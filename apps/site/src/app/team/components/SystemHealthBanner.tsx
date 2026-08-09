@@ -48,19 +48,27 @@ function writeDismissed(next: Record<string, number>) {
   }
 }
 
-export function SystemHealthBanner({ health }: { health: SystemHealth | null }) {
-  const blockers = Array.isArray(health?.blockers) ? health!.blockers : [];
-  const warnings = Array.isArray(health?.warnings) ? health!.warnings : [];
+export function SystemHealthBanner({
+  health,
+}: {
+  health: SystemHealth | null;
+}) {
+  const blockers = React.useMemo(
+    () => (Array.isArray(health?.blockers) ? health.blockers : []),
+    [health?.blockers],
+  );
+  const warnings = React.useMemo(
+    () => (Array.isArray(health?.warnings) ? health.warnings : []),
+    [health?.warnings],
+  );
 
-  const [dismissed, setDismissed] = React.useState<Record<string, number>>(() => readDismissed());
+  const [dismissed, setDismissed] = React.useState<Record<string, number>>(() =>
+    readDismissed(),
+  );
 
   React.useEffect(() => {
     setDismissed(readDismissed());
   }, []);
-
-  const visibleWarnings = warnings.filter((item) => !dismissed[item.id]);
-
-  if (blockers.length === 0 && visibleWarnings.length === 0) return null;
 
   const dismissWarning = React.useCallback((id: string) => {
     const expiresAt = Date.now() + DISMISS_TTL_MS;
@@ -83,18 +91,26 @@ export function SystemHealthBanner({ health }: { health: SystemHealth | null }) 
     });
   }, [warnings]);
 
+  const visibleWarnings = warnings.filter((item) => !dismissed[item.id]);
+
+  if (blockers.length === 0 && visibleWarnings.length === 0) return null;
+
   return (
     <section className="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm shadow-slate-200/60">
       {blockers.length > 0 ? (
         <div className="rounded-xl border border-rose-200/70 bg-rose-50/70 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-700">Action Required</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-700">
+            Action Required
+          </p>
           <p className="mt-1 text-sm font-semibold text-rose-900">
             Some customer-facing actions are disabled until these are fixed.
           </p>
           <div className="mt-4 space-y-4">
             {blockers.map((item) => (
               <div key={item.id} className="rounded-lg bg-white/70 p-3">
-                <p className="text-sm font-semibold text-rose-900">{item.title}</p>
+                <p className="text-sm font-semibold text-rose-900">
+                  {item.title}
+                </p>
                 <p className="mt-1 text-sm text-rose-800">{item.detail}</p>
                 {Array.isArray(item.fix) && item.fix.length > 0 ? (
                   <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-rose-800">
@@ -110,9 +126,13 @@ export function SystemHealthBanner({ health }: { health: SystemHealth | null }) 
       ) : null}
 
       {visibleWarnings.length > 0 ? (
-        <div className={`mt-4 rounded-xl border border-amber-200/70 bg-amber-50/70 p-4 ${blockers.length ? "" : ""}`}>
+        <div
+          className={`mt-4 rounded-xl border border-amber-200/70 bg-amber-50/70 p-4 ${blockers.length ? "" : ""}`}
+        >
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700">Warnings</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700">
+              Warnings
+            </p>
             <button
               type="button"
               onClick={dismissAllWarnings}
@@ -125,7 +145,9 @@ export function SystemHealthBanner({ health }: { health: SystemHealth | null }) 
             {visibleWarnings.map((item) => (
               <div key={item.id} className="rounded-lg bg-white/70 p-3">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <p className="text-sm font-semibold text-amber-900">{item.title}</p>
+                  <p className="text-sm font-semibold text-amber-900">
+                    {item.title}
+                  </p>
                   <button
                     type="button"
                     onClick={() => dismissWarning(item.id)}
@@ -143,4 +165,3 @@ export function SystemHealthBanner({ health }: { health: SystemHealth | null }) 
     </section>
   );
 }
-

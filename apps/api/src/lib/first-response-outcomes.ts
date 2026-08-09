@@ -1,4 +1,5 @@
-import { appointments, conversationMessages, conversationThreads, getDb, leads } from "@/db";
+import type { getDb} from "@/db";
+import { appointments, conversationMessages, conversationThreads, leads } from "@/db";
 import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
 import {
   getQuoteFollowupLearningScope,

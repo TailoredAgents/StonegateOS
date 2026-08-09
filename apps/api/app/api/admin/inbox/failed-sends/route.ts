@@ -6,7 +6,7 @@ import {
   conversationThreads,
   contacts,
   getDb,
-  messageDeliveryEvents
+  messageDeliveryEvents,
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
@@ -40,15 +40,15 @@ export async function GET(request: NextRequest): Promise<Response> {
   const offset = parseOffset(searchParams.get("offset"));
 
   const db = getDb();
+  const failedSendFilter = and(
+    eq(conversationMessages.deliveryStatus, "failed"),
+    eq(conversationMessages.direction, "outbound"),
+    sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`,
+  );
   const [totalRow] = await db
     .select({ count: sql<number>`count(*)` })
     .from(conversationMessages)
-    .where(
-      and(
-        eq(conversationMessages.deliveryStatus, "failed"),
-        eq(conversationMessages.direction, "outbound")
-      )
-    );
+    .where(failedSendFilter);
 
   const total = Number(totalRow?.count ?? 0);
 
@@ -65,17 +65,15 @@ export async function GET(request: NextRequest): Promise<Response> {
       contactId: conversationThreads.contactId,
       threadSubject: conversationThreads.subject,
       contactFirstName: contacts.firstName,
-      contactLastName: contacts.lastName
+      contactLastName: contacts.lastName,
     })
     .from(conversationMessages)
-    .leftJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
-    .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
-    .where(
-      and(
-        eq(conversationMessages.deliveryStatus, "failed"),
-        eq(conversationMessages.direction, "outbound")
-      )
+    .leftJoin(
+      conversationThreads,
+      eq(conversationMessages.threadId, conversationThreads.id),
     )
+    .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+    .where(failedSendFilter)
     .orderBy(desc(conversationMessages.createdAt))
     .limit(limit)
     .offset(offset);
@@ -87,27 +85,36 @@ export async function GET(request: NextRequest): Promise<Response> {
           .select({
             messageId: messageDeliveryEvents.messageId,
             detail: messageDeliveryEvents.detail,
-            occurredAt: messageDeliveryEvents.occurredAt
+            occurredAt: messageDeliveryEvents.occurredAt,
           })
           .from(messageDeliveryEvents)
           .where(
             and(
               inArray(messageDeliveryEvents.messageId, messageIds),
-              eq(messageDeliveryEvents.status, "failed")
-            )
+              eq(messageDeliveryEvents.status, "failed"),
+            ),
           )
           .orderBy(desc(messageDeliveryEvents.occurredAt))
       : [];
 
-  const failureMap = new Map<string, { detail: string | null; occurredAt: Date }>();
+  const failureMap = new Map<
+    string,
+    { detail: string | null; occurredAt: Date }
+  >();
   for (const event of failureEvents) {
     if (!failureMap.has(event.messageId)) {
-      failureMap.set(event.messageId, { detail: event.detail ?? null, occurredAt: event.occurredAt });
+      failureMap.set(event.messageId, {
+        detail: event.detail ?? null,
+        occurredAt: event.occurredAt,
+      });
     }
   }
 
   const messages = rows.map((row) => {
-    const contactName = [row.contactFirstName, row.contactLastName].filter(Boolean).join(" ").trim();
+    const contactName = [row.contactFirstName, row.contactLastName]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
     const failure = failureMap.get(row.id);
     return {
       id: row.id,
@@ -124,9 +131,9 @@ export async function GET(request: NextRequest): Promise<Response> {
       contact: row.contactId
         ? {
             id: row.contactId,
-            name: contactName || "Contact"
+            name: contactName || "Contact",
           }
-        : null
+        : null,
     };
   });
 
@@ -138,7 +145,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       limit,
       offset,
       total,
-      nextOffset: nextOffset < total ? nextOffset : null
-    }
+      nextOffset: nextOffset < total ? nextOffset : null,
+    },
   });
 }

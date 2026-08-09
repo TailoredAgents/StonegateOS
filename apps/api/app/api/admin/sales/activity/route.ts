@@ -1,42 +1,41 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, desc, eq, gte, ilike, inArray, sql } from "drizzle-orm";
-import { getDb, auditLogs, contacts, crmTasks, salesAgentNextActions, teamMembers } from "@/db";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  ilike,
+  inArray,
+  lt,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
+import {
+  getDb,
+  auditLogs,
+  contacts,
+  crmTasks,
+  salesAgentNextActions,
+  teamMembers,
+} from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import { loadCloseLoopOutcomeSummary } from "@/lib/close-loop-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
-
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 200;
-
-const DEFAULT_RANGE_DAYS = 7;
-const MAX_RANGE_DAYS = 90;
-
-const DEFAULT_ACTIONS = [
-  "call.started",
-  "message.received",
-  "message.queued",
-  "message.retry",
-  "sales.escalation.call.started",
-  "sales.escalation.call.connected",
-  "sales.touch.manual",
-  "sales.disposition.set",
-  "sales.autopilot.draft_created",
-  "sales.autopilot.autosend",
-  "sales.agent.draft.prepared",
-  "sales.agent.draft.reused",
-  "sales.agent.draft.skipped",
-  "sales.agent.autosend.queued",
-  "sales.agent.autosend.skipped",
-  "inbox.alert.sent",
-  "inbox.alert.failed",
-  "crm.reminder.created",
-  "crm.reminder.sent",
-  "crm.reminder.failed"
-];
+import { publicSalesActivityContext } from "@/lib/sales-activity-public";
+import {
+  buildSalesActivityPageMetadata,
+  compareSalesActivityKeys,
+  parseSalesActivityQuery,
+  type SalesActivityCursor,
+  type SalesActivityKey,
+} from "@/lib/sales-activity-query";
 
 type ReasonCount = { label: string; count: number };
 type WinSignal = { label: string; detail: string };
@@ -77,41 +76,21 @@ type CloseLoopActivitySummary = {
   postJobCount: number;
 };
 
-const CLOSE_LOOP_ACTION_TYPES = ["appointment_checkin", "appointment_support", "post_job_checkin"] as const;
+const CLOSE_LOOP_ACTION_TYPES = [
+  "appointment_checkin",
+  "appointment_support",
+  "post_job_checkin",
+] as const;
 const CLOSE_LOOP_AUDIT_ACTIONS = [
   "sales.agent.draft.prepared",
   "sales.agent.draft.reused",
   "sales.agent.autosend.queued",
 ] as const;
 
-function parseLimit(value: string | null): number {
-  if (!value) return DEFAULT_LIMIT;
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed <= 0) return DEFAULT_LIMIT;
-  return Math.min(Math.floor(parsed), MAX_LIMIT);
-}
-
-function parseRangeDays(value: string | null): number {
-  if (!value) return DEFAULT_RANGE_DAYS;
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed <= 0) return DEFAULT_RANGE_DAYS;
-  return Math.min(Math.floor(parsed), MAX_RANGE_DAYS);
-}
-
-function parseActionList(value: string | null): string[] {
-  if (!value) return DEFAULT_ACTIONS;
-  const parsed = value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  return parsed.length ? parsed : DEFAULT_ACTIONS;
-}
-
-function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-function incrementReason(map: Map<string, number>, label: string | null | undefined) {
+function incrementReason(
+  map: Map<string, number>,
+  label: string | null | undefined,
+) {
   if (typeof label !== "string") return;
   const normalized = label.trim();
   if (!normalized) return;
@@ -121,7 +100,9 @@ function incrementReason(map: Map<string, number>, label: string | null | undefi
 function topReasonCounts(map: Map<string, number>, limit = 3): ReasonCount[] {
   return [...map.entries()]
     .map(([label, count]) => ({ label, count }))
-    .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.label.localeCompare(b.label)))
+    .sort((a, b) =>
+      b.count !== a.count ? b.count - a.count : a.label.localeCompare(b.label),
+    )
     .slice(0, limit);
 }
 
@@ -130,31 +111,65 @@ function summarizeHumanReviewReason(input: {
   reason: string | null;
   facts: string[] | null;
 }): string {
-  const combined = [input.summary, input.reason, ...(Array.isArray(input.facts) ? input.facts : [])]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+  const combined = [
+    input.summary,
+    input.reason,
+    ...(Array.isArray(input.facts) ? input.facts : []),
+  ]
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    )
     .join(" ")
     .toLowerCase();
 
-  if (combined.includes("hazard") || combined.includes("unsupported material")) return "Hazardous or unsupported material";
-  if (combined.includes("high risk") && combined.includes("demo")) return "High-risk demo scope";
-  if (combined.includes("outside the current service area") || combined.includes("known zip")) return "Out of area";
-  if (combined.includes("supported services") || combined.includes("unsupported services")) return "Unsupported service scope";
-  if (combined.includes("timing conflicts") || combined.includes("faster turnaround") || combined.includes("schedule assumptions")) {
+  if (combined.includes("hazard") || combined.includes("unsupported material"))
+    return "Hazardous or unsupported material";
+  if (combined.includes("high risk") && combined.includes("demo"))
+    return "High-risk demo scope";
+  if (
+    combined.includes("outside the current service area") ||
+    combined.includes("known zip")
+  )
+    return "Out of area";
+  if (
+    combined.includes("supported services") ||
+    combined.includes("unsupported services")
+  )
+    return "Unsupported service scope";
+  if (
+    combined.includes("timing conflicts") ||
+    combined.includes("faster turnaround") ||
+    combined.includes("schedule assumptions")
+  ) {
     return "Scheduling conflict";
   }
-  if (combined.includes("access or scope complexity") || combined.includes("multiple areas") || combined.includes("difficult access")) {
+  if (
+    combined.includes("access or scope complexity") ||
+    combined.includes("multiple areas") ||
+    combined.includes("difficult access")
+  ) {
     return "Access or scope complexity";
   }
-  if (combined.includes("photos, stated scope, and quote signals disagree") || combined.includes("conflict strongly enough")) {
+  if (
+    combined.includes("photos, stated scope, and quote signals disagree") ||
+    combined.includes("conflict strongly enough")
+  ) {
     return "Pricing or scope mismatch";
   }
-  if (combined.includes("frustrated") || combined.includes("dispute") || combined.includes("complaint risk")) {
+  if (
+    combined.includes("frustrated") ||
+    combined.includes("dispute") ||
+    combined.includes("complaint risk")
+  ) {
     return "Frustrated or dispute risk";
   }
   return "Other human review";
 }
 
-function formatDispositionLabel(value: string | null | undefined): string | null {
+function formatDispositionLabel(
+  value: string | null | undefined,
+): string | null {
   if (typeof value !== "string" || value.trim().length === 0) return null;
   return value
     .split("_")
@@ -188,8 +203,16 @@ function summarizeCloseLoopActivity(
   };
 
   for (const row of rows) {
-    const actionType = typeof row.meta?.["actionType"] === "string" ? row.meta["actionType"].trim() : "";
-    if (!CLOSE_LOOP_ACTION_TYPES.includes(actionType as (typeof CLOSE_LOOP_ACTION_TYPES)[number])) continue;
+    const actionType =
+      typeof row.meta?.["actionType"] === "string"
+        ? row.meta["actionType"].trim()
+        : "";
+    if (
+      !CLOSE_LOOP_ACTION_TYPES.includes(
+        actionType as (typeof CLOSE_LOOP_ACTION_TYPES)[number],
+      )
+    )
+      continue;
 
     summary.total += 1;
     if (row.action === "sales.agent.autosend.queued") {
@@ -258,7 +281,10 @@ function buildSupervisorWins(input: {
     });
   }
 
-  if (input.objectionSave.attempts >= 4 && input.objectionSave.reopenRate >= 0.25) {
+  if (
+    input.objectionSave.attempts >= 4 &&
+    input.objectionSave.reopenRate >= 0.25
+  ) {
     wins.push({
       label: "Objection saves are reopening leads",
       detail: input.objectionSave.preferredChannel
@@ -267,7 +293,10 @@ function buildSupervisorWins(input: {
     });
   }
 
-  if (input.appointmentPreservation.attempts >= 6 && input.appointmentPreservation.completedRate >= 0.5) {
+  if (
+    input.appointmentPreservation.attempts >= 6 &&
+    input.appointmentPreservation.completedRate >= 0.5
+  ) {
     wins.push({
       label: "Booked jobs are being protected",
       detail: input.appointmentPreservation.strongestTouchKind
@@ -283,7 +312,8 @@ function buildSupervisorWins(input: {
   if (
     preAppointment.attempts >= 4 &&
     input.closeLoopOutcomes.appointmentCheckinWorthwhile &&
-    (preAppointment.preservedRate >= 0.75 || preAppointment.completedRate >= 0.55)
+    (preAppointment.preservedRate >= 0.75 ||
+      preAppointment.completedRate >= 0.55)
   ) {
     wins.push({
       label: "Pre-appointment check-ins are protecting bookings",
@@ -297,12 +327,15 @@ function buildSupervisorWins(input: {
   if (
     bookedSupport.attempts >= 4 &&
     input.closeLoopOutcomes.appointmentSupportWorthwhile &&
-    (bookedSupport.replyRate >= 0.2 || bookedSupport.rescheduleRate >= 0.2 || bookedSupport.preservedRate >= 0.75)
+    (bookedSupport.replyRate >= 0.2 ||
+      bookedSupport.rescheduleRate >= 0.2 ||
+      bookedSupport.preservedRate >= 0.75)
   ) {
     wins.push({
       label: "Booked-job support is saving momentum",
       detail:
-        bookedSupport.rescheduleRate >= bookedSupport.replyRate && bookedSupport.rescheduleRate >= 0.2
+        bookedSupport.rescheduleRate >= bookedSupport.replyRate &&
+        bookedSupport.rescheduleRate >= 0.2
           ? `${formatRatePercent(bookedSupport.rescheduleRate)} of recent booked-job support touches are successfully saving reschedules.`
           : `${formatRatePercent(bookedSupport.replyRate)} of recent booked-job support touches are getting a customer response without needing heavier intervention.`,
     });
@@ -387,7 +420,10 @@ function buildSupervisorAttention(input: {
     });
   }
 
-  if (input.quoteClose.attempts >= 4 && (input.quoteClose.keepSofter || input.quoteClose.lostRate >= 0.2)) {
+  if (
+    input.quoteClose.attempts >= 4 &&
+    (input.quoteClose.keepSofter || input.quoteClose.lostRate >= 0.2)
+  ) {
     const topLost = input.topLostReasons[0] ?? null;
     items.push({
       label: "Quote follow-up pressure needs adjustment",
@@ -398,20 +434,30 @@ function buildSupervisorAttention(input: {
     });
   }
 
-  if (input.appointmentPreservation.attempts >= 6 && input.appointmentPreservation.needsHumanBackup) {
+  if (
+    input.appointmentPreservation.attempts >= 6 &&
+    input.appointmentPreservation.needsHumanBackup
+  ) {
     items.push({
       label: "Booked jobs need backup protection",
       detail: `Recent cancellation and no-show pressure is ${formatRatePercent(
-        input.appointmentPreservation.canceledRate + input.appointmentPreservation.noShowRate,
+        input.appointmentPreservation.canceledRate +
+          input.appointmentPreservation.noShowRate,
       )}. Watch shaky appointments more closely.`,
       tone:
-        input.appointmentPreservation.canceledRate + input.appointmentPreservation.noShowRate >= 0.25
+        input.appointmentPreservation.canceledRate +
+          input.appointmentPreservation.noShowRate >=
+        0.25
           ? "bad"
           : "warn",
     });
   }
 
-  if (input.objectionSave.attempts >= 4 && input.objectionSave.keepSofter && input.objectionSave.reopenRate < 0.25) {
+  if (
+    input.objectionSave.attempts >= 4 &&
+    input.objectionSave.keepSofter &&
+    input.objectionSave.reopenRate < 0.25
+  ) {
     items.push({
       label: "Price-save messaging is going cold",
       detail: `Only ${formatRatePercent(
@@ -445,7 +491,10 @@ function buildSupervisorAttention(input: {
     items.push({
       label: "Booked-job support is getting noisy",
       detail: `Recent booked-job support replies are not resolving strongly enough. Keep those touches extra light and avoid over-handling simple appointment chatter.`,
-      tone: bookedSupport.replyRate < 0.1 && bookedSupport.rescheduleRate < 0.08 ? "bad" : "warn",
+      tone:
+        bookedSupport.replyRate < 0.1 && bookedSupport.rescheduleRate < 0.08
+          ? "bad"
+          : "warn",
     });
   }
 
@@ -489,7 +538,8 @@ function buildCloseLoopSegmentSignals(input: {
 
     if (
       segment.slice.learned.appointmentCheckinWorthwhile &&
-      (preAppointment.preservedRate >= 0.75 || preAppointment.completedRate >= 0.55)
+      (preAppointment.preservedRate >= 0.75 ||
+        preAppointment.completedRate >= 0.55)
     ) {
       helpingCandidates.push({
         label: `${segment.label} respond well to pre-appointment protection`,
@@ -497,21 +547,31 @@ function buildCloseLoopSegmentSignals(input: {
           preAppointment.preservedRate >= preAppointment.completedRate
             ? `${formatRatePercent(preAppointment.preservedRate)} of recent pre-appointment touches are preserving booked work in this segment.`
             : `${formatRatePercent(preAppointment.completedRate)} of recent pre-appointment touches are still carrying through to completion in this segment.`,
-        score: Math.max(preAppointment.preservedRate, preAppointment.completedRate),
+        score: Math.max(
+          preAppointment.preservedRate,
+          preAppointment.completedRate,
+        ),
       });
     }
 
     if (
       segment.slice.learned.appointmentSupportWorthwhile &&
-      (bookedSupport.replyRate >= 0.2 || bookedSupport.rescheduleRate >= 0.2 || bookedSupport.preservedRate >= 0.75)
+      (bookedSupport.replyRate >= 0.2 ||
+        bookedSupport.rescheduleRate >= 0.2 ||
+        bookedSupport.preservedRate >= 0.75)
     ) {
       helpingCandidates.push({
         label: `${segment.label} are responding well to booked-job support`,
         detail:
-          bookedSupport.rescheduleRate >= bookedSupport.replyRate && bookedSupport.rescheduleRate >= 0.2
+          bookedSupport.rescheduleRate >= bookedSupport.replyRate &&
+          bookedSupport.rescheduleRate >= 0.2
             ? `${formatRatePercent(bookedSupport.rescheduleRate)} of recent support touches are saving reschedules in this segment.`
             : `${formatRatePercent(bookedSupport.replyRate)} of recent support touches are getting a reply while preserving momentum in this segment.`,
-        score: Math.max(bookedSupport.replyRate, bookedSupport.rescheduleRate, bookedSupport.preservedRate),
+        score: Math.max(
+          bookedSupport.replyRate,
+          bookedSupport.rescheduleRate,
+          bookedSupport.preservedRate,
+        ),
       });
     }
 
@@ -550,8 +610,12 @@ function buildCloseLoopSegmentSignals(input: {
       attentionCandidates.push({
         label: `${segment.label} need lighter booked-job support`,
         detail: `Booked-job support is getting noisy in this segment, so keep those replies practical and low pressure.`,
-        tone: bookedSupport.replyRate < 0.1 && bookedSupport.rescheduleRate < 0.08 ? "bad" : "warn",
-        score: 1 - Math.max(bookedSupport.replyRate, bookedSupport.rescheduleRate),
+        tone:
+          bookedSupport.replyRate < 0.1 && bookedSupport.rescheduleRate < 0.08
+            ? "bad"
+            : "warn",
+        score:
+          1 - Math.max(bookedSupport.replyRate, bookedSupport.rescheduleRate),
       });
     }
 
@@ -571,44 +635,254 @@ function buildCloseLoopSegmentSignals(input: {
 
   return {
     helping: helpingCandidates
-      .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.label.localeCompare(b.label)))
+      .sort((a, b) =>
+        b.score !== a.score
+          ? b.score - a.score
+          : a.label.localeCompare(b.label),
+      )
       .slice(0, 3)
       .map(({ score: _score, ...rest }) => rest),
     attention: attentionCandidates
-      .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.label.localeCompare(b.label)))
+      .sort((a, b) =>
+        b.score !== a.score
+          ? b.score - a.score
+          : a.label.localeCompare(b.label),
+      )
       .slice(0, 3)
       .map(({ score: _score, ...rest }) => rest),
   };
 }
 
+function staleSalesActivityPage(): NextResponse {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: "stale_activity_cursor",
+      message:
+        "That Sales Activity boundary changed while it was open. Return to the newest activity and try again.",
+      retryable: true,
+    },
+    { status: 409, headers: { "Cache-Control": "no-store" } },
+  );
+}
+
+function activityCreatedAtBefore(timestamp: string) {
+  return sql<boolean>`${auditLogs.createdAt} < ${timestamp}::timestamptz`;
+}
+
+function activityCreatedAtAfter(timestamp: string) {
+  return sql<boolean>`${auditLogs.createdAt} > ${timestamp}::timestamptz`;
+}
+
+function activityCreatedAtEquals(timestamp: string) {
+  return sql<boolean>`${auditLogs.createdAt} = ${timestamp}::timestamptz`;
+}
+
+function activityAtOrBefore(key: SalesActivityKey) {
+  return or(
+    activityCreatedAtBefore(key.createdAt),
+    and(activityCreatedAtEquals(key.createdAt), lte(auditLogs.id, key.id)),
+  );
+}
+
+function activityCursorBoundary(cursor: SalesActivityCursor) {
+  return cursor.direction === "older"
+    ? or(
+        activityCreatedAtBefore(cursor.anchorCreatedAt),
+        and(
+          activityCreatedAtEquals(cursor.anchorCreatedAt),
+          lt(auditLogs.id, cursor.anchorId),
+        ),
+      )
+    : or(
+        activityCreatedAtAfter(cursor.anchorCreatedAt),
+        and(
+          activityCreatedAtEquals(cursor.anchorCreatedAt),
+          gt(auditLogs.id, cursor.anchorId),
+        ),
+      );
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { ok: false, error: "unauthorized" },
+      { status: 401 },
+    );
   }
-  const permissionError = await requirePermission(request, "audit.read");
+  const permissionError = await requirePermission(request, "sales.read");
   if (permissionError) return permissionError;
 
-  const { searchParams } = request.nextUrl;
-  const limit = parseLimit(searchParams.get("limit"));
-  const rangeDays = parseRangeDays(searchParams.get("rangeDays"));
-  const actorIdRaw = searchParams.get("memberId") ?? searchParams.get("actorId");
-  const actorId = actorIdRaw && isUuid(actorIdRaw) ? actorIdRaw : null;
-  const actions = parseActionList(searchParams.get("actions"));
+  const parsedQuery = parseSalesActivityQuery(request.nextUrl.searchParams);
+  if (!parsedQuery.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "invalid_filter",
+        field: parsedQuery.field,
+        message: parsedQuery.message,
+      },
+      { status: 422, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+  const { limit, rangeDays, actorId, actions, filterHash, cursor } =
+    parsedQuery.query;
 
-  const since = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000);
-  const filters = [gte(auditLogs.createdAt, since), inArray(auditLogs.action, actions)];
+  const snapshotAt = cursor?.snapshotAt ?? new Date().toISOString();
+  const windowStart =
+    cursor?.windowStart ??
+    new Date(
+      new Date(snapshotAt).getTime() - rangeDays * 24 * 60 * 60 * 1000,
+    ).toISOString();
+  const since = new Date(windowStart);
+  const filters = [
+    gte(auditLogs.createdAt, since),
+    sql`${auditLogs.createdAt} <= ${snapshotAt}::timestamptz`,
+    inArray(auditLogs.action, actions),
+  ];
+  filters.push(
+    sql`${auditLogs.action} <> 'call.started' OR ${auditLogs.outcome} = 'succeeded'`,
+  );
   if (actorId) {
     filters.push(eq(auditLogs.actorId, actorId));
   }
 
   const db = getDb();
-  const [closeLoopOutcomeSummary, quoteCloseSummary, objectionSaveSummary, appointmentPreservationSummary] =
-    await Promise.all([
-      loadCloseLoopOutcomeSummary(db, { windowStart: since }),
-      loadQuoteCloseOutcomeSummary(db, { windowStart: since }),
-      loadObjectionSaveOutcomeSummary(db, { windowStart: since }),
-      loadAppointmentPreservationOutcomeSummary(db, { windowStart: since }),
-    ]);
+  if (cursor) {
+    const boundaryIds =
+      cursor.anchorId === cursor.snapshotId
+        ? [cursor.anchorId]
+        : [cursor.anchorId, cursor.snapshotId];
+    const boundaryRows = await db
+      .select({
+        id: auditLogs.id,
+        createdAtKey: sql<string>`to_char(
+          ${auditLogs.createdAt} AT TIME ZONE 'UTC',
+          'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+        )`.as("sales_activity_boundary_created_at_key"),
+      })
+      .from(auditLogs)
+      .where(and(...filters, inArray(auditLogs.id, boundaryIds)))
+      .limit(boundaryIds.length);
+    const boundaryMatches = (key: SalesActivityKey) =>
+      boundaryRows.some(
+        (row) =>
+          row.id === key.id &&
+          compareSalesActivityKeys(
+            { id: row.id, createdAt: row.createdAtKey },
+            key,
+          ) === 0,
+      );
+    if (
+      !boundaryMatches({
+        id: cursor.snapshotId,
+        createdAt: cursor.snapshotCreatedAt,
+      }) ||
+      !boundaryMatches({
+        id: cursor.anchorId,
+        createdAt: cursor.anchorCreatedAt,
+      })
+    ) {
+      return staleSalesActivityPage();
+    }
+  }
+
+  const fetchedRows = await db
+    .select({
+      id: auditLogs.id,
+      actorType: auditLogs.actorType,
+      actorId: auditLogs.actorId,
+      actorRole: auditLogs.actorRole,
+      actorLabel: auditLogs.actorLabel,
+      action: auditLogs.action,
+      entityType: auditLogs.entityType,
+      entityId: auditLogs.entityId,
+      outcome: auditLogs.outcome,
+      meta: auditLogs.meta,
+      createdAtKey: sql<string>`to_char(
+        ${auditLogs.createdAt} AT TIME ZONE 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+      )`.as("sales_activity_created_at_key"),
+      actorName: teamMembers.name,
+    })
+    .from(auditLogs)
+    .leftJoin(teamMembers, eq(auditLogs.actorId, teamMembers.id))
+    .where(
+      and(
+        ...filters,
+        cursor
+          ? activityAtOrBefore({
+              createdAt: cursor.snapshotCreatedAt,
+              id: cursor.snapshotId,
+            })
+          : undefined,
+        cursor ? activityCursorBoundary(cursor) : undefined,
+      ),
+    )
+    .orderBy(
+      ...(cursor?.direction === "newer"
+        ? [asc(auditLogs.createdAt), asc(auditLogs.id)]
+        : [desc(auditLogs.createdAt), desc(auditLogs.id)]),
+    )
+    .limit(limit + 1);
+
+  const hasExtraInRequestedDirection = fetchedRows.length > limit;
+  const requestedRows = hasExtraInRequestedDirection
+    ? fetchedRows.slice(0, limit)
+    : fetchedRows;
+  const rows =
+    cursor?.direction === "newer"
+      ? [...requestedRows].reverse()
+      : requestedRows;
+  if (cursor && rows.length === 0) return staleSalesActivityPage();
+
+  const snapshot: SalesActivityKey | null = cursor
+    ? { createdAt: cursor.snapshotCreatedAt, id: cursor.snapshotId }
+    : fetchedRows[0]
+      ? {
+          createdAt: fetchedRows[0].createdAtKey,
+          id: fetchedRows[0].id,
+        }
+      : null;
+  const totalResult = snapshot
+    ? await db
+        .select({ count: sql<number>`count(*)` })
+        .from(auditLogs)
+        .where(and(...filters, activityAtOrBefore(snapshot)))
+    : [];
+  const totalAtSnapshot = Number(totalResult[0]?.count ?? 0);
+  const hasOlder =
+    cursor?.direction === "newer" ? true : hasExtraInRequestedDirection;
+  const hasNewer =
+    cursor?.direction === "older"
+      ? true
+      : cursor?.direction === "newer"
+        ? hasExtraInRequestedDirection
+        : false;
+  const page = buildSalesActivityPageMetadata({
+    limit,
+    filterHash,
+    windowStart,
+    snapshotAt,
+    snapshot,
+    visible: rows.map((row) => ({ id: row.id, createdAt: row.createdAtKey })),
+    position: cursor ? "history" : "newest",
+    totalAtSnapshot,
+    hasOlder,
+    hasNewer,
+  });
+
+  const [
+    closeLoopOutcomeSummary,
+    quoteCloseSummary,
+    objectionSaveSummary,
+    appointmentPreservationSummary,
+  ] = await Promise.all([
+    loadCloseLoopOutcomeSummary(db, { windowStart: since }),
+    loadQuoteCloseOutcomeSummary(db, { windowStart: since }),
+    loadObjectionSaveOutcomeSummary(db, { windowStart: since }),
+    loadAppointmentPreservationOutcomeSummary(db, { windowStart: since }),
+  ]);
   const closeLoopActivityRows = await db
     .select({
       action: auditLogs.action,
@@ -623,26 +897,6 @@ export async function GET(request: NextRequest): Promise<Response> {
       ),
     )
     .limit(2000);
-  const rows = await db
-    .select({
-      id: auditLogs.id,
-      actorType: auditLogs.actorType,
-      actorId: auditLogs.actorId,
-      actorRole: auditLogs.actorRole,
-      actorLabel: auditLogs.actorLabel,
-      action: auditLogs.action,
-      entityType: auditLogs.entityType,
-      entityId: auditLogs.entityId,
-      meta: auditLogs.meta,
-      createdAt: auditLogs.createdAt,
-      actorName: teamMembers.name
-    })
-    .from(auditLogs)
-    .leftJoin(teamMembers, eq(auditLogs.actorId, teamMembers.id))
-    .where(and(...filters))
-    .orderBy(desc(auditLogs.createdAt))
-    .limit(limit);
-
   const events = rows.map((row) => ({
     id: row.id,
     actor: {
@@ -650,20 +904,18 @@ export async function GET(request: NextRequest): Promise<Response> {
       id: row.actorId,
       role: row.actorRole ?? null,
       label: row.actorLabel ?? null,
-      name: row.actorName ?? null
+      name: row.actorName ?? null,
     },
     action: row.action,
     entityType: row.entityType,
-    entityId: row.entityId ?? null,
-    meta: row.meta ?? null,
-    createdAt: row.createdAt.toISOString()
+    outcome: row.outcome,
+    context: publicSalesActivityContext({
+      entityType: row.entityType,
+      entityId: row.entityId,
+      meta: row.meta,
+    }),
+    createdAt: row.createdAtKey,
   }));
-
-  const totalResult = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(auditLogs)
-    .where(and(...filters));
-  const total = Number(totalResult[0]?.count ?? 0);
 
   const holdFilters = [
     eq(salesAgentNextActions.actionType, "human_follow_up"),
@@ -719,7 +971,10 @@ export async function GET(request: NextRequest): Promise<Response> {
       disposition: sql<string>`coalesce(${auditLogs.meta} ->> 'disposition', '')`,
     })
     .from(auditLogs)
-    .leftJoin(contacts, sql`${auditLogs.entityType} = 'contact' and ${auditLogs.entityId} = ${contacts.id}::text`)
+    .leftJoin(
+      contacts,
+      sql`${auditLogs.entityType} = 'contact' and ${auditLogs.entityId} = ${contacts.id}::text`,
+    )
     .where(and(...lostReasonFilters))
     .limit(500);
 
@@ -740,12 +995,20 @@ export async function GET(request: NextRequest): Promise<Response> {
     incrementReason(lostReasonCounts, formatDispositionLabel(row.disposition));
   }
 
-  const agentDraftCount = rows.filter((row) => row.action.startsWith("sales.autopilot.") || row.action.startsWith("sales.agent.draft.")).length;
-  const agentAutosendCount = rows.filter((row) => row.action === "message.retry" || row.action.startsWith("sales.agent.autosend.")).length;
+  const agentDraftCount = rows.filter(
+    (row) =>
+      row.action.startsWith("sales.autopilot.") ||
+      row.action.startsWith("sales.agent.draft."),
+  ).length;
+  const agentAutosendCount = rows.filter(
+    (row) =>
+      row.action === "message.retry" ||
+      row.action.startsWith("sales.agent.autosend."),
+  ).length;
   const closeLoopActivity = summarizeCloseLoopActivity(
     closeLoopActivityRows.map((row) => ({
       action: row.action,
-      meta: (row.meta as Record<string, unknown> | null) ?? null,
+      meta: row.meta ?? null,
     })),
   );
   const topHoldReasons = topReasonCounts(holdReasonCounts);
@@ -764,30 +1027,43 @@ export async function GET(request: NextRequest): Promise<Response> {
     appointmentPreservation: {
       attempts: appointmentPreservationSummary.attempts,
       completedRate: appointmentPreservationSummary.completedRate,
-      strongestTouchKind: appointmentPreservationSummary.learned.strongestTouchKind,
+      strongestTouchKind:
+        appointmentPreservationSummary.learned.strongestTouchKind,
     },
     closeLoopOutcomes: {
       byAction: {
         appointment_checkin: {
-          attempts: closeLoopOutcomeSummary.byAction.appointment_checkin.attempts,
-          preservedRate: closeLoopOutcomeSummary.byAction.appointment_checkin.preservedRate,
-          completedRate: closeLoopOutcomeSummary.byAction.appointment_checkin.completedRate,
+          attempts:
+            closeLoopOutcomeSummary.byAction.appointment_checkin.attempts,
+          preservedRate:
+            closeLoopOutcomeSummary.byAction.appointment_checkin.preservedRate,
+          completedRate:
+            closeLoopOutcomeSummary.byAction.appointment_checkin.completedRate,
         },
         appointment_support: {
-          attempts: closeLoopOutcomeSummary.byAction.appointment_support.attempts,
-          replyRate: closeLoopOutcomeSummary.byAction.appointment_support.replyRate,
-          rescheduleRate: closeLoopOutcomeSummary.byAction.appointment_support.rescheduleRate,
-          preservedRate: closeLoopOutcomeSummary.byAction.appointment_support.preservedRate,
+          attempts:
+            closeLoopOutcomeSummary.byAction.appointment_support.attempts,
+          replyRate:
+            closeLoopOutcomeSummary.byAction.appointment_support.replyRate,
+          rescheduleRate:
+            closeLoopOutcomeSummary.byAction.appointment_support.rescheduleRate,
+          preservedRate:
+            closeLoopOutcomeSummary.byAction.appointment_support.preservedRate,
         },
         post_job_checkin: {
           attempts: closeLoopOutcomeSummary.byAction.post_job_checkin.attempts,
-          replyRate: closeLoopOutcomeSummary.byAction.post_job_checkin.replyRate,
-          repeatBookRate: closeLoopOutcomeSummary.byAction.post_job_checkin.repeatBookRate,
+          replyRate:
+            closeLoopOutcomeSummary.byAction.post_job_checkin.replyRate,
+          repeatBookRate:
+            closeLoopOutcomeSummary.byAction.post_job_checkin.repeatBookRate,
         },
       },
-      appointmentCheckinWorthwhile: closeLoopOutcomeSummary.learned.appointmentCheckinWorthwhile,
-      appointmentSupportWorthwhile: closeLoopOutcomeSummary.learned.appointmentSupportWorthwhile,
-      postJobCheckinWorthwhile: closeLoopOutcomeSummary.learned.postJobCheckinWorthwhile,
+      appointmentCheckinWorthwhile:
+        closeLoopOutcomeSummary.learned.appointmentCheckinWorthwhile,
+      appointmentSupportWorthwhile:
+        closeLoopOutcomeSummary.learned.appointmentSupportWorthwhile,
+      postJobCheckinWorthwhile:
+        closeLoopOutcomeSummary.learned.postJobCheckinWorthwhile,
     },
     agentAutosendCount,
   });
@@ -808,23 +1084,33 @@ export async function GET(request: NextRequest): Promise<Response> {
     closeLoopOutcomes: {
       byAction: {
         appointment_checkin: {
-          attempts: closeLoopOutcomeSummary.byAction.appointment_checkin.attempts,
-          preservedRate: closeLoopOutcomeSummary.byAction.appointment_checkin.preservedRate,
+          attempts:
+            closeLoopOutcomeSummary.byAction.appointment_checkin.attempts,
+          preservedRate:
+            closeLoopOutcomeSummary.byAction.appointment_checkin.preservedRate,
         },
         appointment_support: {
-          attempts: closeLoopOutcomeSummary.byAction.appointment_support.attempts,
-          replyRate: closeLoopOutcomeSummary.byAction.appointment_support.replyRate,
-          rescheduleRate: closeLoopOutcomeSummary.byAction.appointment_support.rescheduleRate,
+          attempts:
+            closeLoopOutcomeSummary.byAction.appointment_support.attempts,
+          replyRate:
+            closeLoopOutcomeSummary.byAction.appointment_support.replyRate,
+          rescheduleRate:
+            closeLoopOutcomeSummary.byAction.appointment_support.rescheduleRate,
         },
         post_job_checkin: {
           attempts: closeLoopOutcomeSummary.byAction.post_job_checkin.attempts,
-          replyRate: closeLoopOutcomeSummary.byAction.post_job_checkin.replyRate,
-          repeatBookRate: closeLoopOutcomeSummary.byAction.post_job_checkin.repeatBookRate,
+          replyRate:
+            closeLoopOutcomeSummary.byAction.post_job_checkin.replyRate,
+          repeatBookRate:
+            closeLoopOutcomeSummary.byAction.post_job_checkin.repeatBookRate,
         },
       },
-      appointmentCheckinWorthwhile: closeLoopOutcomeSummary.learned.appointmentCheckinWorthwhile,
-      appointmentSupportNeedsLightTouch: closeLoopOutcomeSummary.learned.appointmentSupportNeedsLightTouch,
-      postJobCheckinWorthwhile: closeLoopOutcomeSummary.learned.postJobCheckinWorthwhile,
+      appointmentCheckinWorthwhile:
+        closeLoopOutcomeSummary.learned.appointmentCheckinWorthwhile,
+      appointmentSupportNeedsLightTouch:
+        closeLoopOutcomeSummary.learned.appointmentSupportNeedsLightTouch,
+      postJobCheckinWorthwhile:
+        closeLoopOutcomeSummary.learned.postJobCheckinWorthwhile,
     },
     appointmentPreservation: {
       attempts: appointmentPreservationSummary.attempts,
@@ -845,60 +1131,68 @@ export async function GET(request: NextRequest): Promise<Response> {
     },
   });
 
-  return NextResponse.json({
-    ok: true,
-    rangeDays,
-    since: since.toISOString(),
-    limit,
-    total,
-    memberId: actorId,
-    actions,
-    events,
-    supervisor: {
-      activeHumanReviewCount: Number(activeHumanReviewResult[0]?.count ?? 0),
-      recentlyReviewedCount: Number(recentlyReviewedResult[0]?.count ?? 0),
-      agentDraftCount,
-      agentAutosendCount,
-      closeLoopActivity,
-      closeLoopOutcomes: {
-        attempts: closeLoopOutcomeSummary.attempts,
-        replyRate: closeLoopOutcomeSummary.replyRate,
-        preservedRate: closeLoopOutcomeSummary.preservedRate,
-        completedRate: closeLoopOutcomeSummary.completedRate,
-        rescheduleRate: closeLoopOutcomeSummary.rescheduleRate,
-        repeatBookRate: closeLoopOutcomeSummary.repeatBookRate,
-        appointmentCheckinWorthwhile: closeLoopOutcomeSummary.learned.appointmentCheckinWorthwhile,
-        appointmentSupportWorthwhile: closeLoopOutcomeSummary.learned.appointmentSupportWorthwhile,
-        appointmentSupportNeedsLightTouch: closeLoopOutcomeSummary.learned.appointmentSupportNeedsLightTouch,
-        postJobCheckinWorthwhile: closeLoopOutcomeSummary.learned.postJobCheckinWorthwhile,
-      },
-      closeLoopSegmentSignals,
-      attentionItems,
-      topWins,
-      topHoldReasons,
-      topLostReasons,
-      quoteClose: {
-        attempts: quoteCloseSummary.attempts,
-        bookRate: quoteCloseSummary.bookRate,
-        lostRate: quoteCloseSummary.lostRate,
-        preferredChannel: quoteCloseSummary.learned.preferredChannel,
-        keepSofter: quoteCloseSummary.learned.keepSofter,
-      },
-      objectionSave: {
-        attempts: objectionSaveSummary.attempts,
-        reopenRate: objectionSaveSummary.reopenRate,
-        bookRate: objectionSaveSummary.bookRate,
-        preferredChannel: objectionSaveSummary.learned.preferredChannel,
-        keepSofter: objectionSaveSummary.learned.keepSofter,
-      },
-      appointmentPreservation: {
-        attempts: appointmentPreservationSummary.attempts,
-        completedRate: appointmentPreservationSummary.completedRate,
-        canceledRate: appointmentPreservationSummary.canceledRate,
-        noShowRate: appointmentPreservationSummary.noShowRate,
-        strongestTouchKind: appointmentPreservationSummary.learned.strongestTouchKind,
-        needsHumanBackup: appointmentPreservationSummary.learned.needsHumanBackup,
+  return NextResponse.json(
+    {
+      ok: true,
+      rangeDays,
+      since: windowStart,
+      memberId: actorId,
+      actions,
+      events,
+      page,
+      supervisor: {
+        activeHumanReviewCount: Number(activeHumanReviewResult[0]?.count ?? 0),
+        recentlyReviewedCount: Number(recentlyReviewedResult[0]?.count ?? 0),
+        agentDraftCount,
+        agentAutosendCount,
+        closeLoopActivity,
+        closeLoopOutcomes: {
+          attempts: closeLoopOutcomeSummary.attempts,
+          replyRate: closeLoopOutcomeSummary.replyRate,
+          preservedRate: closeLoopOutcomeSummary.preservedRate,
+          completedRate: closeLoopOutcomeSummary.completedRate,
+          rescheduleRate: closeLoopOutcomeSummary.rescheduleRate,
+          repeatBookRate: closeLoopOutcomeSummary.repeatBookRate,
+          appointmentCheckinWorthwhile:
+            closeLoopOutcomeSummary.learned.appointmentCheckinWorthwhile,
+          appointmentSupportWorthwhile:
+            closeLoopOutcomeSummary.learned.appointmentSupportWorthwhile,
+          appointmentSupportNeedsLightTouch:
+            closeLoopOutcomeSummary.learned.appointmentSupportNeedsLightTouch,
+          postJobCheckinWorthwhile:
+            closeLoopOutcomeSummary.learned.postJobCheckinWorthwhile,
+        },
+        closeLoopSegmentSignals,
+        attentionItems,
+        topWins,
+        topHoldReasons,
+        topLostReasons,
+        quoteClose: {
+          attempts: quoteCloseSummary.attempts,
+          bookRate: quoteCloseSummary.bookRate,
+          lostRate: quoteCloseSummary.lostRate,
+          preferredChannel: quoteCloseSummary.learned.preferredChannel,
+          keepSofter: quoteCloseSummary.learned.keepSofter,
+        },
+        objectionSave: {
+          attempts: objectionSaveSummary.attempts,
+          reopenRate: objectionSaveSummary.reopenRate,
+          bookRate: objectionSaveSummary.bookRate,
+          preferredChannel: objectionSaveSummary.learned.preferredChannel,
+          keepSofter: objectionSaveSummary.learned.keepSofter,
+        },
+        appointmentPreservation: {
+          attempts: appointmentPreservationSummary.attempts,
+          completedRate: appointmentPreservationSummary.completedRate,
+          canceledRate: appointmentPreservationSummary.canceledRate,
+          noShowRate: appointmentPreservationSummary.noShowRate,
+          strongestTouchKind:
+            appointmentPreservationSummary.learned.strongestTouchKind,
+          needsHumanBackup:
+            appointmentPreservationSummary.learned.needsHumanBackup,
+        },
       },
     },
-  });
+    { headers: { "Cache-Control": "private, no-store, max-age=0" } },
+  );
 }

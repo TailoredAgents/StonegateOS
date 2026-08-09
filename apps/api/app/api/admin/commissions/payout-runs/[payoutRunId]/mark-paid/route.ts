@@ -1,37 +1,101 @@
 import type { NextRequest } from "next/server";
-import { NextResponse } from "next/server";
-import { requirePermission } from "@/lib/permissions";
 import { getDb } from "@/db";
-import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
-import { markPayoutRunPaid } from "@/lib/commissions";
-import { isAdminRequest } from "../../../../../web/admin";
+import {
+  markPayoutRunPaid,
+  requirePayoutRunExpectedVersion,
+} from "@/lib/commissions";
+import {
+  normalizePayoutRunMutationError,
+  requirePayoutRunId,
+} from "@/lib/payout-run-mutation-http";
+import {
+  claimTeamMutationIdempotency,
+  settleTeamMutationIdempotencyFailure,
+  type TeamMutationIdempotencyClaim,
+  teamMutationIdempotencyReplayResponse,
+} from "@/lib/team-mutation-idempotency";
+import {
+  beginTeamMutation,
+  recordTeamMutationFailure,
+  TeamMutationFailure,
+  teamMutationExceptionResponse,
+  teamMutationResultResponse,
+} from "@/lib/team-mutation";
 
 export async function POST(
   request: NextRequest,
-  context: { params: Promise<{ payoutRunId: string }> }
+  context: { params: Promise<{ payoutRunId: string }> },
 ): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-  const permissionError = await requirePermission(request, "access.manage");
-  if (permissionError) return permissionError;
-
-  const { payoutRunId } = await context.params;
-  if (!payoutRunId) {
-    return NextResponse.json({ error: "missing_payout_run_id" }, { status: 400 });
-  }
-
-  const db = getDb();
-  await markPayoutRunPaid(db, payoutRunId);
-
-  await recordAuditEvent({
-    actor: getAuditActorFromRequest(request),
-    action: "commission.payout_run.paid",
-    entityType: "payout_run",
-    entityId: payoutRunId,
-    meta: null
+  const boundary = await beginTeamMutation(request, {
+    principalTypes: ["human"],
+    requiredPermissions: ["commissions.pay"],
+    risk: "financial",
+    requiresIdempotency: true,
+    auditAction: "commission.payout_run.paid",
   });
+  if (!boundary.ok) return boundary.response;
+  const { mutation } = boundary;
 
-  return NextResponse.json({ ok: true, payoutRunId });
+  let db: ReturnType<typeof getDb> | null = null;
+  let claim: TeamMutationIdempotencyClaim | null = null;
+  let payoutRunId: string | null = null;
+  try {
+    const { payoutRunId: rawPayoutRunId } = await context.params;
+    payoutRunId = requirePayoutRunId(rawPayoutRunId);
+    requirePayoutRunExpectedVersion(mutation);
+    db = getDb();
+    const claimed = await claimTeamMutationIdempotency(db, mutation, {
+      route: "POST /api/admin/commissions/payout-runs/:id/mark-paid",
+      entityType: "payout_run",
+      entityId: payoutRunId,
+      payload: { requestedStatus: "paid" },
+    });
+    if (claimed.kind === "replay") {
+      return teamMutationIdempotencyReplayResponse(claimed.replay);
+    }
+    claim = claimed.claim;
+
+    const result = await markPayoutRunPaid(db, payoutRunId, {
+      actor: mutation.actor,
+      execution: { mutation, claim },
+    });
+    if (!result.mutationResult) {
+      throw new TeamMutationFailure(
+        "internal",
+        "The payout payment result could not be verified.",
+        { retryable: true },
+      );
+    }
+    return teamMutationResultResponse(
+      result.mutationResult,
+      200,
+      mutation.correlationId,
+    );
+  } catch (rawError) {
+    const error = normalizePayoutRunMutationError(rawError);
+    await recordTeamMutationFailure(mutation, {
+      entityType: "payout_run",
+      entityId: payoutRunId,
+      code: error.code,
+      metadata: {
+        route: "payout_run_paid",
+        boundary: claim ? "execution" : "input",
+      },
+    });
+    if (db && claim) {
+      try {
+        await settleTeamMutationIdempotencyFailure(db, mutation, claim, error);
+      } catch (settlementError) {
+        console.error("[commissions] pay_idempotency_settlement_failed", {
+          operationId: mutation.operationId,
+          correlationId: mutation.correlationId,
+          errorName:
+            settlementError instanceof Error
+              ? settlementError.name
+              : "UnknownError",
+        });
+      }
+    }
+    return teamMutationExceptionResponse(error, mutation);
+  }
 }
-

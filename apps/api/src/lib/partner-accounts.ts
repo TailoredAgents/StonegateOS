@@ -1,5 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
-import { contacts, crmTasks, getDb, partnerAccounts } from "@/db";
+import type { getDb} from "@/db";
+import { contacts, crmTasks, partnerAccounts } from "@/db";
 
 type DatabaseClient = ReturnType<typeof getDb>;
 type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (

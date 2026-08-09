@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, gte, lt, sql } from "drizzle-orm";
 import { getDb, payments } from "@/db";
-import { isAdminRequest } from "../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 
 type RangeKey = "today" | "tomorrow" | "this_week" | "next_week";
 
@@ -59,12 +59,8 @@ function computeRange(range: RangeKey): { start: Date; end: Date } {
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse<ForecastResponse>> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json(
-      { ok: false, range: "this_week", totalCents: 0, currency: null, count: 0, error: "unauthorized" },
-      { status: 401 }
-    );
-  }
+  const permissionError = await requirePermission(request, "finance.read");
+  if (permissionError) return permissionError as NextResponse<ForecastResponse>;
 
   const range = parseRange(request.nextUrl.searchParams.get("range"));
   const { start, end } = computeRange(range);

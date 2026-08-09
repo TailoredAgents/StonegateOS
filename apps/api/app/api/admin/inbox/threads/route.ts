@@ -24,6 +24,13 @@ import {
   normalizePostalCode,
 } from "@/lib/policy";
 import { requirePermission } from "@/lib/permissions";
+import { requireActiveContactForDirectOutbound } from "@/lib/contact-outbound-safety";
+import { buildInboxSnapshotSignature } from "@/lib/inbox-snapshot";
+import { parseInboxQueue } from "@/lib/inbox-queue";
+import {
+  TeamMutationFailure,
+  teamMutationExceptionResponse,
+} from "@/lib/team-mutation";
 import { isAdminRequest } from "../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -175,9 +182,18 @@ export async function GET(request: NextRequest): Promise<Response> {
     ? (searchParams.get("channel") as Channel)
     : null;
   const contactId = searchParams.get("contactId");
+  if (contactId !== null && !UUID_RE.test(contactId)) {
+    return NextResponse.json({ error: "invalid_contact_id" }, { status: 422 });
+  }
   const view = parseView(searchParams.get("view"));
+  const rawQueue = searchParams.get("queue");
+  const queue = parseInboxQueue(rawQueue);
+  if (rawQueue !== null && !queue) {
+    return NextResponse.json({ error: "invalid_queue" }, { status: 422 });
+  }
   const limit = parseLimit(searchParams.get("limit"));
   const offset = parseOffset(searchParams.get("offset"));
+  const snapshotOnly = searchParams.get("snapshot") === "1";
   const firstMessageFrom = parseDateBoundary(
     searchParams.get("firstMessageFrom"),
     "start",
@@ -267,6 +283,16 @@ export async function GET(request: NextRequest): Promise<Response> {
     and ${lastOutboundForThread} is null
     and ${conversationThreads.attentionHandledAt} is null
   )`;
+  const needsReplyQueueFilter = sql`(${activeThreadFilter} and (${inboundNeedsReplyFilter} or ${newUnrepliedLeadFilter}))`;
+  const waitingQueueFilter = sql`${conversationThreads.status} = 'pending'`;
+  const failedQueueFilter = sql`exists (
+    select 1
+    from conversation_messages failed_cm
+    where failed_cm.thread_id = ${conversationThreads.id}
+      and failed_cm.direction = 'outbound'
+      and failed_cm.delivery_status = 'failed'
+      and coalesce(failed_cm.metadata ->> 'draft', 'false') <> 'true'
+  )`;
   const attentionFilter = sql`(${activeThreadFilter} and (${inboundNeedsReplyFilter} or ${newUnrepliedLeadFilter} or ${dueFollowupFilter}))`;
   const priorityScoreSql = sql<number>`case
     when coalesce(${contacts.doNotContact}, false) then -100
@@ -287,17 +313,18 @@ export async function GET(request: NextRequest): Promise<Response> {
     else 3
   end`;
 
-  const filters = [];
+  // Badge counts are facets over the stable base filters (channel, search,
+  // dates, contact, and source). They intentionally exclude both the selected
+  // queue and the transitional legacy status so staff can see the true totals
+  // available when switching queues.
+  const baseFilters = [];
 
-  if (status) {
-    filters.push(eq(conversationThreads.status, status));
-  }
   if (channel) {
-    filters.push(eq(conversationThreads.channel, channel));
+    baseFilters.push(eq(conversationThreads.channel, channel));
   }
   if (searchTerm) {
     const likePattern = `%${searchTerm.replace(/\s+/g, "%")}%`;
-    filters.push(
+    baseFilters.push(
       or(
         ilike(contacts.firstName, likePattern),
         ilike(contacts.lastName, likePattern),
@@ -335,33 +362,48 @@ export async function GET(request: NextRequest): Promise<Response> {
     );
   }
   if (firstMessageFrom) {
-    filters.push(
+    baseFilters.push(
       sql`${firstInboundForThread} >= ${firstMessageFrom}::timestamptz`,
     );
   }
   if (firstMessageTo) {
-    filters.push(
+    baseFilters.push(
       sql`${firstInboundForThread} < ${firstMessageTo}::timestamptz`,
     );
   }
   if (lastMessageFrom) {
-    filters.push(
+    baseFilters.push(
       sql`${lastInboundForThread} >= ${lastMessageFrom}::timestamptz`,
     );
   }
   if (lastMessageTo) {
-    filters.push(sql`${lastInboundForThread} < ${lastMessageTo}::timestamptz`);
+    baseFilters.push(
+      sql`${lastInboundForThread} < ${lastMessageTo}::timestamptz`,
+    );
   }
   if (typeof contactId === "string" && UUID_RE.test(contactId)) {
-    filters.push(eq(conversationThreads.contactId, contactId));
-  }
-  if (view === "attention" && !searchTerm) {
-    filters.push(attentionFilter);
+    baseFilters.push(eq(conversationThreads.contactId, contactId));
   }
   if (view === "google" && !searchTerm) {
-    filters.push(sql`${activeThreadFilter} and ${googleSourceFilter}`);
+    baseFilters.push(sql`${activeThreadFilter} and ${googleSourceFilter}`);
   }
 
+  const filters = [...baseFilters];
+  if (status) {
+    filters.push(eq(conversationThreads.status, status));
+  }
+  if (queue) {
+    if (queue === "needs_reply") filters.push(needsReplyQueueFilter);
+    if (queue === "waiting") filters.push(waitingQueueFilter);
+    if (queue === "failed") filters.push(failedQueueFilter);
+  } else {
+    // Keep old links working during the canonical queue-URL migration.
+    if (view === "attention" && !searchTerm) {
+      filters.push(attentionFilter);
+    }
+  }
+
+  const baseWhereClause = baseFilters.length ? and(...baseFilters) : undefined;
   const whereClause = filters.length ? and(...filters) : undefined;
   const inboundLatest = db
     .select({
@@ -417,10 +459,30 @@ export async function GET(request: NextRequest): Promise<Response> {
         sql`${leadAutomationStates.channel}::text = ${conversationThreads.channel}::text`,
       ),
     );
-  const totalResult = whereClause
-    ? await totalQuery.where(whereClause)
-    : await totalQuery;
-  const total = Number(totalResult[0]?.count ?? 0);
+  const totalResultPromise = whereClause
+    ? totalQuery.where(whereClause)
+    : totalQuery;
+  const queueCountsQuery = db
+    .select({
+      needsReply: sql<number>`(count(*) filter (where ${needsReplyQueueFilter}))::int`,
+      waiting: sql<number>`(count(*) filter (where ${waitingQueueFilter}))::int`,
+      failed: sql<number>`(count(*) filter (where ${failedQueueFilter}))::int`,
+      all: sql<number>`count(*)::int`,
+    })
+    .from(conversationThreads)
+    .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+    .leftJoin(leads, eq(conversationThreads.leadId, leads.id))
+    .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
+    .leftJoin(
+      leadAutomationStates,
+      and(
+        eq(leadAutomationStates.leadId, conversationThreads.leadId),
+        sql`${leadAutomationStates.channel}::text = ${conversationThreads.channel}::text`,
+      ),
+    );
+  const queueCountsResultPromise = baseWhereClause
+    ? queueCountsQuery.where(baseWhereClause)
+    : queueCountsQuery;
 
   const rowsQuery = db
     .select({
@@ -456,11 +518,14 @@ export async function GET(request: NextRequest): Promise<Response> {
       contactPhoneE164: contacts.phoneE164,
       contactSource: contacts.source,
       doNotContact: contacts.doNotContact,
+      contactUpdatedAt: contacts.updatedAt,
       propertyAddressLine1: properties.addressLine1,
       propertyCity: properties.city,
       propertyState: properties.state,
       propertyPostalCode: properties.postalCode,
+      propertyUpdatedAt: properties.updatedAt,
       assignedName: teamMembers.name,
+      assignedMemberUpdatedAt: teamMembers.updatedAt,
       leadSource: leads.source,
       leadUtmSource: leads.utmSource,
       leadGclid: leads.gclid,
@@ -509,7 +574,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     ? rowsQuery.where(whereClause)
     : rowsQuery;
   const sortedRowsQuery =
-    view === "attention" && !searchTerm
+    (queue === "needs_reply" || (!queue && view === "attention")) && !searchTerm
       ? filteredRowsQuery.orderBy(
           sql`${attentionSortBucketSql} asc`,
           sql`${activityLatest.lastActivityAt} desc nulls last`,
@@ -521,31 +586,131 @@ export async function GET(request: NextRequest): Promise<Response> {
           desc(conversationThreads.updatedAt),
         );
 
-  const rows = await sortedRowsQuery.limit(limit).offset(offset);
-
-  const serviceArea = await getServiceAreaPolicy(db);
+  const [totalResult, rows, queueCountsResult] = await Promise.all([
+    totalResultPromise,
+    sortedRowsQuery.limit(limit).offset(offset),
+    queueCountsResultPromise,
+  ]);
+  const total = Number(totalResult[0]?.count ?? 0);
+  const queueCountsRow = queueCountsResult[0];
+  const queueCounts = {
+    needsReply: Number(queueCountsRow?.needsReply ?? 0),
+    waiting: Number(queueCountsRow?.waiting ?? 0),
+    failed: Number(queueCountsRow?.failed ?? 0),
+    all: Number(queueCountsRow?.all ?? 0),
+  };
 
   const threadIds = rows.map((row) => row.id);
-  const messageCounts =
+  const [messageCounts, failedMessageSnapshotRows] = await Promise.all([
     threadIds.length > 0
-      ? await db
+      ? db
           .select({
             threadId: conversationMessages.threadId,
-            count: sql<number>`count(*)`,
+            count: sql<number>`count(*)::int`,
+            queuedCount: sql<number>`(count(*) filter (where ${conversationMessages.deliveryStatus} = 'queued'))::int`,
+            sentCount: sql<number>`(count(*) filter (where ${conversationMessages.deliveryStatus} = 'sent'))::int`,
+            deliveredCount: sql<number>`(count(*) filter (where ${conversationMessages.deliveryStatus} = 'delivered'))::int`,
+            failedCount: sql<number>`(count(*) filter (where ${conversationMessages.deliveryStatus} = 'failed' and ${conversationMessages.direction} = 'outbound' and coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'))::int`,
           })
           .from(conversationMessages)
           .where(inArray(conversationMessages.threadId, threadIds))
           .groupBy(conversationMessages.threadId)
-      : [];
+      : Promise.resolve([]),
+    db
+      .select({
+        count: sql<number>`count(*)::int`,
+        lastFailedAt: sql<Date | null>`max(${conversationMessages.createdAt})`,
+      })
+      .from(conversationMessages)
+      .where(
+        and(
+          eq(conversationMessages.deliveryStatus, "failed"),
+          eq(conversationMessages.direction, "outbound"),
+          sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`,
+        ),
+      ),
+  ]);
 
   const messageCountMap = new Map<string, number>();
+  const messageDeliveryCountMap = new Map<
+    string,
+    { queued: number; sent: number; delivered: number; failed: number }
+  >();
   for (const row of messageCounts) {
     messageCountMap.set(row.threadId, Number(row.count));
+    messageDeliveryCountMap.set(row.threadId, {
+      queued: Number(row.queuedCount ?? 0),
+      sent: Number(row.sentCount ?? 0),
+      delivered: Number(row.deliveredCount ?? 0),
+      failed: Number(row.failedCount ?? 0),
+    });
   }
 
-  const facebookSessions =
+  const nextOffset = offset + rows.length;
+  const failedMessageSnapshot = failedMessageSnapshotRows[0];
+  const snapshotRevision = {
+    queue: queue ?? null,
+    queueCounts,
+    total,
+    limit,
+    offset,
+    globalFailedMessageCount: Number(failedMessageSnapshot?.count ?? 0),
+    globalLastFailedAt: failedMessageSnapshot?.lastFailedAt ?? null,
+    threads: rows.map((row) => ({
+      id: row.id,
+      status: row.status,
+      state: row.state,
+      channel: row.channel,
+      lastActivityAt: row.lastActivityAt,
+      updatedAt: row.updatedAt,
+      stateUpdatedAt: row.stateUpdatedAt,
+      attentionHandledAt: row.attentionHandledAt,
+      closedReason: row.closedReason,
+      closedAt: row.closedAt,
+      assignedTo: row.assignedTo,
+      assignedMemberUpdatedAt: row.assignedMemberUpdatedAt,
+      contactId: row.contactId,
+      contactUpdatedAt: row.contactUpdatedAt,
+      propertyId: row.propertyId,
+      propertyUpdatedAt: row.propertyUpdatedAt,
+      followup: [
+        row.followupState,
+        row.followupStep,
+        row.nextFollowupAt,
+        row.followupPaused,
+        row.followupDnc,
+      ],
+      firstInboundAt: row.firstInboundAt,
+      lastInboundAt: row.lastInboundAt,
+      lastOutboundAt: row.lastOutboundAt,
+      lastDirection: row.lastDirection,
+      mediaCount: row.mediaCount,
+      priorityScore: row.priorityScore,
+      messageCount: messageCountMap.get(row.id) ?? 0,
+      deliveryCounts: messageDeliveryCountMap.get(row.id) ?? {
+        queued: 0,
+        sent: 0,
+        delivered: 0,
+        failed: 0,
+      },
+    })),
+  };
+  const snapshot = {
+    signature: buildInboxSnapshotSignature(snapshotRevision),
+    total,
+    limit,
+    offset,
+    nextOffset: nextOffset < total ? nextOffset : null,
+  };
+
+  if (snapshotOnly) {
+    return NextResponse.json({ ok: true, snapshot });
+  }
+
+  const [serviceArea, facebookSessions] = await Promise.all([
+    getServiceAreaPolicy(db),
     threadIds.length > 0
-      ? await db
+      ? db
           .select({
             threadId: facebookSalesAutopilotSessions.threadId,
             stage: facebookSalesAutopilotSessions.stage,
@@ -561,7 +726,8 @@ export async function GET(request: NextRequest): Promise<Response> {
           })
           .from(facebookSalesAutopilotSessions)
           .where(inArray(facebookSalesAutopilotSessions.threadId, threadIds))
-      : [];
+      : Promise.resolve([]),
+  ]);
 
   const facebookSessionMap = new Map<
     string,
@@ -727,6 +893,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           }
         : null,
       messageCount: messageCountMap.get(row.id) ?? 0,
+      failedMessageCount: messageDeliveryCountMap.get(row.id)?.failed ?? 0,
       followup: row.leadId
         ? {
             state: row.followupState ?? null,
@@ -751,10 +918,11 @@ export async function GET(request: NextRequest): Promise<Response> {
     };
   });
 
-  const nextOffset = offset + threads.length;
-
   return NextResponse.json({
     threads,
+    queue: queue ?? null,
+    queueCounts,
+    snapshot,
     pagination: {
       limit,
       offset,
@@ -882,6 +1050,9 @@ export async function POST(request: NextRequest): Promise<Response> {
       if (!contactId) {
         throw new Error("contact_not_found");
       }
+      if (direction === "outbound" && messageBody.length > 0) {
+        await requireActiveContactForDirectOutbound(tx, contactId);
+      }
 
       const now = new Date();
       const [thread] = await tx
@@ -997,6 +1168,9 @@ export async function POST(request: NextRequest): Promise<Response> {
       return { thread, message: messageRecord };
     });
   } catch (error) {
+    if (error instanceof TeamMutationFailure) {
+      return teamMutationExceptionResponse(error);
+    }
     const message =
       error instanceof Error ? error.message : "thread_create_failed";
     const status = message === "contact_not_found" ? 404 : 400;

@@ -12,7 +12,7 @@ export async function GET(
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "access.manage");
+  const permissionError = await requirePermission(request, "commissions.read");
   if (permissionError) return permissionError;
 
   const { payoutRunId } = await context.params;
@@ -30,12 +30,16 @@ export async function GET(
     const filename = `payout-run-${report.run.periodStart.toISOString().slice(0, 10)}-to-${report.run.periodEnd
       .toISOString()
       .slice(0, 10)}.html`;
+    const version = report.run.updatedAt.toISOString();
 
     return new NextResponse(html, {
       status: 200,
       headers: {
         "Content-Type": "text/html; charset=utf-8",
         "Content-Disposition": `inline; filename="${filename}"`,
+        ETag: `"${version}"`,
+        "x-record-version": version,
+        "Cache-Control": "private, no-store",
       },
     });
   } catch (error) {

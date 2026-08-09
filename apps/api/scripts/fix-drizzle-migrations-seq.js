@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 const postgres = require("postgres");
 
 function shouldUseSsl(connectionString) {
@@ -12,7 +11,9 @@ function shouldUseSsl(connectionString) {
 async function main() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
-    console.log("[db:migrate] DATABASE_URL not set; skipping drizzle migration sequence fix");
+    console.log(
+      "[db:migrate] DATABASE_URL not set; skipping drizzle migration sequence fix",
+    );
     return;
   }
 
@@ -20,7 +21,9 @@ async function main() {
     prepare: false,
     max: 1,
     idle_timeout: 20,
-    ...(shouldUseSsl(connectionString) ? { ssl: { rejectUnauthorized: false } } : {})
+    ...(shouldUseSsl(connectionString)
+      ? { ssl: { rejectUnauthorized: false } }
+      : {}),
   });
 
   try {
@@ -43,7 +46,9 @@ BEGIN
   );
 END $$;
 `);
-    console.log("[db:migrate] drizzle.__drizzle_migrations sequence check complete");
+    console.log(
+      "[db:migrate] drizzle.__drizzle_migrations sequence check complete",
+    );
   } finally {
     await sql.end({ timeout: 5 });
   }
@@ -53,4 +58,3 @@ main().catch((error) => {
   console.error("[db:migrate] drizzle migrations sequence fix failed:", error);
   process.exitCode = 1;
 });
-

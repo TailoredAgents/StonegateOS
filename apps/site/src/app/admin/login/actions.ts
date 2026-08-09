@@ -5,8 +5,9 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
   ADMIN_SESSION_COOKIE,
+  adminSessionMatches,
   adminSessionCookieOptions,
-  getAdminKey,
+  getAdminSessionSecret,
 } from "@/lib/admin-session";
 
 export type LoginFormState = {
@@ -17,9 +18,9 @@ export async function loginAction(
   _prevState: LoginFormState | undefined,
   formData: FormData,
 ): Promise<LoginFormState> {
-  const adminKey = getAdminKey();
-  if (!adminKey) {
-    return { error: "ADMIN_API_KEY is not configured." };
+  const sessionSecret = getAdminSessionSecret();
+  if (!sessionSecret) {
+    return { error: "ADMIN_SESSION_SECRET is not configured." };
   }
 
   const submittedKey = formData.get("key");
@@ -33,13 +34,13 @@ export async function loginAction(
     return { error: "Enter your admin key." };
   }
 
-  if (submittedKey.trim() !== adminKey) {
+  if (!adminSessionMatches(submittedKey.trim())) {
     return { error: "Invalid admin key." };
   }
 
   (await cookies()).set(
     ADMIN_SESSION_COOKIE,
-    adminKey,
+    sessionSecret,
     adminSessionCookieOptions(),
   );
   redirect(redirectTo as Route);

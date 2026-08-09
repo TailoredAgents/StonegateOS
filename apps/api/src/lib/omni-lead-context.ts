@@ -1,14 +1,24 @@
-import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  sql,
+} from "drizzle-orm";
 import {
   appointments,
   callRecords,
+  contactProperties,
   contacts,
   conversationMessages,
   conversationParticipants,
   conversationThreads,
   crmPipeline,
   crmTasks,
-  getDb,
   instantQuotes,
   leadAutomationStates,
   leads,
@@ -16,6 +26,7 @@ import {
   properties,
   quotes,
 } from "@/db";
+import type { DatabaseClient } from "@/db";
 import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
 import {
   findAllowedCityInText,
@@ -24,11 +35,11 @@ import {
   normalizePostalCode,
 } from "@/lib/policy";
 
-type DatabaseClient = ReturnType<typeof getDb>;
-type TransactionExecutor =
-  Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
-    ? Tx
-    : never;
+type TransactionExecutor = Parameters<
+  DatabaseClient["transaction"]
+>[0] extends (tx: infer Tx) => Promise<unknown>
+  ? Tx
+  : never;
 type DbExecutor = DatabaseClient | TransactionExecutor;
 
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
@@ -90,8 +101,12 @@ function perceivedSizeRank(value: string | null | undefined): number {
   }
 }
 
-function extractQuotePrice(aiResult: unknown): { priceLow: number | null; priceHigh: number | null } {
-  if (!aiResult || typeof aiResult !== "object") return { priceLow: null, priceHigh: null };
+function extractQuotePrice(aiResult: unknown): {
+  priceLow: number | null;
+  priceHigh: number | null;
+} {
+  if (!aiResult || typeof aiResult !== "object")
+    return { priceLow: null, priceHigh: null };
   const record = aiResult as Record<string, unknown>;
   const low = record["priceLow"];
   const high = record["priceHigh"];
@@ -103,7 +118,10 @@ function extractQuotePrice(aiResult: unknown): { priceLow: number | null; priceH
 
 function coerceStringArray(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    ? value.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      )
     : [];
 }
 
@@ -121,9 +139,13 @@ function extractMediaAnalysis(aiResult: unknown): {
   }
   const mediaRecord = mediaAnalysis as Record<string, unknown>;
   const confidenceRaw =
-    typeof mediaRecord["confidence"] === "string" ? mediaRecord["confidence"].trim().toLowerCase() : "";
+    typeof mediaRecord["confidence"] === "string"
+      ? mediaRecord["confidence"].trim().toLowerCase()
+      : "";
   const confidence =
-    confidenceRaw === "low" || confidenceRaw === "medium" || confidenceRaw === "high"
+    confidenceRaw === "low" ||
+    confidenceRaw === "medium" ||
+    confidenceRaw === "high"
       ? confidenceRaw
       : null;
   const missingViews = coerceStringArray(mediaRecord["missingViews"]);
@@ -138,13 +160,18 @@ function summarizePricing(input: {
   if (input.formalQuoteTotal !== null && input.formalQuoteTotal !== undefined) {
     return `Formal quote on file: $${Number(input.formalQuoteTotal).toFixed(2)}`;
   }
-  if (typeof input.instantQuoteLow === "number" && typeof input.instantQuoteHigh === "number") {
+  if (
+    typeof input.instantQuoteLow === "number" &&
+    typeof input.instantQuoteHigh === "number"
+  ) {
     return `Instant quote range on file: $${input.instantQuoteLow}-$${input.instantQuoteHigh}`;
   }
   return null;
 }
 
-function detectObjections(messages: Array<{ direction: string; body: string }>): string[] {
+function detectObjections(
+  messages: Array<{ direction: string; body: string }>,
+): string[] {
   const text = messages
     .filter((message) => message.direction === "inbound")
     .map((message) => message.body.toLowerCase())
@@ -172,7 +199,11 @@ function detectObjections(messages: Array<{ direction: string; body: string }>):
   ) {
     results.add("timing");
   }
-  if (/(shopping around|other companies|another company|another quote|other quote|comparing quotes|someone else)/.test(text)) {
+  if (
+    /(shopping around|other companies|another company|another quote|other quote|comparing quotes|someone else)/.test(
+      text,
+    )
+  ) {
     results.add("comparison_shopping");
   }
   if (/(don't call|stop|unsubscribe|leave me alone)/.test(text)) {
@@ -209,11 +240,18 @@ function detectExceptionSignals(input: {
     input.pipelineNotes,
     input.latestCallSummary,
   ]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    )
     .join("\n")
     .toLowerCase();
   const serviceText = input.serviceHints.join(" ").toLowerCase();
-  const riskText = (Array.isArray(input.mediaRiskFlags) ? input.mediaRiskFlags : []).join(" ").toLowerCase();
+  const riskText = (
+    Array.isArray(input.mediaRiskFlags) ? input.mediaRiskFlags : []
+  )
+    .join(" ")
+    .toLowerCase();
   const results = new Set<string>();
 
   if (
@@ -258,9 +296,12 @@ function detectExceptionSignals(input: {
     /\b(today|same day|asap|as soon as possible|right away|this morning|this afternoon|tonight|within an hour|as early as possible)\b/.test(
       contextText,
     );
-  const instantQuoteTimeframe = (input.instantQuoteTimeframe ?? "").trim().toLowerCase();
+  const instantQuoteTimeframe = (input.instantQuoteTimeframe ?? "")
+    .trim()
+    .toLowerCase();
   const nextAppointmentAt =
-    typeof input.nextAppointmentStartAt === "string" && input.nextAppointmentStartAt.trim().length > 0
+    typeof input.nextAppointmentStartAt === "string" &&
+    input.nextAppointmentStartAt.trim().length > 0
       ? new Date(input.nextAppointmentStartAt)
       : null;
   const appointmentFarBeyondUrgency =
@@ -269,20 +310,28 @@ function detectExceptionSignals(input: {
     nextAppointmentAt.getTime() - Date.now() > 36 * 60 * 60 * 1000;
   if (
     urgencyRequested &&
-    ((instantQuoteTimeframe.length > 0 && !["today", "tomorrow"].includes(instantQuoteTimeframe)) || appointmentFarBeyondUrgency)
+    ((instantQuoteTimeframe.length > 0 &&
+      !["today", "tomorrow"].includes(instantQuoteTimeframe)) ||
+      appointmentFarBeyondUrgency)
   ) {
     results.add("schedule_urgency_contradiction");
   }
 
-  const mediaRiskFlags = Array.isArray(input.mediaRiskFlags) ? input.mediaRiskFlags : [];
+  const mediaRiskFlags = Array.isArray(input.mediaRiskFlags)
+    ? input.mediaRiskFlags
+    : [];
   const accessOrComplexityHints =
     /\b(upstairs|downstairs|stairs|steps|basement|attic|backyard|back yard|rear yard|shed|garage|fence|gate|multiple rooms|other room|another room|long carry|long walk|carry distance)\b/.test(
       contextText,
     ) ||
-    /\b(piano|gun safe|safe\b|pool table|hot tub|spa|treadmill)\b/.test(contextText);
+    /\b(piano|gun safe|safe\b|pool table|hot tub|spa|treadmill)\b/.test(
+      contextText,
+    );
   const simpleScopeAssumption =
-    (perceivedSizeRank(input.instantQuotePerceivedSize) > 0 && perceivedSizeRank(input.instantQuotePerceivedSize) <= 3) ||
-    (mediaRangeRank(input.mediaVisibleRange) > 0 && mediaRangeRank(input.mediaVisibleRange) <= 4);
+    (perceivedSizeRank(input.instantQuotePerceivedSize) > 0 &&
+      perceivedSizeRank(input.instantQuotePerceivedSize) <= 3) ||
+    (mediaRangeRank(input.mediaVisibleRange) > 0 &&
+      mediaRangeRank(input.mediaVisibleRange) <= 4);
   if (
     accessOrComplexityHints &&
     (simpleScopeAssumption ||
@@ -296,13 +345,17 @@ function detectExceptionSignals(input: {
     mediaRiskFlags.includes("stated_scope_exceeds_visible_media") &&
     mediaRiskFlags.includes("text_add_on_hints_exceed_visible_counts");
   const mediaRangeGap =
-    mediaRangeRank(input.mediaMergedRange) > 0 && mediaRangeRank(input.mediaVisibleRange) > 0
-      ? mediaRangeRank(input.mediaMergedRange) - mediaRangeRank(input.mediaVisibleRange)
+    mediaRangeRank(input.mediaMergedRange) > 0 &&
+    mediaRangeRank(input.mediaVisibleRange) > 0
+      ? mediaRangeRank(input.mediaMergedRange) -
+        mediaRangeRank(input.mediaVisibleRange)
       : 0;
   if (
     contradictionFromRiskFlags ||
     (mediaRangeGap >= 2 && input.mediaConfidence !== "high") ||
-    (mediaRangeGap >= 1 && input.mediaConfidence === "low" && mediaRiskFlags.includes("stated_scope_exceeds_visible_media"))
+    (mediaRangeGap >= 1 &&
+      input.mediaConfidence === "low" &&
+      mediaRiskFlags.includes("stated_scope_exceeds_visible_media"))
   ) {
     results.add("scope_pricing_contradiction");
   }
@@ -317,17 +370,25 @@ function detectCustomerIntent(input: {
   nextAppointmentType: string | null;
 }): string | null {
   if (input.nextAppointmentType) return "booked_or_scheduling";
-  const allServices = [...input.latestLeadServices, ...input.instantQuoteJobTypes].join(" ").toLowerCase();
+  const allServices = [
+    ...input.latestLeadServices,
+    ...input.instantQuoteJobTypes,
+  ]
+    .join(" ")
+    .toLowerCase();
   if (allServices.includes("demo")) return "demolition_quote";
-  if (allServices.includes("brush") || allServices.includes("land")) return "land_clearing_quote";
+  if (allServices.includes("brush") || allServices.includes("land"))
+    return "land_clearing_quote";
   if (allServices.length > 0) return "junk_removal_quote";
 
   const inboundText = input.recentMessages
     .filter((message) => message.direction === "inbound")
     .map((message) => message.body.toLowerCase())
     .join("\n");
-  if (/(book|schedule|available|come out)/.test(inboundText)) return "booking_intent";
-  if (/(quote|estimate|price|cost|how much)/.test(inboundText)) return "quote_intent";
+  if (/(book|schedule|available|come out)/.test(inboundText))
+    return "booking_intent";
+  if (/(quote|estimate|price|cost|how much)/.test(inboundText))
+    return "quote_intent";
   return null;
 }
 
@@ -474,7 +535,11 @@ export type OmniLeadContext = {
 
 export async function loadOmniLeadContext(
   db: DbExecutor,
-  input: { contactId: string; includeQuotePrice?: boolean; messageLimit?: number },
+  input: {
+    contactId: string;
+    includeQuotePrice?: boolean;
+    messageLimit?: number;
+  },
 ): Promise<OmniLeadContext | null> {
   const contactId = input.contactId.trim();
   if (!contactId) return null;
@@ -494,19 +559,44 @@ export async function loadOmniLeadContext(
       salespersonMemberId: contacts.salespersonMemberId,
     })
     .from(contacts)
-    .where(eq(contacts.id, contactId))
+    .where(and(eq(contacts.id, contactId), isNull(contacts.deletedAt)))
     .limit(1);
 
   if (!contact?.id) return null;
 
-  const [pipeline, recentProperties, recentOpenTasks, recentNotes, latestLeadRow, latestCallRow, recentThreadRows, recentMessageRows, latestFormalQuoteRow, latestMediaAnalysisRow] =
-    await Promise.all([
+  const [
+    pipeline,
+    recentProperties,
+    recentOpenTasks,
+    recentNotes,
+    latestLeadRow,
+    latestCallRow,
+    recentThreadRows,
+    recentMessageRows,
+    latestFormalQuoteRow,
+    latestMediaAnalysisRow,
+  ] = await Promise.all([
+    db
+      .select({ stage: crmPipeline.stage, notes: crmPipeline.notes })
+      .from(crmPipeline)
+      .where(eq(crmPipeline.contactId, contactId))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+    Promise.all([
       db
-        .select({ stage: crmPipeline.stage, notes: crmPipeline.notes })
-        .from(crmPipeline)
-        .where(eq(crmPipeline.contactId, contactId))
-        .limit(1)
-        .then((rows) => rows[0] ?? null),
+        .select({
+          id: properties.id,
+          addressLine1: properties.addressLine1,
+          city: properties.city,
+          state: properties.state,
+          postalCode: properties.postalCode,
+          createdAt: properties.createdAt,
+        })
+        .from(contactProperties)
+        .innerJoin(properties, eq(contactProperties.propertyId, properties.id))
+        .where(eq(contactProperties.contactId, contactId))
+        .orderBy(desc(properties.createdAt))
+        .limit(6),
       db
         .select({
           id: properties.id,
@@ -520,119 +610,159 @@ export async function loadOmniLeadContext(
         .where(eq(properties.contactId, contactId))
         .orderBy(desc(properties.createdAt))
         .limit(6),
-      db
-        .select({
-          id: crmTasks.id,
-          title: crmTasks.title,
-          dueAt: crmTasks.dueAt,
-          assignedTo: crmTasks.assignedTo,
-          notes: crmTasks.notes,
-        })
-        .from(crmTasks)
-        .where(and(eq(crmTasks.contactId, contactId), eq(crmTasks.status, "open")))
-        .orderBy(asc(crmTasks.dueAt), asc(crmTasks.createdAt))
-        .limit(8),
-      db
-        .select({
-          id: crmTasks.id,
-          title: crmTasks.title,
-          notes: crmTasks.notes,
-          updatedAt: crmTasks.updatedAt,
-        })
-        .from(crmTasks)
-        .where(and(eq(crmTasks.contactId, contactId), eq(crmTasks.status, "completed"), sql`${crmTasks.dueAt} is null`))
-        .orderBy(desc(crmTasks.updatedAt))
-        .limit(5),
-      db
-        .select({
-          id: leads.id,
-          createdAt: leads.createdAt,
-          status: leads.status,
-          source: leads.source,
-          servicesRequested: leads.servicesRequested,
-          notes: leads.notes,
-          propertyId: leads.propertyId,
-          instantQuoteId: leads.instantQuoteId,
-          formPayload: leads.formPayload,
-        })
-        .from(leads)
-        .where(eq(leads.contactId, contactId))
-        .orderBy(desc(leads.createdAt), desc(leads.updatedAt))
-        .limit(1)
-        .then((rows) => rows[0] ?? null),
-      db
-        .select({
-          id: callRecords.id,
-          direction: callRecords.direction,
-          callStatus: callRecords.callStatus,
-          createdAt: callRecords.createdAt,
-          summary: callRecords.summary,
-          transcript: callRecords.transcript,
-          extracted: callRecords.extracted,
-        })
-        .from(callRecords)
-        .where(and(eq(callRecords.contactId, contactId), isNotNull(callRecords.processedAt)))
-        .orderBy(desc(callRecords.createdAt))
-        .limit(1)
-        .then((rows) => rows[0] ?? null),
-      db
-        .select({
-          id: conversationThreads.id,
-          channel: conversationThreads.channel,
-          lastMessageAt: conversationThreads.lastMessageAt,
-        })
-        .from(conversationThreads)
-        .where(eq(conversationThreads.contactId, contactId))
-        .orderBy(desc(conversationThreads.lastMessageAt), desc(conversationThreads.updatedAt))
-        .limit(20),
-      db
-        .select({
-          id: conversationMessages.id,
-          threadId: conversationMessages.threadId,
-          channel: conversationMessages.channel,
-          direction: conversationMessages.direction,
-          subject: conversationMessages.subject,
-          body: conversationMessages.body,
-          mediaUrls: conversationMessages.mediaUrls,
-          createdAt: conversationMessages.createdAt,
-          sentAt: conversationMessages.sentAt,
-          receivedAt: conversationMessages.receivedAt,
-          participantName: conversationParticipants.displayName,
-        })
-        .from(conversationMessages)
-        .innerJoin(conversationThreads, and(eq(conversationMessages.threadId, conversationThreads.id), eq(conversationThreads.contactId, contactId)))
-        .leftJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
-        .orderBy(desc(sql`coalesce(${conversationMessages.receivedAt}, ${conversationMessages.sentAt}, ${conversationMessages.createdAt})`))
-        .limit(messageLimit),
-      db
-        .select({
-          id: quotes.id,
-          status: quotes.status,
-          total: quotes.total,
-          services: quotes.services,
-          notes: quotes.notes,
-          createdAt: quotes.createdAt,
-        })
-        .from(quotes)
-        .where(eq(quotes.contactId, contactId))
-        .orderBy(desc(quotes.createdAt), desc(quotes.updatedAt))
-        .limit(1)
-        .then((rows) => rows[0] ?? null),
-      db
-        .select({
-          confidence: mediaJobAnalyses.confidence,
-          visibleVolumeRange: mediaJobAnalyses.visibleVolumeRange,
-          mergedVolumeRange: mediaJobAnalyses.mergedVolumeRange,
-          riskFlags: mediaJobAnalyses.riskFlags,
-          missingViews: mediaJobAnalyses.missingViews,
-          summary: mediaJobAnalyses.summary,
-          source: mediaJobAnalyses.source,
-        })
-        .from(mediaJobAnalyses)
-        .where(eq(mediaJobAnalyses.contactId, contactId))
-        .limit(1)
-        .then((rows) => rows[0] ?? null),
-    ]);
+    ]).then(([associated, compatibility]) =>
+      Array.from(
+        new Map(
+          [...associated, ...compatibility].map((row) => [row.id, row]),
+        ).values(),
+      )
+        .sort(
+          (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
+        )
+        .slice(0, 6),
+    ),
+    db
+      .select({
+        id: crmTasks.id,
+        title: crmTasks.title,
+        dueAt: crmTasks.dueAt,
+        assignedTo: crmTasks.assignedTo,
+        notes: crmTasks.notes,
+      })
+      .from(crmTasks)
+      .where(
+        and(eq(crmTasks.contactId, contactId), eq(crmTasks.status, "open")),
+      )
+      .orderBy(asc(crmTasks.dueAt), asc(crmTasks.createdAt))
+      .limit(8),
+    db
+      .select({
+        id: crmTasks.id,
+        title: crmTasks.title,
+        notes: crmTasks.notes,
+        updatedAt: crmTasks.updatedAt,
+      })
+      .from(crmTasks)
+      .where(
+        and(
+          eq(crmTasks.contactId, contactId),
+          eq(crmTasks.status, "completed"),
+          sql`${crmTasks.dueAt} is null`,
+        ),
+      )
+      .orderBy(desc(crmTasks.updatedAt))
+      .limit(5),
+    db
+      .select({
+        id: leads.id,
+        createdAt: leads.createdAt,
+        status: leads.status,
+        source: leads.source,
+        servicesRequested: leads.servicesRequested,
+        notes: leads.notes,
+        propertyId: leads.propertyId,
+        instantQuoteId: leads.instantQuoteId,
+        formPayload: leads.formPayload,
+      })
+      .from(leads)
+      .where(eq(leads.contactId, contactId))
+      .orderBy(desc(leads.createdAt), desc(leads.updatedAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+    db
+      .select({
+        id: callRecords.id,
+        direction: callRecords.direction,
+        callStatus: callRecords.callStatus,
+        createdAt: callRecords.createdAt,
+        summary: callRecords.summary,
+        transcript: callRecords.transcript,
+        extracted: callRecords.extracted,
+      })
+      .from(callRecords)
+      .where(
+        and(
+          eq(callRecords.contactId, contactId),
+          isNotNull(callRecords.processedAt),
+        ),
+      )
+      .orderBy(desc(callRecords.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+    db
+      .select({
+        id: conversationThreads.id,
+        channel: conversationThreads.channel,
+        lastMessageAt: conversationThreads.lastMessageAt,
+      })
+      .from(conversationThreads)
+      .where(eq(conversationThreads.contactId, contactId))
+      .orderBy(
+        desc(conversationThreads.lastMessageAt),
+        desc(conversationThreads.updatedAt),
+      )
+      .limit(20),
+    db
+      .select({
+        id: conversationMessages.id,
+        threadId: conversationMessages.threadId,
+        channel: conversationMessages.channel,
+        direction: conversationMessages.direction,
+        subject: conversationMessages.subject,
+        body: conversationMessages.body,
+        mediaUrls: conversationMessages.mediaUrls,
+        createdAt: conversationMessages.createdAt,
+        sentAt: conversationMessages.sentAt,
+        receivedAt: conversationMessages.receivedAt,
+        participantName: conversationParticipants.displayName,
+      })
+      .from(conversationMessages)
+      .innerJoin(
+        conversationThreads,
+        and(
+          eq(conversationMessages.threadId, conversationThreads.id),
+          eq(conversationThreads.contactId, contactId),
+        ),
+      )
+      .leftJoin(
+        conversationParticipants,
+        eq(conversationMessages.participantId, conversationParticipants.id),
+      )
+      .orderBy(
+        desc(
+          sql`coalesce(${conversationMessages.receivedAt}, ${conversationMessages.sentAt}, ${conversationMessages.createdAt})`,
+        ),
+      )
+      .limit(messageLimit),
+    db
+      .select({
+        id: quotes.id,
+        status: quotes.status,
+        total: quotes.total,
+        services: quotes.services,
+        notes: quotes.notes,
+        createdAt: quotes.createdAt,
+      })
+      .from(quotes)
+      .where(eq(quotes.contactId, contactId))
+      .orderBy(desc(quotes.createdAt), desc(quotes.updatedAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+    db
+      .select({
+        confidence: mediaJobAnalyses.confidence,
+        visibleVolumeRange: mediaJobAnalyses.visibleVolumeRange,
+        mergedVolumeRange: mediaJobAnalyses.mergedVolumeRange,
+        riskFlags: mediaJobAnalyses.riskFlags,
+        missingViews: mediaJobAnalyses.missingViews,
+        summary: mediaJobAnalyses.summary,
+        source: mediaJobAnalyses.source,
+      })
+      .from(mediaJobAnalyses)
+      .where(eq(mediaJobAnalyses.contactId, contactId))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+  ]);
   const serviceAreaPolicy = await getServiceAreaPolicy(db);
 
   const omniFacts = await loadOmniThreadFacts(db, {
@@ -648,54 +778,55 @@ export async function loadOmniLeadContext(
         createdAt: latestLeadRow.createdAt.toISOString(),
         status: latestLeadRow.status,
         source: cleanText(latestLeadRow.source),
-        servicesRequested: Array.isArray(latestLeadRow.servicesRequested) ? latestLeadRow.servicesRequested : [],
+        servicesRequested: Array.isArray(latestLeadRow.servicesRequested)
+          ? latestLeadRow.servicesRequested
+          : [],
         notes: cleanText(latestLeadRow.notes),
         propertyId: latestLeadRow.propertyId ?? null,
         instantQuoteId: latestLeadRow.instantQuoteId ?? null,
         formPayload:
-          latestLeadRow.formPayload && typeof latestLeadRow.formPayload === "object"
-            ? (latestLeadRow.formPayload as Record<string, unknown>)
+          latestLeadRow.formPayload &&
+          typeof latestLeadRow.formPayload === "object"
+            ? latestLeadRow.formPayload
             : null,
       }
     : null;
 
-  const automationRows =
-    latestLead?.id
-      ? await db
-          .select({
-            channel: leadAutomationStates.channel,
-            paused: leadAutomationStates.paused,
-            dnc: leadAutomationStates.dnc,
-            humanTakeover: leadAutomationStates.humanTakeover,
-            followupState: leadAutomationStates.followupState,
-            followupStep: leadAutomationStates.followupStep,
-            nextFollowupAt: leadAutomationStates.nextFollowupAt,
-          })
-          .from(leadAutomationStates)
-          .where(eq(leadAutomationStates.leadId, latestLead.id))
-          .orderBy(asc(leadAutomationStates.channel))
-      : [];
+  const automationRows = latestLead?.id
+    ? await db
+        .select({
+          channel: leadAutomationStates.channel,
+          paused: leadAutomationStates.paused,
+          dnc: leadAutomationStates.dnc,
+          humanTakeover: leadAutomationStates.humanTakeover,
+          followupState: leadAutomationStates.followupState,
+          followupStep: leadAutomationStates.followupStep,
+          nextFollowupAt: leadAutomationStates.nextFollowupAt,
+        })
+        .from(leadAutomationStates)
+        .where(eq(leadAutomationStates.leadId, latestLead.id))
+        .orderBy(asc(leadAutomationStates.channel))
+    : [];
 
-  const latestInstantQuoteRow =
-    latestLead?.instantQuoteId
-      ? (
-          await db
-            .select({
-              id: instantQuotes.id,
-              createdAt: instantQuotes.createdAt,
-              zip: instantQuotes.zip,
-              timeframe: instantQuotes.timeframe,
-              jobTypes: instantQuotes.jobTypes,
-              perceivedSize: instantQuotes.perceivedSize,
-              notes: instantQuotes.notes,
-              photoUrls: instantQuotes.photoUrls,
-              aiResult: instantQuotes.aiResult,
-            })
-            .from(instantQuotes)
-            .where(eq(instantQuotes.id, latestLead.instantQuoteId))
-            .limit(1)
-        )[0] ?? null
-      : null;
+  const latestInstantQuoteRow = latestLead?.instantQuoteId
+    ? ((
+        await db
+          .select({
+            id: instantQuotes.id,
+            createdAt: instantQuotes.createdAt,
+            zip: instantQuotes.zip,
+            timeframe: instantQuotes.timeframe,
+            jobTypes: instantQuotes.jobTypes,
+            perceivedSize: instantQuotes.perceivedSize,
+            notes: instantQuotes.notes,
+            photoUrls: instantQuotes.photoUrls,
+            aiResult: instantQuotes.aiResult,
+          })
+          .from(instantQuotes)
+          .where(eq(instantQuotes.id, latestLead.instantQuoteId))
+          .limit(1)
+      )[0] ?? null)
+    : null;
 
   const appointmentRows = await db
     .select({
@@ -707,31 +838,41 @@ export async function loadOmniLeadContext(
       finalTotalCents: appointments.finalTotalCents,
     })
     .from(appointments)
-    .where(and(eq(appointments.contactId, contactId), ne(appointments.status, "canceled")))
+    .where(
+      and(
+        eq(appointments.contactId, contactId),
+        ne(appointments.status, "canceled"),
+      ),
+    )
     .orderBy(desc(appointments.startAt), desc(appointments.createdAt))
     .limit(10);
 
   const nowMs = Date.now();
   const upcomingAppointment =
     appointmentRows
-      .filter((row): row is typeof row & { startAt: Date } => row.startAt instanceof Date && row.startAt.getTime() >= nowMs)
-      .sort((a, b) => a.startAt.getTime() - b.startAt.getTime())[0] ?? appointmentRows[0] ?? null;
+      .filter(
+        (row): row is typeof row & { startAt: Date } =>
+          row.startAt instanceof Date && row.startAt.getTime() >= nowMs,
+      )
+      .sort((a, b) => a.startAt.getTime() - b.startAt.getTime())[0] ??
+    appointmentRows[0] ??
+    null;
 
-  const recentMessages = [...recentMessageRows]
-    .reverse()
-    .map((row) => ({
-      id: row.id,
-      threadId: row.threadId,
-      channel: row.channel,
-      direction: row.direction,
-      body: row.body,
-      subject: cleanText(row.subject),
-      participantName: cleanText(row.participantName),
-      mediaUrls: Array.isArray(row.mediaUrls) ? row.mediaUrls.filter(Boolean) : [],
-      createdAt: row.createdAt.toISOString(),
-      sentAt: toIso(row.sentAt),
-      receivedAt: toIso(row.receivedAt),
-    }));
+  const recentMessages = [...recentMessageRows].reverse().map((row) => ({
+    id: row.id,
+    threadId: row.threadId,
+    channel: row.channel,
+    direction: row.direction,
+    body: row.body,
+    subject: cleanText(row.subject),
+    participantName: cleanText(row.participantName),
+    mediaUrls: Array.isArray(row.mediaUrls)
+      ? row.mediaUrls.filter(Boolean)
+      : [],
+    createdAt: row.createdAt.toISOString(),
+    sentAt: toIso(row.sentAt),
+    receivedAt: toIso(row.receivedAt),
+  }));
 
   const threadIds = recentThreadRows.map((row) => row.id);
   const channelTimes =
@@ -750,7 +891,12 @@ export async function loadOmniLeadContext(
 
   const channelSummaryMap = new Map<
     string,
-    { threadCount: number; lastInboundAt: Date | null; lastOutboundAt: Date | null; lastMessageAt: Date | null }
+    {
+      threadCount: number;
+      lastInboundAt: Date | null;
+      lastOutboundAt: Date | null;
+      lastMessageAt: Date | null;
+    }
   >();
   for (const thread of recentThreadRows) {
     const existing = channelSummaryMap.get(thread.channel) ?? {
@@ -760,7 +906,10 @@ export async function loadOmniLeadContext(
       lastMessageAt: null,
     };
     existing.threadCount += 1;
-    if (thread.lastMessageAt && (!existing.lastMessageAt || thread.lastMessageAt > existing.lastMessageAt)) {
+    if (
+      thread.lastMessageAt &&
+      (!existing.lastMessageAt || thread.lastMessageAt > existing.lastMessageAt)
+    ) {
       existing.lastMessageAt = thread.lastMessageAt;
     }
     channelSummaryMap.set(thread.channel, existing);
@@ -772,10 +921,16 @@ export async function loadOmniLeadContext(
       lastOutboundAt: null,
       lastMessageAt: null,
     };
-    if (row.lastInboundAt && (!existing.lastInboundAt || row.lastInboundAt > existing.lastInboundAt)) {
+    if (
+      row.lastInboundAt &&
+      (!existing.lastInboundAt || row.lastInboundAt > existing.lastInboundAt)
+    ) {
       existing.lastInboundAt = row.lastInboundAt;
     }
-    if (row.lastOutboundAt && (!existing.lastOutboundAt || row.lastOutboundAt > existing.lastOutboundAt)) {
+    if (
+      row.lastOutboundAt &&
+      (!existing.lastOutboundAt || row.lastOutboundAt > existing.lastOutboundAt)
+    ) {
       existing.lastOutboundAt = row.lastOutboundAt;
     }
     channelSummaryMap.set(row.channel, existing);
@@ -789,37 +944,53 @@ export async function loadOmniLeadContext(
       lastOutboundAt: toIso(row.lastOutboundAt),
       lastMessageAt: toIso(row.lastMessageAt),
     }))
-    .sort((a, b) => Date.parse(b.lastMessageAt ?? "") - Date.parse(a.lastMessageAt ?? ""));
+    .sort(
+      (a, b) =>
+        Date.parse(b.lastMessageAt ?? "") - Date.parse(a.lastMessageAt ?? ""),
+    );
 
-  const latestInbound = [...recentMessages]
-    .filter((message) => message.direction === "inbound")
-    .sort((a, b) => Date.parse(b.receivedAt ?? b.createdAt) - Date.parse(a.receivedAt ?? a.createdAt))[0] ?? null;
-  const latestOutbound = [...recentMessages]
-    .filter((message) => message.direction === "outbound")
-    .sort((a, b) => Date.parse(b.sentAt ?? b.createdAt) - Date.parse(a.sentAt ?? a.createdAt))[0] ?? null;
+  const latestInbound =
+    [...recentMessages]
+      .filter((message) => message.direction === "inbound")
+      .sort(
+        (a, b) =>
+          Date.parse(b.receivedAt ?? b.createdAt) -
+          Date.parse(a.receivedAt ?? a.createdAt),
+      )[0] ?? null;
+  const latestOutbound =
+    [...recentMessages]
+      .filter((message) => message.direction === "outbound")
+      .sort(
+        (a, b) =>
+          Date.parse(b.sentAt ?? b.createdAt) -
+          Date.parse(a.sentAt ?? a.createdAt),
+      )[0] ?? null;
 
   const objections = detectObjections(recentMessages);
   const channelPreference =
     latestInbound?.channel ??
     channelSummary.find((channel) => channel.threadCount > 0)?.channel ??
     null;
-  const hasMessengerHistory = channelSummary.some((channel) => channel.channel === "dm" && channel.threadCount > 0);
+  const hasMessengerHistory = channelSummary.some(
+    (channel) => channel.channel === "dm" && channel.threadCount > 0,
+  );
   const latestLeadSource = latestLead?.source?.toLowerCase() ?? null;
   const latestLeadFormSource =
     typeof latestLead?.formPayload?.["source"] === "string"
       ? latestLead.formPayload["source"].toLowerCase()
       : null;
   const contactSource = contact.source?.toLowerCase() ?? null;
-  const dmEntrySource =
-    hasMessengerHistory
-      ? latestLeadSource === "facebook_lead" ||
-        latestLeadFormSource === "facebook_lead" ||
-        contactSource === "facebook_lead"
-        ? "facebook_ad_lead"
-        : "organic_messenger"
-      : null;
+  const dmEntrySource = hasMessengerHistory
+    ? latestLeadSource === "facebook_lead" ||
+      latestLeadFormSource === "facebook_lead" ||
+      contactSource === "facebook_lead"
+      ? "facebook_ad_lead"
+      : "organic_messenger"
+    : null;
 
-  const instantQuotePrice = latestInstantQuoteRow ? extractQuotePrice(latestInstantQuoteRow.aiResult) : { priceLow: null, priceHigh: null };
+  const instantQuotePrice = latestInstantQuoteRow
+    ? extractQuotePrice(latestInstantQuoteRow.aiResult)
+    : { priceLow: null, priceHigh: null };
   const pricingContext = summarizePricing({
     formalQuoteTotal: latestFormalQuoteRow?.total ?? null,
     instantQuoteLow: instantQuotePrice.priceLow,
@@ -827,15 +998,22 @@ export async function loadOmniLeadContext(
   });
   const customerIntent = detectCustomerIntent({
     latestLeadServices: latestLead?.servicesRequested ?? [],
-    instantQuoteJobTypes: latestInstantQuoteRow ? coerceStringArray(latestInstantQuoteRow.jobTypes) : [],
-    recentMessages: recentMessages.map((message) => ({ direction: message.direction, body: message.body })),
+    instantQuoteJobTypes: latestInstantQuoteRow
+      ? coerceStringArray(latestInstantQuoteRow.jobTypes)
+      : [],
+    recentMessages: recentMessages.map((message) => ({
+      direction: message.direction,
+      body: message.body,
+    })),
     nextAppointmentType: upcomingAppointment?.type ?? null,
   });
 
   const knownZip =
     omniFacts.knownZip ??
     normalizePostalCode(recentProperties[0]?.postalCode ?? null) ??
-    (latestInstantQuoteRow ? normalizePostalCode(latestInstantQuoteRow.zip) : null);
+    (latestInstantQuoteRow
+      ? normalizePostalCode(latestInstantQuoteRow.zip)
+      : null);
   const messageCityMatch = findAllowedCityInText(
     recentMessages
       .filter((message) => message.direction === "inbound")
@@ -853,21 +1031,30 @@ export async function loadOmniLeadContext(
     })() ??
     (() => {
       const property = latestLead?.formPayload?.["property"];
-      if (!property || typeof property !== "object" || Array.isArray(property)) return null;
+      if (!property || typeof property !== "object" || Array.isArray(property))
+        return null;
       const city = (property as Record<string, unknown>)["city"];
       return typeof city === "string" ? cleanText(city) : null;
     })();
-  const serviceAreaAllowed = knownCity ? isCityAllowed(knownCity, serviceAreaPolicy) : null;
-  const instantQuoteMediaAnalysis = extractMediaAnalysis(latestInstantQuoteRow?.aiResult);
+  const serviceAreaAllowed = knownCity
+    ? isCityAllowed(knownCity, serviceAreaPolicy)
+    : null;
+  const instantQuoteMediaAnalysis = extractMediaAnalysis(
+    latestInstantQuoteRow?.aiResult,
+  );
   const mediaConfidenceRaw = latestMediaAnalysisRow?.confidence;
   const mediaConfidence: "low" | "medium" | "high" | null =
-    mediaConfidenceRaw === "low" || mediaConfidenceRaw === "medium" || mediaConfidenceRaw === "high"
+    mediaConfidenceRaw === "low" ||
+    mediaConfidenceRaw === "medium" ||
+    mediaConfidenceRaw === "high"
       ? mediaConfidenceRaw
       : null;
   const mediaAnalysis = latestMediaAnalysisRow
     ? {
         confidence: mediaConfidence,
-        visibleVolumeRange: cleanText(latestMediaAnalysisRow.visibleVolumeRange),
+        visibleVolumeRange: cleanText(
+          latestMediaAnalysisRow.visibleVolumeRange,
+        ),
         mergedVolumeRange: cleanText(latestMediaAnalysisRow.mergedVolumeRange),
         riskFlags: coerceStringArray(latestMediaAnalysisRow.riskFlags),
         missingViews: coerceStringArray(latestMediaAnalysisRow.missingViews),
@@ -877,38 +1064,47 @@ export async function loadOmniLeadContext(
     : null;
   const serviceHints = [
     ...(latestLead?.servicesRequested ?? []),
-    ...(latestInstantQuoteRow ? coerceStringArray(latestInstantQuoteRow.jobTypes) : []),
+    ...(latestInstantQuoteRow
+      ? coerceStringArray(latestInstantQuoteRow.jobTypes)
+      : []),
     ...(latestFormalQuoteRow
       ? Array.isArray(latestFormalQuoteRow.services)
-        ? latestFormalQuoteRow.services.filter((item): item is string => typeof item === "string")
+        ? latestFormalQuoteRow.services.filter(
+            (item): item is string => typeof item === "string",
+          )
         : []
       : []),
   ];
   const missingFields = Array.from(
     new Set([
       ...omniFacts.missingFields,
-      ...(instantQuoteMediaAnalysis.missingViews.length > 0 ? ["one better photo angle"] : []),
+      ...(instantQuoteMediaAnalysis.missingViews.length > 0
+        ? ["one better photo angle"]
+        : []),
       ...(mediaAnalysis?.missingViews.length ? ["one better photo angle"] : []),
       ...(contact.phoneE164 || contact.phone ? [] : ["phone"]),
       ...(contact.email ? [] : ["email"]),
     ]),
   );
-  const bookingReadiness =
-    upcomingAppointment
-      ? "booked"
-      : customerIntent === "booked_or_scheduling"
-        ? "high"
-        : recentMessages.some((message) => message.direction === "inbound" && /\b(book|schedule|available|come out)\b/i.test(message.body))
-          ? "high"
-          : pricingContext
-            ? "medium"
-            : "low";
-  const quoteConfidence =
-    latestFormalQuoteRow
+  const bookingReadiness = upcomingAppointment
+    ? "booked"
+    : customerIntent === "booked_or_scheduling"
       ? "high"
-      : instantQuoteMediaAnalysis.confidence
-        ? instantQuoteMediaAnalysis.confidence
-      : latestInstantQuoteRow && (latestInstantQuoteRow.photoUrls?.length ?? 0) >= 2
+      : recentMessages.some(
+            (message) =>
+              message.direction === "inbound" &&
+              /\b(book|schedule|available|come out)\b/i.test(message.body),
+          )
+        ? "high"
+        : pricingContext
+          ? "medium"
+          : "low";
+  const quoteConfidence = latestFormalQuoteRow
+    ? "high"
+    : instantQuoteMediaAnalysis.confidence
+      ? instantQuoteMediaAnalysis.confidence
+      : latestInstantQuoteRow &&
+          (latestInstantQuoteRow.photoUrls?.length ?? 0) >= 2
         ? "medium"
         : latestInstantQuoteRow
           ? "low"
@@ -919,7 +1115,10 @@ export async function loadOmniLeadContext(
     cleanText(recentNotes[0]?.notes) ??
     cleanText(recentNotes[0]?.title);
   const exceptionSignals = detectExceptionSignals({
-    recentMessages: recentMessages.map((message) => ({ direction: message.direction, body: message.body })),
+    recentMessages: recentMessages.map((message) => ({
+      direction: message.direction,
+      body: message.body,
+    })),
     latestLeadNotes: latestLead?.notes ?? null,
     instantQuoteNotes: latestInstantQuoteRow?.notes ?? null,
     pipelineNotes: pipeline?.notes ?? null,
@@ -939,7 +1138,11 @@ export async function loadOmniLeadContext(
   return {
     contact: {
       id: contact.id,
-      name: [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim() || "Unknown contact",
+      name:
+        [contact.firstName, contact.lastName]
+          .filter(Boolean)
+          .join(" ")
+          .trim() || "Unknown contact",
       firstName: cleanText(contact.firstName),
       lastName: cleanText(contact.lastName),
       email: cleanText(contact.email),
@@ -981,10 +1184,11 @@ export async function loadOmniLeadContext(
           id: latestFormalQuoteRow.id,
           status: latestFormalQuoteRow.status,
           total: String(latestFormalQuoteRow.total),
-          services:
-            Array.isArray(latestFormalQuoteRow.services)
-              ? latestFormalQuoteRow.services.filter((item): item is string => typeof item === "string")
-              : [],
+          services: Array.isArray(latestFormalQuoteRow.services)
+            ? latestFormalQuoteRow.services.filter(
+                (item): item is string => typeof item === "string",
+              )
+            : [],
           notes: cleanText(latestFormalQuoteRow.notes),
           createdAt: latestFormalQuoteRow.createdAt.toISOString(),
         }
@@ -1029,8 +1233,9 @@ export async function loadOmniLeadContext(
           summary: cleanText(latestCallRow.summary),
           transcript: cleanText(latestCallRow.transcript),
           extracted:
-            latestCallRow.extracted && typeof latestCallRow.extracted === "object"
-              ? (latestCallRow.extracted as Record<string, unknown>)
+            latestCallRow.extracted &&
+            typeof latestCallRow.extracted === "object"
+              ? latestCallRow.extracted
               : null,
         }
       : null,

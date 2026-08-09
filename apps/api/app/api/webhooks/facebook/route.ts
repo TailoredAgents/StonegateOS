@@ -31,11 +31,6 @@ type FacebookMessagingEvent = {
   postback?: FacebookPostback;
 };
 
-type FacebookLeadgenField = {
-  name?: string;
-  values?: string[];
-};
-
 type FacebookLeadgenChangeValue = {
   leadgen_id?: string;
   form_id?: string;
@@ -64,7 +59,11 @@ type FacebookWebhookPayload = {
   entry?: FacebookWebhookEntry[];
 };
 
-function verifySignature(rawBody: string, signature: string | null, secret: string): boolean {
+function verifySignature(
+  rawBody: string,
+  signature: string | null,
+  secret: string,
+): boolean {
   if (!signature) return false;
   const trimmed = signature.split(",")[0]?.trim() ?? "";
   const [algoRaw, hash] = trimmed.split("=");
@@ -74,18 +73,30 @@ function verifySignature(rawBody: string, signature: string | null, secret: stri
     return false;
   }
 
-  const expected = crypto.createHmac(algo, secret).update(rawBody, "utf8").digest("hex");
+  const expected = crypto
+    .createHmac(algo, secret)
+    .update(rawBody, "utf8")
+    .digest("hex");
   try {
-    return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(expected, "hex"));
+    return crypto.timingSafeEqual(
+      Buffer.from(hash, "hex"),
+      Buffer.from(expected, "hex"),
+    );
   } catch {
     return false;
   }
 }
 
 function getMediaUrls(message?: FacebookMessage): string[] {
-  const attachments = Array.isArray(message?.attachments) ? message?.attachments ?? [] : [];
+  const attachments = Array.isArray(message?.attachments)
+    ? (message?.attachments ?? [])
+    : [];
   return attachments
-    .map((attachment) => (typeof attachment?.payload?.url === "string" ? attachment.payload.url : null))
+    .map((attachment) =>
+      typeof attachment?.payload?.url === "string"
+        ? attachment.payload.url
+        : null,
+    )
     .filter((url): url is string => Boolean(url));
 }
 
@@ -95,63 +106,6 @@ function parseJson<T>(raw: string): T | null {
   } catch {
     return null;
   }
-}
-
-function normalizeFieldKey(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-function buildFieldMap(fields?: FacebookLeadgenField[]): Record<string, string[]> {
-  const map: Record<string, string[]> = {};
-  const items = Array.isArray(fields) ? fields : [];
-  for (const field of items) {
-    const label = typeof field.name === "string" ? field.name.trim() : "";
-    const values = Array.isArray(field.values)
-      ? field.values.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-      : [];
-    if (!label || values.length === 0) {
-      continue;
-    }
-    map[normalizeFieldKey(label)] = values;
-  }
-  return map;
-}
-
-function buildCustomAnswers(
-  fields?: FacebookLeadgenField[],
-  standardKeys?: Set<string>
-): Record<string, string[]> {
-  const answers: Record<string, string[]> = {};
-  const items = Array.isArray(fields) ? fields : [];
-  for (const field of items) {
-    const label = typeof field.name === "string" ? field.name.trim() : "";
-    const values = Array.isArray(field.values)
-      ? field.values.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-      : [];
-    if (!label || values.length === 0) {
-      continue;
-    }
-    const normalized = normalizeFieldKey(label);
-    if (standardKeys?.has(normalized)) {
-      continue;
-    }
-    answers[label] = values;
-  }
-  return answers;
-}
-
-function firstFieldValue(map: Record<string, string[]>, keys: string[]): string | null {
-  for (const key of keys) {
-    const values = map[key];
-    if (Array.isArray(values) && values.length > 0) {
-      return values[0] ?? null;
-    }
-  }
-  return null;
 }
 
 function parseLeadFormFilter(): Set<string> | null {
@@ -186,12 +140,13 @@ export async function POST(request: NextRequest): Promise<Response> {
   const rawBody = await request.text();
   const secret = process.env["FB_APP_SECRET"];
   const signature =
-    request.headers.get("x-hub-signature-256") ?? request.headers.get("x-hub-signature");
+    request.headers.get("x-hub-signature-256") ??
+    request.headers.get("x-hub-signature");
 
   if (secret && !verifySignature(rawBody, signature, secret)) {
     console.warn("[webhooks][facebook] invalid_signature", {
       signatureHeader: signature?.split("=")[0] ?? null,
-      traceId: request.headers.get("x-fb-trace-id") ?? null
+      traceId: request.headers.get("x-fb-trace-id") ?? null,
     });
     return NextResponse.json({ error: "invalid_signature" }, { status: 401 });
   }
@@ -220,7 +175,9 @@ export async function POST(request: NextRequest): Promise<Response> {
       const message = event.message;
       const postback = event.postback;
       const receivedAt =
-        typeof event.timestamp === "number" ? new Date(event.timestamp) : undefined;
+        typeof event.timestamp === "number"
+          ? new Date(event.timestamp)
+          : undefined;
 
       if (message && !message.is_echo) {
         queuedEvents.push({
@@ -231,19 +188,24 @@ export async function POST(request: NextRequest): Promise<Response> {
             recipientId,
             timestamp: receivedAt?.toISOString() ?? null,
             body: typeof message.text === "string" ? message.text : "",
-            providerMessageId: typeof message.mid === "string" ? message.mid : null,
-            mediaUrls: getMediaUrls(message)
-          }
+            providerMessageId:
+              typeof message.mid === "string" ? message.mid : null,
+            mediaUrls: getMediaUrls(message),
+          },
         });
         queued += 1;
         continue;
       }
 
       if (postback) {
-        const payload = typeof postback.payload === "string" ? postback.payload : null;
-        const title = typeof postback.title === "string" ? postback.title : null;
+        const payload =
+          typeof postback.payload === "string" ? postback.payload : null;
+        const title =
+          typeof postback.title === "string" ? postback.title : null;
         const referral =
-          postback.referral && typeof postback.referral === "object" ? postback.referral : null;
+          postback.referral && typeof postback.referral === "object"
+            ? postback.referral
+            : null;
         queuedEvents.push({
           type: "facebook.dm.postback",
           payload: {
@@ -253,8 +215,8 @@ export async function POST(request: NextRequest): Promise<Response> {
             timestamp: receivedAt?.toISOString() ?? null,
             payload,
             title,
-            referral
-          }
+            referral,
+          },
         });
         queued += 1;
         continue;
@@ -269,7 +231,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         continue;
       }
       const value = change.value;
-      const leadgenId = typeof value?.leadgen_id === "string" ? value.leadgen_id : null;
+      const leadgenId =
+        typeof value?.leadgen_id === "string" ? value.leadgen_id : null;
       const formId = typeof value?.form_id === "string" ? value.form_id : null;
       if (!leadgenId) {
         skipped += 1;
@@ -285,8 +248,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         payload: {
           leadgenId,
           formId,
-          pageId: entry.id ?? null
-        }
+          pageId: entry.id ?? null,
+        },
       });
       queued += 1;
     }

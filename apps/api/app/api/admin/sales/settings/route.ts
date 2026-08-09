@@ -29,7 +29,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     .where(eq(policySettings.key, SALES_SCORECARD_POLICY_KEY))
     .limit(1);
 
-  const stored = isRecord(row?.value) ? (row!.value as Record<string, unknown>) : {};
+  const stored = isRecord(row?.value) ? (row.value) : {};
   const defaultAssigneeMemberIdRaw = typeof stored["defaultAssigneeMemberId"] === "string" ? stored["defaultAssigneeMemberId"].trim() : "";
   const defaultAssigneeMemberId = defaultAssigneeMemberIdRaw.length > 0 ? defaultAssigneeMemberIdRaw : null;
 
@@ -84,7 +84,7 @@ export async function PATCH(request: NextRequest): Promise<Response> {
     .where(eq(policySettings.key, SALES_SCORECARD_POLICY_KEY))
     .limit(1);
 
-  const nextValue: Record<string, unknown> = isRecord(existing?.value) ? { ...(existing!.value as Record<string, unknown>) } : {};
+  const nextValue: Record<string, unknown> = isRecord(existing?.value) ? { ...(existing.value) } : {};
   if (nextId) {
     nextValue["defaultAssigneeMemberId"] = nextId;
   } else {

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { randomUUID } from "node:crypto";
 import {
   availabilityWindows,
   getPartnerServiceLabel,
@@ -6,13 +7,16 @@ import {
   PARTNER_DEMO_TIER_KEYS,
   PARTNER_JUNK_BASE_TIER_KEYS,
   PARTNER_LAND_CLEARING_TIER_KEYS,
-  weeklyAvailability
+  weeklyAvailability,
 } from "@myst-os/pricing";
 import { callPartnerApi } from "../lib/api";
 import { partnerCreateBookingAction } from "../actions";
+import { PartnerMutationSubmitButton } from "../PartnerMutationSubmitButton";
 
 const PARTNER_PORTAL_TIME_ZONE = "America/New_York";
-const SERVICE_DAYS = new Set(weeklyAvailability.serviceDays.map((d) => d.toLowerCase()));
+const SERVICE_DAYS = new Set(
+  weeklyAvailability.serviceDays.map((d) => d.toLowerCase()),
+);
 
 function tierFieldLabelForService(serviceKey: string): string {
   const key = serviceKey.trim().toLowerCase();
@@ -24,18 +28,25 @@ function tierFieldLabelForService(serviceKey: string): string {
 
 function notesPlaceholderForService(serviceKey: string): string {
   const key = serviceKey.trim().toLowerCase();
-  if (key === "junk-removal") return "Item list, access notes, stairs, heavy items, parking, etc.";
-  if (key === "demo-hauloff") return "What are we demoing? Any tile/concrete/heavy materials? Access + parking notes.";
-  if (key === "land-clearing") return "Area size, access width, brush density, haul-away vs pile on-site, etc.";
+  if (key === "junk-removal")
+    return "Item list, access notes, stairs, heavy items, parking, etc.";
+  if (key === "demo-hauloff")
+    return "What are we demoing? Any tile/concrete/heavy materials? Access + parking notes.";
+  if (key === "land-clearing")
+    return "Area size, access width, brush density, haul-away vs pile on-site, etc.";
   return "Any access notes, item list, parking instructions, etc.";
 }
 
-function ymdPartsInTimeZone(date: Date): { year: number; month: number; day: number } {
+function ymdPartsInTimeZone(date: Date): {
+  year: number;
+  month: number;
+  day: number;
+} {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: PARTNER_PORTAL_TIME_ZONE,
     year: "numeric",
     month: "2-digit",
-    day: "2-digit"
+    day: "2-digit",
   }).formatToParts(date);
 
   const year = Number(parts.find((p) => p.type === "year")?.value ?? "");
@@ -54,7 +65,10 @@ function formatYmdInTimeZone(date: Date): string {
 }
 
 function weekdayKeyInTimeZone(date: Date): string {
-  return new Intl.DateTimeFormat("en-US", { timeZone: PARTNER_PORTAL_TIME_ZONE, weekday: "long" })
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: PARTNER_PORTAL_TIME_ZONE,
+    weekday: "long",
+  })
     .format(date)
     .toLowerCase();
 }
@@ -97,19 +111,39 @@ type RateItemRow = {
 type ServiceOption = { key: string; label: string };
 
 export default async function PartnerBookPage({
-  searchParams
+  searchParams,
 }: {
-  searchParams?: Promise<{ propertyId?: string; serviceKey?: string; rescheduleFrom?: string; error?: string }>;
+  searchParams?: Promise<{
+    propertyId?: string;
+    serviceKey?: string;
+    rescheduleFrom?: string;
+    rescheduleVersion?: string;
+    error?: string;
+  }>;
 }) {
   const params = (await searchParams) ?? {};
-  const propertyId = typeof params.propertyId === "string" ? params.propertyId.trim() : "";
-  const serviceKeyParam = typeof params.serviceKey === "string" ? params.serviceKey.trim().toLowerCase() : "";
-  const rescheduleFrom = typeof params.rescheduleFrom === "string" ? params.rescheduleFrom.trim() : "";
-  const error = typeof params.error === "string" && params.error.trim().length ? params.error.trim() : null;
+  const propertyId =
+    typeof params.propertyId === "string" ? params.propertyId.trim() : "";
+  const serviceKeyParam =
+    typeof params.serviceKey === "string"
+      ? params.serviceKey.trim().toLowerCase()
+      : "";
+  const rescheduleFrom =
+    typeof params.rescheduleFrom === "string"
+      ? params.rescheduleFrom.trim()
+      : "";
+  const rescheduleVersion =
+    typeof params.rescheduleVersion === "string"
+      ? params.rescheduleVersion.trim()
+      : "";
+  const error =
+    typeof params.error === "string" && params.error.trim().length
+      ? params.error.trim()
+      : null;
 
   const [propertiesRes, ratesRes] = await Promise.all([
     callPartnerApi("/api/portal/properties"),
-    callPartnerApi("/api/portal/rates")
+    callPartnerApi("/api/portal/rates"),
   ]);
 
   if (!propertiesRes.ok) {
@@ -117,40 +151,53 @@ export default async function PartnerBookPage({
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
         <h1 className="text-xl font-semibold text-slate-900">Book service</h1>
         <p className="mt-2 text-sm text-slate-600">
-          Please <Link className="text-primary-700 underline" href="/partners/login">sign in</Link> to book.
+          Please{" "}
+          <Link className="text-primary-700 underline" href="/partners/login">
+            sign in
+          </Link>{" "}
+          to book.
         </p>
       </div>
     );
   }
 
-  const propertiesPayload = (await propertiesRes.json().catch(() => null)) as { properties?: PropertyRow[] } | null;
+  const propertiesPayload = (await propertiesRes.json().catch(() => null)) as {
+    properties?: PropertyRow[];
+  } | null;
   const properties = propertiesPayload?.properties ?? [];
 
   const ratesPayload = ratesRes.ok
-    ? ((await ratesRes.json().catch(() => null)) as { currency?: string; items?: RateItemRow[] } | null)
+    ? ((await ratesRes.json().catch(() => null)) as {
+        currency?: string;
+        items?: RateItemRow[];
+      } | null)
     : null;
   const rateItems = ratesPayload?.items ?? [];
 
   const validWindows = availabilityWindows.filter(
-    (w) => w.startHour >= weeklyAvailability.startHour && w.endHour <= weeklyAvailability.endHour
+    (w) =>
+      w.startHour >= weeklyAvailability.startHour &&
+      w.endHour <= weeklyAvailability.endHour,
   );
   const tomorrow = computeNextServiceDayYmd();
 
   const services: ServiceOption[] = Array.from(
     new Set(
       rateItems
-        .map((item) => (typeof item.serviceKey === "string" ? item.serviceKey.trim().toLowerCase() : ""))
+        .map((item) =>
+          typeof item.serviceKey === "string"
+            ? item.serviceKey.trim().toLowerCase()
+            : "",
+        )
         .filter((key) => key.length > 0)
-        .filter((key) => isPartnerAllowedServiceKey(key))
-    )
+        .filter((key) => isPartnerAllowedServiceKey(key)),
+    ),
   )
     .map((key) => ({ key, label: getPartnerServiceLabel(key) }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
   const serviceKey =
-    serviceKeyParam.length > 0
-      ? serviceKeyParam
-      : (services[0]?.key ?? "");
+    serviceKeyParam.length > 0 ? serviceKeyParam : (services[0]?.key ?? "");
 
   const selectedProperty = properties.find((p) => p.id === propertyId) ?? null;
   const selectedService = services.find((s) => s.key === serviceKey) ?? null;
@@ -160,12 +207,18 @@ export default async function PartnerBookPage({
         .filter((i) => i.serviceKey.toLowerCase() === selectedService.key)
         .filter((i) =>
           selectedService.key === "junk-removal"
-            ? (PARTNER_JUNK_BASE_TIER_KEYS as readonly string[]).includes(i.tierKey)
+            ? (PARTNER_JUNK_BASE_TIER_KEYS as readonly string[]).includes(
+                i.tierKey,
+              )
             : selectedService.key === "demo-hauloff"
-              ? (PARTNER_DEMO_TIER_KEYS as readonly string[]).includes(i.tierKey)
+              ? (PARTNER_DEMO_TIER_KEYS as readonly string[]).includes(
+                  i.tierKey,
+                )
               : selectedService.key === "land-clearing"
-                ? (PARTNER_LAND_CLEARING_TIER_KEYS as readonly string[]).includes(i.tierKey)
-                : false
+                ? (
+                    PARTNER_LAND_CLEARING_TIER_KEYS as readonly string[]
+                  ).includes(i.tierKey)
+                : false,
         )
         .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     : [];
@@ -174,10 +227,13 @@ export default async function PartnerBookPage({
     <div className="space-y-5">
       <header className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
         <h1 className="text-xl font-semibold text-slate-900">Book service</h1>
-        <p className="mt-1 text-sm text-slate-600">Bookings start next service day. Same-day requires calling.</p>
+        <p className="mt-1 text-sm text-slate-600">
+          Bookings start next service day. Same-day requires calling.
+        </p>
         {rescheduleFrom ? (
           <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            Rescheduling: once you confirm, we'll cancel your previous booking.
+            Rescheduling: confirmation moves your booking in one step. If the
+            new time cannot be reserved, your current booking stays unchanged.
           </div>
         ) : null}
         {error ? (
@@ -189,25 +245,59 @@ export default async function PartnerBookPage({
 
       {properties.length === 0 ? (
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
-          <h2 className="text-base font-semibold text-slate-900">Add a property first</h2>
-          <p className="mt-1 text-sm text-slate-600">You'll need at least one address to request service for.</p>
-          <Link className="mt-4 inline-flex rounded-2xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700" href="/partners/properties">
+          <h2 className="text-base font-semibold text-slate-900">
+            Add a property first
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">
+            You’ll need at least one address to request service for.
+          </p>
+          <Link
+            className="mt-4 inline-flex rounded-2xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700"
+            href="/partners/properties"
+          >
             Add property
           </Link>
         </div>
       ) : (
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
-          <h2 className="text-base font-semibold text-slate-900">Step 1 - Select property + service</h2>
+          <h2 className="text-base font-semibold text-slate-900">
+            Step 1 - Select property + service
+          </h2>
           {services.length === 0 ? (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              Your partner account is not configured for online booking yet. Please contact Stonegate to enable portal
-              services for your account.
+              Your partner account is not configured for online booking yet.
+              Please contact Stonegate to enable portal services for your
+              account.
             </div>
           ) : null}
-          <form method="get" action="/partners/book" className="mt-4 grid gap-3 md:grid-cols-2">
+          <form
+            method="get"
+            action="/partners/book"
+            className="mt-4 grid gap-3 md:grid-cols-2"
+          >
+            {rescheduleFrom ? (
+              <>
+                <input
+                  type="hidden"
+                  name="rescheduleFrom"
+                  value={rescheduleFrom}
+                />
+                <input
+                  type="hidden"
+                  name="rescheduleVersion"
+                  value={rescheduleVersion}
+                />
+              </>
+            ) : null}
             <label>
-              <div className="text-xs font-semibold text-slate-700">Property</div>
-              <select name="propertyId" defaultValue={selectedProperty?.id ?? ""} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
+              <div className="text-xs font-semibold text-slate-700">
+                Property
+              </div>
+              <select
+                name="propertyId"
+                defaultValue={selectedProperty?.id ?? ""}
+                className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
+              >
                 <option value="">Choose...</option>
                 {properties.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -217,8 +307,14 @@ export default async function PartnerBookPage({
               </select>
             </label>
             <label>
-              <div className="text-xs font-semibold text-slate-700">Service</div>
-              <select name="serviceKey" defaultValue={selectedService?.key ?? ""} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
+              <div className="text-xs font-semibold text-slate-700">
+                Service
+              </div>
+              <select
+                name="serviceKey"
+                defaultValue={selectedService?.key ?? ""}
+                className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
+              >
                 <option value="">Choose...</option>
                 {services.map((s) => (
                   <option key={s.key} value={s.key}>
@@ -227,59 +323,124 @@ export default async function PartnerBookPage({
                 ))}
               </select>
             </label>
-            <button type="submit" className="md:col-span-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700">
+            <button
+              type="submit"
+              className="md:col-span-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700"
+            >
               Continue
             </button>
           </form>
 
           {selectedProperty && selectedService ? (
             <div className="mt-6 border-t border-slate-100 pt-6">
-              <h2 className="text-base font-semibold text-slate-900">Step 2 - Choose time</h2>
-              <form action={partnerCreateBookingAction} className="mt-4 grid gap-3 md:grid-cols-2">
-                <input type="hidden" name="propertyId" value={selectedProperty.id} />
-                <input type="hidden" name="serviceKey" value={selectedService.key} />
-                {rescheduleFrom ? <input type="hidden" name="rescheduleFromAppointmentId" value={rescheduleFrom} /> : null}
+              <h2 className="text-base font-semibold text-slate-900">
+                Step 2 - Choose time
+              </h2>
+              <form
+                action={partnerCreateBookingAction}
+                className="mt-4 grid gap-3 md:grid-cols-2"
+              >
+                <input type="hidden" name="operationKey" value={randomUUID()} />
+                <input
+                  type="hidden"
+                  name="propertyId"
+                  value={selectedProperty.id}
+                />
+                <input
+                  type="hidden"
+                  name="serviceKey"
+                  value={selectedService.key}
+                />
+                {rescheduleFrom ? (
+                  <>
+                    <input
+                      type="hidden"
+                      name="rescheduleFromAppointmentId"
+                      value={rescheduleFrom}
+                    />
+                    <input
+                      type="hidden"
+                      name="rescheduleFromVersion"
+                      value={rescheduleVersion}
+                    />
+                  </>
+                ) : null}
 
                 <label>
-                  <div className="text-xs font-semibold text-slate-700">{tierFieldLabelForService(selectedService.key)}</div>
-                  <select name="tierKey" defaultValue="" className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
-                    <option value="">Call for pricing / use standard rate</option>
+                  <div className="text-xs font-semibold text-slate-700">
+                    {tierFieldLabelForService(selectedService.key)}
+                  </div>
+                  <select
+                    name="tierKey"
+                    defaultValue=""
+                    className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
+                  >
+                    <option value="">
+                      Call for pricing / use standard rate
+                    </option>
                     {tiersForService.map((tier) => (
                       <option key={tier.id} value={tier.tierKey}>
-                        {tier.label ? `${tier.label} - $${(tier.amountCents / 100).toFixed(2)}` : `${tier.tierKey} - $${(tier.amountCents / 100).toFixed(2)}`}
+                        {tier.label
+                          ? `${tier.label} - $${(tier.amountCents / 100).toFixed(2)}`
+                          : `${tier.tierKey} - $${(tier.amountCents / 100).toFixed(2)}`}
                       </option>
                     ))}
                   </select>
                 </label>
 
                 <label>
-                  <div className="text-xs font-semibold text-slate-700">Date</div>
-                  <input name="preferredDate" type="date" min={tomorrow} required className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm" />
-                </label>
-
-                <label className="md:col-span-2">
-                  <div className="text-xs font-semibold text-slate-700">Time window</div>
-                  <select name="timeWindowId" required className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
-                    {validWindows.map((w) => (
-                      <option key={w.id} value={w.id}>
-                        {typeof (w as unknown as { label?: unknown }).label === "string" ? String((w as unknown as { label?: unknown }).label) : w.id} ({w.startHour}:00-{w.endHour}:00)
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="md:col-span-2">
-                  <div className="text-xs font-semibold text-slate-700">Notes (optional)</div>
-                  <textarea
-                    name="notes"
-                    className="mt-1 min-h-[120px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
-                    placeholder={notesPlaceholderForService(selectedService.key)}
+                  <div className="text-xs font-semibold text-slate-700">
+                    Date
+                  </div>
+                  <input
+                    name="preferredDate"
+                    type="date"
+                    min={tomorrow}
+                    required
+                    className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
                   />
                 </label>
 
-                <button type="submit" className="md:col-span-2 rounded-2xl bg-primary-600 px-4 py-3 text-sm font-semibold text-white hover:bg-primary-700">
-                  Confirm booking
-                </button>
+                <label className="md:col-span-2">
+                  <div className="text-xs font-semibold text-slate-700">
+                    Time window
+                  </div>
+                  <select
+                    name="timeWindowId"
+                    required
+                    className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
+                  >
+                    {validWindows.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {typeof (w as unknown as { label?: unknown }).label ===
+                        "string"
+                          ? String((w as unknown as { label?: unknown }).label)
+                          : w.id}{" "}
+                        ({w.startHour}:00-{w.endHour}:00)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="md:col-span-2">
+                  <div className="text-xs font-semibold text-slate-700">
+                    Notes (optional)
+                  </div>
+                  <textarea
+                    name="notes"
+                    className="mt-1 min-h-[120px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
+                    placeholder={notesPlaceholderForService(
+                      selectedService.key,
+                    )}
+                  />
+                </label>
+
+                <PartnerMutationSubmitButton
+                  className="md:col-span-2 rounded-2xl bg-primary-600 px-4 py-3 text-sm font-semibold text-white hover:bg-primary-700"
+                  pendingLabel={rescheduleFrom ? "Rescheduling…" : "Booking…"}
+                >
+                  {rescheduleFrom ? "Confirm reschedule" : "Confirm booking"}
+                </PartnerMutationSubmitButton>
               </form>
             </div>
           ) : null}

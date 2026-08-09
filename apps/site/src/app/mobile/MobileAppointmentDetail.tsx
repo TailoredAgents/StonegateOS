@@ -18,6 +18,7 @@ export type MobileAppointmentNote = {
 
 export function MobileAppointmentDetail({
   appointmentId,
+  appointmentVersion,
   employeeId,
   notes,
   quotedScopeText,
@@ -28,9 +29,10 @@ export function MobileAppointmentDetail({
   canManageMedia,
   canReadPayments,
   canCollectPayments,
-  isOwner,
+  canManagePayments,
 }: {
   appointmentId: string;
+  appointmentVersion: string | null;
   employeeId: string;
   notes: MobileAppointmentNote[] | undefined;
   quotedScopeText: string | null;
@@ -41,7 +43,7 @@ export function MobileAppointmentDetail({
   canManageMedia: boolean;
   canReadPayments: boolean;
   canCollectPayments: boolean;
-  isOwner: boolean;
+  canManagePayments: boolean;
 }) {
   const [needsScope, setNeedsScope] = React.useState(mediaSummary.needsScope);
 
@@ -63,10 +65,11 @@ export function MobileAppointmentDetail({
       {canReadPayments && paymentSummary ? (
         <MobilePaymentPanel
           appointmentId={appointmentId}
+          initialVersion={appointmentVersion}
           initialSummary={paymentSummary}
           initialLedgerAvailable={paymentLedgerAvailable}
           canCollect={canCollectPayments}
-          isOwner={isOwner}
+          canManagePayments={canManagePayments}
           needsScope={needsScope}
         />
       ) : null}

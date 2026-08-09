@@ -182,29 +182,32 @@ describe("final total payment lock", () => {
         nextFinalTotalCents: 15_000,
         paidTowardJobCents: 0,
         hasSuccessfulPayment: false,
-        actorRole: "crew",
+        canManagePayments: false,
       }),
     ).toEqual({ ok: true });
   });
 
-  it("requires an owner and reason after the first successful payment", () => {
+  it("requires payment-management capability and a reason after the first successful payment", () => {
     expect(
       validateFinalTotalChange({
         currentFinalTotalCents: 15_000,
         nextFinalTotalCents: 16_000,
         paidTowardJobCents: 15_000,
         hasSuccessfulPayment: true,
-        actorRole: "crew",
+        canManagePayments: false,
         changeReason: "Added volume",
       }),
-    ).toMatchObject({ ok: false, code: "owner_required_after_payment" });
+    ).toMatchObject({
+      ok: false,
+      code: "payment_management_required_after_payment",
+    });
     expect(
       validateFinalTotalChange({
         currentFinalTotalCents: 15_000,
         nextFinalTotalCents: 16_000,
         paidTowardJobCents: 15_000,
         hasSuccessfulPayment: true,
-        actorRole: "owner",
+        canManagePayments: true,
       }),
     ).toMatchObject({ ok: false, code: "change_reason_required" });
   });
@@ -216,7 +219,7 @@ describe("final total payment lock", () => {
         nextFinalTotalCents: 12_000,
         paidTowardJobCents: 13_000,
         hasSuccessfulPayment: true,
-        actorRole: "owner",
+        canManagePayments: true,
         changeReason: "Correction",
       }),
     ).toMatchObject({ ok: false, code: "final_total_below_net_paid" });

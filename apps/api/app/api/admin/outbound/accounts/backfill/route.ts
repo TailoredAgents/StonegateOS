@@ -4,9 +4,7 @@ import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { contacts, crmTasks, getDb } from "@/db";
 import { isAdminRequest } from "../../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
-import {
-  resolveOrCreatePartnerAccount,
-} from "@/lib/partner-accounts";
+import { resolveOrCreatePartnerAccount } from "@/lib/partner-accounts";
 
 function parseLimit(value: string | null): number {
   if (!value) return 250;
@@ -19,7 +17,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "appointments.update");
+  const permissionError = await requirePermission(request, "outbound.write");
   if (permissionError) return permissionError;
 
   const url = new URL(request.url);
@@ -36,7 +34,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       partnerStatus: contacts.partnerStatus,
       salespersonMemberId: contacts.salespersonMemberId,
       partnerOwnerMemberId: contacts.partnerOwnerMemberId,
-      partnerAccountId: contacts.partnerAccountId
+      partnerAccountId: contacts.partnerAccountId,
     })
     .from(contacts)
     .where(
@@ -44,9 +42,9 @@ export async function POST(request: NextRequest): Promise<Response> {
         isNull(contacts.partnerAccountId),
         or(
           sql`lower(coalesce(${contacts.source}, '')) like 'outbound:%'`,
-          ne(contacts.partnerStatus, "none")
-        )
-      )
+          ne(contacts.partnerStatus, "none"),
+        ),
+      ),
     )
     .limit(limit);
 
@@ -63,12 +61,13 @@ export async function POST(request: NextRequest): Promise<Response> {
         ? source.slice("outbound:".length).trim() || null
         : null;
 
-    const account = await resolveOrCreatePartnerAccount(db as any, {
+    const account = await resolveOrCreatePartnerAccount(db, {
       name: row.company,
       domain: row.email ?? null,
       source,
       sourceCampaign,
-      ownerMemberId: row.partnerOwnerMemberId ?? row.salespersonMemberId ?? null
+      ownerMemberId:
+        row.partnerOwnerMemberId ?? row.salespersonMemberId ?? null,
     });
 
     if (!account?.id) {
@@ -85,7 +84,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     const taskResult = await db
       .update(crmTasks)
       .set({ partnerAccountId: account.id, updatedAt: now })
-      .where(and(eq(crmTasks.contactId, row.id), isNull(crmTasks.partnerAccountId)))
+      .where(
+        and(eq(crmTasks.contactId, row.id), isNull(crmTasks.partnerAccountId)),
+      )
       .returning({ id: crmTasks.id });
 
     linkedTasks += taskResult.length;
@@ -96,6 +97,6 @@ export async function POST(request: NextRequest): Promise<Response> {
     scanned,
     linkedContacts,
     linkedTasks,
-    skipped
+    skipped,
   });
 }

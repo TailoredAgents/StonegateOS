@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { mediaJobAnalyses } from "@/db";
@@ -10,10 +11,11 @@ import { listInstantQuoteMediaReadUrls } from "@/lib/appointment-media";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
 
 type DatabaseClient = ReturnType<typeof getDb>;
-type TransactionExecutor =
-  Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
-    ? Tx
-    : never;
+type TransactionExecutor = Parameters<
+  DatabaseClient["transaction"]
+>[0] extends (tx: infer Tx) => Promise<unknown>
+  ? Tx
+  : never;
 type DbExecutor = DatabaseClient | TransactionExecutor;
 
 export type VolumeBucket =
@@ -117,10 +119,20 @@ const MAX_VIDEO_FRAMES_PER_VIDEO = 4;
 const DEFAULT_MAX_VIDEO_BYTES = 20 * 1024 * 1024;
 
 function dedupe(items: Array<string | null | undefined>): string[] {
-  return [...new Set(items.filter((item): item is string => typeof item === "string" && item.trim().length > 0))];
+  return [
+    ...new Set(
+      items.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      ),
+    ),
+  ];
 }
 
-function compactText(value: string | null | undefined, maxLen = 240): string | null {
+function compactText(
+  value: string | null | undefined,
+  maxLen = 240,
+): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.replace(/\s+/g, " ").trim();
   if (!normalized) return null;
@@ -157,7 +169,10 @@ function getMediaAnalyzerConfig(): { apiKey: string; model: string } | null {
 }
 
 function getMaxVideoBytes(): number {
-  return readEnvInt("OPENAI_MEDIA_ANALYSIS_MAX_VIDEO_BYTES", DEFAULT_MAX_VIDEO_BYTES);
+  return readEnvInt(
+    "OPENAI_MEDIA_ANALYSIS_MAX_VIDEO_BYTES",
+    DEFAULT_MAX_VIDEO_BYTES,
+  );
 }
 
 function mapPerceivedSizeToVolume(perceivedSize: string | null | undefined): {
@@ -175,7 +190,10 @@ function mapPerceivedSizeToVolume(perceivedSize: string | null | undefined): {
     case "half_trailer":
       return { bucket: "half", range: "half" };
     case "one_room_or_half_garage":
-      return { bucket: "half_to_three_quarters", range: "half_to_three_quarters" };
+      return {
+        bucket: "half_to_three_quarters",
+        range: "half_to_three_quarters",
+      };
     case "three_quarter_trailer":
       return { bucket: "three_quarters", range: "three_quarters_to_full" };
     case "big_cleanout":
@@ -242,10 +260,17 @@ function countKeyword(text: string, patterns: string[]): number {
   }
 
   if (best > 0) return best;
-  return patterns.some((pattern) => new RegExp(`\\b${pattern}\\b`, "i").test(text)) ? 1 : 0;
+  return patterns.some((pattern) =>
+    new RegExp(`\\b${pattern}\\b`, "i").test(text),
+  )
+    ? 1
+    : 0;
 }
 
-function extractScopeSignals(messages: OmniLeadContext["recentMessages"], notes: string | null): {
+function extractScopeSignals(
+  messages: OmniLeadContext["recentMessages"],
+  notes: string | null,
+): {
   unpicturedScopeSignals: string[];
   sourceHints: string[];
   addOnHints: { mattresses: number; paintCans: number; tires: number };
@@ -254,34 +279,52 @@ function extractScopeSignals(messages: OmniLeadContext["recentMessages"], notes:
     .filter((message) => message.direction === "inbound")
     .map((message) => message.body)
     .join("\n");
-  const sourceText = [notes, inboundText].filter(Boolean).join("\n").toLowerCase();
+  const sourceText = [notes, inboundText]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
   const unpicturedScopeSignals = dedupe([
-    /\b(also|plus|and also)\b/.test(sourceText) ? "Customer mentioned additional items beyond the main visible pile." : null,
+    /\b(also|plus|and also)\b/.test(sourceText)
+      ? "Customer mentioned additional items beyond the main visible pile."
+      : null,
     /\b(not pictured|not shown|didn'?t photo|didnt photo)\b/.test(sourceText)
       ? "Customer indicated some items are not shown in the media."
       : null,
-    /\b(garage|basement|attic|upstairs|downstairs|backyard|shed|another room|other room|multiple rooms)\b/.test(sourceText)
+    /\b(garage|basement|attic|upstairs|downstairs|backyard|shed|another room|other room|multiple rooms)\b/.test(
+      sourceText,
+    )
       ? "Text suggests junk may be spread across additional areas."
       : null,
   ]);
 
   const sourceHints = dedupe([
     notes ? `Lead/quote notes: ${compactText(notes, 140)}` : null,
-    inboundText ? `Recent inbound scope text captured from ${messages.filter((message) => message.direction === "inbound").length} message(s).` : null,
+    inboundText
+      ? `Recent inbound scope text captured from ${messages.filter((message) => message.direction === "inbound").length} message(s).`
+      : null,
   ]);
 
   return {
     unpicturedScopeSignals,
     sourceHints,
     addOnHints: {
-      mattresses: countKeyword(sourceText, ["mattress(?:es)?", "box\\s*springs?"]),
-      paintCans: countKeyword(sourceText, ["paint\\s*cans?", "cans?\\s+of\\s+paint", "paint"]),
+      mattresses: countKeyword(sourceText, [
+        "mattress(?:es)?",
+        "box\\s*springs?",
+      ]),
+      paintCans: countKeyword(sourceText, [
+        "paint\\s*cans?",
+        "cans?\\s+of\\s+paint",
+        "paint",
+      ]),
       tires: countKeyword(sourceText, ["tires?"]),
     },
   };
 }
 
-function buildScaffoldSceneGroups(mediaUrls: string[]): SceneGroupRecord[] | null {
+function buildScaffoldSceneGroups(
+  mediaUrls: string[],
+): SceneGroupRecord[] | null {
   if (mediaUrls.length === 0) return null;
   return [
     {
@@ -305,16 +348,25 @@ function getCollectedMedia(context: OmniLeadContext): {
     ...(context.instantQuote?.photoUrls ?? []),
     ...context.recentMessages.flatMap((message) => message.mediaUrls ?? []),
   ]);
-  const videoUrls = mediaUrls.filter((url) => /\.(mp4|mov|m4v|webm)(?:\?|#|$)/i.test(url));
+  const videoUrls = mediaUrls.filter((url) =>
+    /\.(mp4|mov|m4v|webm)(?:\?|#|$)/i.test(url),
+  );
   const photoUrls = mediaUrls.filter((url) => !videoUrls.includes(url));
   return { mediaUrls, photoUrls, videoUrls };
 }
 
-function buildStatedScope(context: OmniLeadContext, scopeSignals: ReturnType<typeof extractScopeSignals>): StatedScopeRecord {
-  const notes = context.latestLead?.notes ?? context.instantQuote?.notes ?? null;
+function buildStatedScope(
+  context: OmniLeadContext,
+  scopeSignals: ReturnType<typeof extractScopeSignals>,
+): StatedScopeRecord {
+  const notes =
+    context.latestLead?.notes ?? context.instantQuote?.notes ?? null;
   return {
     perceivedSize: context.instantQuote?.perceivedSize ?? null,
-    jobTypes: context.instantQuote?.jobTypes ?? context.latestLead?.servicesRequested ?? [],
+    jobTypes:
+      context.instantQuote?.jobTypes ??
+      context.latestLead?.servicesRequested ??
+      [],
     notes: compactText(notes, 500),
     sourceHints: scopeSignals.sourceHints,
     unpicturedScopeSignals: scopeSignals.unpicturedScopeSignals,
@@ -324,27 +376,45 @@ function buildStatedScope(context: OmniLeadContext, scopeSignals: ReturnType<typ
 
 function buildScaffoldAnalysis(
   context: OmniLeadContext,
-  options?: { reason?: string | null; modelOutput?: Record<string, unknown> | null },
+  options?: {
+    reason?: string | null;
+    modelOutput?: Record<string, unknown> | null;
+  },
 ): MediaJobAnalysisRecord {
   const { mediaUrls, photoUrls, videoUrls } = getCollectedMedia(context);
-  const notes = context.latestLead?.notes ?? context.instantQuote?.notes ?? null;
-  const statedVolume = mapPerceivedSizeToVolume(context.instantQuote?.perceivedSize ?? null);
+  const notes =
+    context.latestLead?.notes ?? context.instantQuote?.notes ?? null;
+  const statedVolume = mapPerceivedSizeToVolume(
+    context.instantQuote?.perceivedSize ?? null,
+  );
   const scopeSignals = extractScopeSignals(context.recentMessages, notes);
-  const shouldWidenForUnpicturedScope = scopeSignals.unpicturedScopeSignals.length > 0 && statedVolume.range !== "unknown";
-  const mergedRange = shouldWidenForUnpicturedScope ? widenVolumeRange(statedVolume.range) : statedVolume.range;
+  const shouldWidenForUnpicturedScope =
+    scopeSignals.unpicturedScopeSignals.length > 0 &&
+    statedVolume.range !== "unknown";
+  const mergedRange = shouldWidenForUnpicturedScope
+    ? widenVolumeRange(statedVolume.range)
+    : statedVolume.range;
   const mergedBucket = bucketFromRange(mergedRange);
   const riskFlags = dedupe([
-    photoUrls.length === 0 && videoUrls.length === 0 ? "no_media_on_file" : null,
+    photoUrls.length === 0 && videoUrls.length === 0
+      ? "no_media_on_file"
+      : null,
     photoUrls.length > 0 ? "awaiting_model_media_analysis" : null,
     videoUrls.length > 0 ? "video_frame_analysis_not_enabled_yet" : null,
-    scopeSignals.unpicturedScopeSignals.length > 0 ? "stated_scope_exceeds_visible_media" : null,
-    scopeSignals.addOnHints.mattresses > 0 || scopeSignals.addOnHints.paintCans > 0 || scopeSignals.addOnHints.tires > 0
+    scopeSignals.unpicturedScopeSignals.length > 0
+      ? "stated_scope_exceeds_visible_media"
+      : null,
+    scopeSignals.addOnHints.mattresses > 0 ||
+    scopeSignals.addOnHints.paintCans > 0 ||
+    scopeSignals.addOnHints.tires > 0
       ? "add_on_counts_from_text_only"
       : null,
     options?.reason ? `vision_fallback:${options.reason}` : null,
   ]);
   const missingViews = dedupe([
-    photoUrls.length === 0 && videoUrls.length === 0 ? "Add 2-4 photos or a quick walkthrough video to tighten the estimate." : null,
+    photoUrls.length === 0 && videoUrls.length === 0
+      ? "Add 2-4 photos or a quick walkthrough video to tighten the estimate."
+      : null,
     scopeSignals.unpicturedScopeSignals.length > 0
       ? "Add one wide photo of any remaining rooms, garage, or areas not already shown."
       : null,
@@ -374,7 +444,9 @@ function buildScaffoldAnalysis(
     scopeSignals.addOnHints.paintCans > 0
       ? `Text hints at ${scopeSignals.addOnHints.paintCans} paint can${scopeSignals.addOnHints.paintCans === 1 ? "" : "s"}.`
       : null,
-    options?.reason ? `Vision analysis fallback reason: ${options.reason}.` : "Photo/video model reasoning is not available for this run, so this record is a merged scaffold from stated scope plus media presence.",
+    options?.reason
+      ? `Vision analysis fallback reason: ${options.reason}.`
+      : "Photo/video model reasoning is not available for this run, so this record is a merged scaffold from stated scope plus media presence.",
   ]);
 
   return {
@@ -408,12 +480,20 @@ function buildScaffoldAnalysis(
   };
 }
 
-function buildVisionPrompt(context: OmniLeadContext, mediaInputs: VisionMediaInput[]): { systemPrompt: string; userPrompt: string } {
-  const notes = context.latestLead?.notes ?? context.instantQuote?.notes ?? null;
+function buildVisionPrompt(
+  context: OmniLeadContext,
+  mediaInputs: VisionMediaInput[],
+): { systemPrompt: string; userPrompt: string } {
+  const notes =
+    context.latestLead?.notes ?? context.instantQuote?.notes ?? null;
   const scopeSignals = extractScopeSignals(context.recentMessages, notes);
   const statedScope = buildStatedScope(context, scopeSignals);
-  const statedVolume = mapPerceivedSizeToVolume(context.instantQuote?.perceivedSize ?? null);
-  const videoFrameCount = mediaInputs.filter((input) => input.sourceKind === "video").length;
+  const statedVolume = mapPerceivedSizeToVolume(
+    context.instantQuote?.perceivedSize ?? null,
+  );
+  const videoFrameCount = mediaInputs.filter(
+    (input) => input.sourceKind === "video",
+  ).length;
 
   const systemPrompt = [
     "You analyze junk-removal job photos for trailer-volume estimating.",
@@ -433,11 +513,15 @@ function buildVisionPrompt(context: OmniLeadContext, mediaInputs: VisionMediaInp
 
   const userLines = [
     `Visual input count: ${mediaInputs.length}`,
-    videoFrameCount > 0 ? `Video-derived frame count: ${videoFrameCount}` : null,
+    videoFrameCount > 0
+      ? `Video-derived frame count: ${videoFrameCount}`
+      : null,
     `Customer-selected size: ${context.instantQuote?.perceivedSize ?? "unknown"}`,
     `Stated size maps to: bucket=${statedVolume.bucket}, range=${statedVolume.range}`,
     statedScope.notes ? `Notes: ${statedScope.notes}` : null,
-    statedScope.jobTypes.length > 0 ? `Job types: ${statedScope.jobTypes.join(", ")}` : null,
+    statedScope.jobTypes.length > 0
+      ? `Job types: ${statedScope.jobTypes.join(", ")}`
+      : null,
     statedScope.unpicturedScopeSignals.length > 0
       ? `Text hints at extra unpictured scope: ${statedScope.unpicturedScopeSignals.join(" | ")}`
       : null,
@@ -458,7 +542,10 @@ async function callVisionAnalyzer(input: {
   mediaInputs: VisionMediaInput[];
   systemPrompt: string;
   userPrompt: string;
-}): Promise<{ ok: true; value: VisionAnalysisResult } | { ok: false; reason: string; detail?: string | null }> {
+}): Promise<
+  | { ok: true; value: VisionAnalysisResult }
+  | { ok: false; reason: string; detail?: string | null }
+> {
   const content: Array<Record<string, unknown>> = [
     { type: "input_text", text: input.userPrompt },
     ...input.mediaInputs.map((item) => ({
@@ -493,8 +580,16 @@ async function callVisionAnalyzer(input: {
           properties: {
             visible_volume_bucket: { type: "string", enum: VOLUME_ORDER },
             visible_volume_range: { type: "string", enum: VOLUME_ORDER },
-            visible_mattress_count: { type: "integer", minimum: 0, maximum: 20 },
-            visible_paint_can_count: { type: "integer", minimum: 0, maximum: 60 },
+            visible_mattress_count: {
+              type: "integer",
+              minimum: 0,
+              maximum: 20,
+            },
+            visible_paint_can_count: {
+              type: "integer",
+              minimum: 0,
+              maximum: 60,
+            },
             visible_tire_count: { type: "integer", minimum: 0, maximum: 20 },
             scene_groups: {
               type: "array",
@@ -541,14 +636,17 @@ async function callVisionAnalyzer(input: {
     payload["reasoning"] = { effort: "low" };
   }
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${input.apiKey}`,
+  const response = await fetch(
+    resolveOpenAiApiEndpoint("responses", process.env),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${input.apiKey}`,
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  });
+  );
 
   if (!response.ok) {
     const bodyText = await response.text().catch(() => "");
@@ -557,19 +655,23 @@ async function callVisionAnalyzer(input: {
       status: response.status,
       bodyText: bodyText.slice(0, 300),
     });
-    return { ok: false, reason: "openai_request_failed", detail: bodyText.slice(0, 300) };
+    return {
+      ok: false,
+      reason: "openai_request_failed",
+      detail: bodyText.slice(0, 300),
+    };
   }
 
-  const data = (await response.json().catch(() => null)) as
-    | { output_text?: unknown; output?: Array<{ content?: Array<{ text?: unknown }> }> }
-    | null;
+  const data = (await response.json().catch(() => null)) as {
+    output_text?: unknown;
+    output?: Array<{ content?: Array<{ text?: unknown }> }>;
+  } | null;
 
   const raw =
     (typeof data?.output_text === "string" ? data.output_text : null) ??
     data?.output
       ?.flatMap((item) => item.content ?? [])
-      .find((chunk) => typeof chunk.text === "string")
-      ?.text ??
+      .find((chunk) => typeof chunk.text === "string")?.text ??
     null;
 
   if (typeof raw !== "string" || raw.trim().length === 0) {
@@ -580,7 +682,11 @@ async function callVisionAnalyzer(input: {
   try {
     parsedJson = JSON.parse(raw);
   } catch {
-    return { ok: false, reason: "openai_parse_failed", detail: raw.slice(0, 300) };
+    return {
+      ok: false,
+      reason: "openai_parse_failed",
+      detail: raw.slice(0, 300),
+    };
   }
 
   const parsed = VisionAnalysisSchema.safeParse(parsedJson);
@@ -588,20 +694,29 @@ async function callVisionAnalyzer(input: {
     return {
       ok: false,
       reason: "openai_schema_failed",
-      detail: parsed.error.issues.slice(0, 3).map((issue) => issue.message).join(" | "),
+      detail: parsed.error.issues
+        .slice(0, 3)
+        .map((issue) => issue.message)
+        .join(" | "),
     };
   }
 
   return { ok: true, value: parsed.data };
 }
 
-function mapSceneGroups(mediaInputs: VisionMediaInput[], sceneGroups: VisionAnalysisResult["scene_groups"]): SceneGroupRecord[] | null {
+function mapSceneGroups(
+  mediaInputs: VisionMediaInput[],
+  sceneGroups: VisionAnalysisResult["scene_groups"],
+): SceneGroupRecord[] | null {
   if (sceneGroups.length === 0) return null;
   return sceneGroups.map((group, index) => {
-    const groupReferences = group.image_indices.map((mediaIndex) => mediaInputs[mediaIndex - 1]?.reference ?? null).filter(Boolean) as string[];
+    const groupReferences = group.image_indices
+      .map((mediaIndex) => mediaInputs[mediaIndex - 1]?.reference ?? null)
+      .filter(Boolean) as string[];
     const groupUrls = dedupe(
-      group.image_indices
-        .map((mediaIndex) => mediaInputs[mediaIndex - 1]?.sourceUrl ?? null),
+      group.image_indices.map(
+        (mediaIndex) => mediaInputs[mediaIndex - 1]?.sourceUrl ?? null,
+      ),
     );
     return {
       id: `scene_${index + 1}`,
@@ -623,10 +738,14 @@ function mergeVisionWithScope(input: {
 }): MediaJobAnalysisRecord {
   const scopeSignals = extractScopeSignals(
     input.context.recentMessages,
-    input.context.latestLead?.notes ?? input.context.instantQuote?.notes ?? null,
+    input.context.latestLead?.notes ??
+      input.context.instantQuote?.notes ??
+      null,
   );
   const statedScope = buildStatedScope(input.context, scopeSignals);
-  const statedVolume = mapPerceivedSizeToVolume(input.context.instantQuote?.perceivedSize ?? null);
+  const statedVolume = mapPerceivedSizeToVolume(
+    input.context.instantQuote?.perceivedSize ?? null,
+  );
 
   let mergedRange =
     input.vision.visible_volume_range !== "unknown"
@@ -636,29 +755,51 @@ function mergeVisionWithScope(input: {
   if (
     statedVolume.range !== "unknown" &&
     volumeRank(statedVolume.range) > volumeRank(mergedRange) &&
-    (scopeSignals.unpicturedScopeSignals.length > 0 || input.vision.confidence !== "high")
+    (scopeSignals.unpicturedScopeSignals.length > 0 ||
+      input.vision.confidence !== "high")
   ) {
     mergedRange = statedVolume.range;
   }
 
-  if (scopeSignals.unpicturedScopeSignals.length > 0 && mergedRange !== "unknown") {
+  if (
+    scopeSignals.unpicturedScopeSignals.length > 0 &&
+    mergedRange !== "unknown"
+  ) {
     mergedRange = widenVolumeRange(mergedRange);
   }
 
   const mergedBucket =
-    input.vision.visible_volume_bucket !== "unknown" || mergedRange !== "unknown"
-      ? maxVolume(input.vision.visible_volume_bucket, bucketFromRange(mergedRange))
+    input.vision.visible_volume_bucket !== "unknown" ||
+    mergedRange !== "unknown"
+      ? maxVolume(
+          input.vision.visible_volume_bucket,
+          bucketFromRange(mergedRange),
+        )
       : "unknown";
 
-  const visibleMattressCount = Math.max(input.vision.visible_mattress_count, statedScope.addOnHints.mattresses);
-  const visiblePaintCanCount = Math.max(input.vision.visible_paint_can_count, statedScope.addOnHints.paintCans);
-  const visibleTireCount = Math.max(input.vision.visible_tire_count, statedScope.addOnHints.tires);
+  const visibleMattressCount = Math.max(
+    input.vision.visible_mattress_count,
+    statedScope.addOnHints.mattresses,
+  );
+  const visiblePaintCanCount = Math.max(
+    input.vision.visible_paint_can_count,
+    statedScope.addOnHints.paintCans,
+  );
+  const visibleTireCount = Math.max(
+    input.vision.visible_tire_count,
+    statedScope.addOnHints.tires,
+  );
 
   const riskFlags = dedupe([
     ...input.vision.risk_flags,
     ...input.extractionNotes,
-    input.videoUrls.length > 0 && input.mediaInputs.some((item) => item.sourceKind === "video") ? "video_frames_sampled_for_analysis" : null,
-    scopeSignals.unpicturedScopeSignals.length > 0 ? "stated_scope_exceeds_visible_media" : null,
+    input.videoUrls.length > 0 &&
+    input.mediaInputs.some((item) => item.sourceKind === "video")
+      ? "video_frames_sampled_for_analysis"
+      : null,
+    scopeSignals.unpicturedScopeSignals.length > 0
+      ? "stated_scope_exceeds_visible_media"
+      : null,
     visibleMattressCount > input.vision.visible_mattress_count ||
     visiblePaintCanCount > input.vision.visible_paint_can_count ||
     visibleTireCount > input.vision.visible_tire_count
@@ -674,13 +815,15 @@ function mergeVisionWithScope(input: {
   ]);
 
   const confidence: "low" | "medium" | "high" =
-    scopeSignals.unpicturedScopeSignals.length > 0 && input.vision.confidence === "high"
+    scopeSignals.unpicturedScopeSignals.length > 0 &&
+    input.vision.confidence === "high"
       ? "medium"
       : input.vision.confidence;
 
   const summaryParts = dedupe([
     `Visual estimate: ${input.vision.visible_volume_range.replace(/_/g, " ")} with ${input.vision.confidence} confidence.`,
-    input.videoUrls.length > 0 && input.mediaInputs.some((item) => item.sourceKind === "video")
+    input.videoUrls.length > 0 &&
+    input.mediaInputs.some((item) => item.sourceKind === "video")
       ? `Video frames were sampled from ${input.videoUrls.length} video${input.videoUrls.length === 1 ? "" : "s"} for the visual estimate.`
       : null,
     input.context.instantQuote?.perceivedSize
@@ -695,9 +838,7 @@ function mergeVisionWithScope(input: {
     visiblePaintCanCount > 0
       ? `Paint can count used: ${visiblePaintCanCount}.`
       : null,
-    visibleTireCount > 0
-      ? `Tire count used: ${visibleTireCount}.`
-      : null,
+    visibleTireCount > 0 ? `Tire count used: ${visibleTireCount}.` : null,
     input.vision.summary,
   ]);
 
@@ -712,7 +853,10 @@ function mergeVisionWithScope(input: {
     visibleMattressCount,
     visiblePaintCanCount,
     visibleTireCount,
-    sceneGroupsJson: mapSceneGroups(input.mediaInputs, input.vision.scene_groups),
+    sceneGroupsJson: mapSceneGroups(
+      input.mediaInputs,
+      input.vision.scene_groups,
+    ),
     statedScopeJson: statedScope,
     riskFlags,
     missingViews,
@@ -736,11 +880,16 @@ function mergeVisionWithScope(input: {
   };
 }
 
-export function buildMediaJobAnalysis(context: OmniLeadContext): MediaJobAnalysisRecord {
+export function buildMediaJobAnalysis(
+  context: OmniLeadContext,
+): MediaJobAnalysisRecord {
   return buildScaffoldAnalysis(context);
 }
 
-function distributeVideoFrameSlots(videoCount: number, remainingSlots: number): number[] {
+function distributeVideoFrameSlots(
+  videoCount: number,
+  remainingSlots: number,
+): number[] {
   if (videoCount <= 0 || remainingSlots <= 0) return [];
   const allocations: number[] = new Array<number>(videoCount).fill(0);
   let slotsLeft = remainingSlots;
@@ -751,7 +900,8 @@ function distributeVideoFrameSlots(videoCount: number, remainingSlots: number): 
       slotsLeft -= 1;
     }
     cursor = (cursor + 1) % videoCount;
-    if (allocations.every((count) => count >= MAX_VIDEO_FRAMES_PER_VIDEO)) break;
+    if (allocations.every((count) => count >= MAX_VIDEO_FRAMES_PER_VIDEO))
+      break;
   }
   return allocations;
 }
@@ -773,9 +923,17 @@ function formatVideoFrameLabel(videoIndex: number, frameIndex: number): string {
   return `video ${videoIndex + 1} frame ${frameIndex + 1}`;
 }
 
-function buildVideoFrameTimestamps(durationSeconds: number, frameCount: number): number[] {
+function buildVideoFrameTimestamps(
+  durationSeconds: number,
+  frameCount: number,
+): number[] {
   if (frameCount <= 1) {
-    return [Math.max(0, Math.min(durationSeconds * 0.5, Math.max(0, durationSeconds - 0.05)))];
+    return [
+      Math.max(
+        0,
+        Math.min(durationSeconds * 0.5, Math.max(0, durationSeconds - 0.05)),
+      ),
+    ];
   }
 
   const startRatio = 0.15;
@@ -784,7 +942,12 @@ function buildVideoFrameTimestamps(durationSeconds: number, frameCount: number):
   for (let index = 0; index < frameCount; index += 1) {
     const progress = frameCount === 1 ? 0.5 : index / (frameCount - 1);
     const ratio = startRatio + (endRatio - startRatio) * progress;
-    timestamps.push(Math.max(0, Math.min(durationSeconds * ratio, Math.max(0, durationSeconds - 0.05))));
+    timestamps.push(
+      Math.max(
+        0,
+        Math.min(durationSeconds * ratio, Math.max(0, durationSeconds - 0.05)),
+      ),
+    );
   }
   return timestamps;
 }
@@ -799,7 +962,9 @@ function parseDurationSeconds(stderr: string): number | null {
   return Number.isFinite(total) && total > 0 ? total : null;
 }
 
-async function runFfmpeg(args: string[]): Promise<{ stdout: string; stderr: string }> {
+async function runFfmpeg(
+  args: string[],
+): Promise<{ stdout: string; stderr: string }> {
   const binary = readEnvString("FFMPEG_PATH") ?? "ffmpeg";
   if (!binary) {
     throw new Error("ffmpeg_missing");
@@ -824,7 +989,9 @@ async function runFfmpeg(args: string[]): Promise<{ stdout: string; stderr: stri
   });
 }
 
-async function probeVideoDurationSeconds(inputPath: string): Promise<number | null> {
+async function probeVideoDurationSeconds(
+  inputPath: string,
+): Promise<number | null> {
   try {
     const result = await runFfmpeg(["-i", inputPath, "-f", "null", "-"]);
     return parseDurationSeconds(result.stderr);
@@ -841,7 +1008,9 @@ async function extractFramesFromVideoUrl(
 ): Promise<VisionMediaInput[]> {
   if (frameCount <= 0) return [];
 
-  const response = await fetch(videoUrl, { signal: AbortSignal.timeout(20000) });
+  const response = await fetch(videoUrl, {
+    signal: AbortSignal.timeout(20000),
+  });
   if (!response.ok) {
     throw new Error(`video_fetch_failed_${response.status}`);
   }
@@ -856,7 +1025,10 @@ async function extractFramesFromVideoUrl(
 
   const tempDir = await mkdtemp(join(tmpdir(), "stonegate-media-analysis-"));
   try {
-    const inputPath = join(tempDir, `input${guessVideoExtension(videoUrl, response.headers.get("content-type"))}`);
+    const inputPath = join(
+      tempDir,
+      `input${guessVideoExtension(videoUrl, response.headers.get("content-type"))}`,
+    );
     await writeFile(inputPath, bytes);
 
     const duration = (await probeVideoDurationSeconds(inputPath)) ?? 12;
@@ -901,7 +1073,10 @@ async function buildVisionMediaInputs(
 ): Promise<{ mediaInputs: VisionMediaInput[]; extractionNotes: string[] }> {
   const mediaInputs: VisionMediaInput[] = [];
   const extractionNotes: string[] = [];
-  const photoBudget = videoUrls.length > 0 ? Math.min(photoUrls.length, 6) : Math.min(photoUrls.length, MAX_VISION_MEDIA_INPUTS);
+  const photoBudget =
+    videoUrls.length > 0
+      ? Math.min(photoUrls.length, 6)
+      : Math.min(photoUrls.length, MAX_VISION_MEDIA_INPUTS);
 
   for (const photoUrl of photoUrls.slice(0, photoBudget)) {
     mediaInputs.push({
@@ -913,14 +1088,21 @@ async function buildVisionMediaInputs(
     });
   }
 
-  const remainingSlots = Math.max(0, MAX_VISION_MEDIA_INPUTS - mediaInputs.length);
+  const remainingSlots = Math.max(
+    0,
+    MAX_VISION_MEDIA_INPUTS - mediaInputs.length,
+  );
   const framePlan = distributeVideoFrameSlots(videoUrls.length, remainingSlots);
 
   for (let videoIndex = 0; videoIndex < videoUrls.length; videoIndex += 1) {
     const plannedFrames = framePlan[videoIndex] ?? 0;
     if (plannedFrames <= 0) continue;
     try {
-      const frames = await extractFramesFromVideoUrl(videoUrls[videoIndex]!, plannedFrames, videoIndex);
+      const frames = await extractFramesFromVideoUrl(
+        videoUrls[videoIndex]!,
+        plannedFrames,
+        videoIndex,
+      );
       if (!frames.length) {
         extractionNotes.push(`video_frame_extraction_empty:${videoIndex + 1}`);
         continue;
@@ -928,7 +1110,9 @@ async function buildVisionMediaInputs(
       mediaInputs.push(...frames);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      extractionNotes.push(`video_frame_extraction_failed:${videoIndex + 1}:${message.slice(0, 80)}`);
+      extractionNotes.push(
+        `video_frame_extraction_failed:${videoIndex + 1}:${message.slice(0, 80)}`,
+      );
     }
   }
 
@@ -943,8 +1127,7 @@ export async function buildMediaJobAnalysisWithVision(
 ): Promise<MediaJobAnalysisRecord> {
   const instantQuoteId = context.instantQuote?.id ?? null;
   const durableInstantQuoteUrls =
-    instantQuoteId &&
-    instantQuoteId !== "00000000-0000-0000-0000-000000000000"
+    instantQuoteId && instantQuoteId !== "00000000-0000-0000-0000-000000000000"
       ? await listInstantQuoteMediaReadUrls(instantQuoteId).catch(() => [])
       : [];
   const analysisContext =
@@ -971,10 +1154,16 @@ export async function buildMediaJobAnalysisWithVision(
     });
   }
 
-  const { mediaInputs, extractionNotes } = await buildVisionMediaInputs(photoUrls, videoUrls);
+  const { mediaInputs, extractionNotes } = await buildVisionMediaInputs(
+    photoUrls,
+    videoUrls,
+  );
   if (mediaInputs.length === 0) {
     return buildScaffoldAnalysis(analysisContext, {
-      reason: videoUrls.length > 0 ? "video_frame_extraction_unavailable" : "no_photo_media",
+      reason:
+        videoUrls.length > 0
+          ? "video_frame_extraction_unavailable"
+          : "no_photo_media",
       modelOutput: extractionNotes.length ? { extractionNotes } : null,
     });
   }

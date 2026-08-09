@@ -1,6 +1,12 @@
 import { and, desc, eq, gte, isNotNull, or, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { getDb, messageDeliveryEvents, outboxEvents, providerHealth, webEventCountsDaily } from "../db";
+import {
+  getDb,
+  messageDeliveryEvents,
+  outboxEvents,
+  providerHealth,
+  webEventCountsDaily,
+} from "../db";
 
 function safeDiv(num: number, den: number): number {
   if (!Number.isFinite(num) || !Number.isFinite(den) || den <= 0) return 0;
@@ -20,13 +26,22 @@ function clampInt(value: number, min: number, max: number): number {
 
 function fmtAgeMinutes(from: Date | null | undefined, now: Date) {
   if (!from) return "unknown";
-  const ms = now.getTime() - new Date(from as any).getTime();
+  const ms = now.getTime() - from.getTime();
   if (!Number.isFinite(ms) || ms < 0) return "unknown";
   const minutes = Math.floor(ms / 60_000);
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   const rem = minutes % 60;
   return `${hours}h${String(rem).padStart(2, "0")}m`;
+}
+
+function parseDatabaseDate(value: unknown): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 export async function buildOpsDiagnosticsMarkdown(input: {
@@ -38,18 +53,31 @@ export async function buildOpsDiagnosticsMarkdown(input: {
   const tz = (input.tz || "America/New_York").trim() || "America/New_York";
   const lookbackHours = clampInt(input.lookbackHours ?? 6, 1, 48);
   const outboxStaleMinutes = clampInt(input.outboxStaleMinutes ?? 10, 3, 180);
-  const smsLookbackMinutes = clampInt(input.smsLookbackMinutes ?? 120, 15, 1440);
+  const smsLookbackMinutes = clampInt(
+    input.smsLookbackMinutes ?? 120,
+    15,
+    1440,
+  );
 
   const nowLuxon = DateTime.now().setZone(tz);
   const now = nowLuxon.toJSDate();
   const sinceFailure = nowLuxon.minus({ hours: lookbackHours }).toJSDate();
   const smsSince = nowLuxon.minus({ minutes: smsLookbackMinutes }).toJSDate();
-  const outboxStaleBefore = nowLuxon.minus({ minutes: outboxStaleMinutes }).toJSDate();
+  const outboxStaleBefore = nowLuxon
+    .minus({ minutes: outboxStaleMinutes })
+    .toJSDate();
   const todayDate = nowLuxon.toISODate() ?? DateTime.now().toISODate() ?? "";
 
   const db = getDb();
 
-  const [providers, outboxSummary, outboxTopTypes, smsFailures, smsRecent, todayWeb] = await Promise.all([
+  const [
+    providers,
+    outboxSummary,
+    outboxTopTypes,
+    smsFailures,
+    smsRecent,
+    todayWeb,
+  ] = await Promise.all([
     db
       .select()
       .from(providerHealth)
@@ -57,19 +85,32 @@ export async function buildOpsDiagnosticsMarkdown(input: {
         and(
           isNotNull(providerHealth.lastFailureAt),
           gte(providerHealth.lastFailureAt, sinceFailure),
-          or(sql`${providerHealth.lastSuccessAt} is null`, sql`${providerHealth.lastFailureAt} > ${providerHealth.lastSuccessAt}`)
-        )
+          or(
+            sql`${providerHealth.lastSuccessAt} is null`,
+            sql`${providerHealth.lastFailureAt} > ${providerHealth.lastSuccessAt}`,
+          ),
+        ),
       )
       .orderBy(desc(providerHealth.lastFailureAt))
       .limit(20),
     db
       .select({
-        backlog: sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.createdAt} < ${outboxStaleBefore}), 0)`.mapWith(Number),
-        retrying: sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.attempts} >= 1), 0)`.mapWith(Number),
-        highAttempts: sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.attempts} >= 3), 0)`.mapWith(Number),
-        oldest: sql<Date | null>`min(${outboxEvents.createdAt}) filter (where ${outboxEvents.processedAt} is null)`.mapWith(
-          (v) => (v ? new Date(v as any) : null)
-        )
+        backlog:
+          sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.createdAt} < ${outboxStaleBefore}), 0)`.mapWith(
+            Number,
+          ),
+        retrying:
+          sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.attempts} >= 1), 0)`.mapWith(
+            Number,
+          ),
+        highAttempts:
+          sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.attempts} >= 3), 0)`.mapWith(
+            Number,
+          ),
+        oldest:
+          sql<Date | null>`min(${outboxEvents.createdAt}) filter (where ${outboxEvents.processedAt} is null)`.mapWith(
+            parseDatabaseDate,
+          ),
       })
       .from(outboxEvents)
       .then((rows) => rows[0] ?? null),
@@ -81,40 +122,64 @@ export async function buildOpsDiagnosticsMarkdown(input: {
         group by ${outboxEvents.type}
         order by count desc
         limit 6
-      `
+      `,
     ) as Promise<Array<{ type?: string | null; count?: number | null }>>,
     db
       .select({
-        failed: sql<number>`coalesce(count(*),0)`.mapWith(Number)
+        failed: sql<number>`coalesce(count(*),0)`.mapWith(Number),
       })
       .from(messageDeliveryEvents)
-      .where(and(eq(messageDeliveryEvents.status, "failed" as any), gte(messageDeliveryEvents.occurredAt, smsSince)))
+      .where(
+        and(
+          eq(messageDeliveryEvents.status, "failed"),
+          gte(messageDeliveryEvents.occurredAt, smsSince),
+        ),
+      )
       .then((rows) => rows[0] ?? null),
     db
       .select({
         occurredAt: messageDeliveryEvents.occurredAt,
         detail: messageDeliveryEvents.detail,
-        provider: messageDeliveryEvents.provider
+        provider: messageDeliveryEvents.provider,
       })
       .from(messageDeliveryEvents)
-      .where(and(eq(messageDeliveryEvents.status, "failed" as any), gte(messageDeliveryEvents.occurredAt, smsSince)))
+      .where(
+        and(
+          eq(messageDeliveryEvents.status, "failed"),
+          gte(messageDeliveryEvents.occurredAt, smsSince),
+        ),
+      )
       .orderBy(desc(messageDeliveryEvents.occurredAt))
       .limit(5),
     db
       .select({
-        bookStep1Views: sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_step_view' and ${webEventCountsDaily.key}='1' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(Number),
-        bookStep1Submits: sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_step1_submit' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(Number),
-        bookQuoteSuccess: sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_quote_success' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(Number),
-        bookBookingSuccess: sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_booking_success' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(Number)
+        bookStep1Views:
+          sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_step_view' and ${webEventCountsDaily.key}='1' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(
+            Number,
+          ),
+        bookStep1Submits:
+          sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_step1_submit' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(
+            Number,
+          ),
+        bookQuoteSuccess:
+          sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_quote_success' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(
+            Number,
+          ),
+        bookBookingSuccess:
+          sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_booking_success' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(
+            Number,
+          ),
       })
       .from(webEventCountsDaily)
       .where(eq(webEventCountsDaily.dateStart, todayDate))
-      .then((rows) => rows[0] ?? null)
+      .then((rows) => rows[0] ?? null),
   ]);
 
   const lines: string[] = [];
   const stamp = nowLuxon.isValid ? nowLuxon.toFormat("ccc, LLL d h:mma") : "";
-  lines.push(`**Ops Diagnostic Snapshot${stamp ? ` - ${stamp} (${tz})` : ""}**`);
+  lines.push(
+    `**Ops Diagnostic Snapshot${stamp ? ` - ${stamp} (${tz})` : ""}**`,
+  );
   lines.push("");
 
   // Funnel
@@ -126,8 +191,12 @@ export async function buildOpsDiagnosticsMarkdown(input: {
   const quoteRate = safeDiv(quotes, submits);
   const bookRate = safeDiv(bookings, quotes);
   lines.push("**/book funnel (today)**");
-  lines.push(`- Step1 views: ${views} | Submits: ${submits} (${toPercent(submitRate)})`);
-  lines.push(`- Quotes shown: ${quotes} (${toPercent(quoteRate)} of submits) | Self-serve bookings: ${bookings} (${toPercent(bookRate)} of quotes)`);
+  lines.push(
+    `- Step1 views: ${views} | Submits: ${submits} (${toPercent(submitRate)})`,
+  );
+  lines.push(
+    `- Quotes shown: ${quotes} (${toPercent(quoteRate)} of submits) | Self-serve bookings: ${bookings} (${toPercent(bookRate)} of quotes)`,
+  );
   lines.push("");
 
   // Provider health
@@ -135,11 +204,15 @@ export async function buildOpsDiagnosticsMarkdown(input: {
   if (!providers.length) {
     lines.push("- No failing providers recorded recently.");
   } else {
-    for (const row of providers.slice(0, 6) as any[]) {
-      const provider = String(row.provider ?? "unknown");
-      const at = row.lastFailureAt ? fmtAgeMinutes(row.lastFailureAt, now) : "unknown";
-      const detail = String(row.lastFailureDetail ?? "").trim();
-      lines.push(`- ${provider}: failing (${at} ago)${detail ? ` — ${detail.slice(0, 160)}` : ""}`);
+    for (const row of providers.slice(0, 6)) {
+      const provider = row.provider || "unknown";
+      const at = row.lastFailureAt
+        ? fmtAgeMinutes(row.lastFailureAt, now)
+        : "unknown";
+      const detail = row.lastFailureDetail?.trim() ?? "";
+      lines.push(
+        `- ${provider}: failing (${at} ago)${detail ? ` — ${detail.slice(0, 160)}` : ""}`,
+      );
     }
   }
   lines.push("");
@@ -151,13 +224,19 @@ export async function buildOpsDiagnosticsMarkdown(input: {
   const oldestAge = fmtAgeMinutes(outboxSummary?.oldest ?? null, now);
   const typeLines = Array.isArray(outboxTopTypes)
     ? outboxTopTypes
-        .map((r) => (r && typeof r.type === "string" ? `${r.type}: ${Number(r.count) || 0}` : null))
+        .map((r) =>
+          r && typeof r.type === "string"
+            ? `${r.type}: ${Number(r.count) || 0}`
+            : null,
+        )
         .filter(Boolean)
         .slice(0, 6)
     : [];
 
   lines.push(`**Outbox queue**`);
-  lines.push(`- Backlog (stale>${outboxStaleMinutes}m): ${backlog} | Retrying: ${retrying} | High attempts (>=3): ${highAttempts} | Oldest: ${oldestAge}`);
+  lines.push(
+    `- Backlog (stale>${outboxStaleMinutes}m): ${backlog} | Retrying: ${retrying} | High attempts (>=3): ${highAttempts} | Oldest: ${oldestAge}`,
+  );
   if (typeLines.length) lines.push(`- Top types: ${typeLines.join(", ")}`);
   lines.push("");
 
@@ -166,11 +245,14 @@ export async function buildOpsDiagnosticsMarkdown(input: {
   lines.push(`**SMS delivery (last ${smsLookbackMinutes}m)**`);
   lines.push(`- Failed delivery events: ${smsFailed}`);
   const recent = Array.isArray(smsRecent) ? smsRecent : [];
-  for (const row of recent as any[]) {
+  for (const row of recent) {
     const at = row.occurredAt ? fmtAgeMinutes(row.occurredAt, now) : "unknown";
     const provider = typeof row.provider === "string" ? row.provider : "";
-    const detail = typeof row.detail === "string" ? row.detail.trim().slice(0, 140) : "";
-    lines.push(`- ${at} ago${provider ? ` (${provider})` : ""}${detail ? ` — ${detail}` : ""}`);
+    const detail =
+      typeof row.detail === "string" ? row.detail.trim().slice(0, 140) : "";
+    lines.push(
+      `- ${at} ago${provider ? ` (${provider})` : ""}${detail ? ` — ${detail}` : ""}`,
+    );
   }
 
   return lines.join("\n").trim();

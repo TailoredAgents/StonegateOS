@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi } from "@/app/team/lib/api";
+import { callAdminApiForCurrentSession } from "@/app/team/lib/api";
 import { hasMobilePermission, resolveMobileSessionFromCookies } from "../../../../../mobile/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +25,7 @@ export async function GET(
     return NextResponse.json({ error: "thread_required" }, { status: 400 });
   }
 
-  const apiResponse = await callAdminApi(`/api/admin/inbox/threads/${encodeURIComponent(normalizedThreadId)}`, {
+  const apiResponse = await callAdminApiForCurrentSession(`/api/admin/inbox/threads/${encodeURIComponent(normalizedThreadId)}`, {
     method: "GET"
   });
   const payload: unknown = await apiResponse.json().catch(() => null);

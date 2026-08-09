@@ -1,3 +1,5 @@
+export type PipelineView = "board" | "list";
+
 export type PipelineContact = {
   id: string;
   firstName: string;
@@ -36,4 +38,17 @@ export type PipelineLane = {
 export type PipelineResponse = {
   stages: string[];
   lanes: PipelineLane[];
+  stageCounts: Record<string, number>;
+  pagination: {
+    offset: number;
+    limit: number;
+    total: number;
+    hasPrevious: boolean;
+    hasNext: boolean;
+  };
+  filters: {
+    q: string;
+    stage: string | null;
+    excludeOutbound: boolean;
+  };
 };

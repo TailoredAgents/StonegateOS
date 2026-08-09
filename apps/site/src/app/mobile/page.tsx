@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import type { Route } from "next";
 import { redirect } from "next/navigation";
@@ -17,7 +18,7 @@ import {
   hasMobilePermission,
   resolveMobileSessionFromCookies,
 } from "./lib/session";
-import { callAdminApi } from "../team/lib/api";
+import { callAdminApiForCurrentSession } from "../team/lib/api";
 import {
   createMobileExpenseAction,
   addMobileContactNoteAction,
@@ -253,6 +254,9 @@ type CalendarEvent = {
   status?: string | null;
   quotedTotalCents?: number | null;
   finalTotalCents?: number | null;
+  soldByMemberId?: string | null;
+  assignedSalespersonMemberId?: string | null;
+  version?: string | null;
   quotedScopeText?: string | null;
   mediaSummary?: AppointmentMediaSummary;
   paymentSummary?: AppointmentPaymentSummary;
@@ -285,6 +289,7 @@ type CalendarFeedResponse = {
 
 type QuoteSummary = {
   id: string;
+  revision: number;
   status: string;
   displayStatus: string;
   quoteNumber: string | null;
@@ -311,6 +316,8 @@ type QuoteSummary = {
   updatedAt: string;
   sentAt: string | null;
   expiresAt: string | null;
+  deliveryState: string | null;
+  deliveryAttemptId: string | null;
   shareToken: string | null;
   contact: { name: string; email: string | null };
   property: {
@@ -335,6 +342,7 @@ type MobileExpense = {
   method: string | null;
   source: string;
   paidAt: string;
+  lifecycleStatus?: "draft" | "posted" | "voided" | "corrected";
   receipt: { filename: string; contentType: string } | null;
 };
 
@@ -359,6 +367,7 @@ type TeamMemberSummary = {
   phone: string | null;
   passwordSet?: boolean;
   active: boolean;
+  updatedAt: string;
   role: {
     id: string;
     name: string | null;
@@ -747,6 +756,31 @@ function formatStage(value: string | null | undefined): string {
     .join(" ");
 }
 
+function formatQuoteStatus(value: string | null | undefined): string {
+  if (value === "pending") return "Draft";
+  if (value === "sent") return "Issued";
+  return formatStage(value);
+}
+
+function formatQuoteDelivery(value: string | null | undefined): string {
+  switch (value) {
+    case "requested":
+      return "Requested";
+    case "dispatched":
+      return "Provider pending";
+    case "succeeded":
+      return "Sent";
+    case "partial_failure":
+      return "Partially sent — review Inbox";
+    case "failed":
+      return "Failed — review Inbox";
+    case "reconciliation_required":
+      return "Uncertain — reconcile";
+    default:
+      return "Not requested";
+  }
+}
+
 function formatChannel(value: string): string {
   if (value === "sms") return "SMS";
   if (value === "dm") return "Messenger";
@@ -842,7 +876,11 @@ function MobileCompleteAppointmentForm({
   teamMembers,
   currentTeamMemberId,
   currentTeamMemberName,
-  isOwner,
+  canCollectPayments,
+  canManagePayments,
+  canManageCommissions,
+  canOverrideAppointmentConflicts,
+  canSendCustomerMessages,
 }: {
   event: CalendarEvent;
   appointmentId: string;
@@ -851,14 +889,21 @@ function MobileCompleteAppointmentForm({
   teamMembers: TeamMemberSummary[];
   currentTeamMemberId: string;
   currentTeamMemberName: string;
-  isOwner: boolean;
+  canCollectPayments: boolean;
+  canManagePayments: boolean;
+  canManageCommissions: boolean;
+  canOverrideAppointmentConflicts: boolean;
+  canSendCustomerMessages: boolean;
 }) {
   const status = (event.status ?? "").trim().toLowerCase();
   const isQuoteOnly = isQuoteOnlyAppointmentType(event.appointmentType);
   const canConvertCompletedQuote =
-    isQuoteOnly && status === "completed" && isOwner;
+    isQuoteOnly && status === "completed" && canOverrideAppointmentConflicts;
   const canCorrectCompletedJob =
-    !isQuoteOnly && status === "completed" && isOwner;
+    !isQuoteOnly &&
+    status === "completed" &&
+    canManagePayments &&
+    canManageCommissions;
   if (
     !appointmentId ||
     isCanceledEvent(event) ||
@@ -877,6 +922,25 @@ function MobileCompleteAppointmentForm({
         ? (normalizeCents(event.quotedTotalCents)! / 100).toFixed(2)
         : "";
   const pricingContext = formatEventPricing(event);
+  const sellerBaseline =
+    event.soldByMemberId ?? event.assignedSalespersonMemberId ?? null;
+  const activeSellerBaseline = sellerBaseline
+    ? (teamMembers.find((member) => member.id === sellerBaseline) ?? null)
+    : null;
+  const sellerCorrectionBlocked = Boolean(
+    sellerBaseline && !activeSellerBaseline && !canManageCommissions,
+  );
+  const defaultSellerId = sellerBaseline
+    ? (activeSellerBaseline?.id ?? "")
+    : currentTeamMemberId;
+  const defaultSellerName = activeSellerBaseline?.name ?? currentTeamMemberName;
+  const selectableSellers = (
+    canManageCommissions || !sellerBaseline
+      ? teamMembers
+      : activeSellerBaseline
+        ? [activeSellerBaseline]
+        : []
+  ).filter((member) => member.id !== defaultSellerId);
 
   if (isQuoteOnly) {
     return (
@@ -884,6 +948,16 @@ function MobileCompleteAppointmentForm({
         {status !== "completed" ? (
           <form action={updateMobileAppointmentStatusAction}>
             <input type="hidden" name="appointmentId" value={appointmentId} />
+            <input
+              type="hidden"
+              name="expectedVersion"
+              value={event.version ?? ""}
+            />
+            <input
+              type="hidden"
+              name="idempotencyKey"
+              value={`mobile-appointment-status:${randomUUID()}`}
+            />
             <input type="hidden" name="date" value={calendarDay} />
             <input type="hidden" name="screen" value={screen} />
             <input
@@ -899,132 +973,190 @@ function MobileCompleteAppointmentForm({
             >
               Quote done
             </button>
+            <p className="mt-2 text-xs leading-5 text-slate-400">
+              This records the quote outcome only. The customer will not be
+              notified.
+            </p>
           </form>
         ) : null}
-        <details className="rounded-md border border-cyan-300/30 bg-cyan-300/10 p-3">
-          <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
-            Convert to job
-          </summary>
-          <form
-            action={convertMobileQuoteToJobAction}
-            className="mt-3 space-y-3"
+        {canCollectPayments && sellerCorrectionBlocked ? (
+          <p
+            role="alert"
+            className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-3 text-sm leading-6 text-amber-100"
           >
-            <input type="hidden" name="appointmentId" value={appointmentId} />
-            <input type="hidden" name="date" value={calendarDay} />
-            <input type="hidden" name="screen" value={screen} />
-            <label className="block">
-              <span className="text-xs font-semibold text-slate-300">
-                Job start
-              </span>
+            Conversion is blocked because the assigned seller is inactive or
+            unavailable. A commission manager must choose an active seller.
+          </p>
+        ) : canCollectPayments ? (
+          <details className="rounded-md border border-cyan-300/30 bg-cyan-300/10 p-3">
+            <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
+              Convert to job
+            </summary>
+            <form
+              action={convertMobileQuoteToJobAction}
+              className="mt-3 space-y-3"
+            >
+              <input type="hidden" name="appointmentId" value={appointmentId} />
               <input
-                name="startAt"
-                type="datetime-local"
-                required
-                defaultValue={formatDateTimeInputValue(event.start)}
-                className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                type="hidden"
+                name="expectedVersion"
+                value={event.version ?? ""}
               />
-            </label>
-            <label className="block">
-              <span className="text-xs font-semibold text-slate-300">
-                Sold by
-              </span>
-              <select
-                name="soldByMemberId"
-                required
-                defaultValue={currentTeamMemberId}
-                className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-              >
-                <option value={currentTeamMemberId}>
-                  {currentTeamMemberName}
-                </option>
-                {teamMembers
-                  .filter((member) => member.id !== currentTeamMemberId)
-                  .map((member) => (
+              <input
+                type="hidden"
+                name="idempotencyKey"
+                value={`mobile-appointment-convert:${randomUUID()}`}
+              />
+              <input type="hidden" name="expectedStatus" value={status} />
+              <input
+                type="hidden"
+                name="expectedSoldByMemberId"
+                value={event.soldByMemberId ?? ""}
+              />
+              <input
+                type="hidden"
+                name="expectedAssignedSalespersonMemberId"
+                value={event.assignedSalespersonMemberId ?? ""}
+              />
+              <input
+                type="hidden"
+                name="expectedFinalTotalCents"
+                value={finalTotalCents === null ? "null" : finalTotalCents}
+              />
+              <input type="hidden" name="date" value={calendarDay} />
+              <input type="hidden" name="screen" value={screen} />
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-300">
+                  Job start
+                </span>
+                <input
+                  name="startAt"
+                  type="datetime-local"
+                  required
+                  defaultValue={formatDateTimeInputValue(event.start)}
+                  className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-300">
+                  Sold by
+                </span>
+                <select
+                  name="soldByMemberId"
+                  required
+                  defaultValue={defaultSellerId}
+                  className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                >
+                  <option value="">(Select active seller)</option>
+                  {defaultSellerId ? (
+                    <option value={defaultSellerId}>{defaultSellerName}</option>
+                  ) : null}
+                  {selectableSellers.map((member) => (
                     <option key={member.id} value={member.id}>
                       {member.name}
                     </option>
                   ))}
-              </select>
-            </label>
-            <label className="block">
-              <span className="text-xs font-semibold text-slate-300">
-                Seller override code
-              </span>
-              <input
-                name="soldByOverrideCode"
-                type="password"
-                autoComplete="off"
-                className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                placeholder="Only if changing seller"
+                </select>
+              </label>
+              {sellerBaseline && !activeSellerBaseline ? (
+                <p className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100">
+                  The previous seller is inactive. Choose an active seller; this
+                  correction requires commission-management permission.
+                </p>
+              ) : null}
+              <MobileAppointmentPricingFields
+                sourceTeamMemberId={currentTeamMemberId}
+                fixedAppointmentType="job"
               />
-            </label>
-            <MobileAppointmentPricingFields
-              sourceTeamMemberId={currentTeamMemberId}
-              fixedAppointmentType="job"
-            />
-            <label className="block">
-              <span className="text-xs font-semibold text-slate-300">
-                Final job total
-              </span>
-              <input
-                name="finalTotal"
-                type="number"
-                min={0}
-                step="0.01"
-                defaultValue={amountDefault}
-                className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                placeholder="350"
-              />
-            </label>
-            <div className="rounded-md border border-white/10 bg-slate-950 p-3">
-              <p className="text-xs font-semibold text-slate-300">Who worked</p>
-              <div className="mt-2 grid grid-cols-1 gap-2">
-                {teamMembers.length ? (
-                  teamMembers.map((member) => (
-                    <label
-                      key={member.id}
-                      className="flex cursor-pointer items-center gap-3 rounded-md border border-white/10 bg-slate-900 px-3 py-3 text-sm text-slate-200"
-                    >
+              {canCollectPayments ? (
+                <>
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-300">
+                      Final job total
+                    </span>
+                    <input
+                      name="finalTotal"
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      defaultValue={amountDefault}
+                      className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                      placeholder="350"
+                    />
+                  </label>
+                  {finalTotalCents !== null && canManagePayments ? (
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-300">
+                        Reason if changing the existing total
+                      </span>
                       <input
-                        name="crewMemberId"
-                        type="checkbox"
-                        value={member.id}
-                        className="h-5 w-5 rounded border-slate-500 bg-slate-950 accent-emerald-300"
+                        name="finalTotalChangeReason"
+                        type="text"
+                        maxLength={500}
+                        className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
                       />
-                      <span className="min-w-0 truncate">{member.name}</span>
                     </label>
-                  ))
-                ) : (
-                  <p className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100">
-                    No active team members loaded. Refresh before completing
-                    this job.
-                  </p>
-                )}
+                  ) : null}
+                  <div className="rounded-md border border-white/10 bg-slate-950 p-3">
+                    <p className="text-xs font-semibold text-slate-300">
+                      Who worked
+                    </p>
+                    <div className="mt-2 grid grid-cols-1 gap-2">
+                      {teamMembers.length ? (
+                        teamMembers.map((member) => (
+                          <label
+                            key={member.id}
+                            className="flex cursor-pointer items-center gap-3 rounded-md border border-white/10 bg-slate-900 px-3 py-3 text-sm text-slate-200"
+                          >
+                            <input
+                              name="crewMemberId"
+                              type="checkbox"
+                              value={member.id}
+                              className="h-5 w-5 rounded border-slate-500 bg-slate-950 accent-emerald-300"
+                            />
+                            <span className="min-w-0 truncate">
+                              {member.name}
+                            </span>
+                          </label>
+                        ))
+                      ) : (
+                        <p className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100">
+                          No active team members loaded. Refresh before
+                          completing this job.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              <div className="grid grid-cols-1 gap-2">
+                {canCollectPayments ? (
+                  <button
+                    type="submit"
+                    name="completionMode"
+                    value="complete"
+                    className="w-full rounded-md bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950"
+                  >
+                    Convert + complete
+                  </button>
+                ) : null}
+                <button
+                  type="submit"
+                  name="completionMode"
+                  value="convert"
+                  className="w-full rounded-md border border-cyan-300/30 bg-slate-950 px-3 py-2 text-sm font-semibold text-cyan-100"
+                >
+                  Convert only
+                </button>
               </div>
-            </div>
-            <div className="grid grid-cols-1 gap-2">
-              <button
-                type="submit"
-                name="completionMode"
-                value="complete"
-                className="w-full rounded-md bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950"
-              >
-                Convert + complete
-              </button>
-              <button
-                type="submit"
-                name="completionMode"
-                value="convert"
-                className="w-full rounded-md border border-cyan-300/30 bg-slate-950 px-3 py-2 text-sm font-semibold text-cyan-100"
-              >
-                Convert only
-              </button>
-            </div>
-          </form>
-        </details>
+            </form>
+          </details>
+        ) : null}
       </div>
     );
   }
+
+  if (!canCollectPayments) return null;
 
   return (
     <details className="rounded-md border border-emerald-300/30 bg-emerald-300/10 p-3">
@@ -1036,6 +1168,16 @@ function MobileCompleteAppointmentForm({
         className="mt-3 space-y-3"
       >
         <input type="hidden" name="appointmentId" value={appointmentId} />
+        <input
+          type="hidden"
+          name="expectedVersion"
+          value={event.version ?? ""}
+        />
+        <input
+          type="hidden"
+          name="idempotencyKey"
+          value={`mobile-appointment-status:${randomUUID()}`}
+        />
         <input type="hidden" name="date" value={calendarDay} />
         <input type="hidden" name="screen" value={screen} />
         <input
@@ -1050,7 +1192,7 @@ function MobileCompleteAppointmentForm({
           quotedTotalCents={normalizeCents(event.quotedTotalCents)}
           initialPaymentSummary={event.paymentSummary ?? null}
           pricingContext={pricingContext}
-          isOwner={isOwner}
+          canManagePayments={canManagePayments}
         />
         {status === "completed" ? (
           <p className="rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-2 text-xs leading-5 text-cyan-100">
@@ -1086,6 +1228,25 @@ function MobileCompleteAppointmentForm({
             )}
           </div>
         </div>
+        {canSendCustomerMessages ? (
+          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-3 text-sm text-cyan-100">
+            <input
+              name="sendReviewRequest"
+              type="checkbox"
+              className="mt-0.5 h-5 w-5 rounded border-slate-500 bg-slate-950 accent-cyan-300"
+            />
+            <span>
+              Request a review by SMS after completion. This is off unless you
+              check it; saving only queues the request and does not confirm
+              delivery.
+            </span>
+          </label>
+        ) : (
+          <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-400">
+            The customer will not be sent a review request. Message-send
+            permission is required.
+          </p>
+        )}
         <button
           type="submit"
           className="w-full rounded-md bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950"
@@ -1195,10 +1356,13 @@ function MobileWeekAgenda({
   canManageMedia,
   canReadPayments,
   canCollectPayments,
+  canManagePayments,
+  canManageCommissions,
+  canOverrideAppointmentConflicts,
+  canSendCustomerMessages,
   teamMembers,
   currentTeamMemberId,
   currentTeamMemberName,
-  isOwner,
 }: {
   days: string[];
   events: CalendarEvent[];
@@ -1208,10 +1372,13 @@ function MobileWeekAgenda({
   canManageMedia: boolean;
   canReadPayments: boolean;
   canCollectPayments: boolean;
+  canManagePayments: boolean;
+  canManageCommissions: boolean;
+  canOverrideAppointmentConflicts: boolean;
+  canSendCustomerMessages: boolean;
   teamMembers: TeamMemberSummary[];
   currentTeamMemberId: string;
   currentTeamMemberName: string;
-  isOwner: boolean;
 }) {
   const weekProjectedLabel = formatProjectedRange(events);
   const weekJobCount = events.filter(
@@ -1288,6 +1455,7 @@ function MobileWeekAgenda({
                   const canUpdate = Boolean(
                     canUpdateAppointments &&
                       appointmentId &&
+                      event.version &&
                       event.source === "db",
                   );
                   const isQuoteOnly = isQuoteOnlyAppointmentType(
@@ -1320,6 +1488,7 @@ function MobileWeekAgenda({
                         {appointmentId ? (
                           <MobileAppointmentDetail
                             appointmentId={appointmentId}
+                            appointmentVersion={event.version ?? null}
                             employeeId={currentTeamMemberId}
                             notes={event.notes}
                             quotedScopeText={event.quotedScopeText ?? null}
@@ -1335,7 +1504,7 @@ function MobileWeekAgenda({
                               canCollectPayments &&
                               canCollectPaymentForEvent(event)
                             }
-                            isOwner={isOwner}
+                            canManagePayments={canManagePayments}
                           />
                         ) : null}
 
@@ -1377,7 +1546,13 @@ function MobileWeekAgenda({
                               teamMembers={teamMembers}
                               currentTeamMemberId={currentTeamMemberId}
                               currentTeamMemberName={currentTeamMemberName}
-                              isOwner={isOwner}
+                              canCollectPayments={canCollectPayments}
+                              canManagePayments={canManagePayments}
+                              canManageCommissions={canManageCommissions}
+                              canOverrideAppointmentConflicts={
+                                canOverrideAppointmentConflicts
+                              }
+                              canSendCustomerMessages={canSendCustomerMessages}
                             />
                             <details className="rounded-md border border-white/10 bg-slate-900 px-3">
                               <summary className="flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-slate-300">
@@ -1387,11 +1562,22 @@ function MobileWeekAgenda({
                                 {!isCanceledEvent(event) ? (
                                   <form
                                     action={updateMobileAppointmentStatusAction}
+                                    className="space-y-2"
                                   >
                                     <input
                                       type="hidden"
                                       name="appointmentId"
                                       value={appointmentId}
+                                    />
+                                    <input
+                                      type="hidden"
+                                      name="expectedVersion"
+                                      value={event.version ?? ""}
+                                    />
+                                    <input
+                                      type="hidden"
+                                      name="idempotencyKey"
+                                      value={`mobile-appointment-status:${randomUUID()}`}
                                     />
                                     <input
                                       type="hidden"
@@ -1403,6 +1589,26 @@ function MobileWeekAgenda({
                                       name="screen"
                                       value="calendar"
                                     />
+                                    {canSendCustomerMessages ? (
+                                      <label className="flex cursor-pointer items-start gap-3 rounded-md border border-rose-300/20 bg-rose-300/10 px-3 py-3 text-xs leading-5 text-rose-100">
+                                        <input
+                                          name="sendCustomerNotification"
+                                          type="checkbox"
+                                          className="mt-0.5 h-5 w-5 rounded border-slate-500 bg-slate-950 accent-rose-300"
+                                        />
+                                        <span>
+                                          Also request a cancellation notice for
+                                          the customer. This is off unless
+                                          checked, and delivery is not confirmed
+                                          by this action.
+                                        </span>
+                                      </label>
+                                    ) : (
+                                      <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-400">
+                                        Canceling will not notify the customer.
+                                        Message-send permission is required.
+                                      </p>
+                                    )}
                                     <button
                                       type="submit"
                                       name="status"
@@ -1507,7 +1713,7 @@ async function loadMobileThreads(input: {
   if (input.view) params.set("view", input.view);
   if (input.status) params.set("status", input.status);
   if (input.q) params.set("q", input.q);
-  const response = await callAdminApi(
+  const response = await callAdminApiForCurrentSession(
     `/api/admin/inbox/threads?${params.toString()}`,
     { method: "GET" },
   );
@@ -1522,7 +1728,7 @@ async function loadMobileThread(
   threadId: string,
 ): Promise<ThreadResponse | null> {
   if (!threadId) return null;
-  const response = await callAdminApi(
+  const response = await callAdminApiForCurrentSession(
     `/api/admin/inbox/threads/${encodeURIComponent(threadId)}`,
     { method: "GET" },
   );
@@ -1537,7 +1743,7 @@ async function loadMobileContact(
   contactId: string | null | undefined,
 ): Promise<ContactSummary | null> {
   if (!contactId) return null;
-  const response = await callAdminApi(
+  const response = await callAdminApiForCurrentSession(
     `/api/admin/contacts?contactId=${encodeURIComponent(contactId)}&limit=1`,
     {
       method: "GET",
@@ -1556,7 +1762,7 @@ async function loadMobileContacts(input: {
   const params = new URLSearchParams();
   params.set("limit", "25");
   if (input.q) params.set("q", input.q);
-  const response = await callAdminApi(
+  const response = await callAdminApiForCurrentSession(
     `/api/admin/contacts?${params.toString()}`,
     { method: "GET" },
   );
@@ -1581,7 +1787,7 @@ async function loadMobileCalendarRange(
   const end = new Date(start.getTime());
   end.setUTCDate(end.getUTCDate() + Math.max(1, days));
 
-  const response = await callAdminApi(
+  const response = await callAdminApiForCurrentSession(
     `/api/admin/calendar/feed?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`,
     { method: "GET" },
   );
@@ -1608,7 +1814,7 @@ async function loadMobileQuotes(status: string): Promise<QuoteSummary[]> {
   const params = new URLSearchParams();
   if (status !== "all") params.set("status", status);
   const query = params.toString();
-  const response = await callAdminApi(
+  const response = await callAdminApiForCurrentSession(
     `/api/quotes${query ? `?${query}` : ""}`,
     { method: "GET" },
   );
@@ -1620,9 +1826,12 @@ async function loadMobileQuotes(status: string): Promise<QuoteSummary[]> {
 }
 
 async function loadMobileExpenses(): Promise<MobileExpense[]> {
-  const response = await callAdminApi("/api/admin/expenses?limit=12", {
-    method: "GET",
-  });
+  const response = await callAdminApiForCurrentSession(
+    "/api/admin/expenses?limit=12",
+    {
+      method: "GET",
+    },
+  );
   if (!response.ok) return [];
   const payload = (await response
     .json()
@@ -1635,8 +1844,8 @@ async function loadMobileAccess(): Promise<{
   members: TeamMemberSummary[];
 }> {
   const [rolesResponse, membersResponse] = await Promise.all([
-    callAdminApi("/api/admin/roles", { method: "GET" }),
-    callAdminApi("/api/admin/team/members", { method: "GET" }),
+    callAdminApiForCurrentSession("/api/admin/roles", { method: "GET" }),
+    callAdminApiForCurrentSession("/api/admin/team/members", { method: "GET" }),
   ]);
 
   const rolesPayload = rolesResponse.ok
@@ -1657,9 +1866,12 @@ async function loadMobileAccess(): Promise<{
 }
 
 async function loadMobileTeamMembers(): Promise<TeamMemberSummary[]> {
-  const response = await callAdminApi("/api/admin/team/members", {
-    method: "GET",
-  });
+  const response = await callAdminApiForCurrentSession(
+    "/api/admin/team/members",
+    {
+      method: "GET",
+    },
+  );
   if (!response.ok) return [];
   const payload = (await response
     .json()
@@ -1704,8 +1916,11 @@ export default async function MobileHomePage({
     q?: string;
     date?: string;
     appointment?: string;
+    customerNotification?: string;
+    reviewRequest?: string;
     booked?: string;
     converted?: string;
+    calendarSync?: string;
     upload?: string;
     quote?: string;
     quoteStatus?: string;
@@ -1771,9 +1986,15 @@ export default async function MobileHomePage({
   const noteSaved = params.note === "1";
   const contactSaved = params.contact === "1";
   const appointmentSaved = params.appointment === "1";
+  const appointmentCustomerNotification =
+    params.customerNotification === "requested" ? "requested" : "not_requested";
+  const appointmentReviewRequest =
+    params.reviewRequest === "requested" ? "requested" : "not_requested";
   const appointmentBooked = params.booked === "1";
   const appointmentConverted =
     params.converted === "1" || params.converted === "completed";
+  const calendarSyncStatus =
+    params.calendarSync === "requested" ? "requested" : "not_required";
   const uploadSaved = params.upload === "1";
   const quoteSaved = params.quote === "1";
   const quoteSent = params.quote === "sent";
@@ -1787,6 +2008,7 @@ export default async function MobileHomePage({
   const inviteSent = params.invite === "sent";
   const passwordSaved = params.password === "saved";
   const callStarted = params.call === "started";
+  const callNotConnected = params.call === "not_connected";
   const handledSaved = params.handled === "1";
   const threadClosed = params.closed === "1";
   const error =
@@ -1882,6 +2104,10 @@ export default async function MobileHomePage({
     session.teamMember.permissions,
     "messages.send",
   );
+  const canPlaceCalls = hasMobilePermission(
+    session.teamMember.permissions,
+    "calls.place",
+  );
   const canWriteExpenses = hasMobilePermission(
     session.teamMember.permissions,
     "expenses.write",
@@ -1889,6 +2115,18 @@ export default async function MobileHomePage({
   const canUpdateAppointments = hasMobilePermission(
     session.teamMember.permissions,
     "appointments.update",
+  );
+  const canWriteQuotes = hasMobilePermission(
+    session.teamMember.permissions,
+    "quotes.write",
+  );
+  const canUpdateQuotes = hasMobilePermission(
+    session.teamMember.permissions,
+    "quotes.update",
+  );
+  const canSendQuotes = hasMobilePermission(
+    session.teamMember.permissions,
+    "quotes.send",
   );
   const canCaptureMedia = hasMobilePermission(
     session.teamMember.permissions,
@@ -1905,6 +2143,18 @@ export default async function MobileHomePage({
   const canCollectPayments = hasMobilePermission(
     session.teamMember.permissions,
     "payments.collect",
+  );
+  const canManagePayments = hasMobilePermission(
+    session.teamMember.permissions,
+    "payments.manage",
+  );
+  const canManageCommissions = hasMobilePermission(
+    session.teamMember.permissions,
+    "commissions.manage",
+  );
+  const canOverrideAppointmentConflicts = hasMobilePermission(
+    session.teamMember.permissions,
+    "appointments.override_conflicts",
   );
   const calendarWeekProjectedLabel = formatProjectedRange(calendarWeekEvents);
   const selectedThread =
@@ -2089,8 +2339,22 @@ export default async function MobileHomePage({
             </div>
           ) : null}
           {appointmentSaved ? (
-            <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
-              Appointment updated.
+            <div
+              className={`rounded-lg border p-4 text-sm ${
+                calendarSyncStatus === "requested"
+                  ? "border-amber-300/30 bg-amber-300/10 text-amber-100"
+                  : "border-emerald-300/30 bg-emerald-300/10 text-emerald-100"
+              }`}
+            >
+              Appointment updated.{" "}
+              {appointmentCustomerNotification === "requested"
+                ? "The customer notice was requested; delivery is not yet confirmed."
+                : appointmentReviewRequest === "requested"
+                  ? "A review request was queued; delivery is not yet confirmed."
+                  : "The customer was not notified."}{" "}
+              {calendarSyncStatus === "requested"
+                ? "Google Calendar cleanup is queued."
+                : ""}
             </div>
           ) : null}
           {appointmentBooked ? (
@@ -2102,7 +2366,10 @@ export default async function MobileHomePage({
             <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
               {params.converted === "completed"
                 ? "Quote converted and completed."
-                : "Quote converted to job."}
+                : "Quote converted to job."}{" "}
+              {calendarSyncStatus === "requested"
+                ? "Google Calendar sync queued."
+                : "No Google Calendar change was required."}
             </div>
           ) : null}
           {uploadSaved ? (
@@ -2183,6 +2450,12 @@ export default async function MobileHomePage({
               Ringing your phone now. Answer to connect with the customer.
             </div>
           ) : null}
+          {callNotConnected ? (
+            <div className="rounded-lg border border-amber-300/30 bg-amber-300/10 p-4 text-sm text-amber-100">
+              The signed call callback confirmed that the customer did not
+              connect. Follow-up tasks remain open.
+            </div>
+          ) : null}
           {handledSaved ? (
             <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
               Thread marked handled.
@@ -2224,7 +2497,8 @@ export default async function MobileHomePage({
                             : ""}
                         </p>
                       </div>
-                      {selectedThread.thread.contact?.id &&
+                      {canPlaceCalls &&
+                      selectedThread.thread.contact?.id &&
                       (selectedThread.thread.contact.phone ||
                         selectedContact?.phoneE164 ||
                         selectedContact?.phone) ? (
@@ -2233,6 +2507,16 @@ export default async function MobileHomePage({
                             type="hidden"
                             name="contactId"
                             value={selectedThread.thread.contact.id}
+                          />
+                          <input
+                            type="hidden"
+                            name="idempotencyKey"
+                            value={`mobile-call:${randomUUID()}`}
+                          />
+                          <input
+                            type="hidden"
+                            name="explicitNewAttempt"
+                            value="START NEW CALL"
                           />
                           <input
                             type="hidden"
@@ -2513,7 +2797,7 @@ export default async function MobileHomePage({
                                 ) : null}
                               </div>
                             </Link>
-                            {phone && thread.contact?.id ? (
+                            {canPlaceCalls && phone && thread.contact?.id ? (
                               <form
                                 action={startMobileContactCallAction}
                                 className="mt-3"
@@ -2522,6 +2806,16 @@ export default async function MobileHomePage({
                                   type="hidden"
                                   name="contactId"
                                   value={thread.contact.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="idempotencyKey"
+                                  value={`mobile-call:${randomUUID()}`}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="explicitNewAttempt"
+                                  value="START NEW CALL"
                                 />
                                 <input
                                   type="hidden"
@@ -2573,12 +2867,23 @@ export default async function MobileHomePage({
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-2">
-                      {(selectedContact.phoneE164 ?? selectedContact.phone) ? (
+                      {canPlaceCalls &&
+                      (selectedContact.phoneE164 ?? selectedContact.phone) ? (
                         <form action={startMobileContactCallAction}>
                           <input
                             type="hidden"
                             name="contactId"
                             value={selectedContact.id}
+                          />
+                          <input
+                            type="hidden"
+                            name="idempotencyKey"
+                            value={`mobile-call:${randomUUID()}`}
+                          />
+                          <input
+                            type="hidden"
+                            name="explicitNewAttempt"
+                            value="START NEW CALL"
                           />
                           <input
                             type="hidden"
@@ -3017,6 +3322,7 @@ export default async function MobileHomePage({
                       const canUpdate = Boolean(
                         canUpdateAppointments &&
                           appointmentId &&
+                          event.version &&
                           event.source === "db",
                       );
                       const isQuoteOnly = isQuoteOnlyAppointmentType(
@@ -3049,6 +3355,7 @@ export default async function MobileHomePage({
                             <div className="space-y-3">
                               <MobileAppointmentDetail
                                 appointmentId={appointmentId}
+                                appointmentVersion={event.version ?? null}
                                 employeeId={session.teamMember.id}
                                 notes={event.notes}
                                 quotedScopeText={event.quotedScopeText ?? null}
@@ -3066,7 +3373,7 @@ export default async function MobileHomePage({
                                   canCollectPayments &&
                                   canCollectPaymentForEvent(event)
                                 }
-                                isOwner={session.isOwner}
+                                canManagePayments={canManagePayments}
                               />
                             </div>
                           ) : null}
@@ -3083,6 +3390,16 @@ export default async function MobileHomePage({
                                   type="hidden"
                                   name="appointmentId"
                                   value={appointmentId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="expectedVersion"
+                                  value={event.version ?? ""}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="idempotencyKey"
+                                  value={`mobile-appointment-note:${randomUUID()}`}
                                 />
                                 <input
                                   type="hidden"
@@ -3148,7 +3465,13 @@ export default async function MobileHomePage({
                                 teamMembers={teamMembers}
                                 currentTeamMemberId={session.teamMember.id}
                                 currentTeamMemberName={session.teamMember.name}
-                                isOwner={session.isOwner}
+                                canCollectPayments={canCollectPayments}
+                                canManagePayments={canManagePayments}
+                                canManageCommissions={canManageCommissions}
+                                canOverrideAppointmentConflicts={
+                                  canOverrideAppointmentConflicts
+                                }
+                                canSendCustomerMessages={canStartMessageThreads}
                               />
                             </div>
                           ) : null}
@@ -3215,12 +3538,23 @@ export default async function MobileHomePage({
                           </button>
                         </form>
                       ) : null}
-                      {(contactDetail.phoneE164 ?? contactDetail.phone) ? (
+                      {canPlaceCalls &&
+                      (contactDetail.phoneE164 ?? contactDetail.phone) ? (
                         <form action={startMobileContactCallAction}>
                           <input
                             type="hidden"
                             name="contactId"
                             value={contactDetail.id}
+                          />
+                          <input
+                            type="hidden"
+                            name="idempotencyKey"
+                            value={`mobile-call:${randomUUID()}`}
+                          />
+                          <input
+                            type="hidden"
+                            name="explicitNewAttempt"
+                            value="START NEW CALL"
                           />
                           <input
                             type="hidden"
@@ -3661,131 +3995,149 @@ export default async function MobileHomePage({
                 </div>
               </div>
 
-              <details className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
-                <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
-                  Create quote
-                </summary>
-                <form
-                  action={createMobileQuoteAction}
-                  className="mt-4 space-y-3"
-                >
-                  <label className="block">
-                    <span className="text-xs font-semibold text-slate-300">
-                      Contact / property
-                    </span>
-                    <select
-                      name="contactProperty"
-                      required
-                      className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
-                    >
-                      <option value="">Choose contact</option>
-                      {contacts.flatMap((contact) =>
-                        (contact.properties ?? []).map((property) => (
-                          <option
-                            key={`${contact.id}:${property.id}`}
-                            value={`${contact.id}:${property.id}`}
-                          >
-                            {contact.name} - {property.addressLine1},{" "}
-                            {property.city}
-                          </option>
-                        )),
-                      )}
-                    </select>
-                  </label>
-                  <div className="space-y-2">
-                    {mobileQuoteServices.map((service) => (
-                      <div
-                        key={service.id}
-                        className="grid grid-cols-[1fr_7rem] gap-2 rounded-md border border-white/10 bg-slate-950 p-2"
-                      >
-                        <label className="flex items-center gap-2 text-sm text-slate-200">
-                          <input
-                            name="services"
-                            type="checkbox"
-                            value={service.id}
-                            className="rounded border-slate-600 bg-slate-900"
-                          />
-                          {service.label}
-                        </label>
-                        <input
-                          name={`servicePrice:${service.id}`}
-                          inputMode="decimal"
-                          className="w-full rounded-md border border-white/10 bg-slate-900 px-2 py-1 text-sm text-white outline-none focus:border-cyan-300"
-                          placeholder="$"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block">
-                      <span className="text-xs font-semibold text-slate-300">
-                        Duration
-                      </span>
-                      <select
-                        name="jobDurationMinutes"
-                        defaultValue="120"
-                        className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
-                      >
-                        <option value="60">1h</option>
-                        <option value="120">2h</option>
-                        <option value="180">3h</option>
-                        <option value="240">Half day</option>
-                        <option value="480">Full day</option>
-                      </select>
-                    </label>
-                    <label className="block">
-                      <span className="text-xs font-semibold text-slate-300">
-                        Deposit
-                      </span>
-                      <select
-                        name="depositRate"
-                        defaultValue="0"
-                        className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
-                      >
-                        <option value="0">None</option>
-                        <option value="0.1">10%</option>
-                        <option value="0.25">25%</option>
-                        <option value="0.5">50%</option>
-                      </select>
-                    </label>
-                  </div>
-                  <label className="block">
-                    <span className="text-xs font-semibold text-slate-300">
-                      Client scope
-                    </span>
-                    <textarea
-                      name="clientScope"
-                      rows={3}
-                      className="mt-1 w-full resize-none rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
-                      placeholder="What the customer will see on the quote..."
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs font-semibold text-slate-300">
-                      Internal notes
-                    </span>
-                    <textarea
-                      name="notes"
-                      rows={2}
-                      className="mt-1 w-full resize-none rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
-                    />
-                  </label>
-                  <label className="flex items-center gap-2 text-sm text-slate-200">
-                    <input
-                      name="sendQuote"
-                      type="checkbox"
-                      className="rounded border-slate-600 bg-slate-900"
-                    />
-                    Send SMS/email after creating
-                  </label>
-                  <button
-                    type="submit"
-                    className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
-                  >
+              {canWriteQuotes ? (
+                <details className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                  <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
                     Create quote
-                  </button>
-                </form>
-              </details>
+                  </summary>
+                  <form
+                    action={createMobileQuoteAction}
+                    className="mt-4 space-y-3"
+                  >
+                    <input
+                      type="hidden"
+                      name="idempotencyKey"
+                      value={`quote-mobile-create:${randomUUID()}`}
+                    />
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-300">
+                        Contact / property
+                      </span>
+                      <select
+                        name="contactProperty"
+                        required
+                        className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
+                      >
+                        <option value="">Choose contact</option>
+                        {contacts.flatMap((contact) =>
+                          (contact.properties ?? []).map((property) => (
+                            <option
+                              key={`${contact.id}:${property.id}`}
+                              value={`${contact.id}:${property.id}`}
+                            >
+                              {contact.name} - {property.addressLine1},{" "}
+                              {property.city}
+                            </option>
+                          )),
+                        )}
+                      </select>
+                    </label>
+                    <div className="space-y-2">
+                      {mobileQuoteServices.map((service) => (
+                        <div
+                          key={service.id}
+                          className="grid grid-cols-[1fr_7rem] gap-2 rounded-md border border-white/10 bg-slate-950 p-2"
+                        >
+                          <label className="flex items-center gap-2 text-sm text-slate-200">
+                            <input
+                              name="services"
+                              type="checkbox"
+                              value={service.id}
+                              className="rounded border-slate-600 bg-slate-900"
+                            />
+                            {service.label}
+                          </label>
+                          <input
+                            name={`servicePrice:${service.id}`}
+                            inputMode="decimal"
+                            className="w-full rounded-md border border-white/10 bg-slate-900 px-2 py-1 text-sm text-white outline-none focus:border-cyan-300"
+                            placeholder="$"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="text-xs font-semibold text-slate-300">
+                          Duration
+                        </span>
+                        <select
+                          name="jobDurationMinutes"
+                          defaultValue="120"
+                          className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
+                        >
+                          <option value="60">1h</option>
+                          <option value="120">2h</option>
+                          <option value="180">3h</option>
+                          <option value="240">Half day</option>
+                          <option value="480">Full day</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="text-xs font-semibold text-slate-300">
+                          Deposit
+                        </span>
+                        <select
+                          name="depositRate"
+                          defaultValue="0"
+                          className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
+                        >
+                          <option value="0">None</option>
+                          <option value="0.1">10%</option>
+                          <option value="0.25">25%</option>
+                          <option value="0.5">50%</option>
+                        </select>
+                      </label>
+                    </div>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-300">
+                        Client scope
+                      </span>
+                      <textarea
+                        name="clientScope"
+                        rows={3}
+                        className="mt-1 w-full resize-none rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
+                        placeholder="What the customer will see on the quote..."
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-300">
+                        Internal notes
+                      </span>
+                      <textarea
+                        name="notes"
+                        rows={2}
+                        className="mt-1 w-full resize-none rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
+                      />
+                    </label>
+                    {canSendQuotes ? (
+                      <label className="flex items-center gap-2 text-sm text-slate-200">
+                        <input
+                          name="sendQuote"
+                          type="checkbox"
+                          className="rounded border-slate-600 bg-slate-900"
+                        />
+                        Send SMS/email after creating
+                      </label>
+                    ) : (
+                      <p className="rounded-md border border-white/10 bg-slate-900 p-3 text-xs leading-5 text-slate-300">
+                        This will create a private draft. You do not have quote
+                        delivery permission.
+                      </p>
+                    )}
+                    <button
+                      type="submit"
+                      className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
+                    >
+                      Create quote
+                    </button>
+                  </form>
+                </details>
+              ) : (
+                <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4 text-sm leading-6 text-slate-300">
+                  Quote creation is read-only for your current permissions.
+                </div>
+              )}
 
               <div className="space-y-3">
                 {quotes.length > 0 ? (
@@ -3823,7 +4175,9 @@ export default async function MobileHomePage({
                             ) : null}
                           </div>
                           <span className="shrink-0 rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold capitalize text-slate-300">
-                            {formatStage(quote.displayStatus ?? quote.status)}
+                            {formatQuoteStatus(
+                              quote.displayStatus ?? quote.status,
+                            )}
                           </span>
                         </div>
                         <p className="mt-3 text-sm text-slate-300">
@@ -3848,7 +4202,7 @@ export default async function MobileHomePage({
                           </div>
                           <div className="rounded-md border border-white/10 bg-slate-900 px-3 py-2">
                             <p className="text-slate-500">
-                              {quote.sentAt ? "Sent" : "Expires"}
+                              {quote.sentAt ? "Issued" : "Expires"}
                             </p>
                             <p className="mt-0.5 font-semibold text-slate-200">
                               {quote.sentAt
@@ -3857,6 +4211,12 @@ export default async function MobileHomePage({
                                   ? formatMobileDateTime(quote.expiresAt)
                                   : "Not sent"}
                             </p>
+                            {quote.sentAt ? (
+                              <p className="mt-1 text-[10px] leading-4 text-slate-400">
+                                Delivery:{" "}
+                                {formatQuoteDelivery(quote.deliveryState)}
+                              </p>
+                            ) : null}
                           </div>
                           <div className="rounded-md border border-white/10 bg-slate-900 px-3 py-2">
                             <p className="text-slate-500">Viewed</p>
@@ -3877,8 +4237,9 @@ export default async function MobileHomePage({
                             </p>
                           </div>
                         </div>
-                        {quote.status === "pending" ||
-                        quote.status === "sent" ? (
+                        {canUpdateQuotes &&
+                        (quote.status === "pending" ||
+                          quote.status === "sent") ? (
                           <details className="mt-3 rounded-md border border-white/10 bg-slate-900 p-3">
                             <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
                               Edit quote
@@ -3891,6 +4252,21 @@ export default async function MobileHomePage({
                                 type="hidden"
                                 name="quoteId"
                                 value={quote.id}
+                              />
+                              <input
+                                type="hidden"
+                                name="expectedVersion"
+                                value={quote.revision}
+                              />
+                              <input
+                                type="hidden"
+                                name="idempotencyKey"
+                                value={`quote-mobile-update:${quote.id}:${quote.revision}:${randomUUID()}`}
+                              />
+                              <input
+                                type="hidden"
+                                name="confirmation"
+                                value="update_quote"
                               />
                               <div className="grid grid-cols-2 gap-2">
                                 <label className="block">
@@ -3993,13 +4369,29 @@ export default async function MobileHomePage({
                           </details>
                         ) : null}
                         <div className="mt-3 grid grid-cols-2 gap-2">
-                          {quote.status === "pending" ||
-                          quote.status === "sent" ? (
+                          {canSendQuotes &&
+                          (quote.status === "pending" ||
+                            quote.status === "sent") ? (
                             <form action={sendMobileQuoteAction}>
                               <input
                                 type="hidden"
                                 name="quoteId"
                                 value={quote.id}
+                              />
+                              <input
+                                type="hidden"
+                                name="expectedVersion"
+                                value={quote.revision}
+                              />
+                              <input
+                                type="hidden"
+                                name="idempotencyKey"
+                                value={`quote-mobile-send:${quote.id}:${randomUUID()}`}
+                              />
+                              <input
+                                type="hidden"
+                                name="confirmation"
+                                value="send_quote"
                               />
                               <button
                                 type="submit"
@@ -4009,36 +4401,73 @@ export default async function MobileHomePage({
                               </button>
                             </form>
                           ) : null}
-                          <form action={updateMobileQuoteDecisionAction}>
-                            <input
-                              type="hidden"
-                              name="quoteId"
-                              value={quote.id}
-                            />
-                            <button
-                              type="submit"
-                              name="decision"
-                              value="accepted"
-                              className="w-full rounded-md border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-sm font-semibold text-emerald-100"
-                            >
-                              Accepted
-                            </button>
-                          </form>
-                          <form action={updateMobileQuoteDecisionAction}>
-                            <input
-                              type="hidden"
-                              name="quoteId"
-                              value={quote.id}
-                            />
-                            <button
-                              type="submit"
-                              name="decision"
-                              value="declined"
-                              className="w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm font-semibold text-rose-100"
-                            >
-                              Declined
-                            </button>
-                          </form>
+                          {canUpdateQuotes &&
+                          quote.status === "sent" &&
+                          Boolean(quote.sentAt) &&
+                          !quote.acceptedAppointmentId ? (
+                            <>
+                              <form action={updateMobileQuoteDecisionAction}>
+                                <input
+                                  type="hidden"
+                                  name="quoteId"
+                                  value={quote.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="expectedVersion"
+                                  value={quote.revision}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="idempotencyKey"
+                                  value={`quote-mobile-decision:${quote.id}:accepted:${randomUUID()}`}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="confirmation"
+                                  value="set_quote_decision"
+                                />
+                                <button
+                                  type="submit"
+                                  name="decision"
+                                  value="accepted"
+                                  className="w-full rounded-md border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-sm font-semibold text-emerald-100"
+                                >
+                                  Accept internally
+                                </button>
+                              </form>
+                              <form action={updateMobileQuoteDecisionAction}>
+                                <input
+                                  type="hidden"
+                                  name="quoteId"
+                                  value={quote.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="expectedVersion"
+                                  value={quote.revision}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="idempotencyKey"
+                                  value={`quote-mobile-decision:${quote.id}:declined:${randomUUID()}`}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="confirmation"
+                                  value="set_quote_decision"
+                                />
+                                <button
+                                  type="submit"
+                                  name="decision"
+                                  value="declined"
+                                  className="w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm font-semibold text-rose-100"
+                                >
+                                  Decline internally
+                                </button>
+                              </form>
+                            </>
+                          ) : null}
                           {quote.shareToken ? (
                             <a
                               href={`/quote/${quote.shareToken}?preview=1`}
@@ -4140,10 +4569,15 @@ export default async function MobileHomePage({
                 canManageMedia={canManageMedia}
                 canReadPayments={canReadPayments}
                 canCollectPayments={canCollectPayments}
+                canManagePayments={canManagePayments}
+                canManageCommissions={canManageCommissions}
+                canOverrideAppointmentConflicts={
+                  canOverrideAppointmentConflicts
+                }
+                canSendCustomerMessages={canStartMessageThreads}
                 teamMembers={teamMembers}
                 currentTeamMemberId={session.teamMember.id}
                 currentTeamMemberName={session.teamMember.name}
-                isOwner={session.isOwner}
               />
             </div>
           ) : activeScreen === "owner" && ownerSummary ? (
@@ -4458,6 +4892,16 @@ export default async function MobileHomePage({
                                 name="payoutRunId"
                                 value={run.id}
                               />
+                              <input
+                                type="hidden"
+                                name="expectedVersion"
+                                value={run.version}
+                              />
+                              <input
+                                type="hidden"
+                                name="idempotencyKey"
+                                value={`commissions:mobile:lock:${run.id}:${randomUUID()}`}
+                              />
                               <button
                                 type="submit"
                                 className="w-full rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-sm font-semibold text-amber-100"
@@ -4473,6 +4917,16 @@ export default async function MobileHomePage({
                                 type="hidden"
                                 name="payoutRunId"
                                 value={run.id}
+                              />
+                              <input
+                                type="hidden"
+                                name="expectedVersion"
+                                value={run.version}
+                              />
+                              <input
+                                type="hidden"
+                                name="idempotencyKey"
+                                value={`commissions:mobile:paid:${run.id}:${randomUUID()}`}
                               />
                               <button
                                 type="submit"
@@ -4698,6 +5152,16 @@ export default async function MobileHomePage({
                             name="memberId"
                             value={member.id}
                           />
+                          <input
+                            type="hidden"
+                            name="expectedUpdatedAt"
+                            value={member.updatedAt}
+                          />
+                          <input
+                            type="hidden"
+                            name="idempotencyKey"
+                            value={`mobile-access-member-update:${member.id}:${member.updatedAt}`}
+                          />
                           <label className="block">
                             <span className="text-xs font-semibold text-slate-300">
                               Name
@@ -4787,6 +5251,11 @@ export default async function MobileHomePage({
                           action={createMobileTeamMemberAction}
                           className="mt-4 space-y-3"
                         >
+                          <input
+                            type="hidden"
+                            name="idempotencyKey"
+                            value={`mobile-access-member-create:${randomUUID()}`}
+                          />
                           <input type="hidden" name="name" value={entry.name} />
                           <input
                             type="hidden"
@@ -4892,6 +5361,16 @@ export default async function MobileHomePage({
                 action={createMobileExpenseAction}
                 className="space-y-3 rounded-lg border border-white/10 bg-white/[0.08] p-4"
               >
+                <input
+                  type="hidden"
+                  name="idempotencyKey"
+                  value={randomUUID()}
+                />
+                <input
+                  type="hidden"
+                  name="paidAt"
+                  value={new Date().toISOString()}
+                />
                 <label className="block">
                   <span className="text-xs font-semibold text-slate-300">
                     Amount
@@ -4959,6 +5438,11 @@ export default async function MobileHomePage({
                             <p className="text-sm font-semibold text-white">
                               {formatUsdCents(expense.amountCents)}
                             </p>
+                            {expense.lifecycleStatus ? (
+                              <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-cyan-200">
+                                {expense.lifecycleStatus}
+                              </p>
+                            ) : null}
                             <p className="mt-1 truncate text-xs text-slate-400">
                               {formatMobileDateTime(expense.paidAt)}
                               {expense.category ? ` - ${expense.category}` : ""}

@@ -1,12 +1,12 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { requireTeamRole } from "../../auth";
-import { callAdminApi } from "@/app/team/lib/api";
+import { requireTeamPrincipal } from "../../auth";
+import { callAdminApiAs } from "@/app/team/lib/api";
 
 export async function GET(request: NextRequest): Promise<Response> {
-  const auth = await requireTeamRole(request, {
+  const auth = await requireTeamPrincipal(request, {
+    permissions: "messages.read",
     returnJson: true,
-    roles: ["owner", "office", "crew"],
   });
   if (!auth.ok) return auth.response;
 
@@ -15,6 +15,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const passthroughKeys = [
     "q",
+    "queue",
     "status",
     "channel",
     "contactId",
@@ -25,6 +26,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     "firstMessageTo",
     "lastMessageFrom",
     "lastMessageTo",
+    "snapshot",
   ] as const;
   for (const key of passthroughKeys) {
     const value = input.get(key);
@@ -33,7 +35,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
   }
 
-  const res = await callAdminApi(
+  const res = await callAdminApiAs(
+    auth.principal,
     `/api/admin/inbox/threads?${params.toString()}`,
     { method: "GET" },
   ).catch(() => null);

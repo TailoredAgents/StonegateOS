@@ -1,16 +1,15 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, outboxEvents } from "@/db";
-import { isAdminRequest } from "../../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 
 function isIsoDateString(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const denied = await requirePermission(request, "marketing.write");
+  if (denied) return denied;
 
   let body: unknown = {};
   try {
@@ -20,7 +19,9 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const daysRaw =
-    body && typeof body === "object" && "days" in body ? (body as Record<string, unknown>)["days"] : undefined;
+    body && typeof body === "object" && "days" in body
+      ? (body as Record<string, unknown>)["days"]
+      : undefined;
   const days =
     typeof daysRaw === "number"
       ? daysRaw
@@ -29,18 +30,27 @@ export async function POST(request: NextRequest): Promise<Response> {
         : NaN;
 
   const sinceRaw =
-    body && typeof body === "object" && "since" in body ? (body as Record<string, unknown>)["since"] : undefined;
+    body && typeof body === "object" && "since" in body
+      ? (body as Record<string, unknown>)["since"]
+      : undefined;
   const untilRaw =
-    body && typeof body === "object" && "until" in body ? (body as Record<string, unknown>)["until"] : undefined;
+    body && typeof body === "object" && "until" in body
+      ? (body as Record<string, unknown>)["until"]
+      : undefined;
 
-  const since = typeof sinceRaw === "string" && isIsoDateString(sinceRaw) ? sinceRaw : null;
-  const until = typeof untilRaw === "string" && isIsoDateString(untilRaw) ? untilRaw : null;
+  const since =
+    typeof sinceRaw === "string" && isIsoDateString(sinceRaw) ? sinceRaw : null;
+  const until =
+    typeof untilRaw === "string" && isIsoDateString(untilRaw) ? untilRaw : null;
 
   const payload: Record<string, unknown> =
     since && until && since <= until
       ? { since, until }
       : {
-          days: Number.isFinite(days) && days > 0 ? Math.min(Math.floor(days), 90) : 14
+          days:
+            Number.isFinite(days) && days > 0
+              ? Math.min(Math.floor(days), 90)
+              : 14,
         };
 
   const db = getDb();
@@ -48,10 +58,14 @@ export async function POST(request: NextRequest): Promise<Response> {
     .insert(outboxEvents)
     .values({
       type: "meta.ads_insights.sync",
-      payload
+      payload,
     })
     .returning({ id: outboxEvents.id });
 
-  return NextResponse.json({ ok: true, queued: true, id: event?.id ?? null, payload });
+  return NextResponse.json({
+    ok: true,
+    queued: true,
+    id: event?.id ?? null,
+    payload,
+  });
 }
-

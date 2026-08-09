@@ -1,11 +1,19 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { ADMIN_SESSION_COOKIE, adminSessionCookieOptions, getAdminKey } from "@/lib/admin-session";
+import {
+  ADMIN_SESSION_COOKIE,
+  adminSessionMatches,
+  adminSessionCookieOptions,
+  getAdminSessionSecret,
+} from "@/lib/admin-session";
 
 export async function POST(request: NextRequest) {
-  const adminKey = getAdminKey();
-  if (!adminKey) {
-    return NextResponse.json({ error: "admin_key_missing" }, { status: 500 });
+  const sessionSecret = getAdminSessionSecret();
+  if (!sessionSecret) {
+    return NextResponse.json(
+      { error: "admin_session_secret_missing" },
+      { status: 503 },
+    );
   }
 
   let body: unknown;
@@ -16,17 +24,23 @@ export async function POST(request: NextRequest) {
   }
 
   const submitted =
-    body && typeof body === "object" && "key" in body ? (body as { key?: unknown }).key : undefined;
+    body && typeof body === "object" && "key" in body
+      ? (body as { key?: unknown }).key
+      : undefined;
 
   if (typeof submitted !== "string" || submitted.trim().length === 0) {
     return NextResponse.json({ error: "missing_key" }, { status: 400 });
   }
 
-  if (submitted.trim() !== adminKey) {
+  if (!adminSessionMatches(submitted.trim())) {
     return NextResponse.json({ error: "invalid_key" }, { status: 401 });
   }
 
   const response = NextResponse.json({ ok: true });
-  response.cookies.set(ADMIN_SESSION_COOKIE, adminKey, adminSessionCookieOptions());
+  response.cookies.set(
+    ADMIN_SESSION_COOKIE,
+    sessionSecret,
+    adminSessionCookieOptions(),
+  );
   return response;
 }

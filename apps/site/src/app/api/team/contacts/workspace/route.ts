@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { requireTeamRole } from "@/app/api/team/auth";
-import { callAdminApi } from "@/app/team/lib/api";
+import { requireTeamPrincipal } from "@/app/api/team/auth";
+import { callAdminApiAs } from "@/app/team/lib/api";
 import type {
   CustomerWorkspace,
   CustomerWorkspaceAppointment,
@@ -24,7 +24,9 @@ function numberOrNull(value: unknown): number | null {
 }
 
 function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function mapProperty(value: unknown): CustomerWorkspaceProperty | null {
@@ -58,7 +60,9 @@ function mapContact(value: unknown): {
     : [];
   const properties = propertiesRaw
     .map(mapProperty)
-    .filter((property): property is CustomerWorkspaceProperty => Boolean(property));
+    .filter((property): property is CustomerWorkspaceProperty =>
+      Boolean(property),
+    );
 
   const pipeline = record(item?.["pipeline"]);
   const stats = record(item?.["stats"]);
@@ -95,7 +99,9 @@ function mapContact(value: unknown): {
   };
 }
 
-function propertyFromAppointment(value: unknown): CustomerWorkspaceProperty | null {
+function propertyFromAppointment(
+  value: unknown,
+): CustomerWorkspaceProperty | null {
   return mapProperty(value);
 }
 
@@ -115,19 +121,31 @@ function mapAppointment(value: unknown): CustomerWorkspaceAppointment | null {
   };
 }
 
-function quoteBelongsToContact(quote: Record<string, unknown>, contact: CustomerWorkspaceContact): boolean {
+function quoteBelongsToContact(
+  quote: Record<string, unknown>,
+  contact: CustomerWorkspaceContact,
+): boolean {
   const contactRecord = record(quote["contact"]);
-  const quoteContactId = text(quote["contactId"]) ?? text(contactRecord?.["id"]);
+  const quoteContactId =
+    text(quote["contactId"]) ?? text(contactRecord?.["id"]);
   if (quoteContactId && quoteContactId === contact.id) return true;
 
   const quoteEmail = text(contactRecord?.["email"]);
-  if (quoteEmail && contact.email && quoteEmail.toLowerCase() === contact.email.toLowerCase()) return true;
+  if (
+    quoteEmail &&
+    contact.email &&
+    quoteEmail.toLowerCase() === contact.email.toLowerCase()
+  )
+    return true;
 
   const quoteName = text(contactRecord?.["name"]);
   return Boolean(quoteName && quoteName === contact.name);
 }
 
-function mapQuote(value: unknown, contact: CustomerWorkspaceContact): CustomerWorkspaceQuote | null {
+function mapQuote(
+  value: unknown,
+  contact: CustomerWorkspaceContact,
+): CustomerWorkspaceQuote | null {
   const item = record(value);
   const id = text(item?.["id"]);
   if (!item) return null;
@@ -176,24 +194,29 @@ function computeMissingFields(
 ): CustomerWorkspaceMissingField[] {
   const missing: CustomerWorkspaceMissingField[] = [];
   if (!contact.name || contact.name === "Unknown contact") missing.push("name");
-  if (!contact.phone && !contact.phoneE164 && !contact.email) missing.push("phone_or_email");
+  if (!contact.phone && !contact.phoneE164 && !contact.email)
+    missing.push("phone_or_email");
   if (properties.length === 0) missing.push("address");
   return missing;
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
-  const auth = await requireTeamRole(request, {
-    roles: ["owner", "office", "crew"],
+  const auth = await requireTeamPrincipal(request, {
+    permissions: "contacts.read",
     returnJson: true,
   });
   if (!auth.ok) return auth.response;
 
   const contactId = request.nextUrl.searchParams.get("contactId")?.trim() ?? "";
   if (!contactId) {
-    return NextResponse.json({ ok: false, message: "Missing contact id." }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, message: "Missing contact id." },
+      { status: 400 },
+    );
   }
 
-  const contactRes = await callAdminApi(
+  const contactRes = await callAdminApiAs(
+    auth.principal,
     `/api/admin/contacts?contactId=${encodeURIComponent(contactId)}&limit=1`,
   ).catch(() => null);
   if (!contactRes?.ok) {
@@ -210,24 +233,31 @@ export async function GET(request: NextRequest): Promise<Response> {
     : record(contactPayload)?.["contact"];
   const mappedContact = mapContact(contactRaw);
   if (!mappedContact) {
-    return NextResponse.json({ ok: false, message: "Contact not found." }, { status: 404 });
+    return NextResponse.json(
+      { ok: false, message: "Contact not found." },
+      { status: 404 },
+    );
   }
 
   const [appointmentsRes, quotesRes] = await Promise.all([
-    callAdminApi(
+    callAdminApiAs(
+      auth.principal,
       `/api/appointments?status=${encodeURIComponent("confirmed,requested")}&contactId=${encodeURIComponent(contactId)}&limit=25`,
     ).catch(() => null),
-    callAdminApi("/api/quotes").catch(() => null),
+    callAdminApiAs(auth.principal, "/api/quotes").catch(() => null),
   ]);
 
   let upcomingAppointments: CustomerWorkspaceAppointment[] = [];
   if (appointmentsRes?.ok) {
     const payload = (await appointmentsRes.json().catch(() => null)) as unknown;
-    const itemsRaw = record(payload)?.["data"] ?? record(payload)?.["appointments"];
+    const itemsRaw =
+      record(payload)?.["data"] ?? record(payload)?.["appointments"];
     const now = Date.now();
     upcomingAppointments = (Array.isArray(itemsRaw) ? itemsRaw : [])
       .map(mapAppointment)
-      .filter((appointment): appointment is CustomerWorkspaceAppointment => Boolean(appointment))
+      .filter((appointment): appointment is CustomerWorkspaceAppointment =>
+        Boolean(appointment),
+      )
       .filter((appointment) => {
         if (!appointment.startAt) return true;
         const parsed = Date.parse(appointment.startAt);
@@ -244,11 +274,18 @@ export async function GET(request: NextRequest): Promise<Response> {
     quotes = (Array.isArray(itemsRaw) ? itemsRaw : [])
       .map((quote) => mapQuote(quote, mappedContact.contact))
       .filter((quote): quote is CustomerWorkspaceQuote => Boolean(quote))
-      .sort((a, b) => Date.parse(b.updatedAt ?? b.createdAt ?? "") - Date.parse(a.updatedAt ?? a.createdAt ?? ""))
+      .sort(
+        (a, b) =>
+          Date.parse(b.updatedAt ?? b.createdAt ?? "") -
+          Date.parse(a.updatedAt ?? a.createdAt ?? ""),
+      )
       .slice(0, 8);
   }
 
-  const missingFields = computeMissingFields(mappedContact.contact, mappedContact.properties);
+  const missingFields = computeMissingFields(
+    mappedContact.contact,
+    mappedContact.properties,
+  );
   const recommendedIntent =
     missingFields.length > 0
       ? "missing_info"

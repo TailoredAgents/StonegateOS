@@ -1,9 +1,16 @@
-import nodemailer from "nodemailer";
 import { DateTime } from "luxon";
-import { generateEstimateNotificationCopy, generateQuoteNotificationCopy } from "@/lib/ai";
-import { joinServiceLabels, summarizeServiceLabels } from "@/lib/service-labels";
+import {
+  generateEstimateNotificationCopy,
+  generateQuoteNotificationCopy,
+} from "@/lib/ai";
+import {
+  joinServiceLabels,
+  summarizeServiceLabels,
+} from "@/lib/service-labels";
 import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
 import { queueSystemOutboundMessage } from "@/lib/system-outbound";
+import { quoteSentMessageDedupeKey } from "@/lib/quote-outbox-contract";
+import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
 
 interface BaseContact {
   name: string;
@@ -45,7 +52,28 @@ export interface EstimateNotificationPayload {
 
 type ConfirmationReason = "requested" | "rescheduled";
 
-export async function sendEstimateCancellation(payload: EstimateNotificationPayload): Promise<void> {
+export function notificationOperationDedupeKey(
+  baseKey: string,
+  operationId?: string | null,
+): string {
+  return operationId ? `${baseKey}:${operationId}` : baseKey;
+}
+
+export type AppointmentNotificationAuthorizationEvidence = {
+  sourceStatusOutboxEventId: string;
+  sourceStatusAuditEventId: string;
+  sourceCorrelationId: string;
+  sourceOperationId: string;
+  sourceActorId: string;
+  sourceAuthMethod: "team_session" | "break_glass";
+  sourceRequiredPermission: "messages.send";
+};
+
+export async function sendEstimateCancellation(
+  payload: EstimateNotificationPayload,
+  operationId?: string | null,
+  authorization?: AppointmentNotificationAuthorizationEvidence | null,
+): Promise<void> {
   const { contact, appointment } = payload;
   const when = formatDateTime(appointment.startAt);
 
@@ -64,16 +92,49 @@ export async function sendEstimateCancellation(payload: EstimateNotificationPayl
           confirmationLoop: true,
           kind: "estimate.canceled",
           leadId: payload.leadId,
-          appointmentId: appointment.id
+          appointmentId: appointment.id,
+          ...(authorization ?? {}),
         },
-        dedupeKey: `estimate.canceled:${appointment.id}`
+        dedupeKey: notificationOperationDedupeKey(
+          `estimate.canceled:${appointment.id}`,
+          operationId,
+        ),
       });
     } else {
-      await sendSms(contact.phone, smsBody, { leadId: payload.leadId, appointmentId: appointment.id });
+      await sendSms(contact.phone, smsBody, {
+        leadId: payload.leadId,
+        appointmentId: appointment.id,
+      });
     }
   }
 
-  await sendPlainEmail(contact.email, emailSubject, emailBody, { leadId: payload.leadId, appointmentId: appointment.id });
+  if (contact.email) {
+    if (payload.contactId) {
+      await queueSystemOutboundMessage({
+        contactId: payload.contactId,
+        channel: "email",
+        toAddress: contact.email,
+        subject: emailSubject,
+        body: emailBody,
+        metadata: {
+          confirmationLoop: true,
+          kind: "estimate.canceled",
+          leadId: payload.leadId,
+          appointmentId: appointment.id,
+          ...(authorization ?? {}),
+        },
+        dedupeKey: notificationOperationDedupeKey(
+          `estimate.canceled:${appointment.id}:email`,
+          operationId,
+        ),
+      });
+    } else {
+      await sendPlainEmail(contact.email, emailSubject, emailBody, {
+        leadId: payload.leadId,
+        appointmentId: appointment.id,
+      });
+    }
+  }
 }
 
 export interface QuoteNotificationPayload {
@@ -87,6 +148,40 @@ export interface QuoteNotificationPayload {
   shareUrl: string;
   expiresAt: Date | null;
   notes?: string | null;
+}
+
+const QUOTE_LINK_AI_PLACEHOLDER = "https://quote-link.invalid/customer-access";
+
+type GeneratedQuoteCopy = {
+  emailSubject?: string | null;
+  emailBody?: string | null;
+  smsBody?: string | null;
+};
+
+/**
+ * The public quote URL is a bearer capability. AI may help draft surrounding
+ * copy, but it receives only a non-secret placeholder. Generated bodies are
+ * usable only when the placeholder survives exactly; replacement happens
+ * locally immediately before durable customer-message creation.
+ */
+function materializeGeneratedQuoteCopy(
+  generated: GeneratedQuoteCopy | null,
+  shareUrl: string,
+): GeneratedQuoteCopy | null {
+  if (!generated) return null;
+  const replaceLink = (value: string | null | undefined): string | null =>
+    typeof value === "string" && value.includes(QUOTE_LINK_AI_PLACEHOLDER)
+      ? value.replaceAll(QUOTE_LINK_AI_PLACEHOLDER, shareUrl)
+      : null;
+  return {
+    emailSubject:
+      typeof generated.emailSubject === "string" &&
+      !generated.emailSubject.includes(QUOTE_LINK_AI_PLACEHOLDER)
+        ? generated.emailSubject
+        : null,
+    emailBody: replaceLink(generated.emailBody),
+    smsBody: replaceLink(generated.smsBody),
+  };
 }
 
 const DEFAULT_TIME_ZONE =
@@ -104,38 +199,6 @@ function isLocalhostUrl(value: string): boolean {
   );
 }
 
-let cachedTransporter: nodemailer.Transporter | null;
-
-function getTransport(): nodemailer.Transporter | null {
-  if (cachedTransporter) {
-    return cachedTransporter;
-  }
-
-  const host = process.env["SMTP_HOST"];
-  const port = process.env["SMTP_PORT"];
-  const user = process.env["SMTP_USER"];
-  const pass = process.env["SMTP_PASS"];
-
-  if (!host || !port || !user || !pass) {
-    return null;
-  }
-
-  const parsedPort = Number(port);
-  const secure = parsedPort === 465;
-
-  cachedTransporter = nodemailer.createTransport({
-    host,
-    port: parsedPort,
-    secure,
-    auth: {
-      user,
-      pass
-    }
-  });
-
-  return cachedTransporter;
-}
-
 function formatDateTime(date: Date | null): string {
   if (!date) {
     return "TBD";
@@ -149,7 +212,7 @@ function formatDateTime(date: Date | null): string {
 export function formatAppointmentArrivalWindow(
   date: Date | null,
   windowMinutes = 30,
-  timeZone = DEFAULT_TIME_ZONE
+  timeZone = DEFAULT_TIME_ZONE,
 ): string {
   if (!date) {
     return "TBD";
@@ -167,17 +230,21 @@ export function formatAppointmentArrivalWindow(
 
   if (start.hasSame(end, "day")) {
     return `${start.toLocaleString(DateTime.DATE_MED)}, ${start.toLocaleString(
-      DateTime.TIME_SIMPLE
+      DateTime.TIME_SIMPLE,
     )} - ${end.toLocaleString(DateTime.TIME_SIMPLE)}`;
   }
 
   return `${start.toLocaleString(DateTime.DATETIME_MED)} - ${end.toLocaleString(
-    DateTime.DATETIME_MED
+    DateTime.DATETIME_MED,
   )}`;
 }
 
 function escapeIcs(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/,/g, "\\,").replace(/;/g, "\\;").replace(/\n/g, "\\n");
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;")
+    .replace(/\n/g, "\\n");
 }
 
 function createIcsAttachment(payload: EstimateNotificationPayload): {
@@ -198,7 +265,9 @@ function createIcsAttachment(payload: EstimateNotificationPayload): {
   const descriptionLines = [
     `Services: ${joinServiceLabels(payload.services)}`,
     payload.notes ? `Notes: ${payload.notes}` : null,
-    appointment.rescheduleUrl ? `Reschedule: ${appointment.rescheduleUrl}` : null
+    appointment.rescheduleUrl
+      ? `Reschedule: ${appointment.rescheduleUrl}`
+      : null,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\\n");
@@ -220,78 +289,52 @@ function createIcsAttachment(payload: EstimateNotificationPayload): {
     `DESCRIPTION:${escapeIcs(descriptionLines)}`,
     `LOCATION:${escapeIcs(location)}`,
     "END:VEVENT",
-    "END:VCALENDAR"
+    "END:VCALENDAR",
   ].join("\r\n");
 
   return {
     filename: "stonegate-appointment.ics",
     content,
-    contentType: "text/calendar; charset=utf-8; method=REQUEST"
+    contentType: "text/calendar; charset=utf-8; method=REQUEST",
   };
 }
 
-async function sendSms(to: string, body: string, context: Record<string, unknown>): Promise<void> {
-  const sid = process.env["TWILIO_ACCOUNT_SID"];
-  const token = process.env["TWILIO_AUTH_TOKEN"];
-  const from = process.env["TWILIO_FROM"];
-
-  if (!sid || !token || !from) {
-    console.info("[notify] sms.unsent.no_twilio", { to, body, ...context });
-    return;
-  }
-
-  const twilioBaseUrl = (process.env["TWILIO_API_BASE_URL"] ?? "https://api.twilio.com").replace(/\/$/, "");
-
-  try {
-    const auth = Buffer.from(`${sid}:${token}`).toString("base64");
-    const form = new URLSearchParams({ From: from, To: to, Body: body }).toString();
-
-    const response = await fetch(`${twilioBaseUrl}/2010-04-01/Accounts/${sid}/Messages.json`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${auth}`
-      },
-      body: form
+async function sendSms(
+  to: string,
+  body: string,
+  context: Record<string, unknown>,
+): Promise<void> {
+  // These contactless compatibility notifications still use the shared
+  // provider boundary. Never place phone numbers, message bodies, provider
+  // response text, or caller-supplied identifiers in operational logs.
+  void context;
+  const result = await sendSmsMessage(to, body);
+  if (!result.ok) {
+    console.warn("[notify] sms.delivery_failed", {
+      certainty: result.deliveryCertainty ?? "uncertain",
+      detail: result.detail ?? "sms_provider_failed",
     });
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      console.warn("[notify] sms.failed", { to, status: response.status, text, ...context });
-    } else {
-      console.info("[notify] sms.sent", { to, ...context });
-    }
-  } catch (error) {
-    console.warn("[notify] sms.error", { to, error: String(error), ...context });
   }
 }
 
 async function sendEmail(
   payload: EstimateNotificationPayload,
   subject: string,
-  textBody: string
+  textBody: string,
 ): Promise<void> {
-  const transporter = getTransport();
-  const from = process.env["SMTP_FROM"];
   const to = payload.contact.email;
 
-  if (!transporter || !from || !to) {
-    console.info("[notify] email.unsent", { subject, to: to ?? "unknown" });
-    return;
-  }
+  if (!to) return;
 
   const ics = createIcsAttachment(payload);
-  try {
-    await transporter.sendMail({
-      from,
-      to,
-      subject,
-      text: textBody,
-      attachments: ics ? [ics] : undefined
+  const result = await sendEmailMessage(to, subject, textBody, {
+    emailAttachments: ics ? [ics] : undefined,
+  });
+  if (!result.ok) {
+    console.warn("[notify] email.delivery_failed", {
+      certainty: result.deliveryCertainty ?? "uncertain",
+      detail: result.detail ?? "email_provider_failed",
     });
-    console.info("[notify] email.sent", { to, subject });
-  } catch (error) {
-    console.warn("[notify] email.error", { to, subject, error: String(error) });
   }
 }
 
@@ -299,31 +342,24 @@ async function sendPlainEmail(
   to: string | null | undefined,
   subject: string,
   textBody: string,
-  context: Record<string, unknown>
+  context: Record<string, unknown>,
 ): Promise<void> {
-  const transporter = getTransport();
-  const from = process.env["SMTP_FROM"];
-
-  if (!transporter || !from || !to) {
-    console.info("[notify] email.unsent", { ...context, subject, to: to ?? "unknown" });
-    return;
-  }
-
-  try {
-    await transporter.sendMail({
-      from,
-      to,
-      subject,
-      text: textBody
+  void context;
+  if (!to) return;
+  const result = await sendEmailMessage(to, subject, textBody);
+  if (!result.ok) {
+    console.warn("[notify] email.delivery_failed", {
+      certainty: result.deliveryCertainty ?? "uncertain",
+      detail: result.detail ?? "email_provider_failed",
     });
-    console.info("[notify] email.sent", { ...context, to, subject });
-  } catch (error) {
-    console.warn("[notify] email.error", { ...context, to, subject, error: String(error) });
   }
 }
 
 function formatCurrency(value: number): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(value);
 }
 
 function getQuoteAlertRecipients(): string[] {
@@ -341,12 +377,19 @@ function servicesSummary(services: string[]): string {
   return summarizeServiceLabels(services);
 }
 
-function buildRescheduleUrl(appointment: EstimateNotificationPayload["appointment"]): string | null {
+function buildRescheduleUrl(
+  appointment: EstimateNotificationPayload["appointment"],
+): string | null {
   if (appointment.rescheduleUrl) {
     try {
       const parsed = new URL(appointment.rescheduleUrl);
-      const allowInsecure = process.env["NODE_ENV"] === "development" || process.env["NODE_ENV"] === "test";
-      if (!isLocalhostUrl(appointment.rescheduleUrl) && (allowInsecure || parsed.protocol === "https:")) {
+      const allowInsecure =
+        process.env["NODE_ENV"] === "development" ||
+        process.env["NODE_ENV"] === "test";
+      if (
+        !isLocalhostUrl(appointment.rescheduleUrl) &&
+        (allowInsecure || parsed.protocol === "https:")
+      ) {
         return appointment.rescheduleUrl;
       }
     } catch {
@@ -369,12 +412,14 @@ function joinServices(services: string[]): string {
 
 export async function sendEstimateConfirmation(
   payload: EstimateNotificationPayload,
-  reason: ConfirmationReason = "requested"
+  reason: ConfirmationReason = "requested",
+  operationId?: string | null,
 ): Promise<void> {
   const { contact, appointment, property, scheduling } = payload;
   const when = formatAppointmentArrivalWindow(appointment.startAt);
   const rescheduleUrl = buildRescheduleUrl(appointment);
-  const headline = reason === "requested" ? "You're booked!" : "Appointment updated";
+  const headline =
+    reason === "requested" ? "You're booked!" : "Appointment updated";
 
   const fallbackSubject = `Stonegate Junk Removal - ${when}`;
   const fallbackBody = [
@@ -384,7 +429,7 @@ export async function sendEstimateConfirmation(
     scheduling.timeWindow ? `Preferred window: ${scheduling.timeWindow}` : null,
     payload.notes ? `Notes: ${payload.notes}` : null,
     "",
-    rescheduleUrl ? `Need to reschedule? ${rescheduleUrl}` : null
+    rescheduleUrl ? `Need to reschedule? ${rescheduleUrl}` : null,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
@@ -407,9 +452,9 @@ export async function sendEstimateConfirmation(
           line1: property.addressLine1,
           city: property.city,
           state: property.state,
-          postalCode: property.postalCode
+          postalCode: property.postalCode,
         },
-        contactName: contact.name
+        contactName: contact.name,
       });
     } catch (error) {
       console.warn("[notify] ai.copy.error", { error: String(error) });
@@ -429,29 +474,63 @@ export async function sendEstimateConfirmation(
           kind: "estimate.confirmation",
           reason,
           leadId: payload.leadId,
-          appointmentId: appointment.id
+          appointmentId: appointment.id,
         },
-        dedupeKey: `estimate.confirmation:${appointment.id}:${reason}`
+        dedupeKey: notificationOperationDedupeKey(
+          `estimate.confirmation:${appointment.id}:${reason}`,
+          operationId,
+        ),
       });
     } else {
-      await sendSms(contact.phone, smsBody, { leadId: payload.leadId, appointmentId: appointment.id });
+      await sendSms(contact.phone, smsBody, {
+        leadId: payload.leadId,
+        appointmentId: appointment.id,
+      });
     }
   }
 
-  await sendEmail(
-    payload,
-    generated?.emailSubject && generated.emailSubject.length <= 120 ? generated.emailSubject : fallbackSubject,
-    generated?.emailBody && generated.emailBody.length <= 1000 ? generated.emailBody : fallbackBody
-  );
+  const emailSubject =
+    generated?.emailSubject && generated.emailSubject.length <= 120
+      ? generated.emailSubject
+      : fallbackSubject;
+  const emailBody =
+    generated?.emailBody && generated.emailBody.length <= 1000
+      ? generated.emailBody
+      : fallbackBody;
+  if (contact.email && payload.contactId) {
+    const calendarAttachment = createIcsAttachment(payload);
+    await queueSystemOutboundMessage({
+      contactId: payload.contactId,
+      channel: "email",
+      toAddress: contact.email,
+      subject: emailSubject,
+      body: emailBody,
+      metadata: {
+        confirmationLoop: true,
+        kind: "estimate.confirmation",
+        reason,
+        leadId: payload.leadId,
+        appointmentId: appointment.id,
+        emailAttachments: calendarAttachment ? [calendarAttachment] : [],
+      },
+      dedupeKey: notificationOperationDedupeKey(
+        `estimate.confirmation:${appointment.id}:${reason}:email`,
+        operationId,
+      ),
+    });
+  } else {
+    await sendEmail(payload, emailSubject, emailBody);
+  }
 }
 
 interface ReminderOptions {
   windowMinutes: number;
+  operationId?: string | null;
 }
 
 async function sendEstimateReminderInternal(
   payload: EstimateNotificationPayload,
-  options: ReminderOptions
+  options: ReminderOptions,
 ): Promise<void> {
   const { contact, appointment } = payload;
   const when = formatAppointmentArrivalWindow(appointment.startAt);
@@ -465,7 +544,9 @@ async function sendEstimateReminderInternal(
     `Quick reminder: your Stonegate Junk Removal appointment is in ${windowHours} hours (${when}).`,
     `Location: ${payload.property.addressLine1}, ${payload.property.city}, ${payload.property.state} ${payload.property.postalCode}`,
     "",
-    rescheduleUrl ? `Need to adjust? ${rescheduleUrl}` : "Need to adjust? Reply to this message."
+    rescheduleUrl
+      ? `Need to adjust? ${rescheduleUrl}`
+      : "Need to adjust? Reply to this message.",
   ].join("\n");
   const fallbackSubject = `Reminder: Stonegate appointment ${when}`;
 
@@ -483,9 +564,9 @@ async function sendEstimateReminderInternal(
           line1: payload.property.addressLine1,
           city: payload.property.city,
           state: payload.property.state,
-          postalCode: payload.property.postalCode
+          postalCode: payload.property.postalCode,
         },
-        contactName: payload.contact.name
+        contactName: payload.contact.name,
       });
     } catch (error) {
       console.warn("[notify] reminder.ai.error", { error: String(error) });
@@ -493,7 +574,10 @@ async function sendEstimateReminderInternal(
   }
 
   if (contact.phone) {
-    const smsBody = generated?.smsBody && generated.smsBody.length <= 320 ? generated.smsBody : fallbackSms;
+    const smsBody =
+      generated?.smsBody && generated.smsBody.length <= 320
+        ? generated.smsBody
+        : fallbackSms;
     if (payload.contactId) {
       await queueSystemOutboundMessage({
         contactId: payload.contactId,
@@ -505,67 +589,81 @@ async function sendEstimateReminderInternal(
           kind: "estimate.reminder",
           leadId: payload.leadId,
           appointmentId: appointment.id,
-          reminderMinutes: options.windowMinutes
+          reminderMinutes: options.windowMinutes,
         },
-        dedupeKey: `estimate.reminder:${appointment.id}:${options.windowMinutes}`
+        dedupeKey: notificationOperationDedupeKey(
+          `estimate.reminder:${appointment.id}:${options.windowMinutes}`,
+          options.operationId,
+        ),
       });
     } else {
       await sendSms(contact.phone, smsBody, {
         leadId: payload.leadId,
         appointmentId: appointment.id,
-        reminderMinutes: options.windowMinutes
+        reminderMinutes: options.windowMinutes,
       });
     }
   }
 
-  const transporter = getTransport();
-  const from = process.env["SMTP_FROM"];
   const to = payload.contact.email;
+  const subject =
+    generated?.emailSubject && generated.emailSubject.length <= 120
+      ? generated.emailSubject
+      : fallbackSubject;
+  const text =
+    generated?.emailBody && generated.emailBody.length <= 1000
+      ? generated.emailBody
+      : fallbackEmailBody;
 
-  if (transporter && from && to) {
-    const subject =
-      generated?.emailSubject && generated.emailSubject.length <= 120 ? generated.emailSubject : fallbackSubject;
-    const text = generated?.emailBody && generated.emailBody.length <= 1000 ? generated.emailBody : fallbackEmailBody;
-
-    try {
-      await transporter.sendMail({ from, to, subject, text });
-      console.info("[notify] email.reminder.sent", {
-        to,
-        appointmentId: appointment.id,
-        reminderMinutes: options.windowMinutes
-      });
-    } catch (error) {
-      console.warn("[notify] email.reminder.error", {
-        to,
+  if (to && payload.contactId) {
+    await queueSystemOutboundMessage({
+      contactId: payload.contactId,
+      channel: "email",
+      toAddress: to,
+      subject,
+      body: text,
+      metadata: {
+        confirmationLoop: true,
+        kind: "estimate.reminder",
+        leadId: payload.leadId,
         appointmentId: appointment.id,
         reminderMinutes: options.windowMinutes,
-        error: String(error)
-      });
-    }
-  } else {
-    console.info("[notify] reminder.email.unsent", {
-      appointmentId: appointment.id,
-      reminderMinutes: options.windowMinutes
+      },
+      dedupeKey: notificationOperationDedupeKey(
+        `estimate.reminder:${appointment.id}:${options.windowMinutes}:email`,
+        options.operationId,
+      ),
+    });
+  } else if (to) {
+    await sendPlainEmail(to, subject, text, {
+      type: "estimate.reminder",
     });
   }
 }
 
 export async function sendEstimateReminder(
   payload: EstimateNotificationPayload,
-  windowMinutes: number
+  windowMinutes: number,
+  operationId?: string | null,
 ): Promise<void> {
-  await sendEstimateReminderInternal(payload, { windowMinutes });
+  await sendEstimateReminderInternal(payload, { windowMinutes, operationId });
 }
 
-export async function sendEstimateReminder24h(payload: EstimateNotificationPayload): Promise<void> {
+export async function sendEstimateReminder24h(
+  payload: EstimateNotificationPayload,
+): Promise<void> {
   await sendEstimateReminder(payload, 24 * 60);
 }
 
-export async function sendEstimateReminder2h(payload: EstimateNotificationPayload): Promise<void> {
+export async function sendEstimateReminder2h(
+  payload: EstimateNotificationPayload,
+): Promise<void> {
   await sendEstimateReminder(payload, 2 * 60);
 }
 
-export async function sendQuoteSentNotification(payload: QuoteNotificationPayload): Promise<void> {
+export async function sendQuoteSentNotification(
+  payload: QuoteNotificationPayload & { sendAttemptId: string },
+): Promise<void> {
   const expiresIso = payload.expiresAt ? payload.expiresAt.toISOString() : null;
   const paymentTerms =
     payload.depositDue > 0
@@ -582,7 +680,7 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
     `Review and approve: ${payload.shareUrl}`,
     expiresIso ? `Expires: ${expiresIso}` : null,
     "",
-    "We appreciate the opportunity to help."
+    "We appreciate the opportunity to help.",
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
@@ -592,26 +690,32 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
       ? `Stonegate quote ready: ${formatCurrency(payload.total)} (${formatCurrency(payload.depositDue)} deposit listed). Review ${payload.shareUrl}`
       : `Stonegate quote ready: ${formatCurrency(payload.total)}. Review ${payload.shareUrl}`;
 
-  let generated = null;
+  let generated: GeneratedQuoteCopy | null = null;
   try {
-    generated = await generateQuoteNotificationCopy({
+    const generatedDraft = await generateQuoteNotificationCopy({
       customerName: payload.contact.name,
       services: payload.services,
       total: payload.total,
       depositDue: payload.depositDue,
       balanceDue: payload.balanceDue,
-      shareUrl: payload.shareUrl,
+      shareUrl: QUOTE_LINK_AI_PLACEHOLDER,
       expiresAtIso: expiresIso,
       notes: payload.notes,
-      reason: "sent"
+      reason: "sent",
     });
+    generated = materializeGeneratedQuoteCopy(generatedDraft, payload.shareUrl);
   } catch (error) {
-    console.warn("[notify] quote.ai.error", { quoteId: payload.quoteId, error: String(error) });
+    console.warn("[notify] quote.ai.error", {
+      quoteId: payload.quoteId,
+      error: String(error),
+    });
   }
 
   if (payload.contact.phone) {
     const smsBody =
-      generated?.smsBody && generated.smsBody.length <= 240 ? generated.smsBody : fallbackSms;
+      generated?.smsBody && generated.smsBody.length <= 240
+        ? generated.smsBody
+        : fallbackSms;
     if (payload.contactId) {
       await queueSystemOutboundMessage({
         contactId: payload.contactId,
@@ -620,14 +724,19 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
         body: smsBody,
         metadata: {
           kind: "quote.sent",
-          quoteId: payload.quoteId
+          quoteId: payload.quoteId,
+          sendAttemptId: payload.sendAttemptId,
         },
-        dedupeKey: `quote.sent:${payload.quoteId}`
+        dedupeKey: quoteSentMessageDedupeKey(
+          payload.quoteId,
+          payload.sendAttemptId,
+          "sms",
+        ),
       });
     } else {
       await sendSms(payload.contact.phone, smsBody, {
         quoteId: payload.quoteId,
-        type: "quote.sent"
+        type: "quote.sent",
       });
     }
   }
@@ -637,25 +746,47 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
       ? generated.emailSubject
       : fallbackSubject;
   const emailBody =
-    generated?.emailBody && generated.emailBody.length <= 900 ? generated.emailBody : fallbackBody;
+    generated?.emailBody && generated.emailBody.length <= 900
+      ? generated.emailBody
+      : fallbackBody;
 
-  await sendPlainEmail(payload.contact.email, emailSubject, emailBody, {
-    quoteId: payload.quoteId,
-    type: "quote.sent"
-  });
+  if (payload.contact.email && payload.contactId) {
+    await queueSystemOutboundMessage({
+      contactId: payload.contactId,
+      channel: "email",
+      toAddress: payload.contact.email,
+      subject: emailSubject,
+      body: emailBody,
+      metadata: {
+        kind: "quote.sent",
+        quoteId: payload.quoteId,
+        sendAttemptId: payload.sendAttemptId,
+      },
+      dedupeKey: quoteSentMessageDedupeKey(
+        payload.quoteId,
+        payload.sendAttemptId,
+        "email",
+      ),
+    });
+  } else {
+    await sendPlainEmail(payload.contact.email, emailSubject, emailBody, {
+      quoteId: payload.quoteId,
+      type: "quote.sent",
+    });
+  }
 
   const alertRecipients = getQuoteAlertRecipients();
   if (alertRecipients.length) {
     const subject = `Quote sent: ${servicesSummary(payload.services)} for ${payload.contact.name}`;
-  const body = [
-    `Customer: ${payload.contact.name}`,
-    `Services: ${servicesSummary(payload.services)}`,
-    `Total: ${formatCurrency(payload.total)}`,
-    paymentTerms,
-    `Share link: ${payload.shareUrl}`,
-    expiresIso ? `Expires: ${expiresIso}` : null,
-    payload.notes ? `Notes: ${payload.notes}` : null
-  ]
+    const body = [
+      `Customer: ${payload.contact.name}`,
+      `Services: ${servicesSummary(payload.services)}`,
+      `Total: ${formatCurrency(payload.total)}`,
+      paymentTerms,
+      `Share link: ${payload.shareUrl}`,
+      expiresIso ? `Expires: ${expiresIso}` : null,
+      payload.notes ? `Notes: ${payload.notes}` : null,
+    ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
 
@@ -664,15 +795,18 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
         sendPlainEmail(recipient, subject, body, {
           quoteId: payload.quoteId,
           type: "quote.sent",
-          internal: true
-        })
-      )
+          internal: true,
+        }),
+      ),
     );
   }
 }
 
 export async function sendQuoteDecisionNotification(
-  payload: QuoteNotificationPayload & { decision: "accepted" | "declined"; source: "customer" | "admin" }
+  payload: QuoteNotificationPayload & {
+    decision: "accepted" | "declined";
+    source: "customer";
+  },
 ): Promise<void> {
   const paymentTerms =
     payload.depositDue > 0
@@ -692,7 +826,7 @@ export async function sendQuoteDecisionNotification(
     `Total: ${formatCurrency(payload.total)}.`,
     paymentTerms,
     `Quote link: ${payload.shareUrl}`,
-    payload.notes ? `Notes: ${payload.notes}` : null
+    payload.notes ? `Notes: ${payload.notes}` : null,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
@@ -702,29 +836,32 @@ export async function sendQuoteDecisionNotification(
       ? "Stonegate: thanks for approving your quote! We'll follow up with scheduling details."
       : "Stonegate: we've recorded your quote decision. Let us know if you'd like any adjustments.";
 
-  let generated = null;
+  let generated: GeneratedQuoteCopy | null = null;
   try {
-    generated = await generateQuoteNotificationCopy({
+    const generatedDraft = await generateQuoteNotificationCopy({
       customerName: payload.contact.name,
       services: payload.services,
       total: payload.total,
       depositDue: payload.depositDue,
       balanceDue: payload.balanceDue,
-      shareUrl: payload.shareUrl,
+      shareUrl: QUOTE_LINK_AI_PLACEHOLDER,
       notes: payload.notes,
-      reason: payload.decision
+      reason: payload.decision,
     });
+    generated = materializeGeneratedQuoteCopy(generatedDraft, payload.shareUrl);
   } catch (error) {
     console.warn("[notify] quote.decision.ai.error", {
       quoteId: payload.quoteId,
       decision: payload.decision,
-      error: String(error)
+      error: String(error),
     });
   }
 
   if (payload.contact.phone) {
     const smsBody =
-      generated?.smsBody && generated.smsBody.length <= 240 ? generated.smsBody : fallbackSms;
+      generated?.smsBody && generated.smsBody.length <= 240
+        ? generated.smsBody
+        : fallbackSms;
     if (payload.contactId) {
       await queueSystemOutboundMessage({
         contactId: payload.contactId,
@@ -735,16 +872,16 @@ export async function sendQuoteDecisionNotification(
           kind: "quote.decision",
           quoteId: payload.quoteId,
           decision: payload.decision,
-          source: payload.source
+          source: payload.source,
         },
-        dedupeKey: `quote.decision:${payload.quoteId}:${payload.decision}:${payload.source}`
+        dedupeKey: `quote.decision:${payload.quoteId}:${payload.decision}:${payload.source}`,
       });
     } else {
       await sendSms(payload.contact.phone, smsBody, {
         quoteId: payload.quoteId,
         type: "quote.decision",
         decision: payload.decision,
-        source: payload.source
+        source: payload.source,
       });
     }
   }
@@ -754,27 +891,46 @@ export async function sendQuoteDecisionNotification(
       ? generated.emailSubject
       : fallbackSubject;
   const emailBody =
-    generated?.emailBody && generated.emailBody.length <= 900 ? generated.emailBody : fallbackBody;
+    generated?.emailBody && generated.emailBody.length <= 900
+      ? generated.emailBody
+      : fallbackBody;
 
-  await sendPlainEmail(payload.contact.email, emailSubject, emailBody, {
-    quoteId: payload.quoteId,
-    type: "quote.decision",
-    decision: payload.decision,
-    source: payload.source
-  });
+  if (payload.contact.email && payload.contactId) {
+    await queueSystemOutboundMessage({
+      contactId: payload.contactId,
+      channel: "email",
+      toAddress: payload.contact.email,
+      subject: emailSubject,
+      body: emailBody,
+      metadata: {
+        kind: "quote.decision",
+        quoteId: payload.quoteId,
+        decision: payload.decision,
+        source: payload.source,
+      },
+      dedupeKey: `quote.decision:${payload.quoteId}:${payload.decision}:${payload.source}:email`,
+    });
+  } else {
+    await sendPlainEmail(payload.contact.email, emailSubject, emailBody, {
+      quoteId: payload.quoteId,
+      type: "quote.decision",
+      decision: payload.decision,
+      source: payload.source,
+    });
+  }
 
   const alertRecipients = getQuoteAlertRecipients();
   if (alertRecipients.length) {
     const subject = `Quote ${payload.decision}: ${payload.contact.name}`;
-  const body = [
-    `Customer: ${payload.contact.name}`,
-    `Services: ${servicesSummary(payload.services)}`,
-    `Decision: ${payload.decision.toUpperCase()} (source: ${payload.source})`,
-    `Total: ${formatCurrency(payload.total)}`,
-    paymentTerms,
-    `Quote link: ${payload.shareUrl}`,
-    payload.notes ? `Notes: ${payload.notes}` : null
-  ]
+    const body = [
+      `Customer: ${payload.contact.name}`,
+      `Services: ${servicesSummary(payload.services)}`,
+      `Decision: ${payload.decision.toUpperCase()} (source: ${payload.source})`,
+      `Total: ${formatCurrency(payload.total)}`,
+      paymentTerms,
+      `Quote link: ${payload.shareUrl}`,
+      payload.notes ? `Notes: ${payload.notes}` : null,
+    ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
 
@@ -785,9 +941,9 @@ export async function sendQuoteDecisionNotification(
           type: "quote.decision",
           decision: payload.decision,
           source: payload.source,
-          internal: true
-        })
-      )
+          internal: true,
+        }),
+      ),
     );
   }
 }

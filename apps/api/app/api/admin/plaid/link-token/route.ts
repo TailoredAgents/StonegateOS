@@ -1,14 +1,13 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { isAdminRequest } from "../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 import { getPlaidClient, plaidConfigured } from "@/lib/plaid";
 import { nanoid } from "nanoid";
 import type { CountryCode, Products } from "plaid";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const permissionError = await requirePermission(request, "payments.manage");
+  if (permissionError) return permissionError as NextResponse;
   if (!plaidConfigured()) {
     return NextResponse.json({ error: "plaid_not_configured" }, { status: 503 });
   }

@@ -8,6 +8,7 @@ import {
   crewSessionCookieOptions,
   getCrewKey,
 } from "@/lib/crew-session";
+import { legacySessionSecretMatches } from "@/lib/legacy-session-secret";
 
 export type CrewLoginFormState = {
   error?: string;
@@ -28,13 +29,14 @@ export async function crewLoginAction(
     return { error: "Enter the crew key." };
   }
 
-  if (submitted.trim().toLowerCase() !== getCrewKey().toLowerCase()) {
+  const crewKey = getCrewKey();
+  if (!legacySessionSecretMatches(submitted.trim(), crewKey)) {
     return { error: "Invalid crew key." };
   }
 
   (await cookies()).set(
     CREW_SESSION_COOKIE,
-    getCrewKey(),
+    crewKey!,
     crewSessionCookieOptions(),
   );
   redirect(redirectTo as Route);

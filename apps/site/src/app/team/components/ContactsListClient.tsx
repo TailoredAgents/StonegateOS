@@ -41,6 +41,18 @@ import {
   resolveBookingSelection,
   type AppointmentBookingSelection,
 } from "../lib/booking-details";
+import { teamSurfaceHref, type TeamSurfaceId } from "../surface-registry";
+import { quoteWorkspaceHref } from "../quotes-workspace";
+import { pipelineExpectedVersion } from "../lib/pipeline-stage-mutation";
+import {
+  parseReminderMutationSuccess,
+  stableReminderMutationAttempt,
+  type ReminderMutationAttempt,
+} from "../lib/reminder-mutation";
+import {
+  readTeamMutationError,
+  readTeamMutationException,
+} from "../lib/mutation-feedback";
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return "N/A";
@@ -82,27 +94,31 @@ function toLocalDateTimeInputValue(iso: string | null): string {
 }
 
 function teamLink(
-  tab: string,
+  surfaceId: TeamSurfaceId,
   params?: Record<string, string | null | undefined>,
 ): string {
-  const query = new URLSearchParams();
-  query.set("tab", tab);
+  const query: Record<string, string> = {};
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       if (typeof value === "string" && value.trim().length > 0) {
-        query.set(key, value.trim());
+        query[key] = value.trim();
       }
     }
   }
-  return `/team?${query.toString()}`;
+  return teamSurfaceHref(surfaceId, { query });
 }
 
 type ContactCardProps = {
   contact: ContactSummary;
   teamMembers: Array<{ id: string; name: string }>;
+  canPlaceCalls: boolean;
 };
 
-function ContactCard({ contact, teamMembers }: ContactCardProps) {
+function ContactCard({
+  contact,
+  teamMembers,
+  canPlaceCalls,
+}: ContactCardProps) {
   const [contactState, setContactState] = useState<ContactSummary>(contact);
   const [editingContact, setEditingContact] = useState(false);
   const [assigneeSaving, setAssigneeSaving] = useState(false);
@@ -127,6 +143,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const [reminderDueDraft, setReminderDueDraft] = useState("");
   const [reminderNotesDraft, setReminderNotesDraft] = useState("");
   const [reminderError, setReminderError] = useState<string | null>(null);
+  const [reminderNotice, setReminderNotice] = useState<string | null>(null);
   const [reminderSaving, setReminderSaving] = useState(false);
   const [reminderCompletingId, setReminderCompletingId] = useState<
     string | null
@@ -140,7 +157,26 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const [reminderEditSavingId, setReminderEditSavingId] = useState<
     string | null
   >(null);
+  const reminderCreateAttemptRef = useRef<ReminderMutationAttempt | null>(null);
+  const reminderEditAttemptRef = useRef<ReminderMutationAttempt | null>(null);
+  const reminderCompletionAttemptsRef = useRef(
+    new Map<string, ReminderMutationAttempt>(),
+  );
+  const [callAttemptKey, setCallAttemptKey] = useState<string | null>(null);
+  const [pipelineStageDraft, setPipelineStageDraft] = useState(
+    contact.pipeline.stage,
+  );
   const contactIdRef = useRef(contact.id);
+
+  useEffect(() => {
+    setCallAttemptKey(
+      `team-call:${contact.id}:${globalThis.crypto.randomUUID()}`,
+    );
+  }, [contact.id]);
+
+  useEffect(() => {
+    setPipelineStageDraft(contact.pipeline.stage);
+  }, [contact.id, contact.pipeline.stage, contact.pipeline.updatedAt]);
 
   useEffect(() => {
     setContactState(contact);
@@ -162,6 +198,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       setReminderDueDraft("");
       setReminderNotesDraft("");
       setReminderError(null);
+      setReminderNotice(null);
       setReminderSaving(false);
       setReminderCompletingId(null);
       setReminderEditingId(null);
@@ -169,13 +206,16 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       setReminderEditDueDraft("");
       setReminderEditNotesDraft("");
       setReminderEditSavingId(null);
+      reminderCreateAttemptRef.current = null;
+      reminderEditAttemptRef.current = null;
+      reminderCompletionAttemptsRef.current.clear();
     }
   }, [contact]);
 
   const primaryProperty = contactState.properties[0];
   const mapsLink = mapsUrl(primaryProperty);
   const phoneLink = normalizePhoneLink(contactState.phone);
-  const canCall = Boolean(phoneLink);
+  const canCall = canPlaceCalls && Boolean(phoneLink);
   const hasBookingName = contactState.name.trim().length > 0;
   const hasBookingPhone = Boolean(
     (contactState.phoneE164 ?? contactState.phone ?? "").trim(),
@@ -469,10 +509,20 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
     setReminderEditDueDraft(toLocalDateTimeInputValue(reminder.dueAt));
     setReminderEditNotesDraft(reminder.notes ?? "");
     setReminderError(null);
+    setReminderNotice(null);
   }
 
   async function saveEditedReminder(taskId: string) {
     if (reminderEditSavingId) return;
+    const current = (contactState.reminders ?? []).find(
+      (reminder) => reminder.id === taskId,
+    );
+    if (!current) {
+      setReminderError(
+        "This reminder is no longer available. Refresh and try again.",
+      );
+      return;
+    }
 
     const title = reminderEditTitleDraft.trim().length
       ? reminderEditTitleDraft.trim()
@@ -494,6 +544,20 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
 
     setReminderEditSavingId(taskId);
     setReminderError(null);
+    setReminderNotice(null);
+    const fingerprint = JSON.stringify({
+      dueAt,
+      notes,
+      taskId,
+      title,
+      version: current.updatedAt,
+    });
+    const attempt = stableReminderMutationAttempt(
+      reminderEditAttemptRef.current,
+      fingerprint,
+      `crm-reminder-update:${taskId}`,
+    );
+    reminderEditAttemptRef.current = attempt;
 
     try {
       const response = await fetch(`/api/team/contacts/reminders/${taskId}`, {
@@ -501,6 +565,8 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          "Idempotency-Key": attempt.idempotencyKey,
+          "If-Match": `"${current.updatedAt}"`,
         },
         body: JSON.stringify({
           title,
@@ -510,58 +576,45 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       });
 
       if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as unknown;
-        const message =
-          data &&
-          typeof data === "object" &&
-          typeof (data as Record<string, unknown>)["message"] === "string"
-            ? String((data as Record<string, unknown>)["message"])
-            : "Unable to update reminder. Please try again.";
-        setReminderError(message);
+        setReminderError(
+          await readTeamMutationError(response, "Unable to update reminder"),
+        );
         return;
       }
 
       const data = (await response.json().catch(() => null)) as unknown;
-      const reminder =
-        data && typeof data === "object"
-          ? (data as Record<string, unknown>)["reminder"]
-          : null;
-      const reminderRecord =
-        reminder && typeof reminder === "object"
-          ? (reminder as Record<string, unknown>)
-          : null;
-      const updatedAt =
-        typeof reminderRecord?.["updatedAt"] === "string"
-          ? reminderRecord["updatedAt"]
-          : null;
-      const serverDueAt =
-        typeof reminderRecord?.["dueAt"] === "string"
-          ? reminderRecord["dueAt"]
-          : dueAt;
-      const serverNotes =
-        typeof reminderRecord?.["notes"] === "string"
-          ? reminderRecord["notes"]
-          : null;
+      const success = parseReminderMutationSuccess(data, {
+        status: "open",
+        taskId,
+      });
+      if (!success) {
+        setReminderError(
+          "The reminder service returned an unreadable update receipt. No success is being claimed; your changes remain available. Refresh before retrying.",
+        );
+        return;
+      }
+      const updated = success.data.reminder;
 
       setContactState((prev) => ({
         ...prev,
         reminders: (prev.reminders ?? []).map((existing) =>
-          existing.id === taskId
-            ? {
-                ...existing,
-                title,
-                dueAt: serverDueAt,
-                notes: serverNotes ?? (notes.length ? notes : null),
-                updatedAt: updatedAt ?? existing.updatedAt,
-              }
-            : existing,
+          existing.id === taskId ? updated : existing,
         ),
       }));
 
+      reminderEditAttemptRef.current = null;
       setReminderEditingId(null);
       setReminderEditTitleDraft("");
       setReminderEditDueDraft("");
       setReminderEditNotesDraft("");
+      setReminderNotice("Reminder updated.");
+    } catch (caught) {
+      setReminderError(
+        readTeamMutationException(
+          caught,
+          "The reminder service could not be reached. Your changes were not confirmed and remain available to retry",
+        ),
+      );
     } finally {
       setReminderEditSavingId(null);
     }
@@ -591,6 +644,19 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
 
     setReminderSaving(true);
     setReminderError(null);
+    setReminderNotice(null);
+    const fingerprint = JSON.stringify({
+      contactId: contactState.id,
+      dueAt,
+      notes,
+      title,
+    });
+    const attempt = stableReminderMutationAttempt(
+      reminderCreateAttemptRef.current,
+      fingerprint,
+      `crm-reminder-create:${contactState.id}`,
+    );
+    reminderCreateAttemptRef.current = attempt;
 
     try {
       const response = await fetch("/api/team/contacts/reminders", {
@@ -598,6 +664,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          "Idempotency-Key": attempt.idempotencyKey,
         },
         body: JSON.stringify({
           contactId: contactState.id,
@@ -608,58 +675,24 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       });
 
       if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as unknown;
-        const message =
-          data &&
-          typeof data === "object" &&
-          typeof (data as Record<string, unknown>)["message"] === "string"
-            ? String((data as Record<string, unknown>)["message"])
-            : "Unable to create reminder. Please try again.";
-        setReminderError(message);
+        setReminderError(
+          await readTeamMutationError(response, "Unable to create reminder"),
+        );
         return;
       }
 
       const data = (await response.json().catch(() => null)) as unknown;
-      const reminder =
-        data && typeof data === "object"
-          ? (data as Record<string, unknown>)["reminder"]
-          : null;
-      if (!reminder || typeof reminder !== "object") {
-        setReminderError("Unable to create reminder. Please try again.");
+      const success = parseReminderMutationSuccess(data, {
+        contactId: contactState.id,
+        status: "open",
+      });
+      if (!success) {
+        setReminderError(
+          "The reminder service returned an unreadable receipt. No success is being claimed; your input remains available. Refresh before retrying.",
+        );
         return;
       }
-
-      const reminderRecord = reminder as Record<string, unknown>;
-      if (
-        typeof reminderRecord["id"] !== "string" ||
-        typeof reminderRecord["title"] !== "string" ||
-        typeof reminderRecord["status"] !== "string" ||
-        typeof reminderRecord["createdAt"] !== "string" ||
-        typeof reminderRecord["updatedAt"] !== "string"
-      ) {
-        setReminderError("Unable to create reminder. Please try again.");
-        return;
-      }
-
-      const created: ContactReminderSummary = {
-        id: reminderRecord["id"],
-        title: reminderRecord["title"],
-        notes:
-          typeof reminderRecord["notes"] === "string"
-            ? reminderRecord["notes"]
-            : null,
-        dueAt:
-          typeof reminderRecord["dueAt"] === "string"
-            ? reminderRecord["dueAt"]
-            : null,
-        assignedTo:
-          typeof reminderRecord["assignedTo"] === "string"
-            ? reminderRecord["assignedTo"]
-            : null,
-        status: reminderRecord["status"] === "completed" ? "completed" : "open",
-        createdAt: reminderRecord["createdAt"],
-        updatedAt: reminderRecord["updatedAt"],
-      };
+      const created: ContactReminderSummary = success.data.reminder;
 
       setContactState((prev) => ({
         ...prev,
@@ -672,6 +705,15 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       setReminderDueDraft("");
       setReminderNotesDraft("");
       setShowReminderForm(false);
+      reminderCreateAttemptRef.current = null;
+      setReminderNotice("Reminder created and notification scheduled.");
+    } catch (caught) {
+      setReminderError(
+        readTeamMutationException(
+          caught,
+          "The reminder service could not be reached. Your reminder was not confirmed and your input remains available to retry",
+        ),
+      );
     } finally {
       setReminderSaving(false);
     }
@@ -679,24 +721,55 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
 
   async function completeReminder(taskId: string) {
     if (reminderCompletingId) return;
+    const reminder = (contactState.reminders ?? []).find(
+      (item) => item.id === taskId,
+    );
+    if (!reminder) {
+      setReminderError(
+        "This reminder is no longer available. Refresh and try again.",
+      );
+      return;
+    }
     setReminderCompletingId(taskId);
     setReminderError(null);
+    setReminderNotice(null);
+    const fingerprint = JSON.stringify({
+      status: "completed",
+      taskId,
+      version: reminder.updatedAt,
+    });
+    const attempt = stableReminderMutationAttempt(
+      reminderCompletionAttemptsRef.current.get(taskId) ?? null,
+      fingerprint,
+      `crm-reminder-complete:${taskId}`,
+    );
+    reminderCompletionAttemptsRef.current.set(taskId, attempt);
 
     try {
       const response = await fetch(`/api/team/contacts/reminders/${taskId}`, {
         method: "POST",
-        headers: { Accept: "application/json" },
+        headers: {
+          Accept: "application/json",
+          "Idempotency-Key": attempt.idempotencyKey,
+          "If-Match": `"${reminder.updatedAt}"`,
+        },
       });
 
       if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as unknown;
-        const message =
-          data &&
-          typeof data === "object" &&
-          typeof (data as Record<string, unknown>)["message"] === "string"
-            ? String((data as Record<string, unknown>)["message"])
-            : "Unable to complete reminder. Please try again.";
-        setReminderError(message);
+        setReminderError(
+          await readTeamMutationError(response, "Unable to complete reminder"),
+        );
+        return;
+      }
+      const data = (await response.json().catch(() => null)) as unknown;
+      const success = parseReminderMutationSuccess(data, {
+        status: "completed",
+        taskId,
+      });
+      if (!success) {
+        setReminderError(
+          "The reminder service returned an unreadable completion receipt. No success is being claimed; refresh before retrying.",
+        );
         return;
       }
 
@@ -712,6 +785,15 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
           remindersCount: Math.max(0, previousCount - 1),
         };
       });
+      reminderCompletionAttemptsRef.current.delete(taskId);
+      setReminderNotice("Reminder completed.");
+    } catch (caught) {
+      setReminderError(
+        readTeamMutationException(
+          caught,
+          "The reminder service could not be reached. Completion was not confirmed; refresh before retrying",
+        ),
+      );
     } finally {
       setReminderCompletingId(null);
     }
@@ -739,13 +821,33 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               className="flex flex-wrap items-center gap-2 text-xs text-slate-600"
             >
               <input type="hidden" name="contactId" value={contactState.id} />
+              <input
+                type="hidden"
+                name="previousStage"
+                value={contactState.pipeline.stage}
+              />
+              <input
+                type="hidden"
+                name="expectedVersion"
+                value={pipelineExpectedVersion(contactState.pipeline.updatedAt)}
+              />
+              <input
+                type="hidden"
+                name="idempotencyKey"
+                value={`pipeline-stage:${contactState.id}:${pipelineExpectedVersion(
+                  contactState.pipeline.updatedAt,
+                )}:${pipelineStageDraft}`}
+              />
               <label className="flex items-center gap-2">
                 <span className="text-[11px] font-medium text-slate-500">
                   Stage
                 </span>
                 <select
                   name="stage"
-                  defaultValue={contactState.pipeline.stage}
+                  value={pipelineStageDraft}
+                  onChange={(event) =>
+                    setPipelineStageDraft(event.target.value)
+                  }
                   className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 shadow-sm focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
                 >
                   {PIPELINE_STAGES.map((value) => (
@@ -758,6 +860,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               <SubmitButton
                 className="rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-600 hover:border-primary-300 hover:text-primary-700"
                 pendingLabel="Saving..."
+                disabled={pipelineStageDraft === contactState.pipeline.stage}
               >
                 Update
               </SubmitButton>
@@ -838,28 +941,13 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               <CalendarPlus className="h-4 w-4" aria-hidden="true" />
               {showBookingForm ? "Close booking" : "Book appointment"}
             </button>
-            <form action={deleteContactAction} className="inline">
-              <input type="hidden" name="contactId" value={contactState.id} />
-              <SubmitButton
-                className={`${teamButtonClass("danger", "sm")} gap-2`}
-                pendingLabel="Removing..."
-              >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
-                Delete
-              </SubmitButton>
-            </form>
             <form
-              action={startContactCallAction}
+              action={deleteContactAction}
               className="inline"
               onSubmit={(event) => {
-                if (!canCall) {
-                  event.preventDefault();
-                  return;
-                }
-                const label = contactState.phone ?? "this contact";
                 if (
                   !window.confirm(
-                    `Call ${contactState.name} (${label}) from the Stonegate number?`,
+                    `Move ${contactState.name} to recovery? They will be hidden from active CRM views for 30 days. Automation will pause and queued operations will be quarantined for review.`,
                   )
                 ) {
                   event.preventDefault();
@@ -867,15 +955,64 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               }}
             >
               <input type="hidden" name="contactId" value={contactState.id} />
+              <input
+                type="hidden"
+                name="expectedVersion"
+                value={contactState.updatedAt}
+              />
+              <input
+                type="hidden"
+                name="idempotencyKey"
+                value={`contact-delete:${contactState.id}:${contactState.updatedAt}`}
+              />
               <SubmitButton
-                className={`${teamButtonClass("primary", "sm")} gap-2`}
-                pendingLabel="Calling..."
-                disabled={!canCall}
+                className={`${teamButtonClass("danger", "sm")} gap-2`}
+                pendingLabel="Moving..."
               >
-                <Phone className="h-4 w-4" aria-hidden="true" />
-                Call
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                Move to recovery
               </SubmitButton>
             </form>
+            {canPlaceCalls ? (
+              <form
+                action={startContactCallAction}
+                className="inline"
+                onSubmit={(event) => {
+                  if (!canCall) {
+                    event.preventDefault();
+                    return;
+                  }
+                  const label = contactState.phone ?? "this contact";
+                  if (
+                    !window.confirm(
+                      `Call ${contactState.name} (${label}) from the Stonegate number?`,
+                    )
+                  ) {
+                    event.preventDefault();
+                  }
+                }}
+              >
+                <input type="hidden" name="contactId" value={contactState.id} />
+                <input
+                  type="hidden"
+                  name="idempotencyKey"
+                  value={callAttemptKey ?? ""}
+                />
+                <input
+                  type="hidden"
+                  name="explicitNewAttempt"
+                  value="START NEW CALL"
+                />
+                <SubmitButton
+                  className={`${teamButtonClass("primary", "sm")} gap-2`}
+                  pendingLabel="Calling..."
+                  disabled={!canCall || !callAttemptKey}
+                >
+                  <Phone className="h-4 w-4" aria-hidden="true" />
+                  Call
+                </SubmitButton>
+              </form>
+            ) : null}
             <a
               className={`${teamButtonClass("secondary", "sm")} gap-2`}
               href={inboxLink}
@@ -885,9 +1022,8 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
             </a>
             <a
               className={`${teamButtonClass("secondary", "sm")} gap-2`}
-              href={teamLink("quotes", {
-                quoteMode: "builder",
-                contactId: contactState.id,
+              href={quoteWorkspaceHref("create", {
+                query: { contactId: contactState.id },
               })}
             >
               <FileText className="h-4 w-4" aria-hidden="true" />
@@ -1440,10 +1576,11 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 </h4>
                 <button
                   type="button"
-                  className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                  className="min-h-11 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-primary-300 hover:text-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
                   onClick={() => {
                     setShowReminderForm((prev) => !prev);
                     setReminderError(null);
+                    setReminderNotice(null);
                   }}
                 >
                   {showReminderForm ? "Close" : "Add reminder"}
@@ -1481,7 +1618,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                             <button
                               type="button"
                               disabled={reminderEditSavingId === reminder.id}
-                              className="rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
+                              className="min-h-11 rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-70"
                               onClick={() => startEditReminder(reminder)}
                             >
                               Edit
@@ -1494,7 +1631,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                           <button
                             type="button"
                             disabled={reminderCompletingId === reminder.id}
-                            className="rounded-full border border-emerald-200 px-3 py-1.5 font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-70"
+                            className="min-h-11 rounded-full border border-emerald-200 px-3 py-1.5 font-medium text-emerald-700 hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-70"
                             onClick={() => void completeReminder(reminder.id)}
                           >
                             {reminderCompletingId === reminder.id
@@ -1531,6 +1668,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                               onChange={(event) =>
                                 setReminderEditTitleDraft(event.target.value)
                               }
+                              maxLength={160}
                               className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                               required
                             />
@@ -1543,6 +1681,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                               onChange={(event) =>
                                 setReminderEditNotesDraft(event.target.value)
                               }
+                              maxLength={4000}
                               className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                             />
                           </label>
@@ -1575,8 +1714,19 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               </div>
 
               {reminderError ? (
-                <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                <p
+                  className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700"
+                  role="alert"
+                >
                   {reminderError}
+                </p>
+              ) : null}
+              {reminderNotice ? (
+                <p
+                  className="mt-3 text-xs font-semibold text-emerald-700"
+                  role="status"
+                >
+                  {reminderNotice}
                 </p>
               ) : null}
 
@@ -1604,6 +1754,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                       onChange={(event) =>
                         setReminderTitleDraft(event.target.value)
                       }
+                      maxLength={160}
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                       placeholder="Call back, follow up, payment, etc."
                       required
@@ -1617,6 +1768,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                       onChange={(event) =>
                         setReminderNotesDraft(event.target.value)
                       }
+                      maxLength={4000}
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                       placeholder="Any context the salesperson should see in the SMS"
                     />
@@ -1835,9 +1987,11 @@ function NoteRow({
 export default function ContactsListClient({
   contacts,
   teamMembers,
+  canPlaceCalls,
 }: {
   contacts: ContactSummary[];
   teamMembers: Array<{ id: string; name: string }>;
+  canPlaceCalls: boolean;
 }) {
   return (
     <ul className="space-y-4">
@@ -1846,6 +2000,7 @@ export default function ContactsListClient({
           key={contact.id}
           contact={contact}
           teamMembers={teamMembers}
+          canPlaceCalls={canPlaceCalls}
         />
       ))}
     </ul>

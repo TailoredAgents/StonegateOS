@@ -5,18 +5,27 @@ import { getDb, googleAdsAnalystReports, teamMembers } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../../../web/admin";
 
-export async function GET(_request: NextRequest, context: { params: Promise<{ id: string }> }): Promise<Response> {
+export async function GET(
+  _request: NextRequest,
+  context: { params: Promise<{ id: string }> },
+): Promise<Response> {
   const request = _request;
   if (!isAdminRequest(request)) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { ok: false, error: "unauthorized" },
+      { status: 401 },
+    );
   }
 
-  const permissionError = await requirePermission(request, "policy.read");
+  const permissionError = await requirePermission(request, "marketing.read");
   if (permissionError) return permissionError;
 
   const { id } = await context.params;
   if (!id || typeof id !== "string") {
-    return NextResponse.json({ ok: false, error: "invalid_request" }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, error: "invalid_request" },
+      { status: 400 },
+    );
   }
 
   const db = getDb();
@@ -31,16 +40,22 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
       report: googleAdsAnalystReports.report,
       createdBy: googleAdsAnalystReports.createdBy,
       createdByName: teamMembers.name,
-      createdAt: googleAdsAnalystReports.createdAt
+      createdAt: googleAdsAnalystReports.createdAt,
     })
     .from(googleAdsAnalystReports)
-    .leftJoin(teamMembers, eq(teamMembers.id, googleAdsAnalystReports.createdBy))
+    .leftJoin(
+      teamMembers,
+      eq(teamMembers.id, googleAdsAnalystReports.createdBy),
+    )
     .where(eq(googleAdsAnalystReports.id, id))
     .limit(1)
     .then((rows) => rows[0] ?? null);
 
   if (!row) {
-    return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+    return NextResponse.json(
+      { ok: false, error: "not_found" },
+      { status: 404 },
+    );
   }
 
   return NextResponse.json({
@@ -55,7 +70,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
       report: row.report,
       createdBy: row.createdBy ?? null,
       createdByName: row.createdByName ?? null,
-      createdAt: row.createdAt.toISOString()
-    }
+      createdAt: row.createdAt.toISOString(),
+    },
   });
 }

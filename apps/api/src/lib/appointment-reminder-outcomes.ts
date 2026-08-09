@@ -1,4 +1,5 @@
-import { appointments, auditLogs, conversationMessages, getDb, outboxEvents } from "@/db";
+import type { getDb} from "@/db";
+import { appointments, auditLogs, conversationMessages, outboxEvents } from "@/db";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 
 type DbExecutor = ReturnType<typeof getDb>;

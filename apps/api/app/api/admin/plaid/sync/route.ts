@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { isAdminRequest } from "../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 import { getPlaidClient, plaidConfigured } from "@/lib/plaid";
 import { getDb, plaidItems, plaidAccounts, plaidTransactions } from "@/db";
 import { eq, inArray, type InferInsertModel } from "drizzle-orm";
@@ -8,9 +8,8 @@ import { eq, inArray, type InferInsertModel } from "drizzle-orm";
 type SyncRequest = { itemId?: string };
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const permissionError = await requirePermission(request, "payments.manage");
+  if (permissionError) return permissionError as NextResponse;
   if (!plaidConfigured()) {
     return NextResponse.json({ error: "plaid_not_configured" }, { status: 503 });
   }
@@ -99,7 +98,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             isoCurrencyCode: txn.iso_currency_code ?? null,
             date: new Date(txn.date ?? new Date().toISOString()),
             pending: Boolean(txn.pending),
-            category: txn.category as string[] | null,
+            category: txn.category,
             raw: txn as unknown as Record<string, unknown>
           })
           .onConflictDoUpdate({
@@ -111,7 +110,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
               isoCurrencyCode: txn.iso_currency_code ?? null,
               date: new Date(txn.date ?? new Date().toISOString()),
               pending: Boolean(txn.pending),
-              category: (txn.category as string[] | null) ?? null,
+              category: txn.category ?? null,
               raw: txn as unknown as Record<string, unknown>,
               updatedAt: new Date()
             }

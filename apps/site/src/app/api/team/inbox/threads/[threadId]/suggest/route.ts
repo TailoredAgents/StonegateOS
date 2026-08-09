@@ -1,19 +1,34 @@
-import { callAdminApi } from "@/app/team/lib/api";
+import { requireTeamPrincipal } from "@/app/api/team/auth";
+import { callAdminApiAs } from "@/app/team/lib/api";
+import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 type RouteContext = {
   params: Promise<{ threadId?: string }>;
 };
 
-export async function POST(request: Request, context: RouteContext): Promise<Response> {
+export async function POST(
+  request: NextRequest,
+  context: RouteContext,
+): Promise<Response> {
+  const auth = await requireTeamPrincipal(request, {
+    permissions: "messages.write",
+    returnJson: true,
+  });
+  if (!auth.ok) return auth.response;
+
   const { threadId } = await context.params;
   const resolvedThreadId = typeof threadId === "string" ? threadId.trim() : "";
   if (!resolvedThreadId) {
-    return NextResponse.json({ ok: false, error: "thread_id_required" }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, error: "thread_id_required" },
+      { status: 400 },
+    );
   }
 
   const body = await request.text().catch(() => "");
-  const upstream = await callAdminApi(
+  const upstream = await callAdminApiAs(
+    auth.principal,
     `/api/admin/inbox/threads/${encodeURIComponent(resolvedThreadId)}/suggest`,
     {
       method: "POST",
@@ -25,6 +40,8 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
     },
   );
 
-  const payload = await upstream.json().catch(() => null);
-  return NextResponse.json(payload ?? { ok: false, error: "upstream_error" }, { status: upstream.status });
+  const payload: unknown = await upstream.json().catch(() => null);
+  return NextResponse.json(payload ?? { ok: false, error: "upstream_error" }, {
+    status: upstream.status,
+  });
 }

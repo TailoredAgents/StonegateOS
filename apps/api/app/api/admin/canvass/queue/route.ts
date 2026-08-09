@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { and, asc, eq, ilike, isNotNull, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { contacts, crmTasks, getDb } from "@/db";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
 
@@ -28,13 +29,17 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "outbound.read");
+  if (permissionError) return permissionError;
 
   const db = getDb();
   const config = await getSalesScorecardConfig(db);
 
   const url = new URL(request.url);
   const assignedToRaw = url.searchParams.get("memberId")?.trim() || "";
-  const assignedTo = assignedToRaw.length ? assignedToRaw : config.defaultAssigneeMemberId;
+  const assignedTo = assignedToRaw.length
+    ? assignedToRaw
+    : config.defaultAssigneeMemberId;
   const limit = parseLimit(url.searchParams.get("limit"));
   const offset = parseOffset(url.searchParams.get("offset"));
 
@@ -50,7 +55,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       contactLast: contacts.lastName,
       contactEmail: contacts.email,
       contactPhone: contacts.phone,
-      contactPhoneE164: contacts.phoneE164
+      contactPhoneE164: contacts.phoneE164,
     })
     .from(crmTasks)
     .innerJoin(contacts, eq(crmTasks.contactId, contacts.id))
@@ -59,14 +64,20 @@ export async function GET(request: NextRequest): Promise<Response> {
         eq(crmTasks.status, "open"),
         eq(crmTasks.assignedTo, assignedTo),
         isNotNull(crmTasks.notes),
-        ilike(crmTasks.notes, "%kind=canvass%")
-      )
+        ilike(crmTasks.notes, "%kind=canvass%"),
+      ),
     )
-    .orderBy(sql`(${crmTasks.dueAt} is null) asc`, asc(crmTasks.dueAt), asc(crmTasks.createdAt))
+    .orderBy(
+      sql`(${crmTasks.dueAt} is null) asc`,
+      asc(crmTasks.dueAt),
+      asc(crmTasks.createdAt),
+    )
     .limit(MAX_SCAN);
 
   const now = new Date();
-  const nowLocal = DateTime.fromJSDate(now, { zone: config.timezone || "America/New_York" });
+  const nowLocal = DateTime.fromJSDate(now, {
+    zone: config.timezone || "America/New_York",
+  });
   const startOfTodayUtc = nowLocal.startOf("day").toUTC().toJSDate().getTime();
   const endOfTodayUtc = nowLocal.endOf("day").toUTC().toJSDate().getTime();
 
@@ -74,8 +85,10 @@ export async function GET(request: NextRequest): Promise<Response> {
     const dueAtIso = row.dueAt instanceof Date ? row.dueAt.toISOString() : null;
     const dueMs = row.dueAt instanceof Date ? row.dueAt.getTime() : null;
     const overdue = dueMs !== null ? dueMs < now.getTime() : false;
-    const minutesUntilDue = dueMs !== null ? Math.round((dueMs - now.getTime()) / 60_000) : null;
-    const name = `${row.contactFirst ?? ""} ${row.contactLast ?? ""}`.trim() || "Contact";
+    const minutesUntilDue =
+      dueMs !== null ? Math.round((dueMs - now.getTime()) / 60_000) : null;
+    const name =
+      `${row.contactFirst ?? ""} ${row.contactLast ?? ""}`.trim() || "Contact";
 
     return {
       id: row.id,
@@ -87,8 +100,8 @@ export async function GET(request: NextRequest): Promise<Response> {
         id: row.contactId,
         name,
         phone: row.contactPhoneE164 ?? row.contactPhone ?? null,
-        email: row.contactEmail ?? null
-      }
+        email: row.contactEmail ?? null,
+      },
     };
   });
 
@@ -102,10 +115,11 @@ export async function GET(request: NextRequest): Promise<Response> {
       if (dueMs !== null && dueMs <= now.getTime()) acc.dueNow += 1;
       if (dueMs !== null && dueMs < now.getTime()) acc.overdue += 1;
       if (dueMs === null) acc.notStarted += 1;
-      if (dueMs !== null && dueMs >= startOfTodayUtc && dueMs <= endOfTodayUtc) acc.dueToday += 1;
+      if (dueMs !== null && dueMs >= startOfTodayUtc && dueMs <= endOfTodayUtc)
+        acc.dueToday += 1;
       return acc;
     },
-    { dueNow: 0, overdue: 0, notStarted: 0, dueToday: 0 }
+    { dueNow: 0, overdue: 0, notStarted: 0, dueToday: 0 },
   );
 
   return NextResponse.json({
@@ -116,6 +130,6 @@ export async function GET(request: NextRequest): Promise<Response> {
     limit,
     nextOffset,
     summary,
-    items: page
+    items: page,
   });
 }

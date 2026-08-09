@@ -1,25 +1,19 @@
 import React from "react";
-import { callAdminApi } from "../lib/api";
+import {
+  hasTeamPermission,
+  requireCurrentTeamPrincipal,
+} from "@/lib/team-principal";
+import { callAdminApiAs } from "../lib/api";
+import {
+  parseTeamSalesActivityPayload,
+  type TeamSalesActivityEvent,
+  type TeamSalesActivityPage,
+} from "../sales-activity-page";
 import { TEAM_TIME_ZONE, formatDayKey } from "../lib/timezone";
+import { teamSurfaceHref } from "../surface-registry";
 import type { SalesSupervisorPayload } from "./sales.types";
 
 type TeamMember = { id: string; name: string; active: boolean };
-
-type ActivityEvent = {
-  id: string;
-  action: string;
-  entityType: string;
-  entityId: string | null;
-  createdAt: string;
-  actor?: {
-    type?: string;
-    id?: string | null;
-    role?: string | null;
-    label?: string | null;
-    name?: string | null;
-  };
-  meta?: Record<string, unknown> | null;
-};
 
 type ActivityRow = {
   id: string;
@@ -38,12 +32,10 @@ type ActivityRow = {
   channel: string | null;
   contactId: string | null;
   leadId: string | null;
+  threadId: string | null;
+  callRecordId: string | null;
   summary: string;
 };
-
-function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
 
 function formatAgo(iso: string): string {
   const value = new Date(iso);
@@ -70,37 +62,32 @@ function formatLocal(iso: string): string {
   }).format(value);
 }
 
-function getMetaString(meta: Record<string, unknown> | null | undefined, key: string): string | null {
-  if (!meta) return null;
-  const value = meta[key];
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length ? trimmed : null;
-}
-
-function getMetaUuid(meta: Record<string, unknown> | null | undefined, key: string): string | null {
-  const value = getMetaString(meta, key);
-  if (!value) return null;
-  return isUuid(value) ? value : null;
-}
-
-function buildRow(event: ActivityEvent): ActivityRow {
-  const actor = event.actor?.name ?? event.actor?.label ?? event.actor?.type ?? "system";
+function buildRow(event: TeamSalesActivityEvent): ActivityRow {
+  const actor =
+    event.actor?.name ?? event.actor?.label ?? event.actor?.type ?? "system";
   const ago = formatAgo(event.createdAt);
   const whenLocal = formatLocal(event.createdAt);
 
-  const contactId =
-    getMetaUuid(event.meta, "contactId") ?? (event.entityType === "contact" && event.entityId ? event.entityId : null);
-  const leadId = getMetaUuid(event.meta, "leadId") ?? null;
-  const channel = getMetaString(event.meta, "channel") ?? getMetaString(event.meta, "replyChannel") ?? null;
+  const contactId = event.context?.contactId ?? null;
+  const leadId = event.context?.leadId ?? null;
+  const threadId = event.context?.threadId ?? null;
+  const callRecordId = event.context?.callRecordId ?? null;
+  const channel = event.context?.channel ?? null;
+  const actionType = event.context?.actionType ?? null;
 
-  const to = getMetaString(event.meta, "to");
-  const from = getMetaString(event.meta, "from");
-  const reason = getMetaString(event.meta, "reason");
-  const actionType = getMetaString(event.meta, "actionType");
-
-  if (event.action === "call.started" || event.action.startsWith("sales.escalation.call.")) {
-    const target = to ?? "unknown number";
+  if (
+    event.action === "call.started" ||
+    event.action.startsWith("sales.escalation.call.")
+  ) {
+    const escalationSummary: Record<string, string> = {
+      "sales.escalation.call.started": "Automated call started",
+      "sales.escalation.call.dispatched": "Automated call dispatch started",
+      "sales.escalation.call.connected": "Customer connection confirmed",
+      "sales.escalation.call.not_connected": "Customer was not connected",
+      "sales.escalation.call.not_dispatched": "Automated call was not placed",
+      "sales.escalation.call.reconciliation_required":
+        "Call result needs reconciliation",
+    };
     return {
       id: event.id,
       whenIso: event.createdAt,
@@ -111,20 +98,29 @@ function buildRow(event: ActivityEvent): ActivityRow {
       channel: "voice",
       contactId,
       leadId,
+      threadId,
+      callRecordId,
       summary:
-        event.action === "sales.escalation.call.connected"
-          ? `Connected (press 1) to ${target}`
-          : event.action === "sales.escalation.call.started"
-            ? `Auto call started to ${target}`
-            : `Call started to ${target}`,
+        escalationSummary[event.action] ??
+        (event.context?.terminalOutcome === "connected"
+          ? "Customer connection confirmed"
+          : "Outbound call activity recorded"),
     };
   }
 
-  if (event.action === "message.received" || event.action === "message.queued") {
-    const directionLabel = event.action === "message.received" ? "Inbound message" : "Outbound message";
-    const type = event.action === "message.received" ? "Inbound message" : "Outbound message";
+  if (
+    event.action === "message.received" ||
+    event.action === "message.queued"
+  ) {
+    const directionLabel =
+      event.action === "message.received"
+        ? "Inbound message"
+        : "Outbound message";
+    const type =
+      event.action === "message.received"
+        ? "Inbound message"
+        : "Outbound message";
     const channelLabel = channel ?? "unknown";
-    const numberLabel = to ?? from ?? null;
     return {
       id: event.id,
       whenIso: event.createdAt,
@@ -135,13 +131,16 @@ function buildRow(event: ActivityEvent): ActivityRow {
       channel: channelLabel,
       contactId,
       leadId,
-      summary: numberLabel
-        ? `${directionLabel} (${channelLabel}) to or from ${numberLabel}`
-        : `${directionLabel} (${channelLabel})`,
+      threadId,
+      callRecordId,
+      summary: `${directionLabel} (${channelLabel})`,
     };
   }
 
-  if (event.action.startsWith("sales.autopilot.") || event.action.startsWith("sales.agent.draft.")) {
+  if (
+    event.action.startsWith("sales.autopilot.") ||
+    event.action.startsWith("sales.agent.draft.")
+  ) {
     const summary =
       event.action === "sales.autopilot.draft_created"
         ? "Autopilot draft created"
@@ -154,9 +153,7 @@ function buildRow(event: ActivityEvent): ActivityRow {
               ? `Planner draft reused for ${actionType}`
               : "Planner draft reused"
             : event.action === "sales.agent.draft.skipped"
-              ? reason
-                ? `Planner draft skipped: ${reason}`
-                : "Planner draft skipped"
+              ? "Planner draft skipped"
               : event.action;
     return {
       id: event.id,
@@ -168,20 +165,23 @@ function buildRow(event: ActivityEvent): ActivityRow {
       channel: channel ?? null,
       contactId,
       leadId,
+      threadId,
+      callRecordId,
       summary,
     };
   }
 
-  if (event.action === "message.retry" || event.action.startsWith("sales.agent.autosend.")) {
+  if (
+    event.action === "message.retry" ||
+    event.action.startsWith("sales.agent.autosend.")
+  ) {
     const summary =
       event.action === "sales.agent.autosend.queued"
         ? actionType
           ? `Planner autosend queued for ${actionType}`
           : "Planner autosend queued"
         : event.action === "sales.agent.autosend.skipped"
-          ? reason
-            ? `Planner autosend skipped: ${reason}`
-            : "Planner autosend skipped"
+          ? "Planner autosend skipped"
           : "Queued send";
     return {
       id: event.id,
@@ -193,16 +193,25 @@ function buildRow(event: ActivityEvent): ActivityRow {
       channel: channel ?? null,
       contactId,
       leadId,
+      threadId,
+      callRecordId,
       summary,
     };
   }
 
   if (event.action.startsWith("crm.reminder.")) {
-    const taskId = getMetaString(event.meta, "taskId");
-    const recipient = to ?? getMetaString(event.meta, "recipient");
-    const detail = [taskId ? `task ${taskId}` : null, recipient ? `to ${recipient}` : null]
-      .filter(Boolean)
-      .join(" | ");
+    const summary =
+      event.action === "crm.reminder.created"
+        ? "Reminder created"
+        : event.action === "crm.reminder.updated"
+          ? "Reminder updated"
+          : event.action === "crm.reminder.completed"
+            ? "Reminder completed"
+            : event.action === "crm.reminder.sent"
+              ? "Reminder sent"
+              : event.action === "crm.reminder.failed"
+                ? "Reminder delivery failed"
+                : "Reminder activity recorded";
     return {
       id: event.id,
       whenIso: event.createdAt,
@@ -213,7 +222,9 @@ function buildRow(event: ActivityEvent): ActivityRow {
       channel: "sms",
       contactId,
       leadId,
-      summary: detail ? `${event.action} | ${detail}` : event.action,
+      threadId,
+      callRecordId,
+      summary,
     };
   }
 
@@ -227,16 +238,78 @@ function buildRow(event: ActivityEvent): ActivityRow {
     channel: channel ?? null,
     contactId,
     leadId,
+    threadId,
+    callRecordId,
     summary: event.action,
   };
 }
 
+function ActivityContextLinks({
+  row,
+  compact = false,
+}: {
+  row: ActivityRow;
+  compact?: boolean;
+}): React.ReactElement | null {
+  const linkClass = compact
+    ? "inline-flex min-h-[44px] items-center rounded-full border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-link)]"
+    : "inline-flex min-h-[44px] items-center font-semibold text-[color:var(--team-link)] hover:underline";
+  const links: React.ReactElement[] = [];
+
+  if (row.contactId) {
+    links.push(
+      <a
+        key="contact"
+        className={linkClass}
+        href={teamSurfaceHref("contacts", {
+          query: { contactId: row.contactId },
+        })}
+      >
+        Contact
+      </a>,
+    );
+  }
+  if (row.threadId) {
+    links.push(
+      <a
+        key="thread"
+        className={linkClass}
+        href={teamSurfaceHref("inbox", {
+          query: { threadId: row.threadId },
+        })}
+      >
+        Conversation
+      </a>,
+    );
+  }
+  if (row.callRecordId) {
+    links.push(
+      <a
+        key="call"
+        className={linkClass}
+        href={`${teamSurfaceHref("sales-hq")}#call-${row.callRecordId}`}
+      >
+        Call coaching
+      </a>,
+    );
+  }
+
+  return links.length > 0 ? (
+    <div className="flex flex-wrap gap-2" aria-label="Related CRM records">
+      {links}
+    </div>
+  ) : null;
+}
+
 function formatPercent(value: number | null | undefined): string {
-  const numeric = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  const numeric =
+    typeof value === "number" && Number.isFinite(value) ? value : 0;
   return `${Math.round(numeric * 100)}%`;
 }
 
-function formatTouchKindLabel(value: SalesSupervisorPayload["appointmentPreservation"]["strongestTouchKind"]): string | null {
+function formatTouchKindLabel(
+  value: SalesSupervisorPayload["appointmentPreservation"]["strongestTouchKind"],
+): string | null {
   if (!value) return null;
   if (value === "requested") return "Initial confirmation";
   if (value === "rescheduled") return "Reschedule confirmation";
@@ -248,36 +321,201 @@ function formatCloseLoopCount(value: number): string {
   return `${value}`;
 }
 
-export async function SalesActivityLogSection({ memberId }: { memberId?: string }): Promise<React.ReactElement> {
-  const qs = new URLSearchParams({ limit: "150", rangeDays: "7" });
+function SalesHqViewsNav(): React.ReactElement {
+  const salesHqHref = teamSurfaceHref("sales-hq");
+  return (
+    <nav
+      aria-label="Sales HQ views"
+      className="flex flex-wrap gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-2"
+    >
+      <a
+        href={`${salesHqHref}#sales-hq-queue`}
+        className="inline-flex min-h-[44px] items-center rounded-xl px-4 py-2 text-sm font-semibold text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface-muted)] hover:text-[color:var(--team-text)]"
+      >
+        Queue
+      </a>
+      <a
+        href={`${salesHqHref}#sales-hq-coaching`}
+        className="inline-flex min-h-[44px] items-center rounded-xl px-4 py-2 text-sm font-semibold text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface-muted)] hover:text-[color:var(--team-text)]"
+      >
+        Coaching
+      </a>
+      <a
+        href={teamSurfaceHref("sales-log")}
+        aria-current="page"
+        className="inline-flex min-h-[44px] items-center rounded-xl bg-primary-50 px-4 py-2 text-sm font-semibold text-primary-800"
+      >
+        Activity
+      </a>
+    </nav>
+  );
+}
+
+type ActivitySearchValue = string | string[] | undefined;
+
+function appendActivitySearchValue(
+  params: URLSearchParams,
+  key: string,
+  value: ActivitySearchValue,
+  fallback?: string,
+): void {
+  const values = Array.isArray(value)
+    ? value
+    : value === undefined
+      ? fallback === undefined
+        ? []
+        : [fallback]
+      : [value];
+  for (const item of values) params.append(key, item);
+}
+
+export async function SalesActivityLogSection({
+  memberId,
+  cursor,
+  limit,
+  rangeDays,
+  actions,
+}: {
+  memberId?: string;
+  cursor?: ActivitySearchValue;
+  limit?: ActivitySearchValue;
+  rangeDays?: ActivitySearchValue;
+  actions?: ActivitySearchValue;
+}): Promise<React.ReactElement> {
+  const principal = await requireCurrentTeamPrincipal();
+  const qs = new URLSearchParams();
+  appendActivitySearchValue(qs, "limit", limit, "50");
+  appendActivitySearchValue(qs, "rangeDays", rangeDays, "7");
+  appendActivitySearchValue(qs, "actions", actions);
+  appendActivitySearchValue(qs, "cursor", cursor);
   if (memberId) qs.set("memberId", memberId);
 
-  const [activityRes, membersRes] = await Promise.all([
-    callAdminApi(`/api/admin/sales/activity?${qs.toString()}`),
-    callAdminApi("/api/admin/team/members"),
+  type ActivityPayload = NonNullable<
+    ReturnType<typeof parseTeamSalesActivityPayload>
+  > & {
+    supervisor: SalesSupervisorPayload;
+  };
+  let activityPayload: ActivityPayload | null = null;
+  let activityError: string | null = null;
+  let membersError: string | null = null;
+  let members: TeamMember[] = [];
+  const [activityResult, membersResult] = await Promise.allSettled([
+    callAdminApiAs(principal, `/api/admin/sales/activity?${qs.toString()}`),
+    callAdminApiAs(principal, "/api/admin/team/members"),
   ]);
 
-  if (!activityRes.ok) {
-    throw new Error("Failed to load sales activity");
+  if (activityResult.status === "fulfilled") {
+    const activityRes = activityResult.value;
+    if (activityRes.ok) {
+      try {
+        const payload: unknown = await activityRes.json();
+        const parsedPayload = parseTeamSalesActivityPayload(payload);
+        if (parsedPayload) {
+          activityPayload = {
+            ...parsedPayload,
+            supervisor:
+              parsedPayload.supervisor as unknown as SalesSupervisorPayload,
+          };
+        } else {
+          activityError =
+            "Sales activity returned an incomplete or unsafe response. This is not an empty history.";
+        }
+      } catch {
+        activityError =
+          "Sales activity returned malformed data. This is not an empty history.";
+      }
+    } else if (activityRes.status === 409) {
+      activityError =
+        "This saved activity page changed while it was open. Return to the newest activity to create a fresh snapshot.";
+    } else if (activityRes.status === 422) {
+      activityError =
+        "This activity page link has invalid or mismatched filters. Return to the newest activity and apply the filters again.";
+    } else {
+      activityError = `Sales activity is unavailable (HTTP ${activityRes.status}).`;
+    }
+  } else {
+    activityError =
+      "Sales activity is unavailable because the service could not be reached.";
   }
 
-  const activityPayload = (await activityRes.json()) as {
-    events?: ActivityEvent[];
-    memberId?: string | null;
-    supervisor?: SalesSupervisorPayload;
-  };
-  const events = activityPayload.events ?? [];
-  const supervisor = activityPayload.supervisor ?? null;
+  if (membersResult.status === "fulfilled") {
+    const membersRes = membersResult.value;
+    if (membersRes.ok) {
+      try {
+        const membersPayload: unknown = await membersRes.json();
+        if (
+          membersPayload &&
+          typeof membersPayload === "object" &&
+          Array.isArray((membersPayload as { members?: unknown }).members)
+        ) {
+          members = (membersPayload as { members: TeamMember[] }).members;
+        } else {
+          membersError = "Team-member filters returned an incomplete response.";
+        }
+      } catch {
+        membersError = "Team-member filters returned malformed data.";
+      }
+    } else {
+      membersError = `Team-member filters are unavailable (HTTP ${membersRes.status}).`;
+    }
+  } else {
+    membersError = "Team-member filters are unavailable.";
+  }
+
+  if (activityError || !activityPayload) {
+    const recoveryHref = teamSurfaceHref("sales-log", {
+      query: {
+        memberId,
+        salesRangeDays: typeof rangeDays === "string" ? rangeDays : undefined,
+        salesActions: typeof actions === "string" ? actions : undefined,
+        salesLimit: typeof limit === "string" ? limit : undefined,
+      },
+    });
+    return (
+      <section className="space-y-6">
+        <SalesHqViewsNav />
+        <div
+          className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-800"
+          role="alert"
+        >
+          <p className="font-semibold">Sales Activity could not be loaded.</p>
+          <p className="mt-1">
+            {activityError ?? "The response was incomplete."}
+          </p>
+          <p className="mt-1">
+            This is not an empty activity history. Refresh to retry.
+          </p>
+          <a
+            href={recoveryHref}
+            className="mt-3 inline-flex min-h-[44px] items-center rounded-xl border border-rose-300 bg-white px-4 py-2 font-semibold text-rose-900"
+          >
+            Return to newest activity
+          </a>
+        </div>
+      </section>
+    );
+  }
+
+  const events = activityPayload.events;
+  const supervisor = activityPayload.supervisor;
+  const page: TeamSalesActivityPage = activityPayload.page;
   const rows = events.map(buildRow);
 
-  let members: TeamMember[] = [];
-  if (membersRes.ok) {
-    const membersPayload = (await membersRes.json()) as { members?: TeamMember[] };
-    members = membersPayload.members ?? [];
-  }
-
-  const selectedMemberId = (typeof activityPayload.memberId === "string" ? activityPayload.memberId : null) ?? null;
-  const selectedLabel = selectedMemberId ? members.find((m) => m.id === selectedMemberId)?.name ?? null : null;
+  const selectedMemberId = activityPayload.memberId;
+  const selectedLabel = selectedMemberId
+    ? (members.find((m) => m.id === selectedMemberId)?.name ?? null)
+    : null;
+  const pageHref = (nextCursor: string | null) =>
+    teamSurfaceHref("sales-log", {
+      query: {
+        memberId: selectedMemberId,
+        salesRangeDays: activityPayload.rangeDays,
+        salesActions: activityPayload.actions.join(","),
+        salesLimit: page.limit,
+        salesCursor: nextCursor,
+      },
+    });
+  const newestHref = pageHref(null);
 
   const summary = rows.reduce(
     (acc, row) => {
@@ -289,7 +527,14 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
       if (row.type === "Reminder") acc.reminders += 1;
       return acc;
     },
-    { outboundCalls: 0, outboundMessages: 0, inboundMessages: 0, agentDrafts: 0, agentAutosends: 0, reminders: 0 },
+    {
+      outboundCalls: 0,
+      outboundMessages: 0,
+      inboundMessages: 0,
+      agentDrafts: 0,
+      agentAutosends: 0,
+      reminders: 0,
+    },
   );
 
   const grouped = rows.reduce<Record<string, ActivityRow[]>>((acc, row) => {
@@ -299,75 +544,181 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
     return acc;
   }, {});
 
-  const groupKeys = Object.keys(grouped).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  const groupKeys = Object.keys(grouped).sort((a, b) =>
+    a < b ? 1 : a > b ? -1 : 0,
+  );
+  const exportParams = new URLSearchParams({
+    rangeDays: String(activityPayload.rangeDays),
+    actions: activityPayload.actions.join(","),
+  });
+  if (selectedMemberId) exportParams.set("memberId", selectedMemberId);
+  const exportHref = `/api/team/sales/activity/export?${exportParams.toString()}`;
 
   return (
     <section className="space-y-6">
+      <SalesHqViewsNav />
       <header className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Sales Activity Log</h2>
+            <h2 className="text-xl font-semibold text-slate-900">
+              Sales Activity Log
+            </h2>
             <p className="mt-1 text-sm text-slate-600">
-              Readable feed of when calls and messages happened, plus reminders and agent activity.
+              Readable feed of when calls and messages happened, plus reminders
+              and agent activity.
             </p>
             {selectedLabel ? (
               <p className="mt-2 text-xs text-slate-500">
-                Filtered to: <span className="font-semibold text-slate-700">{selectedLabel}</span>
+                Filtered to:{" "}
+                <span className="font-semibold text-slate-700">
+                  {selectedLabel}
+                </span>
               </p>
             ) : null}
+            <p className="mt-2 text-xs text-slate-500">
+              Snapshot taken{" "}
+              <time dateTime={page.asOf}>{formatLocal(page.asOf)}</time>. New
+              activity appears after you return to newest.
+            </p>
           </div>
 
-          <form method="GET" className="flex flex-wrap items-end gap-2">
-            <input type="hidden" name="tab" value="sales-log" />
-            <label className="text-xs font-semibold text-slate-700">
-              Team member
-              <select
-                name="memberId"
-                defaultValue={selectedMemberId ?? ""}
-                className="mt-1 block w-56 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm"
-              >
-                <option value="">All</option>
-                {members
-                  .filter((member) => member.active)
-                  .map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <button
-              type="submit"
-              className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary-700"
+          <div className="flex flex-wrap items-end gap-2">
+            <form
+              method="GET"
+              action={teamSurfaceHref("sales-log")}
+              className="flex flex-wrap items-end gap-2"
             >
-              Apply
-            </button>
-          </form>
+              <input
+                type="hidden"
+                name="salesActions"
+                value={activityPayload.actions.join(",")}
+              />
+              <input
+                type="hidden"
+                name="salesLimit"
+                value={String(page.limit)}
+              />
+              <label className="text-xs font-semibold text-slate-700">
+                Team member
+                <select
+                  name="memberId"
+                  defaultValue={selectedMemberId ?? ""}
+                  className="mt-1 block min-h-[44px] w-56 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm"
+                >
+                  <option value="">All</option>
+                  {members
+                    .filter((member) => member.active)
+                    .map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-slate-700">
+                Time window
+                <select
+                  name="salesRangeDays"
+                  defaultValue={String(activityPayload.rangeDays)}
+                  className="mt-1 block min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm"
+                >
+                  {[1, 7, 14, 30, 90].includes(
+                    activityPayload.rangeDays,
+                  ) ? null : (
+                    <option value={String(activityPayload.rangeDays)}>
+                      {activityPayload.rangeDays} days
+                    </option>
+                  )}
+                  <option value="1">24 hours</option>
+                  <option value="7">7 days</option>
+                  <option value="14">14 days</option>
+                  <option value="30">30 days</option>
+                  <option value="90">90 days</option>
+                </select>
+              </label>
+              <button
+                type="submit"
+                className="min-h-[44px] rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary-700"
+              >
+                Apply
+              </button>
+            </form>
+            {hasTeamPermission(principal, "audit.export") ? (
+              <a
+                href={exportHref}
+                download
+                className="inline-flex min-h-[44px] items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:border-primary-300 hover:text-primary-800"
+              >
+                Export redacted CSV
+              </a>
+            ) : null}
+          </div>
         </div>
       </header>
+
+      <details className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+        <summary className="cursor-pointer font-semibold text-slate-900">
+          What this activity view counts
+        </summary>
+        <p className="mt-2">
+          This {activityPayload.rangeDays}-day feed counts recorded sales calls,
+          inbound and outbound messages, agent draft/autosend events, and
+          reminder events. The summary cards count only the events on the
+          current page. Page totals are fixed to the snapshot taken when this
+          browsing sequence began, so new activity cannot shift or duplicate
+          older pages.
+        </p>
+      </details>
+
+      {membersError ? (
+        <div
+          className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+          role="status"
+        >
+          {membersError} Activity data is still available; the member filter may
+          be incomplete.
+        </div>
+      ) : null}
 
       {supervisor ? (
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/50 backdrop-blur">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <h3 className="text-lg font-semibold text-slate-900">Supervisor Overview</h3>
+              <h3 className="text-lg font-semibold text-slate-900">
+                Supervisor Overview
+              </h3>
               <p className="mt-1 text-sm text-slate-600">
-                Fast read on what the agent handled automatically, what it held back, and where follow-up performance is helping or hurting.
+                Fast read on what the agent handled automatically, what it held
+                back, and where follow-up performance is helping or hurting.
               </p>
             </div>
-            <div className="text-xs text-slate-500">Last {selectedLabel ? "filtered" : "team-wide"} {qs.get("rangeDays")} days</div>
+            <div className="text-xs text-slate-500">
+              Last {selectedLabel ? "filtered" : "team-wide"}{" "}
+              {qs.get("rangeDays")} days
+            </div>
           </div>
 
           <div className="mt-5 grid gap-3 lg:grid-cols-5">
             <div className="rounded-2xl border border-amber-200 bg-amber-50/80 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Held Back</p>
-              <p className="mt-2 text-2xl font-semibold text-amber-950">{supervisor.activeHumanReviewCount}</p>
-              <p className="mt-2 text-sm text-amber-900">Need human review right now</p>
-              <p className="mt-1 text-xs text-amber-800">Reviewed in last 24h: {supervisor.recentlyReviewedCount}</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
+                Held Back
+              </p>
+              <p className="mt-2 text-2xl font-semibold text-amber-950">
+                {supervisor.activeHumanReviewCount}
+              </p>
+              <p className="mt-2 text-sm text-amber-900">
+                Need human review right now
+              </p>
+              <p className="mt-1 text-xs text-amber-800">
+                Reviewed in last 24h: {supervisor.recentlyReviewedCount}
+              </p>
               {supervisor.topHoldReasons.length ? (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {supervisor.topHoldReasons.map((item) => (
-                    <span key={item.label} className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-900">
+                    <span
+                      key={item.label}
+                      className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-900"
+                    >
                       {item.label}: {item.count}
                     </span>
                   ))}
@@ -376,27 +727,49 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
             </div>
 
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Agent Handled</p>
-              <p className="mt-2 text-2xl font-semibold text-emerald-950">{supervisor.agentAutosendCount}</p>
-              <p className="mt-2 text-sm text-emerald-900">Autosends queued this period</p>
-              <p className="mt-1 text-xs text-emerald-800">Drafts prepared/reused: {supervisor.agentDraftCount}</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                Agent Handled
+              </p>
+              <p className="mt-2 text-2xl font-semibold text-emerald-950">
+                {supervisor.agentAutosendCount}
+              </p>
+              <p className="mt-2 text-sm text-emerald-900">
+                Autosends queued this period
+              </p>
+              <p className="mt-1 text-xs text-emerald-800">
+                Drafts prepared/reused: {supervisor.agentDraftCount}
+              </p>
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Quote Close</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(supervisor.quoteClose.bookRate)}</p>
-              <p className="mt-2 text-sm text-slate-700">Booked after quote follow-up</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Quote Close
+              </p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">
+                {formatPercent(supervisor.quoteClose.bookRate)}
+              </p>
+              <p className="mt-2 text-sm text-slate-700">
+                Booked after quote follow-up
+              </p>
               <p className="mt-1 text-xs text-slate-500">
                 Lost: {formatPercent(supervisor.quoteClose.lostRate)}
-                {supervisor.quoteClose.preferredChannel ? ` | Lean: ${supervisor.quoteClose.preferredChannel.toUpperCase()}` : ""}
+                {supervisor.quoteClose.preferredChannel
+                  ? ` | Lean: ${supervisor.quoteClose.preferredChannel.toUpperCase()}`
+                  : ""}
               </p>
               {supervisor.quoteClose.keepSofter ? (
-                <p className="mt-2 text-xs font-semibold text-amber-700">Recent close pushes are running hot. Softer nudges are safer right now.</p>
+                <p className="mt-2 text-xs font-semibold text-amber-700">
+                  Recent close pushes are running hot. Softer nudges are safer
+                  right now.
+                </p>
               ) : null}
               {supervisor.topLostReasons.length ? (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {supervisor.topLostReasons.map((item) => (
-                    <span key={item.label} className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-semibold text-rose-700">
+                    <span
+                      key={item.label}
+                      className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-semibold text-rose-700"
+                    >
                       Lost: {item.label} ({item.count})
                     </span>
                   ))}
@@ -405,30 +778,59 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Objection Saves</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(supervisor.objectionSave.reopenRate)}</p>
-              <p className="mt-2 text-sm text-slate-700">Reopened after objection follow-up</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Objection Saves
+              </p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">
+                {formatPercent(supervisor.objectionSave.reopenRate)}
+              </p>
+              <p className="mt-2 text-sm text-slate-700">
+                Reopened after objection follow-up
+              </p>
               <p className="mt-1 text-xs text-slate-500">
                 Booked later: {formatPercent(supervisor.objectionSave.bookRate)}
-                {supervisor.objectionSave.preferredChannel ? ` | Lean: ${supervisor.objectionSave.preferredChannel.toUpperCase()}` : ""}
+                {supervisor.objectionSave.preferredChannel
+                  ? ` | Lean: ${supervisor.objectionSave.preferredChannel.toUpperCase()}`
+                  : ""}
               </p>
               {supervisor.objectionSave.keepSofter ? (
-                <p className="mt-2 text-xs font-semibold text-amber-700">Objection saves are softening. Lower-pressure follow-ups are winning more.</p>
+                <p className="mt-2 text-xs font-semibold text-amber-700">
+                  Objection saves are softening. Lower-pressure follow-ups are
+                  winning more.
+                </p>
               ) : null}
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Booked Revenue Protection</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(supervisor.appointmentPreservation.completedRate)}</p>
-              <p className="mt-2 text-sm text-slate-700">Completed after confirmation touches</p>
-              <p className="mt-1 text-xs text-slate-500">
-                Cancel/no-show: {formatPercent(supervisor.appointmentPreservation.canceledRate + supervisor.appointmentPreservation.noShowRate)}
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Booked Revenue Protection
+              </p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">
+                {formatPercent(
+                  supervisor.appointmentPreservation.completedRate,
+                )}
+              </p>
+              <p className="mt-2 text-sm text-slate-700">
+                Completed after confirmation touches
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                Strongest touch: {formatTouchKindLabel(supervisor.appointmentPreservation.strongestTouchKind) ?? "Still learning"}
+                Cancel/no-show:{" "}
+                {formatPercent(
+                  supervisor.appointmentPreservation.canceledRate +
+                    supervisor.appointmentPreservation.noShowRate,
+                )}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Strongest touch:{" "}
+                {formatTouchKindLabel(
+                  supervisor.appointmentPreservation.strongestTouchKind,
+                ) ?? "Still learning"}
               </p>
               {supervisor.appointmentPreservation.needsHumanBackup ? (
-                <p className="mt-2 text-xs font-semibold text-amber-700">Booked jobs are slipping. Human backup is recommended on shaky appointments.</p>
+                <p className="mt-2 text-xs font-semibold text-amber-700">
+                  Booked jobs are slipping. Human backup is recommended on shaky
+                  appointments.
+                </p>
               ) : null}
             </div>
           </div>
@@ -436,50 +838,92 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
           <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-800">Close-loop handling</div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-800">
+                  Close-loop handling
+                </div>
                 <div className="mt-1 text-sm text-sky-950">
-                  Pre-appointment, booked-job support, and post-job follow-up volume on the agent stack.
+                  Pre-appointment, booked-job support, and post-job follow-up
+                  volume on the agent stack.
                 </div>
               </div>
               <div className="text-xs text-sky-800">
-                Total handled: {formatCloseLoopCount(supervisor.closeLoopActivity.total)}
+                Total handled:{" "}
+                {formatCloseLoopCount(supervisor.closeLoopActivity.total)}
               </div>
             </div>
             <div className="mt-3 grid gap-3 md:grid-cols-4">
               <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Pre-appointment</div>
-                <div className="mt-2 text-2xl font-semibold text-sky-950">{formatCloseLoopCount(supervisor.closeLoopActivity.preAppointmentCount)}</div>
-                <div className="mt-1 text-xs text-sky-800">Check-ins queued or drafted</div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
+                  Pre-appointment
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-sky-950">
+                  {formatCloseLoopCount(
+                    supervisor.closeLoopActivity.preAppointmentCount,
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-sky-800">
+                  Check-ins queued or drafted
+                </div>
               </div>
               <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Booked-job support</div>
-                <div className="mt-2 text-2xl font-semibold text-sky-950">{formatCloseLoopCount(supervisor.closeLoopActivity.bookedSupportCount)}</div>
-                <div className="mt-1 text-xs text-sky-800">Timing, reassurance, or reschedule-save replies</div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
+                  Booked-job support
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-sky-950">
+                  {formatCloseLoopCount(
+                    supervisor.closeLoopActivity.bookedSupportCount,
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-sky-800">
+                  Timing, reassurance, or reschedule-save replies
+                </div>
               </div>
               <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Post-job</div>
-                <div className="mt-2 text-2xl font-semibold text-sky-950">{formatCloseLoopCount(supervisor.closeLoopActivity.postJobCount)}</div>
-                <div className="mt-1 text-xs text-sky-800">Satisfaction follow-ups after completion</div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
+                  Post-job
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-sky-950">
+                  {formatCloseLoopCount(
+                    supervisor.closeLoopActivity.postJobCount,
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-sky-800">
+                  Satisfaction follow-ups after completion
+                </div>
               </div>
               <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Execution mix</div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
+                  Execution mix
+                </div>
                 <div className="mt-2 text-sm font-semibold text-sky-950">
-                  Drafts: {formatCloseLoopCount(supervisor.closeLoopActivity.draftCount)}
+                  Drafts:{" "}
+                  {formatCloseLoopCount(
+                    supervisor.closeLoopActivity.draftCount,
+                  )}
                 </div>
                 <div className="mt-1 text-sm font-semibold text-sky-950">
-                  Autosends: {formatCloseLoopCount(supervisor.closeLoopActivity.autosendCount)}
+                  Autosends:{" "}
+                  {formatCloseLoopCount(
+                    supervisor.closeLoopActivity.autosendCount,
+                  )}
                 </div>
               </div>
             </div>
             <div className="mt-3 rounded-2xl border border-sky-200 bg-white/80 p-3 text-xs text-sky-900">
-              <div className="font-semibold uppercase tracking-[0.18em] text-sky-700">Close-loop outcomes</div>
+              <div className="font-semibold uppercase tracking-[0.18em] text-sky-700">
+                Close-loop outcomes
+              </div>
               <div className="mt-2">
-                Reply {formatPercent(supervisor.closeLoopOutcomes.replyRate)} | Preserved{" "}
-                {formatPercent(supervisor.closeLoopOutcomes.preservedRate)} | Completed{" "}
+                Reply {formatPercent(supervisor.closeLoopOutcomes.replyRate)} |
+                Preserved{" "}
+                {formatPercent(supervisor.closeLoopOutcomes.preservedRate)} |
+                Completed{" "}
                 {formatPercent(supervisor.closeLoopOutcomes.completedRate)}
               </div>
               <div className="mt-1">
-                Reschedule saves {formatPercent(supervisor.closeLoopOutcomes.rescheduleRate)} | Repeat booked{" "}
+                Reschedule saves{" "}
+                {formatPercent(supervisor.closeLoopOutcomes.rescheduleRate)} |
+                Repeat booked{" "}
                 {formatPercent(supervisor.closeLoopOutcomes.repeatBookRate)}
               </div>
               <div className="mt-2 text-[11px] text-sky-800">
@@ -500,42 +944,62 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
                   : "Post-job check-ins are still early and should stay low pressure."}
               </div>
             </div>
-            {supervisor.closeLoopSegmentSignals.helping.length || supervisor.closeLoopSegmentSignals.attention.length ? (
+            {supervisor.closeLoopSegmentSignals.helping.length ||
+            supervisor.closeLoopSegmentSignals.attention.length ? (
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 {supervisor.closeLoopSegmentSignals.helping.length ? (
                   <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3 text-xs">
-                    <div className="font-semibold uppercase tracking-[0.18em] text-emerald-700">Helping By Segment</div>
+                    <div className="font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                      Helping By Segment
+                    </div>
                     <div className="mt-3 space-y-2">
-                      {supervisor.closeLoopSegmentSignals.helping.map((item) => (
-                        <div key={`${item.label}:${item.detail}`} className="rounded-2xl border border-emerald-200 bg-white/80 p-3">
-                          <div className="text-sm font-semibold text-emerald-950">{item.label}</div>
-                          <div className="mt-1 text-xs text-emerald-900">{item.detail}</div>
-                        </div>
-                      ))}
+                      {supervisor.closeLoopSegmentSignals.helping.map(
+                        (item) => (
+                          <div
+                            key={`${item.label}:${item.detail}`}
+                            className="rounded-2xl border border-emerald-200 bg-white/80 p-3"
+                          >
+                            <div className="text-sm font-semibold text-emerald-950">
+                              {item.label}
+                            </div>
+                            <div className="mt-1 text-xs text-emerald-900">
+                              {item.detail}
+                            </div>
+                          </div>
+                        ),
+                      )}
                     </div>
                   </div>
                 ) : null}
                 {supervisor.closeLoopSegmentSignals.attention.length ? (
                   <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-3 text-xs">
-                    <div className="font-semibold uppercase tracking-[0.18em] text-amber-800">Slipping By Segment</div>
+                    <div className="font-semibold uppercase tracking-[0.18em] text-amber-800">
+                      Slipping By Segment
+                    </div>
                     <div className="mt-3 space-y-2">
-                      {supervisor.closeLoopSegmentSignals.attention.map((item) => (
-                        <div
-                          key={`${item.label}:${item.detail}`}
-                          className={`rounded-2xl border p-3 ${
-                            item.tone === "bad"
-                              ? "border-rose-200 bg-rose-50/80"
-                              : "border-amber-200 bg-white/80"
-                          }`}
-                        >
-                          <div className={`text-sm font-semibold ${item.tone === "bad" ? "text-rose-900" : "text-amber-950"}`}>
-                            {item.label}
+                      {supervisor.closeLoopSegmentSignals.attention.map(
+                        (item) => (
+                          <div
+                            key={`${item.label}:${item.detail}`}
+                            className={`rounded-2xl border p-3 ${
+                              item.tone === "bad"
+                                ? "border-rose-200 bg-rose-50/80"
+                                : "border-amber-200 bg-white/80"
+                            }`}
+                          >
+                            <div
+                              className={`text-sm font-semibold ${item.tone === "bad" ? "text-rose-900" : "text-amber-950"}`}
+                            >
+                              {item.label}
+                            </div>
+                            <div
+                              className={`mt-1 text-xs ${item.tone === "bad" ? "text-rose-800" : "text-amber-900"}`}
+                            >
+                              {item.detail}
+                            </div>
                           </div>
-                          <div className={`mt-1 text-xs ${item.tone === "bad" ? "text-rose-800" : "text-amber-900"}`}>
-                            {item.detail}
-                          </div>
-                        </div>
-                      ))}
+                        ),
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -545,7 +1009,9 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
 
           {supervisor.attentionItems.length ? (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-800">Needs Attention</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-800">
+                Needs Attention
+              </div>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
                 {supervisor.attentionItems.map((item) => (
                   <div
@@ -556,10 +1022,14 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
                         : "border-amber-200 bg-white/80"
                     }`}
                   >
-                    <div className={`text-sm font-semibold ${item.tone === "bad" ? "text-rose-900" : "text-amber-950"}`}>
+                    <div
+                      className={`text-sm font-semibold ${item.tone === "bad" ? "text-rose-900" : "text-amber-950"}`}
+                    >
                       {item.label}
                     </div>
-                    <div className={`mt-1 text-xs ${item.tone === "bad" ? "text-rose-800" : "text-amber-900"}`}>
+                    <div
+                      className={`mt-1 text-xs ${item.tone === "bad" ? "text-rose-800" : "text-amber-900"}`}
+                    >
                       {item.detail}
                     </div>
                   </div>
@@ -570,12 +1040,21 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
 
           {supervisor.topWins.length ? (
             <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Agent Wins Right Now</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                Agent Wins Right Now
+              </div>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
                 {supervisor.topWins.map((item) => (
-                  <div key={`${item.label}:${item.detail}`} className="rounded-2xl border border-emerald-200 bg-white/80 p-3">
-                    <div className="text-sm font-semibold text-emerald-950">{item.label}</div>
-                    <div className="mt-1 text-xs text-emerald-900">{item.detail}</div>
+                  <div
+                    key={`${item.label}:${item.detail}`}
+                    className="rounded-2xl border border-emerald-200 bg-white/80 p-3"
+                  >
+                    <div className="text-sm font-semibold text-emerald-950">
+                      {item.label}
+                    </div>
+                    <div className="mt-1 text-xs text-emerald-900">
+                      {item.detail}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -584,32 +1063,107 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
         </div>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-6">
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Outbound calls</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{summary.outboundCalls}</p>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Outbound messages</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{summary.outboundMessages}</p>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Inbound messages</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{summary.inboundMessages}</p>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Agent drafts</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{summary.agentDrafts}</p>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Agent autosends</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{summary.agentAutosends}</p>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Reminders</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{summary.reminders}</p>
+      <div>
+        <p className="mb-2 text-xs text-[color:var(--team-text-muted)]">
+          Activity counts below summarize the visible page. Supervisor metrics
+          cover the selected seven-day window.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-6">
+          <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+              Outbound calls
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">
+              {summary.outboundCalls}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+              Outbound messages
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">
+              {summary.outboundMessages}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+              Inbound messages
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">
+              {summary.inboundMessages}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+              Agent drafts
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">
+              {summary.agentDrafts}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+              Agent autosends
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">
+              {summary.agentAutosends}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+              Reminders
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">
+              {summary.reminders}
+            </p>
+          </div>
         </div>
       </div>
+
+      <nav
+        aria-label="Sales activity pages"
+        className="flex flex-col gap-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+      >
+        <span className="text-[color:var(--team-text-muted)]">
+          {rows.length > 0
+            ? `Showing ${rows.length} of ${page.totalAtSnapshot} matching events in this fixed snapshot${page.position === "history" ? " (historical page)" : ""}`
+            : `No events in this ${activityPayload.rangeDays}-day window`}
+        </span>
+        <div className="flex flex-wrap gap-2">
+          {page.newerCursor ? (
+            <a
+              href={pageHref(page.newerCursor)}
+              className="inline-flex min-h-[44px] items-center rounded-xl border border-[color:var(--team-border)] px-4 py-2 font-semibold text-[color:var(--team-text)]"
+            >
+              Newer
+            </a>
+          ) : (
+            <span className="inline-flex min-h-[44px] items-center px-4 py-2 text-[color:var(--team-text-soft)]">
+              No newer page
+            </span>
+          )}
+          {page.olderCursor ? (
+            <a
+              href={pageHref(page.olderCursor)}
+              className="inline-flex min-h-[44px] items-center rounded-xl border border-[color:var(--team-border)] px-4 py-2 font-semibold text-[color:var(--team-text)]"
+            >
+              Older
+            </a>
+          ) : (
+            <span className="inline-flex min-h-[44px] items-center px-4 py-2 text-[color:var(--team-text-soft)]">
+              No older page
+            </span>
+          )}
+          {page.position === "history" ? (
+            <a
+              href={newestHref}
+              className="inline-flex min-h-[44px] items-center rounded-xl bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700"
+            >
+              Return newest
+            </a>
+          ) : null}
+        </div>
+      </nav>
 
       {rows.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-white/70 p-5 text-sm text-slate-500 shadow-sm">
@@ -630,41 +1184,61 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
             );
 
             return (
-              <div key={dayKey} className="rounded-3xl border border-slate-200 bg-white/90 shadow-xl shadow-slate-200/50 backdrop-blur">
+              <div
+                key={dayKey}
+                className="rounded-3xl border border-slate-200 bg-white/90 shadow-xl shadow-slate-200/50 backdrop-blur"
+              >
                 <div className="flex flex-col gap-2 border-b border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="text-sm font-semibold text-slate-900">{dayKey}</div>
+                  <div className="text-sm font-semibold text-slate-900">
+                    {dayKey}
+                  </div>
                   <div className="flex flex-wrap gap-2 text-xs text-slate-600">
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold">Calls: {daySummary.calls}</span>
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold">Outbound: {daySummary.outbound}</span>
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold">Inbound: {daySummary.inbound}</span>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold">
+                      Calls: {daySummary.calls}
+                    </span>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold">
+                      Outbound: {daySummary.outbound}
+                    </span>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold">
+                      Inbound: {daySummary.inbound}
+                    </span>
                   </div>
                 </div>
 
                 <div className="space-y-3 p-4 sm:hidden">
                   {dayRows.map((row) => (
-                    <article key={row.id} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm shadow-sm">
+                    <article
+                      key={row.id}
+                      className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm shadow-sm"
+                    >
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <div className="font-medium text-slate-900">{row.whenLocal}</div>
-                          <div className="text-xs text-slate-500">{row.ago}</div>
+                          <div className="font-medium text-slate-900">
+                            {row.whenLocal}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {row.ago}
+                          </div>
                         </div>
                         <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700">
                           {row.type}
                         </span>
                       </div>
                       <div className="mt-3 text-xs text-slate-600">
-                        Channel: <span className="font-medium text-slate-700">{row.channel ?? "-"}</span>
+                        Channel:{" "}
+                        <span className="font-medium text-slate-700">
+                          {row.channel ?? "-"}
+                        </span>
                       </div>
-                      <div className="mt-3 text-sm font-medium text-slate-900">{row.summary}</div>
-                      <div className="mt-1 text-xs text-slate-500">Actor: {row.actor}</div>
-                      {row.contactId ? (
-                        <a
-                          className="mt-3 inline-flex rounded-full border border-primary-200 bg-white px-3 py-2 text-xs font-semibold text-primary-700"
-                          href={`/team?tab=contacts&contactId=${encodeURIComponent(row.contactId)}`}
-                        >
-                          Open contact
-                        </a>
-                      ) : null}
+                      <div className="mt-3 text-sm font-medium text-slate-900">
+                        {row.summary}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        Actor: {row.actor}
+                      </div>
+                      <div className="mt-3">
+                        <ActivityContextLinks row={row} compact />
+                      </div>
                     </article>
                   ))}
                 </div>
@@ -676,7 +1250,7 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
                         <th className="whitespace-nowrap px-4 py-3">When</th>
                         <th className="whitespace-nowrap px-4 py-3">Type</th>
                         <th className="whitespace-nowrap px-4 py-3">Channel</th>
-                        <th className="whitespace-nowrap px-4 py-3">Contact</th>
+                        <th className="whitespace-nowrap px-4 py-3">Related</th>
                         <th className="px-4 py-3">Details</th>
                       </tr>
                     </thead>
@@ -684,30 +1258,37 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
                       {dayRows.map((row) => (
                         <tr key={row.id} className="text-slate-700">
                           <td className="whitespace-nowrap px-4 py-3">
-                            <div className="font-medium text-slate-900">{row.whenLocal}</div>
-                            <div className="text-xs text-slate-500">{row.ago}</div>
+                            <div className="font-medium text-slate-900">
+                              {row.whenLocal}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              {row.ago}
+                            </div>
                           </td>
                           <td className="whitespace-nowrap px-4 py-3">
                             <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
                               {row.type}
                             </span>
                           </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-600">{row.channel ?? "-"}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-600">
+                            {row.channel ?? "-"}
+                          </td>
                           <td className="whitespace-nowrap px-4 py-3 text-xs">
-                            {row.contactId ? (
-                              <a
-                                className="font-semibold text-primary-700 hover:text-primary-800"
-                                href={`/team?tab=contacts&contactId=${encodeURIComponent(row.contactId)}`}
-                              >
-                                Open
-                              </a>
+                            {row.contactId ||
+                            row.threadId ||
+                            row.callRecordId ? (
+                              <ActivityContextLinks row={row} />
                             ) : (
                               <span className="text-slate-400">-</span>
                             )}
                           </td>
                           <td className="px-4 py-3">
-                            <div className="font-medium text-slate-900">{row.summary}</div>
-                            <div className="mt-1 text-xs text-slate-500">Actor: {row.actor}</div>
+                            <div className="font-medium text-slate-900">
+                              {row.summary}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              Actor: {row.actor}
+                            </div>
                           </td>
                         </tr>
                       ))}

@@ -1,10 +1,6 @@
 "use client";
 
 import React from "react";
-import {
-  formatLockedCrewSplitPercent,
-  resolveLockedCrewPayout,
-} from "../lib/locked-crew-payout";
 
 type TeamMember = {
   id: string;
@@ -14,6 +10,7 @@ type TeamMember = {
 type Props = {
   teamMembers: TeamMember[];
   showSplitPercentages?: boolean;
+  stacked?: boolean;
 };
 
 function toggleSelection(current: string[], memberId: string): string[] {
@@ -29,6 +26,7 @@ function toggleSelection(current: string[], memberId: string): string[] {
 export function CrewPayoutSelector({
   teamMembers,
   showSplitPercentages = true,
+  stacked = false,
 }: Props): React.ReactElement {
   const [selectedMemberIds, setSelectedMemberIds] = React.useState<string[]>(
     [],
@@ -37,29 +35,20 @@ export function CrewPayoutSelector({
   const selectedMembers = teamMembers.filter((member) =>
     selectedSet.has(member.id),
   );
-  const resolvedCrewPayout = resolveLockedCrewPayout(selectedMemberIds);
-  const resolvedTotalSplitBps = resolvedCrewPayout.ok
-    ? resolvedCrewPayout.splits.reduce(
-        (sum, entry) => sum + (entry.splitBps ?? 0),
-        0,
-      )
-    : 0;
-  const splitByMemberId = new Map(
-    resolvedCrewPayout.ok
-      ? resolvedCrewPayout.splits.map((entry) => [
-          entry.memberId,
-          entry.splitBps,
-        ])
-      : [],
-  );
 
   return (
-    <div className="space-y-3 sm:col-span-2">
+    <div className="min-w-0 space-y-3">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
         Crew payout
       </div>
 
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div
+        className={
+          stacked
+            ? "grid grid-cols-1 gap-2"
+            : "grid grid-cols-1 gap-2 sm:grid-cols-2"
+        }
+      >
         {teamMembers.map((member) => {
           const checked = selectedSet.has(member.id);
           return (
@@ -94,39 +83,32 @@ export function CrewPayoutSelector({
           Select who worked this job. Mark complete is blocked until at least
           one crew member is selected.
         </div>
-      ) : resolvedCrewPayout.ok ? (
+      ) : (
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
-            Locked split
+            Crew selected
           </div>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <div
+            className={
+              stacked
+                ? "mt-2 grid grid-cols-1 gap-2"
+                : "mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2"
+            }
+          >
             {selectedMembers.map((member) => (
               <div
                 key={member.id}
                 className="rounded-2xl border border-emerald-200 bg-white px-3 py-2"
               >
                 <div className="font-medium">{member.name}</div>
-                {showSplitPercentages ? (
-                  <div className="text-xs text-emerald-700">
-                    {formatLockedCrewSplitPercent(
-                      splitByMemberId.get(member.id) ?? 0,
-                      resolvedTotalSplitBps,
-                    )}{" "}
-                    of labor pool
-                  </div>
-                ) : null}
               </div>
             ))}
           </div>
           <div className="mt-2 text-[11px] text-emerald-700">
             {showSplitPercentages
-              ? "Labor payout uses the fixed 20% pool and this saved split."
-              : "Labor payout uses the fixed 20% pool. Split percentages stay in Payroll only."}
+              ? "The server applies the active Payroll split rule when completion is saved. Review the resulting shares before locking the payout."
+              : "Split percentages stay in Payroll and are applied by the server when completion is saved."}
           </div>
-        </div>
-      ) : (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3 text-[11px] text-amber-800">
-          Select at least one crew member before marking this job complete.
         </div>
       )}
     </div>

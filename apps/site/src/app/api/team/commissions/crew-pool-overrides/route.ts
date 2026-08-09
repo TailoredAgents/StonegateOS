@@ -1,9 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi } from "@/app/team/lib/api";
+import { requireTeamPrincipal } from "@/app/api/team/auth";
+import { callAdminApiAs } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
-
-const ADMIN_COOKIE = "myst-admin-session";
 
 export const dynamic = "force-dynamic";
 
@@ -16,30 +15,22 @@ function parsePercentToBps(value: FormDataEntryValue | null): number | null {
   return Math.round(parsed * 100);
 }
 
+function readFormString(formData: FormData, key: string): string {
+  const value = formData.get(key);
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
-  const jar = request.cookies;
-  const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
+  const auth = await requireTeamPrincipal(request, {
+    permissions: "commissions.manage",
+    redirectTo: new URL("/team?tab=commissions", request.url),
+  });
+  if (!auth.ok) return auth.response;
+
   const redirectTo = getSafeRedirectUrl(request, "/team?tab=commissions");
-
-  if (!hasOwner) {
-    const response = NextResponse.redirect(redirectTo, 303);
-    response.cookies.set({
-      name: "myst-flash-error",
-      value: "Owner login required.",
-      path: "/",
-    });
-    return response;
-  }
-
   const formData = await request.formData();
-  const action =
-    typeof formData.get("action") === "string"
-      ? formData.get("action")!.toString().trim()
-      : "";
-  const localDate =
-    typeof formData.get("localDate") === "string"
-      ? formData.get("localDate")!.toString().trim()
-      : "";
+  const action = readFormString(formData, "action");
+  const localDate = readFormString(formData, "localDate");
 
   if (!localDate) {
     const response = NextResponse.redirect(redirectTo, 303);
@@ -52,7 +43,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   if (action === "delete") {
-    const apiResponse = await callAdminApi(
+    const apiResponse = await callAdminApiAs(
+      auth.principal,
       "/api/admin/commissions/crew-pool-overrides",
       {
         method: "DELETE",
@@ -104,12 +96,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     return response;
   }
 
-  const note =
-    typeof formData.get("note") === "string"
-      ? formData.get("note")!.toString().trim()
-      : "";
+  const note = readFormString(formData, "note");
 
-  const apiResponse = await callAdminApi(
+  const apiResponse = await callAdminApiAs(
+    auth.principal,
     "/api/admin/commissions/crew-pool-overrides",
     {
       method: "POST",

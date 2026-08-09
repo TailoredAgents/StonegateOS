@@ -29,8 +29,13 @@ import {
 } from "@/db";
 import type { AuditActor } from "@/lib/audit";
 import { recordAuditEvent } from "@/lib/audit";
+import { requireActiveContactForDirectOutbound } from "@/lib/contact-outbound-safety";
 import { sendSmsMessage } from "@/lib/messaging";
 import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
+import {
+  TeamMutationFailure,
+  type TeamMutationTransaction,
+} from "@/lib/team-mutation";
 
 export const CREW_ETA_STATUSES = [
   "heading_there",
@@ -61,6 +66,7 @@ export type EtaAppointmentSummary = {
 };
 
 const TEAM_TIME_ZONE = "America/New_York";
+type EtaDbExecutor = DatabaseClient | TeamMutationTransaction;
 
 type AppointmentEtaContext = {
   appointmentId: string;
@@ -403,7 +409,7 @@ async function computeDraft(
 }
 
 async function ensureEtaThread(
-  db: DatabaseClient,
+  db: EtaDbExecutor,
   contactId: string,
 ): Promise<{ threadId: string; channel: string } | null> {
   const [existing] = await db
@@ -790,159 +796,204 @@ export async function listEtaDrafts(status = "draft", limit = 25) {
 export async function sendEtaDraft(input: {
   draftId: string;
   actor?: AuditActor;
-}): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> {
+}): Promise<
+  | { ok: true; messageId: string }
+  | {
+      ok: false;
+      error: string;
+      code?: "conflict";
+      message?: string;
+    }
+> {
   const db = getDb();
-  const [draft] = await db
-    .select({
-      id: etaMessageDrafts.id,
-      appointmentId: etaMessageDrafts.appointmentId,
-      contactId: etaMessageDrafts.contactId,
-      threadId: etaMessageDrafts.threadId,
-      channel: etaMessageDrafts.channel,
-      body: etaMessageDrafts.body,
-      status: etaMessageDrafts.status,
-    })
-    .from(etaMessageDrafts)
-    .where(eq(etaMessageDrafts.id, input.draftId))
-    .limit(1);
-  if (!draft?.id) return { ok: false, error: "draft_not_found" };
-  if (draft.status !== "draft") return { ok: false, error: "draft_not_open" };
-  if (!draft.contactId) return { ok: false, error: "contact_missing" };
+  try {
+    const sent = await db.transaction(async (tx) => {
+      const [draft] = await tx
+        .select({
+          id: etaMessageDrafts.id,
+          appointmentId: etaMessageDrafts.appointmentId,
+          contactId: etaMessageDrafts.contactId,
+          threadId: etaMessageDrafts.threadId,
+          channel: etaMessageDrafts.channel,
+          body: etaMessageDrafts.body,
+          status: etaMessageDrafts.status,
+        })
+        .from(etaMessageDrafts)
+        .where(eq(etaMessageDrafts.id, input.draftId))
+        .limit(1);
+      if (!draft?.id) throw new Error("draft_not_found");
+      if (draft.status !== "draft") throw new Error("draft_not_open");
+      if (!draft.contactId) throw new Error("contact_missing");
 
-  const ensuredThread = draft.threadId
-    ? { threadId: draft.threadId, channel: draft.channel }
-    : await ensureEtaThread(db, draft.contactId);
-  if (!ensuredThread?.threadId) return { ok: false, error: "thread_missing" };
-  const threadId = ensuredThread.threadId;
+      // Hold the same contact lifecycle lock through the message and outbox
+      // inserts so this route can never acknowledge a send after deletion.
+      await requireActiveContactForDirectOutbound(tx, draft.contactId);
+      const ensuredThread = draft.threadId
+        ? { threadId: draft.threadId, channel: draft.channel }
+        : await ensureEtaThread(tx, draft.contactId);
+      if (!ensuredThread?.threadId) throw new Error("thread_missing");
+      const threadId = ensuredThread.threadId;
 
-  const now = new Date();
-  const [thread] = await db
-    .select({
-      channel: conversationThreads.channel,
-      contactId: conversationThreads.contactId,
-      doNotContact: contacts.doNotContact,
-      phone: contacts.phone,
-      phoneE164: contacts.phoneE164,
-      email: contacts.email,
-    })
-    .from(conversationThreads)
-    .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
-    .where(eq(conversationThreads.id, threadId))
-    .limit(1);
-  if (!thread) return { ok: false, error: "thread_not_found" };
-  if (thread.doNotContact) return { ok: false, error: "dnc_confirmation_required" };
+      const now = new Date();
+      const [thread] = await tx
+        .select({
+          channel: conversationThreads.channel,
+          contactId: conversationThreads.contactId,
+          doNotContact: contacts.doNotContact,
+          phone: contacts.phone,
+          phoneE164: contacts.phoneE164,
+          email: contacts.email,
+        })
+        .from(conversationThreads)
+        .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+        .where(eq(conversationThreads.id, threadId))
+        .limit(1);
+      if (!thread) throw new Error("thread_not_found");
+      if (thread.contactId && thread.contactId !== draft.contactId) {
+        await requireActiveContactForDirectOutbound(tx, thread.contactId);
+      }
+      if (thread.doNotContact) {
+        throw new Error("dnc_confirmation_required");
+      }
 
-  let toAddress =
-    thread.channel === "email"
-      ? thread.email
-      : thread.channel === "dm"
-        ? null
-        : thread.phoneE164 ?? thread.phone;
-  let metadata: Record<string, unknown> = {
-    etaDraftId: draft.id,
-    etaAppointmentId: draft.appointmentId,
-    source: "eta_agent",
-  };
-  if (thread.channel === "dm") {
-    const [lastInboundDm] = await db
-      .select({
-        fromAddress: conversationMessages.fromAddress,
-        metadata: conversationMessages.metadata,
-      })
-      .from(conversationMessages)
-      .where(
-        and(
-          eq(conversationMessages.threadId, threadId),
-          eq(conversationMessages.direction, "inbound"),
-          eq(conversationMessages.channel, "dm"),
-        ),
-      )
-      .orderBy(desc(conversationMessages.createdAt))
-      .limit(1);
-    toAddress = lastInboundDm?.fromAddress ?? null;
-    metadata = {
-      ...(isRecord(lastInboundDm?.metadata) ? lastInboundDm.metadata : { source: "facebook" }),
-      ...metadata,
-    };
-  }
-  if (!toAddress) return { ok: false, error: "missing_recipient" };
+      let toAddress =
+        thread.channel === "email"
+          ? thread.email
+          : thread.channel === "dm"
+            ? null
+            : (thread.phoneE164 ?? thread.phone);
+      let metadata: Record<string, unknown> = {
+        etaDraftId: draft.id,
+        etaAppointmentId: draft.appointmentId,
+        source: "eta_agent",
+      };
+      if (thread.channel === "dm") {
+        const [lastInboundDm] = await tx
+          .select({
+            fromAddress: conversationMessages.fromAddress,
+            metadata: conversationMessages.metadata,
+          })
+          .from(conversationMessages)
+          .where(
+            and(
+              eq(conversationMessages.threadId, threadId),
+              eq(conversationMessages.direction, "inbound"),
+              eq(conversationMessages.channel, "dm"),
+            ),
+          )
+          .orderBy(desc(conversationMessages.createdAt))
+          .limit(1);
+        toAddress = lastInboundDm?.fromAddress ?? null;
+        metadata = {
+          ...(isRecord(lastInboundDm?.metadata)
+            ? lastInboundDm.metadata
+            : { source: "facebook" }),
+          ...metadata,
+        };
+      }
+      if (!toAddress) throw new Error("missing_recipient");
 
-  const [participant] = await db
-    .select({ id: conversationParticipants.id })
-    .from(conversationParticipants)
-    .where(
-      and(
-        eq(conversationParticipants.threadId, threadId),
-        eq(conversationParticipants.participantType, "team"),
-        input.actor?.id
-          ? eq(conversationParticipants.teamMemberId, input.actor.id)
-          : isNull(conversationParticipants.teamMemberId),
-      ),
-    )
-    .limit(1);
-  const participantId =
-    participant?.id ??
-    (
-      await db
-        .insert(conversationParticipants)
+      const [participant] = await tx
+        .select({ id: conversationParticipants.id })
+        .from(conversationParticipants)
+        .where(
+          and(
+            eq(conversationParticipants.threadId, threadId),
+            eq(conversationParticipants.participantType, "team"),
+            input.actor?.id
+              ? eq(conversationParticipants.teamMemberId, input.actor.id)
+              : isNull(conversationParticipants.teamMemberId),
+          ),
+        )
+        .limit(1);
+      const participantId =
+        participant?.id ??
+        (
+          await tx
+            .insert(conversationParticipants)
+            .values({
+              threadId,
+              participantType: "team",
+              teamMemberId: input.actor?.id ?? null,
+              displayName: input.actor?.label ?? "ETA Agent",
+              createdAt: now,
+            })
+            .returning({ id: conversationParticipants.id })
+        )[0]?.id ??
+        null;
+
+      const [message] = await tx
+        .insert(conversationMessages)
         .values({
           threadId,
-          participantType: "team",
-          teamMemberId: input.actor?.id ?? null,
-          displayName: input.actor?.label ?? "ETA Agent",
+          participantId,
+          direction: "outbound",
+          channel: thread.channel,
+          body: draft.body,
+          toAddress,
+          deliveryStatus: "queued",
+          metadata,
           createdAt: now,
         })
-        .returning({ id: conversationParticipants.id })
-    )[0]?.id ??
-    null;
+        .returning({ id: conversationMessages.id });
+      if (!message?.id) throw new Error("message_create_failed");
 
-  const [message] = await db
-    .insert(conversationMessages)
-    .values({
-      threadId,
-      participantId,
-      direction: "outbound",
-      channel: thread.channel,
-      body: draft.body,
-      toAddress,
-      deliveryStatus: "queued",
-      metadata,
-      createdAt: now,
-    })
-    .returning({ id: conversationMessages.id });
-  if (!message?.id) return { ok: false, error: "message_create_failed" };
+      await tx
+        .update(conversationThreads)
+        .set({
+          lastMessagePreview: draft.body.slice(0, 140),
+          lastMessageAt: now,
+          updatedAt: now,
+        })
+        .where(eq(conversationThreads.id, threadId));
+      await tx.insert(outboxEvents).values({
+        type: "message.send",
+        payload: { messageId: message.id },
+        createdAt: now,
+      });
+      await tx
+        .update(etaMessageDrafts)
+        .set({
+          status: "sent",
+          threadId,
+          sentBy: input.actor?.id ?? null,
+          sentAt: now,
+          updatedAt: now,
+        })
+        .where(eq(etaMessageDrafts.id, draft.id));
 
-  await db
-    .update(conversationThreads)
-    .set({
-      lastMessagePreview: draft.body.slice(0, 140),
-      lastMessageAt: now,
-      updatedAt: now,
-    })
-    .where(eq(conversationThreads.id, threadId));
-  await db.insert(outboxEvents).values({
-    type: "message.send",
-    payload: { messageId: message.id },
-    createdAt: now,
-  });
-  await db
-    .update(etaMessageDrafts)
-    .set({
-      status: "sent",
-      threadId,
-      sentBy: input.actor?.id ?? null,
-      sentAt: now,
-      updatedAt: now,
-    })
-    .where(eq(etaMessageDrafts.id, draft.id));
-  await recordAuditEvent({
-    actor: input.actor ?? { type: "system", label: "eta-agent" },
-    action: "eta.draft_sent",
-    entityType: "eta_message_draft",
-    entityId: draft.id,
-    meta: { appointmentId: draft.appointmentId, messageId: message.id },
-  });
-  return { ok: true, messageId: message.id };
+      return {
+        messageId: message.id,
+        draftId: draft.id,
+        appointmentId: draft.appointmentId,
+      };
+    });
+
+    await recordAuditEvent({
+      actor: input.actor ?? { type: "system", label: "eta-agent" },
+      action: "eta.draft_sent",
+      entityType: "eta_message_draft",
+      entityId: sent.draftId,
+      meta: {
+        appointmentId: sent.appointmentId,
+        messageId: sent.messageId,
+      },
+    });
+    return { ok: true, messageId: sent.messageId };
+  } catch (error) {
+    if (error instanceof TeamMutationFailure) {
+      return {
+        ok: false,
+        error: "contact_deleted",
+        code: "conflict",
+        message: error.message,
+      };
+    }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "message_create_failed",
+    };
+  }
 }
 
 export async function dismissEtaDraft(input: {

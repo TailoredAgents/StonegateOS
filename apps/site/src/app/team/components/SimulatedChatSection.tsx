@@ -54,13 +54,19 @@ type SavedRun = {
   id: string;
   title: string;
   channel: ChatChannel;
-  contactName?: string | null;
+  usedLiveContact: boolean;
   messages: ChatMessage[];
   lastResult: SimulationResult | null;
   savedAt: string;
+  expiresAt: string;
 };
 
 const STORAGE_KEY = "stonegate.simulated-chat.runs.v1";
+const MAX_SAVED_RUNS = 20;
+const MAX_SAVED_MESSAGES = 40;
+const MAX_SAVED_MESSAGE_CHARS = 2_000;
+const MAX_SAVED_BYTES = 200_000;
+const SAVED_RUN_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const FIRST_REPLY_DELAY_MIN_MS = 5_000;
 const FIRST_REPLY_DELAY_MAX_MS = 20_000;
 const FOLLOWUP_REPLY_DELAY_MIN_MS = 3_000;
@@ -80,7 +86,10 @@ function randomIntInclusive(min: number, max: number): number {
 function estimateTypingDelayMs(body: string): number {
   return Math.min(
     MAX_TYPING_MS,
-    Math.max(MIN_TYPING_MS, Math.round(body.trim().length * TYPING_MS_PER_CHAR)),
+    Math.max(
+      MIN_TYPING_MS,
+      Math.round(body.trim().length * TYPING_MS_PER_CHAR),
+    ),
   );
 }
 
@@ -90,13 +99,19 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-function getSimulatedReplyTiming(body: string, firstReply: boolean): {
+function getSimulatedReplyTiming(
+  body: string,
+  firstReply: boolean,
+): {
   thinkDelayMs: number;
   typingDelayMs: number;
 } {
   const thinkDelayMs = firstReply
     ? randomIntInclusive(FIRST_REPLY_DELAY_MIN_MS, FIRST_REPLY_DELAY_MAX_MS)
-    : randomIntInclusive(FOLLOWUP_REPLY_DELAY_MIN_MS, FOLLOWUP_REPLY_DELAY_MAX_MS);
+    : randomIntInclusive(
+        FOLLOWUP_REPLY_DELAY_MIN_MS,
+        FOLLOWUP_REPLY_DELAY_MAX_MS,
+      );
   return {
     thinkDelayMs,
     typingDelayMs: estimateTypingDelayMs(body),
@@ -115,34 +130,186 @@ function formatLabel(value: string | null | undefined): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function sanitizeSavedMessage(value: unknown): ChatMessage | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<ChatMessage>;
+  if (candidate.role !== "customer" && candidate.role !== "agent") {
+    return null;
+  }
+  if (typeof candidate.body !== "string" || !candidate.body.trim()) {
+    return null;
+  }
+  return {
+    id: typeof candidate.id === "string" ? candidate.id : createId(),
+    role: candidate.role,
+    body: candidate.body.trim().slice(0, MAX_SAVED_MESSAGE_CHARS),
+    mediaUrls: Array.isArray(candidate.mediaUrls)
+      ? candidate.mediaUrls
+          .filter((url): url is string => typeof url === "string")
+          .slice(0, 4)
+      : [],
+    createdAt:
+      typeof candidate.createdAt === "string"
+        ? candidate.createdAt
+        : new Date().toISOString(),
+  };
+}
+
+function sanitizeSavedSlot(value: unknown): OfferedSlot | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<OfferedSlot>;
+  if (
+    typeof candidate.label !== "string" ||
+    !candidate.label.trim() ||
+    typeof candidate.startAt !== "string" ||
+    !candidate.startAt.trim()
+  ) {
+    return null;
+  }
+  return {
+    label: candidate.label.trim().slice(0, 160),
+    startAt: candidate.startAt,
+    endAt: typeof candidate.endAt === "string" ? candidate.endAt : null,
+  };
+}
+
+function sanitizeSavedResult(value: unknown): SimulationResult | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<SimulationResult>;
+  const requiredStrings = [
+    candidate.stage,
+    candidate.proposedAction,
+    candidate.executedAction,
+    candidate.reason,
+    candidate.mode,
+  ];
+  if (
+    requiredStrings.some((field) => typeof field !== "string") ||
+    (candidate.channel !== "dm" && candidate.channel !== "sms")
+  ) {
+    return null;
+  }
+  const quote = candidate.quoteRange;
+  const quoteRange =
+    quote &&
+    Number.isFinite(quote.lowCents) &&
+    Number.isFinite(quote.highCents) &&
+    (quote.confidence === "low" ||
+      quote.confidence === "medium" ||
+      quote.confidence === "high")
+      ? {
+          lowCents: Math.round(quote.lowCents),
+          highCents: Math.round(quote.highCents),
+          confidence: quote.confidence,
+        }
+      : null;
+  const offeredSlots = Array.isArray(candidate.offeredSlots)
+    ? candidate.offeredSlots
+        .map(sanitizeSavedSlot)
+        .filter((slot): slot is OfferedSlot => slot !== null)
+        .slice(0, 6)
+    : [];
+  return {
+    reply:
+      typeof candidate.reply === "string"
+        ? candidate.reply.slice(0, MAX_SAVED_MESSAGE_CHARS)
+        : null,
+    stage: candidate.stage?.slice(0, 80) ?? "unknown",
+    proposedAction: candidate.proposedAction?.slice(0, 120) ?? "none",
+    executedAction: candidate.executedAction?.slice(0, 120) ?? "none",
+    reason: candidate.reason?.slice(0, 1_000) ?? "No reason saved",
+    humanReviewReason:
+      typeof candidate.humanReviewReason === "string"
+        ? candidate.humanReviewReason.slice(0, 1_000)
+        : null,
+    confidence:
+      candidate.confidence === "high" || candidate.confidence === "medium"
+        ? candidate.confidence
+        : "low",
+    quoteRange,
+    offeredSlots,
+    confirmedSlot: sanitizeSavedSlot(candidate.confirmedSlot),
+    mode: candidate.mode?.slice(0, 80) ?? "unknown",
+    channel: candidate.channel,
+    // Debug context can contain internal identifiers or oversized provider data.
+    // It is deliberately never persisted in browser storage.
+    debug: {},
+  };
+}
+
+function sanitizeSavedRun(value: unknown, nowMs: number): SavedRun | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<SavedRun>;
+  const savedAtMs = Date.parse(candidate.savedAt ?? "");
+  const expiresAtMs = Date.parse(candidate.expiresAt ?? "");
+  if (
+    typeof candidate.id !== "string" ||
+    typeof candidate.title !== "string" ||
+    (candidate.channel !== "dm" && candidate.channel !== "sms") ||
+    !Number.isFinite(savedAtMs) ||
+    !Number.isFinite(expiresAtMs) ||
+    expiresAtMs <= nowMs ||
+    !Array.isArray(candidate.messages)
+  ) {
+    return null;
+  }
+  const messages = candidate.messages
+    .map(sanitizeSavedMessage)
+    .filter((message): message is ChatMessage => message !== null)
+    .slice(-MAX_SAVED_MESSAGES);
+  if (messages.length === 0) return null;
+  return {
+    id: candidate.id,
+    title: candidate.title.trim().slice(0, 96) || "Saved simulation",
+    channel: candidate.channel,
+    usedLiveContact: candidate.usedLiveContact === true,
+    messages,
+    lastResult: sanitizeSavedResult(candidate.lastResult),
+    savedAt: new Date(savedAtMs).toISOString(),
+    expiresAt: new Date(expiresAtMs).toISOString(),
+  };
+}
+
 function readSavedRuns(): SavedRun[] {
   if (typeof window === "undefined") return [];
   try {
-    const parsed = JSON.parse(
-      window.localStorage.getItem(STORAGE_KEY) ?? "[]",
-    ) as unknown;
+    const stored = window.localStorage.getItem(STORAGE_KEY) ?? "[]";
+    if (new Blob([stored]).size > MAX_SAVED_BYTES) {
+      window.localStorage.removeItem(STORAGE_KEY);
+      return [];
+    }
+    const parsed = JSON.parse(stored) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is SavedRun => {
-      return Boolean(
-        item && typeof item === "object" && "id" in item && "messages" in item,
-      );
-    });
+    const nowMs = Date.now();
+    return parsed
+      .map((item) => sanitizeSavedRun(item, nowMs))
+      .filter((item): item is SavedRun => item !== null)
+      .slice(0, MAX_SAVED_RUNS);
   } catch {
     return [];
   }
 }
 
+function fitRunsToStorageLimit(runs: SavedRun[]): SavedRun[] {
+  const bounded = runs.slice(0, MAX_SAVED_RUNS);
+  while (
+    bounded.length > 0 &&
+    new Blob([JSON.stringify(bounded)]).size > MAX_SAVED_BYTES
+  ) {
+    bounded.pop();
+  }
+  return bounded;
+}
+
 function buildRunTitle(
   messages: ChatMessage[],
   result: SimulationResult | null,
-  contactName?: string | null,
 ): string {
   const firstCustomer =
     messages.find((message) => message.role === "customer")?.body ??
     "Simulation";
   const label = firstCustomer.replace(/\s+/g, " ").trim().slice(0, 46);
-  const prefix = contactName ? `${contactName}: ` : "";
-  return `${prefix}${label || "Simulation"} - ${formatLabel(result?.proposedAction ?? "no action")}`;
+  return `${label || "Simulation"} - ${formatLabel(result?.proposedAction ?? "no action")}`;
 }
 
 export function SimulatedChatSection(): React.ReactElement {
@@ -167,6 +334,8 @@ export function SimulatedChatSection(): React.ReactElement {
   const [isSending, setIsSending] = React.useState(false);
   const [isAgentTyping, setIsAgentTyping] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [storageStatus, setStorageStatus] = React.useState<string | null>(null);
+  const [isConfirmingClear, setIsConfirmingClear] = React.useState(false);
 
   React.useEffect(() => {
     setSavedRuns(readSavedRuns());
@@ -210,24 +379,63 @@ export function SimulatedChatSection(): React.ReactElement {
     };
   }, [contactSearch]);
 
-  const persistRuns = React.useCallback((runs: SavedRun[]) => {
-    setSavedRuns(runs);
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(runs.slice(0, 30)));
+  const persistRuns = React.useCallback((runs: SavedRun[]): boolean => {
+    const bounded = fitRunsToStorageLimit(runs);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(bounded));
+      setSavedRuns(bounded);
+      return true;
+    } catch {
+      setStorageStatus(
+        "This browser could not save the run. Clear older runs or free browser storage, then try again.",
+      );
+      return false;
+    }
   }, []);
 
   const saveCurrentRun = React.useCallback(() => {
     if (messages.length === 0) return;
+    const now = Date.now();
     const run: SavedRun = {
       id: createId(),
-      title: buildRunTitle(messages, lastResult, selectedContact?.name ?? null),
+      title: buildRunTitle(messages, lastResult),
       channel,
-      contactName: selectedContact?.name ?? null,
-      messages,
+      usedLiveContact: selectedContact !== null,
+      messages: messages.slice(-MAX_SAVED_MESSAGES),
       lastResult,
-      savedAt: new Date().toISOString(),
+      savedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + SAVED_RUN_RETENTION_MS).toISOString(),
     };
-    persistRuns([run, ...savedRuns].slice(0, 30));
+    if (persistRuns([run, ...savedRuns])) {
+      setStorageStatus(
+        "Simulation saved only in this browser. Contact identity was not stored.",
+      );
+    }
   }, [channel, lastResult, messages, persistRuns, savedRuns, selectedContact]);
+
+  const restoreRun = React.useCallback((run: SavedRun) => {
+    setChannel(run.channel);
+    setSelectedContact(null);
+    setMessages(run.messages);
+    setLastResult(run.lastResult);
+    setInput("");
+    setIncludePhotos(false);
+    setError(null);
+    setStorageStatus(
+      run.usedLiveContact
+        ? "Transcript restored without its live contact connection. Select a contact again only if you need current CRM context."
+        : "Saved transcript restored.",
+    );
+  }, []);
+
+  const deleteRun = React.useCallback(
+    (runId: string) => {
+      if (persistRuns(savedRuns.filter((run) => run.id !== runId))) {
+        setStorageStatus("Saved simulation deleted from this browser.");
+      }
+    },
+    [persistRuns, savedRuns],
+  );
 
   async function sendMessage(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -242,6 +450,8 @@ export function SimulatedChatSection(): React.ReactElement {
       createdAt: new Date().toISOString(),
     };
     const nextMessages = [...messages, customerMessage];
+    const priorMessages = messages;
+    const priorIncludePhotos = includePhotos;
     setMessages(nextMessages);
     setInput("");
     setIncludePhotos(false);
@@ -270,9 +480,12 @@ export function SimulatedChatSection(): React.ReactElement {
         ok?: boolean;
         result?: SimulationResult;
         error?: string;
+        message?: string;
       } | null;
       if (!response.ok || !payload?.ok || !payload.result) {
-        throw new Error(payload?.error ?? "Simulation failed");
+        throw new Error(
+          payload?.message ?? payload?.error ?? "Simulation failed",
+        );
       }
 
       const result = payload.result;
@@ -300,6 +513,9 @@ export function SimulatedChatSection(): React.ReactElement {
         },
       ]);
     } catch (err) {
+      setMessages(priorMessages);
+      setInput(body);
+      setIncludePhotos(priorIncludePhotos);
       setError(err instanceof Error ? err.message : "Simulation failed");
     } finally {
       setIsAgentTyping(false);
@@ -309,20 +525,18 @@ export function SimulatedChatSection(): React.ReactElement {
 
   function startNewSimulation() {
     if (messages.length > 0) {
+      const now = Date.now();
       const run: SavedRun = {
         id: createId(),
-        title: buildRunTitle(
-          messages,
-          lastResult,
-          selectedContact?.name ?? null,
-        ),
+        title: buildRunTitle(messages, lastResult),
         channel,
-        contactName: selectedContact?.name ?? null,
-        messages,
+        usedLiveContact: selectedContact !== null,
+        messages: messages.slice(-MAX_SAVED_MESSAGES),
         lastResult,
-        savedAt: new Date().toISOString(),
+        savedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + SAVED_RUN_RETENTION_MS).toISOString(),
       };
-      persistRuns([run, ...savedRuns].slice(0, 30));
+      persistRuns([run, ...savedRuns]);
     }
     setMessages([]);
     setLastResult(null);
@@ -330,6 +544,7 @@ export function SimulatedChatSection(): React.ReactElement {
     setInput("");
     setIncludePhotos(false);
     setIsAgentTyping(false);
+    setStorageStatus(null);
   }
 
   return (
@@ -338,7 +553,7 @@ export function SimulatedChatSection(): React.ReactElement {
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
             <h2 className="text-xl font-semibold text-[color:var(--team-text)]">
-              Simulated chat
+              Simulator
             </h2>
             <div className="mt-2 flex flex-wrap gap-2 text-xs text-[color:var(--team-text-muted)]">
               <span className="rounded-full border border-slate-200 bg-white px-3 py-1">
@@ -349,6 +564,9 @@ export function SimulatedChatSection(): React.ReactElement {
               </span>
               <span className="rounded-full border border-slate-200 bg-white px-3 py-1">
                 No real booking
+              </span>
+              <span className="rounded-full border border-slate-200 bg-white px-3 py-1">
+                No CRM changes
               </span>
               {selectedContact ? (
                 <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">
@@ -362,7 +580,7 @@ export function SimulatedChatSection(): React.ReactElement {
               type="button"
               onClick={saveCurrentRun}
               disabled={messages.length === 0 || isSending}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Save run
             </button>
@@ -370,7 +588,7 @@ export function SimulatedChatSection(): React.ReactElement {
               type="button"
               onClick={startNewSimulation}
               disabled={isSending}
-              className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-[44px] rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               New simulation
             </button>
@@ -439,7 +657,7 @@ export function SimulatedChatSection(): React.ReactElement {
                 <button
                   type="button"
                   onClick={() => setSelectedContact(null)}
-                  className="w-fit text-xs font-semibold text-slate-500 hover:text-slate-800"
+                  className="min-h-[44px] w-fit text-xs font-semibold text-slate-500 hover:text-slate-800"
                 >
                   Clear selected client
                 </button>
@@ -454,9 +672,7 @@ export function SimulatedChatSection(): React.ReactElement {
                 onChange={(event) => {
                   const value = event.target.value;
                   setSimulationMode(
-                    value === "assist" ||
-                      value === "auto" ||
-                      value === "off"
+                    value === "assist" || value === "auto" || value === "off"
                       ? value
                       : "shadow",
                   );
@@ -540,7 +756,10 @@ export function SimulatedChatSection(): React.ReactElement {
                     <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
                       Agent
                     </div>
-                    <div className="mt-2 flex items-center gap-1" aria-label="Agent is typing">
+                    <div
+                      className="mt-2 flex items-center gap-1"
+                      aria-label="Agent is typing"
+                    >
                       <span className="h-2 w-2 animate-pulse rounded-full bg-white/80" />
                       <span className="h-2 w-2 animate-pulse rounded-full bg-white/80 [animation-delay:150ms]" />
                       <span className="h-2 w-2 animate-pulse rounded-full bg-white/80 [animation-delay:300ms]" />
@@ -567,6 +786,7 @@ export function SimulatedChatSection(): React.ReactElement {
                   <textarea
                     value={input}
                     onChange={(event) => setInput(event.target.value)}
+                    maxLength={MAX_SAVED_MESSAGE_CHARS}
                     rows={3}
                     className="min-h-[86px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
                     placeholder="Type as the customer..."
@@ -589,7 +809,11 @@ export function SimulatedChatSection(): React.ReactElement {
                     disabled={!input.trim() || isSending}
                     className="min-h-[44px] rounded-xl bg-primary-600 px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {isAgentTyping ? "Typing..." : isSending ? "Thinking..." : "Send"}
+                    {isAgentTyping
+                      ? "Typing..."
+                      : isSending
+                        ? "Thinking..."
+                        : "Send"}
                   </button>
                 </div>
               </div>
@@ -635,15 +859,55 @@ export function SimulatedChatSection(): React.ReactElement {
               <h3 className="text-sm font-semibold text-[color:var(--team-text)]">
                 Saved runs
               </h3>
-              <button
-                type="button"
-                onClick={() => persistRuns([])}
-                disabled={savedRuns.length === 0}
-                className="text-xs font-semibold text-slate-500 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Clear
-              </button>
+              {isConfirmingClear ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (persistRuns([])) {
+                        setStorageStatus(
+                          "All saved simulations were deleted from this browser.",
+                        );
+                      }
+                      setIsConfirmingClear(false);
+                    }}
+                    className="min-h-[44px] text-xs font-semibold text-rose-700 hover:text-rose-900"
+                  >
+                    Confirm clear
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsConfirmingClear(false)}
+                    className="min-h-[44px] text-xs font-semibold text-slate-500 hover:text-slate-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmingClear(true)}
+                  disabled={savedRuns.length === 0}
+                  className="min-h-[44px] text-xs font-semibold text-slate-500 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Clear all
+                </button>
+              )}
             </div>
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              Saved only in this browser for seven days, up to 20 runs and 200
+              KB. Contact IDs and names are not stored. Transcript text is
+              stored, so do not type secrets or unnecessary personal data.
+            </p>
+            {storageStatus ? (
+              <p
+                className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700"
+                role="status"
+                aria-live="polite"
+              >
+                {storageStatus}
+              </p>
+            ) : null}
             <div className="mt-3 space-y-2">
               {savedRuns.length === 0 ? (
                 <p className="text-sm text-slate-500">No saved runs yet.</p>
@@ -658,15 +922,16 @@ export function SimulatedChatSection(): React.ReactElement {
                     <span className="ml-2 text-xs font-normal text-slate-500">
                       {run.channel === "dm" ? "Facebook DM" : "SMS"}
                     </span>
-                    {run.contactName ? (
-                      <span className="ml-2 text-xs font-normal text-emerald-700">
-                        {run.contactName}
+                    {run.usedLiveContact ? (
+                      <span className="ml-2 text-xs font-normal text-amber-700">
+                        Used live context; identity not stored
                       </span>
                     ) : null}
                   </summary>
                   <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
                     <div className="text-xs text-slate-500">
-                      Saved {new Date(run.savedAt).toLocaleString()}
+                      Saved {new Date(run.savedAt).toLocaleString()} · expires{" "}
+                      {new Date(run.expiresAt).toLocaleString()}
                     </div>
                     <div className="space-y-2">
                       {run.messages.map((message) => (
@@ -688,6 +953,22 @@ export function SimulatedChatSection(): React.ReactElement {
                         {run.lastResult.reason}
                       </div>
                     ) : null}
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => restoreRun(run)}
+                        className="min-h-[44px] rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-300"
+                      >
+                        Restore transcript
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteRun(run.id)}
+                        className="min-h-[44px] rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:border-rose-300"
+                      >
+                        Delete saved run
+                      </button>
+                    </div>
                   </div>
                 </details>
               ))}

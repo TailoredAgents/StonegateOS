@@ -50,7 +50,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "messages.send");
+  const permissionError = await requirePermission(request, "messages.upload");
   if (permissionError) return permissionError;
 
   const formData = await request.formData().catch(() => null);

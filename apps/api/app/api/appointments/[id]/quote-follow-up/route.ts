@@ -123,7 +123,7 @@ export async function POST(
   const now = new Date();
   const assignedTo =
     appointment.contactSalespersonMemberId?.trim() ||
-    (await getDefaultSalesAssigneeMemberId(db as any)) ||
+    (await getDefaultSalesAssigneeMemberId(db)) ||
     null;
   const notes = buildQuoteFollowUpNotes({
     contactId: appointment.contactId,
@@ -141,7 +141,7 @@ export async function POST(
       .from(crmTasks)
       .where(
         and(
-          eq(crmTasks.contactId, appointment.contactId!),
+          eq(crmTasks.contactId, appointment.contactId),
           eq(crmTasks.status, "open"),
           isNotNull(crmTasks.notes),
           ilike(crmTasks.notes, "%kind=quote_follow_up%"),
@@ -164,7 +164,7 @@ export async function POST(
     const [task] = await tx
       .insert(crmTasks)
       .values({
-        contactId: appointment.contactId!,
+        contactId: appointment.contactId,
         title: QUOTE_FOLLOW_UP_TITLE,
         dueAt,
         assignedTo,

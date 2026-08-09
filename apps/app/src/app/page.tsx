@@ -54,7 +54,7 @@ type RevenuePayload = {
   };
 };
 
-async function callAdminApi(path: string, init?: RequestInit): Promise<Response> {
+async function callAdminApiWithOwnerHubServiceKey(path: string, init?: RequestInit): Promise<Response> {
   if (!ADMIN_API_KEY) {
     throw new Error("ADMIN_API_KEY must be set to use the Owner Hub.");
   }
@@ -146,7 +146,7 @@ export async function updateStatusAction(formData: FormData) {
     return;
   }
 
-  const response = await callAdminApi(`/api/appointments/${appointmentId}/status`, {
+  const response = await callAdminApiWithOwnerHubServiceKey(`/api/appointments/${appointmentId}/status`, {
     method: "POST",
     body: JSON.stringify({ status })
   });
@@ -219,8 +219,8 @@ export default async function OwnerHubPage() {
   }
 
   const [appointmentsResponse, revenueResponse] = await Promise.all([
-    callAdminApi("/api/appointments?status=all"),
-    callAdminApi("/api/revenue/summary")
+    callAdminApiWithOwnerHubServiceKey("/api/appointments?status=all"),
+    callAdminApiWithOwnerHubServiceKey("/api/revenue/summary")
   ]);
 
   if (!appointmentsResponse.ok) {

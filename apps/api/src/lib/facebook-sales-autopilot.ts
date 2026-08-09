@@ -16,6 +16,10 @@ import { getAutonomousBookingDurationMinutes, isAfterHoursAutonomyActive } from 
 import { buildMediaJobAnalysisWithVision, getMediaJobAnalysis, upsertMediaJobAnalysis } from "@/lib/media-job-analysis";
 import { loadOmniLeadContext, type OmniLeadContext } from "@/lib/omni-lead-context";
 import { getSalesAutopilotPolicy, normalizePostalCode, type SalesAutopilotPolicy } from "@/lib/policy";
+import {
+  evaluateMessagingAutomationPrecedence,
+  normalizeMessagingAutomationMode,
+} from "@/lib/messaging-automation";
 import { normalizePhoneE164 } from "@/lib/team-auth";
 
 type AutonomyMode = SalesAutopilotPolicy["facebookCloser"]["mode"];
@@ -735,7 +739,12 @@ async function fetchBookingAssist(input: {
   if (!apiBase || !adminKey) return [];
   const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/admin/booking/assist`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": adminKey },
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": adminKey,
+      "x-actor-type": "worker",
+      "x-actor-label": "facebook-autopilot",
+    },
     body: JSON.stringify({
       addressLine1: input.property.addressLine1,
       city: input.property.city,
@@ -809,7 +818,21 @@ export function simulateFacebookSalesChatTurn(input: {
   const channel = input.channel === "sms" ? "sms" : "dm";
   const closer = input.policy.facebookCloser;
   const coaching = input.policy.facebookCoaching;
-  const mode = closer.mode;
+  const automationDecision = evaluateMessagingAutomationPrecedence({
+    globalMode:
+      normalizeMessagingAutomationMode(input.policy.mode) ?? "off",
+    channelOverride:
+      normalizeMessagingAutomationMode(input.policy.channelModes[channel]) ??
+      "off",
+    emergencyStop: input.policy.emergencyStop,
+  });
+  const mode: AutonomyMode =
+    automationDecision.decision === "blocked"
+      ? "off"
+      : automationDecision.decision === "approval_required" &&
+          closer.mode === "auto"
+        ? "assist"
+        : closer.mode;
   const nowIso = new Date().toISOString();
   const normalizedMessages = input.messages
     .map((message) => ({
@@ -888,7 +911,12 @@ export function simulateFacebookSalesChatTurn(input: {
 
   if (mode === "off" || closer.emergencyStop) {
     action = "no_op";
-    reason = mode === "off" ? "sales_closer_off" : "sales_closer_emergency_stop";
+    reason =
+      input.policy.emergencyStop
+        ? "global_automation_emergency_stop"
+        : mode === "off"
+          ? `automation_${automationDecision.reason}`
+          : "sales_closer_emergency_stop";
   } else if (riskReason) {
     stage = "needs_human_review";
     action = "human_review";
@@ -1011,7 +1039,12 @@ async function bookSlot(input: {
   if (!apiBase || !adminKey) return { ok: false, error: "api_not_configured" };
   const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/admin/booking/book`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": adminKey, "x-actor-label": "facebook-autopilot" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": adminKey,
+      "x-actor-type": "worker",
+      "x-actor-label": "facebook-autopilot",
+    },
     body: JSON.stringify({
       contactId: input.contactId,
       propertyId: input.propertyId,
@@ -1065,14 +1098,36 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
   if (!context) return { status: "skipped" };
   const testAutonomyOverride = isSalesAutonomyTestOverrideActive({ row, context });
   const inAutonomyWindow = naturalAutonomyWindow || testAutonomyOverride;
-  const mode: AutonomyMode = closer.mode === "auto" && !inAutonomyWindow ? "assist" : closer.mode;
+  const leadAutomation = context.automation.find(
+    (entry) => entry.channel === row.channel,
+  );
+  const automationDecision = evaluateMessagingAutomationPrecedence({
+    globalMode: normalizeMessagingAutomationMode(policy.mode) ?? "off",
+    channelOverride:
+      normalizeMessagingAutomationMode(policy.channelModes[row.channel]) ??
+      "off",
+    emergencyStop: policy.emergencyStop,
+    dnc: leadAutomation?.dnc,
+    humanTakeover: leadAutomation?.humanTakeover,
+    paused: leadAutomation?.paused,
+  });
+  const configuredMode: AutonomyMode =
+    automationDecision.decision === "blocked"
+      ? "off"
+      : automationDecision.decision === "approval_required" &&
+          closer.mode === "auto"
+        ? "assist"
+        : closer.mode;
+  const mode: AutonomyMode =
+    configuredMode === "auto" && !inAutonomyWindow
+      ? "assist"
+      : configuredMode;
 
   const latestInboundAt = latestMeaningfulInboundAt(context, row.channel) ?? row.receivedAt ?? row.createdAt;
   const autonomousConversationAt =
     testAutonomyOverride && !naturalAutonomyWindow ? forcedAfterHoursConversationAt(latestInboundAt) : latestInboundAt;
   const responseWindowMs = closer.messengerResponseWindowHours * 60 * 60 * 1000;
   const outsideMessengerWindow = row.channel === "dm" && Date.now() - latestInboundAt.getTime() > responseWindowMs;
-  const leadAutomation = context.automation.find((entry) => entry.channel === row.channel);
   const hasBookedAppointment = Boolean(context.nextAppointment && context.nextAppointment.status !== "canceled");
   const riskReason = detectFacebookSalesRisk(context);
   const latestBody = row.body ?? "";

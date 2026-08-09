@@ -1,4 +1,5 @@
 import { DateTime } from "luxon";
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
 import { and, desc, eq, gt, gte, isNotNull, ne, or, sql } from "drizzle-orm";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import {
@@ -11,8 +12,10 @@ import {
   conversationThreads,
   crmPipeline,
   getDb,
+  leadAutomationStates,
+  leads,
   outboxEvents,
-  properties
+  properties,
 } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
 import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
@@ -21,18 +24,27 @@ import {
   findAllowedCityInText,
   getCompanyProfilePolicy,
   getConversationPersonaPolicy,
+  getBusinessHoursPolicy,
+  getQuietHoursPolicy,
   getSalesAutopilotPolicy,
   getServiceAreaPolicy,
   isSalesAutopilotLiveReplyEnabled,
   getTemplatesPolicy,
   isCityAllowed,
-  isGeorgiaPostalCode,
-  normalizePostalCode,
-  resolveTemplateForChannel
+  nextQuietHoursEnd,
+  resolveTemplateForChannel,
 } from "@/lib/policy";
+import {
+  evaluateMessagingAutomationPrecedence,
+  normalizeMessagingAutomationMode,
+} from "@/lib/messaging-automation";
 
 type DatabaseClient = ReturnType<typeof getDb>;
-type Tx = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer T) => Promise<unknown> ? T : never;
+type Tx = Parameters<DatabaseClient["transaction"]>[0] extends (
+  tx: infer T,
+) => Promise<unknown>
+  ? T
+  : never;
 
 type ReplyChannel = "sms" | "email" | "dm";
 
@@ -54,9 +66,18 @@ const DECLINED_OR_HAZARD_ITEM_PATTERNS: Array<[RegExp, string]> = [
 ];
 
 const CUSTOMER_DEFERRAL_PATTERNS: Array<[RegExp, string]> = [
-  [/\b(let me think|think about it|thinking about it|need to think|sleep on it)\b/i, "customer_needs_time"],
-  [/\b(i'?ll get back|i will get back|i'?ll let you know|i will let you know)\b/i, "customer_will_follow_up"],
-  [/\b(not ready|maybe later|hold off|wait for now|no rush)\b/i, "customer_not_ready"],
+  [
+    /\b(let me think|think about it|thinking about it|need to think|sleep on it)\b/i,
+    "customer_needs_time",
+  ],
+  [
+    /\b(i'?ll get back|i will get back|i'?ll let you know|i will let you know)\b/i,
+    "customer_will_follow_up",
+  ],
+  [
+    /\b(not ready|maybe later|hold off|wait for now|no rush)\b/i,
+    "customer_not_ready",
+  ],
 ];
 
 type MessageContext = {
@@ -93,7 +114,10 @@ export function evaluateSalesAutopilotAutosendSafety(input: {
   const inboundBody = input.inboundBody ?? "";
   const draftBody = input.draftBody ?? "";
   const transcript = (input.transcriptBodies ?? [])
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    )
     .join("\n");
   const combined = [inboundBody, draftBody, transcript].join("\n");
 
@@ -125,7 +149,7 @@ function readEnvString(key: string): string | null {
 
 async function getAutomationModeForReplyChannel(
   db: DatabaseClient,
-  channel: ReplyChannel
+  channel: ReplyChannel,
 ): Promise<"draft" | "assist" | "auto"> {
   const [row] = await db
     .select({ mode: automationSettings.mode })
@@ -133,15 +157,18 @@ async function getAutomationModeForReplyChannel(
     .where(eq(automationSettings.channel, channel))
     .limit(1);
 
-  return (row?.mode ?? "draft") as "draft" | "assist" | "auto";
+  return row?.mode ?? "draft";
 }
 
-function getOpenAIConfig():
-  | { apiKey: string; thinkModel: string | null; writeModel: string }
-  | null {
+function getOpenAIConfig(): {
+  apiKey: string;
+  thinkModel: string | null;
+  writeModel: string;
+} | null {
   const apiKey = process.env["OPENAI_API_KEY"];
   if (!apiKey) return null;
-  const thinkModel = readEnvString("OPENAI_SALES_AUTOPILOT_THINK_MODEL") ?? "gpt-5-mini";
+  const thinkModel =
+    readEnvString("OPENAI_SALES_AUTOPILOT_THINK_MODEL") ?? "gpt-5-mini";
   const writeModel =
     readEnvString("OPENAI_SALES_AUTOPILOT_WRITE_MODEL") ??
     "ft:gpt-4.1-mini-2025-04-14:tailored-agents:devon:CyO8flN3";
@@ -153,11 +180,11 @@ function supportsReasoningEffort(model: string): boolean {
   return normalized.startsWith("gpt-5") || normalized.startsWith("o");
 }
 
-function tryParseJsonObject(raw: string): unknown | null {
+function tryParseJsonObject(raw: string): unknown {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   try {
-    return JSON.parse(trimmed) as unknown;
+    return JSON.parse(trimmed);
   } catch {
     // continue
   }
@@ -207,7 +234,7 @@ async function callOpenAIJsonSchema(input: {
       model: targetModel,
       input: [
         { role: "system", content: input.systemPrompt },
-        { role: "user", content: input.userPrompt }
+        { role: "user", content: input.userPrompt },
       ],
       max_output_tokens: input.maxOutputTokens,
       text: {
@@ -216,36 +243,42 @@ async function callOpenAIJsonSchema(input: {
           type: "json_schema",
           name: input.schemaName,
           strict: true,
-          schema: input.schema
-        }
-      }
+          schema: input.schema,
+        },
+      },
     };
 
     if (input.reasoningEffort && supportsReasoningEffort(targetModel)) {
       payload["reasoning"] = { effort: input.reasoningEffort };
     }
 
-    return fetch("https://api.openai.com/v1/responses", {
+    return fetch(resolveOpenAiApiEndpoint("responses", process.env), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${input.apiKey}`
+        Authorization: `Bearer ${input.apiKey}`,
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
   }
 
   const modelsToTry = [input.model, ...(input.fallbackModels ?? [])].filter(
-    (model, index, list) => model.trim().length > 0 && list.indexOf(model) === index
+    (model, index, list) =>
+      model.trim().length > 0 && list.indexOf(model) === index,
   );
 
-  let lastError: { error: string; detail?: string | null } = { error: "openai_request_failed" };
+  let lastError: { error: string; detail?: string | null } = {
+    error: "openai_request_failed",
+  };
 
   for (const model of modelsToTry) {
     const response = await request(model);
     if (!response.ok) {
       const bodyText = await response.text().catch(() => "");
-      lastError = { error: "openai_request_failed", detail: bodyText.slice(0, 300) };
+      lastError = {
+        error: "openai_request_failed",
+        detail: bodyText.slice(0, 300),
+      };
       continue;
     }
 
@@ -258,8 +291,7 @@ async function callOpenAIJsonSchema(input: {
         (typeof data.output_text === "string" ? data.output_text : null) ??
         data.output
           ?.flatMap((item) => item.content ?? [])
-          .find((chunk) => typeof chunk.text === "string")
-          ?.text ??
+          .find((chunk) => typeof chunk.text === "string")?.text ??
         null;
       if (!raw) {
         lastError = { error: "openai_empty_response" };
@@ -278,7 +310,12 @@ async function callOpenAIJsonSchema(input: {
   }
 
   const modelUsed = modelsToTry[modelsToTry.length - 1] ?? input.model;
-  return { ok: false, modelUsed, error: lastError.error, detail: lastError.detail ?? null };
+  return {
+    ok: false,
+    modelUsed,
+    error: lastError.error,
+    detail: lastError.detail ?? null,
+  };
 }
 
 type ReplyPlan = {
@@ -294,26 +331,54 @@ function isReplyPlan(value: unknown): value is ReplyPlan {
   if (!isRecord(value)) return false;
   if (typeof value["intent"] !== "string") return false;
   if (typeof value["tone"] !== "string") return false;
-  if (!Array.isArray(value["facts"]) || !value["facts"].every((item) => typeof item === "string")) return false;
-  if (!Array.isArray(value["questions"]) || !value["questions"].every((item) => typeof item === "string")) return false;
+  if (
+    !Array.isArray(value["facts"]) ||
+    !value["facts"].every((item) => typeof item === "string")
+  )
+    return false;
+  if (
+    !Array.isArray(value["questions"]) ||
+    !value["questions"].every((item) => typeof item === "string")
+  )
+    return false;
   if (typeof value["next_action"] !== "string") return false;
-  if (!Array.isArray(value["constraints"]) || !value["constraints"].every((item) => typeof item === "string")) return false;
+  if (
+    !Array.isArray(value["constraints"]) ||
+    !value["constraints"].every((item) => typeof item === "string")
+  )
+    return false;
   return true;
 }
 
 type DraftCandidate = { body: string; subject: string };
-type DraftResult = { best: DraftCandidate; alternatives: DraftCandidate[]; missing_info: string[] };
+type DraftResult = {
+  best: DraftCandidate;
+  alternatives: DraftCandidate[];
+  missing_info: string[];
+};
 
 function isDraftResult(value: unknown): value is DraftResult {
   if (!isRecord(value)) return false;
   if (!isRecord(value["best"])) return false;
-  const best = value["best"] as Record<string, unknown>;
-  if (typeof best["body"] !== "string" || typeof best["subject"] !== "string") return false;
+  const best = value["best"];
+  if (typeof best["body"] !== "string" || typeof best["subject"] !== "string")
+    return false;
   if (!Array.isArray(value["alternatives"])) return false;
-  if (!value["alternatives"].every((item) => isRecord(item) && typeof item["body"] === "string" && typeof item["subject"] === "string")) {
+  if (
+    !value["alternatives"].every(
+      (item) =>
+        isRecord(item) &&
+        typeof item["body"] === "string" &&
+        typeof item["subject"] === "string",
+    )
+  ) {
     return false;
   }
-  if (!Array.isArray(value["missing_info"]) || !value["missing_info"].every((item) => typeof item === "string")) return false;
+  if (
+    !Array.isArray(value["missing_info"]) ||
+    !value["missing_info"].every((item) => typeof item === "string")
+  )
+    return false;
   return true;
 }
 
@@ -326,9 +391,16 @@ const REPLY_PLAN_SCHEMA: Record<string, unknown> = {
     facts: { type: "array", items: { type: "string" } },
     questions: { type: "array", items: { type: "string" } },
     next_action: { type: "string" },
-    constraints: { type: "array", items: { type: "string" } }
+    constraints: { type: "array", items: { type: "string" } },
   },
-  required: ["intent", "tone", "facts", "questions", "next_action", "constraints"]
+  required: [
+    "intent",
+    "tone",
+    "facts",
+    "questions",
+    "next_action",
+    "constraints",
+  ],
 };
 
 const AUTOPILOT_DRAFT_SCHEMA: Record<string, unknown> = {
@@ -340,9 +412,9 @@ const AUTOPILOT_DRAFT_SCHEMA: Record<string, unknown> = {
       additionalProperties: false,
       properties: {
         body: { type: "string" },
-        subject: { type: "string" }
+        subject: { type: "string" },
       },
-      required: ["body", "subject"]
+      required: ["body", "subject"],
     },
     alternatives: {
       type: "array",
@@ -351,19 +423,22 @@ const AUTOPILOT_DRAFT_SCHEMA: Record<string, unknown> = {
         additionalProperties: false,
         properties: {
           body: { type: "string" },
-          subject: { type: "string" }
+          subject: { type: "string" },
         },
-        required: ["body", "subject"]
-      }
+        required: ["body", "subject"],
+      },
     },
-    missing_info: { type: "array", items: { type: "string" } }
+    missing_info: { type: "array", items: { type: "string" } },
   },
-  required: ["best", "alternatives", "missing_info"]
+  required: ["best", "alternatives", "missing_info"],
 };
 
 function stripDashLikeChars(text: string): string {
   return text
-    .replace(/[\u002d\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE63\uFF0D]/g, " ")
+    .replace(
+      /[\u002d\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE63\uFF0D]/g,
+      " ",
+    )
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n[ \t]+/g, "\n")
     .replace(/[ \t]{2,}/g, " ")
@@ -382,20 +457,19 @@ function stripLinks(text: string): string {
 
 function buildTranscript(messages: MessageContext[]): string {
   const lines = messages.map((message) => {
-    const who = message.participantName ?? (message.direction === "inbound" ? "Customer" : "Team");
+    const who =
+      message.participantName ??
+      (message.direction === "inbound" ? "Customer" : "Team");
     const subject = message.subject ? ` (subject: ${message.subject})` : "";
     return `[${message.createdAt.toISOString()}] ${who}${subject}: ${message.body}`;
   });
   return lines.join("\n");
 }
 
-function extractZipFromText(text: string): string | null {
-  const match = text.match(/\b\d{5}\b/);
-  return match ? match[0] : null;
-}
-
-function extractPhoneFromText(text: string): { raw: string; e164: string } | null {
-  const candidates = text.match(/\+?\d[\d(). \-]{7,}\d/g) ?? [];
+function extractPhoneFromText(
+  text: string,
+): { raw: string; e164: string } | null {
+  const candidates = text.match(/\+?\d[\d(). -]{7,}\d/g) ?? [];
   for (const candidate of candidates) {
     const phone = parsePhoneNumberFromString(candidate, "US");
     if (phone?.isValid()) {
@@ -411,27 +485,52 @@ function didCustomerAskAboutPrice(messages: MessageContext[]): boolean {
     .map((m) => m.body)
     .join("\n")
     .toLowerCase();
-  return /\b(price|pricing|quote|cost|how much|estimate)\b/.test(text) || /\$\s*\d/.test(text);
+  return (
+    /\b(price|pricing|quote|cost|how much|estimate)\b/.test(text) ||
+    /\$\s*\d/.test(text)
+  );
 }
 
 function isMessengerLeadCard(body: string): boolean {
   const text = body.toLowerCase();
-  const markers = ["phone number:", "email:", "zip code:", "first name:", "when do you want it gone?:"];
-  const hitCount = markers.reduce((count, marker) => (text.includes(marker) ? count + 1 : count), 0);
+  const markers = [
+    "phone number:",
+    "email:",
+    "zip code:",
+    "first name:",
+    "when do you want it gone?:",
+  ];
+  const hitCount = markers.reduce(
+    (count, marker) => (text.includes(marker) ? count + 1 : count),
+    0,
+  );
   return hitCount >= 3;
 }
 
-function shouldAllowDmAutosend(messages: MessageContext[], currentInboundBody: string): boolean {
+function shouldAllowDmAutosend(
+  messages: MessageContext[],
+  currentInboundBody: string,
+): boolean {
   if (isMessengerLeadCard(currentInboundBody)) return false;
   const nonLeadDmInbounds = messages.filter(
-    (m) => m.direction === "inbound" && m.channel === "dm" && typeof m.body === "string" && m.body.trim().length > 0 && !isMessengerLeadCard(m.body)
+    (m) =>
+      m.direction === "inbound" &&
+      m.channel === "dm" &&
+      typeof m.body === "string" &&
+      m.body.trim().length > 0 &&
+      !isMessengerLeadCard(m.body),
   );
   return nonLeadDmInbounds.length >= 2;
 }
 
 function stripAutopilotFooter(body: string): string {
   const lower = body.toLowerCase();
-  const markers = ["missing info", "missing information", "info checklist", "checklist:"];
+  const markers = [
+    "missing info",
+    "missing information",
+    "info checklist",
+    "checklist:",
+  ];
   const idx = markers
     .map((marker) => lower.indexOf(marker))
     .filter((pos) => pos >= 0)
@@ -441,10 +540,12 @@ function stripAutopilotFooter(body: string): string {
 }
 
 function normalizeReplyCandidate(candidate: DraftCandidate): DraftCandidate {
-  const cleanedBody = stripAutopilotFooter(stripLinks(stripDashLikeChars(candidate.body)));
+  const cleanedBody = stripAutopilotFooter(
+    stripLinks(stripDashLikeChars(candidate.body)),
+  );
   return {
     body: cleanedBody,
-    subject: stripLinks(stripDashLikeChars(candidate.subject))
+    subject: stripLinks(stripDashLikeChars(candidate.subject)),
   };
 }
 
@@ -473,14 +574,23 @@ function clampReplyBody(body: string, channel: ReplyChannel): string {
 
   if (withoutFooter.length <= maxChars) return withoutFooter;
   const slice = withoutFooter.slice(0, maxChars);
-  const lastPunctuation = Math.max(slice.lastIndexOf("."), slice.lastIndexOf("!"), slice.lastIndexOf("?"));
+  const lastPunctuation = Math.max(
+    slice.lastIndexOf("."),
+    slice.lastIndexOf("!"),
+    slice.lastIndexOf("?"),
+  );
   if (lastPunctuation >= 80) {
     return slice.slice(0, lastPunctuation + 1).trim();
   }
   return slice.trim();
 }
 
-async function ensureAutopilotParticipant(tx: Tx, threadId: string, now: Date, displayName: string) {
+async function ensureAutopilotParticipant(
+  tx: Tx,
+  threadId: string,
+  now: Date,
+  displayName: string,
+) {
   const [existing] = await tx
     .select({ id: conversationParticipants.id })
     .from(conversationParticipants)
@@ -489,8 +599,8 @@ async function ensureAutopilotParticipant(tx: Tx, threadId: string, now: Date, d
         eq(conversationParticipants.threadId, threadId),
         eq(conversationParticipants.participantType, "team"),
         eq(conversationParticipants.displayName, displayName),
-        sql`${conversationParticipants.teamMemberId} is null`
-      )
+        sql`${conversationParticipants.teamMemberId} is null`,
+      ),
     )
     .limit(1);
 
@@ -503,16 +613,26 @@ async function ensureAutopilotParticipant(tx: Tx, threadId: string, now: Date, d
       participantType: "team",
       teamMemberId: null,
       displayName,
-      createdAt: now
+      createdAt: now,
     })
     .returning({ id: conversationParticipants.id });
 
   return created?.id ?? null;
 }
 
-async function resolveReplyAddress(db: DatabaseClient, input: { threadId: string; channel: ReplyChannel; contact: ThreadContext }): Promise<{ toAddress: string | null; dmMetadata: Record<string, unknown> | null }> {
+async function resolveReplyAddress(
+  db: DatabaseClient,
+  input: { threadId: string; channel: ReplyChannel; contact: ThreadContext },
+): Promise<{
+  toAddress: string | null;
+  dmMetadata: Record<string, unknown> | null;
+}> {
   if (input.channel === "sms") {
-    return { toAddress: input.contact.contactPhoneE164 ?? input.contact.contactPhone ?? null, dmMetadata: null };
+    return {
+      toAddress:
+        input.contact.contactPhoneE164 ?? input.contact.contactPhone ?? null,
+      dmMetadata: null,
+    };
   }
   if (input.channel === "email") {
     return { toAddress: input.contact.contactEmail ?? null, dmMetadata: null };
@@ -521,24 +641,28 @@ async function resolveReplyAddress(db: DatabaseClient, input: { threadId: string
   const [latestInboundDm] = await db
     .select({
       fromAddress: conversationMessages.fromAddress,
-      metadata: conversationMessages.metadata
+      metadata: conversationMessages.metadata,
     })
     .from(conversationMessages)
     .where(
       and(
         eq(conversationMessages.threadId, input.threadId),
         eq(conversationMessages.direction, "inbound"),
-        eq(conversationMessages.channel, "dm")
-      )
+        eq(conversationMessages.channel, "dm"),
+      ),
     )
     .orderBy(desc(conversationMessages.createdAt))
     .limit(1);
 
-  const dmMetadata = isRecord(latestInboundDm?.metadata) ? (latestInboundDm!.metadata as Record<string, unknown>) : null;
+  const dmMetadata = isRecord(latestInboundDm?.metadata)
+    ? latestInboundDm.metadata
+    : null;
   return { toAddress: latestInboundDm?.fromAddress ?? null, dmMetadata };
 }
 
-export async function handleInboundSalesAutopilot(messageId: string): Promise<OutboxOutcome> {
+export async function handleInboundSalesAutopilot(
+  messageId: string,
+): Promise<OutboxOutcome> {
   const db = getDb();
   const policy = await getSalesAutopilotPolicy(db);
 
@@ -569,10 +693,13 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
       propertyPostalCode: properties.postalCode,
       propertyAddressLine1: properties.addressLine1,
       propertyCity: properties.city,
-      propertyState: properties.state
+      propertyState: properties.state,
     })
     .from(conversationMessages)
-    .leftJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .leftJoin(
+      conversationThreads,
+      eq(conversationMessages.threadId, conversationThreads.id),
+    )
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
     .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
     .where(eq(conversationMessages.id, messageId))
@@ -587,20 +714,27 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
     return { status: "skipped" };
   }
 
-  const partnerStatus = typeof inbound.contactPartnerStatus === "string" ? inbound.contactPartnerStatus : null;
+  const partnerStatus =
+    typeof inbound.contactPartnerStatus === "string"
+      ? inbound.contactPartnerStatus
+      : null;
   if (partnerStatus === "partner") {
     await recordAuditEvent({
       actor: { type: "system", label: "sales-autopilot" },
       action: "sales.autopilot.skipped",
       entityType: "conversation_message",
       entityId: messageId,
-      meta: { reason: "partner_contact" }
+      meta: { reason: "partner_contact" },
     });
     return { status: "processed" };
   }
 
   const replyChannel = inbound.threadChannel as ReplyChannel;
-  if (replyChannel !== "sms" && replyChannel !== "email" && replyChannel !== "dm") {
+  if (
+    replyChannel !== "sms" &&
+    replyChannel !== "email" &&
+    replyChannel !== "dm"
+  ) {
     return { status: "skipped" };
   }
   if (!isSalesAutopilotLiveReplyEnabled(policy, replyChannel)) {
@@ -618,7 +752,7 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
       action: "sales.autopilot.skipped",
       entityType: "conversation_message",
       entityId: messageId,
-      meta: { reason: "messenger_lead_card" }
+      meta: { reason: "messenger_lead_card" },
     });
     return { status: "processed" };
   }
@@ -626,16 +760,19 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
   const [latestInbound] = await db
     .select({
       id: conversationMessages.id,
-      createdAt: conversationMessages.createdAt
+      createdAt: conversationMessages.createdAt,
     })
     .from(conversationMessages)
     .where(
       and(
         eq(conversationMessages.threadId, threadId),
-        eq(conversationMessages.direction, "inbound")
-      )
+        eq(conversationMessages.direction, "inbound"),
+      ),
     )
-    .orderBy(desc(conversationMessages.createdAt), desc(conversationMessages.id))
+    .orderBy(
+      desc(conversationMessages.createdAt),
+      desc(conversationMessages.id),
+    )
     .limit(1);
 
   if (latestInbound?.id && latestInbound.id !== messageId) {
@@ -649,8 +786,8 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
       and(
         eq(conversationMessages.threadId, threadId),
         eq(conversationMessages.direction, "outbound"),
-        sql`${conversationMessages.metadata} ->> 'salesAutopilotForMessageId' = ${messageId}`
-      )
+        sql`${conversationMessages.metadata} ->> 'salesAutopilotForMessageId' = ${messageId}`,
+      ),
     )
     .limit(1);
 
@@ -666,14 +803,24 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
       .where(eq(crmPipeline.contactId, contactId))
       .limit(1);
 
-    if (pipeline?.stage && (pipeline.stage === "quoted" || pipeline.stage === "won" || pipeline.stage === "lost")) {
+    if (
+      pipeline?.stage &&
+      (pipeline.stage === "quoted" ||
+        pipeline.stage === "won" ||
+        pipeline.stage === "lost")
+    ) {
       return { status: "processed" };
     }
 
     const [booked] = await db
       .select({ id: appointments.id })
       .from(appointments)
-      .where(and(eq(appointments.contactId, contactId), ne(appointments.status, "canceled")))
+      .where(
+        and(
+          eq(appointments.contactId, contactId),
+          ne(appointments.status, "canceled"),
+        ),
+      )
       .limit(1);
 
     if (booked?.id) {
@@ -681,12 +828,17 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
     }
   }
 
-  const coalesceUntil = DateTime.fromJSDate(inbound.createdAt).plus({ milliseconds: INBOUND_COALESCE_MS }).toJSDate();
+  const coalesceUntil = DateTime.fromJSDate(inbound.createdAt)
+    .plus({ milliseconds: INBOUND_COALESCE_MS })
+    .toJSDate();
   if (new Date() < coalesceUntil) {
     return { status: "retry", nextAttemptAt: coalesceUntil };
   }
 
-  const contactName = [inbound.contactFirstName, inbound.contactLastName].filter(Boolean).join(" ").trim();
+  const contactName = [inbound.contactFirstName, inbound.contactLastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
   const threadContext: ThreadContext = {
     id: inbound.threadId,
     channel: inbound.threadChannel ?? inbound.channel ?? "sms",
@@ -701,10 +853,14 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
     propertyPostalCode: inbound.propertyPostalCode ?? null,
     propertyAddressLine1: inbound.propertyAddressLine1 ?? null,
     propertyCity: inbound.propertyCity ?? null,
-    propertyState: inbound.propertyState ?? null
+    propertyState: inbound.propertyState ?? null,
   };
 
-  const { toAddress, dmMetadata } = await resolveReplyAddress(db, { threadId, channel: replyChannel, contact: threadContext });
+  const { toAddress, dmMetadata } = await resolveReplyAddress(db, {
+    threadId,
+    channel: replyChannel,
+    contact: threadContext,
+  });
   if (!toAddress) {
     return { status: "processed" };
   }
@@ -716,10 +872,13 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
       subject: conversationMessages.subject,
       body: conversationMessages.body,
       createdAt: conversationMessages.createdAt,
-      participantName: conversationParticipants.displayName
+      participantName: conversationParticipants.displayName,
     })
     .from(conversationMessages)
-    .leftJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
+    .leftJoin(
+      conversationParticipants,
+      eq(conversationMessages.participantId, conversationParticipants.id),
+    )
     .where(eq(conversationMessages.threadId, threadId))
     .orderBy(desc(conversationMessages.createdAt))
     .limit(12);
@@ -731,7 +890,7 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
       subject: row.subject ?? null,
       body: row.body,
       createdAt: row.createdAt,
-      participantName: row.participantName ?? null
+      participantName: row.participantName ?? null,
     }))
     .reverse();
 
@@ -739,33 +898,48 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
   const serviceArea = await getServiceAreaPolicy(db);
   const companyProfile = await getCompanyProfilePolicy(db);
   const persona = await getConversationPersonaPolicy(db);
-  const zipFromThread = normalizePostalCode(threadContext.propertyPostalCode ?? null);
-  const zipFromBody = normalizePostalCode(extractZipFromText(inbound.body) ?? null);
-  const zipFromTranscript = normalizePostalCode(extractZipFromText(messages.map((m) => m.body).join("\n")) ?? null);
-  const normalizedPostal = zipFromThread ?? zipFromBody ?? zipFromTranscript;
-  const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
   const cityFromThread =
-    typeof threadContext.propertyCity === "string" && threadContext.propertyCity.trim().length > 0
+    typeof threadContext.propertyCity === "string" &&
+    threadContext.propertyCity.trim().length > 0
       ? threadContext.propertyCity.trim()
       : null;
-  const cityFromTranscript = findAllowedCityInText(messages.map((m) => m.body).join("\n"), serviceArea);
+  const cityFromTranscript = findAllowedCityInText(
+    messages.map((m) => m.body).join("\n"),
+    serviceArea,
+  );
   const knownCity = cityFromThread ?? cityFromTranscript;
-  const outOfServiceArea = knownCity ? !isCityAllowed(knownCity, serviceArea) : null;
-  const automationMode = await getAutomationModeForReplyChannel(db, replyChannel);
+  const outOfServiceArea = knownCity
+    ? !isCityAllowed(knownCity, serviceArea)
+    : null;
+  const automationMode = await getAutomationModeForReplyChannel(
+    db,
+    replyChannel,
+  );
   const autoSendEligible = automationMode === "auto";
-  const extractedPhone = extractPhoneFromText(messages.map((m) => m.body).join("\n"));
+  const extractedPhone = extractPhoneFromText(
+    messages.map((m) => m.body).join("\n"),
+  );
   const omni = await loadOmniThreadFacts(db, {
     threadId,
     contactId: threadContext.contactId,
     threadPostalCode: threadContext.propertyPostalCode ?? null,
-    includeQuotePrice: didCustomerAskAboutPrice(messages)
+    includeQuotePrice: didCustomerAskAboutPrice(messages),
   });
 
-  const firstTouchExample = resolveTemplateForChannel(templates.first_touch, { inboundChannel: replyChannel, replyChannel });
-  const followUpExample = resolveTemplateForChannel(templates.follow_up, { inboundChannel: replyChannel, replyChannel });
+  const firstTouchExample = resolveTemplateForChannel(templates.first_touch, {
+    inboundChannel: replyChannel,
+    replyChannel,
+  });
+  const followUpExample = resolveTemplateForChannel(templates.follow_up, {
+    inboundChannel: replyChannel,
+    replyChannel,
+  });
   const outOfAreaExample =
     replyChannel === "email" || replyChannel === "sms"
-      ? resolveTemplateForChannel(templates.out_of_area, { inboundChannel: replyChannel, replyChannel })
+      ? resolveTemplateForChannel(templates.out_of_area, {
+          inboundChannel: replyChannel,
+          replyChannel,
+        })
       : null;
 
   const agentName = policy.agentDisplayName;
@@ -809,16 +983,25 @@ Notes: ${companyProfile.agentNotes}
       : null,
     omni.otherChannelThreads.length
       ? `Other channels:\n${omni.otherChannelThreads
-          .map((t) => `- ${t.channel} last=${t.lastMessageAt ? t.lastMessageAt.toISOString() : "unknown"}: ${t.lastMessagePreview ?? ""}`)
+          .map(
+            (t) =>
+              `- ${t.channel} last=${t.lastMessageAt ? t.lastMessageAt.toISOString() : "unknown"}: ${t.lastMessagePreview ?? ""}`,
+          )
           .join("\n")}`
       : null,
-    omni.missingFields.length ? `Missing info (ask at most one): ${omni.missingFields.join(", ")}` : `Missing info: none`,
-    knownCity ? `Service city is already known: ${knownCity} (do not ask for ZIP)` : `Service city is not confirmed yet. Do not stop the sale over ZIP.`,
-    knownCity && outOfServiceArea === true ? `Location warning: city may be out of our usual service area. Confirm job location before closing out.` : null,
+    omni.missingFields.length
+      ? `Missing info (ask at most one): ${omni.missingFields.join(", ")}`
+      : `Missing info: none`,
+    knownCity
+      ? `Service city is already known: ${knownCity} (do not ask for ZIP)`
+      : `Service city is not confirmed yet. Do not stop the sale over ZIP.`,
+    knownCity && outOfServiceArea === true
+      ? `Location warning: city may be out of our usual service area. Confirm job location before closing out.`
+      : null,
     firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,
     followUpExample ? `Example (follow up): ${followUpExample}` : null,
     outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,
-    `Transcript:\n${buildTranscript(messages)}`
+    `Transcript:\n${buildTranscript(messages)}`,
   ].filter((line): line is string => Boolean(line));
 
   const baseUserPrompt = `Write a reply in the voice of ${policy.agentDisplayName}.\n${contextLines.join("\n")}`;
@@ -838,7 +1021,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
       maxOutputTokens: 600,
       schemaName: "reply_plan",
       schema: REPLY_PLAN_SCHEMA,
-      reasoningEffort: "low"
+      reasoningEffort: "low",
     });
 
     if (planResult.ok && isReplyPlan(planResult.value)) {
@@ -846,7 +1029,9 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     }
   }
 
-  const userPrompt = plan ? `${baseUserPrompt}\n\nReply plan (internal):\n${JSON.stringify(plan)}` : baseUserPrompt;
+  const userPrompt = plan
+    ? `${baseUserPrompt}\n\nReply plan (internal):\n${JSON.stringify(plan)}`
+    : baseUserPrompt;
 
   const draftResult = await callOpenAIJsonSchema({
     apiKey: config.apiKey,
@@ -856,7 +1041,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     userPrompt,
     maxOutputTokens: 900,
     schemaName: "autopilot_draft",
-    schema: AUTOPILOT_DRAFT_SCHEMA
+    schema: AUTOPILOT_DRAFT_SCHEMA,
   });
 
   if (!draftResult.ok) {
@@ -864,7 +1049,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
       messageId,
       model: draftResult.modelUsed,
       error: draftResult.error,
-      detail: draftResult.detail ?? null
+      detail: draftResult.detail ?? null,
     });
     return { status: "retry", error: draftResult.error };
   }
@@ -874,8 +1059,14 @@ Do not write the customer message. Output ONLY JSON matching the schema.
   }
 
   const best = normalizeReplyCandidate(draftResult.value.best);
-  const alternatives = draftResult.value.alternatives.map(normalizeReplyCandidate).filter((c) => c.body.length > 0).slice(0, 2);
-  const missingInfo = draftResult.value.missing_info.map((item) => item.trim()).filter(Boolean).slice(0, 8);
+  const alternatives = draftResult.value.alternatives
+    .map(normalizeReplyCandidate)
+    .filter((c) => c.body.length > 0)
+    .slice(0, 2);
+  const missingInfo = draftResult.value.missing_info
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 8);
 
   const bestBody = clampReplyBody(best.body, replyChannel);
   const bestSubject = replyChannel === "email" ? best.subject.trim() : "";
@@ -891,10 +1082,20 @@ Do not write the customer message. Output ONLY JSON matching the schema.
 
   const now = new Date();
   const draftId = await db.transaction(async (tx) => {
-    const participantId = await ensureAutopilotParticipant(tx, threadId, now, policy.agentDisplayName);
+    const participantId = await ensureAutopilotParticipant(
+      tx,
+      threadId,
+      now,
+      policy.agentDisplayName,
+    );
     const dmAutosendAllowed =
-      replyChannel === "dm" && typeof inbound.body === "string" ? shouldAllowDmAutosend(messages, inbound.body) : true;
-    const noAutosend = !autoSendEligible || (replyChannel === "dm" && !dmAutosendAllowed) || !autosendSafety.allowed;
+      replyChannel === "dm" && typeof inbound.body === "string"
+        ? shouldAllowDmAutosend(messages, inbound.body)
+        : true;
+    const noAutosend =
+      !autoSendEligible ||
+      (replyChannel === "dm" && !dmAutosendAllowed) ||
+      !autosendSafety.allowed;
 
     await tx
       .delete(conversationMessages)
@@ -904,8 +1105,8 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           eq(conversationMessages.direction, "outbound"),
           eq(conversationMessages.channel, replyChannel),
           sql`${conversationMessages.metadata} ->> 'salesAutopilot' = 'true'`,
-          sql`${conversationMessages.metadata} ->> 'draft' = 'true'`
-        )
+          sql`${conversationMessages.metadata} ->> 'draft' = 'true'`,
+        ),
       );
 
     const [message] = await tx
@@ -915,7 +1116,12 @@ Do not write the customer message. Output ONLY JSON matching the schema.
         participantId,
         direction: "outbound",
         channel: replyChannel,
-        subject: replyChannel === "email" ? (bestSubject.length ? bestSubject : "") : null,
+        subject:
+          replyChannel === "email"
+            ? bestSubject.length
+              ? bestSubject
+              : ""
+            : null,
         body: bestBody,
         toAddress,
         deliveryStatus: "queued",
@@ -925,14 +1131,18 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           salesAutopilot: true,
           salesAutopilotForMessageId: messageId,
           salesAutopilotNoAutosend: noAutosend ? true : undefined,
-          salesAutopilotNoAutosendReason: !autosendSafety.allowed ? autosendSafety.reason : undefined,
-          salesAutopilotNoAutosendKeyword: !autosendSafety.allowed ? autosendSafety.keyword : undefined,
+          salesAutopilotNoAutosendReason: !autosendSafety.allowed
+            ? autosendSafety.reason
+            : undefined,
+          salesAutopilotNoAutosendKeyword: !autosendSafety.allowed
+            ? autosendSafety.keyword
+            : undefined,
           aiModel: draftResult.modelUsed,
           missingInfo,
           alternatives,
-          extractedPhoneE164: extractedPhone?.e164 ?? undefined
+          extractedPhoneE164: extractedPhone?.e164 ?? undefined,
         },
-        createdAt: now
+        createdAt: now,
       })
       .returning({ id: conversationMessages.id });
 
@@ -944,8 +1154,10 @@ Do not write the customer message. Output ONLY JSON matching the schema.
       await tx.insert(outboxEvents).values({
         type: "sales.autopilot.autosend",
         payload: { draftMessageId: message.id, inboundMessageId: messageId },
-        nextAttemptAt: DateTime.fromJSDate(now).plus({ minutes: policy.autoSendAfterMinutes }).toJSDate(),
-        createdAt: now
+        nextAttemptAt: DateTime.fromJSDate(now)
+          .plus({ minutes: policy.autoSendAfterMinutes })
+          .toJSDate(),
+        createdAt: now,
       });
     }
 
@@ -957,13 +1169,15 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     action: "sales.autopilot.draft_created",
     entityType: "conversation_message",
     entityId: draftId,
-    meta: { threadId, channel: replyChannel, inboundMessageId: messageId }
+    meta: { threadId, channel: replyChannel, inboundMessageId: messageId },
   });
 
   return { status: "processed" };
 }
 
-function isDraftMessage(metadata: Record<string, unknown> | null | undefined): boolean {
+function isDraftMessage(
+  metadata: Record<string, unknown> | null | undefined,
+): boolean {
   return metadata?.["draft"] === true;
 }
 
@@ -973,30 +1187,52 @@ function randomHumanisticDelayMs(): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-async function hasRecentActivityAcrossChannels(db: DatabaseClient, contactId: string, since: Date): Promise<boolean> {
+async function hasRecentActivityAcrossChannels(
+  db: DatabaseClient,
+  contactId: string,
+  since: Date,
+): Promise<boolean> {
   const [row] = await db
     .select({ id: conversationMessages.id })
     .from(conversationMessages)
-    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
-    .where(and(eq(conversationThreads.contactId, contactId), gte(conversationMessages.createdAt, since)))
+    .innerJoin(
+      conversationThreads,
+      eq(conversationMessages.threadId, conversationThreads.id),
+    )
+    .where(
+      and(
+        eq(conversationThreads.contactId, contactId),
+        gte(conversationMessages.createdAt, since),
+      ),
+    )
     .limit(1);
   return Boolean(row?.id);
 }
 
-async function hasHumanTouchSince(db: DatabaseClient, contactId: string, since: Date): Promise<boolean> {
+async function hasHumanTouchSince(
+  db: DatabaseClient,
+  contactId: string,
+  since: Date,
+): Promise<boolean> {
   const [outboundTeam] = await db
     .select({ id: conversationMessages.id })
     .from(conversationMessages)
-    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
-    .innerJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
+    .innerJoin(
+      conversationThreads,
+      eq(conversationMessages.threadId, conversationThreads.id),
+    )
+    .innerJoin(
+      conversationParticipants,
+      eq(conversationMessages.participantId, conversationParticipants.id),
+    )
     .where(
       and(
         eq(conversationThreads.contactId, contactId),
         eq(conversationMessages.direction, "outbound"),
         eq(conversationParticipants.participantType, "team"),
         isNotNull(conversationParticipants.teamMemberId),
-        gte(conversationMessages.createdAt, since)
-      )
+        gte(conversationMessages.createdAt, since),
+      ),
     )
     .limit(1);
   if (outboundTeam?.id) return true;
@@ -1008,25 +1244,31 @@ async function hasHumanTouchSince(db: DatabaseClient, contactId: string, since: 
       and(
         eq(auditLogs.action, "sales.escalation.call.connected"),
         gte(auditLogs.createdAt, since),
-        sql`${auditLogs.meta} ->> 'contactId' = ${contactId}`
-      )
+        sql`${auditLogs.meta} ->> 'contactId' = ${contactId}`,
+      ),
     )
     .limit(1);
 
   return Boolean(connectedForContact?.id);
 }
 
-function stripDraftFlag(metadata: Record<string, unknown> | null): Record<string, unknown> | null {
+function stripDraftFlag(
+  metadata: Record<string, unknown> | null,
+): Record<string, unknown> | null {
   if (!metadata) return null;
   const copy = { ...metadata };
   delete copy["draft"];
   return copy;
 }
 
-async function getLastSalespersonAssignmentChangeAt(db: DatabaseClient, contactId: string, sinceExclusive: Date): Promise<Date | null> {
+async function getLastSalespersonAssignmentChangeAt(
+  db: DatabaseClient,
+  contactId: string,
+  sinceExclusive: Date,
+): Promise<Date | null> {
   const [row] = await db
     .select({
-      at: sql<Date | null>`max(${auditLogs.createdAt})`
+      at: sql<Date | null>`max(${auditLogs.createdAt})`,
     })
     .from(auditLogs)
     .where(
@@ -1035,14 +1277,17 @@ async function getLastSalespersonAssignmentChangeAt(db: DatabaseClient, contactI
         eq(auditLogs.entityType, "contact"),
         eq(auditLogs.entityId, contactId),
         gt(auditLogs.createdAt, sinceExclusive),
-        sql`${auditLogs.meta} -> 'fields' ? 'salespersonMemberId'`
-      )
+        sql`${auditLogs.meta} -> 'fields' ? 'salespersonMemberId'`,
+      ),
     )
     .limit(1);
   return row?.at ?? null;
 }
 
-export async function handleSalesAutopilotAutosend(input: { draftMessageId: string; inboundMessageId?: string | null }): Promise<OutboxOutcome> {
+export async function handleSalesAutopilotAutosend(input: {
+  draftMessageId: string;
+  inboundMessageId?: string | null;
+}): Promise<OutboxOutcome> {
   const db = getDb();
   const [row] = await db
     .select({
@@ -1053,10 +1298,13 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       metadata: conversationMessages.metadata,
       deliveryStatus: conversationMessages.deliveryStatus,
       channel: conversationMessages.channel,
-      threadContactId: conversationThreads.contactId
+      threadContactId: conversationThreads.contactId,
     })
     .from(conversationMessages)
-    .leftJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .leftJoin(
+      conversationThreads,
+      eq(conversationMessages.threadId, conversationThreads.id),
+    )
     .where(eq(conversationMessages.id, input.draftMessageId))
     .limit(1);
 
@@ -1064,14 +1312,8 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     return { status: "processed" };
   }
 
-  const meta = isRecord(row.metadata) ? (row.metadata as Record<string, unknown>) : null;
+  const meta = isRecord(row.metadata) ? row.metadata : null;
   const isAutoFirstTouch = meta?.["autoFirstTouch"] === true;
-
-  const policy = await getSalesAutopilotPolicy(db);
-  const liveAutosendAllowed = isSalesAutopilotLiveReplyEnabled(policy, row.channel);
-  if (!liveAutosendAllowed) {
-    return { status: "processed" };
-  }
 
   if (!isDraftMessage(meta) || meta?.["salesAutopilot"] !== true) {
     return { status: "processed" };
@@ -1082,26 +1324,16 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       action: "sales.autopilot.autosend_skipped",
       entityType: "conversation_message",
       entityId: row.id,
-      meta: { reason: "autosend_disabled" }
+      meta: { reason: "autosend_disabled" },
     });
     return { status: "processed" };
   }
 
   const replyChannel: ReplyChannel | null =
-    row.channel === "sms" || row.channel === "email" || row.channel === "dm" ? (row.channel as ReplyChannel) : null;
+    row.channel === "sms" || row.channel === "email" || row.channel === "dm"
+      ? (row.channel as ReplyChannel)
+      : null;
   if (!replyChannel) {
-    return { status: "processed" };
-  }
-
-  const automationMode = await getAutomationModeForReplyChannel(db, replyChannel);
-  if (automationMode !== "auto") {
-    await recordAuditEvent({
-      actor: { type: "ai", label: "sales-autopilot" },
-      action: "sales.autopilot.autosend_skipped",
-      entityType: "conversation_message",
-      entityId: row.id,
-      meta: { reason: "automation_mode", mode: automationMode, channel: replyChannel }
-    });
     return { status: "processed" };
   }
 
@@ -1110,29 +1342,159 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     return { status: "processed" };
   }
 
+  const policy = await getSalesAutopilotPolicy(db);
+  const now = new Date();
+  const [contactSafety, leadSafety, quietHours, businessHours] =
+    await Promise.all([
+      db
+        .select({ dnc: contacts.doNotContact })
+        .from(contacts)
+        .where(eq(contacts.id, contactId))
+        .limit(1),
+      db
+        .select({
+          dnc: leadAutomationStates.dnc,
+          humanTakeover: leadAutomationStates.humanTakeover,
+          paused: leadAutomationStates.paused,
+        })
+        .from(leadAutomationStates)
+        .innerJoin(leads, eq(leadAutomationStates.leadId, leads.id))
+        .where(
+          and(
+            eq(leads.contactId, contactId),
+            eq(leadAutomationStates.channel, replyChannel),
+            or(
+              eq(leadAutomationStates.dnc, true),
+              eq(leadAutomationStates.humanTakeover, true),
+              eq(leadAutomationStates.paused, true),
+            ),
+          ),
+        )
+        .orderBy(desc(leadAutomationStates.updatedAt))
+        .limit(1),
+      getQuietHoursPolicy(db),
+      getBusinessHoursPolicy(db),
+    ]);
+  const quietUntil = nextQuietHoursEnd(
+    now,
+    replyChannel,
+    quietHours,
+    businessHours.timezone,
+  );
+  const localNow = DateTime.fromJSDate(now).setZone(businessHours.timezone);
+  const capWindowStart = localNow.startOf("day").toUTC().toJSDate();
+  const capWindowEnd = localNow.plus({ days: 1 }).startOf("day");
+  const [dailySendCount] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(conversationMessages)
+    .where(
+      and(
+        eq(conversationMessages.direction, "outbound"),
+        gte(conversationMessages.createdAt, capWindowStart),
+        sql`${conversationMessages.metadata} ->> 'salesAutopilot' = 'true'`,
+        sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`,
+      ),
+    );
+  const capReached =
+    Number(dailySendCount?.count ?? 0) >= policy.dailyAutomaticSendCap;
+  const precedence = evaluateMessagingAutomationPrecedence({
+    globalMode: normalizeMessagingAutomationMode(policy.mode) ?? "off",
+    channelOverride:
+      normalizeMessagingAutomationMode(policy.channelModes[replyChannel]) ??
+      "off",
+    emergencyStop: policy.emergencyStop,
+    dnc: contactSafety[0]?.dnc === true || leadSafety[0]?.dnc === true,
+    humanTakeover: leadSafety[0]?.humanTakeover === true,
+    paused: leadSafety[0]?.paused === true,
+    quietHoursActive: quietUntil !== null,
+    capReached,
+  });
+  if (!precedence.automaticSendAllowed) {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.autosend_skipped",
+      entityType: "conversation_message",
+      entityId: row.id,
+      meta: {
+        reason: precedence.reason,
+        channel: replyChannel,
+        decision: precedence.decision,
+      },
+    });
+    if (precedence.reason === "quiet_hours" && quietUntil) {
+      return {
+        status: "retry",
+        error: "quiet_hours",
+        nextAttemptAt: quietUntil,
+      };
+    }
+    if (precedence.reason === "cap_reached") {
+      return {
+        status: "retry",
+        error: "automatic_send_cap_reached",
+        nextAttemptAt: capWindowEnd.toUTC().toJSDate(),
+      };
+    }
+    return { status: "processed" };
+  }
+
+  const liveAutosendAllowed = isSalesAutopilotLiveReplyEnabled(
+    policy,
+    row.channel,
+  );
+  if (!liveAutosendAllowed) {
+    return { status: "processed" };
+  }
+
+  const automationMode = await getAutomationModeForReplyChannel(
+    db,
+    replyChannel,
+  );
+  if (automationMode !== "auto") {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.autosend_skipped",
+      entityType: "conversation_message",
+      entityId: row.id,
+      meta: {
+        reason: "automation_mode",
+        mode: automationMode,
+        channel: replyChannel,
+      },
+    });
+    return { status: "processed" };
+  }
+
   if (isAutoFirstTouch && row.channel === "sms") {
     const [recentDm] = await db
       .select({ body: conversationMessages.body })
       .from(conversationMessages)
-      .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+      .innerJoin(
+        conversationThreads,
+        eq(conversationMessages.threadId, conversationThreads.id),
+      )
       .where(
         and(
           eq(conversationThreads.contactId, contactId),
           eq(conversationMessages.direction, "inbound"),
           eq(conversationMessages.channel, "dm"),
-          gt(conversationMessages.createdAt, row.createdAt)
-        )
+          gt(conversationMessages.createdAt, row.createdAt),
+        ),
       )
       .orderBy(desc(conversationMessages.createdAt))
       .limit(1);
 
-    if (typeof recentDm?.body === "string" && recentDm.body.trim().length > 0 && !isMessengerLeadCard(recentDm.body)) {
+    if (
+      typeof recentDm?.body === "string" &&
+      recentDm.body.trim().length > 0 &&
+      !isMessengerLeadCard(recentDm.body)
+    ) {
       await recordAuditEvent({
         actor: { type: "ai", label: "sales-autopilot" },
         action: "sales.autopilot.autosend_skipped",
         entityType: "conversation_message",
         entityId: row.id,
-        meta: { reason: "dm_active" }
+        meta: { reason: "dm_active" },
       });
       return { status: "processed" };
     }
@@ -1144,7 +1506,8 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     .where(eq(contacts.id, contactId))
     .limit(1);
   const assigneeMemberId =
-    typeof assignee?.salespersonMemberId === "string" && assignee.salespersonMemberId.trim().length > 0
+    typeof assignee?.salespersonMemberId === "string" &&
+    assignee.salespersonMemberId.trim().length > 0
       ? assignee.salespersonMemberId.trim()
       : null;
 
@@ -1152,8 +1515,16 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     const [latestInbound] = await db
       .select({ id: conversationMessages.id })
       .from(conversationMessages)
-      .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
-      .where(and(eq(conversationThreads.contactId, contactId), eq(conversationMessages.direction, "inbound")))
+      .innerJoin(
+        conversationThreads,
+        eq(conversationMessages.threadId, conversationThreads.id),
+      )
+      .where(
+        and(
+          eq(conversationThreads.contactId, contactId),
+          eq(conversationMessages.direction, "inbound"),
+        ),
+      )
       .orderBy(desc(conversationMessages.createdAt))
       .limit(1);
     if (latestInbound?.id && latestInbound.id !== input.inboundMessageId) {
@@ -1162,15 +1533,23 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
         action: "sales.autopilot.autosend_skipped",
         entityType: "conversation_message",
         entityId: row.id,
-        meta: { reason: "newer_inbound", inboundMessageId: input.inboundMessageId, latestInboundMessageId: latestInbound.id }
+        meta: {
+          reason: "newer_inbound",
+          inboundMessageId: input.inboundMessageId,
+          latestInboundMessageId: latestInbound.id,
+        },
       });
       return { status: "processed" };
     }
   }
 
   const inboundIdForSafety =
-    (typeof input.inboundMessageId === "string" ? input.inboundMessageId : null) ??
-    (typeof meta?.["salesAutopilotForMessageId"] === "string" ? (meta["salesAutopilotForMessageId"] as string) : null);
+    (typeof input.inboundMessageId === "string"
+      ? input.inboundMessageId
+      : null) ??
+    (typeof meta?.["salesAutopilotForMessageId"] === "string"
+      ? meta["salesAutopilotForMessageId"]
+      : null);
   let inboundBodyForSafety: string | null = null;
   if (inboundIdForSafety) {
     const [inboundForSafety] = await db
@@ -1201,7 +1580,11 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       action: "sales.autopilot.autosend_skipped",
       entityType: "conversation_message",
       entityId: row.id,
-      meta: { reason: autosendSafety.reason, keyword: autosendSafety.keyword, inboundMessageId: inboundIdForSafety },
+      meta: {
+        reason: autosendSafety.reason,
+        keyword: autosendSafety.keyword,
+        inboundMessageId: inboundIdForSafety,
+      },
     });
     return { status: "processed" };
   }
@@ -1216,7 +1599,12 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
   const [appointment] = await db
     .select({ id: appointments.id })
     .from(appointments)
-    .where(and(eq(appointments.contactId, contactId), ne(appointments.status, "canceled")))
+    .where(
+      and(
+        eq(appointments.contactId, contactId),
+        ne(appointments.status, "canceled"),
+      ),
+    )
     .limit(1);
   const isBooked = Boolean(appointment?.id);
 
@@ -1226,14 +1614,18 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       action: "sales.autopilot.autosend_skipped",
       entityType: "conversation_message",
       entityId: row.id,
-      meta: { reason: "handled", stage, booked: isBooked }
+      meta: { reason: "handled", stage, booked: isBooked },
     });
     return { status: "processed" };
   }
 
   const inboundId =
-    (typeof input.inboundMessageId === "string" ? input.inboundMessageId : null) ??
-    (typeof meta?.["salesAutopilotForMessageId"] === "string" ? (meta["salesAutopilotForMessageId"] as string) : null);
+    (typeof input.inboundMessageId === "string"
+      ? input.inboundMessageId
+      : null) ??
+    (typeof meta?.["salesAutopilotForMessageId"] === "string"
+      ? meta["salesAutopilotForMessageId"]
+      : null);
 
   let since = row.createdAt;
   if (inboundId) {
@@ -1247,13 +1639,21 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     }
   }
 
-  const now = new Date();
-
-  const assignmentChangedAt = await getLastSalespersonAssignmentChangeAt(db, contactId, since);
+  const assignmentChangedAt = await getLastSalespersonAssignmentChangeAt(
+    db,
+    contactId,
+    since,
+  );
   if (assignmentChangedAt) {
-    const assignmentGate = DateTime.fromJSDate(assignmentChangedAt).plus({ minutes: policy.autoSendAfterMinutes }).toJSDate();
+    const assignmentGate = DateTime.fromJSDate(assignmentChangedAt)
+      .plus({ minutes: policy.autoSendAfterMinutes })
+      .toJSDate();
     if (now < assignmentGate) {
-      return { status: "retry", error: "assignee_changed", nextAttemptAt: assignmentGate };
+      return {
+        status: "retry",
+        error: "assignee_changed",
+        nextAttemptAt: assignmentGate,
+      };
     }
     since = assignmentChangedAt;
   }
@@ -1261,7 +1661,13 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
   const [newerInbound] = await db
     .select({ id: conversationMessages.id })
     .from(conversationMessages)
-    .where(and(eq(conversationMessages.threadId, row.threadId), eq(conversationMessages.direction, "inbound"), gt(conversationMessages.createdAt, since)))
+    .where(
+      and(
+        eq(conversationMessages.threadId, row.threadId),
+        eq(conversationMessages.direction, "inbound"),
+        gt(conversationMessages.createdAt, since),
+      ),
+    )
     .limit(1);
   if (newerInbound?.id) {
     await recordAuditEvent({
@@ -1269,7 +1675,7 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       action: "sales.autopilot.autosend_skipped",
       entityType: "conversation_message",
       entityId: row.id,
-      meta: { reason: "stale_inbound", inboundId }
+      meta: { reason: "stale_inbound", inboundId },
     });
     return { status: "processed" };
   }
@@ -1277,14 +1683,17 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
   const [latestDraftForContact] = await db
     .select({ id: conversationMessages.id })
     .from(conversationMessages)
-    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .innerJoin(
+      conversationThreads,
+      eq(conversationMessages.threadId, conversationThreads.id),
+    )
     .where(
       and(
         eq(conversationThreads.contactId, contactId),
         eq(conversationMessages.direction, "outbound"),
         sql`${conversationMessages.metadata} ->> 'salesAutopilot' = 'true'`,
-        sql`${conversationMessages.metadata} ->> 'draft' = 'true'`
-      )
+        sql`${conversationMessages.metadata} ->> 'draft' = 'true'`,
+      ),
     )
     .orderBy(desc(conversationMessages.createdAt))
     .limit(1);
@@ -1294,7 +1703,7 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       action: "sales.autopilot.autosend_skipped",
       entityType: "conversation_message",
       entityId: row.id,
-      meta: { reason: "stale_draft" }
+      meta: { reason: "stale_draft" },
     });
     return { status: "processed" };
   }
@@ -1307,18 +1716,24 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
         eq(conversationMessages.threadId, row.threadId),
         eq(conversationMessages.direction, "outbound"),
         sql`${conversationMessages.metadata} ->> 'salesAutopilot' = 'true'`,
-        or(eq(conversationMessages.deliveryStatus, "sent"), eq(conversationMessages.deliveryStatus, "delivered"))
-      )
+        or(
+          eq(conversationMessages.deliveryStatus, "sent"),
+          eq(conversationMessages.deliveryStatus, "delivered"),
+        ),
+      ),
     )
     .orderBy(desc(conversationMessages.createdAt))
     .limit(1);
-  if (typeof priorSent?.body === "string" && normalizeForCompare(priorSent.body) === normalizeForCompare(row.body)) {
+  if (
+    typeof priorSent?.body === "string" &&
+    normalizeForCompare(priorSent.body) === normalizeForCompare(row.body)
+  ) {
     await recordAuditEvent({
       actor: { type: "ai", label: "sales-autopilot" },
       action: "sales.autopilot.autosend_skipped",
       entityType: "conversation_message",
       entityId: row.id,
-      meta: { reason: "duplicate_body" }
+      meta: { reason: "duplicate_body" },
     });
     return { status: "processed" };
   }
@@ -1329,25 +1744,35 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       action: "sales.autopilot.autosend_skipped",
       entityType: "conversation_message",
       entityId: row.id,
-      meta: { reason: "human_touch", contactId }
+      meta: { reason: "human_touch", contactId },
     });
     return { status: "processed" };
   }
 
-  const activitySince = DateTime.fromJSDate(now).minus({ minutes: policy.activityWindowMinutes }).toJSDate();
+  const activitySince = DateTime.fromJSDate(now)
+    .minus({ minutes: policy.activityWindowMinutes })
+    .toJSDate();
   if (await hasRecentActivityAcrossChannels(db, contactId, activitySince)) {
-    const nextAttemptAt = DateTime.fromJSDate(now).plus({ minutes: policy.retryDelayMinutes }).toJSDate();
+    const nextAttemptAt = DateTime.fromJSDate(now)
+      .plus({ minutes: policy.retryDelayMinutes })
+      .toJSDate();
     return { status: "retry", error: "recent_activity", nextAttemptAt };
   }
 
-  const sendAt = DateTime.fromJSDate(now).plus({ milliseconds: randomHumanisticDelayMs() }).toJSDate();
+  const sendAt = DateTime.fromJSDate(now)
+    .plus({ milliseconds: randomHumanisticDelayMs() })
+    .toJSDate();
 
   await db.transaction(async (tx) => {
     const existingSend = await tx
       .select({ id: outboxEvents.id })
       .from(outboxEvents)
       .where(
-        and(eq(outboxEvents.type, "message.send"), sql`payload->>'messageId' = ${row.id}`, sql`${outboxEvents.processedAt} is null`)
+        and(
+          eq(outboxEvents.type, "message.send"),
+          sql`payload->>'messageId' = ${row.id}`,
+          sql`${outboxEvents.processedAt} is null`,
+        ),
       )
       .limit(1);
 
@@ -1355,7 +1780,7 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       .update(conversationMessages)
       .set({
         deliveryStatus: "queued",
-        metadata: stripDraftFlag(meta)
+        metadata: stripDraftFlag(meta),
       })
       .where(eq(conversationMessages.id, row.id));
 
@@ -1364,21 +1789,25 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       .set({
         lastMessagePreview: (row.body ?? "").slice(0, 140),
         lastMessageAt: now,
-        updatedAt: now
+        updatedAt: now,
       })
       .where(eq(conversationThreads.id, row.threadId));
 
     if (existingSend[0]?.id) {
       await tx
         .update(outboxEvents)
-        .set({ attempts: 0, nextAttemptAt: row.channel === "dm" ? now : sendAt, lastError: null })
+        .set({
+          attempts: 0,
+          nextAttemptAt: row.channel === "dm" ? now : sendAt,
+          lastError: null,
+        })
         .where(eq(outboxEvents.id, existingSend[0].id));
     } else {
       await tx.insert(outboxEvents).values({
         type: "message.send",
         payload: { messageId: row.id },
         nextAttemptAt: row.channel === "dm" ? now : sendAt,
-        createdAt: now
+        createdAt: now,
       });
     }
   });
@@ -1388,14 +1817,14 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     action: "sales.autopilot.autosent",
     entityType: "conversation_message",
     entityId: row.id,
-    meta: { contactId }
+    meta: { contactId },
   });
 
   await completeNextFollowupTaskOnTouch({
     db,
     contactId,
     memberId: assigneeMemberId,
-    now
+    now,
   });
 
   return { status: "processed" };

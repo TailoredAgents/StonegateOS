@@ -7,7 +7,10 @@ import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminde
 import { loadChannelHandoffOutcomeSummary } from "@/lib/channel-handoff-outcomes";
 import { loadCloseLoopOutcomeSummary } from "@/lib/close-loop-outcomes";
 import { loadFirstResponseOutcomeSummary } from "@/lib/first-response-outcomes";
-import { loadMediaQuoteOutcomeSummary, loadQuoteInsightMap } from "@/lib/media-quote-outcomes";
+import {
+  loadMediaQuoteOutcomeSummary,
+  loadQuoteInsightMap,
+} from "@/lib/media-quote-outcomes";
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
@@ -16,6 +19,7 @@ import { loadQuoteHotWindowOutcomeSummary } from "@/lib/quote-hot-window-outcome
 import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
 import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
 import { listInstantQuoteMediaReadUrls } from "@/lib/appointment-media";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../web/admin";
 
 function parseLimit(value: string | null): number {
@@ -28,13 +32,18 @@ export async function GET(request: NextRequest) {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "quotes.read");
+  if (permissionError) return permissionError;
+
   const db = getDb();
   const { searchParams } = request.nextUrl;
   const id = searchParams.get("id");
   const limit = Math.min(parseLimit(searchParams.get("limit")), 50);
   const summary = await loadMediaQuoteOutcomeSummary(db);
-  const appointmentPreservationSummary = await loadAppointmentPreservationOutcomeSummary(db);
-  const appointmentReminderSummary = await loadAppointmentReminderOutcomeSummary(db);
+  const appointmentPreservationSummary =
+    await loadAppointmentPreservationOutcomeSummary(db);
+  const appointmentReminderSummary =
+    await loadAppointmentReminderOutcomeSummary(db);
   const channelHandoffSummary = await loadChannelHandoffOutcomeSummary(db);
   const closeLoopSummary = await loadCloseLoopOutcomeSummary(db);
   const firstResponseSummary = await loadFirstResponseOutcomeSummary(db);
@@ -45,12 +54,17 @@ export async function GET(request: NextRequest) {
   const quoteCloseSummary = await loadQuoteCloseOutcomeSummary(db);
   const followupSummary = await loadQuoteFollowupOutcomeSummary(db);
   const reactivationSummary = await loadReactivationOutcomeSummary(db);
+  // Drizzle strips the outer table qualifier when a column is interpolated
+  // inside this correlated raw expression. Both joined inner tables also have
+  // an `id`, so PostgreSQL correctly rejects the unqualified reference as
+  // ambiguous. This is a constant schema identifier, never user input.
+  const outerInstantQuoteId = sql.raw('"instant_quotes"."id"');
   const bookedFromQuoteExpr = sql<boolean>`
     exists(
       select 1
       from ${leads} lead
       join appointments appt on appt.lead_id = lead.id
-      where lead.instant_quote_id = ${instantQuotes.id}
+      where lead.instant_quote_id = ${outerInstantQuoteId}
         and appt.status <> 'canceled'
     )
   `;
@@ -59,6 +73,8 @@ export async function GET(request: NextRequest) {
     const rows = await db
       .select({
         id: instantQuotes.id,
+        contactId: instantQuotes.contactId,
+        propertyId: instantQuotes.propertyId,
         createdAt: instantQuotes.createdAt,
         source: instantQuotes.source,
         contactName: instantQuotes.contactName,
@@ -74,12 +90,22 @@ export async function GET(request: NextRequest) {
           coalesce(${instantQuotes.aiResult} -> 'mediaAnalysis' ->> 'source', '') like 'vision%'
         `,
         hasBookedAppointment: bookedFromQuoteExpr,
+        relationshipBackfillAmbiguous: sql<boolean>`
+          exists(
+            select 1
+            from instant_quote_relationship_backfill_ambiguities ambiguity
+            where ambiguity.instant_quote_id = ${outerInstantQuoteId}
+          )
+        `,
       })
       .from(instantQuotes)
       .where(eq(instantQuotes.id, id))
       .orderBy(desc(instantQuotes.createdAt))
       .limit(1);
-    const quoteInsights = await loadQuoteInsightMap(db, rows.map((row) => row.id));
+    const quoteInsights = await loadQuoteInsightMap(
+      db,
+      rows.map((row) => row.id),
+    );
     const rowsWithAuthorizedMedia = await Promise.all(
       rows.map(async (row) => {
         const durablePhotoUrls = await listInstantQuoteMediaReadUrls(
@@ -88,16 +114,15 @@ export async function GET(request: NextRequest) {
         return {
           ...row,
           photoUrls:
-            durablePhotoUrls.length > 0
-              ? durablePhotoUrls
-              : row.photoUrls,
+            durablePhotoUrls.length > 0 ? durablePhotoUrls : row.photoUrls,
         };
       }),
     );
     return NextResponse.json({
       quotes: rowsWithAuthorizedMedia.map((row) => ({
         ...row,
-        tightenedAfterMoreMedia: quoteInsights.get(row.id)?.tightenedAfterMoreMedia ?? false,
+        tightenedAfterMoreMedia:
+          quoteInsights.get(row.id)?.tightenedAfterMoreMedia ?? false,
       })),
       summary,
       appointmentPreservationSummary,
@@ -118,6 +143,8 @@ export async function GET(request: NextRequest) {
   const rows = await db
     .select({
       id: instantQuotes.id,
+      contactId: instantQuotes.contactId,
+      propertyId: instantQuotes.propertyId,
       createdAt: instantQuotes.createdAt,
       source: instantQuotes.source,
       contactName: instantQuotes.contactName,
@@ -130,9 +157,15 @@ export async function GET(request: NextRequest) {
       loadFractionEstimate: sql<number>`coalesce((${instantQuotes.aiResult} ->> 'loadFractionEstimate')::float8, 0)`,
       priceLow: sql<number>`coalesce((${instantQuotes.aiResult} ->> 'priceLow')::int, 0)`,
       priceHigh: sql<number>`coalesce((${instantQuotes.aiResult} ->> 'priceHigh')::int, 0)`,
-      priceLowDiscounted: sql<number | null>`(${instantQuotes.aiResult} ->> 'priceLowDiscounted')::int`,
-      priceHighDiscounted: sql<number | null>`(${instantQuotes.aiResult} ->> 'priceHighDiscounted')::int`,
-      discountPercent: sql<number | null>`(${instantQuotes.aiResult} ->> 'discountPercent')::float8`,
+      priceLowDiscounted: sql<
+        number | null
+      >`(${instantQuotes.aiResult} ->> 'priceLowDiscounted')::int`,
+      priceHighDiscounted: sql<
+        number | null
+      >`(${instantQuotes.aiResult} ->> 'priceHighDiscounted')::int`,
+      discountPercent: sql<
+        number | null
+      >`(${instantQuotes.aiResult} ->> 'discountPercent')::float8`,
       displayTierLabel: sql<string>`coalesce(${instantQuotes.aiResult} ->> 'displayTierLabel', '')`,
       reasonSummary: sql<string>`coalesce(${instantQuotes.aiResult} ->> 'reasonSummary', '')`,
       needsInPersonEstimate: sql<boolean>`coalesce((${instantQuotes.aiResult} ->> 'needsInPersonEstimate')::boolean, false)`,
@@ -142,14 +175,26 @@ export async function GET(request: NextRequest) {
       mediaMergedVolumeRange: sql<string>`coalesce(${instantQuotes.aiResult} -> 'mediaAnalysis' ->> 'mergedVolumeRange', '')`,
       mediaConfidence: sql<string>`coalesce(${instantQuotes.aiResult} -> 'mediaAnalysis' ->> 'confidence', '')`,
       hasBookedAppointment: bookedFromQuoteExpr,
+      relationshipBackfillAmbiguous: sql<boolean>`
+        exists(
+          select 1
+          from instant_quote_relationship_backfill_ambiguities ambiguity
+          where ambiguity.instant_quote_id = ${outerInstantQuoteId}
+        )
+      `,
     })
     .from(instantQuotes)
     .orderBy(desc(instantQuotes.createdAt))
     .limit(limit);
-  const quoteInsights = await loadQuoteInsightMap(db, rows.map((row) => row.id));
+  const quoteInsights = await loadQuoteInsightMap(
+    db,
+    rows.map((row) => row.id),
+  );
 
   const quotes = rows.map((row) => ({
     id: row.id,
+    contactId: row.contactId,
+    propertyId: row.propertyId,
     createdAt: row.createdAt,
     source: row.source,
     contactName: row.contactName,
@@ -177,7 +222,9 @@ export async function GET(request: NextRequest) {
               visibleVolumeRange: row.mediaVisibleVolumeRange || undefined,
               mergedVolumeRange: row.mediaMergedVolumeRange || undefined,
               confidence:
-                row.mediaConfidence === "low" || row.mediaConfidence === "medium" || row.mediaConfidence === "high"
+                row.mediaConfidence === "low" ||
+                row.mediaConfidence === "medium" ||
+                row.mediaConfidence === "high"
                   ? row.mediaConfidence
                   : undefined,
             }
@@ -185,7 +232,9 @@ export async function GET(request: NextRequest) {
     },
     isMediaInformed: row.mediaAnalysisSource.startsWith("vision"),
     hasBookedAppointment: row.hasBookedAppointment,
-    tightenedAfterMoreMedia: quoteInsights.get(row.id)?.tightenedAfterMoreMedia ?? false,
+    relationshipBackfillAmbiguous: row.relationshipBackfillAmbiguous,
+    tightenedAfterMoreMedia:
+      quoteInsights.get(row.id)?.tightenedAfterMoreMedia ?? false,
   }));
 
   return NextResponse.json({

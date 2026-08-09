@@ -6,6 +6,7 @@ import {
   buildMediaJobAnalysisWithVision,
   upsertMediaJobAnalysis,
 } from "@/lib/media-job-analysis";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../../web/admin";
 
 type RouteContext = {
@@ -13,21 +14,37 @@ type RouteContext = {
 };
 
 function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
-export async function POST(request: NextRequest, context: RouteContext): Promise<Response> {
+export async function POST(
+  request: NextRequest,
+  context: RouteContext,
+): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.write");
+  if (permissionError) return permissionError;
+  const includeQuotePrice =
+    request.nextUrl.searchParams.get("includeQuotePrice") === "1";
+  if (includeQuotePrice) {
+    const quotePermissionError = await requirePermission(
+      request,
+      "quotes.read",
+    );
+    if (quotePermissionError) return quotePermissionError;
+  }
 
   const { contactId } = await context.params;
-  const contactIdTrimmed = typeof contactId === "string" ? contactId.trim() : "";
+  const contactIdTrimmed =
+    typeof contactId === "string" ? contactId.trim() : "";
   if (!contactIdTrimmed || !isUuid(contactIdTrimmed)) {
     return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
   }
 
-  const includeQuotePrice = request.nextUrl.searchParams.get("includeQuotePrice") === "1";
   const db = getDb();
   const liveContext = await loadOmniLeadContext(db, {
     contactId: contactIdTrimmed,

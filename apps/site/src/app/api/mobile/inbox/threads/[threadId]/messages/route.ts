@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi } from "@/app/team/lib/api";
+import { callAdminApiForCurrentSession } from "@/app/team/lib/api";
 import { hasMobilePermission, resolveMobileSessionFromCookies } from "../../../../../../mobile/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -40,7 +40,7 @@ export async function POST(
     return NextResponse.json({ error: "message_required" }, { status: 400 });
   }
 
-  const apiResponse = await callAdminApi(`/api/admin/inbox/threads/${encodeURIComponent(normalizedThreadId)}/messages`, {
+  const apiResponse = await callAdminApiForCurrentSession(`/api/admin/inbox/threads/${encodeURIComponent(normalizedThreadId)}/messages`, {
     method: "POST",
     body: JSON.stringify({
       body,

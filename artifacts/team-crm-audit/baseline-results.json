@@ -1,0 +1,96 @@
+{
+  "capturedAt": "2026-08-05",
+  "commit": "116339d",
+  "branch": "main",
+  "environment": {
+    "node": "v24.11.1",
+    "pnpm": "9.15.9 via corepack",
+    "barePnpmOnPath": false,
+    "dockerAvailable": false,
+    "siteHealth": "unreachable at localhost:3000",
+    "apiHealth": "unreachable at localhost:3001",
+    "chromeDevToolsMcpAvailable": false
+  },
+  "checks": [
+    {
+      "command": "corepack pnpm typecheck",
+      "result": "pass",
+      "exitCode": 0,
+      "durationSeconds": 13.95,
+      "notes": "API and Site TypeScript checks passed; Contentlayer emitted a non-fatal Node 24 process.exitCode compatibility warning."
+    },
+    {
+      "command": "corepack pnpm build",
+      "result": "infrastructure-fail",
+      "exitCode": 1,
+      "durationSeconds": 0.28,
+      "notes": "Configured Turbo command cannot find a bare pnpm shim on PATH."
+    },
+    {
+      "command": "pnpm build with a temporary Corepack shim outside the restricted sandbox",
+      "result": "pass",
+      "exitCode": 0,
+      "durationSeconds": 17.92,
+      "notes": "6/6 Turbo tasks passed. Site built 80 pages and API built 134. /team was 84.2 kB with 231 kB first-load JS."
+    },
+    {
+      "command": "pnpm lint",
+      "result": "fail",
+      "exitCode": 1,
+      "durationSeconds": 24.67,
+      "notes": "991 raw errors: Site 424 errors and 12 warnings; API 567 errors. The /team subtree has 126 errors and 6 warnings."
+    },
+    {
+      "command": "pnpm lint:ratchet",
+      "result": "pass",
+      "exitCode": 0,
+      "durationSeconds": 22.25,
+      "notes": "991 errors are below the accepted baseline of 1027."
+    },
+    {
+      "command": "corepack pnpm test",
+      "result": "pass-outside-sandbox",
+      "exitCode": 0,
+      "durationSeconds": 1.86,
+      "notes": "40 suites passed, 1 skipped; 243 tests passed, 1 skipped. Restricted sandbox run failed only because a security test could not bind localhost."
+    },
+    {
+      "command": "corepack pnpm test:e2e",
+      "result": "blocked",
+      "exitCode": 1,
+      "durationSeconds": 1.16,
+      "notes": "Docker is absent, PostgreSQL/services are not running, seed and cleanup received ECONNREFUSED, and zero browser tests executed."
+    },
+    {
+      "command": "corepack pnpm exec playwright test --list",
+      "result": "pass",
+      "exitCode": 0,
+      "durationSeconds": 0.64,
+      "notes": "The existing suite declares 115 cases in 10 files; direct desktop /team coverage is concentrated in Inbox CRM workflows."
+    },
+    {
+      "command": "corepack pnpm typecheck:e2e:team-audit",
+      "result": "pass",
+      "exitCode": 0,
+      "notes": "Dedicated audit config, setup/teardown, fixture, and spec TypeScript checks passed without emitting files."
+    },
+    {
+      "command": "corepack pnpm preflight:e2e:team-audit",
+      "result": "pass",
+      "exitCode": 0,
+      "notes": "The active database target exactly matched .env.e2e; no database connection or seed was attempted."
+    },
+    {
+      "command": "DATABASE_URL=<deliberate mismatch> corepack pnpm preflight:e2e:team-audit",
+      "result": "pass-expected-refusal",
+      "exitCode": 1,
+      "notes": "Setup stopped before any connection or seed with: active DATABASE_URL does not exactly match .env.e2e."
+    },
+    {
+      "command": "corepack pnpm exec playwright test --config=playwright.team-audit.config.ts --list",
+      "result": "pass",
+      "exitCode": 0,
+      "notes": "The audit-only suite loads successfully: 59 source test declarations expand to 590 project cases across 10 viewport/theme projects. Nine source declarations are explicit fixme placeholders; role/navigation cases intentionally filter duplicate project coverage. Runtime remains blocked on the local E2E services."
+    }
+  ]
+}

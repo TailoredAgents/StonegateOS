@@ -1,6 +1,12 @@
 import { and, eq, gte, isNotNull, or, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { getDb, messageDeliveryEvents, outboxEvents, providerHealth, webEventCountsDaily } from "../db";
+import {
+  getDb,
+  messageDeliveryEvents,
+  outboxEvents,
+  providerHealth,
+  webEventCountsDaily,
+} from "../db";
 
 type Severity = "info" | "warn" | "critical";
 
@@ -37,11 +43,17 @@ export async function computeOpsMonitorAlerts(input: {
   const tz = (input.tz || "America/New_York").trim() || "America/New_York";
   const lookbackHours = clampInt(input.lookbackHours ?? 6, 1, 48);
   const outboxStaleMinutes = clampInt(input.outboxStaleMinutes ?? 10, 3, 180);
-  const smsLookbackMinutes = clampInt(input.smsLookbackMinutes ?? 120, 15, 1440);
+  const smsLookbackMinutes = clampInt(
+    input.smsLookbackMinutes ?? 120,
+    15,
+    1440,
+  );
 
   const now = DateTime.now().setZone(tz);
   const sinceFailure = now.minus({ hours: lookbackHours }).toJSDate();
-  const outboxStaleBefore = now.minus({ minutes: outboxStaleMinutes }).toJSDate();
+  const outboxStaleBefore = now
+    .minus({ minutes: outboxStaleMinutes })
+    .toJSDate();
   const smsSince = now.minus({ minutes: smsLookbackMinutes }).toJSDate();
   const todayDate = now.toISODate() ?? DateTime.now().toISODate() ?? "";
 
@@ -55,48 +67,77 @@ export async function computeOpsMonitorAlerts(input: {
         and(
           isNotNull(providerHealth.lastFailureAt),
           gte(providerHealth.lastFailureAt, sinceFailure),
-          or(sql`${providerHealth.lastSuccessAt} is null`, sql`${providerHealth.lastFailureAt} > ${providerHealth.lastSuccessAt}`)
-        )
+          or(
+            sql`${providerHealth.lastSuccessAt} is null`,
+            sql`${providerHealth.lastFailureAt} > ${providerHealth.lastSuccessAt}`,
+          ),
+        ),
       )
       .limit(50),
     db
       .select({
-        backlog: sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.createdAt} < ${outboxStaleBefore}), 0)`.mapWith(Number),
-        retrying: sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.attempts} >= 1), 0)`.mapWith(Number),
-        highAttempts: sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.attempts} >= 3), 0)`.mapWith(Number)
+        backlog:
+          sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.createdAt} < ${outboxStaleBefore}), 0)`.mapWith(
+            Number,
+          ),
+        retrying:
+          sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.attempts} >= 1), 0)`.mapWith(
+            Number,
+          ),
+        highAttempts:
+          sql<number>`coalesce(count(*) filter (where ${outboxEvents.processedAt} is null and ${outboxEvents.attempts} >= 3), 0)`.mapWith(
+            Number,
+          ),
       })
       .from(outboxEvents)
       .then((rows) => rows[0] ?? null),
     db
       .select({
-        failed: sql<number>`coalesce(count(*),0)`.mapWith(Number)
+        failed: sql<number>`coalesce(count(*),0)`.mapWith(Number),
       })
       .from(messageDeliveryEvents)
-      .where(and(eq(messageDeliveryEvents.status, "failed" as any), gte(messageDeliveryEvents.occurredAt, smsSince)))
+      .where(
+        and(
+          eq(messageDeliveryEvents.status, "failed"),
+          gte(messageDeliveryEvents.occurredAt, smsSince),
+        ),
+      )
       .then((rows) => rows[0] ?? null),
     db
       .select({
-        bookStep1Views: sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_step_view' and ${webEventCountsDaily.key}='1' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(Number),
-        bookStep1Submits: sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_step1_submit' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(Number),
-        bookQuoteSuccess: sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_quote_success' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(Number),
-        bookBookingSuccess: sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_booking_success' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(Number)
+        bookStep1Views:
+          sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_step_view' and ${webEventCountsDaily.key}='1' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(
+            Number,
+          ),
+        bookStep1Submits:
+          sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_step1_submit' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(
+            Number,
+          ),
+        bookQuoteSuccess:
+          sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_quote_success' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(
+            Number,
+          ),
+        bookBookingSuccess:
+          sql<number>`coalesce(sum(case when ${webEventCountsDaily.event}='book_booking_success' then ${webEventCountsDaily.count} else 0 end),0)`.mapWith(
+            Number,
+          ),
       })
       .from(webEventCountsDaily)
       .where(eq(webEventCountsDaily.dateStart, todayDate))
-      .then((rows) => rows[0] ?? null)
+      .then((rows) => rows[0] ?? null),
   ]);
 
   const alerts: OpsAlert[] = [];
 
   for (const row of providers) {
-    const provider = String((row as any).provider ?? "").trim() || "unknown";
-    const detail = String((row as any).lastFailureDetail ?? "").trim();
+    const provider = row.provider.trim() || "unknown";
+    const detail = row.lastFailureDetail?.trim() ?? "";
     alerts.push({
       key: `provider:${provider}`,
       severity: provider === "sms" ? "critical" : "warn",
       title: `Provider failing: ${provider}`,
       detail: detail ? detail.slice(0, 280) : undefined,
-      recommendation: "Check logs + credentials, then retry."
+      recommendation: "Check logs + credentials, then retry.",
     });
   }
 
@@ -109,7 +150,7 @@ export async function computeOpsMonitorAlerts(input: {
       severity: "critical",
       title: "Outbox backlog looks stuck",
       detail: `Backlog: ${backlog}, retrying: ${retrying}, high-attempts: ${highAttempts}`,
-      recommendation: "Check the outbox worker + provider credentials."
+      recommendation: "Check the outbox worker + provider credentials.",
     });
   } else if (backlog >= 5) {
     alerts.push({
@@ -117,7 +158,7 @@ export async function computeOpsMonitorAlerts(input: {
       severity: "warn",
       title: "Outbox backlog is growing",
       detail: `Backlog: ${backlog}, retrying: ${retrying}`,
-      recommendation: "Check worker health and recent failures."
+      recommendation: "Check worker health and recent failures.",
     });
   }
 
@@ -128,11 +169,10 @@ export async function computeOpsMonitorAlerts(input: {
       severity: "warn",
       title: "SMS failures detected",
       detail: `${smsFailed} failed delivery event(s) in the last ${smsLookbackMinutes} minutes.`,
-      recommendation: "Check Twilio logs + destination numbers."
+      recommendation: "Check Twilio logs + destination numbers.",
     });
   }
 
-  const views = todayWeb?.bookStep1Views ?? 0;
   const submits = todayWeb?.bookStep1Submits ?? 0;
   const quotes = todayWeb?.bookQuoteSuccess ?? 0;
   const bookings = todayWeb?.bookBookingSuccess ?? 0;
@@ -145,7 +185,7 @@ export async function computeOpsMonitorAlerts(input: {
       severity: "warn",
       title: "Submit → Quote shown looks low today",
       detail: `Submits: ${submits}, quotes shown: ${quotes} (${toPercent(quoteRate)}).`,
-      recommendation: "Check /book step 2 + quote calculation logs for errors."
+      recommendation: "Check /book step 2 + quote calculation logs for errors.",
     });
   }
   if (quotes >= 5 && bookRate < 0.08) {
@@ -154,14 +194,17 @@ export async function computeOpsMonitorAlerts(input: {
       severity: "info",
       title: "Quote → Self-serve booking looks low today",
       detail: `Quotes shown: ${quotes}, self-serve bookings: ${bookings} (${toPercent(bookRate)}).`,
-      recommendation: "Consider follow-up speed + messaging clarity."
+      recommendation: "Consider follow-up speed + messaging clarity.",
     });
   }
 
   return alerts;
 }
 
-export function formatOpsMonitorAlertsMarkdown(input: { alerts: OpsAlert[]; tz: string }): string | null {
+export function formatOpsMonitorAlertsMarkdown(input: {
+  alerts: OpsAlert[];
+  tz: string;
+}): string | null {
   const alerts = input.alerts ?? [];
   if (!alerts.length) return null;
 
@@ -169,13 +212,24 @@ export function formatOpsMonitorAlertsMarkdown(input: { alerts: OpsAlert[]; tz: 
   const now = DateTime.now().setZone(tz);
   const stamp = now.isValid ? now.toFormat("ccc, LLL d") : "";
 
-  const severityOrder: Record<Severity, number> = { critical: 0, warn: 1, info: 2 };
-  const sorted = [...alerts].sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+  const severityOrder: Record<Severity, number> = {
+    critical: 0,
+    warn: 1,
+    info: 2,
+  };
+  const sorted = [...alerts].sort(
+    (a, b) => severityOrder[a.severity] - severityOrder[b.severity],
+  );
 
   const lines: string[] = [];
   lines.push(`**Ops Monitor Alerts${stamp ? ` — ${stamp} (${tz})` : ""}**`);
   for (const a of sorted.slice(0, 8)) {
-    const prefix = a.severity === "critical" ? "[CRITICAL]" : a.severity === "warn" ? "[WARN]" : "[INFO]";
+    const prefix =
+      a.severity === "critical"
+        ? "[CRITICAL]"
+        : a.severity === "warn"
+          ? "[WARN]"
+          : "[INFO]";
     const parts: string[] = [];
     parts.push(`${prefix} **${a.title}**`);
     if (a.detail) parts.push(`  - ${a.detail}`);

@@ -1,36 +1,8 @@
+import { randomUUID } from "node:crypto";
 import React from "react";
 import type { Route } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import {
-  logoutCrew,
-  logoutOwner,
-  dismissNewLeadAction,
-  updatePipelineStageAction,
-} from "./actions";
-import { teamLogoutAction, teamSetPasswordAction } from "./login/actions";
-import { ContactsSection } from "./components/ContactsSection";
-import { PipelineSection } from "./components/PipelineSection";
-import { ChatSection } from "./components/ChatSection";
-import { CalendarSection } from "./components/CalendarSection";
-import { OwnerSection } from "./components/OwnerSection";
-import { InboxSection } from "./components/InboxSection";
-import { ExpensesSection } from "./components/ExpensesSection";
-import { CommissionsSection } from "./components/CommissionsSection";
-import { MarketingSection } from "./components/MarketingSection";
-import { WebAnalyticsSection } from "./components/WebAnalyticsSection";
-import { PolicyCenterSection } from "./components/PolicyCenterSection";
-import { AutomationSection } from "./components/AutomationSection";
-import { SimulatedChatSection } from "./components/SimulatedChatSection";
-import { AccessSection } from "./components/AccessSection";
-import { AuditLogSection } from "./components/AuditLogSection";
-import { SalesActivityLogSection } from "./components/SalesActivityLogSection";
-import { MergeQueueSection } from "./components/MergeQueueSection";
-import { SalesScorecardSection } from "./components/SalesScorecardSection";
-import { OutboundSection } from "./components/OutboundSection";
-import { PartnersSection } from "./components/PartnersSection";
-import { SeoAgentSection } from "./components/SeoAgentSection";
-import { QuotesHubSection } from "./components/QuotesHubSection";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import {
   TeamAppShell,
@@ -41,17 +13,37 @@ import {
   getCompanyShortName,
   getPublicCompanyProfile,
 } from "../../lib/company";
-import { callAdminApi, resolveTeamMemberFromSessionCookie } from "./lib/api";
+import { callAdminApiAs } from "./lib/api";
 import { FlashClearer } from "./components/FlashClearer";
 import { TeamSkeletonCard } from "./components/TeamSkeleton";
 import {
-  TEAM_CARD_PADDED,
-  TEAM_SECTION_SUBTITLE,
-  TEAM_SECTION_TITLE,
-} from "./components/team-ui";
-
-const ADMIN_COOKIE = "myst-admin-session";
-const CREW_COOKIE = "myst-crew-session";
+  resolveTeamPrincipalFromCookies,
+  teamPermissionMatches,
+  toTeamMemberIdentity,
+} from "@/lib/team-principal";
+import {
+  isTeamSurfaceId,
+  resolveDefaultTeamSurfaceId,
+  teamSurfaceHref,
+  TEAM_SURFACE_GROUP_LABELS,
+  TEAM_SURFACE_GROUP_ORDER,
+  TEAM_SURFACE_BY_ID,
+  TEAM_SURFACES,
+} from "./surface-registry";
+import {
+  TeamSurfaceWorkspace,
+  TEAM_SURFACE_LOADING_TITLES,
+  type TeamSurfaceLoaderContext,
+} from "./surface-loaders";
+import {
+  parsePersonalSessionInventory,
+  type PersonalSessionInventory,
+} from "./settings-sessions";
+import {
+  parseInboxNewLeadFeed,
+  type InboxNewLeadFeed,
+} from "./inbox-new-leads";
+import { InboxNewLeadNotice } from "./components/InboxNewLeadNotice";
 
 export const metadata = {
   title: "Stonegate Team Console",
@@ -60,15 +52,6 @@ export const metadata = {
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-type LeadContactSummary = {
-  id: string;
-  name: string;
-  phone: string | null;
-  phoneE164: string | null;
-  source?: string | null;
-  pipeline?: { stage?: string | null };
-};
 
 type SystemHealthApiFinding = {
   id: string;
@@ -92,6 +75,7 @@ export default async function TeamPage({
     tab?: string;
     q?: string;
     inbox_q?: string;
+    inbox_queue?: string;
     inbox_status?: string;
     inbox_view?: string;
     inbox_first_from?: string;
@@ -99,14 +83,21 @@ export default async function TeamPage({
     inbox_last_from?: string;
     inbox_last_to?: string;
     inbox_offset?: string;
+    inbox_message_cursor?: string | string[];
+    inbox_message_limit?: string | string[];
     offset?: string;
     includeOutbound?: string;
     contactId?: string;
     created?: string;
     threadId?: string;
     status?: string;
+    stage?: string;
     channel?: string;
     memberId?: string;
+    salesCursor?: string | string[];
+    salesLimit?: string | string[];
+    salesRangeDays?: string | string[];
+    salesActions?: string | string[];
     out_q?: string;
     out_campaign?: string;
     out_attempt?: string;
@@ -114,133 +105,93 @@ export default async function TeamPage({
     out_has?: string;
     out_disposition?: string;
     out_taskId?: string;
-    out_offset?: string;
+    out_account?: string;
+    out_cursor?: string;
+    out_direction?: string;
+    out_return?: string;
     p_status?: string;
     p_owner?: string;
     p_type?: string;
     p_q?: string;
-    p_offset?: string;
+    p_cursor?: string;
     p_selected?: string;
     quoteMode?: string;
     view?: string;
+    subview?: string;
     onlyOutbound?: string;
+    outbound?: string;
     gaReportId?: string;
     gaCampaignId?: string;
     waRangeDays?: string;
     cal?: string;
     calView?: string;
+    calStatus?: string;
+    calCrew?: string;
+    calSource?: string;
+    calConflict?: string;
     addr?: string;
     city?: string;
     state?: string;
     zip?: string;
     propertyId?: string;
+    instantQuoteId?: string;
+    action?: string;
     setup?: string;
     saved?: string;
     error?: string;
     layout?: string;
     ownerView?: string;
+    mergeSuggestionId?: string;
+    mergeRecoveryId?: string;
+    mergeSourceId?: string;
+    mergeTargetId?: string;
+    mergeQ?: string;
+    mergeStatus?: string;
+    mergeOffset?: string;
+    mergeContactQ?: string;
+    auditAction?: string;
+    auditActorId?: string;
+    auditActorType?: string;
+    auditEntityType?: string;
+    auditEntityId?: string;
+    auditOutcome?: string;
+    auditCorrelationId?: string;
+    auditFrom?: string;
+    auditTo?: string;
+    auditCursor?: string;
+    expenseView?: string;
+    expenseFrom?: string;
+    expenseTo?: string;
+    expenseStatus?: string;
+    expenseCategory?: string;
+    expenseSource?: string;
+    expenseReview?: string;
+    expenseQ?: string;
+    expenseCursor?: string;
+    expenseDirection?: string;
+    expensePage?: string;
+    _canonical?: string;
   }>;
 }) {
   const params = await searchParams;
   const cookieStore = await cookies();
-  const legacyOwnerSession = cookieStore.get(ADMIN_COOKIE)?.value
-    ? true
-    : false;
-  const legacyCrewSession = cookieStore.get(CREW_COOKIE)?.value ? true : false;
-  const teamMember = await resolveTeamMemberFromSessionCookie();
-  const teamRole = teamMember?.roleSlug ?? null;
-  const hasOwner = legacyOwnerSession || teamRole === "owner";
-  const hasOffice = teamRole === "office";
-  const hasCrew = legacyCrewSession || teamRole === "crew";
-  const isAuthenticated = hasOwner || hasOffice || hasCrew;
-
-  if (!isAuthenticated) {
+  const principal = await resolveTeamPrincipalFromCookies();
+  if (!principal) {
     redirect("/team/login");
   }
+  const teamMember = toTeamMemberIdentity(principal);
 
-  const FALLBACK_PERMISSIONS_BY_ROLE: Record<string, string[]> = {
-    owner: ["*"],
-    office: [
-      "messages.send",
-      "messages.read",
-      "policy.read",
-      "policy.write",
-      "bookings.manage",
-      "automation.read",
-      "automation.write",
-      "audit.read",
-      "appointments.read",
-      "appointments.update",
-      "appointment_media.capture",
-      "appointment_media.manage",
-      "payments.read",
-      "payments.collect",
-      "quotes.read",
-      "quotes.write",
-      "quotes.send",
-      "quotes.update",
-      "quotes.delete",
-      "expenses.read",
-      "expenses.write",
-    ],
-    sales: [
-      "messages.read",
-      "messages.send",
-      "appointments.read",
-      "appointments.update",
-      "appointment_media.capture",
-      "appointment_media.manage",
-      "payments.read",
-      "payments.collect",
-      "bookings.manage",
-      "quotes.read",
-      "quotes.write",
-      "quotes.send",
-      "quotes.update",
-    ],
-    crew: [
-      "messages.read",
-      "appointments.read",
-      "appointments.update",
-      "appointment_media.capture",
-      "payments.read",
-      "payments.collect",
-      "expenses.read",
-      "expenses.write",
-    ],
-    read_only: ["read"],
-  };
-
-  const effectivePermissions: string[] = hasOwner
-    ? ["*"]
-    : Array.isArray(teamMember?.permissions)
-      ? (teamMember?.permissions ?? [])
-      : teamRole && FALLBACK_PERMISSIONS_BY_ROLE[teamRole]
-        ? (FALLBACK_PERMISSIONS_BY_ROLE[teamRole] ?? [])
-        : [];
-
-  const permissionMatches = (granted: string, required: string): boolean => {
-    if (granted === "*") return true;
-    if (required === "read") return granted === "read";
-    if (granted === "read") {
-      return (
-        required === "read" ||
-        (required.endsWith(".read") && required !== "payments.read")
-      );
-    }
-    if (granted.endsWith(".*")) {
-      const prefix = granted.slice(0, -2);
-      return required.startsWith(prefix);
-    }
-    return granted === required;
-  };
+  const effectivePermissions = teamMember.permissions;
 
   const hasPermission = (required: string): boolean => {
-    if (hasOwner) return true;
     return effectivePermissions.some((permission) =>
-      permissionMatches(permission, required),
+      teamPermissionMatches(permission, required),
     );
   };
+  const hasOwner = hasPermission("*");
+  const hasOffice =
+    hasPermission("messages.read") || hasPermission("bookings.manage");
+  const hasCrew = hasPermission("appointments.read");
 
   const isAllowed = (requires?: TabNavItem["requires"]): boolean => {
     if (!requires) return true;
@@ -254,6 +205,21 @@ export default async function TeamPage({
   };
 
   const requestedTab = params?.tab;
+  if (
+    params?.setup === "1" &&
+    !requestedTab &&
+    params?._canonical !== "1" &&
+    params?.layout !== "classic"
+  ) {
+    const canonicalSearch = new URLSearchParams();
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (key === "tab" || key === "_canonical") continue;
+      if (typeof value === "string" && value.length > 0) {
+        canonicalSearch.set(key, value);
+      }
+    }
+    redirect(teamSurfaceHref("settings", { query: canonicalSearch }));
+  }
   const requestedQuoteMode =
     typeof params?.quoteMode === "string" ? params.quoteMode : undefined;
   let forcedQuoteMode: string | undefined;
@@ -266,23 +232,63 @@ export default async function TeamPage({
     forcedQuoteMode = "canvass";
   } else if (requestedTab === "marketing") {
     normalizedRequestedTab = "google-ads";
-  } else if (requestedTab === "myday") {
+  } else if (requestedTab === "myday" || requestedTab === "estimates") {
     normalizedRequestedTab = "calendar";
   }
+  const defaultTab =
+    resolveDefaultTeamSurfaceId(effectivePermissions) ?? "settings";
+  const resolvedRequestedTab = normalizedRequestedTab;
   const tab =
-    normalizedRequestedTab === "estimates"
-      ? hasOwner
-        ? "inbox"
-        : "calendar"
-      : normalizedRequestedTab ||
-        (hasCrew && !hasOwner && !hasOffice ? "calendar" : "inbox");
+    resolvedRequestedTab && isTeamSurfaceId(resolvedRequestedTab)
+      ? resolvedRequestedTab
+      : defaultTab;
+  if (
+    requestedTab &&
+    params?._canonical !== "1" &&
+    params?.layout !== "classic"
+  ) {
+    const surface = TEAM_SURFACE_BY_ID.get(tab);
+    if (surface) {
+      const canonicalSearch = new URLSearchParams();
+      for (const [key, value] of Object.entries(params ?? {})) {
+        if (key === "tab" || key === "_canonical") continue;
+        if (typeof value === "string" && value.length > 0) {
+          canonicalSearch.set(key, value);
+        }
+      }
+      if (forcedQuoteMode) canonicalSearch.set("quoteMode", forcedQuoteMode);
+      const query = canonicalSearch.toString();
+      redirect(`${surface.canonicalPath}${query ? `?${query}` : ""}` as Route);
+    }
+  }
+  if (
+    tab === "expenses" &&
+    params?._canonical === "1" &&
+    params?.layout !== "classic" &&
+    !params?.expenseView?.trim()
+  ) {
+    const canonicalSearch = new URLSearchParams();
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (key === "tab" || key === "_canonical" || key === "expenseView") {
+        continue;
+      }
+      if (typeof value === "string" && value.length > 0) {
+        canonicalSearch.set(key, value);
+      }
+    }
+    canonicalSearch.set("expenseView", "ledger");
+    redirect(`/team/expenses?${canonicalSearch.toString()}` as Route);
+  }
   const contactsQuery = typeof params?.q === "string" ? params.q : undefined;
   const contactsView =
     typeof params?.view === "string" ? params.view.trim().toLowerCase() : "";
+  const contactsRecovery = contactsView === "recovery";
   const contactsOnlyOutbound =
-    contactsView === "outbound" || params?.onlyOutbound === "1";
+    !contactsRecovery &&
+    (contactsView === "outbound" || params?.onlyOutbound === "1");
   const contactsIncludeOutbound =
-    contactsView === "all" || params?.includeOutbound === "1";
+    !contactsRecovery &&
+    (contactsView === "all" || params?.includeOutbound === "1");
   let contactsOffset: number | undefined;
   if (typeof params?.offset === "string") {
     const parsed = Number(params.offset);
@@ -295,6 +301,13 @@ export default async function TeamPage({
   const createdContactRaw =
     typeof params?.created === "string" ? params.created : undefined;
   const contactIdParam = contactIdRaw ?? createdContactRaw;
+  const propertyIdParam =
+    typeof params?.propertyId === "string" ? params.propertyId : undefined;
+  const instantQuoteIdParam =
+    typeof params?.instantQuoteId === "string"
+      ? params.instantQuoteId
+      : undefined;
+  const bookingRequested = params?.action === "book";
   const gaReportIdParam =
     typeof params?.gaReportId === "string" ? params.gaReportId : undefined;
   const gaCampaignIdParam =
@@ -303,6 +316,8 @@ export default async function TeamPage({
     typeof params?.waRangeDays === "string" ? params.waRangeDays : undefined;
   const inboxThreadId =
     typeof params?.threadId === "string" ? params.threadId : undefined;
+  const inboxQueue =
+    typeof params?.inbox_queue === "string" ? params.inbox_queue : undefined;
   const inboxStatus =
     typeof params?.inbox_status === "string"
       ? params.inbox_status
@@ -331,9 +346,44 @@ export default async function TeamPage({
     typeof params?.inbox_last_to === "string"
       ? params.inbox_last_to
       : undefined;
-  const inboxOffset = undefined;
+  let inboxOffset: string | undefined;
+  if (typeof params?.inbox_offset === "string") {
+    const parsed = Number(params.inbox_offset);
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      inboxOffset = String(parsed);
+    }
+  }
+  const inboxMessageCursor =
+    typeof params?.inbox_message_cursor === "string" ||
+    Array.isArray(params?.inbox_message_cursor)
+      ? params.inbox_message_cursor
+      : undefined;
+  const inboxMessageLimit =
+    typeof params?.inbox_message_limit === "string" ||
+    Array.isArray(params?.inbox_message_limit)
+      ? params.inbox_message_limit
+      : undefined;
   const memberIdParam =
     typeof params?.memberId === "string" ? params.memberId : undefined;
+  const salesCursorParam =
+    typeof params?.salesCursor === "string" ||
+    Array.isArray(params?.salesCursor)
+      ? params.salesCursor
+      : undefined;
+  const salesLimitParam =
+    typeof params?.salesLimit === "string" || Array.isArray(params?.salesLimit)
+      ? params.salesLimit
+      : undefined;
+  const salesRangeDaysParam =
+    typeof params?.salesRangeDays === "string" ||
+    Array.isArray(params?.salesRangeDays)
+      ? params.salesRangeDays
+      : undefined;
+  const salesActionsParam =
+    typeof params?.salesActions === "string" ||
+    Array.isArray(params?.salesActions)
+      ? params.salesActions
+      : undefined;
   const quoteModeParam = forcedQuoteMode ?? requestedQuoteMode;
   const settingsSetup = params?.setup === "1";
   const settingsSaved = params?.saved === "1";
@@ -362,8 +412,14 @@ export default async function TeamPage({
         : undefined,
     taskId:
       typeof params?.out_taskId === "string" ? params.out_taskId : undefined,
-    offset:
-      typeof params?.out_offset === "string" ? params.out_offset : undefined,
+    accountId:
+      typeof params?.out_account === "string" ? params.out_account : undefined,
+    cursor:
+      typeof params?.out_cursor === "string" ? params.out_cursor : undefined,
+    direction:
+      typeof params?.out_direction === "string"
+        ? params.out_direction
+        : undefined,
   };
 
   const partnerFilters = {
@@ -371,27 +427,26 @@ export default async function TeamPage({
     ownerId: typeof params?.p_owner === "string" ? params.p_owner : undefined,
     type: typeof params?.p_type === "string" ? params.p_type : undefined,
     q: typeof params?.p_q === "string" ? params.p_q : undefined,
-    offset: typeof params?.p_offset === "string" ? params.p_offset : undefined,
+    cursor: typeof params?.p_cursor === "string" ? params.p_cursor : undefined,
     selectedId:
       typeof params?.p_selected === "string" ? params.p_selected : undefined,
+    outboundReturn:
+      typeof params?.out_return === "string" ? params.out_return : undefined,
   };
 
   const flash = cookieStore.get("myst-flash")?.value ?? null;
   const flashError = cookieStore.get("myst-flash-error")?.value ?? null;
-  const dismissedNewLeadId =
-    cookieStore.get("myst-new-lead-dismissed")?.value ?? null;
-  const hiddenUntilRaw =
-    cookieStore.get("myst-new-lead-hidden-until")?.value ?? null;
-  const hiddenUntilMs = hiddenUntilRaw ? Number(hiddenUntilRaw) : NaN;
-  const isNewLeadHidden =
-    Number.isFinite(hiddenUntilMs) && hiddenUntilMs > Date.now();
 
   let systemHealth: SystemHealthApiResponse | null = null;
-  if (tab === "policy" && hasOwner) {
+  if (tab === "policy" && hasPermission("policy.read")) {
     try {
-      const response = await callAdminApi("/api/admin/system/health", {
-        timeoutMs: 8_000,
-      });
+      const response = await callAdminApiAs(
+        principal,
+        "/api/admin/system/health",
+        {
+          timeoutMs: 8_000,
+        },
+      );
       if (response.ok) {
         const payload = (await response
           .json()
@@ -403,208 +458,48 @@ export default async function TeamPage({
     }
   }
 
-  const tabs: TabNavItem[] = [
-    {
-      id: "expenses",
-      label: "Expenses",
-      href: "/team?tab=expenses",
-      requires: "expenses.read",
-    },
-    {
-      id: "quotes",
-      label: "Quotes",
-      href: "/team?tab=quotes",
-      requires: "appointments.read",
-    },
-    {
-      id: "inbox",
-      label: "Inbox",
-      href: "/team?tab=inbox",
-      requires: "messages.send",
-    },
-    {
-      id: "chat",
-      label: "Agent",
-      href: "/team?tab=chat",
-      requires: "messages.send",
-    },
-    {
-      id: "pipeline",
-      label: "Pipeline",
-      href: "/team?tab=pipeline",
-      requires: "bookings.manage",
-    },
-    {
-      id: "sales-hq",
-      label: "Sales HQ",
-      href: "/team?tab=sales-hq",
-      requires: "messages.send",
-    },
-    {
-      id: "simulated-chat",
-      label: "Simulated chat",
-      href: "/team?tab=simulated-chat",
-      requires: "messages.send",
-    },
-    {
-      id: "outbound",
-      label: "Outbound",
-      href: "/team?tab=outbound",
-      requires: "messages.send",
-    },
-    {
-      id: "partners",
-      label: "Partners",
-      href: "/team?tab=partners",
-      requires: "owner",
-    },
-    {
-      id: "calendar",
-      label: "Calendar",
-      href: "/team?tab=calendar",
-      requires: ["bookings.manage", "appointments.read"],
-    },
-    {
-      id: "contacts",
-      label: "Contacts",
-      href: "/team?tab=contacts",
-      requires: "bookings.manage",
-    },
-    {
-      id: "owner",
-      label: "Owner HQ",
-      href: "/team?tab=owner",
-      requires: "owner",
-    },
-    {
-      id: "policy",
-      label: "Policy Center",
-      href: "/team?tab=policy",
-      requires: "policy.read",
-    },
-    {
-      id: "commissions",
-      label: "Commissions",
-      href: "/team?tab=commissions",
-      requires: "access.manage",
-    },
-    {
-      id: "google-ads",
-      label: "Google Ads",
-      href: "/team?tab=google-ads",
-      requires: "policy.read",
-    },
-    {
-      id: "web-analytics",
-      label: "Website Analytics",
-      href: "/team?tab=web-analytics",
-      requires: "policy.read",
-    },
-    {
-      id: "seo",
-      label: "SEO Agent",
-      href: "/team?tab=seo",
-      requires: "policy.read",
-    },
-    {
-      id: "automation",
-      label: "Messaging Automation",
-      href: "/team?tab=automation",
-      requires: "automation.read",
-    },
-    {
-      id: "access",
-      label: "Access",
-      href: "/team?tab=access",
-      requires: "access.manage",
-    },
-    {
-      id: "sales-log",
-      label: "Sales Log",
-      href: "/team?tab=sales-log",
-      requires: "audit.read",
-    },
-    {
-      id: "audit",
-      label: "Audit Log",
-      href: "/team?tab=audit",
-      requires: "audit.read",
-    },
-    {
-      id: "merge",
-      label: "Merge Queue",
-      href: "/team?tab=merge",
-      requires: "contacts.merge",
-    },
-    { id: "settings", label: "Settings", href: "/team?tab=settings" },
-  ];
   const withLayout = (href: string): string => {
     if (!useClassicLayout) return href;
     return href.includes("?")
       ? `${href}&layout=classic`
       : `${href}?layout=classic`;
   };
+  const tabs: TabNavItem[] = TEAM_SURFACES.map((surface) => ({
+    id: surface.id,
+    label: surface.label,
+    href: surface.canonicalPath,
+    ...(surface.requiredPermissions.length > 0
+      ? { requires: [...surface.requiredPermissions] }
+      : {}),
+  }));
   const resolvedTabs: TabNavItem[] = useClassicLayout
     ? tabs.map((item) => ({ ...item, href: withLayout(item.href) }))
     : tabs;
-  const tabGroups: TabNavGroup[] = [
-    {
-      id: "calendar",
-      label: "Calendar",
-      itemIds: ["calendar"],
-      variant: "single",
-    },
-    { id: "inbox", label: "Inbox", itemIds: ["inbox"], variant: "single" },
-    {
-      id: "contacts",
-      label: "Contacts",
-      itemIds: ["contacts"],
-      variant: "single",
-    },
-    { id: "quotes", label: "Quotes", itemIds: ["quotes"], variant: "single" },
-    {
-      id: "expenses",
-      label: "Expenses",
-      itemIds: ["expenses"],
-      variant: "single",
-    },
-    {
-      id: "sales",
-      label: "Sales",
-      itemIds: [
-        "pipeline",
-        "sales-hq",
-        "simulated-chat",
-        "outbound",
-        "partners",
-      ],
-    },
-    {
-      id: "marketing",
-      label: "Marketing",
-      itemIds: ["google-ads", "web-analytics", "seo"],
-    },
-    { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
-    {
-      id: "admin",
-      label: "Admin",
-      itemIds: [
-        "commissions",
-        "policy",
-        "automation",
-        "access",
-        "sales-log",
-        "audit",
-        "merge",
-      ],
-    },
-    {
-      id: "tools",
-      label: "Tools",
-      itemIds: ["chat", "settings"],
-      variant: "dropdown",
-    },
-  ];
+  const dailyGroups: TabNavGroup[] = TEAM_SURFACES.filter(
+    (surface) => surface.group === "daily",
+  ).map((surface) => ({
+    id: surface.id,
+    label: surface.label,
+    itemIds: [surface.id],
+    variant: "single",
+  }));
+  const groupedWorkspaces: TabNavGroup[] = TEAM_SURFACE_GROUP_ORDER.filter(
+    (group) => group !== "daily",
+  )
+    .map((group) => {
+      const itemIds = TEAM_SURFACES.filter(
+        (surface) => surface.group === group,
+      ).map((surface) => surface.id);
+      return {
+        id: group,
+        label: TEAM_SURFACE_GROUP_LABELS[group],
+        itemIds,
+        variant: itemIds.length === 1 ? "single" : "dropdown",
+      } satisfies TabNavGroup;
+    })
+    .filter((group) => group.itemIds.length > 0);
+  const tabGroups: TabNavGroup[] = [...dailyGroups, ...groupedWorkspaces];
+
   const activeTab =
     resolvedTabs.find((item) => item.id === tab) ?? resolvedTabs[0] ?? null;
   if (activeTab && !isAllowed(activeTab.requires)) {
@@ -620,7 +515,7 @@ export default async function TeamPage({
   let calendarBadge: CalendarSyncBadge | null = null;
   if (tab === "settings" && hasOwner) {
     try {
-      const response = await callAdminApi("/api/calendar/status");
+      const response = await callAdminApiAs(principal, "/api/calendar/status");
       if (response.ok) {
         const payload = (await response.json()) as CalendarStatusApiResponse;
         calendarBadge = evaluateCalendarBadge(payload);
@@ -640,442 +535,224 @@ export default async function TeamPage({
     }
   }
 
-  let newLead: LeadContactSummary | null = null;
-  if (tab === "inbox" && (hasOwner || hasOffice)) {
-    if (isNewLeadHidden) {
-      newLead = null;
+  let personalSessions: PersonalSessionInventory | null = null;
+  let personalSessionsError: string | null = null;
+  if (tab === "settings") {
+    if (!hasPermission("sessions.manage_self")) {
+      personalSessionsError =
+        "Session management is not available under your current access policy.";
     } else {
       try {
-        const response = await callAdminApi("/api/admin/contacts?limit=12");
-        if (response.ok) {
-          const payload = (await response.json()) as {
-            contacts?: LeadContactSummary[];
-          };
-          const contacts = payload.contacts ?? [];
-          newLead =
-            contacts.find(
-              (contact) =>
-                contact.pipeline?.stage === "new" &&
-                !(contact.source && contact.source.startsWith("outbound:")) &&
-                (!dismissedNewLeadId || contact.id !== dismissedNewLeadId),
-            ) ?? null;
+        const response = await callAdminApiAs(
+          principal,
+          "/api/admin/team/sessions/self",
+          { timeoutMs: 8_000 },
+        );
+        if (!response.ok) {
+          personalSessionsError = `Session inventory is unavailable (HTTP ${response.status}).`;
+        } else {
+          personalSessions = parsePersonalSessionInventory(
+            await response.json().catch(() => null),
+          );
+          if (!personalSessions) {
+            personalSessionsError =
+              "Session inventory returned an invalid response. No sessions were changed.";
+          }
         }
       } catch {
-        newLead = null;
+        personalSessionsError =
+          "Session inventory is temporarily unavailable. No sessions were changed.";
       }
     }
   }
 
+  let newLeadFeed: InboxNewLeadFeed | null = null;
+  let newLeadFeedError: string | null = null;
+  if (tab === "inbox" && hasPermission("messages.read")) {
+    try {
+      const response = await callAdminApiAs(
+        principal,
+        "/api/admin/inbox/new-leads/next",
+        { timeoutMs: 8_000 },
+      );
+      if (!response.ok) {
+        newLeadFeedError =
+          response.status === 403
+            ? "Your current access does not allow this new-lead queue. No empty queue is being assumed."
+            : `The new-lead queue could not be verified (HTTP ${response.status}). No empty queue is being assumed.`;
+      } else {
+        newLeadFeed = parseInboxNewLeadFeed(
+          await response.json().catch(() => null),
+        );
+        if (!newLeadFeed) {
+          newLeadFeedError =
+            "The new-lead service returned an incomplete response. No empty queue is being assumed.";
+        }
+      }
+    } catch {
+      newLeadFeedError =
+        "The new-lead service is temporarily unreachable. Refresh before relying on this queue.";
+    }
+  }
+  const newLeadAcknowledgementKey = newLeadFeed?.next ? randomUUID() : null;
+
+  const surfaceContext: TeamSurfaceLoaderContext = {
+    calendarSearchParams: params,
+    inbox: {
+      queue: inboxQueue,
+      threadId: inboxThreadId,
+      status: inboxStatus,
+      contactId: contactIdParam,
+      channel: inboxChannel,
+      q: inboxQuery,
+      view: inboxView,
+      firstMessageFrom: inboxFirstFrom,
+      firstMessageTo: inboxFirstTo,
+      lastMessageFrom: inboxLastFrom,
+      lastMessageTo: inboxLastTo,
+      offset: inboxOffset,
+      messageCursor: inboxMessageCursor,
+      messageLimit: inboxMessageLimit,
+    },
+    quotes: {
+      quoteMode: quoteModeParam,
+      contactId: contactIdParam,
+      propertyId: propertyIdParam,
+      instantQuoteId: instantQuoteIdParam,
+      memberId: memberIdParam,
+    },
+    expenses: {
+      view: params.expenseView,
+      filters: {
+        from: params.expenseFrom,
+        to: params.expenseTo,
+        status: params.expenseStatus,
+        category: params.expenseCategory,
+        source: params.expenseSource,
+        financeReview: params.expenseReview,
+        q: params.expenseQ,
+        cursor: params.expenseCursor,
+        direction: params.expenseDirection,
+        page: params.expensePage,
+      },
+    },
+    pipeline: {
+      contactId: contactIdParam,
+      q: params.q,
+      stage: params.stage,
+      offset: params.offset,
+      view: params.view,
+      outbound: params.outbound,
+    },
+    outbound: {
+      memberId: memberIdParam,
+      view: params.view,
+      filters: outboundFilters,
+    },
+    partners: { filters: partnerFilters },
+    contacts: {
+      search: contactsQuery,
+      offset: contactsOffset,
+      contactId: contactIdParam,
+      subview: params.subview,
+      propertyId: propertyIdParam,
+      instantQuoteId: instantQuoteIdParam,
+      bookingRequested,
+      excludeOutbound: contactsOnlyOutbound ? false : !contactsIncludeOutbound,
+      onlyOutbound: contactsOnlyOutbound,
+      deletedOnly: contactsRecovery,
+    },
+    owner: { ownerView: params.ownerView },
+    policy: { systemHealth },
+    marketing: {
+      reportId: gaReportIdParam,
+      campaignId: gaCampaignIdParam,
+    },
+    websiteAnalytics: {
+      rangeDays: waRangeDaysParam,
+      gaReportId: gaReportIdParam,
+      gaCampaignId: gaCampaignIdParam,
+    },
+    salesActivity: {
+      memberId: memberIdParam,
+      cursor: salesCursorParam,
+      limit: salesLimitParam,
+      rangeDays: salesRangeDaysParam,
+      actions: salesActionsParam,
+    },
+    merge: {
+      selectedSuggestionId: params.mergeSuggestionId,
+      selectedRecoveryId: params.mergeRecoveryId,
+      manualSourceId: params.mergeSourceId,
+      manualTargetId: params.mergeTargetId,
+      q: params.mergeQ,
+      status: params.mergeStatus,
+      offset: params.mergeOffset,
+      contactQ: params.mergeContactQ,
+    },
+    audit: {
+      filters: {
+        action: params.auditAction,
+        actorId: params.auditActorId,
+        actorType: params.auditActorType,
+        entityType: params.auditEntityType,
+        entityId: params.auditEntityId,
+        outcome: params.auditOutcome,
+        correlationId: params.auditCorrelationId,
+        from: params.auditFrom,
+        to: params.auditTo,
+        cursor: params.auditCursor,
+      },
+    },
+    settings: {
+      teamMember,
+      hasOwner,
+      canExportMessages: hasPermission("messages.export"),
+      authMethod: principal.authMethod,
+      setup: settingsSetup,
+      saved: settingsSaved,
+      error: settingsError,
+      calendarBadge,
+      personalSessions,
+      personalSessionsError,
+    },
+  };
+
   const content = (
     <>
       {flash ? (
-        <div className="rounded-2xl border border-emerald-200/70 bg-emerald-50/80 p-4 text-sm text-emerald-700 shadow-sm shadow-emerald-100">
+        <div
+          role="status"
+          aria-live="polite"
+          data-team-flash="success"
+          className="rounded-2xl border border-emerald-200/70 bg-emerald-50/80 p-4 text-sm text-emerald-700 shadow-sm shadow-emerald-100"
+        >
           {flash}
         </div>
       ) : null}
       {flashError ? (
-        <div className="rounded-2xl border border-rose-200/70 bg-rose-50/80 p-4 text-sm text-rose-700 shadow-sm shadow-rose-100">
+        <div
+          role="alert"
+          data-team-flash="error"
+          className="rounded-2xl border border-rose-200/70 bg-rose-50/80 p-4 text-sm text-rose-700 shadow-sm shadow-rose-100"
+        >
           {flashError}
         </div>
       ) : null}
       {flash || flashError ? <FlashClearer /> : null}
-      {tab === "inbox" && newLead ? (
-        <section className="rounded-2xl border border-emerald-200/70 bg-emerald-50/80 p-4 shadow-sm shadow-emerald-100">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">
-                New lead ready
-              </p>
-              <p className="mt-1 text-sm font-semibold text-emerald-900">
-                {newLead.name || "New lead"}
-              </p>
-              <p className="mt-1 text-xs text-emerald-700">
-                {newLead.phoneE164 ?? newLead.phone ?? "Phone not on file yet"}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs">
-              <a
-                className="rounded-full border border-emerald-200 px-3 py-2 font-semibold text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
-                href={`/team?tab=contacts&contactId=${encodeURIComponent(newLead.id)}`}
-              >
-                Open contact
-              </a>
-              <form action={updatePipelineStageAction}>
-                <input type="hidden" name="contactId" value={newLead.id} />
-                <input type="hidden" name="stage" value="contacted" />
-                <button
-                  type="submit"
-                  className="rounded-full border border-emerald-200 px-3 py-2 font-semibold text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
-                >
-                  Mark contacted
-                </button>
-              </form>
-              <form action={dismissNewLeadAction}>
-                <input type="hidden" name="contactId" value={newLead.id} />
-                <button
-                  type="submit"
-                  className="rounded-full border border-emerald-200 px-3 py-2 font-semibold text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
-                >
-                  Dismiss 24h
-                </button>
-              </form>
-            </div>
-          </div>
-        </section>
+      {tab === "inbox" ? (
+        <InboxNewLeadNotice
+          feed={newLeadFeed}
+          error={newLeadFeedError}
+          acknowledgementKey={newLeadAcknowledgementKey}
+        />
       ) : null}
 
-      {tab === "expenses" && (hasCrew || hasOffice || hasOwner) ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading expenses" />}
-        >
-          <ExpensesSection />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "chat" && (hasOffice || hasOwner) ? (
-        <React.Suspense fallback={<TeamSkeletonCard title="Loading chat" />}>
-          <ChatSection />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "inbox" && (hasOffice || hasOwner) ? (
-        <React.Suspense fallback={<TeamSkeletonCard title="Loading inbox" />}>
-          <InboxSection
-            threadId={inboxThreadId}
-            status={inboxStatus}
-            contactId={contactIdParam}
-            channel={inboxChannel}
-            q={inboxQuery}
-            view={inboxView}
-            firstMessageFrom={inboxFirstFrom}
-            firstMessageTo={inboxFirstTo}
-            lastMessageFrom={inboxLastFrom}
-            lastMessageTo={inboxLastTo}
-            offset={inboxOffset}
-          />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "calendar" && (hasCrew || hasOffice || hasOwner) ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading calendar" />}
-        >
-          <CalendarSection searchParams={params} />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "quotes" && (hasCrew || hasOffice || hasOwner) ? (
-        <React.Suspense fallback={<TeamSkeletonCard title="Loading Quotes" />}>
-          <QuotesHubSection
-            quoteMode={quoteModeParam}
-            contactId={contactIdParam}
-            memberId={memberIdParam}
-          />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "pipeline" && (hasOffice || hasOwner) ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading pipeline" />}
-        >
-          <PipelineSection contactId={contactIdParam ?? undefined} />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "sales-hq" && (hasOffice || hasOwner) ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading Sales HQ" />}
-        >
-          <SalesScorecardSection />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "simulated-chat" && (hasOffice || hasOwner) ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading simulated chat" />}
-        >
-          <SimulatedChatSection />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "outbound" && (hasOffice || hasOwner) ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading outbound prospects" />}
-        >
-          <OutboundSection memberId={memberIdParam} filters={outboundFilters} />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "partners" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading partners" />}
-        >
-          <PartnersSection filters={partnerFilters} />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "contacts" && (hasOffice || hasOwner) ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading contacts" />}
-        >
-          <ContactsSection
-            search={contactsQuery}
-            offset={contactsOffset}
-            contactId={contactIdParam}
-            excludeOutbound={
-              contactsOnlyOutbound ? false : !contactsIncludeOutbound
-            }
-            onlyOutbound={contactsOnlyOutbound}
-          />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "owner" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading owner tools" />}
-        >
-          <OwnerSection ownerView={params?.ownerView} />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "policy" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading policy center" />}
-        >
-          <PolicyCenterSection systemHealth={systemHealth} />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "commissions" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading commissions" />}
-        >
-          <CommissionsSection />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "google-ads" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading Google Ads" />}
-        >
-          <MarketingSection
-            reportId={gaReportIdParam}
-            campaignId={gaCampaignIdParam}
-          />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "web-analytics" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading website analytics" />}
-        >
-          <WebAnalyticsSection
-            rangeDays={waRangeDaysParam}
-            gaReportId={gaReportIdParam}
-            gaCampaignId={gaCampaignIdParam}
-          />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "seo" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading SEO agent" />}
-        >
-          <SeoAgentSection />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "automation" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading automation" />}
-        >
-          <AutomationSection />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "access" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading access controls" />}
-        >
-          <AccessSection />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "sales-log" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading sales activity" />}
-        >
-          <SalesActivityLogSection memberId={memberIdParam} />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "audit" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading audit log" />}
-        >
-          <AuditLogSection />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "merge" && hasOwner ? (
-        <React.Suspense
-          fallback={<TeamSkeletonCard title="Loading merge queue" />}
-        >
-          <MergeQueueSection />
-        </React.Suspense>
-      ) : null}
-
-      {tab === "settings" ? (
-        <section className={`space-y-4 ${TEAM_CARD_PADDED}`}>
-          <div className="space-y-4">
-            <h2 className={TEAM_SECTION_TITLE}>Account</h2>
-            <p className={TEAM_SECTION_SUBTITLE}>
-              Signed-in team members control attribution for calls, messages,
-              and audit logs. Owner sessions still have full access.
-            </p>
-            {settingsSetup ? (
-              <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800 shadow-sm shadow-sky-100">
-                Set a password to enable password sign-in. Magic links will
-                still work.
-              </div>
-            ) : null}
-            {settingsSaved ? (
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 shadow-sm shadow-emerald-100">
-                Saved.
-              </div>
-            ) : null}
-            {settingsError ? (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm shadow-rose-100">
-                {settingsError}
-              </div>
-            ) : null}
-
-            {teamMember ? (
-              <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 text-sm text-slate-700 shadow-sm shadow-slate-200/40">
-                <div className="font-semibold text-slate-900">
-                  {teamMember.name}
-                </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  Role:{" "}
-                  <span className="font-medium text-slate-700">
-                    {teamMember.roleSlug ?? "office"}
-                  </span>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="flex flex-wrap gap-3">
-              <form action={teamLogoutAction}>
-                <button className="rounded-full border border-slate-200 px-4 py-2 text-xs font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800">
-                  Log out
-                </button>
-              </form>
-            </div>
-
-            {teamMember && !teamMember.passwordSet ? (
-              <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
-                <h3 className="text-sm font-semibold text-slate-900">
-                  Set password
-                </h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  Optional. Minimum 10 characters.
-                </p>
-                <form
-                  action={teamSetPasswordAction}
-                  className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center"
-                >
-                  <input
-                    name="password"
-                    type="password"
-                    minLength={10}
-                    required
-                    className="w-full flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                    placeholder="New password"
-                  />
-                  <button
-                    type="submit"
-                    className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary-700"
-                  >
-                    Save
-                  </button>
-                </form>
-              </div>
-            ) : null}
-
-            <h2 className={TEAM_SECTION_TITLE}>Calling</h2>
-            <p className={TEAM_SECTION_SUBTITLE}>
-              Outbound calls always ring the{" "}
-              <span className="font-semibold">Assigned to</span> salesperson on
-              the contact (lead routing). Set each salesperson&apos;s phone in{" "}
-              <span className="font-semibold">Access</span> so the system knows
-              who to ring.
-            </p>
-          </div>
-
-          <div className="space-y-4">
-            <details className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
-              <summary className="cursor-pointer text-sm font-semibold text-slate-900">
-                Emergency sessions
-              </summary>
-              <p className="mt-2 text-xs text-slate-500">
-                These controls clear the legacy crew/owner cookies used before
-                per-user login. Most teams won&apos;t need this.
-              </p>
-              <div className="mt-3 flex flex-wrap gap-3">
-                <form action={logoutCrew}>
-                  <button className="rounded-full border border-slate-200 px-4 py-2 text-xs font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800">
-                    Log out crew
-                  </button>
-                </form>
-                <form action={logoutOwner}>
-                  <button className="rounded-full border border-slate-200 px-4 py-2 text-xs font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800">
-                    Log out owner
-                  </button>
-                </form>
-              </div>
-            </details>
-          </div>
-
-          {hasOwner ? (
-            <div className="space-y-4">
-              <h2 className="text-base font-semibold text-slate-900">
-                Exports
-              </h2>
-              <p className="text-xs text-slate-500">
-                Download all inbound/outbound client messages as a JSONL file
-                for analysis or fine tuning (drafts + media omitted).
-              </p>
-              <div>
-                <a
-                  className="inline-flex items-center justify-center rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary-700"
-                  href="/api/team/inbox/export"
-                >
-                  Download conversations (JSONL)
-                </a>
-              </div>
-            </div>
-          ) : null}
-
-          {hasOwner && calendarBadge ? (
-            <div
-              className={`rounded-xl border px-4 py-3 text-xs ${calendarBadgeToneClasses[calendarBadge.tone]}`}
-              title={calendarBadge.detail ?? undefined}
-            >
-              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-current/70">
-                Calendar Sync
-              </span>
-              <span className="mt-1 block text-sm font-medium text-current">
-                {calendarBadge.headline}
-              </span>
-              {calendarBadge.detail ? (
-                <span className="block text-[11px] text-current/80">
-                  {calendarBadge.detail}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-        </section>
-      ) : null}
+      <React.Suspense
+        fallback={<TeamSkeletonCard title={TEAM_SURFACE_LOADING_TITLES[tab]} />}
+      >
+        <TeamSurfaceWorkspace surfaceId={tab} context={surfaceContext} />
+      </React.Suspense>
     </>
   );
 
@@ -1084,6 +761,24 @@ export default async function TeamPage({
       <div className="relative min-h-screen overflow-visible bg-gradient-to-br from-slate-100 via-white to-slate-50">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.12),_transparent_50%)]" />
         <main className="relative mx-auto max-w-6xl space-y-6 px-4 py-8 sm:space-y-8 sm:px-6 sm:py-10 lg:px-8">
+          <section
+            className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm"
+            aria-labelledby="classic-layout-migration-title"
+          >
+            <h2 id="classic-layout-migration-title" className="font-semibold">
+              Classic layout is in compatibility mode
+            </h2>
+            <p className="mt-1 leading-6">
+              Security fixes remain supported here, but new workflow and design
+              improvements are delivered in the modern Team CRM.
+            </p>
+            <a
+              href={teamSurfaceHref(tab)}
+              className="mt-2 inline-flex min-h-[44px] items-center font-semibold underline underline-offset-4"
+            >
+              Switch to the modern layout
+            </a>
+          </section>
           <header className="relative z-50 overflow-visible rounded-3xl border border-white/70 bg-white/80 p-6 shadow-xl shadow-slate-200/60 backdrop-blur sm:p-8">
             <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
               <div>
@@ -1164,15 +859,21 @@ export default async function TeamPage({
   const allowedTabs = resolvedTabs.filter((item) => isAllowed(item.requires));
   const tabMap = new Map(allowedTabs.map((item) => [item.id, item]));
   const quickIds = ["calendar", "inbox", "contacts", "quotes", "expenses"];
-  const utilityIds = ["chat", "settings"];
+  const utilityIds = ["settings"];
+  const nestedSurfaceIds = new Set(["partners", "sales-log"]);
   const quickIdSet = new Set(quickIds);
+  const utilityIdSet = new Set(utilityIds);
   const groups: TeamNavGroup[] = tabGroups
-    .filter((group) => group.id !== "tools")
     .map((group) => ({
       id: group.id,
       label: group.label,
       items: group.itemIds
-        .filter((id) => !quickIdSet.has(id))
+        .filter(
+          (id) =>
+            !quickIdSet.has(id) &&
+            !utilityIdSet.has(id) &&
+            !nestedSurfaceIds.has(id),
+        )
         .map((id) => tabMap.get(id))
         .filter((item): item is TabNavItem => Boolean(item))
         .map((item) => ({
@@ -1192,7 +893,18 @@ export default async function TeamPage({
     .filter((item): item is TabNavItem => Boolean(item))
     .map((item) => ({ id: item.id, label: item.label, href: item.href }));
 
-  const classicHref = withLayout(`/team?tab=${encodeURIComponent(tab)}`);
+  const classicSearch = new URLSearchParams();
+  for (const [key, rawValue] of Object.entries(params ?? {})) {
+    if (key === "tab" || key === "_canonical" || key === "layout") continue;
+    const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+    for (const value of values) {
+      if (typeof value === "string" && value.length > 0) {
+        classicSearch.append(key, value);
+      }
+    }
+  }
+  classicSearch.set("layout", "classic");
+  const classicHref = teamSurfaceHref(tab, { query: classicSearch });
   const companyProfile = getPublicCompanyProfile();
   const brand = {
     shortName: getCompanyShortName(companyProfile),
@@ -1201,7 +913,9 @@ export default async function TeamPage({
 
   return (
     <TeamAppShell
-      activeId={tab}
+      activeId={
+        tab === "partners" ? "outbound" : tab === "sales-log" ? "sales-hq" : tab
+      }
       title={activeTab?.label ?? "Team Console"}
       quickItems={quickItems}
       utilityItems={utilityItems}
@@ -1244,13 +958,6 @@ interface CalendarSyncBadge {
   headline: string;
   detail?: string;
 }
-
-const calendarBadgeToneClasses: Record<CalendarBadgeTone, string> = {
-  ok: "border-emerald-200 bg-emerald-50 text-emerald-700",
-  warn: "border-amber-200 bg-amber-50 text-amber-700",
-  alert: "border-rose-200 bg-rose-50 text-rose-700",
-  idle: "border-slate-200 bg-white text-slate-500",
-};
 
 function evaluateCalendarBadge(
   payload: CalendarStatusApiResponse,

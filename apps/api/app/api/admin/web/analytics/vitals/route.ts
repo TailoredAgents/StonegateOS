@@ -1,24 +1,42 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, gte, sql } from "drizzle-orm";
-import { DateTime } from "luxon";
 import { getDb, webVitals } from "@/db";
-import { isAdminRequest } from "../../../../web/admin";
-
-function parseRangeDays(request: NextRequest): number {
-  const rangeDaysRaw = request.nextUrl.searchParams.get("rangeDays");
-  const parsed = rangeDaysRaw ? Number(rangeDaysRaw) : NaN;
-  if (!Number.isFinite(parsed)) return 7;
-  return Math.min(Math.max(Math.floor(parsed), 1), 30);
-}
+import { requirePermission } from "@/lib/permissions";
+import {
+  buildWebsiteAnalyticsWindow,
+  parseWebsiteAnalyticsRangeDays,
+  WEBSITE_ANALYTICS_RANGE_DAYS,
+} from "@/lib/web-analytics-reporting";
 
 export async function GET(request: NextRequest): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const denied = await requirePermission(request, "marketing.read");
+  if (denied) return denied;
+
+  const rangeDays = parseWebsiteAnalyticsRangeDays(
+    request.nextUrl.searchParams.get("rangeDays"),
+  );
+  if (rangeDays === null) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "invalid_range",
+        allowedRangeDays: WEBSITE_ANALYTICS_RANGE_DAYS,
+      },
+      { status: 422 },
+    );
   }
 
-  const rangeDays = parseRangeDays(request);
-  const cutoff = DateTime.now().minus({ days: rangeDays }).toJSDate();
+  let reportingWindow: ReturnType<typeof buildWebsiteAnalyticsWindow>;
+  try {
+    reportingWindow = buildWebsiteAnalyticsWindow(rangeDays);
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "invalid_time" },
+      { status: 500 },
+    );
+  }
+  const { timeframe, startAt: cutoff } = reportingWindow;
 
   const db = getDb();
   const rows = await db
@@ -27,16 +45,24 @@ export async function GET(request: NextRequest): Promise<Response> {
       metric: webVitals.metric,
       device: webVitals.device,
       samples: sql<number>`count(*)`.mapWith(Number),
-      p75: sql<number>`percentile_cont(0.75) within group (order by ${webVitals.value})`.mapWith(Number)
+      p75: sql<number>`percentile_cont(0.75) within group (order by ${webVitals.value})`.mapWith(
+        Number,
+      ),
     })
     .from(webVitals)
-    .where(and(gte(webVitals.createdAt, cutoff), sql`${webVitals.path} in ('/','/book')`))
+    .where(
+      and(
+        gte(webVitals.createdAt, cutoff),
+        sql`${webVitals.path} in ('/','/book','/bookbrush','/bookdemo')`,
+      ),
+    )
     .groupBy(webVitals.path, webVitals.metric, webVitals.device);
 
   return NextResponse.json({
     ok: true,
     rangeDays,
-    since: cutoff.toISOString(),
-    items: rows
+    since: timeframe.since,
+    timeframe,
+    items: rows,
   });
 }

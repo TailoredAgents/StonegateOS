@@ -1,25 +1,22 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getDb, auditLogs, teamMembers } from "@/db";
+import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
+import {
+  buildAuditWhere,
+  encodeAuditCursor,
+  parseAuditQuery,
+} from "@/lib/audit-query";
+import { AUDIT_RETENTION_POLICY } from "@/lib/audit-retention";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../web/admin";
 
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 200;
-
-function parseLimit(value: string | null): number {
-  if (!value) return DEFAULT_LIMIT;
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed <= 0) return DEFAULT_LIMIT;
-  return Math.min(Math.floor(parsed), MAX_LIMIT);
-}
-
-function parseOffset(value: string | null): number {
-  if (!value) return 0;
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed < 0) return 0;
-  return Math.floor(parsed);
+function invalidFilter(field: string, message: string): NextResponse {
+  return NextResponse.json(
+    { error: "invalid_filter", field, message },
+    { status: 422 },
+  );
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -30,97 +27,78 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (permissionError) return permissionError;
 
   const { searchParams } = request.nextUrl;
-  const entityType = searchParams.get("entityType");
-  const entityId = searchParams.get("entityId");
-  const actorId = searchParams.get("actorId");
-  const limit = parseLimit(searchParams.get("limit"));
-  const offset = parseOffset(searchParams.get("offset"));
-
-  const filters = [];
-  if (entityType) {
-    filters.push(eq(auditLogs.entityType, entityType));
-  }
-  if (entityId) {
-    filters.push(eq(auditLogs.entityId, entityId));
-  }
-  if (actorId) {
-    filters.push(eq(auditLogs.actorId, actorId));
-  }
-
-  const whereClause = filters.length > 0 ? and(...filters) : undefined;
+  const parsed = parseAuditQuery(searchParams);
+  if (!parsed.ok) return invalidFilter(parsed.field, parsed.message);
+  const { query } = parsed;
+  const filters = buildAuditWhere(query);
 
   const db = getDb();
-  const totalResult = whereClause
-    ? await db
-        .select({ count: sql<number>`count(*)` })
-        .from(auditLogs)
-        .where(whereClause)
-    : await db.select({ count: sql<number>`count(*)` }).from(auditLogs);
-  const total = Number(totalResult[0]?.count ?? 0);
+  const rows = await db
+    .select({
+      id: auditLogs.id,
+      actorType: auditLogs.actorType,
+      actorId: auditLogs.actorId,
+      actorRole: auditLogs.actorRole,
+      actorLabel: auditLogs.actorLabel,
+      sessionId: auditLogs.sessionId,
+      authMethod: auditLogs.authMethod,
+      correlationId: auditLogs.correlationId,
+      requiredPermissions: auditLogs.requiredPermissions,
+      outcome: auditLogs.outcome,
+      surface: auditLogs.surface,
+      providerOperationId: auditLogs.providerOperationId,
+      action: auditLogs.action,
+      entityType: auditLogs.entityType,
+      entityId: auditLogs.entityId,
+      meta: auditLogs.meta,
+      createdAt: auditLogs.createdAt,
+      actorName: teamMembers.name,
+    })
+    .from(auditLogs)
+    .leftJoin(teamMembers, eq(auditLogs.actorId, teamMembers.id))
+    .where(filters.length > 0 ? and(...filters) : undefined)
+    .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
+    .limit(query.limit + 1);
 
-  const rows = await (whereClause
-    ? db
-        .select({
-          id: auditLogs.id,
-          actorType: auditLogs.actorType,
-          actorId: auditLogs.actorId,
-          actorRole: auditLogs.actorRole,
-          actorLabel: auditLogs.actorLabel,
-          action: auditLogs.action,
-          entityType: auditLogs.entityType,
-          entityId: auditLogs.entityId,
-          meta: auditLogs.meta,
-          createdAt: auditLogs.createdAt,
-          actorName: teamMembers.name
-        })
-        .from(auditLogs)
-        .leftJoin(teamMembers, eq(auditLogs.actorId, teamMembers.id))
-        .where(whereClause)
-    : db
-        .select({
-          id: auditLogs.id,
-          actorType: auditLogs.actorType,
-          actorId: auditLogs.actorId,
-          actorRole: auditLogs.actorRole,
-          actorLabel: auditLogs.actorLabel,
-          action: auditLogs.action,
-          entityType: auditLogs.entityType,
-          entityId: auditLogs.entityId,
-          meta: auditLogs.meta,
-          createdAt: auditLogs.createdAt,
-          actorName: teamMembers.name
-        })
-        .from(auditLogs)
-        .leftJoin(teamMembers, eq(auditLogs.actorId, teamMembers.id)))
-    .orderBy(desc(auditLogs.createdAt))
-    .limit(limit)
-    .offset(offset);
-
-  const events = rows.map((row) => ({
+  const hasMore = rows.length > query.limit;
+  const pageRows = rows.slice(0, query.limit);
+  const last = pageRows.at(-1);
+  const events = pageRows.map((row) => ({
     id: row.id,
     actor: {
       type: row.actorType,
       id: row.actorId,
       role: row.actorRole ?? null,
       label: row.actorLabel ?? null,
-      name: row.actorName ?? null
+      name: row.actorName ?? null,
+      sessionId: row.sessionId ?? null,
+      authMethod: row.authMethod ?? null,
     },
     action: row.action,
+    outcome: row.outcome ?? null,
+    surface: row.surface ?? null,
     entityType: row.entityType,
     entityId: row.entityId ?? null,
-    meta: row.meta ?? null,
-    createdAt: row.createdAt.toISOString()
+    correlationId: row.correlationId ?? null,
+    requiredPermissions: row.requiredPermissions ?? [],
+    providerOperationId: row.providerOperationId ?? null,
+    meta: sanitizeAuditMetadata(row.meta),
+    createdAt: row.createdAt.toISOString(),
   }));
-
-  const nextOffset = offset + events.length;
 
   return NextResponse.json({
     events,
+    retention: AUDIT_RETENTION_POLICY,
     pagination: {
-      limit,
-      offset,
-      total,
-      nextOffset: nextOffset < total ? nextOffset : null
-    }
+      limit: query.limit,
+      hasMore,
+      nextCursor:
+        hasMore && last
+          ? encodeAuditCursor({
+              createdAt: last.createdAt.toISOString(),
+              id: last.id,
+            })
+          : null,
+    },
   });
 }

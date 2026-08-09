@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
-import { getDb, salesAgentMemories } from "@/db";
+import type { getDb} from "@/db";
+import { salesAgentMemories } from "@/db";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
 
 type DatabaseClient = ReturnType<typeof getDb>;

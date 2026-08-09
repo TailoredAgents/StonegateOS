@@ -1,15 +1,19 @@
+import { randomUUID } from "node:crypto";
 import React, { type ReactElement } from "react";
 import { CopyButton } from "@/components/CopyButton";
 import { SubmitButton } from "@/components/SubmitButton";
 import { summarizeServiceLabels } from "@/lib/service-labels";
 import {
+  hasTeamPermission,
+  requireCurrentTeamPrincipal,
+} from "@/lib/team-principal";
+import {
+  convertAppointmentToJobAction,
   rescheduleAppointmentAction,
   scheduleQuoteFollowupAction,
   startContactCallAction,
-  updateAppointmentBookingDetailsAction,
-  updateAppointmentSoldByAction,
 } from "../actions";
-import { callAdminApi } from "../lib/api";
+import { callAdminApiAs } from "../lib/api";
 import {
   formatAppointmentLeadSource,
   formatAppointmentJobDetails,
@@ -19,7 +23,12 @@ import {
   type AppointmentBookingDetails,
 } from "../lib/booking-details";
 import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
+import { teamSurfaceHref } from "../surface-registry";
 import { AppointmentBookingDetailsFields } from "./AppointmentBookingDetailsFields";
+import {
+  AppointmentBookingDetailsEditorForm,
+  AppointmentSellerEditorForm,
+} from "./AppointmentMetadataEditorForms";
 import { CrewCompletionBookingDetailsEditor } from "./CrewCompletionBookingDetailsEditor";
 import { CrewPayoutSelector } from "./CrewPayoutSelector";
 import { labelForPipelineStage } from "./pipeline.stages";
@@ -241,6 +250,7 @@ function buildMapsHref(property: AppointmentDto["property"]): string {
 
 interface AppointmentDto {
   id: string;
+  updatedAt: string;
   appointmentType: string | null;
   status: AppointmentStatus;
   startAt: string | null;
@@ -349,6 +359,12 @@ type AppointmentSectionProps = {
   teamMembers: TeamMemberDto[];
   teamMemberNameById: Map<string, string>;
   mode: "run" | "manage";
+  canPlaceCalls: boolean;
+  canUpdateAppointments: boolean;
+  canCollectPayments: boolean;
+  canSendCustomerMessages: boolean;
+  canManageCommissions: boolean;
+  canOverrideAppointmentConflicts: boolean;
 };
 
 function AppointmentSection({
@@ -359,6 +375,12 @@ function AppointmentSection({
   teamMembers,
   teamMemberNameById,
   mode,
+  canPlaceCalls,
+  canUpdateAppointments,
+  canCollectPayments,
+  canSendCustomerMessages,
+  canManageCommissions,
+  canOverrideAppointmentConflicts,
 }: AppointmentSectionProps): ReactElement | null {
   if (items.length === 0) return null;
 
@@ -396,6 +418,12 @@ function AppointmentSection({
             teamMembers={teamMembers}
             teamMemberNameById={teamMemberNameById}
             mode={mode}
+            canPlaceCalls={canPlaceCalls}
+            canUpdateAppointments={canUpdateAppointments}
+            canCollectPayments={canCollectPayments}
+            canSendCustomerMessages={canSendCustomerMessages}
+            canManageCommissions={canManageCommissions}
+            canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
           />
         ))}
       </div>
@@ -408,13 +436,163 @@ type AppointmentCardProps = {
   teamMembers: TeamMemberDto[];
   teamMemberNameById: Map<string, string>;
   mode: "run" | "manage";
+  canPlaceCalls: boolean;
+  canUpdateAppointments: boolean;
+  canCollectPayments: boolean;
+  canSendCustomerMessages: boolean;
+  canManageCommissions: boolean;
+  canOverrideAppointmentConflicts: boolean;
 };
+
+function QuoteConversionPanel({
+  appointment,
+  teamMembers,
+  canManageCommissions,
+}: {
+  appointment: AppointmentDto;
+  teamMembers: TeamMemberDto[];
+  canManageCommissions: boolean;
+}): ReactElement {
+  const sellerBaseline =
+    appointment.soldByMemberId ??
+    appointment.contact.assignedAssociateMemberId ??
+    null;
+  const activeBaselineSeller = sellerBaseline
+    ? (teamMembers.find((member) => member.id === sellerBaseline) ?? null)
+    : null;
+  const sellerCorrectionBlocked = Boolean(
+    sellerBaseline && !activeBaselineSeller && !canManageCommissions,
+  );
+  if (sellerCorrectionBlocked) {
+    return (
+      <div
+        role="alert"
+        className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 px-3 py-3 text-sm leading-6 text-amber-900"
+      >
+        Conversion is blocked because the assigned seller is inactive or no
+        longer available. A commission manager must choose an active seller
+        before this quote can become a job.
+      </div>
+    );
+  }
+
+  const defaultSellerId = activeBaselineSeller?.id ?? "";
+  const sellerOptions = (
+    canManageCommissions || !sellerBaseline
+      ? teamMembers
+      : activeBaselineSeller
+        ? [activeBaselineSeller]
+        : []
+  ).filter((member) => member.id !== defaultSellerId);
+
+  return (
+    <details className="mt-4 rounded-2xl border border-cyan-200 bg-cyan-50/40 p-3">
+      <summary className={summaryButtonClass("primary")}>
+        Convert quote to job
+      </summary>
+      <form
+        action={convertAppointmentToJobAction}
+        className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
+      >
+        <input type="hidden" name="appointmentId" value={appointment.id} />
+        <input
+          type="hidden"
+          name="expectedVersion"
+          value={appointment.updatedAt}
+        />
+        <input
+          type="hidden"
+          name="idempotencyKey"
+          value={`appointment-convert:${randomUUID()}`}
+        />
+        <input type="hidden" name="expectedStatus" value={appointment.status} />
+        <input
+          type="hidden"
+          name="expectedSoldByMemberId"
+          value={appointment.soldByMemberId ?? ""}
+        />
+        <input
+          type="hidden"
+          name="expectedAssignedSalespersonMemberId"
+          value={appointment.contact.assignedAssociateMemberId ?? ""}
+        />
+
+        <label className="flex flex-col gap-1">
+          <span>Job start</span>
+          <input
+            name="startAt"
+            type="datetime-local"
+            required
+            defaultValue={fmtDateTimeInputValue(appointment.startAt)}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+          />
+          <span className="text-[11px] text-slate-500">Eastern time</span>
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span>Who sold the job?</span>
+          <select
+            name="soldByMemberId"
+            defaultValue={defaultSellerId}
+            required
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+          >
+            <option value="">(Select seller)</option>
+            {activeBaselineSeller ? (
+              <option value={activeBaselineSeller.id}>
+                {activeBaselineSeller.name}
+              </option>
+            ) : null}
+            {sellerOptions.map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <AppointmentBookingDetailsFields
+          teamMembers={teamMembers}
+          bookingDetails={appointment.bookingDetails}
+          quotedTotalCents={appointment.quotedTotalCents}
+          allowServiceTypeSelection
+          labelClassName="flex flex-col gap-1"
+          fieldClassName="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+        />
+
+        <div className="sm:col-span-2 rounded-2xl border border-cyan-200 bg-white px-3 py-2 text-[11px] leading-5 text-slate-600">
+          {sellerBaseline && !activeBaselineSeller
+            ? "The previous seller is inactive. Choose an active seller; this correction requires commission-management permission. "
+            : null}
+          Conversion saves the job schedule, quoted pricing, seller attribution,
+          Pipeline stage, audit receipt, and any queued Google Calendar sync as
+          one confirmed operation. It does not message the customer or request a
+          review.
+        </div>
+        <div className="sm:col-span-2 flex items-center justify-end">
+          <SubmitButton
+            className={teamButtonClass("primary", "sm")}
+            pendingLabel="Converting..."
+          >
+            Convert to job
+          </SubmitButton>
+        </div>
+      </form>
+    </details>
+  );
+}
 
 function AppointmentCard({
   item,
   teamMembers,
   teamMemberNameById,
   mode,
+  canPlaceCalls,
+  canUpdateAppointments,
+  canCollectPayments,
+  canSendCustomerMessages,
+  canManageCommissions,
+  canOverrideAppointmentConflicts,
 }: AppointmentCardProps): ReactElement {
   const a = item.appointment;
   const sellerName = a.soldByMemberId
@@ -438,6 +616,11 @@ function AppointmentCard({
   const mapsHref = buildMapsHref(a.property);
   const hasPhone = Boolean(a.contact.phone && a.contact.id);
   const isCompleted = a.status === "completed";
+  const canConvertQuote =
+    item.isQuoteOnly &&
+    canUpdateAppointments &&
+    canCollectPayments &&
+    (!isCompleted || canOverrideAppointmentConflicts);
   const cardClassName = item.isQuoteOnly
     ? "border-sky-200 bg-sky-50/40"
     : isCompleted
@@ -465,6 +648,8 @@ function AppointmentCard({
   const showFollowUpPanel =
     item.isQuoteOnly && (quoteVisitHasPassed || Boolean(a.quoteFollowUp));
   const mobilePrimaryActionLabel = item.isQuoteOnly ? "Quote done" : "Complete";
+  const canShowPrimaryMobileAction =
+    canUpdateAppointments && (item.isQuoteOnly || canCollectPayments);
   const mobileMetaRows = [
     {
       label: "Money",
@@ -612,13 +797,23 @@ function AppointmentCard({
           </div>
         </div>
 
-        {!isCompleted ? (
+        {!isCompleted && canPlaceCalls ? (
           <div className="hidden sm:flex sm:flex-wrap sm:gap-2 lg:justify-end">
             <form action={startContactCallAction}>
               <input
                 type="hidden"
                 name="contactId"
                 value={a.contact.id ?? ""}
+              />
+              <input
+                type="hidden"
+                name="idempotencyKey"
+                value={`team-call:${randomUUID()}`}
+              />
+              <input
+                type="hidden"
+                name="explicitNewAttempt"
+                value="START NEW CALL"
               />
               <SubmitButton
                 className={teamButtonClass("secondary", "sm")}
@@ -632,25 +827,49 @@ function AppointmentCard({
         ) : null}
       </div>
 
-      {!isCompleted ? (
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:hidden">
-          <form action={startContactCallAction}>
-            <input type="hidden" name="contactId" value={a.contact.id ?? ""} />
-            <SubmitButton
-              className={teamButtonClass("secondary", "sm")}
-              pendingLabel="Calling..."
-              disabled={!hasPhone}
-            >
-              Call
-            </SubmitButton>
-          </form>
+      {!isCompleted && (canPlaceCalls || canShowPrimaryMobileAction) ? (
+        <div
+          className={`mt-4 grid gap-2 sm:hidden ${
+            canPlaceCalls && canShowPrimaryMobileAction
+              ? "grid-cols-2"
+              : "grid-cols-1"
+          }`}
+        >
+          {canPlaceCalls ? (
+            <form action={startContactCallAction}>
+              <input
+                type="hidden"
+                name="contactId"
+                value={a.contact.id ?? ""}
+              />
+              <input
+                type="hidden"
+                name="idempotencyKey"
+                value={`team-call:${randomUUID()}`}
+              />
+              <input
+                type="hidden"
+                name="explicitNewAttempt"
+                value="START NEW CALL"
+              />
+              <SubmitButton
+                className={teamButtonClass("secondary", "sm")}
+                pendingLabel="Calling..."
+                disabled={!hasPhone}
+              >
+                Call
+              </SubmitButton>
+            </form>
+          ) : null}
 
-          <a
-            href={`#myday-complete-${a.id}`}
-            className={teamButtonClass("primary", "sm")}
-          >
-            {mobilePrimaryActionLabel}
-          </a>
+          {canShowPrimaryMobileAction ? (
+            <a
+              href={`#myday-complete-${a.id}`}
+              className={teamButtonClass("primary", "sm")}
+            >
+              {mobilePrimaryActionLabel}
+            </a>
+          ) : null}
         </div>
       ) : null}
 
@@ -724,7 +943,15 @@ function AppointmentCard({
         )}
       </div>
 
-      {!isCompleted ? (
+      {canConvertQuote ? (
+        <QuoteConversionPanel
+          appointment={a}
+          teamMembers={teamMembers}
+          canManageCommissions={canManageCommissions}
+        />
+      ) : null}
+
+      {!isCompleted && canUpdateAppointments ? (
         <div className="mt-4 space-y-3">
           {item.isQuoteOnly ? (
             <>
@@ -743,12 +970,23 @@ function AppointmentCard({
                   <input type="hidden" name="appointmentId" value={a.id} />
                   <input
                     type="hidden"
+                    name="expectedVersion"
+                    value={a.updatedAt}
+                  />
+                  <input
+                    type="hidden"
+                    name="idempotencyKey"
+                    value={`appointment-status:${randomUUID()}`}
+                  />
+                  <input
+                    type="hidden"
                     name="appointmentType"
                     value={a.appointmentType ?? ""}
                   />
                   <input type="hidden" name="status" value="completed" />
                   <div className="text-sm text-slate-600">
-                    Mark this in-person quote visit as done.
+                    Mark this in-person quote visit as done. The customer will
+                    not be notified by this status change.
                   </div>
                   <div className="flex justify-end">
                     <SubmitButton
@@ -834,7 +1072,7 @@ function AppointmentCard({
                 </details>
               ) : null}
             </>
-          ) : (
+          ) : canCollectPayments ? (
             <details
               id={`myday-complete-${a.id}`}
               className="group rounded-2xl border border-emerald-200 bg-white p-3"
@@ -848,7 +1086,26 @@ function AppointmentCard({
                 className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
               >
                 <input type="hidden" name="appointmentId" value={a.id} />
+                <input
+                  type="hidden"
+                  name="expectedVersion"
+                  value={a.updatedAt}
+                />
+                <input
+                  type="hidden"
+                  name="idempotencyKey"
+                  value={`appointment-status:${randomUUID()}`}
+                />
                 <input type="hidden" name="status" value="completed" />
+                <input
+                  type="hidden"
+                  name="expectedFinalTotalCents"
+                  value={
+                    a.finalTotalCents === null
+                      ? "null"
+                      : String(a.finalTotalCents)
+                  }
+                />
 
                 <label className="flex flex-col gap-1">
                   <span>Final job total</span>
@@ -894,6 +1151,26 @@ function AppointmentCard({
                   </div>
                 </details>
 
+                {canSendCustomerMessages ? (
+                  <label className="sm:col-span-2 flex min-h-11 items-start gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-900">
+                    <input
+                      type="checkbox"
+                      name="sendReviewRequest"
+                      className="mt-0.5 h-5 w-5 rounded border-sky-300"
+                    />
+                    <span>
+                      Request a review message. Safe default is off; checking
+                      this requests a queued message but does not confirm
+                      delivery.
+                    </span>
+                  </label>
+                ) : (
+                  <p className="sm:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+                    This job will be completed without a review message.
+                    Messaging permission is required to request one.
+                  </p>
+                )}
+
                 <div className="sm:col-span-2 flex items-center justify-end">
                   <SubmitButton
                     className={teamButtonClass("primary", "sm")}
@@ -904,7 +1181,7 @@ function AppointmentCard({
                 </div>
               </form>
             </details>
-          )}
+          ) : null}
 
           {mode === "manage" ? (
             <details className="group rounded-2xl border border-slate-200 bg-white p-3">
@@ -917,10 +1194,27 @@ function AppointmentCard({
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     Quick changes
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <form action="/api/team/appointments/status" method="post">
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <form
+                      action="/api/team/appointments/status"
+                      method="post"
+                      className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3"
+                    >
                       <input type="hidden" name="appointmentId" value={a.id} />
+                      <input
+                        type="hidden"
+                        name="expectedVersion"
+                        value={a.updatedAt}
+                      />
+                      <input
+                        type="hidden"
+                        name="idempotencyKey"
+                        value={`appointment-status:${randomUUID()}`}
+                      />
                       <input type="hidden" name="status" value="no_show" />
+                      <p className="text-xs leading-5 text-slate-600">
+                        The customer will not be notified by this status change.
+                      </p>
                       <SubmitButton
                         className={teamButtonClass("secondary", "sm")}
                         pendingLabel="Saving..."
@@ -928,9 +1222,41 @@ function AppointmentCard({
                         No-show
                       </SubmitButton>
                     </form>
-                    <form action="/api/team/appointments/status" method="post">
+                    <form
+                      action="/api/team/appointments/status"
+                      method="post"
+                      className="space-y-2 rounded-2xl border border-rose-200 bg-rose-50/40 p-3"
+                    >
                       <input type="hidden" name="appointmentId" value={a.id} />
+                      <input
+                        type="hidden"
+                        name="expectedVersion"
+                        value={a.updatedAt}
+                      />
+                      <input
+                        type="hidden"
+                        name="idempotencyKey"
+                        value={`appointment-status:${randomUUID()}`}
+                      />
                       <input type="hidden" name="status" value="canceled" />
+                      {canSendCustomerMessages ? (
+                        <label className="flex min-h-11 items-start gap-3 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs leading-5 text-rose-900">
+                          <input
+                            type="checkbox"
+                            name="sendCustomerNotification"
+                            className="mt-0.5 h-5 w-5 rounded border-rose-300"
+                          />
+                          <span>
+                            Send a cancellation notice. Safe default is off;
+                            delivery is tracked separately in Inbox.
+                          </span>
+                        </label>
+                      ) : (
+                        <p className="text-xs leading-5 text-slate-600">
+                          The customer will not be notified. Messaging
+                          permission is required to send a cancellation notice.
+                        </p>
+                      )}
                       <SubmitButton
                         className={teamButtonClass("danger", "sm")}
                         pendingLabel="Saving..."
@@ -989,90 +1315,43 @@ function AppointmentCard({
                   </form>
                 </details>
 
-                {!item.isQuoteOnly ? (
+                {!item.isQuoteOnly &&
+                !isCompleted &&
+                canUpdateAppointments &&
+                canCollectPayments ? (
                   <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
                     <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       Edit booking details
                     </summary>
-                    <form
-                      action={updateAppointmentBookingDetailsAction}
-                      className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
-                    >
-                      <input type="hidden" name="appointmentId" value={a.id} />
-                      <AppointmentBookingDetailsFields
-                        teamMembers={teamMembers}
-                        bookingDetails={a.bookingDetails}
-                        quotedTotalCents={a.quotedTotalCents}
-                        allowServiceTypeSelection
-                        labelClassName="flex flex-col gap-1"
-                        fieldClassName="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                      />
-                      <div className="sm:col-span-2 flex items-center justify-end">
-                        <SubmitButton
-                          className={teamButtonClass("primary", "sm")}
-                          pendingLabel="Saving..."
-                        >
-                          Save booking details
-                        </SubmitButton>
-                      </div>
-                    </form>
+                    <AppointmentBookingDetailsEditorForm
+                      appointmentId={a.id}
+                      version={a.updatedAt}
+                      idempotencyKey={`appointment-booking-details:${randomUUID()}`}
+                      teamMembers={teamMembers}
+                      bookingDetails={a.bookingDetails}
+                      quotedTotalCents={a.quotedTotalCents}
+                    />
                   </details>
                 ) : null}
 
-                {!item.isQuoteOnly ? (
+                {!item.isQuoteOnly &&
+                canUpdateAppointments &&
+                canManageCommissions ? (
                   <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
                     <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       Edit seller
                     </summary>
-                    <form
-                      action={updateAppointmentSoldByAction}
-                      className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
-                    >
-                      <input type="hidden" name="appointmentId" value={a.id} />
-                      <label className="flex flex-col gap-1">
-                        <span>Who sold the job?</span>
-                        <select
-                          name="soldByMemberId"
-                          defaultValue={
-                            a.soldByMemberId ??
-                            a.contact.assignedAssociateMemberId ??
-                            ""
-                          }
-                          required
-                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                        >
-                          <option value="">(Select seller)</option>
-                          {teamMembers.map((member) => (
-                            <option key={member.id} value={member.id}>
-                              {member.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        <span>Seller override code</span>
-                        <input
-                          name="soldByOverrideCode"
-                          type="password"
-                          autoComplete="off"
-                          placeholder="Required if changing seller"
-                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                        />
-                      </label>
-                      <div className="sm:col-span-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-600">
-                        Sales payouts use this seller. Completed jobs update
-                        draft payout reports immediately. Locked or paid payout
-                        periods must be unlocked before seller changes.
-                      </div>
-                      <div className="sm:col-span-2 flex items-center justify-end">
-                        <SubmitButton
-                          className={teamButtonClass("primary", "sm")}
-                          pendingLabel="Saving..."
-                        >
-                          Save seller
-                        </SubmitButton>
-                      </div>
-                    </form>
+                    <AppointmentSellerEditorForm
+                      appointmentId={a.id}
+                      version={a.updatedAt}
+                      idempotencyKey={`appointment-sold-by:${randomUUID()}`}
+                      teamMembers={teamMembers}
+                      soldByMemberId={a.soldByMemberId}
+                      assignedAssociateMemberId={
+                        a.contact.assignedAssociateMemberId
+                      }
+                      status={a.status}
+                    />
                   </details>
                 ) : null}
 
@@ -1110,6 +1389,16 @@ function AppointmentCard({
                     className="mt-3 flex flex-col gap-2 sm:flex-row"
                   >
                     <input type="hidden" name="appointmentId" value={a.id} />
+                    <input
+                      type="hidden"
+                      name="expectedVersion"
+                      value={a.updatedAt}
+                    />
+                    <input
+                      type="hidden"
+                      name="idempotencyKey"
+                      value={`appointment-note:${randomUUID()}`}
+                    />
                     <input
                       name="body"
                       placeholder="Add note"
@@ -1263,6 +1552,22 @@ export async function MyDaySection({
 }: {
   mode?: "run" | "manage";
 } = {}): Promise<ReactElement> {
+  const principal = await requireCurrentTeamPrincipal();
+  const canPlaceCalls = hasTeamPermission(principal, "calls.place");
+  const canUpdateAppointments = hasTeamPermission(
+    principal,
+    "appointments.update",
+  );
+  const canCollectPayments = hasTeamPermission(principal, "payments.collect");
+  const canSendCustomerMessages = hasTeamPermission(principal, "messages.send");
+  const canManageCommissions = hasTeamPermission(
+    principal,
+    "commissions.manage",
+  );
+  const canOverrideAppointmentConflicts = hasTeamPermission(
+    principal,
+    "appointments.override_conflicts",
+  );
   const now = new Date();
   const todayKey = formatDayKey(now);
   const todayRange = getTeamDayRange(now);
@@ -1274,11 +1579,12 @@ export async function MyDaySection({
 
   try {
     const [confirmedRes, completedTodayRes, membersRes] = await Promise.all([
-      callAdminApi("/api/appointments?status=confirmed"),
-      callAdminApi(
+      callAdminApiAs(principal, "/api/appointments?status=confirmed"),
+      callAdminApiAs(
+        principal,
         `/api/appointments?status=completed&startAtFrom=${encodeURIComponent(todayRange.startIso)}&startAtTo=${encodeURIComponent(todayRange.endIso)}`,
       ),
-      callAdminApi("/api/admin/team/directory"),
+      callAdminApiAs(principal, "/api/admin/team/directory"),
     ]);
 
     if (!confirmedRes.ok) {
@@ -1361,8 +1667,12 @@ export async function MyDaySection({
     laterToday.length > 0 ||
     comingUp.length > 0 ||
     completedTodayItems.length > 0;
-  const routeModeHref = "/team?tab=myday&myDayMode=run";
-  const manageModeHref = "/team?tab=myday&myDayMode=manage";
+  const routeModeHref = teamSurfaceHref("calendar", {
+    query: { myDayMode: "run" },
+  });
+  const manageModeHref = teamSurfaceHref("calendar", {
+    query: { myDayMode: "manage" },
+  });
 
   return (
     <section className="space-y-6">
@@ -1428,6 +1738,12 @@ export async function MyDaySection({
           teamMembers={teamMembers}
           teamMemberNameById={teamMemberNameById}
           mode={mode}
+          canPlaceCalls={canPlaceCalls}
+          canUpdateAppointments={canUpdateAppointments}
+          canCollectPayments={canCollectPayments}
+          canSendCustomerMessages={canSendCustomerMessages}
+          canManageCommissions={canManageCommissions}
+          canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
         />
       ) : null}
 
@@ -1440,6 +1756,12 @@ export async function MyDaySection({
           teamMembers={teamMembers}
           teamMemberNameById={teamMemberNameById}
           mode={mode}
+          canPlaceCalls={canPlaceCalls}
+          canUpdateAppointments={canUpdateAppointments}
+          canCollectPayments={canCollectPayments}
+          canSendCustomerMessages={canSendCustomerMessages}
+          canManageCommissions={canManageCommissions}
+          canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
         />
       ) : null}
 
@@ -1452,6 +1774,12 @@ export async function MyDaySection({
           teamMembers={teamMembers}
           teamMemberNameById={teamMemberNameById}
           mode={mode}
+          canPlaceCalls={canPlaceCalls}
+          canUpdateAppointments={canUpdateAppointments}
+          canCollectPayments={canCollectPayments}
+          canSendCustomerMessages={canSendCustomerMessages}
+          canManageCommissions={canManageCommissions}
+          canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
         />
       ) : null}
 
@@ -1464,6 +1792,12 @@ export async function MyDaySection({
           teamMembers={teamMembers}
           teamMemberNameById={teamMemberNameById}
           mode={mode}
+          canPlaceCalls={canPlaceCalls}
+          canUpdateAppointments={canUpdateAppointments}
+          canCollectPayments={canCollectPayments}
+          canSendCustomerMessages={canSendCustomerMessages}
+          canManageCommissions={canManageCommissions}
+          canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
         />
       ) : null}
 
@@ -1476,6 +1810,12 @@ export async function MyDaySection({
           teamMembers={teamMembers}
           teamMemberNameById={teamMemberNameById}
           mode={mode}
+          canPlaceCalls={canPlaceCalls}
+          canUpdateAppointments={canUpdateAppointments}
+          canCollectPayments={canCollectPayments}
+          canSendCustomerMessages={canSendCustomerMessages}
+          canManageCommissions={canManageCommissions}
+          canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
         />
       ) : null}
     </section>

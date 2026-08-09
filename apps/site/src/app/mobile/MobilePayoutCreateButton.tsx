@@ -30,6 +30,7 @@ export function MobilePayoutCreateButton({
 }) {
   const router = useRouter();
   const inFlightRef = useRef(false);
+  const idempotencyKeyRef = useRef<string | null>(null);
   const [pending, setPending] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [result, setResult] = useState<{
@@ -52,12 +53,16 @@ export function MobilePayoutCreateButton({
     setPending(true);
     setElapsedSeconds(0);
     setResult(null);
+    idempotencyKeyRef.current ??= `commissions:mobile-refresh:${globalThis.crypto.randomUUID()}`;
 
     try {
       const response = await fetch("/api/mobile/owner/payout-runs/refresh", {
         method: "POST",
         cache: "no-store",
-        headers: { Accept: "application/json" },
+        headers: {
+          Accept: "application/json",
+          "Idempotency-Key": idempotencyKeyRef.current,
+        },
       });
       const payload = (await response
         .json()
@@ -78,6 +83,7 @@ export function MobilePayoutCreateButton({
           ? `Payout ready. Report refreshed at ${readyAt}.`
           : "Payout ready. The latest totals and report are available.",
       });
+      idempotencyKeyRef.current = null;
       router.refresh();
     } catch (error) {
       setResult({

@@ -45,6 +45,12 @@ export const appointmentStatusEnum = pgEnum("appointment_status", [
   "no_show",
   "canceled",
 ]);
+export const expenseLifecycleStatusEnum = pgEnum("expense_lifecycle_status", [
+  "draft",
+  "posted",
+  "voided",
+  "corrected",
+]);
 
 export type AppointmentLeadSourceType =
   | "google"
@@ -159,6 +165,10 @@ export const messageDeliveryStatusEnum = pgEnum("message_delivery_status", [
   "delivered",
   "failed",
 ]);
+export const externalMessageDispatchStateEnum = pgEnum(
+  "external_message_dispatch_state",
+  ["requested", "dispatched", "succeeded", "failed", "reconciliation_required"],
+);
 export const mergeSuggestionStatusEnum = pgEnum("merge_suggestion_status", [
   "pending",
   "approved",
@@ -234,7 +244,9 @@ export const partnerAccounts = pgTable(
   (table) => ({
     statusIdx: index("partner_accounts_status_idx").on(table.status),
     ownerIdx: index("partner_accounts_owner_idx").on(table.ownerMemberId),
-    nextTouchIdx: index("partner_accounts_next_touch_idx").on(table.nextTouchAt),
+    nextTouchIdx: index("partner_accounts_next_touch_idx").on(
+      table.nextTouchAt,
+    ),
     domainIdx: index("partner_accounts_domain_idx").on(table.domain),
     normalizedNameIdx: index("partner_accounts_normalized_name_idx").on(
       table.normalizedName,
@@ -253,9 +265,12 @@ export const contacts = pgTable(
     phone: varchar("phone", { length: 32 }),
     phoneE164: varchar("phone_e164", { length: 32 }),
     salespersonMemberId: uuid("salesperson_member_id"),
-    partnerAccountId: uuid("partner_account_id").references(() => partnerAccounts.id, {
-      onDelete: "set null",
-    }),
+    partnerAccountId: uuid("partner_account_id").references(
+      () => partnerAccounts.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     partnerStatus: partnerStatusEnum("partner_status")
       .default("none")
       .notNull(),
@@ -280,10 +295,21 @@ export const contacts = pgTable(
     doNotContactReason: text("do_not_contact_reason"),
     preferredContactMethod: text("preferred_contact_method").default("phone"),
     source: text("source"),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    // The migration owns the FK because teamMembers is declared later in this
+    // module; keeping the column here still makes every query type-safe.
+    deletedBy: uuid("deleted_by"),
+    purgeEligibleAt: timestamp("purge_eligible_at", { withTimezone: true }),
+    // Merge provenance is deliberately snapshot-based. The migration owns
+    // the recovery-ledger FK because that append-only table is declared after
+    // contacts; mergedIntoContactId intentionally has no contact FK so the
+    // recovery evidence cannot be rewritten or cascaded by later retention.
+    mergedIntoContactId: uuid("merged_into_contact_snapshot_id"),
+    mergeRecoveryLedgerId: uuid("merge_recovery_ledger_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
@@ -304,6 +330,16 @@ export const contacts = pgTable(
     partnerNextTouchIdx: index("contacts_partner_next_touch_idx").on(
       table.partnerNextTouchAt,
     ),
+    activeUpdatedIdx: index("contacts_active_updated_idx")
+      .on(table.updatedAt)
+      .where(sql`${table.deletedAt} IS NULL`),
+    purgeEligibilityIdx: index("contacts_purge_eligibility_idx")
+      .on(table.purgeEligibleAt)
+      .where(sql`${table.deletedAt} IS NOT NULL`),
+    softDeleteStateCheck: check(
+      "contacts_soft_delete_state_check",
+      sql`(${table.deletedAt} IS NULL AND ${table.deletedBy} IS NULL AND ${table.purgeEligibleAt} IS NULL) OR (${table.deletedAt} IS NOT NULL AND ${table.purgeEligibleAt} IS NOT NULL AND ${table.purgeEligibleAt} >= ${table.deletedAt} + interval '30 days')`,
+    ),
   }),
 );
 
@@ -311,9 +347,14 @@ export const properties = pgTable(
   "properties",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    contactId: uuid("contact_id")
-      .notNull()
-      .references(() => contacts.id, { onDelete: "cascade" }),
+    // Transitional compatibility owner. New code must use contactProperties;
+    // this nullable column remains during the expand phase for older readers.
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    // Canonical physical-address identity. It is nullable so legacy writers
+    // remain deployable while every write path migrates to the association API.
+    addressKey: text("address_key"),
     addressLine1: text("address_line1").notNull(),
     addressLine2: text("address_line2"),
     city: text("city").notNull(),
@@ -332,11 +373,37 @@ export const properties = pgTable(
   },
   (table) => ({
     contactIdx: index("properties_contact_idx").on(table.contactId),
-    addressKey: uniqueIndex("properties_address_key").on(
-      table.addressLine1,
-      table.postalCode,
-      table.state,
-    ),
+    addressKey: uniqueIndex("properties_physical_address_key")
+      .on(table.addressKey)
+      .where(sql`${table.addressKey} is not null`),
+  }),
+);
+
+export const contactProperties = pgTable(
+  "contact_properties",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id")
+      .notNull()
+      .references(() => properties.id, { onDelete: "cascade" }),
+    relationship: text("relationship").default("customer").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    contactPropertyKey: uniqueIndex(
+      "contact_properties_contact_property_key",
+    ).on(table.contactId, table.propertyId),
+    contactIdx: index("contact_properties_contact_idx").on(table.contactId),
+    propertyIdx: index("contact_properties_property_idx").on(table.propertyId),
   }),
 );
 
@@ -365,7 +432,7 @@ export const crmPipeline = pgTable("crm_pipeline", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
+  updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
     .defaultNow()
     .notNull()
     .$onUpdate(() => new Date()),
@@ -378,18 +445,33 @@ export const crmTasks = pgTable(
     contactId: uuid("contact_id")
       .notNull()
       .references(() => contacts.id, { onDelete: "cascade" }),
-    partnerAccountId: uuid("partner_account_id").references(() => partnerAccounts.id, {
-      onDelete: "set null",
-    }),
+    partnerAccountId: uuid("partner_account_id").references(
+      () => partnerAccounts.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     title: text("title").notNull(),
     dueAt: timestamp("due_at", { withTimezone: true }),
     assignedTo: text("assigned_to"),
     status: crmTaskStatusEnum("status").default("open").notNull(),
     notes: text("notes"),
+    outboundProjectionVersion: integer("outbound_projection_version"),
+    outboundIsOutbound: boolean("outbound_is_outbound")
+      .default(false)
+      .notNull(),
+    outboundCampaign: text("outbound_campaign"),
+    outboundAttempt: integer("outbound_attempt"),
+    outboundLastDisposition: text("outbound_last_disposition"),
+    outboundCompany: text("outbound_company"),
+    outboundNoteSnippet: text("outbound_note_snippet"),
+    outboundStartedAt: timestamp("outbound_started_at", {
+      withTimezone: true,
+    }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
@@ -427,6 +509,11 @@ export const leads = pgTable(
     fbclid: text("fbclid"),
     referrer: text("referrer"),
     formPayload: jsonb("form_payload").$type<Record<string, unknown>>(),
+    intakeOperationKeyHash: varchar("intake_operation_key_hash", {
+      length: 64,
+    }),
+    intakeRequestHash: varchar("intake_request_hash", { length: 64 }),
+    intakeResponse: jsonb("intake_response").$type<Record<string, unknown>>(),
     instantQuoteId: uuid("instant_quote_id").references(
       () => instantQuotes.id,
       { onDelete: "set null" },
@@ -445,6 +532,17 @@ export const leads = pgTable(
     contactIdx: index("leads_contact_idx").on(table.contactId),
     propertyIdx: index("leads_property_idx").on(table.propertyId),
     quoteIdx: uniqueIndex("leads_quote_idx").on(table.quoteId),
+    intakeOperationKeyIdx: uniqueIndex("leads_intake_operation_key_hash_key")
+      .on(table.intakeOperationKeyHash)
+      .where(sql`${table.intakeOperationKeyHash} IS NOT NULL`),
+    intakeOperationKeyHashCheck: check(
+      "leads_intake_operation_key_hash_check",
+      sql`${table.intakeOperationKeyHash} IS NULL OR ${table.intakeOperationKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    intakeRequestHashCheck: check(
+      "leads_intake_request_hash_check",
+      sql`${table.intakeRequestHash} IS NULL OR ${table.intakeRequestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
   }),
 );
 
@@ -458,7 +556,7 @@ export const teamRoles = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
@@ -474,6 +572,11 @@ export const teamMembers = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     name: text("name").notNull(),
     email: text("email"),
+    emailNormalized: text("email_normalized"),
+    emailIdentityStatus: text("email_identity_status")
+      .default("none")
+      .notNull(),
+    phoneE164: text("phone_e164"),
     roleId: uuid("role_id").references(() => teamRoles.id, {
       onDelete: "set null",
     }),
@@ -486,14 +589,151 @@ export const teamMembers = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
   },
   (table) => ({
     emailIdx: index("team_members_email_idx").on(table.email),
+    emailNormalizedIdx: uniqueIndex("team_members_email_normalized_key")
+      .on(table.emailNormalized)
+      .where(sql`${table.emailNormalized} IS NOT NULL`),
+    phoneE164Idx: uniqueIndex("team_members_phone_e164_key")
+      .on(table.phoneE164)
+      .where(sql`${table.phoneE164} IS NOT NULL`),
     roleIdx: index("team_members_role_idx").on(table.roleId),
+    phoneE164Check: check(
+      "team_members_phone_e164_format",
+      sql`${table.phoneE164} IS NULL OR ${table.phoneE164} ~ '^\\+[1-9][0-9]{9,14}$'`,
+    ),
+    emailCanonicalCheck: check(
+      "team_members_email_canonical",
+      sql`${table.email} IS NULL OR (${table.email} = lower(btrim(${table.email})) AND length(${table.email}) > 0)`,
+    ),
+    emailIdentityCheck: check(
+      "team_members_email_identity_state",
+      sql`(${table.emailIdentityStatus} = 'ready' AND ${table.email} IS NOT NULL AND ${table.emailNormalized} = ${table.email}) OR (${table.emailIdentityStatus} = 'needs_review' AND ${table.email} IS NOT NULL AND ${table.emailNormalized} IS NULL) OR (${table.emailIdentityStatus} = 'none' AND ${table.email} IS NULL AND ${table.emailNormalized} IS NULL)`,
+    ),
+  }),
+);
+
+export const teamInboxNewLeadAcknowledgements = pgTable(
+  "team_inbox_new_lead_acknowledgements",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    teamMemberId: uuid("team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    acknowledgedAt: timestamp("acknowledged_at", {
+      withTimezone: true,
+    }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    version: integer("version").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    memberContactKey: uniqueIndex(
+      "team_inbox_new_lead_ack_member_contact_key",
+    ).on(table.teamMemberId, table.contactId),
+    memberExpiryIdx: index("team_inbox_new_lead_ack_member_expiry_idx").on(
+      table.teamMemberId,
+      table.expiresAt,
+      table.contactId,
+    ),
+    expiryIdx: index("team_inbox_new_lead_ack_expiry_idx").on(table.expiresAt),
+    expiryCheck: check(
+      "team_inbox_new_lead_ack_expiry_check",
+      sql`${table.expiresAt} = ${table.acknowledgedAt} + interval '24 hours'`,
+    ),
+    versionCheck: check(
+      "team_inbox_new_lead_ack_version_check",
+      sql`${table.version} > 0`,
+    ),
+  }),
+);
+
+export const teamPipelineFilterPresets = pgTable(
+  "team_pipeline_filter_presets",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    teamMemberId: uuid("team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 60 }).notNull(),
+    nameNormalized: varchar("name_normalized", { length: 60 }).notNull(),
+    searchQuery: varchar("search_query", { length: 120 }).default("").notNull(),
+    stage: crmPipelineStageEnum("stage"),
+    excludeOutbound: boolean("exclude_outbound").default(true).notNull(),
+    view: varchar("view", { length: 8 }).default("board").notNull(),
+    version: integer("version").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    memberNameKey: uniqueIndex(
+      "team_pipeline_filter_presets_member_name_key",
+    ).on(table.teamMemberId, table.nameNormalized),
+    memberUpdatedIdx: index(
+      "team_pipeline_filter_presets_member_updated_idx",
+    ).on(table.teamMemberId, table.updatedAt, table.id),
+    nameCheck: check(
+      "team_pipeline_filter_presets_name_check",
+      sql`char_length(btrim(${table.name})) BETWEEN 1 AND 60`,
+    ),
+    normalizedNameCheck: check(
+      "team_pipeline_filter_presets_normalized_name_check",
+      sql`char_length(btrim(${table.nameNormalized})) BETWEEN 1 AND 60 AND ${table.nameNormalized} = lower(${table.nameNormalized})`,
+    ),
+    searchCheck: check(
+      "team_pipeline_filter_presets_search_check",
+      sql`char_length(${table.searchQuery}) <= 120`,
+    ),
+    viewCheck: check(
+      "team_pipeline_filter_presets_view_check",
+      sql`${table.view} IN ('board', 'list')`,
+    ),
+    versionCheck: check(
+      "team_pipeline_filter_presets_version_check",
+      sql`${table.version} > 0`,
+    ),
+  }),
+);
+
+/**
+ * Internal database latch for the effective Access-administrator invariant.
+ *
+ * Application code must not mutate this row. Migration 0076 owns its trigger-
+ * protected lifecycle, including the explicit disposable-fixture reset on a
+ * Team table TRUNCATE.
+ */
+export const teamAccessContinuityState = pgTable(
+  "team_access_continuity_state",
+  {
+    singleton: boolean("singleton").default(true).primaryKey(),
+    protectionEnabled: boolean("protection_enabled").default(false).notNull(),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    singletonCheck: check(
+      "team_access_continuity_state_singleton",
+      sql`${table.singleton} = true`,
+    ),
   }),
 );
 
@@ -519,6 +759,34 @@ export const teamLoginTokens = pgTable(
   }),
 );
 
+export const teamAuthRateLimits = pgTable(
+  "team_auth_rate_limits",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    bucket: text("bucket").notNull(),
+    keyHash: text("key_hash").notNull(),
+    count: integer("count").default(1).notNull(),
+    windowStartedAt: timestamp("window_started_at", {
+      withTimezone: true,
+    }).notNull(),
+    resetAt: timestamp("reset_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    bucketKeyIdx: uniqueIndex("team_auth_rate_limits_bucket_key").on(
+      table.bucket,
+      table.keyHash,
+    ),
+    resetIdx: index("team_auth_rate_limits_reset_idx").on(table.resetAt),
+    countPositiveCheck: check(
+      "team_auth_rate_limits_count_positive",
+      sql`${table.count} > 0`,
+    ),
+  }),
+);
+
 export const teamSessions = pgTable(
   "team_sessions",
   {
@@ -527,6 +795,10 @@ export const teamSessions = pgTable(
       .notNull()
       .references(() => teamMembers.id, { onDelete: "cascade" }),
     sessionHash: text("session_hash").notNull(),
+    authMethod: text("auth_method")
+      .$type<"team_session" | "break_glass">()
+      .default("team_session")
+      .notNull(),
     ip: text("ip"),
     userAgent: text("user_agent"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -550,11 +822,19 @@ export const auditLogs = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     actorType: auditActorTypeEnum("actor_type").default("system").notNull(),
-    actorId: uuid("actor_id").references(() => teamMembers.id, {
-      onDelete: "set null",
-    }),
+    // Historical actor IDs must not be rewritten when a member is removed.
+    // Migration 0071 drops the mutable FK and preserves the verified snapshot.
+    actorId: uuid("actor_id"),
     actorLabel: text("actor_label"),
     actorRole: text("actor_role"),
+    sessionId: uuid("session_id"),
+    authMethod: text("auth_method"),
+    correlationId: text("correlation_id"),
+    requiredPermissions: text("required_permissions").array(),
+    outcome: text("outcome").default("succeeded").notNull(),
+    surface: text("surface"),
+    providerOperationId: text("provider_operation_id"),
+    idempotencyKeyHash: varchar("idempotency_key_hash", { length: 64 }),
     action: text("action").notNull(),
     entityType: text("entity_type").notNull(),
     entityId: text("entity_id"),
@@ -565,11 +845,118 @@ export const auditLogs = pgTable(
   },
   (table) => ({
     actorIdx: index("audit_logs_actor_idx").on(table.actorId),
+    actionIdx: index("audit_logs_action_idx").on(table.action),
+    outcomeIdx: index("audit_logs_outcome_idx").on(table.outcome),
+    correlationIdx: index("audit_logs_correlation_idx").on(table.correlationId),
     entityIdx: index("audit_logs_entity_idx").on(
       table.entityType,
       table.entityId,
     ),
     createdIdx: index("audit_logs_created_idx").on(table.createdAt),
+    cursorIdx: index("audit_logs_cursor_idx").on(table.createdAt, table.id),
+    authMethodCheck: check(
+      "audit_logs_auth_method_check",
+      sql`${table.authMethod} IS NULL OR ${table.authMethod} IN ('team_session', 'break_glass', 'partner_session', 'service')`,
+    ),
+    outcomeCheck: check(
+      "audit_logs_outcome_check",
+      sql`${table.outcome} IN ('attempted', 'succeeded', 'denied', 'failed')`,
+    ),
+    idempotencyHashCheck: check(
+      "audit_logs_idempotency_hash_check",
+      sql`${table.idempotencyKeyHash} IS NULL OR ${table.idempotencyKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+  }),
+);
+
+export type TeamMutationIdempotencyStatus =
+  | "in_progress"
+  | "succeeded"
+  | "failed";
+
+export const teamMutationIdempotency = pgTable(
+  "team_mutation_idempotency",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    principalHash: varchar("principal_hash", { length: 64 }).notNull(),
+    action: text("action").notNull(),
+    keyHash: varchar("key_hash", { length: 64 }).notNull(),
+    scopeHash: varchar("scope_hash", { length: 64 }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    status: text("status")
+      .$type<TeamMutationIdempotencyStatus>()
+      .default("in_progress")
+      .notNull(),
+    operationId: uuid("operation_id").notNull(),
+    correlationId: varchar("correlation_id", { length: 128 }).notNull(),
+    attemptCount: integer("attempt_count").default(1).notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    claimExpiresAt: timestamp("claim_expires_at", {
+      withTimezone: true,
+    }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    responseStatus: integer("response_status"),
+    responseBody: jsonb("response_body").$type<Record<
+      string,
+      unknown
+    > | null>(),
+    lastErrorCode: text("last_error_code"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    principalActionKey: uniqueIndex(
+      "team_mutation_idempotency_principal_action_key",
+    ).on(table.principalHash, table.action, table.keyHash),
+    expiresIdx: index("team_mutation_idempotency_expires_idx").on(
+      table.expiresAt,
+    ),
+    activeClaimIdx: index("team_mutation_idempotency_active_claim_idx")
+      .on(table.claimExpiresAt)
+      .where(sql`${table.status} = 'in_progress'`),
+    statusCheck: check(
+      "team_mutation_idempotency_status_check",
+      sql`${table.status} IN ('in_progress', 'succeeded', 'failed')`,
+    ),
+    principalHashCheck: check(
+      "team_mutation_idempotency_principal_hash_check",
+      sql`${table.principalHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    keyHashCheck: check(
+      "team_mutation_idempotency_key_hash_check",
+      sql`${table.keyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    scopeHashCheck: check(
+      "team_mutation_idempotency_scope_hash_check",
+      sql`${table.scopeHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    requestHashCheck: check(
+      "team_mutation_idempotency_request_hash_check",
+      sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    attemptCountCheck: check(
+      "team_mutation_idempotency_attempt_count_check",
+      sql`${table.attemptCount} BETWEEN 1 AND 3`,
+    ),
+    responseStatusCheck: check(
+      "team_mutation_idempotency_response_status_check",
+      sql`${table.responseStatus} IS NULL OR ${table.responseStatus} BETWEEN 100 AND 599`,
+    ),
+    terminalCheck: check(
+      "team_mutation_idempotency_terminal_check",
+      sql`(${table.status} = 'in_progress' AND ${table.completedAt} IS NULL AND ${table.responseStatus} IS NULL AND ${table.responseBody} IS NULL) OR (${table.status} IN ('succeeded', 'failed') AND ${table.completedAt} IS NOT NULL AND ${table.responseStatus} IS NOT NULL AND ${table.responseBody} IS NOT NULL)`,
+    ),
+    expiryCheck: check(
+      "team_mutation_idempotency_expiry_check",
+      sql`${table.expiresAt} > ${table.createdAt}`,
+    ),
   }),
 );
 
@@ -594,7 +981,7 @@ export const mergeSuggestions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
@@ -606,6 +993,152 @@ export const mergeSuggestions = pgTable(
     pairIdx: uniqueIndex("merge_suggestions_pair_key").on(
       table.sourceContactId,
       table.targetContactId,
+    ),
+  }),
+);
+
+export type ContactMergeRecoveryStatus = "completed";
+export type ContactMergeRecoveryChangeKind =
+  | "baseline"
+  | "created"
+  | "moved"
+  | "deduplicated"
+  | "updated"
+  | "soft_deleted"
+  | "retained_historical"
+  | "superseded";
+
+/**
+ * Append-only recovery evidence for a destructive contact merge.
+ *
+ * Source, target, suggestion, actor, and session identifiers are immutable
+ * snapshots rather than cascading foreign keys. A later contact purge must
+ * not be able to remove or silently rewrite the evidence needed for a dry-run
+ * recovery assessment.
+ */
+export const contactMergeRecoveryLedgers = pgTable(
+  "contact_merge_recovery_ledgers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sourceContactId: uuid("source_contact_snapshot_id").notNull(),
+    targetContactId: uuid("target_contact_snapshot_id").notNull(),
+    suggestionId: uuid("suggestion_snapshot_id"),
+    previewHash: varchar("preview_hash", { length: 64 }).notNull(),
+    ruleVersion: text("rule_version").notNull(),
+    sourceVersion: timestamp("source_version", {
+      withTimezone: true,
+    }).notNull(),
+    targetVersion: timestamp("target_version", {
+      withTimezone: true,
+    }).notNull(),
+    actorMemberId: uuid("actor_member_snapshot_id").notNull(),
+    actorRole: text("actor_role_snapshot"),
+    actorLabel: text("actor_label_snapshot"),
+    sessionId: uuid("session_snapshot_id").notNull(),
+    authMethod: text("auth_method_snapshot").notNull(),
+    operationId: uuid("operation_id").notNull(),
+    correlationId: varchar("correlation_id", { length: 128 }).notNull(),
+    idempotencyKeyHash: varchar("idempotency_key_hash", {
+      length: 64,
+    }).notNull(),
+    status: text("status")
+      .$type<ContactMergeRecoveryStatus>()
+      .default("completed")
+      .notNull(),
+    contactBefore: jsonb("contact_before")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    consolidationPlan: jsonb("consolidation_plan")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    dependencySummary: jsonb("dependency_summary")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    operationKey: uniqueIndex("contact_merge_recovery_operation_key").on(
+      table.operationId,
+    ),
+    sourceCreatedIdx: index("contact_merge_recovery_source_created_idx").on(
+      table.sourceContactId,
+      table.createdAt,
+      table.id,
+    ),
+    targetCreatedIdx: index("contact_merge_recovery_target_created_idx").on(
+      table.targetContactId,
+      table.createdAt,
+      table.id,
+    ),
+    suggestionIdx: index("contact_merge_recovery_suggestion_idx").on(
+      table.suggestionId,
+    ),
+    previewHashCheck: check(
+      "contact_merge_recovery_preview_hash_check",
+      sql`${table.previewHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    idempotencyHashCheck: check(
+      "contact_merge_recovery_idempotency_hash_check",
+      sql`${table.idempotencyKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    statusCheck: check(
+      "contact_merge_recovery_status_check",
+      sql`${table.status} = 'completed'`,
+    ),
+    ruleVersionCheck: check(
+      "contact_merge_recovery_rule_version_check",
+      sql`${table.ruleVersion} = 'contact-merge-v3'`,
+    ),
+    authMethodCheck: check(
+      "contact_merge_recovery_auth_method_check",
+      sql`${table.authMethod} IN ('team_session', 'break_glass')`,
+    ),
+    differentContactsCheck: check(
+      "contact_merge_recovery_distinct_contacts_check",
+      sql`${table.sourceContactId} <> ${table.targetContactId}`,
+    ),
+  }),
+);
+
+export const contactMergeRecoveryEntries = pgTable(
+  "contact_merge_recovery_entries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    ledgerId: uuid("ledger_id")
+      .notNull()
+      .references(() => contactMergeRecoveryLedgers.id, {
+        onDelete: "restrict",
+      }),
+    ordinal: integer("ordinal").notNull(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_snapshot_id").notNull(),
+    changeKind: text("change_kind")
+      .$type<ContactMergeRecoveryChangeKind>()
+      .notNull(),
+    before: jsonb("before_state").$type<Record<string, unknown>>().notNull(),
+    after: jsonb("after_state").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    ledgerOrdinalKey: uniqueIndex(
+      "contact_merge_recovery_entry_ledger_ordinal_key",
+    ).on(table.ledgerId, table.ordinal),
+    ledgerEntityIdx: index("contact_merge_recovery_entry_ledger_entity_idx").on(
+      table.ledgerId,
+      table.entityType,
+      table.entityId,
+    ),
+    ordinalCheck: check(
+      "contact_merge_recovery_entry_ordinal_check",
+      sql`${table.ordinal} >= 0`,
+    ),
+    changeKindCheck: check(
+      "contact_merge_recovery_entry_change_kind_check",
+      sql`${table.changeKind} IN ('baseline', 'created', 'moved', 'deduplicated', 'updated', 'soft_deleted', 'retained_historical', 'superseded')`,
     ),
   }),
 );
@@ -776,9 +1309,11 @@ export const facebookSalesAutopilotSessions = pgTable(
     }),
     quoteLowCents: integer("quote_low_cents"),
     quoteHighCents: integer("quote_high_cents"),
-    offeredSlotsJson: jsonb("offered_slots_json").$type<
-      Array<{ label: string; startAt: string; endAt?: string | null }> | null
-    >(),
+    offeredSlotsJson: jsonb("offered_slots_json").$type<Array<{
+      label: string;
+      startAt: string;
+      endAt?: string | null;
+    }> | null>(),
     metadata: jsonb("metadata").$type<Record<string, unknown> | null>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -828,7 +1363,10 @@ export const facebookSalesAutopilotActions = pgTable(
     confidence: text("confidence").default("medium").notNull(),
     decisionReason: text("decision_reason"),
     humanReviewReason: text("human_review_reason"),
-    inputSnapshot: jsonb("input_snapshot").$type<Record<string, unknown> | null>(),
+    inputSnapshot: jsonb("input_snapshot").$type<Record<
+      string,
+      unknown
+    > | null>(),
     resultJson: jsonb("result_json").$type<Record<string, unknown> | null>(),
     error: text("error"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -858,9 +1396,12 @@ export const mediaJobAnalyses = pgTable(
     leadId: uuid("lead_id").references(() => leads.id, {
       onDelete: "set null",
     }),
-    instantQuoteId: uuid("instant_quote_id").references(() => instantQuotes.id, {
-      onDelete: "set null",
-    }),
+    instantQuoteId: uuid("instant_quote_id").references(
+      () => instantQuotes.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     sourceChannel: text("source_channel"),
     mediaCount: integer("media_count").notNull().default(0),
     videoCount: integer("video_count").notNull().default(0),
@@ -868,16 +1409,28 @@ export const mediaJobAnalyses = pgTable(
     visibleVolumeRange: text("visible_volume_range"),
     mergedVolumeBucket: text("merged_volume_bucket"),
     mergedVolumeRange: text("merged_volume_range"),
-    visibleMattressCount: integer("visible_mattress_count").notNull().default(0),
-    visiblePaintCanCount: integer("visible_paint_can_count").notNull().default(0),
+    visibleMattressCount: integer("visible_mattress_count")
+      .notNull()
+      .default(0),
+    visiblePaintCanCount: integer("visible_paint_can_count")
+      .notNull()
+      .default(0),
     visibleTireCount: integer("visible_tire_count").notNull().default(0),
-    sceneGroupsJson: jsonb("scene_groups_json").$type<Array<Record<string, unknown>> | null>(),
-    statedScopeJson: jsonb("stated_scope_json").$type<Record<string, unknown> | null>(),
+    sceneGroupsJson: jsonb("scene_groups_json").$type<Array<
+      Record<string, unknown>
+    > | null>(),
+    statedScopeJson: jsonb("stated_scope_json").$type<Record<
+      string,
+      unknown
+    > | null>(),
     riskFlags: text("risk_flags").array().notNull().default([]),
     missingViews: text("missing_views").array().notNull().default([]),
     confidence: text("confidence"),
     summary: text("summary"),
-    rawModelOutputJson: jsonb("raw_model_output_json").$type<Record<string, unknown> | null>(),
+    rawModelOutputJson: jsonb("raw_model_output_json").$type<Record<
+      string,
+      unknown
+    > | null>(),
     source: text("source").default("scaffold_v1").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -888,9 +1441,13 @@ export const mediaJobAnalyses = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => ({
-    contactIdx: uniqueIndex("media_job_analyses_contact_key").on(table.contactId),
+    contactIdx: uniqueIndex("media_job_analyses_contact_key").on(
+      table.contactId,
+    ),
     leadIdx: index("media_job_analyses_lead_idx").on(table.leadId),
-    instantQuoteIdx: index("media_job_analyses_instant_quote_idx").on(table.instantQuoteId),
+    instantQuoteIdx: index("media_job_analyses_instant_quote_idx").on(
+      table.instantQuoteId,
+    ),
   }),
 );
 
@@ -919,9 +1476,12 @@ export const conversationThreads = pgTable(
     attentionHandledAt: timestamp("attention_handled_at", {
       withTimezone: true,
     }),
-    attentionHandledBy: uuid("attention_handled_by").references(() => teamMembers.id, {
-      onDelete: "set null",
-    }),
+    attentionHandledBy: uuid("attention_handled_by").references(
+      () => teamMembers.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     closedReason: text("closed_reason"),
     closedAt: timestamp("closed_at", { withTimezone: true }),
     closedBy: uuid("closed_by").references(() => teamMembers.id, {
@@ -1009,10 +1569,26 @@ export const conversationMessages = pgTable(
   },
   (table) => ({
     threadIdx: index("conversation_messages_thread_idx").on(table.threadId),
+    threadCreatedIdIdx: index("conversation_messages_thread_created_id_idx").on(
+      table.threadId,
+      table.createdAt,
+      table.id,
+    ),
     statusIdx: index("conversation_messages_status_idx").on(
       table.deliveryStatus,
     ),
     sentIdx: index("conversation_messages_sent_idx").on(table.sentAt),
+    exportEligibleEffectiveIdx: index(
+      "conversation_messages_export_eligible_effective_idx",
+    )
+      .on(
+        sql`coalesce(${table.sentAt}, ${table.receivedAt}, ${table.createdAt})`,
+        table.createdAt,
+        table.id,
+      )
+      .where(
+        sql`${table.body} !~ E'^[\\t\\n\\v\\f\\r ]*$' AND (${table.direction} = 'inbound' OR (${table.direction} = 'outbound' AND ${table.deliveryStatus} IN ('sent', 'delivered') AND NOT (coalesce(${table.metadata}->>'draft', 'false') = 'true')))`,
+      ),
   }),
 );
 
@@ -1033,7 +1609,7 @@ export const partnerUsers = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
@@ -1071,6 +1647,272 @@ export const partnerLoginTokens = pgTable(
     ),
     userIdx: index("partner_login_tokens_user_idx").on(table.partnerUserId),
     expiresIdx: index("partner_login_tokens_expires_idx").on(table.expiresAt),
+  }),
+);
+
+export type PartnerInviteOperationState =
+  | "requested"
+  | "dispatched"
+  | "succeeded"
+  | "failed"
+  | "reconciliation_required";
+
+export type PartnerInviteResolution = "confirmed_sent" | "confirmed_not_sent";
+
+/**
+ * Durable evidence for a partner portal invitation attempt.
+ *
+ * The unresolved-partner-user index is intentionally independent of the
+ * requesting actor and HTTP idempotency key. Email and SMS providers do not
+ * provide a shared exactly-once boundary, so an ambiguous attempt must be
+ * reconciled before any caller can create another attempt for the same user.
+ */
+export const partnerInviteOperations = pgTable(
+  "partner_invite_operations",
+  {
+    id: uuid("id").primaryKey(),
+    orgContactId: uuid("org_contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "restrict" }),
+    partnerUserId: uuid("partner_user_id")
+      .notNull()
+      .references(() => partnerUsers.id, { onDelete: "restrict" }),
+    operationKind: text("operation_kind").default("team_invite").notNull(),
+    initiatorType: text("initiator_type").default("team_member").notNull(),
+    semanticHash: varchar("semantic_hash", { length: 64 }).notNull(),
+    requestedChannels: text("requested_channels").array().notNull(),
+    correlationId: varchar("correlation_id", { length: 128 }).notNull(),
+    idempotencyKeyHash: varchar("idempotency_key_hash", {
+      length: 64,
+    }).notNull(),
+    actorMemberId: uuid("actor_member_id"),
+    actorRole: text("actor_role"),
+    actorLabel: text("actor_label"),
+    sessionId: uuid("session_id"),
+    authMethod: text("auth_method"),
+    state: externalMessageDispatchStateEnum("state")
+      .$type<PartnerInviteOperationState>()
+      .default("requested")
+      .notNull(),
+    version: integer("version").default(1).notNull(),
+    providerRequestKey: uuid("provider_request_key").notNull(),
+    providerOperationIds: text("provider_operation_ids")
+      .array()
+      .notNull()
+      .default([]),
+    providerEvidence: jsonb("provider_evidence")
+      .$type<Array<Record<string, unknown>>>()
+      .notNull()
+      .default([]),
+    requestedAuditEventId: uuid("requested_audit_event_id")
+      .notNull()
+      .references(() => auditLogs.id, { onDelete: "restrict" }),
+    dispatchAuditEventId: uuid("dispatch_audit_event_id").references(
+      () => auditLogs.id,
+      { onDelete: "restrict" },
+    ),
+    terminalAuditEventId: uuid("terminal_audit_event_id").references(
+      () => auditLogs.id,
+      { onDelete: "restrict" },
+    ),
+    failureCode: text("failure_code"),
+    failureDetail: text("failure_detail"),
+    retryable: boolean("retryable"),
+    quarantinedAt: timestamp("quarantined_at", { withTimezone: true }),
+    quarantinedBy: uuid("quarantined_by"),
+    quarantineReason: text("quarantine_reason"),
+    requestedAt: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    reconciliationRequiredAt: timestamp("reconciliation_required_at", {
+      withTimezone: true,
+    }),
+    resolution: text("resolution").$type<PartnerInviteResolution>(),
+    resolutionEvidence: text("resolution_evidence"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: uuid("resolved_by").references(() => teamMembers.id, {
+      onDelete: "restrict",
+    }),
+    resolutionAuditEventId: uuid("resolution_audit_event_id").references(
+      () => auditLogs.id,
+      { onDelete: "restrict" },
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    semanticIdx: index("partner_invite_operations_semantic_idx").on(
+      table.semanticHash,
+      table.createdAt,
+    ),
+    actorRequestKey: uniqueIndex("partner_invite_operations_actor_request_key")
+      .on(table.actorMemberId, table.idempotencyKeyHash)
+      .where(sql`${table.actorMemberId} IS NOT NULL`),
+    publicRequestKey: uniqueIndex(
+      "partner_invite_operations_public_request_key",
+    )
+      .on(table.idempotencyKeyHash)
+      .where(sql`${table.initiatorType} = 'public_request'`),
+    unresolvedTargetKey: uniqueIndex(
+      "partner_invite_operations_unresolved_target_key",
+    )
+      .on(table.partnerUserId)
+      .where(
+        sql`${table.state} IN ('requested', 'dispatched', 'reconciliation_required') AND ${table.resolvedAt} IS NULL`,
+      ),
+    providerRequestKey: uniqueIndex(
+      "partner_invite_operations_provider_request_key",
+    ).on(table.providerRequestKey),
+    requestedAuditKey: uniqueIndex(
+      "partner_invite_operations_requested_audit_key",
+    ).on(table.requestedAuditEventId),
+    dispatchAuditKey: uniqueIndex(
+      "partner_invite_operations_dispatch_audit_key",
+    )
+      .on(table.dispatchAuditEventId)
+      .where(sql`${table.dispatchAuditEventId} IS NOT NULL`),
+    terminalAuditKey: uniqueIndex(
+      "partner_invite_operations_terminal_audit_key",
+    )
+      .on(table.terminalAuditEventId)
+      .where(sql`${table.terminalAuditEventId} IS NOT NULL`),
+    resolutionAuditKey: uniqueIndex(
+      "partner_invite_operations_resolution_audit_key",
+    )
+      .on(table.resolutionAuditEventId)
+      .where(sql`${table.resolutionAuditEventId} IS NOT NULL`),
+    orgStateIdx: index("partner_invite_operations_org_state_idx").on(
+      table.orgContactId,
+      table.state,
+      table.updatedAt,
+    ),
+    userCreatedIdx: index("partner_invite_operations_user_created_idx").on(
+      table.partnerUserId,
+      table.createdAt,
+      table.id,
+    ),
+    versionCheck: check(
+      "partner_invite_operations_version_check",
+      sql`${table.version} >= 1`,
+    ),
+    semanticHashCheck: check(
+      "partner_invite_operations_semantic_hash_check",
+      sql`${table.semanticHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    idempotencyHashCheck: check(
+      "partner_invite_operations_idempotency_hash_check",
+      sql`${table.idempotencyKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    channelCheck: check(
+      "partner_invite_operations_channel_check",
+      sql`${table.requestedChannels} IN (ARRAY['email']::text[], ARRAY['email', 'sms']::text[])`,
+    ),
+    operationKindCheck: check(
+      "partner_invite_operations_operation_kind_check",
+      sql`${table.operationKind} IN ('team_invite', 'public_login_link')`,
+    ),
+    initiatorCheck: check(
+      "partner_invite_operations_initiator_check",
+      sql`(
+        ${table.initiatorType} = 'team_member'
+        AND ${table.actorMemberId} IS NOT NULL
+        AND ${table.authMethod} IN ('team_session', 'break_glass')
+      ) OR (
+        ${table.initiatorType} = 'public_request'
+        AND ${table.actorMemberId} IS NULL
+        AND ${table.sessionId} IS NULL
+        AND ${table.authMethod} IS NULL
+      )`,
+    ),
+    quarantineCheck: check(
+      "partner_invite_operations_quarantine_check",
+      sql`(${table.quarantinedAt} IS NULL AND ${table.quarantinedBy} IS NULL AND ${table.quarantineReason} IS NULL) OR (${table.quarantinedAt} IS NOT NULL AND ${table.quarantineReason} IS NOT NULL)`,
+    ),
+    resolutionCheck: check(
+      "partner_invite_operations_resolution_check",
+      sql`(
+        ${table.resolution} IS NULL
+        AND ${table.resolutionEvidence} IS NULL
+        AND ${table.resolvedAt} IS NULL
+        AND ${table.resolvedBy} IS NULL
+        AND ${table.resolutionAuditEventId} IS NULL
+      ) OR (
+        ${table.state} = 'reconciliation_required'
+        AND ${table.resolution} IN ('confirmed_sent', 'confirmed_not_sent')
+        AND length(${table.resolutionEvidence}) BETWEEN 20 AND 1000
+        AND ${table.resolvedAt} IS NOT NULL
+        AND ${table.resolvedAt} >= ${table.reconciliationRequiredAt}
+        AND ${table.resolvedBy} IS NOT NULL
+        AND ${table.resolutionAuditEventId} IS NOT NULL
+      )`,
+    ),
+    lifecycleCheck: check(
+      "partner_invite_operations_lifecycle_check",
+      sql`(
+        (${table.state} = 'requested'
+          AND ${table.dispatchedAt} IS NULL
+          AND ${table.completedAt} IS NULL
+          AND ${table.reconciliationRequiredAt} IS NULL
+          AND ${table.dispatchAuditEventId} IS NULL
+          AND ${table.terminalAuditEventId} IS NULL
+          AND ${table.failureCode} IS NULL
+          AND ${table.failureDetail} IS NULL
+          AND ${table.retryable} IS NULL
+          AND ${table.quarantinedAt} IS NULL)
+        OR (${table.state} = 'dispatched'
+          AND ${table.dispatchedAt} IS NOT NULL
+          AND ${table.completedAt} IS NULL
+          AND ${table.reconciliationRequiredAt} IS NULL
+          AND ${table.dispatchAuditEventId} IS NOT NULL
+          AND ${table.terminalAuditEventId} IS NULL
+          AND ${table.failureCode} IS NULL
+          AND ${table.failureDetail} IS NULL
+          AND ${table.retryable} IS NULL
+          AND ${table.quarantinedAt} IS NULL)
+        OR (${table.state} = 'succeeded'
+          AND ${table.dispatchedAt} IS NOT NULL
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.reconciliationRequiredAt} IS NULL
+          AND ${table.dispatchAuditEventId} IS NOT NULL
+          AND ${table.terminalAuditEventId} IS NOT NULL
+          AND ${table.failureCode} IS NULL
+          AND ${table.failureDetail} IS NULL
+          AND ${table.retryable} = false
+          AND ${table.quarantinedAt} IS NULL)
+        OR (${table.state} = 'failed'
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.reconciliationRequiredAt} IS NULL
+          AND ${table.terminalAuditEventId} IS NOT NULL
+          AND ${table.failureCode} IS NOT NULL
+          AND ${table.failureDetail} IS NOT NULL
+          AND (
+            (${table.dispatchedAt} IS NOT NULL
+              AND ${table.dispatchAuditEventId} IS NOT NULL
+              AND ${table.retryable} = true
+              AND ${table.quarantinedAt} IS NULL)
+            OR (${table.dispatchedAt} IS NULL
+              AND ${table.dispatchAuditEventId} IS NULL
+              AND ${table.retryable} = false
+              AND ${table.quarantinedAt} IS NOT NULL)
+          ))
+        OR (${table.state} = 'reconciliation_required'
+          AND ${table.dispatchedAt} IS NOT NULL
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.reconciliationRequiredAt} IS NOT NULL
+          AND ${table.dispatchAuditEventId} IS NOT NULL
+          AND ${table.terminalAuditEventId} IS NOT NULL
+          AND ${table.failureCode} IS NOT NULL
+          AND ${table.failureDetail} IS NOT NULL
+          AND ${table.retryable} = false
+          AND ${table.quarantinedAt} IS NULL)
+      )`,
+    ),
   }),
 );
 
@@ -1114,7 +1956,7 @@ export const partnerRateCards = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
@@ -1186,18 +2028,135 @@ export const messageDeliveryEvents = pgTable(
   }),
 );
 
-export const outboxEvents = pgTable("outbox_events", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  type: text("type").notNull(),
-  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
-  attempts: integer("attempts").default(0).notNull(),
-  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
-  lastError: text("last_error"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  processedAt: timestamp("processed_at", { withTimezone: true }),
-});
+export const outboxEvents = pgTable(
+  "outbox_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    type: text("type").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    quarantinedAt: timestamp("quarantined_at", { withTimezone: true }),
+    quarantinedBy: uuid("quarantined_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    quarantineReason: text("quarantine_reason"),
+    quarantinedContactId: uuid("quarantined_contact_id").references(
+      () => contacts.id,
+      { onDelete: "restrict" },
+    ),
+  },
+  (table) => ({
+    dispatchableIdx: index("outbox_dispatchable_idx")
+      .on(table.nextAttemptAt, table.createdAt)
+      .where(
+        sql`${table.processedAt} IS NULL AND ${table.quarantinedAt} IS NULL`,
+      ),
+    quarantinedContactIdx: index("outbox_quarantined_contact_idx")
+      .on(table.quarantinedContactId, table.quarantinedAt)
+      .where(sql`${table.quarantinedAt} IS NOT NULL`),
+    pipelineMovementIdx: index("outbox_pipeline_movement_contact_created_idx")
+      .on(sql`(${table.payload}->>'contactId')`, table.createdAt.desc())
+      .where(sql`${table.type} = 'pipeline.auto_stage_change'`),
+    quarantineStateCheck: check(
+      "outbox_quarantine_state_check",
+      sql`(${table.quarantinedAt} IS NULL AND ${table.quarantineReason} IS NULL AND ${table.quarantinedContactId} IS NULL) OR (${table.quarantinedAt} IS NOT NULL AND ${table.quarantineReason} IS NOT NULL)`,
+    ),
+  }),
+);
+
+export const externalMessageDispatches = pgTable(
+  "external_message_dispatches",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    outboxEventId: uuid("outbox_event_id")
+      .notNull()
+      .references(() => outboxEvents.id, { onDelete: "restrict" }),
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => conversationMessages.id, { onDelete: "restrict" }),
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "restrict" }),
+    channel: conversationChannelEnum("channel").notNull(),
+    attemptNumber: integer("attempt_number").notNull(),
+    state: externalMessageDispatchStateEnum("state")
+      .default("requested")
+      .notNull(),
+    version: integer("version").default(1).notNull(),
+    providerRequestKey: text("provider_request_key").notNull(),
+    provider: text("provider"),
+    providerOperationId: text("provider_operation_id"),
+    providerOperationIds: text("provider_operation_ids")
+      .array()
+      .notNull()
+      .default([]),
+    providerIdempotencySupported: boolean("provider_idempotency_supported")
+      .default(false)
+      .notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    uncertaintyAt: timestamp("uncertainty_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    reconciliationRequiredAt: timestamp("reconciliation_required_at", {
+      withTimezone: true,
+    }),
+    failureDetail: text("failure_detail"),
+    retryable: boolean("retryable"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    eventAttemptIdx: uniqueIndex(
+      "external_message_dispatches_event_attempt_key",
+    ).on(table.outboxEventId, table.attemptNumber),
+    providerRequestIdx: uniqueIndex(
+      "external_message_dispatches_provider_request_key",
+    ).on(table.providerRequestKey),
+    messageIdx: index("external_message_dispatches_message_idx").on(
+      table.messageId,
+      table.createdAt,
+    ),
+    contactStateIdx: index("external_message_dispatches_contact_state_idx").on(
+      table.contactId,
+      table.state,
+      table.updatedAt,
+    ),
+    reconciliationIdx: index("external_message_dispatches_reconciliation_idx")
+      .on(table.reconciliationRequiredAt)
+      .where(sql`${table.state} = 'reconciliation_required'`),
+    attemptCheck: check(
+      "external_message_dispatches_attempt_check",
+      sql`${table.attemptNumber} >= 1`,
+    ),
+    versionCheck: check(
+      "external_message_dispatches_version_check",
+      sql`${table.version} >= 1`,
+    ),
+    channelCheck: check(
+      "external_message_dispatches_channel_check",
+      sql`${table.channel} IN ('sms', 'email', 'dm')`,
+    ),
+    stateCheck: check(
+      "external_message_dispatches_state_check",
+      sql`(
+        (${table.state} = 'requested' AND ${table.dispatchedAt} IS NULL AND ${table.completedAt} IS NULL AND ${table.reconciliationRequiredAt} IS NULL)
+        OR (${table.state} = 'dispatched' AND ${table.dispatchedAt} IS NOT NULL AND ${table.uncertaintyAt} IS NOT NULL AND ${table.completedAt} IS NULL AND ${table.reconciliationRequiredAt} IS NULL)
+        OR (${table.state} = 'succeeded' AND ${table.dispatchedAt} IS NOT NULL AND ${table.completedAt} IS NOT NULL AND ${table.reconciliationRequiredAt} IS NULL AND ${table.failureDetail} IS NULL AND ${table.retryable} IS NULL)
+        OR (${table.state} = 'failed' AND ${table.completedAt} IS NOT NULL AND ${table.reconciliationRequiredAt} IS NULL AND ${table.failureDetail} IS NOT NULL AND ${table.retryable} IS NOT NULL)
+        OR (${table.state} = 'reconciliation_required' AND ${table.dispatchedAt} IS NOT NULL AND ${table.completedAt} IS NOT NULL AND ${table.reconciliationRequiredAt} IS NOT NULL AND ${table.failureDetail} IS NOT NULL AND ${table.retryable} = false)
+      )`,
+    ),
+  }),
+);
 
 export const providerHealth = pgTable("provider_health", {
   provider: text("provider").primaryKey(),
@@ -1231,10 +2190,9 @@ export const crewTrackingDevices = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => ({
-    providerDeviceIdx: uniqueIndex("crew_tracking_devices_provider_device_key").on(
-      table.provider,
-      table.providerDeviceId,
-    ),
+    providerDeviceIdx: uniqueIndex(
+      "crew_tracking_devices_provider_device_key",
+    ).on(table.provider, table.providerDeviceId),
     memberIdx: index("crew_tracking_devices_member_idx").on(table.teamMemberId),
     activeIdx: index("crew_tracking_devices_active_idx").on(table.active),
   }),
@@ -1265,7 +2223,9 @@ export const crewLocationPings = pgTable(
       table.trackingDeviceId,
       table.fixAt,
     ),
-    freshnessIdx: index("crew_location_pings_freshness_idx").on(table.freshness),
+    freshnessIdx: index("crew_location_pings_freshness_idx").on(
+      table.freshness,
+    ),
   }),
 );
 
@@ -1620,7 +2580,7 @@ export const googleAdsAnalystRecommendations = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
@@ -1634,6 +2594,1152 @@ export const googleAdsAnalystRecommendations = pgTable(
       table.status,
       table.createdAt,
     ),
+  }),
+);
+
+export type GoogleAdsRecommendationOperationState =
+  | "requested"
+  | "dispatched"
+  | "succeeded"
+  | "failed"
+  | "reconciliation_required";
+
+/**
+ * Immutable-per-attempt evidence for Google Ads recommendation applications.
+ *
+ * Google Ads does not accept our caller idempotency key for this mutation. A
+ * durable dispatched row is therefore the safety boundary: once dispatch has
+ * begun, an interrupted attempt is quarantined for reconciliation and is
+ * never sent again automatically.
+ */
+export const googleAdsRecommendationOperations = pgTable(
+  "google_ads_recommendation_operations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    recommendationId: uuid("recommendation_id")
+      .notNull()
+      .references(() => googleAdsAnalystRecommendations.id, {
+        onDelete: "restrict",
+      }),
+    parentOperationId: uuid("parent_operation_id").notNull(),
+    correlationId: varchar("correlation_id", { length: 128 }).notNull(),
+    idempotencyKeyHash: varchar("idempotency_key_hash", {
+      length: 64,
+    }).notNull(),
+    expectedVersion: varchar("expected_version", { length: 200 }).notNull(),
+    // Historical provider evidence keeps the verified actor ID as an
+    // immutable snapshot. It must not be rewritten when a member is removed.
+    actorMemberId: uuid("actor_member_id").notNull(),
+    actorLabel: text("actor_label"),
+    state: text("state")
+      .$type<GoogleAdsRecommendationOperationState>()
+      .default("requested")
+      .notNull(),
+    version: integer("version").default(1).notNull(),
+    provider: text("provider").default("google_ads").notNull(),
+    // This key identifies our dispatch evidence. Google Ads does not consume
+    // it and providerIdempotencySupported must never be interpreted otherwise.
+    providerRequestKey: uuid("provider_request_key").notNull(),
+    providerOperationId: text("provider_operation_id"),
+    terminalAuditEventId: uuid("terminal_audit_event_id").references(
+      () => auditLogs.id,
+      { onDelete: "restrict" },
+    ),
+    providerIdempotencySupported: boolean("provider_idempotency_supported")
+      .default(false)
+      .notNull(),
+    term: text("term").notNull(),
+    matchType: text("match_type").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    reconciliationRequiredAt: timestamp("reconciliation_required_at", {
+      withTimezone: true,
+    }),
+    providerStatus: integer("provider_status"),
+    failureCode: text("failure_code"),
+    failureDetail: text("failure_detail"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    parentRecommendationKey: uniqueIndex(
+      "google_ads_rec_operations_parent_recommendation_key",
+    ).on(table.parentOperationId, table.recommendationId),
+    actorRequestRecommendationKey: uniqueIndex(
+      "google_ads_rec_operations_actor_request_recommendation_key",
+    ).on(table.actorMemberId, table.idempotencyKeyHash, table.recommendationId),
+    activeRecommendationKey: uniqueIndex(
+      "google_ads_rec_operations_active_recommendation_key",
+    )
+      .on(table.recommendationId)
+      .where(sql`${table.state} IN ('requested', 'dispatched')`),
+    providerOperationKey: uniqueIndex(
+      "google_ads_rec_operations_provider_operation_key",
+    )
+      .on(table.providerOperationId)
+      .where(sql`${table.providerOperationId} IS NOT NULL`),
+    providerRequestKey: uniqueIndex(
+      "google_ads_rec_operations_provider_request_key",
+    ).on(table.providerRequestKey),
+    terminalAuditEventKey: uniqueIndex(
+      "google_ads_rec_operations_terminal_audit_event_key",
+    )
+      .on(table.terminalAuditEventId)
+      .where(sql`${table.terminalAuditEventId} IS NOT NULL`),
+    stateUpdatedIdx: index("google_ads_rec_operations_state_updated_idx").on(
+      table.state,
+      table.updatedAt,
+    ),
+    recommendationCreatedIdx: index(
+      "google_ads_rec_operations_recommendation_created_idx",
+    ).on(table.recommendationId, table.createdAt, table.id),
+    stateCheck: check(
+      "google_ads_rec_operations_state_check",
+      sql`${table.state} IN ('requested', 'dispatched', 'succeeded', 'failed', 'reconciliation_required')`,
+    ),
+    versionCheck: check(
+      "google_ads_rec_operations_version_check",
+      sql`${table.version} > 0`,
+    ),
+    idempotencyHashCheck: check(
+      "google_ads_rec_operations_idempotency_hash_check",
+      sql`${table.idempotencyKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    expectedVersionCheck: check(
+      "google_ads_rec_operations_expected_version_check",
+      sql`length(${table.expectedVersion}) BETWEEN 1 AND 200`,
+    ),
+    matchTypeCheck: check(
+      "google_ads_rec_operations_match_type_check",
+      sql`${table.matchType} IN ('BROAD', 'PHRASE', 'EXACT')`,
+    ),
+    providerStatusCheck: check(
+      "google_ads_rec_operations_provider_status_check",
+      sql`${table.providerStatus} IS NULL OR ${table.providerStatus} BETWEEN 100 AND 599`,
+    ),
+    providerCheck: check(
+      "google_ads_rec_operations_provider_check",
+      sql`${table.provider} = 'google_ads' AND ${table.providerIdempotencySupported} = false`,
+    ),
+    termCheck: check(
+      "google_ads_rec_operations_term_check",
+      sql`length(trim(${table.term})) BETWEEN 1 AND 80`,
+    ),
+    lifecycleCheck: check(
+      "google_ads_rec_operations_lifecycle_check",
+      sql`(
+        ${table.state} = 'requested'
+        AND ${table.dispatchedAt} IS NULL
+        AND ${table.completedAt} IS NULL
+        AND ${table.reconciliationRequiredAt} IS NULL
+        AND ${table.providerOperationId} IS NULL
+        AND ${table.terminalAuditEventId} IS NULL
+        AND ${table.providerStatus} IS NULL
+        AND ${table.failureCode} IS NULL
+        AND ${table.failureDetail} IS NULL
+      ) OR (
+        ${table.state} = 'dispatched'
+        AND ${table.dispatchedAt} IS NOT NULL
+        AND ${table.dispatchedAt} >= ${table.requestedAt}
+        AND ${table.completedAt} IS NULL
+        AND ${table.reconciliationRequiredAt} IS NULL
+        AND ${table.providerOperationId} IS NULL
+        AND ${table.terminalAuditEventId} IS NULL
+        AND ${table.providerStatus} IS NULL
+        AND ${table.failureCode} IS NULL
+        AND ${table.failureDetail} IS NULL
+      ) OR (
+        ${table.state} = 'succeeded'
+        AND ${table.dispatchedAt} IS NOT NULL
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.completedAt} >= ${table.dispatchedAt}
+        AND ${table.reconciliationRequiredAt} IS NULL
+        AND ${table.providerOperationId} IS NOT NULL
+        AND ${table.terminalAuditEventId} IS NOT NULL
+        AND ${table.failureCode} IS NULL
+        AND ${table.failureDetail} IS NULL
+      ) OR (
+        ${table.state} = 'failed'
+        AND ${table.dispatchedAt} IS NOT NULL
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.completedAt} >= ${table.dispatchedAt}
+        AND ${table.reconciliationRequiredAt} IS NULL
+        AND ${table.terminalAuditEventId} IS NOT NULL
+        AND ${table.failureCode} IS NOT NULL
+        AND ${table.failureDetail} IS NOT NULL
+      ) OR (
+        ${table.state} = 'reconciliation_required'
+        AND ${table.dispatchedAt} IS NOT NULL
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.completedAt} >= ${table.dispatchedAt}
+        AND ${table.reconciliationRequiredAt} IS NOT NULL
+        AND ${table.reconciliationRequiredAt} >= ${table.dispatchedAt}
+        AND ${table.terminalAuditEventId} IS NOT NULL
+        AND ${table.failureCode} IS NOT NULL
+        AND ${table.failureDetail} IS NOT NULL
+      )`,
+    ),
+  }),
+);
+
+export type TeamCallOperationState =
+  | "requested"
+  | "dispatched"
+  | "active"
+  | "succeeded"
+  | "failed"
+  | "reconciliation_required";
+
+export type TeamCallTerminalOutcome =
+  | "connected"
+  | "not_connected"
+  | "not_dispatched";
+
+export type TeamCallReconciliationOutcome =
+  | "confirmed_connected"
+  | "confirmed_not_connected"
+  | "confirmed_not_dispatched"
+  | "confirmed_active"
+  | "confirmed_sent"
+  | "confirmed_not_sent"
+  | "still_uncertain";
+
+export type TeamCallCallbackKind =
+  | "connect"
+  | "agent_status"
+  | "customer_status"
+  | "dial_action";
+
+export type TeamCallTaskIntentKind = "explicit" | "speed_to_lead" | "follow_up";
+
+export type TeamCallTaskIntentEffect =
+  | "pending"
+  | "completed"
+  | "stale"
+  | "already_terminal"
+  | "not_connected"
+  | "not_dispatched";
+
+export type TeamCallReconciliationEvidenceType =
+  | "provider_call_record"
+  | "provider_no_matching_call"
+  | "provider_support_response"
+  | "operator_investigation";
+
+/**
+ * Immutable per-attempt evidence for manual Team calls.
+ *
+ * Twilio does not consume the CRM's idempotency key. Once an attempt is
+ * durably dispatched, it can only be settled or quarantined for manual
+ * reconciliation; it is never automatically sent a second time.
+ */
+export const teamCallOperations = pgTable(
+  "team_call_operations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    mutationClaimId: uuid("mutation_claim_id").notNull(),
+    // Historical, verified snapshots intentionally remain independent from
+    // mutable CRM rows so retention/deactivation cannot rewrite evidence.
+    contactId: uuid("contact_id").notNull(),
+    agentMemberId: uuid("agent_member_id").notNull(),
+    taskId: uuid("task_id"),
+    actorMemberId: uuid("actor_member_id").notNull(),
+    actorLabel: text("actor_label"),
+    actorRole: text("actor_role"),
+    sessionId: uuid("session_id").notNull(),
+    authMethod: text("auth_method").notNull(),
+    correlationId: varchar("correlation_id", { length: 128 }).notNull(),
+    idempotencyKeyHash: varchar("idempotency_key_hash", {
+      length: 64,
+    }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    state: text("state")
+      .$type<TeamCallOperationState>()
+      .default("requested")
+      .notNull(),
+    version: integer("version").default(1).notNull(),
+    provider: text("provider").default("twilio").notNull(),
+    providerRequestKey: uuid("provider_request_key").notNull(),
+    providerOperationId: text("provider_operation_id"),
+    providerCustomerOperationId: text("provider_customer_operation_id"),
+    providerIdempotencySupported: boolean("provider_idempotency_supported")
+      .default(false)
+      .notNull(),
+    attemptAuditEventId: uuid("attempt_audit_event_id").references(
+      () => auditLogs.id,
+      { onDelete: "restrict" },
+    ),
+    providerAcceptedAuditEventId: uuid(
+      "provider_accepted_audit_event_id",
+    ).references(() => auditLogs.id, { onDelete: "restrict" }),
+    terminalAuditEventId: uuid("terminal_audit_event_id").references(
+      () => auditLogs.id,
+      { onDelete: "restrict" },
+    ),
+    terminalOutcome: text("terminal_outcome").$type<TeamCallTerminalOutcome>(),
+    outcomeReason: text("outcome_reason"),
+    completedExplicitTaskId: uuid("completed_explicit_task_id"),
+    completedFollowupTaskId: uuid("completed_followup_task_id"),
+    completedSpeedToLeadCount: integer("completed_speed_to_lead_count")
+      .default(0)
+      .notNull(),
+    legacyCompletedExplicitTaskId: uuid("legacy_completed_explicit_task_id"),
+    legacyCompletedFollowupTaskId: uuid("legacy_completed_followup_task_id"),
+    legacyCompletedSpeedToLeadCount: integer(
+      "legacy_completed_speed_to_lead_count",
+    )
+      .default(0)
+      .notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    providerAcceptedAt: timestamp("provider_accepted_at", {
+      withTimezone: true,
+    }),
+    agentAnsweredAt: timestamp("agent_answered_at", { withTimezone: true }),
+    customerAnsweredAt: timestamp("customer_answered_at", {
+      withTimezone: true,
+    }),
+    agentCompletedAt: timestamp("agent_completed_at", { withTimezone: true }),
+    customerCompletedAt: timestamp("customer_completed_at", {
+      withTimezone: true,
+    }),
+    callbackDeadlineAt: timestamp("callback_deadline_at", {
+      withTimezone: true,
+    }),
+    guardReleasedAt: timestamp("guard_released_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    reconciliationRequiredAt: timestamp("reconciliation_required_at", {
+      withTimezone: true,
+    }),
+    // The migration owns the FK because the append-only reconciliation table
+    // is declared below this operation ledger. These are the only fields a
+    // terminal reconciliation_required row may ever add after settlement.
+    reconciliationResolutionId: uuid("reconciliation_resolution_id"),
+    reconciliationResolvedAt: timestamp("reconciliation_resolved_at", {
+      withTimezone: true,
+    }),
+    providerStatus: integer("provider_status"),
+    failureCode: text("failure_code"),
+    failureDetail: text("failure_detail"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    mutationClaimKey: uniqueIndex("team_call_operations_mutation_claim_key").on(
+      table.mutationClaimId,
+    ),
+    actorRequestKey: uniqueIndex("team_call_operations_actor_request_key").on(
+      table.actorMemberId,
+      table.idempotencyKeyHash,
+    ),
+    activeContactKey: index("team_call_operations_active_contact_key")
+      .on(table.contactId)
+      .where(sql`${table.guardReleasedAt} IS NULL`),
+    providerRequestKey: uniqueIndex(
+      "team_call_operations_provider_request_key",
+    ).on(table.providerRequestKey),
+    providerOperationKey: uniqueIndex(
+      "team_call_operations_provider_operation_key",
+    )
+      .on(table.providerOperationId)
+      .where(sql`${table.providerOperationId} IS NOT NULL`),
+    providerCustomerOperationKey: uniqueIndex(
+      "team_call_operations_provider_customer_operation_key",
+    )
+      .on(table.providerCustomerOperationId)
+      .where(sql`${table.providerCustomerOperationId} IS NOT NULL`),
+    attemptAuditEventKey: uniqueIndex(
+      "team_call_operations_attempt_audit_event_key",
+    )
+      .on(table.attemptAuditEventId)
+      .where(sql`${table.attemptAuditEventId} IS NOT NULL`),
+    providerAcceptedAuditEventKey: uniqueIndex(
+      "team_call_operations_provider_accepted_audit_event_key",
+    )
+      .on(table.providerAcceptedAuditEventId)
+      .where(sql`${table.providerAcceptedAuditEventId} IS NOT NULL`),
+    terminalAuditEventKey: uniqueIndex(
+      "team_call_operations_terminal_audit_event_key",
+    )
+      .on(table.terminalAuditEventId)
+      .where(sql`${table.terminalAuditEventId} IS NOT NULL`),
+    stateUpdatedIdx: index("team_call_operations_state_updated_idx").on(
+      table.state,
+      table.updatedAt,
+    ),
+    contactCreatedIdx: index("team_call_operations_contact_created_idx").on(
+      table.contactId,
+      table.createdAt,
+      table.id,
+    ),
+    stateCheck: check(
+      "team_call_operations_state_check",
+      sql`${table.state} IN ('requested', 'dispatched', 'active', 'succeeded', 'failed', 'reconciliation_required')`,
+    ),
+    versionCheck: check(
+      "team_call_operations_version_check",
+      sql`${table.version} > 0`,
+    ),
+    authMethodCheck: check(
+      "team_call_operations_auth_method_check",
+      sql`${table.authMethod} IN ('team_session', 'break_glass')`,
+    ),
+    idempotencyHashCheck: check(
+      "team_call_operations_idempotency_hash_check",
+      sql`${table.idempotencyKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    requestHashCheck: check(
+      "team_call_operations_request_hash_check",
+      sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    providerStatusCheck: check(
+      "team_call_operations_provider_status_check",
+      sql`${table.providerStatus} IS NULL OR ${table.providerStatus} BETWEEN 100 AND 599`,
+    ),
+    providerCheck: check(
+      "team_call_operations_provider_check",
+      sql`${table.provider} = 'twilio' AND ${table.providerIdempotencySupported} = false`,
+    ),
+    providerOperationCheck: check(
+      "team_call_operations_provider_operation_check",
+      sql`${table.providerOperationId} IS NULL OR ${table.providerOperationId} ~ '^CA[0-9A-Fa-f]{32}$'`,
+    ),
+    providerCustomerOperationCheck: check(
+      "team_call_operations_provider_customer_operation_check",
+      sql`${table.providerCustomerOperationId} IS NULL OR ${table.providerCustomerOperationId} ~ '^CA[0-9A-Fa-f]{32}$'`,
+    ),
+    terminalOutcomeCheck: check(
+      "team_call_operations_terminal_outcome_check",
+      sql`${table.terminalOutcome} IS NULL OR ${table.terminalOutcome} IN ('connected', 'not_connected', 'not_dispatched')`,
+    ),
+    taskCountCheck: check(
+      "team_call_operations_task_count_check",
+      sql`${table.completedSpeedToLeadCount} >= 0 AND ${table.legacyCompletedSpeedToLeadCount} >= 0`,
+    ),
+    lifecycleCheck: check(
+      "team_call_operations_lifecycle_check",
+      sql`(
+        ${table.state} = 'requested'
+        AND ${table.dispatchedAt} IS NULL
+        AND ${table.attemptAuditEventId} IS NULL
+        AND ${table.callbackDeadlineAt} IS NULL
+        AND ${table.guardReleasedAt} IS NULL
+        AND ${table.completedAt} IS NULL
+        AND ${table.providerOperationId} IS NULL
+        AND ${table.providerCustomerOperationId} IS NULL
+        AND ${table.providerAcceptedAuditEventId} IS NULL
+        AND ${table.terminalAuditEventId} IS NULL
+        AND ${table.terminalOutcome} IS NULL
+        AND ${table.outcomeReason} IS NULL
+      ) OR (
+        ${table.state} = 'dispatched'
+        AND ${table.dispatchedAt} IS NOT NULL
+        AND ${table.attemptAuditEventId} IS NOT NULL
+        AND ${table.callbackDeadlineAt} IS NOT NULL
+        AND ${table.guardReleasedAt} IS NULL
+        AND ${table.completedAt} IS NULL
+        AND ${table.providerOperationId} IS NULL
+        AND ${table.providerAcceptedAuditEventId} IS NULL
+        AND ${table.terminalAuditEventId} IS NULL
+        AND ${table.terminalOutcome} IS NULL
+        AND ${table.outcomeReason} IS NULL
+      ) OR (
+        ${table.state} = 'active'
+        AND ${table.dispatchedAt} IS NOT NULL
+        AND ${table.attemptAuditEventId} IS NOT NULL
+        AND ${table.callbackDeadlineAt} IS NOT NULL
+        AND ${table.guardReleasedAt} IS NULL
+        AND ${table.completedAt} IS NULL
+        AND ${table.providerOperationId} IS NOT NULL
+        AND ${table.providerAcceptedAt} IS NOT NULL
+        AND ${table.providerAcceptedAuditEventId} IS NOT NULL
+        AND ${table.terminalAuditEventId} IS NULL
+        AND ${table.terminalOutcome} IS NULL
+        AND ${table.outcomeReason} IS NULL
+      ) OR (
+        ${table.state} = 'succeeded'
+        AND ${table.attemptAuditEventId} IS NOT NULL
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.guardReleasedAt} IS NOT NULL
+        AND ${table.terminalOutcome} = 'connected'
+        AND ${table.outcomeReason} IS NOT NULL
+        AND ${table.providerOperationId} IS NOT NULL
+        AND ${table.providerCustomerOperationId} IS NOT NULL
+        AND ${table.providerAcceptedAuditEventId} IS NOT NULL
+        AND ${table.terminalAuditEventId} IS NOT NULL
+      ) OR (
+        ${table.state} = 'failed'
+        AND ${table.attemptAuditEventId} IS NOT NULL
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.guardReleasedAt} IS NOT NULL
+        AND ${table.terminalOutcome} IN ('not_connected', 'not_dispatched')
+        AND ${table.outcomeReason} IS NOT NULL
+        AND (${table.terminalOutcome} <> 'not_connected' OR ${table.providerAcceptedAuditEventId} IS NOT NULL)
+        AND ${table.terminalAuditEventId} IS NOT NULL
+        AND ${table.failureCode} IS NOT NULL
+        AND ${table.failureDetail} IS NOT NULL
+        AND ${table.completedExplicitTaskId} IS NULL
+        AND ${table.completedFollowupTaskId} IS NULL
+        AND ${table.completedSpeedToLeadCount} = 0
+      ) OR (
+        ${table.state} = 'reconciliation_required'
+        AND ${table.attemptAuditEventId} IS NOT NULL
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.reconciliationRequiredAt} IS NOT NULL
+        AND (
+          (${table.reconciliationResolutionId} IS NULL AND ${table.reconciliationResolvedAt} IS NULL AND ${table.guardReleasedAt} IS NULL AND ${table.terminalOutcome} IS NULL AND ${table.outcomeReason} IS NULL)
+          OR (${table.reconciliationResolutionId} IS NOT NULL AND ${table.reconciliationResolvedAt} IS NOT NULL AND ${table.guardReleasedAt} IS NOT NULL AND ${table.terminalOutcome} IS NOT NULL AND ${table.outcomeReason} IS NOT NULL)
+        )
+        AND ${table.terminalAuditEventId} IS NOT NULL
+        AND ${table.failureCode} IS NOT NULL
+        AND ${table.failureDetail} IS NOT NULL
+        AND (
+          ${table.terminalOutcome} = 'connected'
+          OR (
+            ${table.completedExplicitTaskId} IS NULL
+            AND ${table.completedFollowupTaskId} IS NULL
+            AND ${table.completedSpeedToLeadCount} = 0
+          )
+        )
+      )`,
+    ),
+  }),
+);
+
+/**
+ * Append-only human review evidence for quarantined manual call attempts.
+ *
+ * Provider facts are copied exactly from the operator-supplied evidence and
+ * are never used to rewrite the original operation outcome. A decisive record
+ * can be linked once from team_call_operations to release the contact block.
+ */
+export const teamCallOperationReconciliations = pgTable(
+  "team_call_operation_reconciliations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    callOperationId: uuid("call_operation_id").notNull(),
+    mutationClaimId: uuid("mutation_claim_id").notNull(),
+    reviewerMemberId: uuid("reviewer_member_id").notNull(),
+    reviewerLabel: text("reviewer_label"),
+    reviewerRole: text("reviewer_role"),
+    reviewerSessionId: uuid("reviewer_session_id").notNull(),
+    reviewerAuthMethod: text("reviewer_auth_method").notNull(),
+    correlationId: varchar("correlation_id", { length: 128 }).notNull(),
+    idempotencyKeyHash: varchar("idempotency_key_hash", {
+      length: 64,
+    }).notNull(),
+    expectedOperationVersion: integer("expected_operation_version").notNull(),
+    outcome: text("outcome").$type<TeamCallReconciliationOutcome>().notNull(),
+    evidenceType: text("evidence_type")
+      .$type<TeamCallReconciliationEvidenceType>()
+      .notNull(),
+    providerOperationId: text("provider_operation_id"),
+    providerStatus: integer("provider_status"),
+    reason: text("reason").notNull(),
+    auditEventId: uuid("audit_event_id")
+      .notNull()
+      .references(() => auditLogs.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    mutationClaimKey: uniqueIndex(
+      "team_call_reconciliations_mutation_claim_key",
+    ).on(table.mutationClaimId),
+    reviewerRequestKey: uniqueIndex(
+      "team_call_reconciliations_reviewer_request_key",
+    ).on(table.reviewerMemberId, table.idempotencyKeyHash),
+    decisiveOperationKey: uniqueIndex(
+      "team_call_reconciliations_decisive_operation_key",
+    )
+      .on(table.callOperationId)
+      .where(
+        sql`${table.outcome} IN ('confirmed_connected', 'confirmed_not_connected', 'confirmed_not_dispatched', 'confirmed_not_sent')`,
+      ),
+    operationCreatedIdx: index(
+      "team_call_reconciliations_operation_created_idx",
+    ).on(table.callOperationId, table.createdAt, table.id),
+    outcomeCheck: check(
+      "team_call_reconciliations_outcome_check",
+      sql`${table.outcome} IN ('confirmed_connected', 'confirmed_not_connected', 'confirmed_not_dispatched', 'confirmed_active', 'confirmed_sent', 'confirmed_not_sent', 'still_uncertain')`,
+    ),
+    evidenceTypeCheck: check(
+      "team_call_reconciliations_evidence_type_check",
+      sql`${table.evidenceType} IN ('provider_call_record', 'provider_no_matching_call', 'provider_support_response', 'operator_investigation')`,
+    ),
+    authMethodCheck: check(
+      "team_call_reconciliations_auth_method_check",
+      sql`${table.reviewerAuthMethod} IN ('team_session', 'break_glass')`,
+    ),
+    versionCheck: check(
+      "team_call_reconciliations_version_check",
+      sql`${table.expectedOperationVersion} > 0`,
+    ),
+    idempotencyHashCheck: check(
+      "team_call_reconciliations_idempotency_hash_check",
+      sql`${table.idempotencyKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    providerOperationCheck: check(
+      "team_call_reconciliations_provider_operation_check",
+      sql`${table.providerOperationId} IS NULL OR ${table.providerOperationId} ~ '^CA[0-9A-Fa-f]{32}$'`,
+    ),
+    providerStatusCheck: check(
+      "team_call_reconciliations_provider_status_check",
+      sql`${table.providerStatus} IS NULL OR ${table.providerStatus} BETWEEN 100 AND 599`,
+    ),
+    reasonCheck: check(
+      "team_call_reconciliations_reason_check",
+      sql`length(btrim(${table.reason})) BETWEEN 20 AND 1000`,
+    ),
+    evidenceOutcomeCheck: check(
+      "team_call_reconciliations_evidence_outcome_check",
+      sql`(${table.outcome} IN ('confirmed_connected', 'confirmed_not_connected', 'confirmed_active', 'confirmed_sent') AND ${table.providerOperationId} IS NOT NULL AND ${table.evidenceType} IN ('provider_call_record', 'provider_support_response')) OR (${table.outcome} IN ('confirmed_not_dispatched', 'confirmed_not_sent') AND ${table.providerOperationId} IS NULL AND ${table.evidenceType} IN ('provider_no_matching_call', 'provider_support_response')) OR ${table.outcome} = 'still_uncertain'`,
+    ),
+  }),
+);
+
+/**
+ * Privacy-safe, append-only evidence from authenticated Twilio callbacks.
+ * Raw form bodies, phone numbers, signatures, and credentials are never
+ * retained here.
+ */
+export const teamCallOperationCallbackEvents = pgTable(
+  "team_call_operation_callback_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    callOperationId: uuid("call_operation_id")
+      .notNull()
+      .references(() => teamCallOperations.id, { onDelete: "restrict" }),
+    kind: text("kind").$type<TeamCallCallbackKind>().notNull(),
+    leg: text("leg").$type<"agent" | "customer">().notNull(),
+    semanticHash: varchar("semantic_hash", { length: 64 }).notNull(),
+    parentCallSid: text("parent_call_sid"),
+    customerCallSid: text("customer_call_sid"),
+    status: text("status"),
+    durationSec: integer("duration_sec"),
+    bridged: boolean("bridged"),
+    applyResult: text("apply_result")
+      .$type<"applied" | "late" | "anomaly">()
+      .notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    semanticKey: uniqueIndex("team_call_callback_events_semantic_key").on(
+      table.callOperationId,
+      table.semanticHash,
+    ),
+    operationReceivedIdx: index(
+      "team_call_callback_events_operation_received_idx",
+    ).on(table.callOperationId, table.receivedAt, table.id),
+    kindCheck: check(
+      "team_call_callback_events_kind_check",
+      sql`${table.kind} IN ('connect', 'agent_status', 'customer_status', 'dial_action')`,
+    ),
+    legCheck: check(
+      "team_call_callback_events_leg_check",
+      sql`${table.leg} IN ('agent', 'customer')`,
+    ),
+    hashCheck: check(
+      "team_call_callback_events_hash_check",
+      sql`${table.semanticHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    parentSidCheck: check(
+      "team_call_callback_events_parent_sid_check",
+      sql`${table.parentCallSid} IS NULL OR ${table.parentCallSid} ~ '^CA[0-9A-Fa-f]{32}$'`,
+    ),
+    customerSidCheck: check(
+      "team_call_callback_events_customer_sid_check",
+      sql`${table.customerCallSid} IS NULL OR ${table.customerCallSid} ~ '^CA[0-9A-Fa-f]{32}$'`,
+    ),
+    durationCheck: check(
+      "team_call_callback_events_duration_check",
+      sql`${table.durationSec} IS NULL OR ${table.durationSec} >= 0`,
+    ),
+    applyResultCheck: check(
+      "team_call_callback_events_apply_result_check",
+      sql`${table.applyResult} IN ('applied', 'late', 'anomaly')`,
+    ),
+    statusCheck: check(
+      "team_call_callback_events_status_check",
+      sql`${table.status} IS NULL OR ${table.status} IN ('queued', 'initiated', 'ringing', 'answered', 'in-progress', 'completed', 'busy', 'no-answer', 'failed', 'canceled')`,
+    ),
+  }),
+);
+
+/**
+ * The exact tasks that existed when a call crossed the provider boundary.
+ * Callback settlement may only affect these snapshots; tasks created or
+ * reassigned while a call is live are never closed by that call.
+ */
+export const teamCallOperationTaskIntents = pgTable(
+  "team_call_operation_task_intents",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    callOperationId: uuid("call_operation_id")
+      .notNull()
+      .references(() => teamCallOperations.id, { onDelete: "restrict" }),
+    taskId: uuid("task_id").notNull(),
+    kind: text("kind").$type<TeamCallTaskIntentKind>().notNull(),
+    expectedContactId: uuid("expected_contact_id").notNull(),
+    expectedAssignedTo: text("expected_assigned_to").notNull(),
+    expectedUpdatedAt: timestamp("expected_updated_at", {
+      withTimezone: true,
+    }).notNull(),
+    effect: text("effect")
+      .$type<TeamCallTaskIntentEffect>()
+      .default("pending")
+      .notNull(),
+    effectAt: timestamp("effect_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    operationTaskKindKey: uniqueIndex(
+      "team_call_task_intents_operation_task_kind_key",
+    ).on(table.callOperationId, table.taskId, table.kind),
+    operationEffectIdx: index("team_call_task_intents_operation_effect_idx").on(
+      table.callOperationId,
+      table.effect,
+      table.taskId,
+    ),
+    kindCheck: check(
+      "team_call_task_intents_kind_check",
+      sql`${table.kind} IN ('explicit', 'speed_to_lead', 'follow_up')`,
+    ),
+    effectCheck: check(
+      "team_call_task_intents_effect_check",
+      sql`${table.effect} IN ('pending', 'completed', 'stale', 'already_terminal', 'not_connected', 'not_dispatched')`,
+    ),
+    effectTimeCheck: check(
+      "team_call_task_intents_effect_time_check",
+      sql`(${table.effect} = 'pending' AND ${table.effectAt} IS NULL) OR (${table.effect} <> 'pending' AND ${table.effectAt} IS NOT NULL)`,
+    ),
+  }),
+);
+
+export type SalesEscalationCallOperationState =
+  | "requested"
+  | "dispatched"
+  | "succeeded"
+  | "failed"
+  | "reconciliation_required";
+
+export type SalesEscalationCallDeliveryCertainty =
+  | "not_sent"
+  | "accepted"
+  | "uncertain";
+
+export type SalesEscalationCallTerminalOutcome =
+  | "connected"
+  | "not_connected"
+  | "not_dispatched";
+
+export type SalesEscalationCallReconciliationOutcome =
+  | "confirmed_dispatched"
+  | "confirmed_connected"
+  | "confirmed_not_dispatched";
+
+export type SalesEscalationCallReconciliationEvidenceType =
+  | "provider_call_record"
+  | "provider_no_matching_call"
+  | "provider_support_response";
+
+/**
+ * One durable attempt at a worker-initiated sales escalation call. Unlike a
+ * manual Team call, this operation belongs to a service principal and an
+ * outbox event, so it deliberately does not reuse the human mutation ledger.
+ */
+export const salesEscalationCallOperations = pgTable(
+  "sales_escalation_call_operations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    outboxEventId: uuid("outbox_event_id")
+      .notNull()
+      .references(() => outboxEvents.id, { onDelete: "restrict" }),
+    attemptNumber: integer("attempt_number").notNull(),
+    taskId: uuid("task_id").notNull(),
+    taskUpdatedAt: timestamp("task_updated_at", {
+      withTimezone: true,
+    }).notNull(),
+    contactId: uuid("contact_id").notNull(),
+    agentMemberId: uuid("agent_member_id").notNull(),
+    agentPhoneE164: text("agent_phone_e164").notNull(),
+    customerPhoneE164: text("customer_phone_e164").notNull(),
+    mode: text("mode").$type<"instant" | "scheduled">().notNull(),
+    state: text("state")
+      .$type<SalesEscalationCallOperationState>()
+      .default("requested")
+      .notNull(),
+    version: integer("version").default(1).notNull(),
+    provider: text("provider").default("twilio").notNull(),
+    providerRequestKey: uuid("provider_request_key").notNull(),
+    providerOperationId: text("provider_operation_id"),
+    providerCustomerOperationId: text("provider_customer_operation_id"),
+    providerIdempotencySupported: boolean("provider_idempotency_supported")
+      .default(false)
+      .notNull(),
+    deliveryCertainty: text(
+      "delivery_certainty",
+    ).$type<SalesEscalationCallDeliveryCertainty | null>(),
+    providerStatus: integer("provider_status"),
+    failureCode: text("failure_code"),
+    failureDetail: text("failure_detail"),
+    retryable: boolean("retryable"),
+    requestedAuditEventId: uuid("requested_audit_event_id")
+      .notNull()
+      .references(() => auditLogs.id, { onDelete: "restrict" }),
+    dispatchAuditEventId: uuid("dispatch_audit_event_id").references(
+      () => auditLogs.id,
+      { onDelete: "restrict" },
+    ),
+    providerResultAuditEventId: uuid(
+      "provider_result_audit_event_id",
+    ).references(() => auditLogs.id, { onDelete: "restrict" }),
+    providerAcceptedAuditEventId: uuid(
+      "provider_accepted_audit_event_id",
+    ).references(() => auditLogs.id, { onDelete: "restrict" }),
+    terminalAuditEventId: uuid("terminal_audit_event_id").references(
+      () => auditLogs.id,
+      { onDelete: "restrict" },
+    ),
+    requestedAt: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    providerAcceptedAt: timestamp("provider_accepted_at", {
+      withTimezone: true,
+    }),
+    reconciliationRequiredAt: timestamp("reconciliation_required_at", {
+      withTimezone: true,
+    }),
+    reconciliationResolutionId: uuid("reconciliation_resolution_id"),
+    reconciliationResolvedAt: timestamp("reconciliation_resolved_at", {
+      withTimezone: true,
+    }),
+    agentAnsweredAt: timestamp("agent_answered_at", { withTimezone: true }),
+    customerDialRequestedAt: timestamp("customer_dial_requested_at", {
+      withTimezone: true,
+    }),
+    customerAnsweredAt: timestamp("customer_answered_at", {
+      withTimezone: true,
+    }),
+    customerCompletedAt: timestamp("customer_completed_at", {
+      withTimezone: true,
+    }),
+    callbackDeadlineAt: timestamp("callback_deadline_at", {
+      withTimezone: true,
+    }),
+    terminalOutcome: text(
+      "terminal_outcome",
+    ).$type<SalesEscalationCallTerminalOutcome | null>(),
+    outcomeReason: text("outcome_reason"),
+    taskEffect: text("task_effect")
+      .$type<
+        | "pending"
+        | "completed"
+        | "stale"
+        | "already_terminal"
+        | "not_connected"
+        | "not_dispatched"
+      >()
+      .default("pending")
+      .notNull(),
+    taskEffectAt: timestamp("task_effect_at", { withTimezone: true }),
+    terminalAt: timestamp("terminal_at", { withTimezone: true }),
+    guardReleasedAt: timestamp("guard_released_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    eventAttemptKey: uniqueIndex(
+      "sales_escalation_call_operations_event_attempt_key",
+    ).on(table.outboxEventId, table.attemptNumber),
+    taskAttemptKey: uniqueIndex(
+      "sales_escalation_call_operations_task_attempt_key",
+    ).on(table.taskId, table.attemptNumber),
+    providerRequestKey: uniqueIndex(
+      "sales_escalation_call_operations_provider_request_key",
+    ).on(table.providerRequestKey),
+    providerOperationKey: uniqueIndex(
+      "sales_escalation_call_operations_provider_operation_key",
+    )
+      .on(table.providerOperationId)
+      .where(sql`${table.providerOperationId} IS NOT NULL`),
+    providerCustomerOperationKey: uniqueIndex(
+      "sales_escalation_call_operations_customer_sid_key",
+    )
+      .on(table.providerCustomerOperationId)
+      .where(sql`${table.providerCustomerOperationId} IS NOT NULL`),
+    unresolvedEventKey: uniqueIndex(
+      "sales_escalation_call_operations_unresolved_event_key",
+    )
+      .on(table.outboxEventId)
+      .where(sql`${table.guardReleasedAt} IS NULL`),
+    unresolvedTaskKey: uniqueIndex(
+      "sales_escalation_call_operations_unresolved_task_key",
+    )
+      .on(table.taskId)
+      .where(sql`${table.guardReleasedAt} IS NULL`),
+    providerCrossedTaskKey: uniqueIndex(
+      "sales_escalation_call_operations_provider_crossed_task_key",
+    )
+      .on(table.taskId)
+      .where(sql`${table.deliveryCertainty} IN ('accepted', 'uncertain')`),
+    taskIdx: index("sales_escalation_call_operations_task_idx").on(
+      table.taskId,
+      table.createdAt,
+    ),
+    contactIdx: index("sales_escalation_call_operations_contact_idx").on(
+      table.contactId,
+      table.createdAt,
+    ),
+  }),
+);
+
+/**
+ * Append-only operator evidence for a quarantined worker-initiated call.
+ * These rows record a human review and never cause another provider request.
+ */
+export const salesEscalationCallReconciliations = pgTable(
+  "sales_escalation_call_reconciliations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    operationId: uuid("operation_id")
+      .notNull()
+      .references(() => salesEscalationCallOperations.id, {
+        onDelete: "restrict",
+      }),
+    mutationClaimId: uuid("mutation_claim_id").notNull(),
+    reviewerMemberId: uuid("reviewer_member_id").notNull(),
+    reviewerLabel: text("reviewer_label"),
+    reviewerRole: text("reviewer_role"),
+    reviewerSessionId: uuid("reviewer_session_id").notNull(),
+    reviewerAuthMethod: text("reviewer_auth_method").notNull(),
+    correlationId: varchar("correlation_id", { length: 128 }).notNull(),
+    idempotencyKeyHash: varchar("idempotency_key_hash", {
+      length: 64,
+    }).notNull(),
+    expectedOperationVersion: integer("expected_operation_version").notNull(),
+    outcome: text("outcome")
+      .$type<SalesEscalationCallReconciliationOutcome>()
+      .notNull(),
+    evidenceType: text("evidence_type")
+      .$type<SalesEscalationCallReconciliationEvidenceType>()
+      .notNull(),
+    providerOperationId: text("provider_operation_id"),
+    providerCustomerOperationId: text("provider_customer_operation_id"),
+    providerCallStatus: text("provider_call_status"),
+    providerCustomerStatus: text("provider_customer_status"),
+    connectedDurationSec: integer("connected_duration_sec"),
+    reason: text("reason").notNull(),
+    auditEventId: uuid("audit_event_id")
+      .notNull()
+      .references(() => auditLogs.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    mutationClaimKey: uniqueIndex(
+      "sales_escalation_call_reconciliations_mutation_claim_key",
+    ).on(table.mutationClaimId),
+    reviewerRequestKey: uniqueIndex(
+      "sales_escalation_call_reconciliations_reviewer_request_key",
+    ).on(table.reviewerMemberId, table.idempotencyKeyHash),
+    auditEventKey: uniqueIndex(
+      "sales_escalation_call_reconciliations_audit_event_key",
+    ).on(table.auditEventId),
+    decisiveOperationKey: uniqueIndex(
+      "sales_escalation_call_reconciliations_decisive_operation_key",
+    )
+      .on(table.operationId)
+      .where(
+        sql`${table.outcome} IN ('confirmed_connected', 'confirmed_not_dispatched')`,
+      ),
+    operationCreatedIdx: index(
+      "sales_escalation_call_reconciliations_operation_created_idx",
+    ).on(table.operationId, table.createdAt, table.id),
+    outcomeCheck: check(
+      "sales_escalation_call_reconciliations_outcome_check",
+      sql`${table.outcome} IN ('confirmed_dispatched', 'confirmed_connected', 'confirmed_not_dispatched')`,
+    ),
+    evidenceTypeCheck: check(
+      "sales_escalation_call_reconciliations_evidence_type_check",
+      sql`${table.evidenceType} IN ('provider_call_record', 'provider_no_matching_call', 'provider_support_response')`,
+    ),
+    authMethodCheck: check(
+      "sales_escalation_call_reconciliations_auth_method_check",
+      sql`${table.reviewerAuthMethod} IN ('team_session', 'break_glass')`,
+    ),
+    versionCheck: check(
+      "sales_escalation_call_reconciliations_version_check",
+      sql`${table.expectedOperationVersion} > 0`,
+    ),
+    correlationCheck: check(
+      "sales_escalation_call_reconciliations_correlation_check",
+      sql`length(${table.correlationId}) BETWEEN 8 AND 128`,
+    ),
+    idempotencyHashCheck: check(
+      "sales_escalation_call_reconciliations_idempotency_hash_check",
+      sql`${table.idempotencyKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    parentSidCheck: check(
+      "sales_escalation_call_reconciliations_parent_sid_check",
+      sql`${table.providerOperationId} IS NULL OR ${table.providerOperationId} ~ '^CA[0-9A-Fa-f]{32}$'`,
+    ),
+    customerSidCheck: check(
+      "sales_escalation_call_reconciliations_customer_sid_check",
+      sql`${table.providerCustomerOperationId} IS NULL OR ${table.providerCustomerOperationId} ~ '^CA[0-9A-Fa-f]{32}$'`,
+    ),
+    providerCallStatusCheck: check(
+      "sales_escalation_call_reconciliations_parent_status_check",
+      sql`${table.providerCallStatus} IS NULL OR ${table.providerCallStatus} IN ('queued', 'initiated', 'ringing', 'answered', 'in-progress', 'completed', 'busy', 'no-answer', 'failed', 'canceled')`,
+    ),
+    providerCustomerStatusCheck: check(
+      "sales_escalation_call_reconciliations_customer_status_check",
+      sql`${table.providerCustomerStatus} IS NULL OR ${table.providerCustomerStatus} IN ('queued', 'initiated', 'ringing', 'answered', 'in-progress', 'completed', 'busy', 'no-answer', 'failed', 'canceled')`,
+    ),
+    durationCheck: check(
+      "sales_escalation_call_reconciliations_duration_check",
+      sql`${table.connectedDurationSec} IS NULL OR ${table.connectedDurationSec} BETWEEN 1 AND 86400`,
+    ),
+    reasonCheck: check(
+      "sales_escalation_call_reconciliations_reason_check",
+      sql`length(btrim(${table.reason})) BETWEEN 20 AND 1000`,
+    ),
+    evidenceOutcomeCheck: check(
+      "sales_escalation_call_reconciliations_evidence_outcome_check",
+      sql`(
+        ${table.outcome} = 'confirmed_dispatched'
+        AND ${table.evidenceType} IN ('provider_call_record', 'provider_support_response')
+        AND ${table.providerOperationId} IS NOT NULL
+        AND ${table.providerCallStatus} IS NOT NULL
+        AND ${table.providerCustomerOperationId} IS NULL
+        AND ${table.providerCustomerStatus} IS NULL
+        AND ${table.connectedDurationSec} IS NULL
+      ) OR (
+        ${table.outcome} = 'confirmed_connected'
+        AND ${table.evidenceType} IN ('provider_call_record', 'provider_support_response')
+        AND ${table.providerOperationId} IS NOT NULL
+        AND ${table.providerCustomerOperationId} IS NOT NULL
+        AND ${table.providerCallStatus} = 'completed'
+        AND ${table.providerCustomerStatus} = 'completed'
+        AND ${table.connectedDurationSec} BETWEEN 1 AND 86400
+      ) OR (
+        ${table.outcome} = 'confirmed_not_dispatched'
+        AND ${table.evidenceType} IN ('provider_no_matching_call', 'provider_support_response')
+        AND ${table.providerOperationId} IS NULL
+        AND ${table.providerCustomerOperationId} IS NULL
+        AND ${table.providerCallStatus} IS NULL
+        AND ${table.providerCustomerStatus} IS NULL
+        AND ${table.connectedDurationSec} IS NULL
+      )`,
+    ),
+  }),
+);
+
+/**
+ * One immutable owner for every Twilio SID introduced through human review.
+ * A separate table permits repeated evidence for the same operation/SID while
+ * enforcing that the SID can never move to another operation or call leg.
+ */
+export const salesEscalationCallReconciliationSidClaims = pgTable(
+  "sales_escalation_call_reconciliation_sid_claims",
+  {
+    sid: text("sid").primaryKey(),
+    operationId: uuid("operation_id")
+      .notNull()
+      .references(() => salesEscalationCallOperations.id, {
+        onDelete: "restrict",
+      }),
+    leg: text("leg").$type<"parent" | "customer">().notNull(),
+    firstReconciliationId: uuid("first_reconciliation_id")
+      .notNull()
+      .references(() => salesEscalationCallReconciliations.id, {
+        onDelete: "restrict",
+      }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    operationLegKey: uniqueIndex(
+      "sales_escalation_call_reconciliation_sid_claims_operation_leg_key",
+    ).on(table.operationId, table.leg),
+    operationIdx: index(
+      "sales_escalation_call_reconciliation_sid_claims_operation_idx",
+    ).on(table.operationId, table.createdAt),
+    sidCheck: check(
+      "sales_escalation_call_reconciliation_sid_claims_sid_check",
+      sql`${table.sid} ~ '^CA[0-9A-Fa-f]{32}$'`,
+    ),
+    legCheck: check(
+      "sales_escalation_call_reconciliation_sid_claims_leg_check",
+      sql`${table.leg} IN ('parent', 'customer')`,
+    ),
+  }),
+);
+
+export type SalesEscalationCallCallbackKind =
+  | "agent_connect"
+  | "customer_dial_requested"
+  | "agent_status"
+  | "customer_status"
+  | "dial_action";
+
+export const salesEscalationCallCallbackEvents = pgTable(
+  "sales_escalation_call_callback_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    operationId: uuid("operation_id")
+      .notNull()
+      .references(() => salesEscalationCallOperations.id, {
+        onDelete: "restrict",
+      }),
+    kind: text("kind").$type<SalesEscalationCallCallbackKind>().notNull(),
+    leg: text("leg").$type<"agent" | "customer">().notNull(),
+    semanticHash: varchar("semantic_hash", { length: 64 }).notNull(),
+    parentCallSid: text("parent_call_sid").notNull(),
+    customerCallSid: text("customer_call_sid"),
+    status: text("status"),
+    durationSec: integer("duration_sec"),
+    bridged: boolean("bridged"),
+    applyResult: text("apply_result")
+      .$type<"applied" | "duplicate" | "late" | "anomaly">()
+      .notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    semanticKey: uniqueIndex("sales_escalation_callback_semantic_key").on(
+      table.operationId,
+      table.semanticHash,
+    ),
+    operationReceivedIdx: index(
+      "sales_escalation_callback_operation_received_idx",
+    ).on(table.operationId, table.receivedAt, table.id),
   }),
 );
 
@@ -1827,7 +3933,7 @@ export const appointments = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
@@ -1846,6 +3952,9 @@ export const appointmentHolds = pgTable(
       () => instantQuotes.id,
       { onDelete: "set null" },
     ),
+    fullQuoteId: uuid("full_quote_id").references(() => quotes.id, {
+      onDelete: "cascade",
+    }),
     leadId: uuid("lead_id").references(() => leads.id, {
       onDelete: "set null",
     }),
@@ -1874,6 +3983,9 @@ export const appointmentHolds = pgTable(
     statusIdx: index("appointment_holds_status_idx").on(table.status),
     expiresIdx: index("appointment_holds_expires_idx").on(table.expiresAt),
     quoteIdx: index("appointment_holds_quote_idx").on(table.instantQuoteId),
+    fullQuoteIdx: index("appointment_holds_full_quote_idx").on(
+      table.fullQuoteId,
+    ),
   }),
 );
 
@@ -2096,9 +4208,7 @@ export const mobileOfflineMediaQueueHealth = pgTable(
     memberDeviceIdx: uniqueIndex(
       "mobile_offline_media_queue_health_member_device_key",
     ).on(table.teamMemberId, table.clientDeviceId),
-    staleQueueIdx: index(
-      "mobile_offline_media_queue_health_stale_idx",
-    )
+    staleQueueIdx: index("mobile_offline_media_queue_health_stale_idx")
       .on(table.oldestQueuedAt)
       .where(sql`${table.queuedCount} > 0`),
     lastReportedIdx: index(
@@ -2138,6 +4248,15 @@ export const partnerBookings = pgTable(
     serviceKey: text("service_key"),
     tierKey: text("tier_key"),
     amountCents: integer("amount_cents"),
+    createOperationKeyHash: varchar("create_operation_key_hash", {
+      length: 64,
+    }),
+    createRequestHash: varchar("create_request_hash", { length: 64 }),
+    cancelOperationKeyHash: varchar("cancel_operation_key_hash", {
+      length: 64,
+    }),
+    version: integer("version").default(1).notNull(),
+    canceledAt: timestamp("canceled_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -2146,6 +4265,123 @@ export const partnerBookings = pgTable(
     orgIdx: index("partner_bookings_org_idx").on(table.orgContactId),
     appointmentIdx: index("partner_bookings_appointment_idx").on(
       table.appointmentId,
+    ),
+    createOperationKeyIdx: uniqueIndex(
+      "partner_bookings_create_operation_key_hash_key",
+    )
+      .on(table.createOperationKeyHash)
+      .where(sql`${table.createOperationKeyHash} IS NOT NULL`),
+    createOperationKeyHashCheck: check(
+      "partner_bookings_create_operation_key_hash_check",
+      sql`${table.createOperationKeyHash} IS NULL OR ${table.createOperationKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    createRequestHashCheck: check(
+      "partner_bookings_create_request_hash_check",
+      sql`${table.createRequestHash} IS NULL OR ${table.createRequestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    cancelOperationKeyHashCheck: check(
+      "partner_bookings_cancel_operation_key_hash_check",
+      sql`${table.cancelOperationKeyHash} IS NULL OR ${table.cancelOperationKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    versionCheck: check(
+      "partner_bookings_version_check",
+      sql`${table.version} > 0`,
+    ),
+  }),
+);
+
+export type StaffNotificationOperationState =
+  | "requested"
+  | "dispatched"
+  | "succeeded"
+  | "failed"
+  | "reconciliation_required";
+
+/**
+ * Durable, private staff notifications. These deliberately do not reuse a
+ * customer conversation thread: an internal recipient must never appear as a
+ * message sent to the customer whose record triggered the alert.
+ */
+export const staffNotificationOperations = pgTable(
+  "staff_notification_operations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    // Snapshot identifier: staff-alert evidence must survive later retention
+    // purges of the triggering CRM record.
+    appointmentId: uuid("appointment_id").notNull(),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    recipientTeamMemberId: uuid("recipient_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "set null" },
+    ),
+    kind: text("kind").notNull(),
+    channel: text("channel").default("sms").notNull(),
+    recipientAddress: text("recipient_address").notNull(),
+    body: text("body").notNull(),
+    state: text("state")
+      .$type<StaffNotificationOperationState>()
+      .default("requested")
+      .notNull(),
+    providerRequestKey: varchar("provider_request_key", {
+      length: 160,
+    }).notNull(),
+    provider: text("provider"),
+    providerOperationId: text("provider_operation_id"),
+    deliveryCertainty: text("delivery_certainty"),
+    failureCode: text("failure_code"),
+    retryable: boolean("retryable").default(false).notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    uncertaintyAt: timestamp("uncertainty_at", { withTimezone: true }),
+    succeededAt: timestamp("succeeded_at", { withTimezone: true }),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    appointmentKindRecipientKey: uniqueIndex(
+      "staff_notification_operations_appointment_kind_recipient_key",
+    ).on(table.appointmentId, table.kind, table.recipientTeamMemberId),
+    appointmentKindAddressKey: uniqueIndex(
+      "staff_notification_operations_appointment_kind_address_key",
+    ).on(table.appointmentId, table.kind, table.recipientAddress),
+    providerRequestKeyIdx: uniqueIndex(
+      "staff_notification_operations_provider_request_key_key",
+    ).on(table.providerRequestKey),
+    stateIdx: index("staff_notification_operations_state_idx").on(
+      table.state,
+      table.createdAt,
+    ),
+    stateCheck: check(
+      "staff_notification_operations_state_check",
+      sql`${table.state} IN ('requested', 'dispatched', 'succeeded', 'failed', 'reconciliation_required')`,
+    ),
+    channelCheck: check(
+      "staff_notification_operations_channel_check",
+      sql`${table.channel} = 'sms'`,
+    ),
+    kindCheck: check(
+      "staff_notification_operations_kind_check",
+      sql`${table.kind} IN ('partner_booking_created', 'partner_booking_canceled')`,
+    ),
+    recipientCheck: check(
+      "staff_notification_operations_recipient_check",
+      sql`${table.recipientAddress} ~ '^\\+[1-9][0-9]{9,14}$'`,
+    ),
+    attemptCountCheck: check(
+      "staff_notification_operations_attempt_count_check",
+      sql`${table.attemptCount} BETWEEN 0 AND 20`,
+    ),
+    lifecycleCheck: check(
+      "staff_notification_operations_lifecycle_check",
+      sql`(${table.state} = 'requested' AND ${table.succeededAt} IS NULL AND ${table.failedAt} IS NULL) OR (${table.state} = 'dispatched' AND ${table.dispatchedAt} IS NOT NULL AND ${table.uncertaintyAt} IS NOT NULL AND ${table.succeededAt} IS NULL AND ${table.failedAt} IS NULL) OR (${table.state} = 'succeeded' AND ${table.succeededAt} IS NOT NULL AND ${table.failedAt} IS NULL) OR (${table.state} IN ('failed', 'reconciliation_required') AND ${table.failedAt} IS NOT NULL AND ${table.succeededAt} IS NULL)`,
     ),
   }),
 );
@@ -2270,6 +4506,96 @@ export const commissionSettings = pgTable("commission_settings", {
     .$onUpdate(() => new Date()),
 });
 
+/**
+ * Management commission allocation is configuration, not application code.
+ * A row is eligible only while both it and its referenced team member are
+ * active. Historical appointment commissions retain their own immutable math
+ * metadata, so changing this table cannot rewrite a locked payout period.
+ */
+export const commissionManagementSplits = pgTable(
+  "commission_management_splits",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    settingsKey: text("settings_key")
+      .default("default")
+      .notNull()
+      .references(() => commissionSettings.key, { onDelete: "cascade" }),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    // These are relative allocation weights. Values may exceed 10,000 (the
+    // established 12%/5% rule uses 12,000 and 5,000) and are normalized by
+    // their total before the management pool is distributed.
+    splitBps: integer("split_bps").notNull(),
+    enabled: boolean("enabled").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    settingsMemberUniqueIdx: uniqueIndex(
+      "commission_management_splits_settings_member_unique",
+    ).on(table.settingsKey, table.memberId),
+    settingsEnabledIdx: index(
+      "commission_management_splits_settings_enabled_idx",
+    ).on(table.settingsKey, table.enabled),
+    splitBpsCheck: check(
+      "commission_management_splits_split_bps_check",
+      sql`${table.splitBps} > 0 AND ${table.splitBps} <= 1000000`,
+    ),
+  }),
+);
+
+/**
+ * Optional crew allocation overrides. Each enabled rule is an exact set of
+ * members whose split weights are normalized inside the configured crew pool.
+ * Appointments retain the resolved weights, so later configuration changes do
+ * not rewrite completed work or a locked payout run.
+ */
+export const commissionCrewSplitRules = pgTable(
+  "commission_crew_split_rules",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    settingsKey: text("settings_key")
+      .default("default")
+      .notNull()
+      .references(() => commissionSettings.key, { onDelete: "cascade" }),
+    ruleKey: text("rule_key").notNull(),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    splitBps: integer("split_bps").notNull(),
+    enabled: boolean("enabled").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    settingsRuleMemberUniqueIdx: uniqueIndex(
+      "commission_crew_split_rules_settings_rule_member_unique",
+    ).on(table.settingsKey, table.ruleKey, table.memberId),
+    settingsEnabledIdx: index(
+      "commission_crew_split_rules_settings_enabled_idx",
+    ).on(table.settingsKey, table.enabled, table.ruleKey),
+    ruleKeyCheck: check(
+      "commission_crew_split_rules_rule_key_check",
+      sql`char_length(btrim(${table.ruleKey})) BETWEEN 1 AND 120`,
+    ),
+    splitBpsCheck: check(
+      "commission_crew_split_rules_split_bps_check",
+      sql`${table.splitBps} > 0 AND ${table.splitBps} <= 1000000`,
+    ),
+  }),
+);
+
 export const commissionCrewPoolOverrideDays = pgTable(
   "commission_crew_pool_override_days",
   {
@@ -2366,6 +4692,9 @@ export const payoutRuns = pgTable(
     scheduledPayoutAt: timestamp("scheduled_payout_at", {
       withTimezone: true,
     }).notNull(),
+    // Expand-phase uniqueness marker. Exactly one canonical row may represent
+    // a timezone/period while historical duplicates remain reviewable.
+    periodCanonical: boolean("period_canonical").default(false).notNull(),
     status: payoutRunStatusEnum("status").default("draft").notNull(),
     createdBy: uuid("created_by").references(() => teamMembers.id, {
       onDelete: "set null",
@@ -2389,7 +4718,14 @@ export const payoutRuns = pgTable(
       table.periodStart,
       table.periodEnd,
     ),
+    canonicalPeriodIdx: uniqueIndex("payout_runs_canonical_period_key")
+      .on(table.timezone, table.periodStart, table.periodEnd)
+      .where(sql`${table.periodCanonical} = true`),
     statusIdx: index("payout_runs_status_idx").on(table.status),
+    timelineCheck: check(
+      "payout_runs_status_timeline_check",
+      sql`(${table.status} = 'draft' AND ${table.lockedAt} IS NULL AND ${table.paidAt} IS NULL) OR (${table.status} = 'locked' AND ${table.lockedAt} IS NOT NULL AND ${table.paidAt} IS NULL) OR (${table.status} = 'paid' AND ${table.lockedAt} IS NOT NULL AND ${table.paidAt} IS NOT NULL)`,
+    ),
   }),
 );
 
@@ -2490,10 +4826,15 @@ export const quotes = pgTable(
     viewCount: integer("view_count").default(0).notNull(),
     decisionAt: timestamp("decision_at", { withTimezone: true }),
     decisionNotes: text("decision_notes"),
-    refreshRequestedAt: timestamp("refresh_requested_at", { withTimezone: true }),
-    acceptedAppointmentId: uuid("accepted_appointment_id").references(() => appointments.id, {
-      onDelete: "set null",
+    refreshRequestedAt: timestamp("refresh_requested_at", {
+      withTimezone: true,
     }),
+    acceptedAppointmentId: uuid("accepted_appointment_id").references(
+      () => appointments.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -2507,7 +4848,64 @@ export const quotes = pgTable(
     propertyIdx: index("quotes_property_idx").on(table.propertyId),
     quoteNumberIdx: index("quotes_quote_number_idx").on(table.quoteNumber),
     shareTokenIdx: uniqueIndex("quotes_share_token_key").on(table.shareToken),
-    acceptedAppointmentIdx: index("quotes_accepted_appointment_idx").on(table.acceptedAppointmentId),
+    acceptedAppointmentIdx: index("quotes_accepted_appointment_idx").on(
+      table.acceptedAppointmentId,
+    ),
+  }),
+);
+
+/**
+ * Token-free replay receipts for customer actions performed through a public
+ * quote capability. The bearer token remains authoritative only on `quotes`;
+ * this table scopes replay by quote ID and stores hashes rather than raw
+ * caller keys or capability values.
+ */
+export const publicQuoteMutationReceipts = pgTable(
+  "public_quote_mutation_receipts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    quoteId: uuid("quote_id")
+      .notNull()
+      .references(() => quotes.id, { onDelete: "restrict" }),
+    action: text("action").notNull(),
+    keyHash: varchar("key_hash", { length: 64 }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    responseStatus: integer("response_status").notNull(),
+    responseBody: jsonb("response_body")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    quoteActionKey: uniqueIndex(
+      "public_quote_mutation_receipts_quote_action_key",
+    ).on(table.quoteId, table.action, table.keyHash),
+    expiresIdx: index("public_quote_mutation_receipts_expires_idx").on(
+      table.expiresAt,
+    ),
+    keyHashCheck: check(
+      "public_quote_mutation_receipts_key_hash_check",
+      sql`${table.keyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    requestHashCheck: check(
+      "public_quote_mutation_receipts_request_hash_check",
+      sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    actionCheck: check(
+      "public_quote_mutation_receipts_action_check",
+      sql`${table.action} IN ('decision', 'refresh', 'hold', 'book')`,
+    ),
+    responseStatusCheck: check(
+      "public_quote_mutation_receipts_response_status_check",
+      sql`${table.responseStatus} BETWEEN 200 AND 299`,
+    ),
+    expiryCheck: check(
+      "public_quote_mutation_receipts_expiry_check",
+      sql`${table.expiresAt} > ${table.createdAt}`,
+    ),
   }),
 );
 
@@ -2583,29 +4981,82 @@ export const quoteChangeRequestRelations = relations(
 );
 
 // Instant quotes (junk removal)
-export const instantQuotes = pgTable("instant_quotes", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  source: text("source").default("public_site").notNull(),
-  contactName: text("contact_name").notNull(),
-  contactPhone: text("contact_phone").notNull(),
-  timeframe: text("timeframe").notNull(),
-  zip: text("zip").notNull(),
-  jobTypes: text("job_types").array().notNull().default([]),
-  perceivedSize: text("perceived_size").notNull(),
-  notes: text("notes"),
-  photoUrls: text("photo_urls").array().notNull().default([]),
-  aiResult: jsonb("ai_result").notNull(),
-});
+export const instantQuotes = pgTable(
+  "instant_quotes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    propertyId: uuid("property_id").references(() => properties.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    source: text("source").default("public_site").notNull(),
+    contactName: text("contact_name").notNull(),
+    contactPhone: text("contact_phone").notNull(),
+    timeframe: text("timeframe").notNull(),
+    zip: text("zip").notNull(),
+    jobTypes: text("job_types").array().notNull().default([]),
+    perceivedSize: text("perceived_size").notNull(),
+    notes: text("notes"),
+    photoUrls: text("photo_urls").array().notNull().default([]),
+    aiResult: jsonb("ai_result").notNull(),
+  },
+  (table) => ({
+    contactIdx: index("instant_quotes_contact_idx").on(table.contactId),
+    propertyIdx: index("instant_quotes_property_idx").on(table.propertyId),
+  }),
+);
 
 export type InstantQuote = typeof instantQuotes.$inferSelect;
 export type InstantQuoteInsert = typeof instantQuotes.$inferInsert;
 
-export const instantQuoteRelations = relations(instantQuotes, ({ many }) => ({
-  media: many(instantQuoteMedia),
-}));
+export const instantQuoteRelations = relations(
+  instantQuotes,
+  ({ one, many }) => ({
+    contact: one(contacts, {
+      fields: [instantQuotes.contactId],
+      references: [contacts.id],
+    }),
+    property: one(properties, {
+      fields: [instantQuotes.propertyId],
+      references: [properties.id],
+    }),
+    media: many(instantQuoteMedia),
+  }),
+);
+
+/**
+ * Durable migration report for legacy quotes whose linked lead rows disagree.
+ * These records must be reviewed; migration code never guesses a relationship.
+ */
+export const instantQuoteRelationshipBackfillAmbiguities = pgTable(
+  "instant_quote_relationship_backfill_ambiguities",
+  {
+    instantQuoteId: uuid("instant_quote_id")
+      .primaryKey()
+      .references(() => instantQuotes.id, { onDelete: "cascade" }),
+    leadCount: integer("lead_count").notNull(),
+    contactIds: uuid("contact_ids").array().notNull(),
+    propertyIds: uuid("property_ids").array().notNull(),
+    detectedAt: timestamp("detected_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+);
+
+export const instantQuoteRelationshipBackfillAmbiguityRelations = relations(
+  instantQuoteRelationshipBackfillAmbiguities,
+  ({ one }) => ({
+    instantQuote: one(instantQuotes, {
+      fields: [instantQuoteRelationshipBackfillAmbiguities.instantQuoteId],
+      references: [instantQuotes.id],
+    }),
+  }),
+);
 
 export const mediaAssetRelations = relations(mediaAssets, ({ one, many }) => ({
   contact: one(contacts, {
@@ -2668,6 +5119,21 @@ export const blogPosts = pgTable(
     metaTitle: text("meta_title"),
     metaDescription: text("meta_description"),
     topicKey: text("topic_key"),
+    editorialStatus: text("editorial_status").default("draft").notNull(),
+    version: integer("version").default(1).notNull(),
+    generatedAt: timestamp("generated_at", { withTimezone: true }),
+    reviewRequestedAt: timestamp("review_requested_at", {
+      withTimezone: true,
+    }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewedBy: uuid("reviewed_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    publishedBy: uuid("published_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    generationKeyHash: text("generation_key_hash"),
+    lastError: text("last_error"),
     publishedAt: timestamp("published_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -2681,6 +5147,12 @@ export const blogPosts = pgTable(
     slugKey: uniqueIndex("blog_posts_slug_key").on(table.slug),
     publishedIdx: index("blog_posts_published_idx").on(table.publishedAt),
     topicKeyIdx: index("blog_posts_topic_key_idx").on(table.topicKey),
+    editorialStatusUpdatedIdx: index(
+      "blog_posts_editorial_status_updated_idx",
+    ).on(table.editorialStatus, table.updatedAt),
+    generationKeyHashKey: uniqueIndex("blog_posts_generation_key_hash_key").on(
+      table.generationKeyHash,
+    ),
   }),
 );
 
@@ -2707,6 +5179,7 @@ export const contactRelations = relations(contacts, ({ many, one }) => ({
     references: [partnerAccounts.id],
   }),
   properties: many(properties),
+  propertyAssociations: many(contactProperties),
   leads: many(leads),
   quotes: many(quotes),
   appointments: many(appointments),
@@ -2775,10 +5248,25 @@ export const propertyRelations = relations(properties, ({ one, many }) => ({
     fields: [properties.contactId],
     references: [contacts.id],
   }),
+  contactAssociations: many(contactProperties),
   leads: many(leads),
   quotes: many(quotes),
   appointments: many(appointments),
 }));
+
+export const contactPropertyRelations = relations(
+  contactProperties,
+  ({ one }) => ({
+    contact: one(contacts, {
+      fields: [contactProperties.contactId],
+      references: [contacts.id],
+    }),
+    property: one(properties, {
+      fields: [contactProperties.propertyId],
+      references: [properties.id],
+    }),
+  }),
+);
 
 export const leadRelations = relations(leads, ({ one, many }) => ({
   contact: one(contacts, {
@@ -2971,6 +5459,27 @@ export const expenses = pgTable(
       () => plaidTransactions.id,
       { onDelete: "set null" },
     ),
+    payoutRunId: uuid("payout_run_id").references(() => payoutRuns.id, {
+      onDelete: "restrict",
+    }),
+    lifecycleStatus: expenseLifecycleStatusEnum("lifecycle_status")
+      .default("posted")
+      .notNull(),
+    version: integer("version").default(1).notNull(),
+    postedAt: timestamp("posted_at", { withTimezone: true }).defaultNow(),
+    postedBy: uuid("posted_by"),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedBy: uuid("voided_by"),
+    voidReason: text("void_reason"),
+    correctedAt: timestamp("corrected_at", { withTimezone: true }),
+    correctedBy: uuid("corrected_by"),
+    correctionReason: text("correction_reason"),
+    // Self-referential foreign keys are installed by migration 0072. Keeping
+    // these as UUID columns here avoids a circular table initializer while the
+    // database still enforces every relationship.
+    reversalOfExpenseId: uuid("reversal_of_expense_id"),
+    correctionOfExpenseId: uuid("correction_of_expense_id"),
+    correctedByExpenseId: uuid("corrected_by_expense_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -2981,7 +5490,41 @@ export const expenses = pgTable(
   },
   (table) => ({
     txnIdx: index("expenses_bank_txn_idx").on(table.bankTransactionId),
+    payoutRunIdx: uniqueIndex("expenses_payout_run_key").on(table.payoutRunId),
     paidAtIdx: index("expenses_paid_at_idx").on(table.paidAt),
+    lifecycleStatusIdx: index("expenses_lifecycle_status_idx").on(
+      table.lifecycleStatus,
+    ),
+    reversalOfIdx: uniqueIndex("expenses_reversal_of_key").on(
+      table.reversalOfExpenseId,
+    ),
+    correctionOfIdx: uniqueIndex("expenses_correction_of_key").on(
+      table.correctionOfExpenseId,
+    ),
+    correctedByIdx: uniqueIndex("expenses_corrected_by_key").on(
+      table.correctedByExpenseId,
+    ),
+    payoutRunSourceCheck: check(
+      "expenses_payout_run_source_check",
+      sql`${table.payoutRunId} IS NULL OR ${table.source} = 'payout_run'`,
+    ),
+    versionCheck: check("expenses_version_check", sql`${table.version} >= 1`),
+    currencyCheck: check(
+      "expenses_currency_check",
+      sql`${table.currency} = 'USD'`,
+    ),
+    coverageCheck: check(
+      "expenses_coverage_check",
+      sql`${table.coverageStartAt} IS NULL OR ${table.coverageEndAt} IS NULL OR ${table.coverageEndAt} >= ${table.coverageStartAt}`,
+    ),
+    amountDirectionCheck: check(
+      "expenses_amount_direction_check",
+      sql`(${table.reversalOfExpenseId} IS NULL AND ${table.amount} > 0) OR (${table.reversalOfExpenseId} IS NOT NULL AND ${table.amount} < 0)`,
+    ),
+    lifecycleTimelineCheck: check(
+      "expenses_lifecycle_timeline_check",
+      sql`(${table.lifecycleStatus} = 'draft' AND ${table.postedAt} IS NULL AND ${table.postedBy} IS NULL AND ${table.voidedAt} IS NULL AND ${table.voidedBy} IS NULL AND ${table.voidReason} IS NULL AND ${table.correctedAt} IS NULL AND ${table.correctedBy} IS NULL AND ${table.correctionReason} IS NULL AND ${table.reversalOfExpenseId} IS NULL AND ${table.correctionOfExpenseId} IS NULL AND ${table.correctedByExpenseId} IS NULL) OR (${table.lifecycleStatus} = 'posted' AND ${table.postedAt} IS NOT NULL AND ${table.voidedAt} IS NULL AND ${table.voidedBy} IS NULL AND ${table.voidReason} IS NULL AND ${table.correctedAt} IS NULL AND ${table.correctedBy} IS NULL AND ${table.correctionReason} IS NULL AND ${table.correctedByExpenseId} IS NULL) OR (${table.lifecycleStatus} = 'voided' AND ${table.postedAt} IS NOT NULL AND ${table.voidedAt} IS NOT NULL AND ${table.voidReason} IS NOT NULL AND ${table.correctedAt} IS NULL AND ${table.correctedBy} IS NULL AND ${table.correctionReason} IS NULL AND ${table.reversalOfExpenseId} IS NULL AND ${table.correctedByExpenseId} IS NULL) OR (${table.lifecycleStatus} = 'corrected' AND ${table.postedAt} IS NOT NULL AND ${table.voidedAt} IS NULL AND ${table.voidedBy} IS NULL AND ${table.voidReason} IS NULL AND ${table.correctedAt} IS NOT NULL AND ${table.correctionReason} IS NOT NULL AND ${table.reversalOfExpenseId} IS NULL AND ${table.correctedByExpenseId} IS NOT NULL)`,
+    ),
   }),
 );
 
@@ -3014,6 +5557,10 @@ export const expenseRelations = relations(expenses, ({ one }) => ({
   bankTransaction: one(plaidTransactions, {
     fields: [expenses.bankTransactionId],
     references: [plaidTransactions.id],
+  }),
+  payoutRun: one(payoutRuns, {
+    fields: [expenses.payoutRunId],
+    references: [payoutRuns.id],
   }),
 }));
 
@@ -3049,7 +5596,7 @@ export const paymentAttempts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
@@ -3125,7 +5672,7 @@ export const payments = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
@@ -3181,7 +5728,7 @@ export const paymentRefunds = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),

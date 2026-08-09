@@ -13,10 +13,13 @@ function parseLimit(value: string | null): number {
 
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { ok: false, error: "unauthorized" },
+      { status: 401 },
+    );
   }
 
-  const permissionError = await requirePermission(request, "policy.read");
+  const permissionError = await requirePermission(request, "marketing.read");
   if (permissionError) return permissionError;
 
   const limit = parseLimit(request.nextUrl.searchParams.get("limit"));
@@ -32,10 +35,13 @@ export async function GET(request: NextRequest): Promise<Response> {
       bookingWeight: googleAdsAnalystReports.bookingWeight,
       createdBy: googleAdsAnalystReports.createdBy,
       createdByName: teamMembers.name,
-      createdAt: googleAdsAnalystReports.createdAt
+      createdAt: googleAdsAnalystReports.createdAt,
     })
     .from(googleAdsAnalystReports)
-    .leftJoin(teamMembers, eq(teamMembers.id, googleAdsAnalystReports.createdBy))
+    .leftJoin(
+      teamMembers,
+      eq(teamMembers.id, googleAdsAnalystReports.createdBy),
+    )
     .orderBy(desc(googleAdsAnalystReports.createdAt))
     .limit(limit);
 
@@ -50,7 +56,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       bookingWeight: String(row.bookingWeight),
       createdBy: row.createdBy,
       createdByName: row.createdByName ?? null,
-      createdAt: row.createdAt.toISOString()
-    }))
+      createdAt: row.createdAt.toISOString(),
+    })),
   });
 }

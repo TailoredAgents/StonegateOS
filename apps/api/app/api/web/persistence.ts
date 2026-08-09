@@ -1,8 +1,12 @@
-import { eq } from "drizzle-orm";
-import { contacts, properties } from "@/db";
+import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
+import { contacts } from "@/db";
 import type { DatabaseClient } from "@/db";
 import type { InferModel } from "drizzle-orm";
 import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
+import {
+  resolveOrCreateContactProperty,
+  type PropertyRecord,
+} from "@/lib/property-write";
 
 type Database = DatabaseClient;
 type TransactionExecutor = Parameters<Database["transaction"]>[0] extends (
@@ -14,7 +18,7 @@ type TransactionExecutor = Parameters<Database["transaction"]>[0] extends (
 type DbExecutor = Database | TransactionExecutor;
 
 export type ContactRecord = InferModel<typeof contacts, "select">;
-export type PropertyRecord = InferModel<typeof properties, "select">;
+export type { PropertyRecord } from "@/lib/property-write";
 
 const CONTACT_SELECT = {
   id: contacts.id,
@@ -40,6 +44,11 @@ const CONTACT_SELECT = {
   doNotContactReason: contacts.doNotContactReason,
   preferredContactMethod: contacts.preferredContactMethod,
   source: contacts.source,
+  deletedAt: contacts.deletedAt,
+  deletedBy: contacts.deletedBy,
+  purgeEligibleAt: contacts.purgeEligibleAt,
+  mergedIntoContactId: contacts.mergedIntoContactId,
+  mergeRecoveryLedgerId: contacts.mergeRecoveryLedgerId,
   createdAt: contacts.createdAt,
   updatedAt: contacts.updatedAt
 } as const;
@@ -53,11 +62,46 @@ interface UpsertContactInput {
   source?: string;
 }
 
+export class PublicContactPersistenceError extends Error {
+  readonly code: "contact_deleted";
+  readonly status = 409;
+  readonly publicCode = "contact_unavailable" as const;
+  readonly publicMessage =
+    "We could not safely save this request online. Please contact the office for help.";
+
+  constructor() {
+    super("contact_deleted");
+    this.name = "PublicContactPersistenceError";
+    this.code = "contact_deleted";
+  }
+}
+
 export async function upsertContact(
   db: DbExecutor,
   input: UpsertContactInput
 ): Promise<ContactRecord> {
   const email = input.email?.trim().toLowerCase();
+  const deletedIdentityConditions = [
+    eq(contacts.phoneE164, input.phoneE164),
+    eq(contacts.phone, input.phoneRaw),
+  ];
+  if (email) {
+    deletedIdentityConditions.push(eq(contacts.email, email));
+  }
+  const [deletedIdentity] = await db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(
+      and(
+        isNotNull(contacts.deletedAt),
+        or(...deletedIdentityConditions),
+      ),
+    )
+    .limit(1);
+  if (deletedIdentity?.id) {
+    throw new PublicContactPersistenceError();
+  }
+
   const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(db);
   let contact: ContactRecord | undefined;
 
@@ -65,7 +109,7 @@ export async function upsertContact(
     const [existingByEmail] = await db
       .select(CONTACT_SELECT)
       .from(contacts)
-      .where(eq(contacts.email, email))
+      .where(and(eq(contacts.email, email), isNull(contacts.deletedAt)))
       .limit(1);
     contact = existingByEmail ?? undefined;
   }
@@ -74,7 +118,15 @@ export async function upsertContact(
     const [existingByPhone] = await db
       .select(CONTACT_SELECT)
       .from(contacts)
-      .where(eq(contacts.phoneE164, input.phoneE164))
+      .where(
+        and(
+          or(
+            eq(contacts.phoneE164, input.phoneE164),
+            eq(contacts.phone, input.phoneRaw),
+          ),
+          isNull(contacts.deletedAt),
+        ),
+      )
       .limit(1);
     contact = existingByPhone ?? undefined;
   }
@@ -98,7 +150,7 @@ export async function upsertContact(
     const [updated] = await db
       .update(contacts)
       .set(updatePayload)
-      .where(eq(contacts.id, contact.id))
+      .where(and(eq(contacts.id, contact.id), isNull(contacts.deletedAt)))
       .returning(CONTACT_SELECT);
 
     if (!updated) {
@@ -130,7 +182,7 @@ export async function upsertContact(
     const [existingByEmail] = await db
       .select(CONTACT_SELECT)
       .from(contacts)
-      .where(eq(contacts.email, email))
+      .where(and(eq(contacts.email, email), isNull(contacts.deletedAt)))
       .limit(1);
     if (existingByEmail) return existingByEmail;
   }
@@ -138,10 +190,34 @@ export async function upsertContact(
   const [existingByPhone] = await db
     .select(CONTACT_SELECT)
     .from(contacts)
-    .where(eq(contacts.phoneE164, input.phoneE164))
+    .where(
+      and(
+        or(
+          eq(contacts.phoneE164, input.phoneE164),
+          eq(contacts.phone, input.phoneRaw),
+        ),
+        isNull(contacts.deletedAt),
+      ),
+    )
     .limit(1);
 
   if (existingByPhone) return existingByPhone;
+
+  // Re-check after the failed insert so a concurrent soft deletion cannot be
+  // misreported as a generic persistence outage.
+  const [deletedIdentityAfterConflict] = await db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(
+      and(
+        isNotNull(contacts.deletedAt),
+        or(...deletedIdentityConditions),
+      ),
+    )
+    .limit(1);
+  if (deletedIdentityAfterConflict?.id) {
+    throw new PublicContactPersistenceError();
+  }
 
   throw new Error("contact_insert_failed");
 }
@@ -159,32 +235,6 @@ export async function upsertProperty(
   db: DbExecutor,
   input: UpsertPropertyInput
 ): Promise<PropertyRecord> {
-  const trimmedAddress = input.addressLine1.trim();
-  const trimmedCity = input.city.trim();
-  const normalizedState = input.state.trim().toUpperCase();
-  const trimmedPostalCode = input.postalCode.trim();
-  const gated = input.gated ?? false;
-
-  const [inserted] = await db
-    .insert(properties)
-    .values({
-      contactId: input.contactId,
-      addressLine1: trimmedAddress,
-      city: trimmedCity,
-      state: normalizedState,
-      postalCode: trimmedPostalCode,
-      gated
-    })
-    .onConflictDoUpdate({
-      target: [properties.addressLine1, properties.postalCode, properties.state],
-      set: {
-        contactId: input.contactId,
-        city: trimmedCity,
-        gated,
-        updatedAt: new Date()
-      }
-    })
-    .returning();
-
-  return inserted as PropertyRecord;
+  const { property } = await resolveOrCreateContactProperty(db, input);
+  return property;
 }

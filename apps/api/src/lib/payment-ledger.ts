@@ -651,7 +651,7 @@ export type FinalTotalChangeDecision =
   | {
       ok: false;
       code:
-        | "owner_required_after_payment"
+        | "payment_management_required_after_payment"
         | "change_reason_required"
         | "final_total_below_net_paid";
       message: string;
@@ -662,7 +662,7 @@ export function validateFinalTotalChange(input: {
   nextFinalTotalCents: number;
   paidTowardJobCents: number;
   hasSuccessfulPayment: boolean;
-  actorRole: string | null | undefined;
+  canManagePayments: boolean;
   changeReason?: string | null;
 }): FinalTotalChangeDecision {
   if (input.nextFinalTotalCents < input.paidTowardJobCents) {
@@ -678,12 +678,12 @@ export function validateFinalTotalChange(input: {
   ) {
     return { ok: true };
   }
-  if (input.actorRole?.trim().toLowerCase() !== "owner") {
+  if (!input.canManagePayments) {
     return {
       ok: false,
-      code: "owner_required_after_payment",
+      code: "payment_management_required_after_payment",
       message:
-        "Only the owner can change the final job total after a successful payment.",
+        "Payment-management permission is required to change the final job total after a successful payment.",
     };
   }
   if (!input.changeReason?.trim()) {

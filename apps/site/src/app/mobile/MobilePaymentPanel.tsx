@@ -2,8 +2,13 @@
 
 import { useRouter } from "next/navigation";
 import * as React from "react";
+import { parseFinalTotalMutationResult } from "./final-total-mutation";
 import type { OfflinePaymentSummary } from "./lib/offline-media";
 import { publishMobileAppointmentSummary } from "./mobile-appointment-summary";
+import {
+  parseManualPaymentMutationResult,
+  parseSquareAttemptMutationResult,
+} from "./payment-collection-mutation";
 
 export type AppointmentPaymentSummary = OfflinePaymentSummary;
 
@@ -149,17 +154,19 @@ async function errorMessage(
 
 export function MobilePaymentPanel({
   appointmentId,
+  initialVersion,
   initialSummary,
   initialLedgerAvailable,
   canCollect,
-  isOwner,
+  canManagePayments,
   needsScope,
 }: {
   appointmentId: string;
+  initialVersion: string | null;
   initialSummary: AppointmentPaymentSummary;
   initialLedgerAvailable: boolean;
   canCollect: boolean;
-  isOwner: boolean;
+  canManagePayments: boolean;
   needsScope: boolean;
 }) {
   const router = useRouter();
@@ -173,6 +180,9 @@ export function MobilePaymentPanel({
   const [online, setOnline] = React.useState(true);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [message, setMessage] = React.useState<string | null>(null);
+  const [currentVersion, setCurrentVersion] = React.useState(initialVersion);
+  const [awaitingVersionRefresh, setAwaitingVersionRefresh] =
+    React.useState(false);
   const [finalTotal, setFinalTotal] = React.useState(
     initialSummary.jobTotalCents == null
       ? ""
@@ -184,6 +194,12 @@ export function MobilePaymentPanel({
   );
   const [manualTip, setManualTip] = React.useState("");
   const [manualNote, setManualNote] = React.useState("");
+  const [resumableSquareLaunch, setResumableSquareLaunch] = React.useState<{
+    attemptId: string;
+    launchUrl: string;
+    platform: "ios" | "android";
+    expiresAt: string;
+  } | null>(null);
   const finalTotalDirtyRef = React.useRef(false);
   const finalTotalEditRevisionRef = React.useRef(0);
   const paymentLoadRevisionRef = React.useRef(0);
@@ -193,9 +209,44 @@ export function MobilePaymentPanel({
   const summaryOverrideBaseRef = React.useRef<string | null>(null);
   const incomingLedgerAvailableRef = React.useRef(initialLedgerAvailable);
   const ledgerOverrideBaseRef = React.useRef<boolean | null>(null);
+  const pendingFinalTotalRequestRef = React.useRef<{
+    signature: string;
+    key: string;
+  } | null>(null);
+  const pendingSquareRequestRef = React.useRef<{
+    signature: string;
+    key: string;
+    clientRequestId: string;
+    correlationId: string;
+  } | null>(null);
+  const pendingManualRequestRef = React.useRef<{
+    signature: string;
+    key: string;
+    clientRequestId: string;
+    correlationId: string;
+  } | null>(null);
+  const paymentActionInFlightRef = React.useRef(false);
+  const currentVersionRef = React.useRef(initialVersion);
   incomingSummaryRef.current = initialSummary;
   incomingSummarySnapshotRef.current = incomingSummarySnapshot;
   incomingLedgerAvailableRef.current = initialLedgerAvailable;
+
+  React.useEffect(() => {
+    currentVersionRef.current = initialVersion;
+    setCurrentVersion(initialVersion);
+    setAwaitingVersionRefresh(false);
+  }, [appointmentId, initialVersion]);
+
+  React.useEffect(() => {
+    pendingSquareRequestRef.current = null;
+    pendingManualRequestRef.current = null;
+    paymentActionInFlightRef.current = false;
+    setResumableSquareLaunch(null);
+  }, [appointmentId]);
+
+  React.useEffect(() => {
+    if (!summary.activeAttemptId) setResumableSquareLaunch(null);
+  }, [summary.activeAttemptId]);
 
   const applySummary = React.useCallback(
     (nextSummary: AppointmentPaymentSummary) => {
@@ -320,6 +371,13 @@ export function MobilePaymentPanel({
       setMessage("Enter a final job total greater than $0.");
       return false;
     }
+    if (awaitingVersionRefresh) {
+      setMessage(
+        "The appointment changed. Wait for the refreshed version before collecting payment.",
+      );
+      router.refresh();
+      return false;
+    }
     if (
       summary.jobTotalCents === finalTotalCents &&
       summary.jobTotalCents !== null
@@ -327,36 +385,99 @@ export function MobilePaymentPanel({
       finalTotalDirtyRef.current = false;
       return true;
     }
+    const requestVersion = currentVersionRef.current ?? currentVersion;
+    if (!requestVersion) {
+      setAwaitingVersionRefresh(true);
+      setMessage(
+        "The appointment version is unavailable. Refresh before saving the final total.",
+      );
+      router.refresh();
+      return false;
+    }
     ++paymentLoadRevisionRef.current;
     setLoading(false);
+    const normalizedReason = changeReason.trim();
+    const requestBody = {
+      finalTotalCents,
+      ...(normalizedReason ? { changeReason: normalizedReason } : {}),
+    };
+    const signature = JSON.stringify({
+      appointmentId,
+      currentVersion: requestVersion,
+      requestBody,
+    });
+    const pendingRequest = pendingFinalTotalRequestRef.current;
+    const idempotencyKey =
+      pendingRequest?.signature === signature
+        ? pendingRequest.key
+        : `mobile-final-total:${crypto.randomUUID()}`;
+    pendingFinalTotalRequestRef.current = {
+      signature,
+      key: idempotencyKey,
+    };
     try {
       const response = await fetch(
         `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/final-total`,
         {
           method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            finalTotalCents,
-            ...(changeReason.trim()
-              ? { changeReason: changeReason.trim() }
-              : {}),
-          }),
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey,
+            "if-match": requestVersion,
+          },
+          body: JSON.stringify(requestBody),
         },
       );
-      if (!response.ok) {
+      const rawResult = (await response.json().catch(() => null)) as unknown;
+      const result = parseFinalTotalMutationResult(rawResult, appointmentId);
+      const responseShapeMatchesStatus =
+        result !== null && result.ok === response.ok;
+      const successMatchesRequest =
+        result?.ok !== true || result.data.finalTotalCents === finalTotalCents;
+      if (!responseShapeMatchesStatus || !successMatchesRequest) {
         setMessage(
-          await errorMessage(response, "Unable to save the final total."),
+          "The server returned an invalid final-total receipt. Your entry was kept; retry with the same request or ask the office to verify the appointment before collecting payment.",
         );
+        return false;
+      }
+      if (!result.ok) {
+        if (result.current) {
+          const currentTotal = result.current.finalTotalCents;
+          currentVersionRef.current = result.current.version;
+          setCurrentVersion(result.current.version);
+          setAwaitingVersionRefresh(false);
+          applySummary({
+            ...summary,
+            jobTotalCents: currentTotal,
+            balanceCents:
+              currentTotal === null
+                ? null
+                : Math.max(currentTotal - summary.paidTowardJobCents, 0),
+          });
+        } else if (result.code === "conflict") {
+          setAwaitingVersionRefresh(true);
+          router.refresh();
+        }
+        if (!result.retryable) pendingFinalTotalRequestRef.current = null;
+        setMessage(result.message);
         return false;
       }
       const nextSummary = {
         ...summary,
-        jobTotalCents: finalTotalCents,
-        balanceCents: Math.max(finalTotalCents - summary.paidTowardJobCents, 0),
+        jobTotalCents: result.data.finalTotalCents,
+        balanceCents: Math.max(
+          result.data.finalTotalCents - result.data.paidTowardJobCents,
+          0,
+        ),
       };
+      pendingFinalTotalRequestRef.current = null;
       finalTotalDirtyRef.current = false;
+      currentVersionRef.current = result.data.version;
+      setCurrentVersion(result.data.version);
+      setAwaitingVersionRefresh(false);
       applySummary(nextSummary);
-      setFinalTotal((finalTotalCents / 100).toFixed(2));
+      setFinalTotal((result.data.finalTotalCents / 100).toFixed(2));
+      setChangeReason("");
       await load();
       router.refresh();
       return true;
@@ -369,6 +490,7 @@ export function MobilePaymentPanel({
   };
 
   const acceptSquare = async () => {
+    if (paymentActionInFlightRef.current) return;
     if (!online) {
       setMessage("Payments are disabled offline.");
       return;
@@ -377,49 +499,145 @@ export function MobilePaymentPanel({
       setMessage("Add the quoted-to-remove summary before taking payment.");
       return;
     }
+    if (summary.activeAttemptId) {
+      const resumable =
+        resumableSquareLaunch?.attemptId === summary.activeAttemptId &&
+        Date.parse(resumableSquareLaunch.expiresAt) > Date.now()
+          ? resumableSquareLaunch
+          : null;
+      if (!resumable) {
+        setMessage(
+          "A Square payment is already active or awaiting verification. Finish the existing handoff or ask the office to reconcile it before starting another.",
+        );
+        return;
+      }
+      paymentActionInFlightRef.current = true;
+      setBusy("square");
+      setMessage(
+        "Reopening the exact Square handoff. StonegateOS will verify the charge before showing Paid.",
+      );
+      try {
+        openSquare(resumable.launchUrl, resumable.platform);
+      } catch {
+        paymentActionInFlightRef.current = false;
+        setBusy(null);
+        setMessage("Unable to reopen Square. Try again from this screen.");
+      }
+      return;
+    }
+    paymentActionInFlightRef.current = true;
     setBusy("square");
     setMessage(null);
     let handoffStarted = false;
     try {
       if (!(await saveFinalTotal())) return;
+      const version = currentVersionRef.current;
+      if (!version) {
+        setAwaitingVersionRefresh(true);
+        setMessage(
+          "The appointment version is unavailable. Refresh before opening Square.",
+        );
+        router.refresh();
+        return;
+      }
       const targetPlatform = platform();
+      const signature = JSON.stringify({
+        appointmentId,
+        version,
+        platform: targetPlatform,
+      });
+      const previous = pendingSquareRequestRef.current;
+      const pending =
+        previous?.signature === signature
+          ? previous
+          : {
+              signature,
+              key: `mobile-square-attempt:${crypto.randomUUID()}`,
+              clientRequestId: crypto.randomUUID(),
+              correlationId: crypto.randomUUID(),
+            };
+      pendingSquareRequestRef.current = pending;
+      const expectedBalance =
+        centsFromDollars(finalTotal) == null
+          ? summary.balanceCents
+          : Math.max(
+              centsFromDollars(finalTotal)! - summary.paidTowardJobCents,
+              0,
+            );
       const response = await fetch(
         `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/payment-attempts`,
         {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": pending.key,
+            "if-match": version,
+            "x-correlation-id": pending.correlationId,
+          },
           body: JSON.stringify({
-            clientRequestId: crypto.randomUUID(),
+            clientRequestId: pending.clientRequestId,
             platform: targetPlatform,
           }),
         },
       );
-      if (!response.ok) {
-        setMessage(await errorMessage(response, "Unable to open Square."));
+      const rawResult = (await response.json().catch(() => null)) as unknown;
+      const result = parseSquareAttemptMutationResult(rawResult, appointmentId);
+      if (!result || result.ok !== response.ok) {
+        setMessage(
+          "Square returned an invalid or incomplete launch receipt. Your retry identity was kept; retry this exact request or ask the office to verify payment state.",
+        );
         return;
       }
-      const payload = (await response.json().catch(() => null)) as Record<
-        string,
-        unknown
-      > | null;
-      const launchUrl = payload?.["launchUrl"];
-      if (typeof launchUrl !== "string" || !launchUrl) {
-        setMessage("Square did not return a launch link.");
+      if (!result.ok) {
+        if (result.current) {
+          currentVersionRef.current = result.current.version;
+          setCurrentVersion(result.current.version);
+          setAwaitingVersionRefresh(false);
+        }
+        if (result.code === "conflict" && result.current) router.refresh();
+        if (!result.retryable) pendingSquareRequestRef.current = null;
+        setMessage(result.message);
         return;
       }
+      if (
+        result.data.clientRequestId !== pending.clientRequestId ||
+        result.data.platform !== targetPlatform ||
+        (expectedBalance !== null &&
+          result.data.amountCents !== expectedBalance)
+      ) {
+        setMessage(
+          "Square returned a launch receipt for different payment details. The launch was not opened; retry with the same request identity and verify the appointment balance.",
+        );
+        return;
+      }
+      currentVersionRef.current = result.data.version;
+      setCurrentVersion(result.data.version);
+      setAwaitingVersionRefresh(false);
+      applySummary(result.data.paymentSummary);
+      setResumableSquareLaunch({
+        attemptId: result.data.attemptId,
+        launchUrl: result.data.launchUrl,
+        platform: result.data.platform,
+        expiresAt: result.data.expiresAt,
+      });
+      pendingSquareRequestRef.current = null;
       setMessage(
         "Opening Square. StonegateOS will verify the charge before showing Paid.",
       );
-      openSquare(launchUrl, targetPlatform);
+      openSquare(result.data.launchUrl, targetPlatform);
       handoffStarted = true;
     } catch {
       setMessage("Unable to open Square. Check your connection and retry.");
     } finally {
-      if (!handoffStarted) setBusy(null);
+      if (!handoffStarted) {
+        paymentActionInFlightRef.current = false;
+        setBusy(null);
+      }
     }
   };
 
   const recordManual = async () => {
+    if (paymentActionInFlightRef.current) return;
     if (!online) {
       setMessage("Payments are disabled offline.");
       return;
@@ -428,38 +646,107 @@ export function MobilePaymentPanel({
       setMessage("Add the quoted-to-remove summary before recording payment.");
       return;
     }
+    paymentActionInFlightRef.current = true;
     setBusy("manual");
     setMessage(null);
     try {
       if (!(await saveFinalTotal())) return;
+      const version = currentVersionRef.current;
+      if (!version) {
+        setAwaitingVersionRefresh(true);
+        setMessage(
+          "The appointment version is unavailable. Refresh before recording payment.",
+        );
+        router.refresh();
+        return;
+      }
       const tipCents = manualTip.trim() ? centsFromDollars(manualTip) : 0;
       if (tipCents == null) {
         setMessage("Enter a valid tip or leave it blank.");
         return;
       }
+      const normalizedNote = manualNote.trim();
+      const requestBody = {
+        tenderType: manualTender,
+        tipCents,
+        ...(normalizedNote ? { note: normalizedNote } : {}),
+      };
+      const signature = JSON.stringify({
+        appointmentId,
+        version,
+        requestBody,
+      });
+      const previous = pendingManualRequestRef.current;
+      const pending =
+        previous?.signature === signature
+          ? previous
+          : {
+              signature,
+              key: `mobile-manual-payment:${crypto.randomUUID()}`,
+              clientRequestId: crypto.randomUUID(),
+              correlationId: crypto.randomUUID(),
+            };
+      pendingManualRequestRef.current = pending;
+      const expectedBalance =
+        centsFromDollars(finalTotal) == null
+          ? summary.balanceCents
+          : Math.max(
+              centsFromDollars(finalTotal)! - summary.paidTowardJobCents,
+              0,
+            );
       const response = await fetch(
         `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/manual-payments`,
         {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": pending.key,
+            "if-match": version,
+            "x-correlation-id": pending.correlationId,
+          },
           body: JSON.stringify({
-            clientRequestId: crypto.randomUUID(),
-            tenderType: manualTender,
-            tipCents,
-            ...(manualNote.trim() ? { note: manualNote.trim() } : {}),
+            clientRequestId: pending.clientRequestId,
+            ...requestBody,
           }),
         },
       );
-      if (!response.ok) {
+      const rawResult = (await response.json().catch(() => null)) as unknown;
+      const result = parseManualPaymentMutationResult(rawResult, appointmentId);
+      if (!result || result.ok !== response.ok) {
         setMessage(
-          await errorMessage(response, "Unable to record the payment."),
+          "The server returned an invalid or incomplete payment receipt. Your entries and retry identity were kept; retry this exact request or ask the office to verify payment state.",
         );
         return;
       }
-      const payload = (await response.json().catch(() => null)) as {
-        paymentSummary?: AppointmentPaymentSummary;
-      } | null;
-      if (payload?.paymentSummary) applySummary(payload.paymentSummary);
+      if (!result.ok) {
+        if (result.current) {
+          currentVersionRef.current = result.current.version;
+          setCurrentVersion(result.current.version);
+          setAwaitingVersionRefresh(false);
+        }
+        if (result.code === "conflict" && result.current) router.refresh();
+        if (!result.retryable) pendingManualRequestRef.current = null;
+        setMessage(result.message);
+        return;
+      }
+      if (
+        result.data.clientRequestId !== pending.clientRequestId ||
+        result.data.tenderType !== manualTender ||
+        result.data.tipCents !== tipCents ||
+        (expectedBalance !== null &&
+          result.data.jobAmountCents !== expectedBalance)
+      ) {
+        setMessage(
+          "The server returned a receipt for different payment details. Your entries and retry identity were kept; verify the appointment before retrying.",
+        );
+        return;
+      }
+      currentVersionRef.current = result.data.version;
+      setCurrentVersion(result.data.version);
+      setAwaitingVersionRefresh(false);
+      applySummary(result.data.paymentSummary);
+      setResumableSquareLaunch(null);
+      pendingManualRequestRef.current = null;
       setMessage(
         `${manualTender === "cash" ? "Cash" : "Check"} payment recorded. Job completion is still separate.`,
       );
@@ -472,6 +759,7 @@ export function MobilePaymentPanel({
         "Unable to record the payment. Check your connection and retry.",
       );
     } finally {
+      paymentActionInFlightRef.current = false;
       setBusy(null);
     }
   };
@@ -482,20 +770,30 @@ export function MobilePaymentPanel({
     summary.paidTowardJobCents > 0 ||
     summary.refundedCents > 0 ||
     ["partial", "paid", "refunded", "needs_review"].includes(summary.status);
-  const canEditFinalTotal = isOwner || !hasRecordedPayment;
+  const canEditFinalTotal = canManagePayments || !hasRecordedPayment;
   const finalTotalIsDirty = enteredFinalTotalCents !== summary.jobTotalCents;
   const actionBalance =
     enteredFinalTotalCents != null && enteredFinalTotalCents > 0
       ? Math.max(enteredFinalTotalCents - summary.paidTowardJobCents, 0)
       : balance;
-  const canStartPayment =
+  const canStartNewPayment =
+    canCollect &&
+    ledgerAvailable &&
+    online &&
+    !awaitingVersionRefresh &&
+    !needsScope &&
+    actionBalance != null &&
+    actionBalance > 0 &&
+    summary.status !== "needs_review" &&
+    !summary.activeAttemptId;
+  const canResumeSquare =
     canCollect &&
     ledgerAvailable &&
     online &&
     !needsScope &&
-    actionBalance != null &&
-    actionBalance > 0 &&
-    summary.status !== "needs_review";
+    summary.activeAttemptId !== null &&
+    resumableSquareLaunch?.attemptId === summary.activeAttemptId &&
+    Date.parse(resumableSquareLaunch.expiresAt) > Date.now();
   const saveFinalTotalOnly = async () => {
     if (!online) {
       setMessage("Payments are disabled offline.");
@@ -664,7 +962,7 @@ export function MobilePaymentPanel({
                       />
                     </div>
                   </label>
-                  {hasRecordedPayment && isOwner ? (
+                  {hasRecordedPayment && canManagePayments ? (
                     <label className="block">
                       <span className="text-xs font-semibold text-slate-300">
                         Reason for total change
@@ -696,6 +994,7 @@ export function MobilePaymentPanel({
                 disabled={
                   !online ||
                   busy !== null ||
+                  awaitingVersionRefresh ||
                   Boolean(summary.activeAttemptId) ||
                   !finalTotalIsDirty
                 }
@@ -714,19 +1013,24 @@ export function MobilePaymentPanel({
               <>
                 <button
                   type="button"
-                  disabled={!canStartPayment || busy !== null}
+                  disabled={
+                    (!canStartNewPayment && !canResumeSquare) || busy !== null
+                  }
                   onClick={() => void acceptSquare()}
                   className="w-full rounded-md bg-emerald-300 px-3 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {busy === "square"
                     ? "Opening Square…"
-                    : summary.activeAttemptId
+                    : canResumeSquare
                       ? "Resume payment in Square"
-                      : `Accept payment${
-                          typeof actionBalance === "number" && actionBalance > 0
-                            ? ` · ${formatMoney(actionBalance)}`
-                            : ""
-                        }`}
+                      : summary.activeAttemptId
+                        ? "Square verification in progress"
+                        : `Accept payment${
+                            typeof actionBalance === "number" &&
+                            actionBalance > 0
+                              ? ` · ${formatMoney(actionBalance)}`
+                              : ""
+                          }`}
                 </button>
                 <p className="text-xs leading-5 text-slate-400">
                   Square opens on this phone for Tap to Pay, tip, and receipt. A
@@ -784,7 +1088,7 @@ export function MobilePaymentPanel({
                     </label>
                     <button
                       type="button"
-                      disabled={!canStartPayment || busy !== null}
+                      disabled={!canStartNewPayment || busy !== null}
                       onClick={() => void recordManual()}
                       className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50"
                     >

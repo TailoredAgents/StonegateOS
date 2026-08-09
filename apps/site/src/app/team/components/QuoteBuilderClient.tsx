@@ -4,6 +4,7 @@ import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 // Removed concrete surface handling for junk removal
 import { createQuoteAction } from "../actions";
+import type { InstantQuoteHandoff } from "../lib/instant-quote-handoff";
 
 export type QuoteBuilderPropertyOption = {
   id: string;
@@ -34,19 +35,31 @@ export type QuoteBuilderZoneOption = {
 // Concrete surface UI removed
 
 interface QuoteBuilderClientProps {
+  mutationKey: string;
+  canSend: boolean;
   contacts: QuoteBuilderContactOption[];
   services: QuoteBuilderServiceOption[];
   zones: QuoteBuilderZoneOption[];
   defaultZoneId: string | null;
   initialContactId?: string;
+  initialPropertyId?: string;
+  instantQuoteId?: string;
+  instantQuotePrefill?: InstantQuoteHandoff["fullQuotePrefill"] | null;
+  instantQuoteHandoffError?: string | null;
 }
 
 export function QuoteBuilderClient({
+  mutationKey,
+  canSend,
   contacts,
   services,
   zones,
   defaultZoneId,
-  initialContactId
+  initialContactId,
+  initialPropertyId,
+  instantQuoteId,
+  instantQuotePrefill = null,
+  instantQuoteHandoffError = null,
 }: QuoteBuilderClientProps) {
   const [contactId, setContactId] = React.useState<string>(() => {
     if (initialContactId) {
@@ -61,57 +74,82 @@ export function QuoteBuilderClient({
     if (initialContactId) {
       const match = contacts.find((contact) => contact.id === initialContactId);
       if (match) {
-        return match.properties[0]?.id ?? "";
+        const requestedProperty = match.properties.find(
+          (property) => property.id === initialPropertyId,
+        );
+        return requestedProperty?.id ?? match.properties[0]?.id ?? "";
       }
     }
     return contacts[0]?.properties[0]?.id ?? "";
   });
-  const zoneId = React.useMemo(() => defaultZoneId ?? zones[0]?.id ?? "", [defaultZoneId, zones]);
+  const zoneId = React.useMemo(
+    () => defaultZoneId ?? zones[0]?.id ?? "",
+    [defaultZoneId, zones],
+  );
   const [contactSearch, setContactSearch] = React.useState("");
-  const [selectedServices, setSelectedServices] = React.useState<string[]>([]);
-  const [sendQuote, setSendQuote] = React.useState<boolean>(() => {
-    if (initialContactId) {
-      const match = contacts.find((contact) => contact.id === initialContactId);
-      if (match) {
-        return Boolean(match.email || match.phone);
-      }
-    }
-    return Boolean(contacts[0]?.email || contacts[0]?.phone);
-  });
-  const [servicePrices, setServicePrices] = React.useState<Record<string, string>>({});
+  const [selectedServices, setSelectedServices] = React.useState<string[]>(() =>
+    (instantQuotePrefill?.serviceIds ?? []).filter((serviceId) =>
+      services.some((service) => service.id === serviceId),
+    ),
+  );
+  // External delivery and bearer-link creation are always explicit choices.
+  // Loading or changing a customer must never silently opt the user in.
+  const [sendQuote, setSendQuote] = React.useState(false);
+  const [shareQuote, setShareQuote] = React.useState(false);
+  const [servicePrices, setServicePrices] = React.useState<
+    Record<string, string>
+  >({});
   const [jobDurationMinutes, setJobDurationMinutes] = React.useState("120");
   const [depositRate, setDepositRate] = React.useState("0");
   const [scopeNotes, setScopeNotes] = React.useState("");
   const [clientScope, setClientScope] = React.useState("");
   const [scopeDrafting, setScopeDrafting] = React.useState(false);
-  const [scopeDraftError, setScopeDraftError] = React.useState<string | null>(null);
+  const [scopeDraftError, setScopeDraftError] = React.useState<string | null>(
+    null,
+  );
   // Concrete surface state removed
 
   const selectedContact = React.useMemo(
     () => contacts.find((contact) => contact.id === contactId) ?? null,
-    [contactId, contacts]
+    [contactId, contacts],
+  );
+  const handoffLocked = Boolean(
+    instantQuoteId &&
+      instantQuotePrefill &&
+      initialContactId &&
+      initialPropertyId,
   );
   const filteredContacts = React.useMemo(() => {
+    const availableContacts = handoffLocked
+      ? contacts.filter((contact) => contact.id === initialContactId)
+      : contacts;
     const query = contactSearch.trim().toLowerCase();
-    if (!query) return contacts.slice(0, 12);
-    return contacts
+    if (!query) return availableContacts.slice(0, 12);
+    return availableContacts
       .filter((contact) => {
-        const propertyText = contact.properties.map((property) => property.label).join(" ");
+        const propertyText = contact.properties
+          .map((property) => property.label)
+          .join(" ");
         return [
           contact.name,
           contact.email ?? "",
           contact.phone ?? "",
-          propertyText
+          propertyText,
         ]
           .join(" ")
           .toLowerCase()
           .includes(query);
       })
       .slice(0, 12);
-  }, [contactSearch, contacts]);
+  }, [contactSearch, contacts, handoffLocked, initialContactId]);
 
-  const canSendQuote = Boolean(selectedContact?.email || selectedContact?.phone);
-  const serviceLookup = React.useMemo(() => new Map(services.map((service) => [service.id, service])), [services]);
+  const canSendQuote = Boolean(
+    canSend && (selectedContact?.email || selectedContact?.phone),
+  );
+  const serviceLookup = React.useMemo(
+    () => new Map(services.map((service) => [service.id, service])),
+    [services],
+  );
   const selectableServices = services;
   // Concrete computations removed
 
@@ -134,11 +172,7 @@ export function QuoteBuilderClient({
       }
     }
     return overrides;
-  }, [
-    selectedServices,
-    serviceLookup,
-    servicePrices
-  ]);
+  }, [selectedServices, serviceLookup, servicePrices]);
 
   const hasAllCustomPrices = React.useMemo(() => {
     return selectedServices.every((serviceId) => {
@@ -158,9 +192,15 @@ export function QuoteBuilderClient({
       return Number.isFinite(value) && value > 0;
     });
   }, [selectedServices, serviceLookup, servicePrices]);
-  const serializedOverrides = React.useMemo(() => JSON.stringify(serviceOverrides), [serviceOverrides]);
+  const serializedOverrides = React.useMemo(
+    () => JSON.stringify(serviceOverrides),
+    [serviceOverrides],
+  );
   const estimatedTotal = React.useMemo(() => {
-    return Object.values(serviceOverrides).reduce((sum, value) => sum + value, 0);
+    return Object.values(serviceOverrides).reduce(
+      (sum, value) => sum + value,
+      0,
+    );
   }, [serviceOverrides]);
 
   React.useEffect(() => {
@@ -169,16 +209,61 @@ export function QuoteBuilderClient({
     if (!match) return;
     if (match.id === contactId) return;
     setContactId(match.id);
-    setPropertyId(match.properties[0]?.id ?? "");
-    setSendQuote(Boolean(match.email || match.phone));
-  }, [initialContactId, contacts, contactId]);
+    const requestedProperty = match.properties.find(
+      (property) => property.id === initialPropertyId,
+    );
+    setPropertyId(requestedProperty?.id ?? match.properties[0]?.id ?? "");
+    setSendQuote(false);
+    setShareQuote(false);
+  }, [initialContactId, initialPropertyId, contacts, contactId, canSend]);
+
+  const appliedInstantQuoteId = React.useRef(instantQuoteId ?? null);
+  React.useEffect(() => {
+    if (
+      !instantQuotePrefill ||
+      !instantQuoteId ||
+      appliedInstantQuoteId.current === instantQuoteId
+    ) {
+      return;
+    }
+    appliedInstantQuoteId.current = instantQuoteId;
+    const handoffContact = contacts.find(
+      (contact) => contact.id === initialContactId,
+    );
+    if (handoffContact) {
+      const handoffProperty = handoffContact.properties.find(
+        (property) => property.id === initialPropertyId,
+      );
+      setContactId(handoffContact.id);
+      setPropertyId(
+        handoffProperty?.id ?? handoffContact.properties[0]?.id ?? "",
+      );
+      setSendQuote(false);
+      setShareQuote(false);
+    }
+    setSelectedServices(
+      instantQuotePrefill.serviceIds.filter((serviceId) =>
+        services.some((service) => service.id === serviceId),
+      ),
+    );
+  }, [
+    contacts,
+    canSend,
+    initialContactId,
+    initialPropertyId,
+    instantQuoteId,
+    instantQuotePrefill,
+    services,
+  ]);
 
   React.useEffect(() => {
     if (!selectedContact) {
       setPropertyId("");
       return;
     }
-    const current = selectedContact.properties.find((property) => property.id === propertyId);
+    const current = selectedContact.properties.find(
+      (property) => property.id === propertyId,
+    );
     if (!current) {
       setPropertyId(selectedContact.properties[0]?.id ?? "");
     }
@@ -206,24 +291,29 @@ export function QuoteBuilderClient({
         return [...prev, serviceId];
       });
     },
-    [setServicePrices]
+    [setServicePrices],
   );
 
   const handlePriceChange = React.useCallback(
     (serviceId: string, value: string) => {
       setServicePrices((prev) => ({
         ...prev,
-        [serviceId]: value
+        [serviceId]: value,
       }));
     },
-    [setServicePrices]
+    [setServicePrices],
   );
 
-  const chooseContact = React.useCallback((contact: QuoteBuilderContactOption) => {
-    setContactId(contact.id);
-    setPropertyId(contact.properties[0]?.id ?? "");
-    setSendQuote(Boolean(contact.email || contact.phone));
-  }, []);
+  const chooseContact = React.useCallback(
+    (contact: QuoteBuilderContactOption) => {
+      if (handoffLocked && contact.id !== initialContactId) return;
+      setContactId(contact.id);
+      setPropertyId(contact.properties[0]?.id ?? "");
+      setSendQuote(false);
+      setShareQuote(false);
+    },
+    [handoffLocked, initialContactId],
+  );
 
   const draftClientScope = React.useCallback(async () => {
     setScopeDrafting(true);
@@ -236,17 +326,22 @@ export function QuoteBuilderClient({
           customerName: selectedContact?.name ?? null,
           services: selectedServices,
           total: estimatedTotal > 0 ? estimatedTotal : undefined,
-          roughNotes: scopeNotes
-        })
+          roughNotes: scopeNotes,
+        }),
       });
-      const payload = (await response.json().catch(() => null)) as { draft?: string; error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as {
+        draft?: string;
+        error?: string;
+      } | null;
       if (!response.ok || !payload?.draft) {
         setScopeDraftError(payload?.error ?? "Unable to draft scope.");
         return;
       }
       setClientScope(payload.draft);
     } catch (error) {
-      setScopeDraftError(error instanceof Error ? error.message : "Unable to draft scope.");
+      setScopeDraftError(
+        error instanceof Error ? error.message : "Unable to draft scope.",
+      );
     } finally {
       setScopeDrafting(false);
     }
@@ -262,41 +357,94 @@ export function QuoteBuilderClient({
   if (contacts.length === 0) {
     return (
       <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 text-sm text-slate-600 shadow-xl shadow-slate-200/60">
-        <h2 className="text-xl font-semibold text-slate-900">No contacts yet</h2>
+        <h2 className="text-xl font-semibold text-slate-900">
+          No contacts yet
+        </h2>
         <p className="mt-2">
-          Add a contact with property details before creating an email-ready quote. Once a lead exists, you can build a
-          proposal here and send it to their inbox in one step.
+          Add a contact with property details before creating an email-ready
+          quote. Once a lead exists, you can build a proposal here and send it
+          to their inbox in one step.
         </p>
       </section>
     );
   }
 
-  const propertyOptions = selectedContact?.properties ?? [];
-  const selectedContactMeta = [selectedContact?.email, selectedContact?.phone].filter(Boolean).join(" / ");
+  const propertyOptions = handoffLocked
+    ? (selectedContact?.properties ?? []).filter(
+        (property) => property.id === initialPropertyId,
+      )
+    : (selectedContact?.properties ?? []);
+  const selectedContactMeta = [selectedContact?.email, selectedContact?.phone]
+    .filter(Boolean)
+    .join(" / ");
 
   return (
     <section className="space-y-6">
       <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Create quote</h2>
+            <h2 className="text-xl font-semibold text-slate-900">
+              Create quote
+            </h2>
             <p className="text-sm text-slate-600">
-              Search the client, confirm the property, set service pricing, and send the quote from one form.
+              Search the client, confirm the property, set service pricing, and
+              send the quote from one form.
             </p>
           </div>
         </div>
 
-          <form action={createQuoteAction} className="mt-5 space-y-6">
-            <input type="hidden" name="services" value={JSON.stringify(selectedServices)} />
-            <input type="hidden" name="serviceOverrides" value={serializedOverrides} />
-            <input type="hidden" name="zoneId" value={zoneId} />
-            <input type="hidden" name="contactId" value={contactId} />
+        {instantQuoteHandoffError ? (
+          <div
+            className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+            role="alert"
+          >
+            <p className="font-semibold">
+              Instant-quote details were not loaded
+            </p>
+            <p className="mt-1">{instantQuoteHandoffError}</p>
+          </div>
+        ) : null}
+        {instantQuotePrefill ? (
+          <div
+            className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950"
+            role="status"
+          >
+            <p className="font-semibold">Verified instant quote loaded</p>
+            <p className="mt-1">
+              The verified customer and property are fixed for this conversion;
+              compatible services and internal notes are selected. The instant
+              estimate was $
+              {(instantQuotePrefill.priceRangeMinCents / 100).toFixed(0)}–$
+              {(instantQuotePrefill.priceRangeMaxCents / 100).toFixed(0)}; set
+              deliberate full-quote prices before creating or sending it.
+            </p>
+          </div>
+        ) : null}
+
+        <form action={createQuoteAction} className="mt-5 space-y-6">
+          <input type="hidden" name="idempotencyKey" value={mutationKey} />
+          <input
+            type="hidden"
+            name="services"
+            value={JSON.stringify(selectedServices)}
+          />
+          <input
+            type="hidden"
+            name="serviceOverrides"
+            value={serializedOverrides}
+          />
+          <input type="hidden" name="zoneId" value={zoneId} />
+          <input type="hidden" name="contactId" value={contactId} />
 
           <div className="grid gap-5 xl:grid-cols-[minmax(280px,0.95fr)_minmax(0,1.35fr)]">
             <section className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
               <div>
-                <h3 className="text-sm font-semibold text-slate-800">Find client</h3>
-                <p className="mt-1 text-xs text-slate-500">Search by name, phone, email, or property address.</p>
+                <h3 className="text-sm font-semibold text-slate-800">
+                  Find client
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Search by name, phone, email, or property address.
+                </p>
               </div>
               <label className="flex flex-col gap-2 text-sm text-slate-600">
                 <span className="sr-only">Search clients</span>
@@ -315,7 +463,8 @@ export function QuoteBuilderClient({
                 ) : (
                   filteredContacts.map((contact) => {
                     const active = contact.id === contactId;
-                    const firstProperty = contact.properties[0]?.label ?? "No property on file";
+                    const firstProperty =
+                      contact.properties[0]?.label ?? "No property on file";
                     return (
                       <button
                         key={contact.id}
@@ -327,11 +476,17 @@ export function QuoteBuilderClient({
                             : "border-slate-200 bg-white text-slate-700 hover:border-primary-200"
                         }`}
                       >
-                        <span className="block text-sm font-semibold">{contact.name}</span>
-                        <span className="mt-1 block truncate text-xs text-slate-500">
-                          {[contact.email, contact.phone].filter(Boolean).join(" / ") || "No email or phone"}
+                        <span className="block text-sm font-semibold">
+                          {contact.name}
                         </span>
-                        <span className="mt-1 block truncate text-xs text-slate-500">{firstProperty}</span>
+                        <span className="mt-1 block truncate text-xs text-slate-500">
+                          {[contact.email, contact.phone]
+                            .filter(Boolean)
+                            .join(" / ") || "No email or phone"}
+                        </span>
+                        <span className="mt-1 block truncate text-xs text-slate-500">
+                          {firstProperty}
+                        </span>
                       </button>
                     );
                   })
@@ -343,14 +498,20 @@ export function QuoteBuilderClient({
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-800">Selected client</h3>
-                    <p className="mt-1 text-lg font-semibold text-slate-950">{selectedContact?.name ?? "No client selected"}</p>
+                    <h3 className="text-sm font-semibold text-slate-800">
+                      Selected client
+                    </h3>
+                    <p className="mt-1 text-lg font-semibold text-slate-950">
+                      {selectedContact?.name ?? "No client selected"}
+                    </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      {selectedContactMeta || "Add an email or phone before sending automatically."}
+                      {selectedContactMeta ||
+                        "Add an email or phone before sending automatically."}
                     </p>
                   </div>
                   <span className="inline-flex w-fit rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
-                    {propertyOptions.length} {propertyOptions.length === 1 ? "property" : "properties"}
+                    {propertyOptions.length}{" "}
+                    {propertyOptions.length === 1 ? "property" : "properties"}
                   </span>
                 </div>
               </div>
@@ -366,7 +527,9 @@ export function QuoteBuilderClient({
                 >
                   {propertyOptions.length === 0 ? (
                     <option value="">
-                      {selectedContact ? "No property on file" : "Select a contact first"}
+                      {selectedContact
+                        ? "No property on file"
+                        : "Select a contact first"}
                     </option>
                   ) : (
                     propertyOptions.map((property) => (
@@ -378,7 +541,8 @@ export function QuoteBuilderClient({
                 </select>
                 {propertyOptions.length === 0 ? (
                   <span className="text-xs text-slate-400">
-                    Save a property for this contact in the Contacts tab to enable quoting.
+                    Save a property for this contact in the Contacts tab to
+                    enable quoting.
                   </span>
                 ) : null}
               </label>
@@ -388,7 +552,9 @@ export function QuoteBuilderClient({
           {/* Removed concrete surfaces UI for junk removal */}
 
           <fieldset className="space-y-3">
-            <legend className="text-sm font-semibold text-slate-700">Services included</legend>
+            <legend className="text-sm font-semibold text-slate-700">
+              Services included
+            </legend>
             <div className="grid gap-2 sm:grid-cols-2">
               {selectableServices.map((service) => {
                 const checked = selectedServices.includes(service.id);
@@ -402,7 +568,9 @@ export function QuoteBuilderClient({
                 const priceInvalid =
                   requiresCustomPrice &&
                   checked &&
-                  (trimmedPrice.length === 0 || !Number.isFinite(numericPrice) || numericPrice <= 0);
+                  (trimmedPrice.length === 0 ||
+                    !Number.isFinite(numericPrice) ||
+                    numericPrice <= 0);
                 return (
                   <div
                     key={service.id}
@@ -417,46 +585,63 @@ export function QuoteBuilderClient({
                         className="mt-1 rounded border-slate-300 text-primary-600 focus:ring-primary-400"
                       />
                       <div className="flex-1">
-                        <span className="block text-sm font-semibold">{service.label}</span>
+                        <span className="block text-sm font-semibold">
+                          {service.label}
+                        </span>
                         {service.description ? (
-                          <span className="mt-1 block text-xs text-slate-500">{service.description}</span>
+                          <span className="mt-1 block text-xs text-slate-500">
+                            {service.description}
+                          </span>
                         ) : null}
                       </div>
                     </label>
                     {requiresCustomPrice ? (
                       <div className="mt-3 space-y-1 pl-8">
                         <label className="flex flex-col gap-1 text-xs text-slate-600">
-                          <span className="font-medium text-slate-700">Custom price (total)</span>
+                          <span className="font-medium text-slate-700">
+                            Custom price (total)
+                          </span>
                           <input
                             type="number"
                             min="0"
                             step="0.01"
                             inputMode="decimal"
                             value={priceValue}
-                            onChange={(event) => handlePriceChange(service.id, event.target.value)}
+                            onChange={(event) =>
+                              handlePriceChange(service.id, event.target.value)
+                            }
                             disabled={!checked}
                             placeholder="Enter total price"
                             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                           />
                         </label>
                         {checked ? (
-                          <p className="text-[11px] text-slate-500">Provide the total for this service.</p>
+                          <p className="text-[11px] text-slate-500">
+                            Provide the total for this service.
+                          </p>
                         ) : (
-                          <p className="text-[11px] text-slate-400">Select this service to enter a price.</p>
+                          <p className="text-[11px] text-slate-400">
+                            Select this service to enter a price.
+                          </p>
                         )}
                         {priceInvalid ? (
-                          <p className="text-[11px] text-rose-500">Enter a positive amount.</p>
+                          <p className="text-[11px] text-rose-500">
+                            Enter a positive amount.
+                          </p>
                         ) : null}
                       </div>
                     ) : service.autoPricingNote ? (
-                      <p className="mt-3 pl-8 text-[11px] text-slate-500">{service.autoPricingNote}</p>
+                      <p className="mt-3 pl-8 text-[11px] text-slate-500">
+                        {service.autoPricingNote}
+                      </p>
                     ) : null}
                   </div>
                 );
               })}
             </div>
             <p className="text-xs text-slate-500">
-              Select at least one service to calculate pricing and generate the quote link.
+              Select at least one service to calculate pricing and generate the
+              quote link.
             </p>
           </fieldset>
 
@@ -489,7 +674,10 @@ export function QuoteBuilderClient({
                 <option value="0.25">25% deposit listed</option>
                 <option value="0.5">50% deposit listed</option>
               </select>
-              <span className="text-xs text-slate-500">Deposits are shown as terms only; online collection is not enabled.</span>
+              <span className="text-xs text-slate-500">
+                Deposits are shown as terms only; online collection is not
+                enabled.
+              </span>
             </label>
             <label className="flex flex-col gap-2 text-sm text-slate-600">
               <span>Quote validity</span>
@@ -506,9 +694,12 @@ export function QuoteBuilderClient({
 
           <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
             <div>
-              <h3 className="text-sm font-semibold text-slate-800">Client-facing scope</h3>
+              <h3 className="text-sm font-semibold text-slate-800">
+                Client-facing scope
+              </h3>
               <p className="mt-1 text-xs text-slate-500">
-                Add rough notes, draft polished proposal language, then review/edit before sending.
+                Add rough notes, draft polished proposal language, then
+                review/edit before sending.
               </p>
             </div>
             <label className="flex flex-col gap-2 text-sm text-slate-600">
@@ -529,7 +720,9 @@ export function QuoteBuilderClient({
             >
               {scopeDrafting ? "Drafting..." : "Draft polished scope"}
             </button>
-            {scopeDraftError ? <p className="text-xs text-rose-600">{scopeDraftError}</p> : null}
+            {scopeDraftError ? (
+              <p className="text-xs text-rose-600">{scopeDraftError}</p>
+            ) : null}
             <label className="flex flex-col gap-2 text-sm text-slate-600">
               <span>Scope shown to customer</span>
               <textarea
@@ -544,26 +737,83 @@ export function QuoteBuilderClient({
           </div>
 
           <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-600">
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="checkbox"
-                name="sendQuote"
-                checked={sendQuote}
-                onChange={(event) => setSendQuote(event.target.checked)}
-                disabled={!canSendQuote}
-                className="rounded border-slate-300 text-primary-600 focus:ring-primary-400 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300"
-                title={!canSendQuote ? "Add an email or phone to this contact to enable sending" : undefined}
-              />
-              Send the quote link by SMS/email immediately
-            </label>
-            <p className="text-xs text-slate-500">
-              We&apos;ll still show the share link so you can copy it into chat, even when messages go out.
-            </p>
-            {!canSendQuote ? (
-              <p className="text-xs font-medium text-amber-600">
-                Add an email address or phone to this contact to enable sending the quote automatically.
-              </p>
-            ) : null}
+            {canSend ? (
+              <>
+                <p className="font-semibold text-slate-800">
+                  Customer access and delivery
+                </p>
+                <label className="inline-flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    name="shareQuote"
+                    checked={shareQuote}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setShareQuote(checked);
+                      if (!checked) setSendQuote(false);
+                    }}
+                    className="mt-0.5 rounded border-slate-300 text-primary-600 focus:ring-primary-400"
+                  />
+                  <span>
+                    Create a customer link
+                    <span className="mt-1 block text-xs text-slate-500">
+                      The quote becomes viewable by anyone with its protected
+                      link, but no message is sent.
+                    </span>
+                  </span>
+                </label>
+                <label className="inline-flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    name="sendQuote"
+                    checked={sendQuote}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setSendQuote(checked);
+                      if (checked) setShareQuote(true);
+                    }}
+                    disabled={!canSendQuote}
+                    className="mt-0.5 rounded border-slate-300 text-primary-600 focus:ring-primary-400 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300"
+                    title={
+                      !canSendQuote
+                        ? "Add an email or phone to this contact to enable sending"
+                        : undefined
+                    }
+                  />
+                  <span>
+                    Send immediately
+                    <span className="mt-1 block text-xs text-slate-500">
+                      {selectedContact
+                        ? [
+                            selectedContact.phone
+                              ? `SMS ${selectedContact.phone}`
+                              : null,
+                            selectedContact.email
+                              ? `email ${selectedContact.email}`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" and ") || "No usable recipient"
+                        : "Choose a customer to see recipients."}
+                    </span>
+                  </span>
+                </label>
+                {!canSendQuote ? (
+                  <p className="text-xs font-medium text-amber-700">
+                    Add a valid email address or phone before requesting
+                    delivery.
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <p className="font-semibold text-slate-800">Private draft</p>
+                <p className="text-xs text-slate-500">
+                  Your current access can create an internal draft only. Share
+                  and Send controls require quote-send permission.
+                </p>
+              </>
+            )}
           </div>
 
           <label className="flex flex-col gap-2 text-sm text-slate-600">
@@ -571,6 +821,7 @@ export function QuoteBuilderClient({
             <textarea
               name="notes"
               rows={4}
+              defaultValue={instantQuotePrefill?.notes ?? ""}
               placeholder="Optional details for the homeowner or crew"
               className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
             />
@@ -580,7 +831,10 @@ export function QuoteBuilderClient({
             <div className="text-xs text-slate-500">
               {selectedContact ? (
                 <>
-                  Sending to <span className="font-medium text-slate-700">{selectedContact.name}</span>
+                  {sendQuote ? "Delivery requested for " : "Creating for "}{" "}
+                  <span className="font-medium text-slate-700">
+                    {selectedContact.name}
+                  </span>
                   {selectedContact.email ? ` (${selectedContact.email})` : ""}.
                 </>
               ) : (
@@ -592,10 +846,16 @@ export function QuoteBuilderClient({
               pendingLabel="Creating quote..."
               disabled={!canSubmit}
             >
-              Create quote
+              {sendQuote
+                ? "Create and send quote"
+                : shareQuote
+                  ? "Create customer link"
+                  : "Create private draft"}
             </SubmitButton>
             {hasAllCustomPrices ? null : (
-              <p className="w-full text-[11px] text-rose-500">Enter a custom price for each selected service.</p>
+              <p className="w-full text-[11px] text-rose-500">
+                Enter a custom price for each selected service.
+              </p>
             )}
             {/* No concrete validation needed */}
           </div>
@@ -605,9 +865,18 @@ export function QuoteBuilderClient({
       <div className="rounded-3xl border border-slate-200 bg-white/80 p-5 text-xs text-slate-500 shadow-md shadow-slate-200/60">
         <h3 className="text-sm font-semibold text-slate-700">Workflow tips</h3>
         <ul className="mt-2 list-disc space-y-1 pl-5">
-          <li>Need a new contact? Add them in the Contacts tab first so their property details are available here.</li>
-          <li>You can uncheck the email option to copy the share link and send it manually via SMS or chat.</li>
-          <li>Bundle discounts apply automatically when qualifying services are selected together.</li>
+          <li>
+            Need a new contact? Add them in the Contacts tab first so their
+            property details are available here.
+          </li>
+          <li>
+            Private draft, customer link, and provider delivery are separate
+            choices. Confirm the intended option before creating the quote.
+          </li>
+          <li>
+            Bundle discounts apply automatically when qualifying services are
+            selected together.
+          </li>
         </ul>
       </div>
     </section>

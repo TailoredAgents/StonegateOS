@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { test, expect } from "../test";
 import {
   ApiClient,
@@ -139,7 +140,12 @@ test.describe("Lead Intake Journey", () => {
         },
         consent: true,
       },
-      { admin: false },
+      {
+        admin: false,
+        headers: {
+          "idempotency-key": `lead-intake-e2e:${randomUUID()}`,
+        },
+      },
     );
     expect(response.appointmentId).toEqual(expect.any(String));
 

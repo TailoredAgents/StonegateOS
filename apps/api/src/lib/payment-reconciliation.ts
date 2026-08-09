@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import {
   appointments,
   type DatabaseClient,
@@ -6,6 +6,7 @@ import {
   payments,
 } from "@/db";
 import { syncAppointmentCardTipCents } from "@/lib/payment-ledger";
+import type { TeamMutationTransaction } from "@/lib/team-mutation";
 
 export type LegacyStripeResolutionError =
   | "payment_not_found"
@@ -19,7 +20,8 @@ export type LegacyStripeResolutionError =
   | "stripe_allocation_mismatch"
   | "appointment_final_total_required"
   | "appointment_has_other_payment_review"
-  | "stripe_job_amount_exceeds_balance";
+  | "stripe_job_amount_exceeds_balance"
+  | "payment_changed";
 
 export type LegacyStripeResolutionDecision =
   | {
@@ -150,8 +152,7 @@ export type ResolveLegacyStripePaymentResult =
     }
   | { ok: false; code: LegacyStripeResolutionError };
 
-export async function resolveLegacyStripePayment(input: {
-  db: DatabaseClient;
+type ResolveLegacyStripePaymentInput = {
   paymentId: string;
   appointmentId: string;
   jobAmountCents: number;
@@ -160,149 +161,174 @@ export async function resolveLegacyStripePayment(input: {
   actorId: string | null;
   actorLabel: string | null;
   now?: Date;
-}): Promise<ResolveLegacyStripePaymentResult> {
-  const now = input.now ?? new Date();
-  return input.db.transaction(async (tx) => {
-    const [appointment] = await tx
-      .select({
-        id: appointments.id,
-        finalTotalCents: appointments.finalTotalCents,
-      })
-      .from(appointments)
-      .where(eq(appointments.id, input.appointmentId))
-      .limit(1)
-      .for("update");
-    if (!appointment) {
-      return { ok: false, code: "appointment_not_found" as const };
-    }
+};
 
-    const [payment] = await tx
-      .select({
-        id: payments.id,
-        provider: payments.provider,
-        appointmentId: payments.appointmentId,
-        amount: payments.amount,
-        totalAmountCents: payments.totalAmountCents,
-        refundedAmountCents: payments.refundedAmountCents,
-        status: payments.status,
-        canonicalStatus: payments.canonicalStatus,
-        providerStatus: payments.providerStatus,
-        metadata: payments.metadata,
-      })
-      .from(payments)
-      .where(eq(payments.id, input.paymentId))
-      .limit(1)
-      .for("update");
-    if (!payment) return { ok: false, code: "payment_not_found" as const };
-    if (payment.appointmentId && payment.appointmentId !== appointment.id) {
-      return {
-        ok: false,
-        code: "stripe_payment_already_attached_elsewhere" as const,
-      };
-    }
+export async function resolveLegacyStripePaymentInTransaction(
+  tx: TeamMutationTransaction,
+  input: ResolveLegacyStripePaymentInput,
+): Promise<ResolveLegacyStripePaymentResult> {
+  const requestedNow = input.now ?? new Date();
+  const [appointment] = await tx
+    .select({
+      id: appointments.id,
+      finalTotalCents: appointments.finalTotalCents,
+    })
+    .from(appointments)
+    .where(eq(appointments.id, input.appointmentId))
+    .limit(1)
+    .for("update");
+  if (!appointment) {
+    return { ok: false, code: "appointment_not_found" as const };
+  }
 
-    const otherPayments = await tx
-      .select({
-        id: payments.id,
-        amount: payments.amount,
-        jobAmountCents: payments.jobAmountCents,
-        tipCents: payments.tipCents,
-        refundedAmountCents: payments.refundedAmountCents,
-        status: payments.status,
-        canonicalStatus: payments.canonicalStatus,
-        providerStatus: payments.providerStatus,
-      })
-      .from(payments)
-      .where(
-        and(
-          eq(payments.appointmentId, input.appointmentId),
-          ne(payments.id, payment.id),
-        ),
-      );
-
-    const reviewablePaymentIds = [
-      payment.id,
-      ...otherPayments.map((row) => row.id),
-    ];
-    const reviewRefunds =
-      reviewablePaymentIds.length === 0
-        ? []
-        : await tx
-            .select({ id: paymentRefunds.id })
-            .from(paymentRefunds)
-            .where(
-              and(
-                inArray(paymentRefunds.paymentId, reviewablePaymentIds),
-                eq(paymentRefunds.canonicalStatus, "needs_review"),
-              ),
-            )
-            .limit(1);
-    const hasOtherReviewItems =
-      reviewRefunds.length > 0 ||
-      otherPayments.some((row) => row.canonicalStatus === "needs_review");
-    const otherPaidTowardJobCents = otherPayments.reduce((total, row) => {
-      if (!financiallyCompletedPayment(row)) return total;
-      const jobAmountCents = resolvedJobAmount(row);
-      const refundedFromJobCents = Math.min(
-        Math.max(row.refundedAmountCents, 0),
-        jobAmountCents,
-      );
-      return total + Math.max(jobAmountCents - refundedFromJobCents, 0);
-    }, 0);
-    const totalAmountCents = Math.max(
-      payment.totalAmountCents ?? payment.amount,
-      0,
-    );
-    const decision = evaluateLegacyStripeResolution({
-      provider: payment.provider,
-      providerStatus: payment.providerStatus ?? payment.status,
-      canonicalStatus: payment.canonicalStatus,
-      totalAmountCents,
-      refundedAmountCents: Math.max(payment.refundedAmountCents, 0),
-      jobAmountCents: input.jobAmountCents,
-      tipCents: input.tipCents,
-      appointmentFinalTotalCents: appointment.finalTotalCents,
-      otherPaidTowardJobCents,
-      hasOtherReviewItems,
-      reviewNote: input.reviewNote,
-    });
-    if (!decision.ok) return decision;
-
-    await tx
-      .update(payments)
-      .set({
-        appointmentId: appointment.id,
-        jobAmountCents: decision.jobAmountCents,
-        tipCents: decision.tipCents,
-        totalAmountCents,
-        canonicalStatus: "completed",
-        metadata: {
-          ...(payment.metadata ?? {}),
-          ownerReconciliation: {
-            resolvedAt: now.toISOString(),
-            resolvedBy: input.actorId ?? input.actorLabel ?? "owner",
-            reviewNote: input.reviewNote.trim(),
-            previousAppointmentId: payment.appointmentId,
-            previousCanonicalStatus: payment.canonicalStatus,
-            jobAmountCents: decision.jobAmountCents,
-            tipCents: decision.tipCents,
-          },
-        },
-        updatedAt: now,
-      })
-      .where(eq(payments.id, payment.id));
-
-    await syncAppointmentCardTipCents(tx, appointment.id);
-
+  const [payment] = await tx
+    .select({
+      id: payments.id,
+      provider: payments.provider,
+      appointmentId: payments.appointmentId,
+      amount: payments.amount,
+      totalAmountCents: payments.totalAmountCents,
+      refundedAmountCents: payments.refundedAmountCents,
+      status: payments.status,
+      canonicalStatus: payments.canonicalStatus,
+      providerStatus: payments.providerStatus,
+      metadata: payments.metadata,
+      updatedAt: payments.updatedAt,
+    })
+    .from(payments)
+    .where(eq(payments.id, input.paymentId))
+    .limit(1)
+    .for("update");
+  if (!payment) return { ok: false, code: "payment_not_found" as const };
+  if (payment.appointmentId && payment.appointmentId !== appointment.id) {
     return {
-      ok: true,
-      paymentId: payment.id,
+      ok: false,
+      code: "stripe_payment_already_attached_elsewhere" as const,
+    };
+  }
+  const now = new Date(
+    Math.max(requestedNow.getTime(), payment.updatedAt.getTime() + 1),
+  );
+
+  const otherPayments = await tx
+    .select({
+      id: payments.id,
+      amount: payments.amount,
+      jobAmountCents: payments.jobAmountCents,
+      tipCents: payments.tipCents,
+      refundedAmountCents: payments.refundedAmountCents,
+      status: payments.status,
+      canonicalStatus: payments.canonicalStatus,
+      providerStatus: payments.providerStatus,
+    })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.appointmentId, input.appointmentId),
+        ne(payments.id, payment.id),
+      ),
+    );
+
+  const reviewablePaymentIds = [
+    payment.id,
+    ...otherPayments.map((row) => row.id),
+  ];
+  const reviewRefunds =
+    reviewablePaymentIds.length === 0
+      ? []
+      : await tx
+          .select({ id: paymentRefunds.id })
+          .from(paymentRefunds)
+          .where(
+            and(
+              inArray(paymentRefunds.paymentId, reviewablePaymentIds),
+              eq(paymentRefunds.canonicalStatus, "needs_review"),
+            ),
+          )
+          .limit(1);
+  const hasOtherReviewItems =
+    reviewRefunds.length > 0 ||
+    otherPayments.some((row) => row.canonicalStatus === "needs_review");
+  const otherPaidTowardJobCents = otherPayments.reduce((total, row) => {
+    if (!financiallyCompletedPayment(row)) return total;
+    const jobAmountCents = resolvedJobAmount(row);
+    const refundedFromJobCents = Math.min(
+      Math.max(row.refundedAmountCents, 0),
+      jobAmountCents,
+    );
+    return total + Math.max(jobAmountCents - refundedFromJobCents, 0);
+  }, 0);
+  const totalAmountCents = Math.max(
+    payment.totalAmountCents ?? payment.amount,
+    0,
+  );
+  const decision = evaluateLegacyStripeResolution({
+    provider: payment.provider,
+    providerStatus: payment.providerStatus ?? payment.status,
+    canonicalStatus: payment.canonicalStatus,
+    totalAmountCents,
+    refundedAmountCents: Math.max(payment.refundedAmountCents, 0),
+    jobAmountCents: input.jobAmountCents,
+    tipCents: input.tipCents,
+    appointmentFinalTotalCents: appointment.finalTotalCents,
+    otherPaidTowardJobCents,
+    hasOtherReviewItems,
+    reviewNote: input.reviewNote,
+  });
+  if (!decision.ok) return decision;
+
+  const [updated] = await tx
+    .update(payments)
+    .set({
       appointmentId: appointment.id,
-      previousAppointmentId: payment.appointmentId,
-      previousCanonicalStatus: payment.canonicalStatus,
       jobAmountCents: decision.jobAmountCents,
       tipCents: decision.tipCents,
-      netJobAmountCents: decision.netJobAmountCents,
-    };
+      totalAmountCents,
+      canonicalStatus: "completed",
+      metadata: {
+        ...(payment.metadata ?? {}),
+        ownerReconciliation: {
+          resolvedAt: now.toISOString(),
+          resolvedBy: input.actorId ?? input.actorLabel ?? "owner",
+          reviewNote: input.reviewNote.trim(),
+          previousAppointmentId: payment.appointmentId,
+          previousCanonicalStatus: payment.canonicalStatus,
+          jobAmountCents: decision.jobAmountCents,
+          tipCents: decision.tipCents,
+        },
+      },
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(payments.id, payment.id),
+        eq(payments.updatedAt, payment.updatedAt),
+        payment.appointmentId === null
+          ? isNull(payments.appointmentId)
+          : eq(payments.appointmentId, payment.appointmentId),
+      ),
+    )
+    .returning({ id: payments.id });
+  if (!updated) return { ok: false, code: "payment_changed" as const };
+
+  await syncAppointmentCardTipCents(tx, appointment.id);
+
+  return {
+    ok: true,
+    paymentId: payment.id,
+    appointmentId: appointment.id,
+    previousAppointmentId: payment.appointmentId,
+    previousCanonicalStatus: payment.canonicalStatus,
+    jobAmountCents: decision.jobAmountCents,
+    tipCents: decision.tipCents,
+    netJobAmountCents: decision.netJobAmountCents,
+  };
+}
+
+export async function resolveLegacyStripePayment(
+  input: ResolveLegacyStripePaymentInput & { db: DatabaseClient },
+): Promise<ResolveLegacyStripePaymentResult> {
+  return input.db.transaction(async (tx) => {
+    return resolveLegacyStripePaymentInTransaction(tx, input);
   });
 }

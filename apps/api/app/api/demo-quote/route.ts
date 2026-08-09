@@ -1,10 +1,18 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getDb, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
+import { getDb, crmPipeline, instantQuotes, leads, outboxEvents } from "@/db";
 import { isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
-import { desc, eq } from "drizzle-orm";
-import { upsertContact, upsertProperty } from "../web/persistence";
+import { eq } from "drizzle-orm";
+import {
+  PublicContactPersistenceError,
+  upsertContact,
+  upsertProperty,
+} from "../web/persistence";
+import {
+  ensureContactPropertyAssociation,
+  findLatestContactProperty,
+} from "@/lib/property-write";
 import { normalizeName, normalizePhone } from "../web/utils";
 import {
   claimPublicInstantQuoteMediaReferences,
@@ -435,33 +443,34 @@ export async function POST(request: NextRequest): Promise<Response> {
     const serviceKeys: string[] = ["demo-hauloff", `demo_${body.job.type}`];
     if (isConcrete && !serviceKeys.includes("concrete")) serviceKeys.push("concrete");
 
-    const [quoteRow] = await db
-      .insert(instantQuotes)
-      .values({
-        source: body.source ?? "public_site",
-        contactName: body.contact.name.trim(),
-        contactPhone: body.contact.phone.trim(),
-        timeframe: body.contact.timeframe,
-        zip: body.job.zip.trim(),
-        jobTypes: serviceKeys,
-        perceivedSize: body.job.size,
-        notes: body.job.notes ?? null,
-        photoUrls: body.job.photoUrls ?? [],
-        aiResult: storedAiResult
-      })
-      .returning({ id: instantQuotes.id });
+    const { firstName, lastName } = normalizeName(body.contact.name);
+    const normalizedPhone = normalizePhone(body.contact.phone);
+    const utm = body.utm ?? {};
+    const referrer = request.headers.get("referer") ?? undefined;
+    const otherDetails =
+      typeof body.job.otherDetails === "string" && body.job.otherDetails.trim().length > 0 ? body.job.otherDetails.trim() : null;
 
-    const quoteId = quoteRow?.id ?? null;
-    if (quoteId) {
-      try {
-        const { firstName, lastName } = normalizeName(body.contact.name);
-        const normalizedPhone = normalizePhone(body.contact.phone);
-        const utm = body.utm ?? {};
-        const referrer = request.headers.get("referer") ?? undefined;
-        const otherDetails =
-          typeof body.job.otherDetails === "string" && body.job.otherDetails.trim().length > 0 ? body.job.otherDetails.trim() : null;
+    const quoteId = await db.transaction(async (tx) => {
+      const [quoteRow] = await tx
+        .insert(instantQuotes)
+        .values({
+          source: body.source ?? "public_site",
+          contactName: body.contact.name.trim(),
+          contactPhone: body.contact.phone.trim(),
+          timeframe: body.contact.timeframe,
+          zip: body.job.zip.trim(),
+          jobTypes: serviceKeys,
+          perceivedSize: body.job.size,
+          notes: body.job.notes ?? null,
+          photoUrls: body.job.photoUrls ?? [],
+          aiResult: storedAiResult
+        })
+        .returning({ id: instantQuotes.id });
+      const quoteId = quoteRow?.id;
+      if (!quoteId) {
+        throw new Error("instant_quote_insert_failed");
+      }
 
-        await db.transaction(async (tx) => {
           const contact = await upsertContact(tx, {
             firstName,
             lastName,
@@ -477,12 +486,10 @@ export async function POST(request: NextRequest): Promise<Response> {
             database: tx,
           });
 
-          const [existingProperty] = await tx
-            .select({ id: properties.id })
-            .from(properties)
-            .where(eq(properties.contactId, contact.id))
-            .orderBy(desc(properties.createdAt))
-            .limit(1);
+          const existingProperty = await findLatestContactProperty(
+            tx,
+            contact.id,
+          );
 
           const property =
             existingProperty?.id
@@ -495,6 +502,22 @@ export async function POST(request: NextRequest): Promise<Response> {
                   postalCode: body.job.zip.trim(),
                   gated: false
                 });
+
+          await ensureContactPropertyAssociation(tx, {
+            contactId: contact.id,
+            propertyId: property.id,
+          });
+          const [linkedQuote] = await tx
+            .update(instantQuotes)
+            .set({
+              contactId: contact.id,
+              propertyId: property.id,
+            })
+            .where(eq(instantQuotes.id, quoteId))
+            .returning({ id: instantQuotes.id });
+          if (!linkedQuote?.id) {
+            throw new Error("instant_quote_relationship_failed");
+          }
 
           const notesParts = [
             body.job.notes ?? null,
@@ -537,16 +560,17 @@ export async function POST(request: NextRequest): Promise<Response> {
               instantQuoteId: quoteId
             })
             .returning({ id: leads.id });
-
-          if (leadRow?.id) {
-            await tx.insert(outboxEvents).values({
-              type: "lead.alert",
-              payload: {
-                leadId: leadRow.id,
-                source: "demo_quote"
-              }
-            });
+          if (!leadRow?.id) {
+            throw new Error("lead_insert_failed");
           }
+
+          await tx.insert(outboxEvents).values({
+            type: "lead.alert",
+            payload: {
+              leadId: leadRow.id,
+              source: "demo_quote"
+            }
+          });
 
           const [pipelineRow] = await tx
             .select({ stage: crmPipeline.stage })
@@ -579,28 +603,17 @@ export async function POST(request: NextRequest): Promise<Response> {
             });
           }
 
-          if (leadRow?.id) {
-            await tx.insert(outboxEvents).values({
-              type: "followup.schedule",
-              payload: {
-                leadId: leadRow.id,
-                contactId: contact.id,
-                reason: "demo_quote.created"
-              }
-            });
-          }
-        });
-      } catch (error) {
-        if (preparedPhotoMedia.length > 0) {
-          await db
-            .delete(instantQuotes)
-            .where(eq(instantQuotes.id, quoteId))
-            .catch(() => undefined);
-          throw error;
-        }
-        console.error("[demo-quote] lead_create_failed", { quoteId, error: String(error) });
-      }
-    }
+          await tx.insert(outboxEvents).values({
+            type: "followup.schedule",
+            payload: {
+              leadId: leadRow.id,
+              contactId: contact.id,
+              reason: "demo_quote.created"
+            }
+          });
+
+      return quoteId;
+    });
 
     const discountAmount = resolveDemoFixedDiscountDollars();
     const priceLowDiscounted = discountAmount > 0 ? Math.max(0, quote.priceLow - discountAmount) : undefined;
@@ -620,6 +633,17 @@ export async function POST(request: NextRequest): Promise<Response> {
       requestOrigin
     );
   } catch (error) {
+    if (error instanceof PublicContactPersistenceError) {
+      return corsJson(
+        {
+          ok: false,
+          error: error.publicCode,
+          message: error.publicMessage,
+        },
+        null,
+        { status: error.status },
+      );
+    }
     if (error instanceof PublicQuoteMediaError) {
       return corsJson(
         {

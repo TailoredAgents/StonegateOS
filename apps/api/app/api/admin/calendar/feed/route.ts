@@ -1,14 +1,19 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { randomUUID } from "node:crypto";
-import { and, gte, inArray, lte, eq, desc } from "drizzle-orm";
+import {
+  parseGoogleCalendarEventListResponse,
+  resolveGoogleCalendarApiEndpoint,
+} from "@myst-os/sdk";
+import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import {
   getDb,
   appointmentNotes,
+  appointmentCrewMembers,
   appointments,
   contacts,
   crmTasks,
   properties,
+  teamMembers,
   type AppointmentBookingDetails,
 } from "@/db";
 import {
@@ -17,6 +22,7 @@ import {
   isGoogleCalendarEnabled,
 } from "@/lib/calendar";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
+import { resolveEasternDayBoundary } from "@/lib/appointment-time";
 import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
 import {
   getEtaSummariesForAppointments,
@@ -46,12 +52,17 @@ type CalendarEvent = {
   status?: string | null;
   quotedTotalCents?: number | null;
   finalTotalCents?: number | null;
+  soldByMemberId?: string | null;
+  assignedSalespersonMemberId?: string | null;
+  version?: string | null;
   quotedScopeText?: string | null;
   mediaSummary?: AppointmentMediaSummary;
   paymentSummary?: AppointmentPaymentSummary;
   paymentLedgerAvailable?: boolean;
   bookingDetails?: AppointmentBookingDetails | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
+  crewMemberIds?: string[];
+  crewNames?: string[];
   eta?: {
     status: string | null;
     eventType: string | null;
@@ -71,6 +82,70 @@ type CalendarEvent = {
 const DEFAULT_DAYS_FORWARD = 30;
 const DEFAULT_DAYS_BACK = 1;
 const MAX_RANGE_DAYS = 366;
+
+function googleAllDayBoundary(date: string | undefined): string | null {
+  if (!date) return null;
+  const resolved = resolveEasternDayBoundary(date);
+  return resolved.ok ? resolved.value.toISOString() : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseExternalGoogleEvents(value: unknown): CalendarEvent[] | null {
+  const envelope = parseGoogleCalendarEventListResponse(value);
+  if (!envelope) return null;
+
+  const events: CalendarEvent[] = [];
+  for (const rawItem of envelope.items) {
+    if (!isRecord(rawItem)) return null;
+    const id = typeof rawItem["id"] === "string" ? rawItem["id"].trim() : "";
+    const status = rawItem["status"];
+    const summary = rawItem["summary"];
+    if (
+      !id ||
+      (status !== undefined && typeof status !== "string") ||
+      (summary !== undefined && typeof summary !== "string")
+    ) {
+      return null;
+    }
+    if (status === "cancelled") continue;
+
+    const start = isRecord(rawItem["start"]) ? rawItem["start"] : null;
+    const end = isRecord(rawItem["end"]) ? rawItem["end"] : null;
+    if (!start || !end) return null;
+    const startDateTime =
+      typeof start["dateTime"] === "string" ? start["dateTime"] : undefined;
+    const startDate =
+      typeof start["date"] === "string" ? start["date"] : undefined;
+    const endDateTime =
+      typeof end["dateTime"] === "string" ? end["dateTime"] : undefined;
+    const endDate = typeof end["date"] === "string" ? end["date"] : undefined;
+    const startIso = startDateTime ?? googleAllDayBoundary(startDate);
+    const endIso = endDateTime ?? googleAllDayBoundary(endDate);
+    const startAt = startIso ? new Date(startIso) : null;
+    const endAt = endIso ? new Date(endIso) : null;
+    if (
+      !startAt ||
+      !endAt ||
+      Number.isNaN(startAt.getTime()) ||
+      Number.isNaN(endAt.getTime()) ||
+      endAt <= startAt
+    ) {
+      return null;
+    }
+    events.push({
+      id: `google:${id}`,
+      title: typeof summary === "string" ? summary : "Calendar event",
+      source: "google",
+      start: startAt.toISOString(),
+      end: endAt.toISOString(),
+      status: typeof status === "string" ? status : null,
+    });
+  }
+  return events;
+}
 
 function fallbackPaymentSummary(
   finalTotalCents: number | null,
@@ -121,10 +196,14 @@ export async function GET(request: NextRequest): Promise<Response> {
       rescheduleToken: appointments.rescheduleToken,
       quotedTotalCents: appointments.quotedTotalCents,
       finalTotalCents: appointments.finalTotalCents,
+      soldByMemberId: appointments.soldByMemberId,
+      crew: appointments.crew,
+      updatedAt: appointments.updatedAt,
       quotedScopeText: appointments.quotedScopeText,
       bookingDetails: appointments.bookingDetails,
       contactFirstName: contacts.firstName,
       contactLastName: contacts.lastName,
+      assignedSalespersonMemberId: contacts.salespersonMemberId,
       addressLine1: properties.addressLine1,
       city: properties.city,
       state: properties.state,
@@ -136,7 +215,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     .where(
       and(
         gte(appointments.startAt, windowStart),
-        lte(appointments.startAt, windowEnd),
+        lt(appointments.startAt, windowEnd),
       ),
     );
 
@@ -157,6 +236,10 @@ export async function GET(request: NextRequest): Promise<Response> {
   const quotedScopeByAppointmentId = new Map(
     dbRows.map((row) => [row.id, row.quotedScopeText ?? null]),
   );
+  const crewByAppointmentId = new Map<
+    string,
+    Array<{ memberId: string; name: string }>
+  >();
   const [etaSummaryMap, mediaSummaryMap, paymentSummaryMap] = await Promise.all(
     [
       appointmentIds.length > 0
@@ -191,6 +274,27 @@ export async function GET(request: NextRequest): Promise<Response> {
         createdAt: row.createdAt.toISOString(),
       });
       notesByAppointmentId.set(row.appointmentId, list);
+    }
+
+    const crewRows = await db
+      .select({
+        appointmentId: appointmentCrewMembers.appointmentId,
+        memberId: appointmentCrewMembers.memberId,
+        name: teamMembers.name,
+      })
+      .from(appointmentCrewMembers)
+      .leftJoin(
+        teamMembers,
+        eq(appointmentCrewMembers.memberId, teamMembers.id),
+      )
+      .where(inArray(appointmentCrewMembers.appointmentId, appointmentIds));
+    for (const row of crewRows) {
+      const list = crewByAppointmentId.get(row.appointmentId) ?? [];
+      list.push({
+        memberId: row.memberId,
+        name: row.name?.trim() || "Inactive crew member",
+      });
+      crewByAppointmentId.set(row.appointmentId, list);
     }
   }
 
@@ -261,6 +365,16 @@ export async function GET(request: NextRequest): Promise<Response> {
           );
         })
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      const crew = crewByAppointmentId.get(row.id) ?? [];
+      const crewNames = Array.from(
+        new Set([
+          ...crew.map((member) => member.name),
+          ...(row.crew ?? "")
+            .split(/,|&/u)
+            .map((name) => name.trim())
+            .filter(Boolean),
+        ]),
+      );
       return {
         id: `db:${row.id}`,
         appointmentId: row.id,
@@ -274,6 +388,9 @@ export async function GET(request: NextRequest): Promise<Response> {
         address: addressParts.length ? addressParts : null,
         status: row.status ?? null,
         quotedTotalCents: row.quotedTotalCents ?? null,
+        soldByMemberId: row.soldByMemberId ?? null,
+        assignedSalespersonMemberId: row.assignedSalespersonMemberId ?? null,
+        version: row.updatedAt.toISOString(),
         quotedScopeText: row.quotedScopeText ?? null,
         mediaSummary: mediaSummaryMap.get(row.id) ?? {
           readyCount: 0,
@@ -301,11 +418,15 @@ export async function GET(request: NextRequest): Promise<Response> {
           pendingDraft: null,
         },
         notes,
+        crewMemberIds: crew.map((member) => member.memberId),
+        crewNames,
       };
     });
 
   const externalEvents: CalendarEvent[] = [];
+  let googleCalendarState: "disabled" | "loaded" | "unavailable" = "disabled";
   if (isGoogleCalendarEnabled()) {
+    googleCalendarState = "unavailable";
     const config = getCalendarConfig();
     if (config) {
       const token = await getAccessToken(config);
@@ -317,42 +438,33 @@ export async function GET(request: NextRequest): Promise<Response> {
           orderBy: "startTime",
           showDeleted: "false",
         });
-        const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
-          config.calendarId,
-        )}/events?${params.toString()}`;
-        const res = await fetch(url, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        if (res.ok) {
-          const data = (await res.json()) as {
-            items?: Array<{
-              id?: string;
-              status?: string;
-              summary?: string;
-              start?: { dateTime?: string; date?: string };
-              end?: { dateTime?: string; date?: string };
-            }>;
-          };
-          for (const item of data.items ?? []) {
-            if (!item || item.status === "cancelled") continue;
-            const startIso =
-              item.start?.dateTime ??
-              (item.start?.date ? `${item.start.date}T00:00:00.000Z` : null);
-            const endIso =
-              item.end?.dateTime ??
-              (item.end?.date ? `${item.end.date}T00:00:00.000Z` : null);
-            if (!startIso || !endIso) continue;
-            externalEvents.push({
-              id: `google:${item.id ?? randomUUID()}`,
-              title: item.summary ?? "Calendar event",
-              source: "google",
-              start: new Date(startIso).toISOString(),
-              end: new Date(endIso).toISOString(),
-              status: item.status ?? null,
+        const res = await (async () => {
+          try {
+            const url = resolveGoogleCalendarApiEndpoint(
+              { kind: "events", calendarId: config.calendarId },
+              process.env,
+              params,
+            );
+            return await fetch(url, {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+              signal: AbortSignal.timeout(5_000),
             });
+          } catch {
+            return null;
           }
+        })();
+        if (res?.ok) {
+          const parsedEvents = parseExternalGoogleEvents(
+            await res.json().catch(() => null),
+          );
+          if (parsedEvents) {
+            googleCalendarState = "loaded";
+            externalEvents.push(...parsedEvents);
+          }
+        } else if (res) {
+          await res.body?.cancel().catch(() => undefined);
         }
       }
     }
@@ -385,6 +497,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     appointments: appointmentsEvents,
     externalEvents,
     conflicts,
+    googleCalendarState,
   });
 }
 

@@ -152,7 +152,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
   // This endpoint is the cross-customer reconciliation list. Appointment-
   // scoped reads use /api/appointments/:id/payments.
-  const permissionError = await requirePermission(request, "payments.manage");
+  const permissionError = await requirePermission(request, "payments.reconcile");
   if (permissionError) return permissionError;
 
   const db = getDb();

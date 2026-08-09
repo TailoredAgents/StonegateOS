@@ -8,6 +8,7 @@ import { teamButtonClass } from "./team-ui";
 type Props = {
   contactId: string;
   initialNotes: ContactNoteSummary[];
+  readOnly?: boolean;
 };
 
 function formatNoteTimestamp(value: string): string {
@@ -19,12 +20,18 @@ function formatNoteTimestamp(value: string): string {
     day: "numeric",
     year: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
   }).format(parsed);
 }
 
-export function InboxContactNotesClient({ contactId, initialNotes }: Props): React.ReactElement {
-  const [notes, setNotes] = React.useState<ContactNoteSummary[]>(() => initialNotes ?? []);
+export function InboxContactNotesClient({
+  contactId,
+  initialNotes,
+  readOnly = false,
+}: Props): React.ReactElement {
+  const [notes, setNotes] = React.useState<ContactNoteSummary[]>(
+    () => initialNotes ?? [],
+  );
   const [showForm, setShowForm] = React.useState(false);
   const [draft, setDraft] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -48,14 +55,19 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
     try {
       const response = await fetch("/api/team/contacts/notes", {
         method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ contactId, body })
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ contactId, body }),
       });
 
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as unknown;
         const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+          data &&
+          typeof data === "object" &&
+          typeof (data as Record<string, unknown>)["message"] === "string"
             ? String((data as Record<string, unknown>)["message"])
             : "Unable to save note. Please try again.";
         setError(message);
@@ -63,7 +75,10 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
       }
 
       const data = (await response.json().catch(() => null)) as unknown;
-      const note = data && typeof data === "object" ? (data as Record<string, unknown>)["note"] : null;
+      const note =
+        data && typeof data === "object"
+          ? (data as Record<string, unknown>)["note"]
+          : null;
       if (!note || typeof note !== "object") {
         setError("Unable to save note. Please try again.");
         return;
@@ -84,7 +99,7 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
         id: noteRecord["id"],
         body: noteRecord["body"],
         createdAt: noteRecord["createdAt"],
-        updatedAt: noteRecord["updatedAt"]
+        updatedAt: noteRecord["updatedAt"],
       };
 
       setNotes((prev) => [created, ...prev]);
@@ -105,13 +120,15 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
     try {
       const response = await fetch(`/api/team/contacts/notes/${noteId}`, {
         method: "POST",
-        headers: { Accept: "application/json" }
+        headers: { Accept: "application/json" },
       });
 
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as unknown;
         const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+          data &&
+          typeof data === "object" &&
+          typeof (data as Record<string, unknown>)["message"] === "string"
             ? String((data as Record<string, unknown>)["message"])
             : "Unable to delete note. Please try again.";
         setError(message);
@@ -149,14 +166,19 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
     try {
       const response = await fetch(`/api/team/contacts/notes/${noteId}`, {
         method: "PATCH",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ body })
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ body }),
       });
 
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as unknown;
         const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+          data &&
+          typeof data === "object" &&
+          typeof (data as Record<string, unknown>)["message"] === "string"
             ? String((data as Record<string, unknown>)["message"])
             : "Unable to update note. Please try again.";
         setError(message);
@@ -164,9 +186,18 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
       }
 
       const data = (await response.json().catch(() => null)) as unknown;
-      const note = data && typeof data === "object" ? (data as Record<string, unknown>)["note"] : null;
-      const noteRecord = note && typeof note === "object" ? (note as Record<string, unknown>) : null;
-      const updatedAt = typeof noteRecord?.["updatedAt"] === "string" ? noteRecord["updatedAt"] : null;
+      const note =
+        data && typeof data === "object"
+          ? (data as Record<string, unknown>)["note"]
+          : null;
+      const noteRecord =
+        note && typeof note === "object"
+          ? (note as Record<string, unknown>)
+          : null;
+      const updatedAt =
+        typeof noteRecord?.["updatedAt"] === "string"
+          ? noteRecord["updatedAt"]
+          : null;
 
       setNotes((prev) =>
         prev.map((existing) =>
@@ -174,10 +205,10 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
             ? {
                 ...existing,
                 body,
-                updatedAt: updatedAt ?? existing.updatedAt
+                updatedAt: updatedAt ?? existing.updatedAt,
               }
-            : existing
-        )
+            : existing,
+        ),
       );
 
       setEditingId(null);
@@ -190,22 +221,30 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Notes</div>
-        <button
-          type="button"
-          onClick={() => {
-            setShowForm((prev) => !prev);
-            setError(null);
-          }}
-          className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-        >
-          {showForm ? "Close" : "Add"}
-        </button>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Notes
+        </div>
+        {!readOnly ? (
+          <button
+            type="button"
+            onClick={() => {
+              setShowForm((prev) => !prev);
+              setError(null);
+            }}
+            className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+          >
+            {showForm ? "Close" : "Add"}
+          </button>
+        ) : (
+          <span className="text-[11px] text-slate-500">Read only</span>
+        )}
       </div>
 
-      {showForm ? (
+      {!readOnly && showForm ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-3">
-          <label className="block text-xs font-semibold text-slate-700">New note</label>
+          <label className="block text-xs font-semibold text-slate-700">
+            New note
+          </label>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -213,7 +252,11 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
             className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
             placeholder="Capture what matters from this conversation…"
           />
-          {error ? <div className="mt-2 text-xs font-semibold text-rose-600">{error}</div> : null}
+          {error ? (
+            <div className="mt-2 text-xs font-semibold text-rose-600">
+              {error}
+            </div>
+          ) : null}
           <div className="mt-3 flex items-center justify-end gap-2">
             <button
               type="button"
@@ -230,7 +273,7 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
             <button
               type="button"
               className={teamButtonClass("primary", "sm")}
-              onClick={createNote}
+              onClick={() => void createNote()}
               disabled={saving}
             >
               {saving ? "Saving…" : "Save"}
@@ -239,7 +282,9 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
         </div>
       ) : null}
 
-      {!showForm && error ? <div className="text-xs font-semibold text-rose-600">{error}</div> : null}
+      {!showForm && error ? (
+        <div className="text-xs font-semibold text-rose-600">{error}</div>
+      ) : null}
 
       {notes.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 text-xs text-slate-500">
@@ -249,35 +294,44 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
         <div className="space-y-3">
           {notes.slice(0, 10).map((note) => {
             const isEditing = editingId === note.id;
-            const timestamp = formatNoteTimestamp(note.updatedAt || note.createdAt);
+            const timestamp = formatNoteTimestamp(
+              note.updatedAt || note.createdAt,
+            );
             return (
-              <div key={note.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+              <div
+                key={note.id}
+                className="rounded-2xl border border-slate-200 bg-white p-3"
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <div className="text-[11px] font-semibold text-slate-500">{timestamp}</div>
+                    <div className="text-[11px] font-semibold text-slate-500">
+                      {timestamp}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {!isEditing ? (
+                  {!readOnly ? (
+                    <div className="flex items-center gap-2">
+                      {!isEditing ? (
+                        <button
+                          type="button"
+                          onClick={() => startEditNote(note)}
+                          className="text-xs font-semibold text-slate-600 hover:text-primary-700"
+                        >
+                          Edit
+                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        onClick={() => startEditNote(note)}
-                        className="text-xs font-semibold text-slate-600 hover:text-primary-700"
+                        onClick={() => void deleteNote(note.id)}
+                        disabled={deletingId === note.id}
+                        className="text-xs font-semibold text-rose-600 hover:text-rose-700 disabled:opacity-60"
                       >
-                        Edit
+                        {deletingId === note.id ? "Deleting…" : "Delete"}
                       </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => deleteNote(note.id)}
-                      disabled={deletingId === note.id}
-                      className="text-xs font-semibold text-rose-600 hover:text-rose-700 disabled:opacity-60"
-                    >
-                      {deletingId === note.id ? "Deleting…" : "Delete"}
-                    </button>
-                  </div>
+                    </div>
+                  ) : null}
                 </div>
 
-                {isEditing ? (
+                {!readOnly && isEditing ? (
                   <div className="mt-2">
                     <textarea
                       value={editDraft}
@@ -286,13 +340,17 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
                       className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                     />
                     <div className="mt-2 flex items-center justify-end gap-2">
-                      <button type="button" className={teamButtonClass("secondary", "sm")} onClick={cancelEdit}>
+                      <button
+                        type="button"
+                        className={teamButtonClass("secondary", "sm")}
+                        onClick={cancelEdit}
+                      >
                         Cancel
                       </button>
                       <button
                         type="button"
                         className={teamButtonClass("primary", "sm")}
-                        onClick={() => saveEditedNote(note.id)}
+                        onClick={() => void saveEditedNote(note.id)}
                         disabled={editSavingId === note.id}
                       >
                         {editSavingId === note.id ? "Saving…" : "Save"}
@@ -300,7 +358,9 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
                     </div>
                   </div>
                 ) : (
-                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{note.body}</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                    {note.body}
+                  </p>
                 )}
               </div>
             );
@@ -310,4 +370,3 @@ export function InboxContactNotesClient({ contactId, initialNotes }: Props): Rea
     </div>
   );
 }
-

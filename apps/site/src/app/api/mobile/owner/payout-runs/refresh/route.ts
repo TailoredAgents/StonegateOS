@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
+import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi } from "@/app/team/lib/api";
+import { callAdminApiForCurrentSession } from "@/app/team/lib/api";
 import { resolveMobileSessionFromCookies } from "@/app/mobile/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +12,10 @@ type PayoutRefreshResponse = {
   reportGeneratedAt?: string | null;
   error?: string;
   message?: string;
+  data?: {
+    payoutRunId?: string;
+    reportGeneratedAt?: string | null;
+  };
 };
 
 async function readUpstreamError(response: Response): Promise<string> {
@@ -23,7 +29,7 @@ async function readUpstreamError(response: Response): Promise<string> {
   );
 }
 
-export async function POST(): Promise<Response> {
+export async function POST(request: NextRequest): Promise<Response> {
   const session = await resolveMobileSessionFromCookies();
 
   if (!session) {
@@ -35,10 +41,17 @@ export async function POST(): Promise<Response> {
   }
 
   try {
-    const response = await callAdminApi("/api/admin/commissions/payout-runs", {
-      method: "POST",
-      timeoutMs: 90_000,
-    });
+    const suppliedKey = request.headers.get("idempotency-key")?.trim();
+    const idempotencyKey =
+      suppliedKey || `commissions:mobile-refresh:${randomUUID()}`;
+    const response = await callAdminApiForCurrentSession(
+      "/api/admin/commissions/payout-runs",
+      {
+        method: "POST",
+        timeoutMs: 90_000,
+        headers: { "Idempotency-Key": idempotencyKey },
+      },
+    );
 
     if (!response.ok) {
       return NextResponse.json(
@@ -53,7 +66,10 @@ export async function POST(): Promise<Response> {
     const payload = (await response
       .json()
       .catch(() => null)) as PayoutRefreshResponse | null;
-    if (!payload?.ok || !payload.payoutRunId) {
+    const payoutRunId = payload?.data?.payoutRunId ?? payload?.payoutRunId;
+    const reportGeneratedAt =
+      payload?.data?.reportGeneratedAt ?? payload?.reportGeneratedAt ?? null;
+    if (!payload?.ok || !payoutRunId) {
       return NextResponse.json(
         {
           error: "invalid_payout_refresh_response",
@@ -66,8 +82,8 @@ export async function POST(): Promise<Response> {
 
     return NextResponse.json({
       ok: true,
-      payoutRunId: payload.payoutRunId,
-      reportGeneratedAt: payload.reportGeneratedAt ?? null,
+      payoutRunId,
+      reportGeneratedAt,
     });
   } catch (error) {
     const message =

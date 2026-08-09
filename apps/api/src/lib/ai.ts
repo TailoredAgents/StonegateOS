@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
 import { joinServiceLabels } from "@/lib/service-labels";
 
 interface BaseAddress {
@@ -47,7 +48,7 @@ export interface NotificationCopy {
 const CopySchema = z.object({
   email_subject: z.string().min(3).max(120).optional(),
   email_body: z.string().min(3).max(1200).optional(),
-  sms_body: z.string().min(3).max(320).optional()
+  sms_body: z.string().min(3).max(320).optional(),
 });
 
 function getOpenAIConfig() {
@@ -57,7 +58,10 @@ function getOpenAIConfig() {
   }
 
   const configuredModel = process.env["OPENAI_MODEL"];
-  const model = configuredModel && configuredModel.trim().length > 0 ? configuredModel.trim() : "gpt-5-mini";
+  const model =
+    configuredModel && configuredModel.trim().length > 0
+      ? configuredModel.trim()
+      : "gpt-5-mini";
 
   return { apiKey, model };
 }
@@ -66,7 +70,7 @@ async function callOpenAI({
   apiKey,
   model,
   systemPrompt,
-  userPrompt
+  userPrompt,
 }: {
   apiKey: string;
   model: string;
@@ -78,15 +82,18 @@ async function callOpenAI({
     return normalized.startsWith("gpt-5") || normalized.startsWith("o");
   }
 
-  async function request(targetModel: string, options?: { useJsonSchema?: boolean }) {
+  async function request(
+    targetModel: string,
+    options?: { useJsonSchema?: boolean },
+  ) {
     const useJsonSchema = options?.useJsonSchema ?? true;
     const payload: Record<string, unknown> = {
       model: targetModel,
       input: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
+        { role: "user", content: userPrompt },
       ],
-      max_output_tokens: 600
+      max_output_tokens: 600,
     };
 
     if (useJsonSchema) {
@@ -102,11 +109,11 @@ async function callOpenAI({
             properties: {
               email_subject: { type: "string" },
               email_body: { type: "string" },
-              sms_body: { type: "string" }
+              sms_body: { type: "string" },
             },
-            required: ["email_subject", "email_body", "sms_body"]
-          }
-        }
+            required: ["email_subject", "email_body", "sms_body"],
+          },
+        },
       };
     } else {
       payload["text"] = { verbosity: "medium" };
@@ -116,13 +123,13 @@ async function callOpenAI({
       payload["reasoning"] = { effort: "low" };
     }
 
-    return fetch("https://api.openai.com/v1/responses", {
+    return fetch(resolveOpenAiApiEndpoint("responses", process.env), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
+        Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
   }
 
@@ -133,21 +140,34 @@ async function callOpenAI({
     const bodyText = await response.text().catch(() => "");
     const isSchemaRejected =
       status === 400 &&
-      /invalid_json_schema|text\.format\.schema|Invalid schema for response_format/i.test(bodyText);
+      /invalid_json_schema|text\.format\.schema|Invalid schema for response_format/i.test(
+        bodyText,
+      );
     const isDev = process.env["NODE_ENV"] !== "production";
 
     if (isSchemaRejected) {
       response = await request(model, { useJsonSchema: false });
       if (!response.ok) {
         const fallbackText = await response.text().catch(() => "");
-        console.warn("[ai] openai.schema_fallback_failed", { model, status: response.status, bodyText: fallbackText });
+        console.warn("[ai] openai.schema_fallback_failed", {
+          model,
+          status: response.status,
+          bodyText: fallbackText,
+        });
         return null;
       }
-    } else
-    if (isDev && (status === 400 || status === 404) && model !== "gpt-5") {
+    } else if (
+      isDev &&
+      (status === 400 || status === 404) &&
+      model !== "gpt-5"
+    ) {
       response = await request("gpt-5", { useJsonSchema: true });
       if (!response.ok) {
-        console.warn("[ai] openai.fallback_failed", { model, status, bodyText });
+        console.warn("[ai] openai.fallback_failed", {
+          model,
+          status,
+          bodyText,
+        });
         return null;
       }
     } else {
@@ -167,8 +187,8 @@ async function callOpenAI({
     const raw =
       data.output
         ?.flatMap((item) => item.content ?? [])
-        .find((contentItem) => typeof contentItem.text === "string")
-        ?.text ?? null;
+        .find((contentItem) => typeof contentItem.text === "string")?.text ??
+      null;
     if (!raw) {
       return null;
     }
@@ -183,7 +203,7 @@ async function callOpenAI({
     return {
       emailSubject: result.email_subject?.trim(),
       emailBody: result.email_body?.trim(),
-      smsBody: result.sms_body?.trim()
+      smsBody: result.sms_body?.trim(),
     };
   } catch (error) {
     console.warn("[ai] copy.response_error", { error: String(error) });
@@ -192,7 +212,7 @@ async function callOpenAI({
 }
 
 export async function generateEstimateNotificationCopy(
-  summary: AppointmentSummary
+  summary: AppointmentSummary,
 ): Promise<NotificationCopy | null> {
   const config = getOpenAIConfig();
   if (!config) {
@@ -218,7 +238,7 @@ Constraints:
     reason,
     reminderWindowHours,
     address,
-    contactName
+    contactName,
   } = summary;
 
   const servicesText = joinServiceLabels(services);
@@ -228,19 +248,28 @@ Constraints:
     `Services: ${servicesText}`,
     `Address: ${address.line1}, ${address.city}, ${address.state} ${address.postalCode}`,
     `Reason: ${reason}`,
-    reminderWindowHours ? `Reminder window hours: ${reminderWindowHours}` : null,
+    reminderWindowHours
+      ? `Reminder window hours: ${reminderWindowHours}`
+      : null,
     notes ? `Customer notes: ${notes}` : null,
-    `Reschedule link: ${rescheduleUrl}`
+    `Reschedule link: ${rescheduleUrl}`,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
 
   const userPrompt = `Create an email subject, email body, and SMS body for this customer notification.\n${lines}`;
 
-  return callOpenAI({ apiKey: config.apiKey, model: config.model, systemPrompt, userPrompt });
+  return callOpenAI({
+    apiKey: config.apiKey,
+    model: config.model,
+    systemPrompt,
+    userPrompt,
+  });
 }
 
-export async function generateQuoteNotificationCopy(summary: QuoteSummary): Promise<NotificationCopy | null> {
+export async function generateQuoteNotificationCopy(
+  summary: QuoteSummary,
+): Promise<NotificationCopy | null> {
   const config = getOpenAIConfig();
   if (!config) {
     return null;
@@ -263,11 +292,13 @@ Constraints:
     shareUrl,
     expiresAtIso,
     notes,
-    reason
+    reason,
   } = summary;
 
   const serviceText = joinServiceLabels(services);
-  const expiresText = expiresAtIso ? `Quote expires ${expiresAtIso}` : "Quote does not expire yet";
+  const expiresText = expiresAtIso
+    ? `Quote expires ${expiresAtIso}`
+    : "Quote does not expire yet";
 
   const userPrompt = [
     `Customer: ${customerName}`,
@@ -279,15 +310,22 @@ Constraints:
       ? `Payment terms: $${summary.depositDue.toFixed(2)} deposit is listed on the quote; balance is due after service.`
       : `Payment terms: No deposit required; payment is due after service.`,
     notes ? `Internal notes: ${notes}` : null,
-    `Reason: ${reason}`
+    `Reason: ${reason}`,
   ]
     .filter(Boolean)
     .join("\n");
 
-  return callOpenAI({ apiKey: config.apiKey, model: config.model, systemPrompt, userPrompt });
+  return callOpenAI({
+    apiKey: config.apiKey,
+    model: config.model,
+    systemPrompt,
+    userPrompt,
+  });
 }
 
-export async function generateQuoteScopeDraft(summary: QuoteScopeDraftSummary): Promise<string | null> {
+export async function generateQuoteScopeDraft(
+  summary: QuoteScopeDraftSummary,
+): Promise<string | null> {
   const config = getOpenAIConfig();
   if (!config) return null;
 
@@ -302,12 +340,21 @@ Constraints:
   const userPrompt = [
     summary.customerName ? `Customer: ${summary.customerName}` : null,
     `Services: ${joinServiceLabels(summary.services)}`,
-    typeof summary.total === "number" ? `Total: $${summary.total.toFixed(2)}` : null,
-    summary.roughNotes ? `Rough notes: ${summary.roughNotes}` : "Rough notes: none"
+    typeof summary.total === "number"
+      ? `Total: $${summary.total.toFixed(2)}`
+      : null,
+    summary.roughNotes
+      ? `Rough notes: ${summary.roughNotes}`
+      : "Rough notes: none",
   ]
     .filter(Boolean)
     .join("\n");
 
-  const generated = await callOpenAI({ apiKey: config.apiKey, model: config.model, systemPrompt, userPrompt });
+  const generated = await callOpenAI({
+    apiKey: config.apiKey,
+    model: config.model,
+    systemPrompt,
+    userPrompt,
+  });
   return generated?.emailBody?.trim() || null;
 }

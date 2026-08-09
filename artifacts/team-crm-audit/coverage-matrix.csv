@@ -1,0 +1,47 @@
+route_or_tab,role,permission_set,viewport,theme,state,test_result,evidence_location,unresolved_blocker
+/team/login,anonymous,none,code inspection,n/a,normal/error,static-reviewed,apps/site/src/app/team/login/page.tsx,Runtime authentication and delivery stack unavailable
+/team/login,anonymous with invalid or expired team cookie,none,1440,light,stale-cookie recovery,static-fail,apps/site/src/app/team/login/page.tsx:13-25,Cookie presence hides login form without session validation
+/team/auth,anonymous token holder,valid token,1440,light,successful exchange,not-run,apps/site/src/app/team/auth/route.ts,Runtime authentication stack unavailable
+/team/auth,anonymous token holder,expired or sequentially replayed token,1440,light,expiry/replay rejection,not-run,tests/e2e/audit/team-console-audit.spec.ts,Runtime database unavailable
+/team/auth,anonymous token holder,one valid token with concurrent callers,1440,light,atomic replay rejection,static-fail,apps/api/src/lib/team-auth.ts:195-249,Select-delete-session insert is non-transactional and delete result is unchecked
+/team?setup=1,newly authenticated team member,role defaults,1440,light,password setup callback destination,static-fail,apps/site/src/app/team/auth/route.ts:58-75,Defaults to Inbox/Calendar while form only renders in Settings
+/team,owner,*,code inspection,n/a,default landing Inbox,static-reviewed,apps/site/src/app/team/page.tsx:256-278,Runtime navigation unavailable
+/team,office,role defaults,code inspection,n/a,default landing Inbox,static-reviewed,apps/site/src/app/team/page.tsx:256-278,Runtime navigation unavailable
+/team,crew,role defaults,code inspection,n/a,default landing Calendar,static-reviewed,apps/site/src/app/team/page.tsx:256-278,Runtime navigation unavailable
+23-route matrix: /team?tab={canonical id},owner,*,1440,light,normal full-page screenshot,not-run,tests/e2e/audit/team-console-audit.spec.ts,Docker PostgreSQL Site and API unavailable
+23-route matrix: /team?tab={canonical id},owner,*,1440,dark,normal full-page screenshot,not-run,tests/e2e/audit/team-console-audit.spec.ts,Docker PostgreSQL Site and API unavailable
+23-route matrix: /team?tab={canonical id},owner,*,1024,light and dark,responsive full-page screenshot,not-run,tests/e2e/audit/team-console-audit.spec.ts,Docker PostgreSQL Site and API unavailable
+23-route matrix: /team?tab={canonical id},owner,*,768,light and dark,responsive full-page screenshot,not-run,tests/e2e/audit/team-console-audit.spec.ts,Docker PostgreSQL Site and API unavailable
+23-route matrix: /team?tab={canonical id},owner,*,375,light and dark,responsive full-page screenshot,not-run,tests/e2e/audit/team-console-audit.spec.ts,Docker PostgreSQL Site and API unavailable
+23-route matrix: /team?tab={canonical id},owner,*,320,light and dark,responsive full-page screenshot,not-run,tests/e2e/audit/team-console-audit.spec.ts,Docker PostgreSQL Site and API unavailable
+/team,office,role defaults,1440,light,permitted landing,not-run,tests/e2e/audit/team-console-audit.spec.ts,Runtime unavailable
+/team,sales,role defaults,1440,light,permitted landing,static-fail,apps/site/src/app/team/page.tsx:150-158,Role is rejected by page authentication
+/team,crew,role defaults,1440,light,permitted landing,not-run,tests/e2e/audit/team-console-audit.spec.ts,Runtime unavailable
+/team,read_only,read,1440,light,read-only landing,static-fail,apps/site/src/app/team/page.tsx:150-158,Role is rejected by page authentication
+/team,custom,grant messages.read and messages.send,1440,light,allowed Inbox action,static-fail,apps/site/src/app/team/page.tsx:150-158,Custom role is rejected by page authentication
+/team?tab=quotes,custom,quotes.* deny quotes.delete,1440,light,deny wins,static-fail,apps/site/src/app/team/page.tsx:150-158,Custom role is rejected before deny behavior can be exercised
+/team,inactive,office defaults,1440,light,session rejection,not-run,tests/e2e/audit/team-console-audit.spec.ts,Runtime unavailable
+/team,expired,office defaults,1440,light,session rejection,not-run,tests/e2e/audit/team-console-audit.spec.ts,Runtime unavailable
+/team?tab=settings,legacy forged owner,none,1440,light,direct page load,static-fail,apps/site/src/app/team/page.tsx:145-155,Any nonempty owner cookie is accepted
+/team?tab=calendar,legacy forged crew,none,1440,light,direct page load,static-fail,apps/site/src/app/team/page.tsx:145-155,Any nonempty crew cookie is accepted
+/api/team/access/members and member/role/sales settings routes,legacy forged owner,none,n/a,n/a,direct read/mutation,static-fail,apps/site/src/app/api/team,Presence-only owner checks accept arbitrary cookie values
+/api/team/contacts/media-analysis?contactId=<valid>,anonymous,none,n/a,n/a,GET and POST before validation/upstream,static-fail,apps/site/src/app/api/team/contacts/media-analysis/route.ts,No session guard before privileged proxy
+/api/team/contacts/quote-photos?contactId=<valid>,anonymous,none,n/a,n/a,direct read,static-fail,apps/site/src/app/api/team/contacts/quote-photos/route.ts,No session guard before privileged proxy
+/api/team/contacts/sales-agent-memory,anonymous,none,n/a,n/a,direct read/mutation,static-fail,apps/site/src/app/api/team/contacts/sales-agent-memory/route.ts,No session guard before privileged proxy
+/api/team/contacts/sales-agent-next-action,anonymous,none,n/a,n/a,direct read/mutation,static-fail,apps/site/src/app/api/team/contacts/sales-agent-next-action/route.ts,No session guard before privileged proxy
+/api/team/inbox/threads/[id]/suggest,anonymous,none,n/a,n/a,draft-generating mutation,static-fail,apps/site/src/app/api/team/inbox/threads/[threadId]/suggest/route.ts,No session guard before privileged proxy
+/team/instant-quotes/[id],anonymous,none,all planned,light and dark,direct page read and delete mutation,static-fail,apps/site/src/app/team/components/InstantQuotesSection.tsx:900-910;1440-1445,No auth guard before privileged latest-25 fetch and rendered delete action
+/team/instant-quotes/[id],intended staff user,not defined,all planned,light and dark,booking handoff,static-fail,apps/site/src/app/team/components/InstantQuoteDetail.tsx:158-166,CTA loops to same orphaned route and query is ignored
+/team?tab=policy|automation|audit,office,role defaults,code inspection,n/a,direct URL visible-nav/content render,static-fail,apps/site/src/app/team/page.tsx:413-531;841-917,Permission allows nav but owner-only JSX produces blank content
+/team?tab=quotes,crew,role defaults,code inspection,n/a,visible tab and lifecycle actions,static-fail,apps/site/src/app/team/page.tsx:161-211;413-418;767-775,Crew nav/render permits Quotes while default API quote permissions are incomplete
+/team?tab=not-a-real-tab,owner,*,1440,light,unknown parameter,static-fail,apps/site/src/app/team/page.tsx:256-278;608-618;727-928,Shell selects a fallback nav item while content remains blank
+"five routes: /team?tab=quote-builder, canvass, marketing, myday, estimates",owner,*,1440,light,legacy alias resolution,static-reviewed,apps/site/src/app/team/page.tsx:256-278,Runtime deep-link/history unavailable and quoteMode is ignored
+/team?tab=calendar&layout=classic,owner,*,1440 and 375,light,direct compatibility smoke,not-run,tests/e2e/audit/team-console-audit.spec.ts,Runtime unavailable
+/team?tab=calendar&layout=classic,office and crew,role defaults,desktop and phone,light,compatibility parity,not-covered,artifacts/team-crm-audit/evidence-index.md,No office/crew classic case is declared
+/team?tab=settings,owner,*,1440,light,modern Classic layout switch,static-fail,apps/site/src/app/team/page.tsx:541-547;1195 and TeamAppShell.tsx:627-635,Control pushes the unchanged modern URL
+/api/public/team/login-password and request-link,anonymous,none,n/a,n/a,repeated identity/IP attempts,not-run,artifacts/team-crm-audit/findings.json,External edge controls and runtime service unavailable
+/api/admin/team/members,owner,access.manage,n/a,n/a,duplicate normalized email,static-fail,apps/api/src/db/schema.ts:471-516,Normalized stored email has no uniqueness invariant
+/api/admin/team/members/[memberId],owner,access.manage,n/a,n/a,self or last-owner deactivate/role-change/delete,static-fail,apps/api/app/api/admin/team/members/[memberId]/route.ts:85-390,No transactional last-active-owner invariant
+all critical journeys,all operational roles,mixed,planned matrix,light and dark,success failure retry concurrency,not-run,tests/e2e/audit/team-console-audit.spec.ts,Services provider mocks fixtures and staff unavailable
+all tabs,all roles,mixed,planned matrix,light and dark,automated WCAG scan,not-run,artifacts/team-crm-audit/evidence-index.md,Axe dependency and browser runtime unavailable
+representative tabs,owner,mixed,planned matrix,light and dark,Core Web Vitals trace,not-run,artifacts/team-crm-audit/evidence-index.md,Chrome DevTools MCP unavailable

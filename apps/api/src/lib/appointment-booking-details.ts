@@ -1,6 +1,9 @@
 import { z } from "zod";
 import type { AppointmentBookingDetails } from "@/db/schema";
 
+const MAXIMUM_CENTS = 2_147_483_647;
+const MAXIMUM_CUSTOM_LOADS = 100;
+
 const sourceTypeSchema = z.enum([
   "google",
   "facebook",
@@ -37,6 +40,7 @@ const sourceSchema = z
     teamMemberId: z.string().uuid().optional().nullable(),
     referralName: z.string().trim().min(1).max(120).optional().nullable(),
   })
+  .strict()
   .superRefine((value, ctx) => {
     if (value.type === "team_member" && !value.teamMemberId) {
       ctx.addIssue({
@@ -50,14 +54,41 @@ const sourceSchema = z
         message: "referral_name_required",
       });
     }
+    if (value.type !== "team_member" && value.teamMemberId != null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["teamMemberId"],
+        message: "team_member_id_not_allowed_for_source",
+      });
+    }
+    if (value.type !== "referral" && value.referralName != null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["referralName"],
+        message: "referral_name_not_allowed_for_source",
+      });
+    }
   });
 
 const pricingSchema = z
   .object({
     mode: priceModeSchema,
-    rangeMinCents: z.number().int().nonnegative().optional().nullable(),
-    rangeMaxCents: z.number().int().nonnegative().optional().nullable(),
+    rangeMinCents: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAXIMUM_CENTS)
+      .optional()
+      .nullable(),
+    rangeMaxCents: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAXIMUM_CENTS)
+      .optional()
+      .nullable(),
   })
+  .strict()
   .superRefine((value, ctx) => {
     if (
       (value.mode === "range" || value.mode === "both") &&
@@ -87,13 +118,29 @@ const pricingSchema = z
         message: "range_max_must_be_greater_than_or_equal_to_min",
       });
     }
+    if (
+      value.mode === "exact" &&
+      (value.rangeMinCents != null || value.rangeMaxCents != null)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rangeMinCents"],
+        message: "price_range_not_allowed_for_exact_mode",
+      });
+    }
   });
 
 const loadSizeSchema = z
   .object({
     kind: loadSizeKindSchema,
-    customLoads: z.number().positive().optional().nullable(),
+    customLoads: z
+      .number()
+      .positive()
+      .max(MAXIMUM_CUSTOM_LOADS)
+      .optional()
+      .nullable(),
   })
+  .strict()
   .superRefine((value, ctx) => {
     if (value.kind === "custom" && value.customLoads == null) {
       ctx.addIssue({
@@ -101,25 +148,50 @@ const loadSizeSchema = z
         message: "custom_loads_required",
       });
     }
+    if (value.kind !== "custom" && value.customLoads != null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["customLoads"],
+        message: "custom_loads_not_allowed_for_standard_size",
+      });
+    }
   });
 
-const landClearingSchema = z.object({
-  areaScope: z.string().trim().min(1).max(240),
-  accessDifficulty: landClearingAccessSchema,
-  haulAway: z.boolean(),
-});
+const landClearingSchema = z
+  .object({
+    areaScope: z.string().trim().min(1).max(240),
+    accessDifficulty: landClearingAccessSchema,
+    haulAway: z.boolean(),
+  })
+  .strict();
 
-const demolitionSchema = z.object({
-  demoType: demolitionTypeSchema,
-  scopeSize: z.string().trim().min(1).max(240),
-  haulAway: z.boolean(),
-});
+const demolitionSchema = z
+  .object({
+    demoType: demolitionTypeSchema,
+    scopeSize: z.string().trim().min(1).max(240),
+    haulAway: z.boolean(),
+  })
+  .strict();
 
-const rentalDumpsterSchema = z.object({
-  dumpsterSize: dumpsterSizeSchema,
-  pickupDate: z.string().trim().min(1).max(64),
-  placementLocation: z.string().trim().min(1).max(240),
-});
+const dateOnlySchema = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/u)
+  .refine((value) => {
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return (
+      !Number.isNaN(parsed.getTime()) &&
+      parsed.toISOString().slice(0, 10) === value
+    );
+  }, "invalid_calendar_date");
+
+const rentalDumpsterSchema = z
+  .object({
+    dumpsterSize: dumpsterSizeSchema,
+    pickupDate: dateOnlySchema,
+    placementLocation: z.string().trim().min(1).max(240),
+  })
+  .strict();
 
 export const appointmentBookingDetailsSchema = z
   .object({
@@ -132,6 +204,26 @@ export const appointmentBookingDetailsSchema = z
     rentalDumpster: rentalDumpsterSchema.optional().nullable(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    const serviceType =
+      value.serviceType ?? (value.loadSize ? "junk_removal" : undefined);
+    const detailsByService = {
+      junk_removal: ["landClearing", "demolition", "rentalDumpster"],
+      land_clearing: ["loadSize", "demolition", "rentalDumpster"],
+      demolition: ["loadSize", "landClearing", "rentalDumpster"],
+      rental_dumpster: ["loadSize", "landClearing", "demolition"],
+    } as const;
+    if (!serviceType) return;
+    for (const field of detailsByService[serviceType]) {
+      if (value[field] != null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: `${field}_not_allowed_for_${serviceType}`,
+        });
+      }
+    }
+  })
   .transform((value, ctx): AppointmentBookingDetails => {
     const serviceType =
       value.serviceType ?? (value.loadSize ? "junk_removal" : undefined);
@@ -144,6 +236,31 @@ export const appointmentBookingDetailsSchema = z
       return z.NEVER;
     }
 
+    const source =
+      value.source.type === "team_member"
+        ? {
+            type: "team_member" as const,
+            teamMemberId: value.source.teamMemberId ?? null,
+          }
+        : value.source.type === "referral"
+          ? {
+              type: "referral" as const,
+              referralName: value.source.referralName ?? null,
+            }
+          : { type: value.source.type };
+    const pricing =
+      value.pricing.mode === "exact"
+        ? {
+            mode: "exact" as const,
+            rangeMinCents: null,
+            rangeMaxCents: null,
+          }
+        : {
+            mode: value.pricing.mode,
+            rangeMinCents: value.pricing.rangeMinCents ?? null,
+            rangeMaxCents: value.pricing.rangeMaxCents ?? null,
+          };
+
     if (serviceType === "junk_removal") {
       if (!value.loadSize) {
         ctx.addIssue({
@@ -155,9 +272,12 @@ export const appointmentBookingDetailsSchema = z
 
       return {
         serviceType,
-        source: value.source,
-        pricing: value.pricing,
-        loadSize: value.loadSize,
+        source,
+        pricing,
+        loadSize: {
+          kind: value.loadSize.kind,
+          customLoads: value.loadSize.customLoads ?? null,
+        },
       };
     }
 
@@ -172,8 +292,8 @@ export const appointmentBookingDetailsSchema = z
 
       return {
         serviceType,
-        source: value.source,
-        pricing: value.pricing,
+        source,
+        pricing,
         landClearing: value.landClearing,
       };
     }
@@ -189,8 +309,8 @@ export const appointmentBookingDetailsSchema = z
 
       return {
         serviceType,
-        source: value.source,
-        pricing: value.pricing,
+        source,
+        pricing,
         demolition: value.demolition,
       };
     }
@@ -213,7 +333,7 @@ export const appointmentBookingDetailsSchema = z
 
     return {
       serviceType,
-      source: value.source,
+      source,
       pricing: {
         mode: "exact",
         rangeMinCents: null,

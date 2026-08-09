@@ -1,71 +1,139 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { ADMIN_SESSION_COOKIE } from "@/lib/admin-session";
-import { CREW_SESSION_COOKIE } from "@/lib/crew-session";
-import { TEAM_SESSION_COOKIE } from "@/lib/team-session";
+import type { TeamPermission } from "@myst-os/sdk";
+import {
+  hasTeamPermission,
+  resolveTeamPrincipalFromRequest,
+  type TeamRequestPrincipal,
+} from "@/lib/team-principal";
+import { isSameOriginTeamRequest } from "@/lib/team-request-origin";
 
-type TeamRole = "owner" | "office" | "crew";
+type PermissionMode = "any" | "all";
 
-type TeamSessionResponse = {
-  ok?: boolean;
-  teamMember?: { roleSlug?: string | null };
+export type RequireTeamPrincipalOptions = {
+  roles?: readonly string[];
+  permissions?: TeamPermission | readonly TeamPermission[];
+  permissionMode?: PermissionMode;
+  redirectTo?: URL;
+  returnJson?: boolean;
+  flashError?: string;
 };
 
-function resolveApiBase(): string {
-  return (process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"] ?? "").replace(/\/$/, "");
+export type TeamPrincipalResult =
+  | {
+      ok: true;
+      principal: TeamRequestPrincipal;
+      role: string | null;
+    }
+  | { ok: false; response: Response };
+
+export async function resolveTeamRoleFromRequest(
+  request: NextRequest,
+): Promise<string | null> {
+  const principal = await resolveTeamPrincipalFromRequest(request);
+  return principal?.roleSlug ?? null;
 }
 
-export async function resolveTeamRoleFromRequest(request: NextRequest): Promise<TeamRole | null> {
-  if (request.cookies.get(ADMIN_SESSION_COOKIE)?.value) return "owner";
-  if (request.cookies.get(CREW_SESSION_COOKIE)?.value) return "crew";
+function normalizeRequirements(values: readonly string[]): string[] {
+  return values
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
+}
 
-  const token = request.cookies.get(TEAM_SESSION_COOKIE)?.value ?? "";
-  if (!token) return null;
+function deniedResponse(
+  request: NextRequest,
+  options: RequireTeamPrincipalOptions,
+  status: 401 | 403,
+): TeamPrincipalResult {
+  const error = status === 401 ? "unauthorized" : "forbidden";
+  const flashError =
+    options.flashError ??
+    (status === 401
+      ? "Please sign in again and retry."
+      : "You do not have permission to perform that action.");
 
-  const base = resolveApiBase();
-  if (!base) return null;
+  if (options.returnJson) {
+    const response = NextResponse.json({ error }, { status });
+    response.cookies.set({
+      name: "myst-flash-error",
+      value: flashError,
+      path: "/",
+    });
+    return { ok: false, response };
+  }
 
-  const res = await fetch(`${base}/api/public/team/session`, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store"
+  const redirectTo = options.redirectTo ?? new URL("/team", request.url);
+  const response = NextResponse.redirect(redirectTo, 303);
+  response.cookies.set({
+    name: "myst-flash-error",
+    value: flashError,
+    path: "/",
   });
+  return { ok: false, response };
+}
 
-  if (!res.ok) return null;
-  const payload = (await res.json().catch(() => null)) as TeamSessionResponse | null;
-  if (!payload?.ok) return null;
-  const roleSlug = payload.teamMember?.roleSlug;
-  if (roleSlug === "owner") return "owner";
-  if (roleSlug === "crew") return "crew";
-  return "office";
+export async function requireTeamPrincipal(
+  request: NextRequest,
+  options: RequireTeamPrincipalOptions = {},
+): Promise<TeamPrincipalResult> {
+  if (!isSameOriginTeamRequest(request)) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        {
+          error: "forbidden",
+          message: "The request origin could not be verified.",
+        },
+        {
+          status: 403,
+          headers: { "Cache-Control": "private, no-store, max-age=0" },
+        },
+      ),
+    };
+  }
+
+  const principal = await resolveTeamPrincipalFromRequest(request);
+  if (!principal) return deniedResponse(request, options, 401);
+
+  const allowedRoles = normalizeRequirements(options.roles ?? []);
+  if (
+    allowedRoles.length > 0 &&
+    (!principal.roleSlug || !allowedRoles.includes(principal.roleSlug))
+  ) {
+    return deniedResponse(request, options, 403);
+  }
+
+  const requiredPermissions = Array.isArray(options.permissions)
+    ? normalizeRequirements(options.permissions)
+    : typeof options.permissions === "string"
+      ? normalizeRequirements([options.permissions])
+      : [];
+  if (requiredPermissions.length > 0) {
+    const permissionMode = options.permissionMode ?? "any";
+    const permitted =
+      permissionMode === "all"
+        ? requiredPermissions.every((permission) =>
+            hasTeamPermission(principal, permission),
+          )
+        : requiredPermissions.some((permission) =>
+            hasTeamPermission(principal, permission),
+          );
+    if (!permitted) return deniedResponse(request, options, 403);
+  }
+
+  return { ok: true, principal, role: principal.roleSlug };
+}
+
+export async function requireTeamRequestPrincipal(
+  request: NextRequest,
+  options: RequireTeamPrincipalOptions = {},
+): Promise<TeamPrincipalResult> {
+  return requireTeamPrincipal(request, options);
 }
 
 export async function requireTeamRole(
   request: NextRequest,
-  options: {
-    roles?: TeamRole[];
-    redirectTo?: URL;
-    returnJson?: boolean;
-    flashError?: string;
-  } = {}
-): Promise<{ ok: true; role: TeamRole } | { ok: false; response: Response }> {
-  const allowed = options.roles ?? ["owner", "office", "crew"];
-  const role = await resolveTeamRoleFromRequest(request);
-  const flashError = options.flashError ?? "Please sign in again and retry.";
-
-  if (!role || !allowed.includes(role)) {
-    if (options.returnJson) {
-      const response = NextResponse.json({ error: "unauthorized" }, { status: 401 });
-      response.cookies.set({ name: "myst-flash-error", value: flashError, path: "/" });
-      return { ok: false, response };
-    }
-
-    const redirectTo = options.redirectTo ?? new URL("/team", request.url);
-    const response = NextResponse.redirect(redirectTo, 303);
-    response.cookies.set({ name: "myst-flash-error", value: flashError, path: "/" });
-    return { ok: false, response };
-  }
-
-  return { ok: true, role };
+  options: RequireTeamPrincipalOptions = {},
+): Promise<TeamPrincipalResult> {
+  return requireTeamPrincipal(request, options);
 }
-

@@ -93,7 +93,10 @@ function safeJsonParse<T>(raw: string | null): T | null {
 }
 
 function randomId(prefix: string): string {
-  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.getRandomValues === "function"
+  ) {
     const buf = new Uint8Array(16);
     crypto.getRandomValues(buf);
     const hex = Array.from(buf)
@@ -134,7 +137,13 @@ function readUtmFromLocation(): UTM | null {
   if (typeof window === "undefined") return null;
   const params = new URLSearchParams(window.location.search);
   const utm: UTM = {};
-  const fields: Array<keyof UTM> = ["source", "medium", "campaign", "term", "content"];
+  const fields: Array<keyof UTM> = [
+    "source",
+    "medium",
+    "campaign",
+    "term",
+    "content",
+  ];
   for (const field of fields) {
     const value = params.get(`utm_${field}`);
     if (!value) continue;
@@ -147,9 +156,15 @@ function readUtmFromLocation(): UTM | null {
 
 function getOrCreateSessionId(): string {
   if (typeof window === "undefined") return randomId("sess");
-  const stored = safeJsonParse<{ id: string; createdAt: number }>(localStorage.getItem(SESSION_STORAGE_KEY));
+  const stored = safeJsonParse<{ id: string; createdAt: number }>(
+    localStorage.getItem(SESSION_STORAGE_KEY),
+  );
   const now = nowMs();
-  if (stored?.id && typeof stored.createdAt === "number" && now - stored.createdAt < SESSION_ROTATE_MS) {
+  if (
+    stored?.id &&
+    typeof stored.createdAt === "number" &&
+    now - stored.createdAt < SESSION_ROTATE_MS
+  ) {
     return stored.id;
   }
   const next = { id: randomId("sess"), createdAt: now };
@@ -233,15 +248,22 @@ async function flushQueue(): Promise<void> {
     const url = `${apiBase}/api/public/web-events`;
 
     let ok = false;
-    if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function" && payload instanceof Blob) {
+    if (
+      typeof navigator !== "undefined" &&
+      typeof navigator.sendBeacon === "function" &&
+      payload instanceof Blob
+    ) {
       ok = navigator.sendBeacon(url, payload);
     }
     if (!ok && typeof fetch === "function") {
       await fetch(url, {
         method: "POST",
-        headers: payload instanceof Blob ? undefined : { "Content-Type": "text/plain;charset=UTF-8" },
-        body: payload instanceof Blob ? payload : (payload as string),
-        keepalive: true
+        headers:
+          payload instanceof Blob
+            ? undefined
+            : { "Content-Type": "text/plain;charset=UTF-8" },
+        body: payload,
+        keepalive: true,
       }).catch(() => null);
     }
   } finally {
@@ -282,7 +304,10 @@ export function trackWebEvent(input: WebAnalyticsEvent): void {
     device,
     zip: input.zip?.trim() ? input.zip.trim().slice(0, 32) : undefined,
     meta: input.meta,
-    value: typeof input.value === "number" && Number.isFinite(input.value) ? input.value : undefined
+    value:
+      typeof input.value === "number" && Number.isFinite(input.value)
+        ? input.value
+        : undefined,
   };
 
   enqueue(event);
@@ -308,5 +333,9 @@ export function ensureVisitStarted(pathname: string): void {
   const startedFor = sessionStorage.getItem(VISIT_STARTED_KEY);
   if (startedFor === visitId) return;
   sessionStorage.setItem(VISIT_STARTED_KEY, visitId);
-  trackWebEvent({ event: "visit_start", path: pathname, referrer: document.referrer });
+  trackWebEvent({
+    event: "visit_start",
+    path: pathname,
+    referrer: document.referrer,
+  });
 }

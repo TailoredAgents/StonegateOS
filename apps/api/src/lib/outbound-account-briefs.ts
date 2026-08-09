@@ -1,4 +1,5 @@
 import { and, desc, eq } from "drizzle-orm";
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
 import { contacts, crmTasks, getDb, partnerAccounts } from "@/db";
 
 export type OutboundAccountBrief = {
@@ -57,14 +58,20 @@ function safeArray(value: unknown): string[] {
     .slice(0, 4);
 }
 
-function chooseServiceAngle(segment: string | null, campaign: string | null): string {
+function chooseServiceAngle(
+  segment: string | null,
+  campaign: string | null,
+): string {
   const normalizedSegment = segment?.trim().toLowerCase() ?? "";
   const normalizedCampaign = campaign?.trim().toLowerCase() ?? "";
 
   if (normalizedSegment.includes("property")) {
     return "unit cleanouts, turnover haul-off, and bulk pickup for vacant units";
   }
-  if (normalizedSegment.includes("realtor") || normalizedSegment.includes("real estate")) {
+  if (
+    normalizedSegment.includes("realtor") ||
+    normalizedSegment.includes("real estate")
+  ) {
     return "listing cleanups, pre-sale haul-off, and seller cleanout help";
   }
   if (normalizedSegment.includes("estate")) {
@@ -73,7 +80,10 @@ function chooseServiceAngle(segment: string | null, campaign: string | null): st
   if (normalizedSegment.includes("contractor")) {
     return "jobsite debris removal, final cleanouts, and light demo haul-off";
   }
-  if (normalizedSegment.includes("investor") || normalizedSegment.includes("flipper")) {
+  if (
+    normalizedSegment.includes("investor") ||
+    normalizedSegment.includes("flipper")
+  ) {
     return "flip cleanouts, debris removal, and fast turnaround between projects";
   }
   if (normalizedCampaign.includes("property")) {
@@ -94,10 +104,9 @@ function fallbackBrief(input: {
   const location = [input.city, input.state].filter(Boolean).join(", ");
   const primaryContact = input.contacts[0]?.name ?? "their team";
   const serviceAngle = chooseServiceAngle(input.segment, input.campaign);
-  const audience =
-    input.segment?.trim().length
-      ? input.segment.trim().replace(/_/g, " ")
-      : "local referral partner";
+  const audience = input.segment?.trim().length
+    ? input.segment.trim().replace(/_/g, " ")
+    : "local referral partner";
 
   return {
     summary: clampText(
@@ -140,8 +149,12 @@ function fallbackBrief(input: {
 function parseStoredBrief(value: unknown): OutboundAccountBrief | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  const summary = cleanText(typeof record["summary"] === "string" ? record["summary"] : null);
-  const whyFit = cleanText(typeof record["whyFit"] === "string" ? record["whyFit"] : null);
+  const summary = cleanText(
+    typeof record["summary"] === "string" ? record["summary"] : null,
+  );
+  const whyFit = cleanText(
+    typeof record["whyFit"] === "string" ? record["whyFit"] : null,
+  );
   const serviceAngle = cleanText(
     typeof record["serviceAngle"] === "string" ? record["serviceAngle"] : null,
   );
@@ -211,7 +224,9 @@ function parseStoredBrief(value: unknown): OutboundAccountBrief | null {
     fitScore,
     fitReason,
     provider,
-    model: cleanText(typeof record["model"] === "string" ? record["model"] : null),
+    model: cleanText(
+      typeof record["model"] === "string" ? record["model"] : null,
+    ),
     updatedAt,
   };
 }
@@ -264,7 +279,9 @@ async function generateOpenAiBrief(input: {
             ? `Location: ${[input.city, input.state].filter(Boolean).join(", ")}`
             : null,
           `Status: ${input.status}`,
-          input.lastDisposition ? `Last disposition: ${input.lastDisposition}` : null,
+          input.lastDisposition
+            ? `Last disposition: ${input.lastDisposition}`
+            : null,
           input.lastTouchAt ? `Last touch: ${input.lastTouchAt}` : null,
           input.nextTouchAt ? `Next touch: ${input.nextTouchAt}` : null,
           input.notes ? `Notes: ${input.notes}` : null,
@@ -341,14 +358,17 @@ async function generateOpenAiBrief(input: {
   }
 
   try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+    const response = await fetch(
+      resolveOpenAiApiEndpoint("responses", process.env),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload),
-    });
+    );
 
     const bodyText = await response.text().catch(() => "");
     if (!response.ok) {
@@ -373,8 +393,7 @@ async function generateOpenAiBrief(input: {
     const raw =
       data?.output
         ?.flatMap((item) => item.content ?? [])
-        .find((item) => typeof item.text === "string")
-        ?.text ?? null;
+        .find((item) => typeof item.text === "string")?.text ?? null;
 
     if (!raw) return null;
 
@@ -388,10 +407,16 @@ async function generateOpenAiBrief(input: {
 
     if (!parsed) return null;
 
-    const summary = cleanText(typeof parsed["summary"] === "string" ? parsed["summary"] : null);
-    const whyFit = cleanText(typeof parsed["whyFit"] === "string" ? parsed["whyFit"] : null);
+    const summary = cleanText(
+      typeof parsed["summary"] === "string" ? parsed["summary"] : null,
+    );
+    const whyFit = cleanText(
+      typeof parsed["whyFit"] === "string" ? parsed["whyFit"] : null,
+    );
     const serviceAngle = cleanText(
-      typeof parsed["serviceAngle"] === "string" ? parsed["serviceAngle"] : null,
+      typeof parsed["serviceAngle"] === "string"
+        ? parsed["serviceAngle"]
+        : null,
     );
     const bestOpener = cleanText(
       typeof parsed["bestOpener"] === "string" ? parsed["bestOpener"] : null,
@@ -516,7 +541,12 @@ export async function ensureOutboundAccountBrief(input: {
       createdAt: crmTasks.createdAt,
     })
     .from(crmTasks)
-    .where(and(eq(crmTasks.partnerAccountId, account.id), eq(crmTasks.status, "open")))
+    .where(
+      and(
+        eq(crmTasks.partnerAccountId, account.id),
+        eq(crmTasks.status, "open"),
+      ),
+    )
     .orderBy(desc(crmTasks.dueAt), desc(crmTasks.createdAt))
     .limit(3);
 
@@ -529,16 +559,23 @@ export async function ensureOutboundAccountBrief(input: {
     city: cleanText(account.city),
     state: cleanText(account.state),
     notes: cleanText(
-      [cleanText(account.notes), ...taskRows.map((task) => cleanText(task.notes))]
+      [
+        cleanText(account.notes),
+        ...taskRows.map((task) => cleanText(task.notes)),
+      ]
         .filter(Boolean)
         .join(" | "),
     ),
     status: account.status,
     lastDisposition: cleanText(account.lastDisposition),
     lastTouchAt:
-      account.lastTouchAt instanceof Date ? account.lastTouchAt.toISOString() : null,
+      account.lastTouchAt instanceof Date
+        ? account.lastTouchAt.toISOString()
+        : null,
     nextTouchAt:
-      account.nextTouchAt instanceof Date ? account.nextTouchAt.toISOString() : null,
+      account.nextTouchAt instanceof Date
+        ? account.nextTouchAt.toISOString()
+        : null,
     contacts: contactRows.map((contact) => ({
       name:
         [cleanText(contact.firstName), cleanText(contact.lastName)]

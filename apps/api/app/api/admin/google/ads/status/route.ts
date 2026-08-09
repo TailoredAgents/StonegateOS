@@ -6,9 +6,12 @@ import {
   GoogleAdsApiError,
   getGoogleAdsAccessToken,
   getGoogleAdsConfiguredIds,
-  listGoogleAdsAccessibleCustomers
+  listGoogleAdsAccessibleCustomers,
 } from "@/lib/google-ads-insights";
-import { isAdminRequest } from "../../../../web/admin";
+import {
+  getTeamOperationKillSwitch,
+  requirePermission,
+} from "@/lib/permissions";
 
 function isConfigured(): boolean {
   const developerToken = process.env["GOOGLE_ADS_DEVELOPER_TOKEN"] ?? "";
@@ -16,17 +19,22 @@ function isConfigured(): boolean {
   const clientSecret = process.env["GOOGLE_ADS_CLIENT_SECRET"] ?? "";
   const refreshToken = process.env["GOOGLE_ADS_REFRESH_TOKEN"] ?? "";
   const customerId = process.env["GOOGLE_ADS_CUSTOMER_ID"] ?? "";
-  return Boolean(developerToken && clientId && clientSecret && refreshToken && customerId);
+  return Boolean(
+    developerToken && clientId && clientSecret && refreshToken && customerId,
+  );
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  }
+  const denied = await requirePermission(request, "marketing.read");
+  if (denied) return denied;
 
   const configured = isConfigured();
   let authOk: boolean | null = null;
-  let authError: { status?: number; error?: string; description?: string } | null = null;
+  let authError: {
+    status?: number;
+    error?: string;
+    description?: string;
+  } | null = null;
   let accessibleCustomers: string[] | null = null;
   const ids = getGoogleAdsConfiguredIds();
 
@@ -34,31 +42,30 @@ export async function GET(request: NextRequest): Promise<Response> {
     try {
       const token = (await Promise.race([
         getGoogleAdsAccessToken(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("google_ads_auth_timeout")), 8000))
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("google_ads_auth_timeout")), 8000),
+        ),
       ])) as string;
       authOk = true;
 
       const url = new URL(request.url);
       const debug = url.searchParams.get("debug");
       if (debug === "1") {
-        accessibleCustomers = await listGoogleAdsAccessibleCustomers({ accessToken: token });
+        accessibleCustomers = await listGoogleAdsAccessibleCustomers({
+          accessToken: token,
+        });
       }
     } catch (error) {
       authOk = false;
       if (error instanceof GoogleAdsApiError) {
-        let parsed: any = null;
-        try {
-          parsed = JSON.parse(error.body);
-        } catch {
-          parsed = null;
-        }
         authError = {
           status: error.status,
-          error: typeof parsed?.error === "string" ? parsed.error : undefined,
-          description: typeof parsed?.error_description === "string" ? parsed.error_description : undefined
+          error: error.failureCode,
         };
       } else {
-        authError = { error: error instanceof Error ? error.message : String(error) };
+        authError = {
+          error: error instanceof Error ? error.message : String(error),
+        };
       }
     }
   }
@@ -69,33 +76,44 @@ export async function GET(request: NextRequest): Promise<Response> {
       .select({
         lastSuccessAt: providerHealth.lastSuccessAt,
         lastFailureAt: providerHealth.lastFailureAt,
-        lastFailureDetail: providerHealth.lastFailureDetail
+        lastFailureDetail: providerHealth.lastFailureDetail,
       })
       .from(providerHealth)
       .where(eq(providerHealth.provider, "google_ads"))
       .limit(1)
       .then((rows) => rows[0] ?? null),
     db
-      .select({ fetchedAt: googleAdsInsightsDaily.fetchedAt, dateStart: googleAdsInsightsDaily.dateStart })
+      .select({
+        fetchedAt: googleAdsInsightsDaily.fetchedAt,
+        dateStart: googleAdsInsightsDaily.dateStart,
+      })
       .from(googleAdsInsightsDaily)
       .orderBy(desc(googleAdsInsightsDaily.fetchedAt))
       .limit(1)
-      .then((rows) => rows[0] ?? null)
+      .then((rows) => rows[0] ?? null),
   ]);
 
   return NextResponse.json({
     ok: true,
     configured,
+    advertisingChangesDisabled:
+      getTeamOperationKillSwitch(["marketing.apply"]) === "advertising_changes",
     authOk,
     authError,
     customerId: ids.customerId,
     loginCustomerId: ids.loginCustomerId,
     apiVersion: ids.apiVersion,
     accessibleCustomers,
-    lastSuccessAt: healthRow?.lastSuccessAt ? healthRow.lastSuccessAt.toISOString() : null,
-    lastFailureAt: healthRow?.lastFailureAt ? healthRow.lastFailureAt.toISOString() : null,
+    lastSuccessAt: healthRow?.lastSuccessAt
+      ? healthRow.lastSuccessAt.toISOString()
+      : null,
+    lastFailureAt: healthRow?.lastFailureAt
+      ? healthRow.lastFailureAt.toISOString()
+      : null,
     lastFailureDetail: healthRow?.lastFailureDetail ?? null,
-    lastFetchedAt: latestRow?.fetchedAt ? latestRow.fetchedAt.toISOString() : null,
-    lastFetchedDate: latestRow?.dateStart ?? null
+    lastFetchedAt: latestRow?.fetchedAt
+      ? latestRow.fetchedAt.toISOString()
+      : null,
+    lastFetchedDate: latestRow?.dateStart ?? null,
   });
 }

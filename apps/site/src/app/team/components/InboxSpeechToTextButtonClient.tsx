@@ -7,8 +7,9 @@ type Status = "idle" | "recording" | "transcribing" | "error";
 
 function supportsAudioRecording(): boolean {
   if (typeof window === "undefined") return false;
-  const hasMediaDevices = typeof navigator.mediaDevices?.getUserMedia === "function";
-  const hasMediaRecorder = typeof (window as any).MediaRecorder === "function";
+  const hasMediaDevices =
+    typeof navigator.mediaDevices?.getUserMedia === "function";
+  const hasMediaRecorder = typeof MediaRecorder === "function";
   return hasMediaDevices && hasMediaRecorder;
 }
 
@@ -23,7 +24,7 @@ function extensionForMime(mime: string): string {
 
 export function InboxSpeechToTextButtonClient({
   textareaId,
-  endpoint = "/api/team/stt"
+  endpoint = "/api/team/stt",
 }: {
   textareaId: string;
   endpoint?: string;
@@ -64,7 +65,9 @@ export function InboxSpeechToTextButtonClient({
 
   const appendTranscript = React.useCallback(
     (transcript: string) => {
-      const textarea = document.getElementById(textareaId) as HTMLTextAreaElement | null;
+      const textarea = document.getElementById(
+        textareaId,
+      ) as HTMLTextAreaElement | null;
       if (!textarea) return;
       const trimmed = transcript.trim();
       if (!trimmed) return;
@@ -78,7 +81,7 @@ export function InboxSpeechToTextButtonClient({
         // ignore
       }
     },
-    [textareaId]
+    [textareaId],
   );
 
   const upload = React.useCallback(
@@ -90,7 +93,9 @@ export function InboxSpeechToTextButtonClient({
         form.append("audio", blob, `speech.${ext}`);
         const res = await fetch(endpoint, { method: "POST", body: form });
         if (!res.ok) throw new Error(`stt_failed:${res.status}`);
-        const data = (await res.json().catch(() => null)) as { transcript?: string } | null;
+        const data = (await res.json().catch(() => null)) as {
+          transcript?: string;
+        } | null;
         const transcript = data?.transcript?.trim() ?? "";
         if (transcript) appendTranscript(transcript);
         setStatus("idle");
@@ -99,7 +104,7 @@ export function InboxSpeechToTextButtonClient({
         window.setTimeout(() => setStatus("idle"), 1200);
       }
     },
-    [appendTranscript, endpoint]
+    [appendTranscript, endpoint],
   );
 
   const stopRecording = React.useCallback(() => {
@@ -127,7 +132,8 @@ export function InboxSpeechToTextButtonClient({
       chunksRef.current = [];
 
       recorder.ondataavailable = (event: BlobEvent) => {
-        if (event.data && event.data.size > 0) chunksRef.current.push(event.data);
+        if (event.data && event.data.size > 0)
+          chunksRef.current.push(event.data);
       };
       recorder.onerror = () => {
         cleanup();
@@ -135,7 +141,8 @@ export function InboxSpeechToTextButtonClient({
         window.setTimeout(() => setStatus("idle"), 1200);
       };
       recorder.onstop = () => {
-        const mimeType = recorder.mimeType || chunksRef.current[0]?.type || "audio/webm";
+        const mimeType =
+          recorder.mimeType || chunksRef.current[0]?.type || "audio/webm";
         const blob = new Blob(chunksRef.current, { type: mimeType });
         cleanup();
         const durationMs = Date.now() - startedAtRef.current;
@@ -165,7 +172,9 @@ export function InboxSpeechToTextButtonClient({
   return (
     <button
       type="button"
-      aria-label={isRecording ? "Recording voice message" : "Press and hold to speak"}
+      aria-label={
+        isRecording ? "Recording voice message" : "Press and hold to speak"
+      }
       title={isRecording ? "Recording..." : "Press and hold to speak"}
       className={`inline-flex h-9 w-9 items-center justify-center rounded-full border text-slate-600 shadow-sm transition ${
         isRecording
@@ -197,7 +206,11 @@ export function InboxSpeechToTextButtonClient({
       }}
       onContextMenu={(event) => event.preventDefault()}
     >
-      {status === "transcribing" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
+      {status === "transcribing" ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <Mic className="h-4 w-4" />
+      )}
     </button>
   );
 }

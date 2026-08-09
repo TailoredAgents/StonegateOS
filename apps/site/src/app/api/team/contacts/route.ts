@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi } from "@/app/team/lib/api";
+import { callAdminApiAs } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
-import { requireTeamRole } from "@/app/api/team/auth";
+import { requireTeamPrincipal } from "@/app/api/team/auth";
 import {
   buildStoredContactSource,
   parseLeadSourceFormData,
@@ -21,8 +21,8 @@ function buildContactsRedirect(
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
-  const auth = await requireTeamRole(request, {
-    roles: ["owner", "office", "crew"],
+  const auth = await requireTeamPrincipal(request, {
+    permissions: "contacts.read",
     returnJson: true,
   });
   if (!auth.ok) return auth.response;
@@ -35,7 +35,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (contactId) params.set("contactId", contactId);
   params.set("limit", limit);
 
-  const apiResponse = await callAdminApi(
+  const apiResponse = await callAdminApiAs(
+    auth.principal,
     `/api/admin/contacts?${params.toString()}`,
     { method: "GET" },
   );
@@ -51,9 +52,9 @@ export async function GET(request: NextRequest): Promise<Response> {
 
 export async function POST(request: NextRequest): Promise<Response> {
   const redirectTo = getSafeRedirectUrl(request, "/team?tab=contacts");
-  const auth = await requireTeamRole(request, {
+  const auth = await requireTeamPrincipal(request, {
     redirectTo,
-    roles: ["owner", "office", "crew"],
+    permissions: "contacts.write",
   });
 
   if (!auth.ok) return auth.response;
@@ -160,10 +161,14 @@ export async function POST(request: NextRequest): Promise<Response> {
     };
   }
 
-  const apiResponse = await callAdminApi("/api/admin/contacts", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  const apiResponse = await callAdminApiAs(
+    auth.principal,
+    "/api/admin/contacts",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
 
   if (!apiResponse.ok) {
     let message = "Unable to create contact";

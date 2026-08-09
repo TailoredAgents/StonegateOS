@@ -7,9 +7,14 @@ import {
   conversationMessages,
   conversationParticipants,
   contacts,
-  outboxEvents
+  outboxEvents,
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
+import { requireActiveContactForDirectOutbound } from "@/lib/contact-outbound-safety";
+import {
+  TeamMutationFailure,
+  teamMutationExceptionResponse,
+} from "@/lib/team-mutation";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
@@ -34,7 +39,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export async function POST(
   request: NextRequest,
-  context: { params: Promise<{ threadId: string }> }
+  context: { params: Promise<{ threadId: string }> },
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -63,15 +68,29 @@ export async function POST(
   }
 
   const body = typeof payload.body === "string" ? payload.body.trim() : "";
-  const subject = typeof payload.subject === "string" && payload.subject.trim().length > 0 ? payload.subject.trim() : null;
-  const direction = isDirection(payload.direction ?? null) ? (payload.direction as Direction) : "outbound";
-  const channel = isChannel(payload.channel ?? null) ? (payload.channel as Channel) : null;
+  const subject =
+    typeof payload.subject === "string" && payload.subject.trim().length > 0
+      ? payload.subject.trim()
+      : null;
+  const direction = isDirection(payload.direction ?? null)
+    ? (payload.direction as Direction)
+    : "outbound";
+  const channel = isChannel(payload.channel ?? null)
+    ? (payload.channel as Channel)
+    : null;
   const mediaUrls = Array.isArray(payload.mediaUrls)
-    ? payload.mediaUrls.filter((url): url is string => typeof url === "string" && url.trim().length > 0)
+    ? payload.mediaUrls.filter(
+        (url): url is string =>
+          typeof url === "string" && url.trim().length > 0,
+      )
     : [];
-  const toAddress = typeof payload.toAddress === "string" && payload.toAddress.trim().length > 0 ? payload.toAddress.trim() : null;
+  const toAddress =
+    typeof payload.toAddress === "string" && payload.toAddress.trim().length > 0
+      ? payload.toAddress.trim()
+      : null;
   const fromAddress =
-    typeof payload.fromAddress === "string" && payload.fromAddress.trim().length > 0
+    typeof payload.fromAddress === "string" &&
+    payload.fromAddress.trim().length > 0
       ? payload.fromAddress.trim()
       : null;
   const allowDncOverride = payload.allowDncOverride === true;
@@ -83,223 +102,273 @@ export async function POST(
     return NextResponse.json({ error: "body_required" }, { status: 400 });
   }
 
-  let result: { message: typeof conversationMessages.$inferSelect; messageChannel: string; contactId: string | null; salespersonMemberId: string | null };
+  let result: {
+    message: typeof conversationMessages.$inferSelect;
+    messageChannel: string;
+    contactId: string | null;
+    salespersonMemberId: string | null;
+  };
   try {
     result = await db.transaction(async (tx) => {
       const [thread] = await tx
-      .select({
-        id: conversationThreads.id,
-        channel: conversationThreads.channel,
-        contactId: conversationThreads.contactId,
-        doNotContact: contacts.doNotContact
-      })
-      .from(conversationThreads)
-      .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
-      .where(eq(conversationThreads.id, threadId))
-      .limit(1);
+        .select({
+          id: conversationThreads.id,
+          channel: conversationThreads.channel,
+          contactId: conversationThreads.contactId,
+          doNotContact: contacts.doNotContact,
+        })
+        .from(conversationThreads)
+        .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+        .where(eq(conversationThreads.id, threadId))
+        .limit(1);
 
       if (!thread) {
         throw new Error("thread_not_found");
       }
-      if (direction === "outbound" && thread.doNotContact === true && !allowDncOverride) {
+      if (direction === "outbound" && thread.contactId) {
+        await requireActiveContactForDirectOutbound(tx, thread.contactId);
+      }
+      if (
+        direction === "outbound" &&
+        thread.doNotContact === true &&
+        !allowDncOverride
+      ) {
         throw new Error("dnc_confirmation_required");
       }
 
-    const messageChannel = channel ?? thread.channel ?? "sms";
-    const now = new Date();
+      const messageChannel = channel ?? thread.channel ?? "sms";
+      const now = new Date();
 
-    let participantId: string | null = null;
-    let resolvedToAddress: string | null = toAddress;
-    let resolvedMetadata: Record<string, unknown> | null = null;
-    let salespersonMemberId: string | null = null;
+      let participantId: string | null = null;
+      let resolvedToAddress: string | null = toAddress;
+      let resolvedMetadata: Record<string, unknown> | null = null;
+      let salespersonMemberId: string | null = null;
 
-    if (direction === "inbound") {
-      const contactParticipant = await tx
-        .select({ id: conversationParticipants.id })
-        .from(conversationParticipants)
-        .where(
-          and(
-            eq(conversationParticipants.threadId, threadId),
-            eq(conversationParticipants.participantType, "contact")
-          )
-        )
-        .limit(1);
-
-       if (!contactParticipant[0] && thread.contactId) {
-         const [contact] = await tx
-           .select({
-             id: contacts.id,
-             firstName: contacts.firstName,
-             lastName: contacts.lastName,
-             email: contacts.email,
-             phone: contacts.phone,
-             phoneE164: contacts.phoneE164
-           })
-           .from(contacts)
-           .where(eq(contacts.id, thread.contactId))
-           .limit(1);
-
-         const displayName =
-           contact ? [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim() : "Contact";
-         const externalAddress =
-           messageChannel === "email"
-             ? contact?.email ?? null
-             : messageChannel === "dm"
-               ? fromAddress ?? toAddress ?? null
-               : contact?.phoneE164 ?? contact?.phone ?? null;
-
-         const [created] = await tx
-           .insert(conversationParticipants)
-           .values({
-             threadId,
-            participantType: "contact",
-            contactId: contact?.id ?? null,
-            displayName: displayName || "Contact",
-            externalAddress,
-            createdAt: now
-          })
-          .returning();
-        participantId = created?.id ?? null;
-      } else {
-        participantId = contactParticipant[0]?.id ?? null;
-      }
-     } else {
-      const teamFilters = [
-        eq(conversationParticipants.threadId, threadId),
-        eq(conversationParticipants.participantType, "team")
-      ];
-      if (actor.id) {
-        teamFilters.push(eq(conversationParticipants.teamMemberId, actor.id));
-      }
-
-      const existingTeam = await tx
-        .select({ id: conversationParticipants.id })
-        .from(conversationParticipants)
-        .where(and(...teamFilters))
-        .limit(1);
-
-      if (existingTeam[0]) {
-        participantId = existingTeam[0].id;
-      } else {
-        const [teamParticipant] = await tx
-          .insert(conversationParticipants)
-          .values({
-            threadId,
-            participantType: "team",
-            teamMemberId: actor.id ?? null,
-            displayName: actor.label ?? "Team Console",
-            createdAt: now
-          })
-          .returning();
-        participantId = teamParticipant?.id ?? null;
-      }
-    }
-
-    if (direction === "outbound") {
-      if (messageChannel === "dm") {
-        const [lastInboundDm] = await tx
-          .select({
-            fromAddress: conversationMessages.fromAddress,
-            metadata: conversationMessages.metadata
-          })
-          .from(conversationMessages)
+      if (direction === "inbound") {
+        const contactParticipant = await tx
+          .select({ id: conversationParticipants.id })
+          .from(conversationParticipants)
           .where(
             and(
-              eq(conversationMessages.threadId, threadId),
-              eq(conversationMessages.direction, "inbound"),
-              eq(conversationMessages.channel, "dm")
-            )
+              eq(conversationParticipants.threadId, threadId),
+              eq(conversationParticipants.participantType, "contact"),
+            ),
           )
-          .orderBy(desc(conversationMessages.createdAt))
           .limit(1);
 
-        resolvedToAddress = resolvedToAddress ?? (lastInboundDm?.fromAddress ?? null);
-        resolvedMetadata = isRecord(lastInboundDm?.metadata) ? lastInboundDm.metadata : null;
-        resolvedMetadata = resolvedMetadata ?? { source: "facebook" };
+        if (!contactParticipant[0] && thread.contactId) {
+          const [contact] = await tx
+            .select({
+              id: contacts.id,
+              firstName: contacts.firstName,
+              lastName: contacts.lastName,
+              email: contacts.email,
+              phone: contacts.phone,
+              phoneE164: contacts.phoneE164,
+            })
+            .from(contacts)
+            .where(eq(contacts.id, thread.contactId))
+            .limit(1);
+
+          const displayName = contact
+            ? [contact.firstName, contact.lastName]
+                .filter(Boolean)
+                .join(" ")
+                .trim()
+            : "Contact";
+          const externalAddress =
+            messageChannel === "email"
+              ? (contact?.email ?? null)
+              : messageChannel === "dm"
+                ? (fromAddress ?? toAddress ?? null)
+                : (contact?.phoneE164 ?? contact?.phone ?? null);
+
+          const [created] = await tx
+            .insert(conversationParticipants)
+            .values({
+              threadId,
+              participantType: "contact",
+              contactId: contact?.id ?? null,
+              displayName: displayName || "Contact",
+              externalAddress,
+              createdAt: now,
+            })
+            .returning();
+          participantId = created?.id ?? null;
+        } else {
+          participantId = contactParticipant[0]?.id ?? null;
+        }
       } else {
-        const [contact] = thread.contactId
-          ? await tx
-              .select({
-                email: contacts.email,
-                phone: contacts.phone,
-                phoneE164: contacts.phoneE164,
-                salespersonMemberId: contacts.salespersonMemberId
-              })
-              .from(contacts)
-              .where(eq(contacts.id, thread.contactId))
-              .limit(1)
-          : [null];
+        const teamFilters = [
+          eq(conversationParticipants.threadId, threadId),
+          eq(conversationParticipants.participantType, "team"),
+        ];
+        if (actor.id) {
+          teamFilters.push(eq(conversationParticipants.teamMemberId, actor.id));
+        }
 
-        salespersonMemberId = contact?.salespersonMemberId ?? null;
-        resolvedToAddress =
-          resolvedToAddress ??
-          (messageChannel === "email"
-            ? contact?.email ?? null
-            : contact?.phoneE164 ?? contact?.phone ?? null);
+        const existingTeam = await tx
+          .select({ id: conversationParticipants.id })
+          .from(conversationParticipants)
+          .where(and(...teamFilters))
+          .limit(1);
+
+        if (existingTeam[0]) {
+          participantId = existingTeam[0].id;
+        } else {
+          const [teamParticipant] = await tx
+            .insert(conversationParticipants)
+            .values({
+              threadId,
+              participantType: "team",
+              teamMemberId: actor.id ?? null,
+              displayName: actor.label ?? "Team Console",
+              createdAt: now,
+            })
+            .returning();
+          participantId = teamParticipant?.id ?? null;
+        }
       }
 
-      if (!resolvedToAddress) {
-        throw new Error("missing_recipient");
+      if (direction === "outbound") {
+        if (messageChannel === "dm") {
+          const [lastInboundDm] = await tx
+            .select({
+              fromAddress: conversationMessages.fromAddress,
+              metadata: conversationMessages.metadata,
+            })
+            .from(conversationMessages)
+            .where(
+              and(
+                eq(conversationMessages.threadId, threadId),
+                eq(conversationMessages.direction, "inbound"),
+                eq(conversationMessages.channel, "dm"),
+              ),
+            )
+            .orderBy(desc(conversationMessages.createdAt))
+            .limit(1);
+
+          resolvedToAddress =
+            resolvedToAddress ?? lastInboundDm?.fromAddress ?? null;
+          resolvedMetadata = isRecord(lastInboundDm?.metadata)
+            ? lastInboundDm.metadata
+            : null;
+          resolvedMetadata = resolvedMetadata ?? { source: "facebook" };
+        } else {
+          const [contact] = thread.contactId
+            ? await tx
+                .select({
+                  email: contacts.email,
+                  phone: contacts.phone,
+                  phoneE164: contacts.phoneE164,
+                  salespersonMemberId: contacts.salespersonMemberId,
+                })
+                .from(contacts)
+                .where(eq(contacts.id, thread.contactId))
+                .limit(1)
+            : [null];
+
+          salespersonMemberId = contact?.salespersonMemberId ?? null;
+          resolvedToAddress =
+            resolvedToAddress ??
+            (messageChannel === "email"
+              ? (contact?.email ?? null)
+              : (contact?.phoneE164 ?? contact?.phone ?? null));
+        }
+
+        if (!resolvedToAddress) {
+          throw new Error("missing_recipient");
+        }
+        if (resolvedMetadata) {
+          // Provider/inbound metadata is never authority to bypass DNC. Only
+          // this route's explicit reviewed request can add the narrow flag.
+          resolvedMetadata = { ...resolvedMetadata };
+          delete resolvedMetadata["allowDncOverride"];
+          delete resolvedMetadata["dncOverrideSource"];
+          delete resolvedMetadata["dncOverrideActorId"];
+        }
+        if (allowDncOverride) {
+          resolvedMetadata = {
+            ...(resolvedMetadata ?? {}),
+            allowDncOverride: true,
+            dncOverrideSource: "explicit_inbox_send",
+            dncOverrideActorId: actor.id ?? null,
+          };
+        }
       }
-    }
 
-    const deliveryStatus =
-      direction === "inbound" ? "delivered" : direction === "internal" ? "sent" : "queued";
+      const deliveryStatus =
+        direction === "inbound"
+          ? "delivered"
+          : direction === "internal"
+            ? "sent"
+            : "queued";
 
-    const [message] = await tx
-      .insert(conversationMessages)
-      .values({
-        threadId,
-        participantId,
-        direction,
-        channel: messageChannel,
-        subject,
-        body,
-        mediaUrls,
-        toAddress: resolvedToAddress,
-        fromAddress,
-        deliveryStatus,
-        sentAt: deliveryStatus === "sent" ? now : null,
-        receivedAt: direction === "inbound" ? now : null,
-        metadata: resolvedMetadata,
-        createdAt: now
-      })
-      .returning();
+      const [message] = await tx
+        .insert(conversationMessages)
+        .values({
+          threadId,
+          participantId,
+          direction,
+          channel: messageChannel,
+          subject,
+          body,
+          mediaUrls,
+          toAddress: resolvedToAddress,
+          fromAddress,
+          deliveryStatus,
+          sentAt: deliveryStatus === "sent" ? now : null,
+          receivedAt: direction === "inbound" ? now : null,
+          metadata: resolvedMetadata,
+          createdAt: now,
+        })
+        .returning();
 
-    if (!message) {
-      throw new Error("message_create_failed");
-    }
+      if (!message) {
+        throw new Error("message_create_failed");
+      }
 
-    await tx
-      .update(conversationThreads)
-      .set({
-        lastMessagePreview: (body || (mediaUrls.length ? "Media message" : "")).slice(0, 140),
-        lastMessageAt: now,
-        updatedAt: now
-      })
-      .where(eq(conversationThreads.id, threadId));
+      await tx
+        .update(conversationThreads)
+        .set({
+          lastMessagePreview: (
+            body || (mediaUrls.length ? "Media message" : "")
+          ).slice(0, 140),
+          lastMessageAt: now,
+          updatedAt: now,
+        })
+        .where(eq(conversationThreads.id, threadId));
 
-    if (direction === "outbound") {
-      await tx.insert(outboxEvents).values({
-        type: "message.send",
-        payload: { messageId: message.id },
-        createdAt: now
-      });
-
-      if (thread.contactId) {
-        await completeNextFollowupTaskOnTouch({
-          db: tx,
-          contactId: thread.contactId,
-          memberId: salespersonMemberId ?? actor.id ?? null,
-          now
+      if (direction === "outbound") {
+        await tx.insert(outboxEvents).values({
+          type: "message.send",
+          payload: { messageId: message.id },
+          createdAt: now,
         });
-      }
-    }
 
-      return { message, messageChannel, contactId: thread.contactId ?? null, salespersonMemberId };
+        if (thread.contactId) {
+          await completeNextFollowupTaskOnTouch({
+            db: tx,
+            contactId: thread.contactId,
+            memberId: salespersonMemberId ?? actor.id ?? null,
+            now,
+          });
+        }
+      }
+
+      return {
+        message,
+        messageChannel,
+        contactId: thread.contactId ?? null,
+        salespersonMemberId,
+      };
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "message_create_failed";
+    if (error instanceof TeamMutationFailure) {
+      return teamMutationExceptionResponse(error);
+    }
+    const message =
+      error instanceof Error ? error.message : "message_create_failed";
     const status = message === "thread_not_found" ? 404 : 400;
     return NextResponse.json({ error: message }, { status });
   }
@@ -309,7 +378,7 @@ export async function POST(
     action: direction === "inbound" ? "message.received" : "message.queued",
     entityType: "conversation_message",
     entityId: result.message.id,
-    meta: { threadId, channel: result.messageChannel, direction }
+    meta: { threadId, channel: result.messageChannel, direction },
   });
 
   return NextResponse.json({
@@ -319,7 +388,7 @@ export async function POST(
       direction: result.message.direction,
       channel: result.message.channel,
       deliveryStatus: result.message.deliveryStatus,
-      createdAt: result.message.createdAt.toISOString()
-    }
+      createdAt: result.message.createdAt.toISOString(),
+    },
   });
 }

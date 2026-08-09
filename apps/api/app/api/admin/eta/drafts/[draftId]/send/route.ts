@@ -21,6 +21,19 @@ export async function POST(
     actor: getAuditActorFromRequest(request),
   });
   if (!result.ok) {
+    if (result.code === "conflict") {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "conflict",
+          message:
+            result.message ??
+            "This contact is in recovery. Restore it before sending a new message.",
+          retryable: false,
+        },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ error: result.error }, { status: 400 });
   }
   return NextResponse.json({ ok: true, messageId: result.messageId });

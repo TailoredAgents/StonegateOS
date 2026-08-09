@@ -1,17 +1,19 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import {
-  getDb,
-  crmPipeline,
-  instantQuotes,
-  leads,
-  outboxEvents,
-  properties,
-} from "@/db";
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
+import { getDb, crmPipeline, instantQuotes, leads, outboxEvents } from "@/db";
 import { isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
-import { desc, eq } from "drizzle-orm";
-import { upsertContact, upsertProperty } from "../web/persistence";
+import { eq } from "drizzle-orm";
+import {
+  PublicContactPersistenceError,
+  upsertContact,
+  upsertProperty,
+} from "../web/persistence";
+import {
+  ensureContactPropertyAssociation,
+  findLatestContactProperty,
+} from "@/lib/property-write";
 import { normalizeName, normalizePhone } from "../web/utils";
 import { JUNK_VOLUME_UNIT_PRICE } from "@/lib/junk-volume-pricing";
 import {
@@ -933,11 +935,10 @@ export async function POST(request: NextRequest) {
         );
       }
       try {
-        preparedPhotoMedia =
-          await resolvePublicInstantQuoteMediaReferences({
-            urls: parsed.data.job.photoUrls,
-            baseUrl: publicApiBaseUrl,
-          });
+        preparedPhotoMedia = await resolvePublicInstantQuoteMediaReferences({
+          urls: parsed.data.job.photoUrls,
+          baseUrl: publicApiBaseUrl,
+        });
       } catch (error) {
         if (error instanceof PublicQuoteMediaError) {
           return corsJson(
@@ -967,9 +968,7 @@ export async function POST(request: NextRequest) {
       ...body,
       job: {
         ...body.job,
-        photoUrls: preparedPhotoMedia.map(
-          (reference) => reference.analysisUrl,
-        ),
+        photoUrls: preparedPhotoMedia.map((reference) => reference.analysisUrl),
       },
     };
 
@@ -1086,162 +1085,160 @@ export async function POST(request: NextRequest) {
     };
 
     const db = getDb();
+    const { firstName, lastName } = normalizeName(body.contact.name);
+    const normalizedPhone = normalizePhone(body.contact.phone);
+    const utm = body.utm ?? {};
+    const referrer = request.headers.get("referer") ?? undefined;
 
-    const [quoteRow] = await db
-      .insert(instantQuotes)
-      .values({
-        source: body.source ?? "public_site",
-        contactName: body.contact.name.trim(),
-        contactPhone: body.contact.phone.trim(),
-        timeframe: body.contact.timeframe,
-        zip: body.job.zip.trim(),
-        jobTypes: body.job.types,
-        perceivedSize: body.job.perceivedSize,
-        notes: body.job.notes ?? null,
-        photoUrls: body.job.photoUrls ?? [],
-        aiResult: storedAiResult,
-      })
-      .returning({ id: instantQuotes.id });
+    const quoteId = await db.transaction(async (tx) => {
+      const [quoteRow] = await tx
+        .insert(instantQuotes)
+        .values({
+          source: body.source ?? "public_site",
+          contactName: body.contact.name.trim(),
+          contactPhone: body.contact.phone.trim(),
+          timeframe: body.contact.timeframe,
+          zip: body.job.zip.trim(),
+          jobTypes: body.job.types,
+          perceivedSize: body.job.perceivedSize,
+          notes: body.job.notes ?? null,
+          photoUrls: body.job.photoUrls ?? [],
+          aiResult: storedAiResult,
+        })
+        .returning({ id: instantQuotes.id });
+      const quoteId = quoteRow?.id;
+      if (!quoteId) {
+        throw new Error("instant_quote_insert_failed");
+      }
 
-    const quoteId = quoteRow?.id ?? null;
-    if (quoteId) {
-      try {
-        const { firstName, lastName } = normalizeName(body.contact.name);
-        const normalizedPhone = normalizePhone(body.contact.phone);
-        const utm = body.utm ?? {};
-        const referrer = request.headers.get("referer") ?? undefined;
+      const contact = await upsertContact(tx, {
+        firstName,
+        lastName,
+        phoneRaw: normalizedPhone.raw,
+        phoneE164: normalizedPhone.e164,
+        source: "instant_quote",
+      });
+      await claimPublicInstantQuoteMediaReferences({
+        instantQuoteId: quoteId,
+        contactId: contact.id,
+        references: preparedPhotoMedia,
+        database: tx,
+      });
 
-        await db.transaction(async (tx) => {
-          const contact = await upsertContact(tx, {
-            firstName,
-            lastName,
-            phoneRaw: normalizedPhone.raw,
-            phoneE164: normalizedPhone.e164,
-            source: "instant_quote",
-          });
-          await claimPublicInstantQuoteMediaReferences({
-            instantQuoteId: quoteId,
+      const existingProperty = await findLatestContactProperty(tx, contact.id);
+
+      const property = existingProperty?.id
+        ? { id: existingProperty.id }
+        : await upsertProperty(tx, {
             contactId: contact.id,
-            references: preparedPhotoMedia,
-            database: tx,
+            addressLine1: `[Instant Quote ${quoteId.split("-")[0] ?? quoteId}] ZIP ${body.job.zip.trim()} (address pending)`,
+            city: "Unknown",
+            state: "GA",
+            postalCode: body.job.zip.trim(),
+            gated: false,
           });
 
-          const [existingProperty] = await tx
-            .select({ id: properties.id })
-            .from(properties)
-            .where(eq(properties.contactId, contact.id))
-            .orderBy(desc(properties.createdAt))
-            .limit(1);
+      await ensureContactPropertyAssociation(tx, {
+        contactId: contact.id,
+        propertyId: property.id,
+      });
+      const [linkedQuote] = await tx
+        .update(instantQuotes)
+        .set({
+          contactId: contact.id,
+          propertyId: property.id,
+        })
+        .where(eq(instantQuotes.id, quoteId))
+        .returning({ id: instantQuotes.id });
+      if (!linkedQuote?.id) {
+        throw new Error("instant_quote_relationship_failed");
+      }
 
-          const property = existingProperty?.id
-            ? { id: existingProperty.id }
-            : await upsertProperty(tx, {
-                contactId: contact.id,
-                addressLine1: `[Instant Quote ${quoteId.split("-")[0] ?? quoteId}] ZIP ${body.job.zip.trim()} (address pending)`,
-                city: "Unknown",
-                state: "GA",
-                postalCode: body.job.zip.trim(),
-                gated: false,
-              });
+      const [leadRow] = await tx
+        .insert(leads)
+        .values({
+          contactId: contact.id,
+          propertyId: property.id,
+          servicesRequested: body.job.types,
+          notes: body.job.notes ?? null,
+          status: "new",
+          source: "instant_quote",
+          utmSource: utm.source,
+          utmMedium: utm.medium,
+          utmCampaign: utm.campaign,
+          utmTerm: utm.term,
+          utmContent: utm.content,
+          gclid: utm.gclid,
+          fbclid: utm.fbclid,
+          referrer,
+          formPayload: {
+            instantQuoteId: quoteId,
+            timeframe: body.contact.timeframe,
+            zip: body.job.zip.trim(),
+            jobTypes: body.job.types,
+            perceivedSize: body.job.perceivedSize,
+            notes: body.job.notes ?? null,
+            aiResult: storedAiResult,
+            utm,
+          },
+          instantQuoteId: quoteId,
+        })
+        .returning({ id: leads.id });
+      if (!leadRow?.id) {
+        throw new Error("lead_insert_failed");
+      }
 
-          const [leadRow] = await tx
-            .insert(leads)
-            .values({
-              contactId: contact.id,
-              propertyId: property.id,
-              servicesRequested: body.job.types,
-              notes: body.job.notes ?? null,
-              status: "new",
-              source: "instant_quote",
-              utmSource: utm.source,
-              utmMedium: utm.medium,
-              utmCampaign: utm.campaign,
-              utmTerm: utm.term,
-              utmContent: utm.content,
-              gclid: utm.gclid,
-              fbclid: utm.fbclid,
-              referrer,
-              formPayload: {
-                instantQuoteId: quoteId,
-                timeframe: body.contact.timeframe,
-                zip: body.job.zip.trim(),
-                jobTypes: body.job.types,
-                perceivedSize: body.job.perceivedSize,
-                notes: body.job.notes ?? null,
-                aiResult: storedAiResult,
-                utm,
-              },
+      await tx.insert(outboxEvents).values({
+        type: "lead.alert",
+        payload: {
+          leadId: leadRow.id,
+          source: "instant_quote",
+        },
+      });
+
+      const [pipelineRow] = await tx
+        .select({ stage: crmPipeline.stage })
+        .from(crmPipeline)
+        .where(eq(crmPipeline.contactId, contact.id))
+        .limit(1);
+
+      const previousStage =
+        typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
+      if (previousStage !== "quoted") {
+        await tx
+          .insert(crmPipeline)
+          .values({ contactId: contact.id, stage: "quoted" })
+          .onConflictDoUpdate({
+            target: crmPipeline.contactId,
+            set: { stage: "quoted", updatedAt: new Date() },
+          });
+
+        await tx.insert(outboxEvents).values({
+          type: "pipeline.auto_stage_change",
+          payload: {
+            contactId: contact.id,
+            fromStage: previousStage,
+            toStage: "quoted",
+            reason: "instant_quote.created",
+            meta: {
               instantQuoteId: quoteId,
-            })
-            .returning({ id: leads.id });
-
-          if (leadRow?.id) {
-            await tx.insert(outboxEvents).values({
-              type: "lead.alert",
-              payload: {
-                leadId: leadRow.id,
-                source: "instant_quote",
-              },
-            });
-          }
-
-          const [pipelineRow] = await tx
-            .select({ stage: crmPipeline.stage })
-            .from(crmPipeline)
-            .where(eq(crmPipeline.contactId, contact.id))
-            .limit(1);
-
-          const previousStage =
-            typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
-          if (previousStage !== "quoted") {
-            await tx
-              .insert(crmPipeline)
-              .values({ contactId: contact.id, stage: "quoted" })
-              .onConflictDoUpdate({
-                target: crmPipeline.contactId,
-                set: { stage: "quoted", updatedAt: new Date() },
-              });
-
-            await tx.insert(outboxEvents).values({
-              type: "pipeline.auto_stage_change",
-              payload: {
-                contactId: contact.id,
-                fromStage: previousStage,
-                toStage: "quoted",
-                reason: "instant_quote.created",
-                meta: {
-                  instantQuoteId: quoteId,
-                  leadId: leadRow?.id ?? null,
-                },
-              },
-            });
-          }
-
-          if (leadRow?.id) {
-            await tx.insert(outboxEvents).values({
-              type: "followup.schedule",
-              payload: {
-                leadId: leadRow.id,
-                contactId: contact.id,
-                reason: "instant_quote.created",
-              },
-            });
-          }
-        });
-      } catch (error) {
-        if (preparedPhotoMedia.length > 0) {
-          await db
-            .delete(instantQuotes)
-            .where(eq(instantQuotes.id, quoteId))
-            .catch(() => undefined);
-          throw error;
-        }
-        console.error("[junk-quote] lead_create_failed", {
-          quoteId,
-          error: String(error),
+              leadId: leadRow?.id ?? null,
+            },
+          },
         });
       }
-    }
+
+      await tx.insert(outboxEvents).values({
+        type: "followup.schedule",
+        payload: {
+          leadId: leadRow.id,
+          contactId: contact.id,
+          reason: "instant_quote.created",
+        },
+      });
+
+      return quoteId;
+    });
 
     return corsJson(
       {
@@ -1273,6 +1270,17 @@ export async function POST(request: NextRequest) {
       requestOrigin,
     );
   } catch (error) {
+    if (error instanceof PublicContactPersistenceError) {
+      return corsJson(
+        {
+          ok: false,
+          error: error.publicCode,
+          message: error.publicMessage,
+        },
+        null,
+        { status: error.status },
+      );
+    }
     if (error instanceof PublicQuoteMediaError) {
       return corsJson(
         {
@@ -1399,30 +1407,33 @@ async function getQuoteFromAi(
       .filter(Boolean)
       .join("\n");
 
-    const res = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+    const res = await fetch(
+      resolveOpenAiApiEndpoint("responses", process.env),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          instructions: `${SYSTEM_PROMPT}\n\n${dynamicRules}`,
+          input: jobForAiInput,
+          tools: [],
+          tool_choice: "none",
+          reasoning: {
+            effort: "minimal",
+          },
+          text: {
+            format:
+              format === "json_schema"
+                ? jsonSchemaFormat
+                : { type: "json_object" },
+          },
+          max_output_tokens: 1200,
+        }),
       },
-      body: JSON.stringify({
-        model,
-        instructions: `${SYSTEM_PROMPT}\n\n${dynamicRules}`,
-        input: jobForAiInput,
-        tools: [],
-        tool_choice: "none",
-        reasoning: {
-          effort: "minimal",
-        },
-        text: {
-          format:
-            format === "json_schema"
-              ? jsonSchemaFormat
-              : { type: "json_object" },
-        },
-        max_output_tokens: 1200,
-      }),
-    });
+    );
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");

@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
-import { callAdminApi } from "../lib/api";
+import { requireCurrentTeamPrincipal } from "@/lib/team-principal";
+import { callAdminApiAs } from "../lib/api";
 import {
   TEAM_CARD_PADDED,
   TEAM_SECTION_SUBTITLE,
@@ -18,6 +20,25 @@ type CommissionSettings = {
   marketingRateBps: number;
   crewPoolRateBps: number;
   marketingMemberId: string | null;
+  managementReady?: boolean;
+  managementTotalSplitBps?: number;
+  managementSplits?: Array<{
+    memberId: string;
+    name: string | null;
+    active: boolean;
+    splitBps: number;
+  }>;
+  crewSplitRulesReady?: boolean;
+  crewSplitRules?: Array<{
+    ruleKey: string;
+    ready: boolean;
+    recipients: Array<{
+      memberId: string;
+      name: string | null;
+      active: boolean;
+      splitBps: number;
+    }>;
+  }>;
 };
 
 type CommissionSettingsPayload = {
@@ -45,6 +66,7 @@ type PayoutRun = {
   createdAt: string;
   lockedAt: string | null;
   paidAt: string | null;
+  version: string;
   totalCents: number;
   reimbursementTotalCents: number;
   otherAdjustmentsTotalCents: number;
@@ -59,16 +81,14 @@ type PayoutRunAdjustment = {
   amountCents: number;
   note: string | null;
   createdAt: string;
-  expense:
-    | {
-        id: string;
-        paidAt: string;
-        category: string | null;
-        vendor: string | null;
-        memo: string | null;
-        receipt: { filename: string; contentType: string } | null;
-      }
-    | null;
+  expense: {
+    id: string;
+    paidAt: string;
+    category: string | null;
+    vendor: string | null;
+    memo: string | null;
+    receipt: { filename: string; contentType: string } | null;
+  } | null;
 };
 
 type PayoutRunsPayload = {
@@ -150,6 +170,7 @@ function todayDateInput(timezone: string): string {
 }
 
 export async function CommissionsSection(): Promise<React.ReactElement> {
+  const principal = await requireCurrentTeamPrincipal();
   let commissionSettings: CommissionSettings | null = null;
   let commissionError: string | null = null;
   let payoutRuns: PayoutRun[] = [];
@@ -160,10 +181,10 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
 
   try {
     const [settingsRes, runsRes, membersRes, overridesRes] = await Promise.all([
-      callAdminApi("/api/admin/commissions/settings"),
-      callAdminApi("/api/admin/commissions/payout-runs?limit=10"),
-      callAdminApi("/api/admin/team/members"),
-      callAdminApi("/api/admin/commissions/crew-pool-overrides"),
+      callAdminApiAs(principal, "/api/admin/commissions/settings"),
+      callAdminApiAs(principal, "/api/admin/commissions/payout-runs?limit=10"),
+      callAdminApiAs(principal, "/api/admin/team/members"),
+      callAdminApiAs(principal, "/api/admin/commissions/crew-pool-overrides"),
     ]);
 
     if (settingsRes.ok) {
@@ -201,6 +222,14 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
   const defaultReimbursementDate = todayDateInput(
     commissionSettings?.timezone ?? "America/New_York",
   );
+  const managementSplits = commissionSettings?.managementSplits ?? [];
+  const managementTotalSplitBps =
+    commissionSettings?.managementTotalSplitBps ??
+    managementSplits.reduce((sum, split) => sum + split.splitBps, 0);
+  const managementReady =
+    commissionSettings?.managementReady === true && managementTotalSplitBps > 0;
+  const crewSplitRules = commissionSettings?.crewSplitRules ?? [];
+  const crewSplitRulesReady = commissionSettings?.crewSplitRulesReady !== false;
 
   return (
     <section className="space-y-4">
@@ -209,8 +238,8 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
         <p className={TEAM_SECTION_SUBTITLE}>
           Weekly payouts use the current Monday-Sunday week and final amount
           paid. Sales commission is retired for new calculations, management
-          pays Jeffrey 12% and Austin 5%, and labor stays at 20% of the job
-          total regardless of the crew.
+          uses the active recipients shown below, and labor stays at 20% of the
+          job total regardless of the crew.
         </p>
       </header>
 
@@ -226,6 +255,11 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
           </div>
           <form action="/api/team/commissions/payout-runs" method="post">
             <input type="hidden" name="action" value="create" />
+            <input
+              type="hidden"
+              name="idempotencyKey"
+              value={`commissions:create:${randomUUID()}`}
+            />
             <SubmitButton
               className={teamButtonClass("primary")}
               pendingLabel="Creating..."
@@ -250,6 +284,9 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
               const otherAdjustments = run.adjustments.filter(
                 (adjustment) => adjustment.kind !== "reimbursement",
               );
+              const lockKey = `commissions:lock:${run.id}:${run.version}`;
+              const paidKey = `commissions:paid:${run.id}:${run.version}`;
+              const reimbursementKey = `commissions:reimbursement:create:${run.id}:${randomUUID()}`;
 
               return (
                 <div
@@ -259,7 +296,8 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <div className="font-semibold text-slate-900">
-                        {run.status.toUpperCase()} — {fmtMoney(run.totalCents, "USD")}
+                        {run.status.toUpperCase()} —{" "}
+                        {fmtMoney(run.totalCents, "USD")}
                       </div>
                       <div className="text-xs text-slate-600">
                         Period: {fmtWhen(run.periodStart, run.timezone)} →{" "}
@@ -267,10 +305,12 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                       </div>
                       <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
                         <span className="rounded-full bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">
-                          Reimbursements {fmtMoney(run.reimbursementTotalCents, "USD")}
+                          Reimbursements{" "}
+                          {fmtMoney(run.reimbursementTotalCents, "USD")}
                         </span>
                         <span className="rounded-full bg-slate-100 px-2 py-1 font-semibold text-slate-600">
-                          Other adjustments {fmtMoney(run.otherAdjustmentsTotalCents, "USD")}
+                          Other adjustments{" "}
+                          {fmtMoney(run.otherAdjustmentsTotalCents, "USD")}
                         </span>
                       </div>
                     </div>
@@ -287,6 +327,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                         <form
                           action="/api/team/commissions/payout-runs"
                           method="post"
+                          className="flex flex-col items-end gap-2"
                         >
                           <input type="hidden" name="action" value="lock" />
                           <input
@@ -294,6 +335,26 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                             name="payoutRunId"
                             value={run.id}
                           />
+                          <input
+                            type="hidden"
+                            name="expectedVersion"
+                            value={run.version}
+                          />
+                          <input
+                            type="hidden"
+                            name="idempotencyKey"
+                            value={lockKey}
+                          />
+                          <label className="flex max-w-56 items-start gap-2 text-left text-xs text-slate-600">
+                            <input
+                              type="checkbox"
+                              name="confirmation"
+                              value="reviewed"
+                              required
+                              className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                            />
+                            <span>I reviewed every recipient and total.</span>
+                          </label>
                           <SubmitButton
                             className={teamButtonClass("secondary", "sm")}
                             pendingLabel="Locking..."
@@ -314,6 +375,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                         <form
                           action="/api/team/commissions/payout-runs"
                           method="post"
+                          className="flex flex-col items-end gap-2"
                         >
                           <input type="hidden" name="action" value="paid" />
                           <input
@@ -321,6 +383,26 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                             name="payoutRunId"
                             value={run.id}
                           />
+                          <input
+                            type="hidden"
+                            name="expectedVersion"
+                            value={run.version}
+                          />
+                          <input
+                            type="hidden"
+                            name="idempotencyKey"
+                            value={paidKey}
+                          />
+                          <label className="flex max-w-56 items-start gap-2 text-left text-xs font-medium text-slate-700">
+                            <input
+                              type="checkbox"
+                              name="confirmation"
+                              value="reviewed"
+                              required
+                              className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                            />
+                            <span>I confirm these funds were paid.</span>
+                          </label>
                           <SubmitButton
                             className={teamButtonClass("primary", "sm")}
                             pendingLabel="Saving..."
@@ -340,10 +422,10 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                             Reimbursements
                           </h4>
                           <p className="mt-1 text-xs text-slate-600">
-                            Use this when someone paid out of pocket for
-                            company supplies or tools. It adds to that
-                            person&apos;s payout and logs the business expense
-                            with the receipt.
+                            Use this when someone paid out of pocket for company
+                            supplies or tools. It adds to that person&apos;s
+                            payout and logs the business expense with the
+                            receipt.
                           </p>
                         </div>
                         <div className="text-right text-xs text-slate-600">
@@ -361,6 +443,16 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                           encType="multipart/form-data"
                           className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"
                         >
+                          <input
+                            type="hidden"
+                            name="expectedVersion"
+                            value={run.version}
+                          />
+                          <input
+                            type="hidden"
+                            name="idempotencyKey"
+                            value={reimbursementKey}
+                          />
                           <label className="flex flex-col gap-1">
                             <span className="text-xs font-medium text-slate-600">
                               Team member
@@ -558,6 +650,16 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                                         name="adjustmentId"
                                         value={adjustment.id}
                                       />
+                                      <input
+                                        type="hidden"
+                                        name="expectedVersion"
+                                        value={run.version}
+                                      />
+                                      <input
+                                        type="hidden"
+                                        name="idempotencyKey"
+                                        value={`commissions:reimbursement:delete:${adjustment.id}:${randomUUID()}`}
+                                      />
                                       <SubmitButton
                                         className={teamButtonClass(
                                           "secondary",
@@ -592,9 +694,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
         </p>
 
         {commissionSettings ? (
-          <div
-            className="mt-4 grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-700 sm:grid-cols-2"
-          >
+          <div className="mt-4 grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-700 sm:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
               <div className="text-xs font-medium text-slate-600">Sales</div>
               <div className="mt-1 text-base font-semibold text-slate-900">
@@ -609,18 +709,37 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                 Management
               </div>
               <div className="mt-1 text-base font-semibold text-slate-900">
-                17% total
+                {fmtPercent(commissionSettings.marketingRateBps)}% total
               </div>
-              <div className="mt-1 text-xs text-slate-500">
-                Split 12% to Jeffrey and 5% to Austin.
-              </div>
+              {managementReady ? (
+                <ul className="mt-1 space-y-1 text-xs text-slate-600">
+                  {managementSplits.map((split) => (
+                    <li key={split.memberId}>
+                      {split.name ?? "Unnamed team member"}:{" "}
+                      {fmtPercent(
+                        Math.round(
+                          (commissionSettings.marketingRateBps *
+                            split.splitBps) /
+                            managementTotalSplitBps,
+                        ),
+                      )}
+                      %
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-xs font-medium text-rose-700">
+                  Recipient setup is incomplete. Completed-job financial changes
+                  are blocked until a system administrator repairs it.
+                </p>
+              )}
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
               <span className="text-xs font-medium text-slate-600">
                 Labor pool
               </span>
               <div className="mt-1 text-base font-semibold text-slate-900">
-                {fmtPercent(commissionSettings.crewPoolRateBps)}
+                {fmtPercent(commissionSettings.crewPoolRateBps)}%
               </div>
               <div className="mt-1 text-xs text-slate-500">
                 Fixed for every completed job.
@@ -628,18 +747,61 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
             </div>
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 px-4 py-3">
               <div className="text-xs font-medium text-slate-600">
-                Locked labor splits
+                Crew split overrides
               </div>
               <div className="mt-1 text-sm text-slate-700">
-                Most crew combinations split the 20% labor pool evenly.
+                Most crew combinations split the configured{" "}
+                {fmtPercent(commissionSettings.crewPoolRateBps)}% labor pool
+                evenly.
               </div>
-              <div className="mt-1 text-sm text-slate-700">
-                Jeffrey + Austin + Devon labor: Jeffrey 3%, Austin 10%, Devon
-                7%.
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                Two-person crews receive 10% each.
-              </div>
+              {!crewSplitRulesReady ? (
+                <p className="mt-2 text-xs font-medium text-rose-700">
+                  A configured override contains an inactive or invalid
+                  recipient. Crew-backed job completions are blocked until it is
+                  repaired.
+                </p>
+              ) : crewSplitRules.length > 0 ? (
+                <div className="mt-2 space-y-2">
+                  {crewSplitRules.map((rule) => {
+                    const totalWeight = rule.recipients.reduce(
+                      (sum, recipient) => sum + recipient.splitBps,
+                      0,
+                    );
+                    return (
+                      <div
+                        key={rule.ruleKey}
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600"
+                      >
+                        <div className="font-semibold text-slate-800">
+                          Configured {rule.recipients.length}-person override
+                        </div>
+                        <ul className="mt-1 space-y-1">
+                          {rule.recipients.map((recipient) => (
+                            <li key={recipient.memberId}>
+                              {recipient.name ?? "Unnamed team member"}:{" "}
+                              {fmtPercent(
+                                totalWeight > 0
+                                  ? Math.round(
+                                      (commissionSettings.crewPoolRateBps *
+                                        recipient.splitBps) /
+                                        totalWeight,
+                                    )
+                                  : 0,
+                              )}
+                              % of the job
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-slate-500">
+                  No overrides are configured; every multi-person crew splits
+                  the labor pool evenly.
+                </p>
+              )}
             </div>
           </div>
         ) : (

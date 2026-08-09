@@ -92,6 +92,64 @@ describe("provider rollout configuration", () => {
     });
   });
 
+  it("accepts only dual-sentinel, loopback Square configuration for a production-build audit", () => {
+    const inspection = inspectSquareConfiguration({
+      NODE_ENV: "production",
+      E2E_RUN_ID: "production-build-audit",
+      TEAM_CRM_AUDIT_MODE: "1",
+      SQUARE_ENVIRONMENT: "sandbox",
+      SQUARE_APPLICATION_ID: "e2e-application",
+      SQUARE_ACCESS_TOKEN: "e2e-token",
+      SQUARE_LOCATION_ID: "e2e-location",
+      SQUARE_API_BASE_URL: "http://127.0.0.1:4015",
+      SQUARE_POS_CALLBACK_URL: "http://localhost:3000/mobile/payment-return",
+      SQUARE_POS_FALLBACK_URL: "http://localhost:3000/mobile/square-setup",
+      SQUARE_POS_STATE_SECRET: "a".repeat(32),
+      SQUARE_WEBHOOK_SIGNATURE_KEY: "e2e-signature",
+      SQUARE_WEBHOOK_NOTIFICATION_URL:
+        "http://127.0.0.1:3001/api/webhooks/square",
+    });
+
+    expect(inspection).toEqual({
+      configured: true,
+      missing: [],
+      invalid: [],
+    });
+  });
+
+  it.each([
+    { E2E_RUN_ID: "production-build-audit" },
+    { TEAM_CRM_AUDIT_MODE: "1" },
+  ])(
+    "rejects production-build Square loopback with a lone sentinel %j",
+    (sentinels) => {
+      const inspection = inspectSquareConfiguration({
+        NODE_ENV: "production",
+        ...sentinels,
+        SQUARE_ENVIRONMENT: "sandbox",
+        SQUARE_APPLICATION_ID: "e2e-application",
+        SQUARE_ACCESS_TOKEN: "e2e-token",
+        SQUARE_LOCATION_ID: "e2e-location",
+        SQUARE_API_BASE_URL: "http://127.0.0.1:4015",
+        SQUARE_POS_CALLBACK_URL: "http://localhost:3000/mobile/payment-return",
+        SQUARE_POS_FALLBACK_URL: "http://localhost:3000/mobile/square-setup",
+        SQUARE_POS_STATE_SECRET: "a".repeat(32),
+        SQUARE_WEBHOOK_SIGNATURE_KEY: "e2e-signature",
+        SQUARE_WEBHOOK_NOTIFICATION_URL:
+          "http://127.0.0.1:3001/api/webhooks/square",
+      });
+
+      expect(inspection.configured).toBe(false);
+      expect(inspection.invalid).toEqual(
+        expect.arrayContaining([
+          "Production provider-test runtime requires both a nonempty E2E_RUN_ID and TEAM_CRM_AUDIT_MODE=1.",
+          "SQUARE_ENVIRONMENT must be production when NODE_ENV=production",
+          "SQUARE_POS_CALLBACK_URL must use HTTPS in production",
+        ]),
+      );
+    },
+  );
+
   it("allows local HTTP Square return URLs outside production", () => {
     const inspection = inspectSquareConfiguration({
       NODE_ENV: "test",
@@ -99,8 +157,7 @@ describe("provider rollout configuration", () => {
       SQUARE_APPLICATION_ID: "application",
       SQUARE_ACCESS_TOKEN: "token",
       SQUARE_LOCATION_ID: "location",
-      SQUARE_POS_CALLBACK_URL:
-        "http://localhost:3000/mobile/payment-return",
+      SQUARE_POS_CALLBACK_URL: "http://localhost:3000/mobile/payment-return",
       SQUARE_POS_FALLBACK_URL: "http://localhost:3000/mobile/square-setup",
       SQUARE_POS_STATE_SECRET: "a".repeat(32),
       SQUARE_WEBHOOK_SIGNATURE_KEY: "signature",
@@ -188,5 +245,77 @@ describe("provider rollout configuration", () => {
       missing: [],
       invalid: [],
     });
+  });
+
+  it("allows LocalStack bucket setup only for a dual-sentinel production-build audit", () => {
+    const controlled = inspectObjectStorageConfiguration({
+      NODE_ENV: "production",
+      E2E_RUN_ID: "production-build-audit",
+      TEAM_CRM_AUDIT_MODE: "1",
+      LOCALSTACK_ENDPOINT: "http://localhost:4566",
+      MEDIA_OBJECT_BUCKET: "e2e-bucket",
+      MEDIA_OBJECT_ACCESS_KEY_ID: "test",
+      MEDIA_OBJECT_SECRET_ACCESS_KEY: "test",
+      MEDIA_OBJECT_AUTO_CREATE_BUCKET: "1",
+    });
+
+    expect(controlled).toEqual({ configured: true, missing: [], invalid: [] });
+
+    for (const sentinels of [
+      { E2E_RUN_ID: "production-build-audit" },
+      { TEAM_CRM_AUDIT_MODE: "1" },
+    ]) {
+      const rejected = inspectObjectStorageConfiguration({
+        NODE_ENV: "production",
+        ...sentinels,
+        LOCALSTACK_ENDPOINT: "http://localhost:4566",
+        MEDIA_OBJECT_BUCKET: "e2e-bucket",
+        MEDIA_OBJECT_ACCESS_KEY_ID: "test",
+        MEDIA_OBJECT_SECRET_ACCESS_KEY: "test",
+        MEDIA_OBJECT_AUTO_CREATE_BUCKET: "1",
+      });
+      expect(rejected.configured).toBe(false);
+      expect(rejected.invalid).toEqual(
+        expect.arrayContaining([
+          "Production provider-test runtime requires both a nonempty E2E_RUN_ID and TEAM_CRM_AUDIT_MODE=1.",
+          "LOCALSTACK_ENDPOINT cannot be used when NODE_ENV=production",
+          "MEDIA_OBJECT_AUTO_CREATE_BUCKET must be disabled in production",
+          "MEDIA_OBJECT_ENDPOINT must use HTTPS in production",
+        ]),
+      );
+    }
+  });
+
+  it("keeps public and credential-bearing URLs invalid in controlled production audits", () => {
+    const common = {
+      NODE_ENV: "production",
+      E2E_RUN_ID: "production-build-audit",
+      TEAM_CRM_AUDIT_MODE: "1",
+      MEDIA_OBJECT_BUCKET: "e2e-bucket",
+      MEDIA_OBJECT_ACCESS_KEY_ID: "test",
+      MEDIA_OBJECT_SECRET_ACCESS_KEY: "test",
+    };
+    for (const endpoint of [
+      "http://storage.example.test",
+      "https://storage.example.test",
+    ]) {
+      expect(
+        inspectObjectStorageConfiguration({
+          ...common,
+          MEDIA_OBJECT_ENDPOINT: endpoint,
+        }).invalid,
+      ).toContain(
+        "MEDIA_OBJECT_ENDPOINT must target a local service during a controlled production-build audit",
+      );
+    }
+    expect(
+      inspectObjectStorageConfiguration({
+        ...common,
+        MEDIA_OBJECT_ENDPOINT:
+          "https://user:secret@storage.example.test?leak=1",
+      }).invalid,
+    ).toContain(
+      "MEDIA_OBJECT_ENDPOINT must be an origin URL without credentials, query parameters, or a fragment",
+    );
   });
 });

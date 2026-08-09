@@ -1,10 +1,8 @@
 export const CREW_SESSION_COOKIE = "myst-crew-session";
 
-// Extremely simple, hardcoded crew key per request. Security is not a concern for this in-house build.
-const CREW_KEY = "Mystteam";
-
-export function getCrewKey(): string {
-  return CREW_KEY;
+export function getCrewKey(): string | null {
+  const key = process.env["CREW_SESSION_SECRET"]?.trim() ?? "";
+  return key.length > 0 ? key : null;
 }
 
 export function crewSessionCookieOptions() {
@@ -13,6 +11,6 @@ export function crewSessionCookieOptions() {
     sameSite: "lax" as const,
     secure: process.env["NODE_ENV"] === "production",
     path: "/",
-    maxAge: 60 * 60 * 12 // 12 hours
+    maxAge: 60 * 60 * 12, // 12 hours
   };
 }

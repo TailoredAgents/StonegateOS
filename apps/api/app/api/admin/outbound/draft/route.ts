@@ -8,7 +8,7 @@ import {
   conversationThreads,
   crmTasks,
   getDb,
-  partnerAccounts
+  partnerAccounts,
 } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
@@ -42,7 +42,7 @@ function parseOutboundNoteField(notes: string, key: string): string | null {
 
 async function ensureThreadForContact(
   db: ReturnType<typeof getDb>,
-  input: { contactId: string; channel: Channel; assignedTo: string | null }
+  input: { contactId: string; channel: Channel; assignedTo: string | null },
 ): Promise<string> {
   const [existing] = await db
     .select({ id: conversationThreads.id })
@@ -51,10 +51,17 @@ async function ensureThreadForContact(
       and(
         eq(conversationThreads.contactId, input.contactId),
         eq(conversationThreads.channel, input.channel),
-        or(eq(conversationThreads.status, "open"), eq(conversationThreads.status, "pending"), eq(conversationThreads.status, "closed"))
-      )
+        or(
+          eq(conversationThreads.status, "open"),
+          eq(conversationThreads.status, "pending"),
+          eq(conversationThreads.status, "closed"),
+        ),
+      ),
     )
-    .orderBy(desc(conversationThreads.lastMessageAt), desc(conversationThreads.updatedAt))
+    .orderBy(
+      desc(conversationThreads.lastMessageAt),
+      desc(conversationThreads.updatedAt),
+    )
     .limit(1);
 
   if (existing?.id) return existing.id;
@@ -70,7 +77,7 @@ async function ensureThreadForContact(
       assignedTo: input.assignedTo,
       stateUpdatedAt: now,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
     })
     .returning({ id: conversationThreads.id });
 
@@ -84,17 +91,19 @@ async function ensureThreadForContact(
       lastName: contacts.lastName,
       email: contacts.email,
       phone: contacts.phone,
-      phoneE164: contacts.phoneE164
+      phoneE164: contacts.phoneE164,
     })
     .from(contacts)
     .where(eq(contacts.id, input.contactId))
     .limit(1);
 
-  const displayName = [contact?.firstName, contact?.lastName].filter(Boolean).join(" ").trim() || "Contact";
+  const displayName =
+    [contact?.firstName, contact?.lastName].filter(Boolean).join(" ").trim() ||
+    "Contact";
   const externalAddress =
     input.channel === "email"
-      ? contact?.email ?? null
-      : contact?.phoneE164 ?? contact?.phone ?? null;
+      ? (contact?.email ?? null)
+      : (contact?.phoneE164 ?? contact?.phone ?? null);
 
   await db.insert(conversationParticipants).values({
     threadId: thread.id,
@@ -102,7 +111,7 @@ async function ensureThreadForContact(
     contactId: input.contactId,
     externalAddress,
     displayName,
-    createdAt: now
+    createdAt: now,
   });
 
   return thread.id;
@@ -110,7 +119,7 @@ async function ensureThreadForContact(
 
 async function ensureAgentParticipant(
   db: ReturnType<typeof getDb>,
-  input: { threadId: string; displayName: string }
+  input: { threadId: string; displayName: string },
 ): Promise<string> {
   const [existing] = await db
     .select({ id: conversationParticipants.id })
@@ -120,8 +129,8 @@ async function ensureAgentParticipant(
         eq(conversationParticipants.threadId, input.threadId),
         eq(conversationParticipants.participantType, "team"),
         eq(conversationParticipants.displayName, input.displayName),
-        sql`${conversationParticipants.teamMemberId} is null`
-      )
+        sql`${conversationParticipants.teamMemberId} is null`,
+      ),
     )
     .limit(1);
 
@@ -135,7 +144,7 @@ async function ensureAgentParticipant(
       participantType: "team",
       teamMemberId: null,
       displayName: input.displayName,
-      createdAt: now
+      createdAt: now,
     })
     .returning({ id: conversationParticipants.id });
 
@@ -145,7 +154,7 @@ async function ensureAgentParticipant(
 
 async function loadRecentContactHistory(
   db: ReturnType<typeof getDb>,
-  contactId: string
+  contactId: string,
 ): Promise<OutboundDraftContextMessage[]> {
   const rows = await db
     .select({
@@ -153,15 +162,18 @@ async function loadRecentContactHistory(
       channel: conversationMessages.channel,
       subject: conversationMessages.subject,
       body: conversationMessages.body,
-      createdAt: conversationMessages.createdAt
+      createdAt: conversationMessages.createdAt,
     })
     .from(conversationMessages)
-    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .innerJoin(
+      conversationThreads,
+      eq(conversationMessages.threadId, conversationThreads.id),
+    )
     .where(
       and(
         eq(conversationThreads.contactId, contactId),
-        sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`
-      )
+        sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`,
+      ),
     )
     .orderBy(desc(conversationMessages.createdAt))
     .limit(12);
@@ -173,7 +185,10 @@ async function loadRecentContactHistory(
       channel: row.channel,
       subject: row.subject,
       body: row.body,
-      createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : new Date().toISOString()
+      createdAt:
+        row.createdAt instanceof Date
+          ? row.createdAt.toISOString()
+          : new Date().toISOString(),
     }))
     .filter((message) => message.body.trim().length > 0);
 }
@@ -182,7 +197,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "messages.send");
+  const permissionError = await requirePermission(request, "outbound.write");
   if (permissionError) return permissionError;
 
   const payload = (await request.json().catch(() => null)) as unknown;
@@ -197,7 +212,9 @@ export async function POST(request: NextRequest): Promise<Response> {
   const kindRaw = readString(payloadRecord["kind"]);
   const recap = readString(payloadRecord["recap"]);
   const explicitDisposition = readString(payloadRecord["disposition"]);
-  const requestedChannel: Channel | null = isChannel(channelRaw) ? channelRaw : null;
+  const requestedChannel: Channel | null = isChannel(channelRaw)
+    ? channelRaw
+    : null;
   const kind = kindRaw === "follow_up" ? "follow_up" : "first_touch";
 
   if (!contactId) {
@@ -217,7 +234,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       phone: contacts.phone,
       phoneE164: contacts.phoneE164,
       salespersonMemberId: contacts.salespersonMemberId,
-      partnerAccountId: contacts.partnerAccountId
+      partnerAccountId: contacts.partnerAccountId,
     })
     .from(contacts)
     .where(eq(contacts.id, contactId))
@@ -238,7 +255,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       name: contact.company,
       domain: contact.email ?? null,
       source: null,
-      ownerMemberId: contact.salespersonMemberId ?? null
+      ownerMemberId: contact.salespersonMemberId ?? null,
     });
     partnerAccountId = account?.id ?? null;
     if (partnerAccountId) {
@@ -262,7 +279,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         name: partnerAccounts.name,
         segment: partnerAccounts.segment,
         city: partnerAccounts.city,
-        state: partnerAccounts.state
+        state: partnerAccounts.state,
       })
       .from(partnerAccounts)
       .where(eq(partnerAccounts.id, partnerAccountId))
@@ -284,8 +301,13 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   if (!toAddress) {
     return NextResponse.json(
-      { error: channel === "email" ? "contact_missing_email" : "contact_missing_phone" },
-      { status: 400 }
+      {
+        error:
+          channel === "email"
+            ? "contact_missing_email"
+            : "contact_missing_phone",
+      },
+      { status: 400 },
     );
   }
 
@@ -304,27 +326,32 @@ export async function POST(request: NextRequest): Promise<Response> {
     const notes = typeof task?.notes === "string" ? task.notes : "";
     if (notes.toLowerCase().includes("kind=outbound")) {
       campaign = parseOutboundNoteField(notes, "campaign");
-      const attemptRaw = Number(parseOutboundNoteField(notes, "attempt") ?? "1");
-      if (Number.isFinite(attemptRaw) && attemptRaw > 0) attempt = Math.floor(attemptRaw);
+      const attemptRaw = Number(
+        parseOutboundNoteField(notes, "attempt") ?? "1",
+      );
+      if (Number.isFinite(attemptRaw) && attemptRaw > 0)
+        attempt = Math.floor(attemptRaw);
       companyFromTask = parseOutboundNoteField(notes, "company");
       notesFromTask = parseOutboundNoteField(notes, "notes");
-      lastDisposition = lastDisposition ?? parseOutboundNoteField(notes, "lastDisposition");
+      lastDisposition =
+        lastDisposition ?? parseOutboundNoteField(notes, "lastDisposition");
     }
   }
 
-  const recipientName = `${contact.firstName ?? ""} ${contact.lastName ?? ""}`.trim() || null;
+  const recipientName =
+    `${contact.firstName ?? ""} ${contact.lastName ?? ""}`.trim() || null;
   const company = accountName ?? companyFromTask ?? contact.company ?? null;
 
   const threadId = await ensureThreadForContact(db, {
     contactId,
     channel,
-    assignedTo: contact.salespersonMemberId ?? null
+    assignedTo: contact.salespersonMemberId ?? null,
   });
 
   const autopilot = await getSalesAutopilotPolicy(db);
   const agentParticipantId = await ensureAgentParticipant(db, {
     threadId,
-    displayName: autopilot.agentDisplayName
+    displayName: autopilot.agentDisplayName,
   });
   const recentMessages = await loadRecentContactHistory(db, contactId);
 
@@ -383,9 +410,9 @@ export async function POST(request: NextRequest): Promise<Response> {
         outboundTaskId: taskId ?? undefined,
         partnerAccountId: partnerAccountId ?? undefined,
         generatedBy: draft.provider,
-        generatedModel: draft.model ?? undefined
+        generatedModel: draft.model ?? undefined,
       },
-      createdAt: now
+      createdAt: now,
     })
     .returning({ id: conversationMessages.id });
 
@@ -398,7 +425,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     .set({
       lastMessagePreview: body.slice(0, 140),
       lastMessageAt: now,
-      updatedAt: now
+      updatedAt: now,
     })
     .where(eq(conversationThreads.id, threadId));
 
@@ -416,8 +443,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       disposition: lastDisposition ?? null,
       campaign,
       attempt,
-      taskId: taskId ?? null
-    }
+      taskId: taskId ?? null,
+    },
   });
 
   return NextResponse.json({
@@ -425,6 +452,6 @@ export async function POST(request: NextRequest): Promise<Response> {
     contactId,
     threadId,
     messageId: message.id,
-    channel
+    channel,
   });
 }

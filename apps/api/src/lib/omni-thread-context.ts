@@ -1,9 +1,18 @@
 import { and, desc, eq, ne } from "drizzle-orm";
-import { appointments, conversationThreads, crmPipeline, getDb, instantQuotes, leads } from "@/db";
-import { getServiceAreaPolicy, isCityAllowed, normalizePostalCode } from "@/lib/policy";
+import type { getDb } from "@/db";
+import {
+  appointments,
+  conversationThreads,
+  crmPipeline,
+  instantQuotes,
+  leads,
+} from "@/db";
+import { normalizePostalCode } from "@/lib/policy";
 
 type DatabaseClient = ReturnType<typeof getDb>;
-type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
+type TransactionExecutor = Parameters<
+  DatabaseClient["transaction"]
+>[0] extends (tx: infer Tx) => Promise<unknown>
   ? Tx
   : never;
 type DbExecutor = DatabaseClient | TransactionExecutor;
@@ -58,23 +67,31 @@ export type OmniThreadFacts = {
   missingFields: string[];
 };
 
-function extractQuotePrice(aiResult: unknown): { priceLow: number | null; priceHigh: number | null } {
-  if (!aiResult || typeof aiResult !== "object") return { priceLow: null, priceHigh: null };
+function extractQuotePrice(aiResult: unknown): {
+  priceLow: number | null;
+  priceHigh: number | null;
+} {
+  if (!aiResult || typeof aiResult !== "object")
+    return { priceLow: null, priceHigh: null };
   const record = aiResult as Record<string, unknown>;
   const low = record["priceLow"];
   const high = record["priceHigh"];
   return {
     priceLow: typeof low === "number" && Number.isFinite(low) ? low : null,
-    priceHigh: typeof high === "number" && Number.isFinite(high) ? high : null
+    priceHigh: typeof high === "number" && Number.isFinite(high) ? high : null,
   };
 }
 
 function coerceRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function coerceStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string")
+    : [];
 }
 
 export async function loadOmniThreadFacts(
@@ -84,11 +101,9 @@ export async function loadOmniThreadFacts(
     contactId: string | null;
     threadPostalCode?: string | null;
     includeQuotePrice?: boolean;
-  }
+  },
 ): Promise<OmniThreadFacts> {
   const includeQuotePrice = input.includeQuotePrice === true;
-  const serviceAreaPolicy = await getServiceAreaPolicy(db);
-
   let pipelineStage: string | null = null;
   let pipelineNotes: string | null = null;
   let latestLead: LeadSnapshot | null = null;
@@ -116,7 +131,7 @@ export async function loadOmniThreadFacts(
         notes: leads.notes,
         propertyId: leads.propertyId,
         instantQuoteId: leads.instantQuoteId,
-        formPayload: leads.formPayload
+        formPayload: leads.formPayload,
       })
       .from(leads)
       .where(eq(leads.contactId, input.contactId))
@@ -129,11 +144,13 @@ export async function loadOmniThreadFacts(
         createdAt: leadRow.createdAt,
         status: leadRow.status,
         source: typeof leadRow.source === "string" ? leadRow.source : null,
-        servicesRequested: Array.isArray(leadRow.servicesRequested) ? leadRow.servicesRequested : [],
+        servicesRequested: Array.isArray(leadRow.servicesRequested)
+          ? leadRow.servicesRequested
+          : [],
         notes: leadRow.notes ?? null,
         propertyId: leadRow.propertyId ?? null,
         instantQuoteId: leadRow.instantQuoteId ?? null,
-        formPayload: coerceRecord(leadRow.formPayload)
+        formPayload: coerceRecord(leadRow.formPayload),
       };
     }
 
@@ -143,23 +160,32 @@ export async function loadOmniThreadFacts(
         id: appointments.id,
         startAt: appointments.startAt,
         status: appointments.status,
-        type: appointments.type
+        type: appointments.type,
       })
       .from(appointments)
-      .where(and(eq(appointments.contactId, input.contactId), ne(appointments.status, "canceled")))
+      .where(
+        and(
+          eq(appointments.contactId, input.contactId),
+          ne(appointments.status, "canceled"),
+        ),
+      )
       .orderBy(desc(appointments.startAt), desc(appointments.createdAt))
       .limit(4);
 
     if (apptRows.length > 0) {
       const upcoming = apptRows
-        .filter((row): row is typeof row & { startAt: Date } => row.startAt instanceof Date && row.startAt.getTime() >= now.getTime())
+        .filter(
+          (row): row is typeof row & { startAt: Date } =>
+            row.startAt instanceof Date &&
+            row.startAt.getTime() >= now.getTime(),
+        )
         .sort((a, b) => a.startAt.getTime() - b.startAt.getTime())[0];
       const best = upcoming ?? apptRows[0]!;
       nextAppointment = {
         id: best.id,
         startAt: best.startAt ?? null,
         status: best.status,
-        type: best.type
+        type: best.type,
       };
     }
 
@@ -168,16 +194,25 @@ export async function loadOmniThreadFacts(
         id: conversationThreads.id,
         channel: conversationThreads.channel,
         lastMessageAt: conversationThreads.lastMessageAt,
-        lastMessagePreview: conversationThreads.lastMessagePreview
+        lastMessagePreview: conversationThreads.lastMessagePreview,
       })
       .from(conversationThreads)
-      .where(and(eq(conversationThreads.contactId, input.contactId), ne(conversationThreads.id, input.threadId)))
-      .orderBy(desc(conversationThreads.lastMessageAt), desc(conversationThreads.updatedAt))
+      .where(
+        and(
+          eq(conversationThreads.contactId, input.contactId),
+          ne(conversationThreads.id, input.threadId),
+        ),
+      )
+      .orderBy(
+        desc(conversationThreads.lastMessageAt),
+        desc(conversationThreads.updatedAt),
+      )
       .limit(4);
   }
 
   const instantQuoteId =
-    typeof latestLead?.instantQuoteId === "string" && latestLead.instantQuoteId.trim().length > 0
+    typeof latestLead?.instantQuoteId === "string" &&
+    latestLead.instantQuoteId.trim().length > 0
       ? latestLead.instantQuoteId
       : null;
 
@@ -191,14 +226,16 @@ export async function loadOmniThreadFacts(
         perceivedSize: instantQuotes.perceivedSize,
         notes: instantQuotes.notes,
         photoUrls: instantQuotes.photoUrls,
-        aiResult: instantQuotes.aiResult
+        aiResult: instantQuotes.aiResult,
       })
       .from(instantQuotes)
       .where(eq(instantQuotes.id, instantQuoteId))
       .limit(1);
 
     if (row?.id) {
-      const price = includeQuotePrice ? extractQuotePrice(row.aiResult) : { priceLow: null, priceHigh: null };
+      const price = includeQuotePrice
+        ? extractQuotePrice(row.aiResult)
+        : { priceLow: null, priceHigh: null };
       instantQuote = {
         id: row.id,
         zip: row.zip,
@@ -208,7 +245,7 @@ export async function loadOmniThreadFacts(
         notes: row.notes ?? null,
         photoUrls: coerceStringArray(row.photoUrls),
         priceLow: price.priceLow,
-        priceHigh: price.priceHigh
+        priceHigh: price.priceHigh,
       };
     }
   }
@@ -219,42 +256,55 @@ export async function loadOmniThreadFacts(
     (() => {
       const leadZip = latestLead?.formPayload?.["zip"];
       return typeof leadZip === "string" ? normalizePostalCode(leadZip) : null;
-    })()
-  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+    })(),
+  ].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
 
   const cityCandidates = [
     (() => {
       const city = latestLead?.formPayload?.["city"];
-      return typeof city === "string" && city.trim().length > 0 ? city.trim() : null;
+      return typeof city === "string" && city.trim().length > 0
+        ? city.trim()
+        : null;
     })(),
     (() => {
       const property = latestLead?.formPayload?.["property"];
-      if (!property || typeof property !== "object" || Array.isArray(property)) return null;
+      if (!property || typeof property !== "object" || Array.isArray(property))
+        return null;
       const city = (property as Record<string, unknown>)["city"];
-      return typeof city === "string" && city.trim().length > 0 ? city.trim() : null;
+      return typeof city === "string" && city.trim().length > 0
+        ? city.trim()
+        : null;
     })(),
-  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+  ].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
 
   const knownZip = zipCandidates[0] ?? null;
   const knownCity = cityCandidates[0] ?? null;
-  const cityClearsServiceArea = knownCity ? isCityAllowed(knownCity, serviceAreaPolicy) : false;
   const hasKnownJob =
-    Boolean(instantQuote && (instantQuote.jobTypes.length > 0 || instantQuote.perceivedSize.trim().length > 0)) ||
-    Boolean(latestLead && latestLead.servicesRequested.length > 0);
+    Boolean(
+      instantQuote &&
+        (instantQuote.jobTypes.length > 0 ||
+          instantQuote.perceivedSize.trim().length > 0),
+    ) || Boolean(latestLead && latestLead.servicesRequested.length > 0);
   const hasPhotos = Boolean(instantQuote && instantQuote.photoUrls.length > 0);
 
   const missingFields: string[] = [];
   if (!hasKnownJob) missingFields.push("items");
   if (!nextAppointment) {
     const tf =
-      typeof instantQuote?.timeframe === "string" && instantQuote.timeframe.trim().length > 0
+      typeof instantQuote?.timeframe === "string" &&
+      instantQuote.timeframe.trim().length > 0
         ? instantQuote.timeframe.trim()
         : typeof latestLead?.formPayload?.["timeframe"] === "string"
           ? String(latestLead.formPayload["timeframe"]).trim()
           : "";
     if (!tf) missingFields.push("timing");
   }
-  if (!hasPhotos && !missingFields.includes("items")) missingFields.push("photos");
+  if (!hasPhotos && !missingFields.includes("items"))
+    missingFields.push("photos");
 
   return {
     pipelineStage,
@@ -267,6 +317,6 @@ export async function loadOmniThreadFacts(
     knownCity,
     hasKnownJob,
     hasPhotos,
-    missingFields
+    missingFields,
   };
 }

@@ -1,190 +1,140 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
-  simulateFacebookSalesChatTurn,
-  type SimulatedSalesChatMessage,
-} from "@/lib/facebook-sales-autopilot";
+  BoundedJsonRequestError,
+  readBoundedJsonRequest,
+} from "@/lib/bounded-json-request";
+import { simulateFacebookSalesChatTurn } from "@/lib/facebook-sales-autopilot";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
-import {
-  getSalesAutopilotPolicy,
-  type SalesAutopilotPolicy,
-} from "@/lib/policy";
+import { getSalesAutopilotPolicy } from "@/lib/policy";
 import { requirePermission } from "@/lib/permissions";
+import {
+  MAX_SIMULATED_CHAT_REQUEST_BYTES,
+  parseSimulatedChatRequest,
+} from "@/lib/simulated-chat-request";
 import { isAdminRequest } from "../../../web/admin";
 
 export const dynamic = "force-dynamic";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const PRIVATE_NO_STORE = "private, no-store, max-age=0";
 
-function coerceMessages(value: unknown): SimulatedSalesChatMessage[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item): SimulatedSalesChatMessage | null => {
-      if (!isRecord(item)) return null;
-      const role =
-        item["role"] === "agent"
-          ? "agent"
-          : item["role"] === "customer"
-            ? "customer"
-            : null;
-      const body = typeof item["body"] === "string" ? item["body"].trim() : "";
-      const mediaUrls = Array.isArray(item["mediaUrls"])
-        ? item["mediaUrls"].filter(
-            (url): url is string =>
-              typeof url === "string" && url.trim().length > 0,
-          )
-        : [];
-      if (!role || (!body && mediaUrls.length === 0)) return null;
-      return {
-        role,
-        body,
-        mediaUrls,
-        createdAt:
-          typeof item["createdAt"] === "string" ? item["createdAt"] : null,
-      };
-    })
-    .filter((message): message is SimulatedSalesChatMessage => Boolean(message))
-    .slice(-40);
-}
-
-function coerceQuoteRange(value: unknown): {
-  lowCents: number;
-  highCents: number;
-  confidence: "low" | "medium" | "high";
-} | null {
-  if (!isRecord(value)) return null;
-  const lowCents = Number(value["lowCents"]);
-  const highCents = Number(value["highCents"]);
-  if (!Number.isFinite(lowCents) || !Number.isFinite(highCents)) return null;
-  const confidence: "low" | "medium" | "high" =
-    value["confidence"] === "high" || value["confidence"] === "medium"
-      ? value["confidence"]
-      : "low";
-  return {
-    lowCents: Math.round(lowCents),
-    highCents: Math.round(highCents),
-    confidence,
-  };
-}
-
-function coerceOfferedSlots(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => {
-      if (!isRecord(item)) return null;
-      const label =
-        typeof item["label"] === "string" ? item["label"].trim() : "";
-      const startAt =
-        typeof item["startAt"] === "string" ? item["startAt"].trim() : "";
-      if (!label || !startAt) return null;
-      return {
-        label,
-        startAt,
-        endAt: typeof item["endAt"] === "string" ? item["endAt"] : null,
-      };
-    })
-    .filter(
-      (
-        slot,
-      ): slot is { label: string; startAt: string; endAt: string | null } =>
-        Boolean(slot),
-    )
-    .slice(-6);
-}
-
-function coerceSimulationMode(
-  value: unknown,
-): SalesAutopilotPolicy["facebookCloser"]["mode"] | null {
-  if (
-    value === "off" ||
-    value === "shadow" ||
-    value === "assist" ||
-    value === "auto"
-  ) {
-    return value;
-  }
-  return null;
-}
-
-function coerceContactId(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      trimmed,
-    )
-  ) {
-    return trimmed;
-  }
-  return null;
+function simulationError(
+  status: number,
+  error: string,
+  message: string,
+): NextResponse {
+  return NextResponse.json(
+    { ok: false, error, message },
+    { status, headers: { "Cache-Control": PRIVATE_NO_STORE } },
+  );
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return simulationError(401, "unauthorized", "Authentication is required.");
   }
-  const permissionError = await requirePermission(request, "messages.send");
+  const permissionError = await requirePermission(
+    request,
+    "automation.simulate",
+  );
   if (permissionError) return permissionError;
 
-  const payload = (await request.json().catch(() => null)) as unknown;
-  if (!isRecord(payload)) {
-    return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
-  }
-
-  const messages = coerceMessages(payload["messages"]);
-  if (!messages.some((message) => message.role === "customer")) {
-    return NextResponse.json(
-      { error: "customer_message_required" },
-      { status: 400 },
+  let rawPayload: unknown;
+  try {
+    rawPayload = await readBoundedJsonRequest(request, {
+      maximumBytes: MAX_SIMULATED_CHAT_REQUEST_BYTES,
+      deadlineMs: 5_000,
+      rejectDuplicateObjectKeys: true,
+    });
+  } catch (error) {
+    if (error instanceof BoundedJsonRequestError) {
+      return simulationError(error.status, error.code, error.message);
+    }
+    return simulationError(
+      400,
+      "invalid_payload",
+      "The simulation request could not be read.",
     );
   }
 
-  const db = getDb();
-  const policy = await getSalesAutopilotPolicy(db);
-  const contactId = coerceContactId(payload["contactId"]);
-  const contactContext = contactId
-    ? await loadOmniLeadContext(db, {
-        contactId,
-        includeQuotePrice: true,
-        messageLimit: 60,
-      })
-    : null;
-  if (contactId && !contactContext) {
-    return NextResponse.json(
-      { error: "contact_context_not_found" },
-      { status: 404 },
-    );
+  const parsed = parseSimulatedChatRequest(rawPayload);
+  if (!parsed.ok) {
+    return simulationError(422, parsed.error, parsed.message);
   }
-  const simulationMode = coerceSimulationMode(payload["simulationMode"]);
-  const simulationPolicy = simulationMode
-    ? {
-        ...policy,
-        facebookCloser: {
-          ...policy.facebookCloser,
-          mode: simulationMode,
-          emergencyStop:
-            simulationMode === "off" ? policy.facebookCloser.emergencyStop : false,
-        },
-      }
-    : policy;
-  const result = simulateFacebookSalesChatTurn({
-    channel: payload["channel"] === "sms" ? "sms" : "dm",
-    messages,
-    policy: simulationPolicy,
-    context: contactContext
+  const payload = parsed.value;
+
+  try {
+    const db = getDb();
+    const snapshot = await db.transaction(async (tx) => {
+      // This database-enforced boundary makes an accidental INSERT, UPDATE,
+      // DELETE, or write-capable helper fail before it can affect CRM data.
+      // Repeatable read also keeps the policy and optional contact context on
+      // one coherent snapshot for the complete simulation turn.
+      await tx.execute(
+        sql`set transaction isolation level repeatable read read only`,
+      );
+      const policy = await getSalesAutopilotPolicy(tx);
+      const contactContext = payload.contactId
+        ? await loadOmniLeadContext(tx, {
+            contactId: payload.contactId,
+            includeQuotePrice: true,
+            messageLimit: 60,
+          })
+        : null;
+      return { policy, contactContext };
+    });
+
+    if (payload.contactId && !snapshot.contactContext) {
+      return simulationError(
+        404,
+        "contact_context_not_found",
+        "The selected contact is unavailable. Choose another contact or run without CRM context.",
+      );
+    }
+
+    const simulationPolicy = payload.simulationMode
       ? {
-          latestLead: contactContext.latestLead,
-          instantQuote: contactContext.instantQuote,
-          derived: contactContext.derived,
-          recentMessages: contactContext.recentMessages,
+          ...snapshot.policy,
+          facebookCloser: {
+            ...snapshot.policy.facebookCloser,
+            mode: payload.simulationMode,
+            emergencyStop:
+              payload.simulationMode === "off"
+                ? snapshot.policy.facebookCloser.emergencyStop
+                : false,
+          },
         }
-      : null,
-    previousQuoteRange: coerceQuoteRange(payload["previousQuoteRange"]),
-    previousOfferedSlots: coerceOfferedSlots(payload["previousOfferedSlots"]),
-  });
+      : snapshot.policy;
+    const result = simulateFacebookSalesChatTurn({
+      channel: payload.channel,
+      messages: payload.messages,
+      policy: simulationPolicy,
+      context: snapshot.contactContext
+        ? {
+            latestLead: snapshot.contactContext.latestLead,
+            instantQuote: snapshot.contactContext.instantQuote,
+            derived: snapshot.contactContext.derived,
+            recentMessages: snapshot.contactContext.recentMessages,
+          }
+        : null,
+      previousQuoteRange: payload.previousQuoteRange,
+      previousOfferedSlots: payload.previousOfferedSlots,
+    });
 
-  return NextResponse.json({ ok: true, result });
+    return NextResponse.json(
+      { ok: true, result },
+      { headers: { "Cache-Control": PRIVATE_NO_STORE } },
+    );
+  } catch (error) {
+    console.error("[simulated-chat] read_only_simulation_failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+    return simulationError(
+      500,
+      "simulation_unavailable",
+      "The simulation could not be completed. No CRM changes were made.",
+    );
+  }
 }

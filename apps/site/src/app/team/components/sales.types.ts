@@ -32,6 +32,7 @@ export type QueuePayload = {
   ok: true;
   memberId: string;
   now: string;
+  nextTaskId?: string | null;
   items: Array<{
     id: string;
     leadId: string | null;
@@ -104,8 +105,26 @@ export type QueuePayload = {
       detail: string;
       tone: "good" | "warn" | "bad" | "neutral";
     } | null;
+    operationalContext?: {
+      ownerMemberId: string;
+      sla: {
+        state: "overdue" | "due_soon" | "on_track" | "unscheduled";
+        label: string;
+      };
+      priorityReason: string;
+      automationLabel: string;
+      lastTouchAt: string | null;
+      draftAgeMinutes: number | null;
+    };
   }>;
 };
+
+export type SalesHqResourceErrors = Partial<
+  Record<
+    "scorecard" | "queue" | "teamMembers" | "coaching" | "supervisor",
+    string
+  >
+>;
 
 export type TeamMemberPayload = {
   members?: Array<{ id: string; name: string; active: boolean }>;

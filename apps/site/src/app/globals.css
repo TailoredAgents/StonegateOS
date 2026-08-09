@@ -8,8 +8,9 @@
   :root {
     background-color: var(--color-neutral-100);
     color: var(--color-neutral-900);
-    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji",
-      "Segoe UI Emoji";
+    --font-sans:
+      ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
+      Arial, "Apple Color Emoji", "Segoe UI Emoji";
     --font-display: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
     font-family: var(--font-sans);
     text-rendering: optimizeLegibility;
@@ -17,7 +18,12 @@
 
   body {
     min-height: 100vh;
-    background: radial-gradient(circle at top left, rgba(20, 184, 166, 0.08), transparent 45%),
+    background:
+      radial-gradient(
+        circle at top left,
+        rgba(20, 184, 166, 0.08),
+        transparent 45%
+      ),
       var(--color-neutral-100);
     color: var(--color-neutral-900);
     font-family: var(--font-sans);
@@ -75,6 +81,27 @@
     --team-list-item-active: rgba(239, 246, 255, 0.96);
     --team-bubble-inbound: rgba(241, 245, 249, 0.98);
     --team-bubble-outbound: rgba(219, 234, 254, 0.98);
+    --team-focus-ring: #0f766e;
+    --team-focus-offset: #ffffff;
+    --team-link: #0f766e;
+    --team-action-primary: #0f766e;
+    --team-action-primary-hover: #115e59;
+    --team-action-primary-text: #ffffff;
+    --team-action-shadow: rgba(15, 118, 110, 0.24);
+    --team-skeleton: #e2e8f0;
+    --team-info-surface: #eff6ff;
+    --team-info-border: #93c5fd;
+    --team-info-text: #1e3a8a;
+    --team-success-surface: #ecfdf5;
+    --team-success-border: #6ee7b7;
+    --team-success-text: #064e3b;
+    --team-warning-surface: #fffbeb;
+    --team-warning-border: #fcd34d;
+    --team-warning-text: #78350f;
+    --team-danger-surface: #fff1f2;
+    --team-danger-surface-hover: #ffe4e6;
+    --team-danger-border: #fda4af;
+    --team-danger-text: #881337;
   }
 
   .team-theme-dark {
@@ -97,6 +124,50 @@
     --team-list-item-active: rgba(30, 41, 59, 0.98);
     --team-bubble-inbound: rgba(20, 30, 49, 0.98);
     --team-bubble-outbound: rgba(37, 52, 78, 0.98);
+    --team-focus-ring: #5eead4;
+    --team-focus-offset: #020617;
+    --team-link: #5eead4;
+    --team-action-primary: #0d9488;
+    --team-action-primary-hover: #14b8a6;
+    --team-action-primary-text: #ffffff;
+    --team-action-shadow: rgba(20, 184, 166, 0.28);
+    --team-skeleton: #334155;
+    --team-info-surface: rgba(30, 64, 175, 0.28);
+    --team-info-border: #3b82f6;
+    --team-info-text: #bfdbfe;
+    --team-success-surface: rgba(6, 78, 59, 0.55);
+    --team-success-border: #10b981;
+    --team-success-text: #a7f3d0;
+    --team-warning-surface: rgba(120, 53, 15, 0.55);
+    --team-warning-border: #f59e0b;
+    --team-warning-text: #fde68a;
+    --team-danger-surface: rgba(136, 19, 55, 0.55);
+    --team-danger-surface-hover: rgba(159, 18, 57, 0.7);
+    --team-danger-border: #f43f5e;
+    --team-danger-text: #fecdd3;
+  }
+
+  .team-reduce-motion *,
+  .team-reduce-motion *::before,
+  .team-reduce-motion *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .team-theme-light *,
+    .team-theme-light *::before,
+    .team-theme-light *::after,
+    .team-theme-dark *,
+    .team-theme-dark *::before,
+    .team-theme-dark *::after {
+      scroll-behavior: auto !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
@@ -222,4 +293,3 @@
     background-color: rgba(30, 41, 59, 0.96) !important;
   }
 }
-

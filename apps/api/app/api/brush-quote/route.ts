@@ -1,10 +1,23 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
-import { getDb, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
-import { getCompanyProfilePolicy, isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
-import { desc, eq } from "drizzle-orm";
-import { upsertContact, upsertProperty } from "../web/persistence";
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
+import { getDb, crmPipeline, instantQuotes, leads, outboxEvents } from "@/db";
+import {
+  getCompanyProfilePolicy,
+  isGeorgiaPostalCode,
+  normalizePostalCode,
+} from "@/lib/policy";
+import { eq } from "drizzle-orm";
+import {
+  PublicContactPersistenceError,
+  upsertContact,
+  upsertProperty,
+} from "../web/persistence";
+import {
+  ensureContactPropertyAssociation,
+  findLatestContactProperty,
+} from "@/lib/property-write";
 import { normalizeName, normalizePhone } from "../web/utils";
 import {
   claimPublicInstantQuoteMediaReferences,
@@ -15,18 +28,26 @@ import {
 } from "@/lib/public-instant-quote-media";
 
 const RAW_ALLOWED_ORIGINS =
-  process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
+  process.env["CORS_ALLOW_ORIGINS"] ??
+  process.env["NEXT_PUBLIC_SITE_URL"] ??
+  process.env["SITE_URL"] ??
+  "*";
 
 function resolveOrigin(requestOrigin: string | null): string {
   if (RAW_ALLOWED_ORIGINS === "*") return "*";
-  const allowed = RAW_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/+$/u, "")).filter(Boolean);
+  const allowed = RAW_ALLOWED_ORIGINS.split(",")
+    .map((o) => o.trim().replace(/\/+$/u, ""))
+    .filter(Boolean);
   if (!allowed.length) return "*";
   const origin = requestOrigin?.trim().replace(/\/+$/u, "") ?? null;
   if (origin && allowed.includes(origin)) return origin;
   return allowed[0] ?? "*";
 }
 
-function applyCors(response: NextResponse, requestOrigin: string | null): NextResponse {
+function applyCors(
+  response: NextResponse,
+  requestOrigin: string | null,
+): NextResponse {
   const origin = resolveOrigin(requestOrigin);
   response.headers.set("Access-Control-Allow-Origin", origin);
   response.headers.set("Vary", "Origin");
@@ -36,15 +57,24 @@ function applyCors(response: NextResponse, requestOrigin: string | null): NextRe
   return response;
 }
 
-function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseInit): NextResponse {
+function corsJson(
+  body: unknown,
+  requestOrigin: string | null,
+  init?: ResponseInit,
+): NextResponse {
   return applyCors(NextResponse.json(body, init), requestOrigin);
 }
 
 export function OPTIONS(request: NextRequest): NextResponse {
-  return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
+  return applyCors(
+    new NextResponse(null, { status: 204 }),
+    request.headers.get("origin"),
+  );
 }
 
-async function resolveInstantQuoteDiscountPercent(db: ReturnType<typeof getDb>): Promise<number> {
+async function resolveInstantQuoteDiscountPercent(
+  db: ReturnType<typeof getDb>,
+): Promise<number> {
   const envRaw = process.env["INSTANT_QUOTE_DISCOUNT"];
   const envValue = envRaw ? Number(envRaw) : NaN;
   if (Number.isFinite(envValue) && envValue > 0 && envValue < 1) {
@@ -65,23 +95,38 @@ const BrushPrimarySchema = z.enum([
   "small_saplings",
   "downed_branches",
   "storm_debris",
-  "other"
+  "other",
 ]);
 
 const BrushDifficultySchema = z.enum(["easy", "moderate", "hard", "not_sure"]);
-const BrushAccessSchema = z.enum(["open", "standard_gate", "tight_gate", "not_sure"]);
+const BrushAccessSchema = z.enum([
+  "open",
+  "standard_gate",
+  "tight_gate",
+  "not_sure",
+]);
 
 const RequestSchema = z.object({
   source: z.string().optional().default("public_site"),
   contact: z.object({
     name: z.string().min(2),
     phone: z.string().min(7),
-    timeframe: z.enum(["today", "tomorrow", "this_week", "flexible"]).optional().default("flexible")
+    timeframe: z
+      .enum(["today", "tomorrow", "this_week", "flexible"])
+      .optional()
+      .default("flexible"),
   }),
   job: z.object({
     primary: BrushPrimarySchema.optional().default("overgrowth"),
     perceivedSize: z
-      .enum(["single_item", "min_pickup", "half_trailer", "three_quarter_trailer", "big_cleanout", "not_sure"])
+      .enum([
+        "single_item",
+        "min_pickup",
+        "half_trailer",
+        "three_quarter_trailer",
+        "big_cleanout",
+        "not_sure",
+      ])
       .optional()
       .default("not_sure"),
     difficulty: BrushDifficultySchema.optional().default("not_sure"),
@@ -91,19 +136,24 @@ const RequestSchema = z.object({
     notes: z.string().optional().nullable(),
     zip: z.string().min(3),
     photoUrls: z
-      .preprocess((value) => (value == null ? undefined : value), z.array(z.string().url().max(2048)).max(10).default([]))
+      .preprocess(
+        (value) => (value == null ? undefined : value),
+        z.array(z.string().url().max(2048)).max(10).default([]),
+      )
       .refine(
         (urls) =>
           urls.every((url) => {
             try {
               const parsed = new URL(url);
-              return parsed.protocol === "http:" || parsed.protocol === "https:";
+              return (
+                parsed.protocol === "http:" || parsed.protocol === "https:"
+              );
             } catch {
               return false;
             }
           }),
-        { message: "Photo URLs must be http(s) links." }
-      )
+        { message: "Photo URLs must be http(s) links." },
+      ),
   }),
   utm: z
     .object({
@@ -113,9 +163,9 @@ const RequestSchema = z.object({
       term: z.string().optional(),
       content: z.string().optional(),
       gclid: z.string().optional(),
-      fbclid: z.string().optional()
+      fbclid: z.string().optional(),
     })
-    .optional()
+    .optional(),
 });
 
 const QuoteResultSchema = z.object({
@@ -124,7 +174,7 @@ const QuoteResultSchema = z.object({
   priceHigh: z.number().finite().nonnegative(),
   displayTierLabel: z.string().min(1).max(120),
   reasonSummary: z.string().min(1).max(500),
-  needsInPersonEstimate: z.boolean()
+  needsInPersonEstimate: z.boolean(),
 });
 
 type QuoteResult = z.infer<typeof QuoteResultSchema>;
@@ -145,29 +195,54 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function getBaseTier(perceivedSize: string): { low: number; high: number; label: string; load: number } {
+function getBaseTier(perceivedSize: string): {
+  low: number;
+  high: number;
+  label: string;
+  load: number;
+} {
   switch (perceivedSize) {
     case "single_item":
       return { low: 650, high: 1100, label: "Small patch", load: 0.25 };
     case "min_pickup":
-      return { low: 850, high: 1600, label: "Fence line / side yard", load: 0.5 };
+      return {
+        low: 850,
+        high: 1600,
+        label: "Fence line / side yard",
+        load: 0.5,
+      };
     case "half_trailer":
       return { low: 1200, high: 2400, label: "Backyard section", load: 0.75 };
     case "three_quarter_trailer":
       return { low: 2200, high: 4200, label: "Most of a yard", load: 1.0 };
     case "big_cleanout":
-      return { low: 3800, high: 7500, label: "Full lot / heavy clearing", load: 1.5 };
+      return {
+        low: 3800,
+        high: 7500,
+        label: "Full lot / heavy clearing",
+        load: 1.5,
+      };
     default:
       return { low: 1200, high: 2800, label: "Brush clearing", load: 1.0 };
   }
 }
 
-function getSmallJobLaneTier(perceivedSize: string): { low: number; high: number; label: string; load: number } {
+function getSmallJobLaneTier(perceivedSize: string): {
+  low: number;
+  high: number;
+  label: string;
+  load: number;
+} {
   switch (perceivedSize) {
     case "single_item":
       return { low: 450, high: 850, label: "Small patch", load: 0.25 };
     case "min_pickup":
-      return { low: 550, high: 1050, label: "Fence line / side yard", load: 0.5 };
+      return {
+        low: 550,
+        high: 1050,
+        label: "Fence line / side yard",
+        load: 0.5,
+      };
     default:
       return { low: 650, high: 1400, label: "Brush clearing", load: 1.0 };
   }
@@ -188,7 +263,13 @@ function applyBrushModifiers(input: {
 
   const low = input.tier.low * difficultyMult;
   const high = input.tier.high * difficultyMult;
-  const load = input.tier.load * (input.difficulty === "hard" ? 1.1 : input.difficulty === "easy" ? 0.97 : 1.0);
+  const load =
+    input.tier.load *
+    (input.difficulty === "hard"
+      ? 1.1
+      : input.difficulty === "easy"
+        ? 0.97
+        : 1.0);
 
   return { low, high, load };
 }
@@ -221,7 +302,11 @@ function shouldUseSmallJobLane(input: {
   // Allow a competitive lane only for truly small, non-hard jobs.
   if (input.access === "standard_gate") return false;
   if (input.access === "not_sure") return false;
-  if (input.perceivedSize !== "single_item" && input.perceivedSize !== "min_pickup") return false;
+  if (
+    input.perceivedSize !== "single_item" &&
+    input.perceivedSize !== "min_pickup"
+  )
+    return false;
   if (input.difficulty === "hard") return false;
   if (input.difficulty === "not_sure") return false;
   if (input.primary === "small_saplings") return false;
@@ -236,17 +321,31 @@ function decideNeedsEstimate(input: {
   photoCount: number;
   haulAway: boolean;
 }): boolean {
-  if (input.perceivedSize === "big_cleanout" || input.perceivedSize === "not_sure") return true;
+  if (
+    input.perceivedSize === "big_cleanout" ||
+    input.perceivedSize === "not_sure"
+  )
+    return true;
   if (input.difficulty === "hard") return true;
   if (input.primary === "small_saplings") return true;
   if (input.access === "not_sure") return true;
-  if (input.haulAway && input.perceivedSize !== "single_item" && input.perceivedSize !== "min_pickup") return true;
-  if (input.photoCount <= 0 && input.perceivedSize !== "single_item") return true;
+  if (
+    input.haulAway &&
+    input.perceivedSize !== "single_item" &&
+    input.perceivedSize !== "min_pickup"
+  )
+    return true;
+  if (input.photoCount <= 0 && input.perceivedSize !== "single_item")
+    return true;
   if (input.photoCount <= 0 && input.difficulty === "not_sure") return true;
   return false;
 }
 
-function applyBounds(result: QuoteResult, minLow: number, maxHigh: number): QuoteResult {
+function applyBounds(
+  result: QuoteResult,
+  minLow: number,
+  maxHigh: number,
+): QuoteResult {
   const low = clamp(roundToNearest(result.priceLow, 25), minLow, maxHigh);
   const high = clamp(roundToNearest(result.priceHigh, 25), low, maxHigh);
   const load = clamp(result.loadFractionEstimate, 0.25, 2.5);
@@ -254,24 +353,32 @@ function applyBounds(result: QuoteResult, minLow: number, maxHigh: number): Quot
     ...result,
     loadFractionEstimate: load,
     priceLow: low,
-    priceHigh: high
+    priceHigh: high,
   };
 }
 
 async function getQuoteFromAi(
   body: z.infer<typeof RequestSchema>,
-  bounds: { minLow: number; maxHigh: number; tierLabel: string; load: number; needsEstimate: boolean }
+  bounds: {
+    minLow: number;
+    maxHigh: number;
+    tierLabel: string;
+    load: number;
+    needsEstimate: boolean;
+  },
 ): Promise<QuoteResult> {
   const apiKey = process.env["OPENAI_API_KEY"];
-  const model = (process.env["OPENAI_MODEL"] ?? "gpt-5-mini").trim() || "gpt-5-mini";
+  const model =
+    (process.env["OPENAI_MODEL"] ?? "gpt-5-mini").trim() || "gpt-5-mini";
   if (!apiKey) {
     return {
       loadFractionEstimate: bounds.load,
       priceLow: bounds.minLow,
       priceHigh: bounds.maxHigh,
       displayTierLabel: `Brush clearing (${bounds.tierLabel})`,
-      reasonSummary: "Estimate based on your selections. Photos help us tighten the range.",
-      needsInPersonEstimate: bounds.needsEstimate
+      reasonSummary:
+        "Estimate based on your selections. Photos help us tighten the range.",
+      needsInPersonEstimate: bounds.needsEstimate,
     };
   }
 
@@ -283,14 +390,17 @@ async function getQuoteFromAi(
     haulAway: body.job.haulAway,
     zip: body.job.zip,
     otherDetails:
-      typeof body.job.otherDetails === "string" && body.job.otherDetails.trim().length > 0
+      typeof body.job.otherDetails === "string" &&
+      body.job.otherDetails.trim().length > 0
         ? body.job.otherDetails.trim().slice(0, 200)
         : undefined,
     notes:
       typeof body.job.notes === "string" && body.job.notes.trim().length > 0
         ? body.job.notes.trim().slice(0, 600)
         : undefined,
-    photoCount: Array.isArray(body.job.photoUrls) ? body.job.photoUrls.length : 0
+    photoCount: Array.isArray(body.job.photoUrls)
+      ? body.job.photoUrls.length
+      : 0,
   };
 
   const dynamicRules = [
@@ -299,7 +409,7 @@ async function getQuoteFromAi(
     bounds.needsEstimate
       ? "Set needsInPersonEstimate=true unless you are very confident from the inputs."
       : "Set needsInPersonEstimate=false only if the job sounds straightforward.",
-    "displayTierLabel should include the size tier (short)."
+    "displayTierLabel should include the size tier (short).",
   ].join("\n");
 
   const jsonSchemaFormat = {
@@ -315,7 +425,7 @@ async function getQuoteFromAi(
         priceHigh: { type: "number" },
         displayTierLabel: { type: "string" },
         reasonSummary: { type: "string" },
-        needsInPersonEstimate: { type: "boolean" }
+        needsInPersonEstimate: { type: "boolean" },
       },
       required: [
         "loadFractionEstimate",
@@ -323,16 +433,16 @@ async function getQuoteFromAi(
         "priceHigh",
         "displayTierLabel",
         "reasonSummary",
-        "needsInPersonEstimate"
-      ]
-    }
+        "needsInPersonEstimate",
+      ],
+    },
   } as const;
 
-  const res = await fetch("https://api.openai.com/v1/responses", {
+  const res = await fetch(resolveOpenAiApiEndpoint("responses", process.env), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model,
@@ -341,13 +451,13 @@ async function getQuoteFromAi(
       tools: [],
       tool_choice: "none",
       reasoning: {
-        effort: "minimal"
+        effort: "minimal",
       },
       text: {
-        format: jsonSchemaFormat
+        format: jsonSchemaFormat,
       },
-      max_output_tokens: 900
-    })
+      max_output_tokens: 900,
+    }),
   });
 
   if (!res.ok) {
@@ -359,9 +469,7 @@ async function getQuoteFromAi(
     output?: unknown;
   };
 
-  const outputItems: unknown[] = Array.isArray(data.output)
-    ? data.output
-    : [];
+  const outputItems: unknown[] = Array.isArray(data.output) ? data.output : [];
   const outputJsonParts: unknown[] = [];
   const outputTextParts: string[] = [];
 
@@ -380,7 +488,8 @@ async function getQuoteFromAi(
       }
       if (partType === "output_text") {
         const textVal = typed["text"];
-        if (typeof textVal === "string" && textVal.trim()) outputTextParts.push(textVal.trim());
+        if (typeof textVal === "string" && textVal.trim())
+          outputTextParts.push(textVal.trim());
       }
     }
   }
@@ -402,9 +511,17 @@ export async function POST(request: NextRequest): Promise<Response> {
   try {
     const parsed = RequestSchema.safeParse(await request.json());
     if (!parsed.success) {
-      return corsJson({ ok: false, error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, {
-        status: 400
-      });
+      return corsJson(
+        {
+          ok: false,
+          error: "invalid_payload",
+          details: parsed.error.flatten(),
+        },
+        requestOrigin,
+        {
+          status: 400,
+        },
+      );
     }
     let preparedPhotoMedia: PreparedPublicQuoteMediaReference[] = [];
     if (parsed.data.job.photoUrls.length > 0) {
@@ -423,11 +540,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         );
       }
       try {
-        preparedPhotoMedia =
-          await resolvePublicInstantQuoteMediaReferences({
-            urls: parsed.data.job.photoUrls,
-            baseUrl: publicApiBaseUrl,
-          });
+        preparedPhotoMedia = await resolvePublicInstantQuoteMediaReferences({
+          urls: parsed.data.job.photoUrls,
+          baseUrl: publicApiBaseUrl,
+        });
       } catch (error) {
         if (error instanceof PublicQuoteMediaError) {
           return corsJson(
@@ -460,9 +576,9 @@ export async function POST(request: NextRequest): Promise<Response> {
         {
           ok: false,
           error: "out_of_area",
-          message: "Thanks for reaching out. We currently serve Georgia only."
+          message: "Thanks for reaching out. We currently serve Georgia only.",
         },
-        requestOrigin
+        requestOrigin,
       );
     }
 
@@ -470,28 +586,46 @@ export async function POST(request: NextRequest): Promise<Response> {
       perceivedSize: body.job.perceivedSize,
       difficulty: body.job.difficulty,
       primary: body.job.primary,
-      access: body.job.access
+      access: body.job.access,
     });
-    const tier = useSmallJobLane ? getSmallJobLaneTier(body.job.perceivedSize) : getBaseTier(body.job.perceivedSize);
+    const tier = useSmallJobLane
+      ? getSmallJobLaneTier(body.job.perceivedSize)
+      : getBaseTier(body.job.perceivedSize);
     const modified = applyBrushModifiers({
       tier,
-      difficulty: body.job.difficulty
+      difficulty: body.job.difficulty,
     });
 
-    const photoCount = Array.isArray(body.job.photoUrls) ? body.job.photoUrls.length : 0;
+    const photoCount = Array.isArray(body.job.photoUrls)
+      ? body.job.photoUrls.length
+      : 0;
     const needsEstimate = decideNeedsEstimate({
       perceivedSize: body.job.perceivedSize,
       primary: body.job.primary,
       difficulty: body.job.difficulty,
       access: body.job.access,
       photoCount,
-      haulAway: body.job.haulAway
+      haulAway: body.job.haulAway,
     });
 
-    const minLowFloor = useSmallJobLane ? (body.job.haulAway ? 650 : 450) : body.job.haulAway ? 850 : 650;
-    const minHighFloor = useSmallJobLane ? (body.job.haulAway ? 850 : 650) : body.job.haulAway ? 1100 : 850;
+    const minLowFloor = useSmallJobLane
+      ? body.job.haulAway
+        ? 650
+        : 450
+      : body.job.haulAway
+        ? 850
+        : 650;
+    const minHighFloor = useSmallJobLane
+      ? body.job.haulAway
+        ? 850
+        : 650
+      : body.job.haulAway
+        ? 1100
+        : 850;
 
-    const haulAddOn = body.job.haulAway ? getHaulAwayAddOn(body.job.perceivedSize) : 0;
+    const haulAddOn = body.job.haulAway
+      ? getHaulAwayAddOn(body.job.perceivedSize)
+      : 0;
     const pricedLow = modified.low + haulAddOn;
     const pricedHigh = modified.high + haulAddOn;
 
@@ -500,7 +634,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       maxHigh: clamp(roundToNearest(pricedHigh, 25), minHighFloor, 10_000),
       tierLabel: tier.label,
       load: clamp(modified.load, 0.25, 2.5),
-      needsEstimate
+      needsEstimate,
     };
     if (bounds.maxHigh < bounds.minLow) bounds.maxHigh = bounds.minLow;
 
@@ -512,196 +646,211 @@ export async function POST(request: NextRequest): Promise<Response> {
       reasonSummary: needsEstimate
         ? "Estimate based on your selections. We may need to confirm details on-site."
         : "Estimate based on your selections. Photos help us tighten the range.",
-      needsInPersonEstimate: needsEstimate
+      needsInPersonEstimate: needsEstimate,
     };
 
     const aiResult = await getQuoteFromAi(body, bounds).catch((err) => {
-      console.error("[brush-quote] ai_failed", err instanceof Error ? err.message : err);
+      console.error(
+        "[brush-quote] ai_failed",
+        err instanceof Error ? err.message : err,
+      );
       return fallback;
     });
 
     const base = applyBounds(aiResult, bounds.minLow, bounds.maxHigh);
 
     const storedAiResult = {
-      ...base
+      ...base,
     };
 
     const db = getDb();
-    const primaryType = body.job.primary === "other" ? "brush_other" : body.job.primary;
-    const [quoteRow] = await db
-      .insert(instantQuotes)
-      .values({
-        source: body.source ?? "public_site",
-        contactName: body.contact.name.trim(),
-        contactPhone: body.contact.phone.trim(),
-        timeframe: body.contact.timeframe,
-        zip: body.job.zip.trim(),
-        jobTypes: ["brush_clearing", primaryType],
-        perceivedSize: body.job.perceivedSize,
-        notes: body.job.notes ?? null,
-        photoUrls: body.job.photoUrls ?? [],
-        aiResult: storedAiResult
-      })
-      .returning({ id: instantQuotes.id });
+    const primaryType =
+      body.job.primary === "other" ? "brush_other" : body.job.primary;
+    const { firstName, lastName } = normalizeName(body.contact.name);
+    const normalizedPhone = normalizePhone(body.contact.phone);
+    const utm = body.utm ?? {};
+    const referrer = request.headers.get("referer") ?? undefined;
+    const otherDetails =
+      typeof body.job.otherDetails === "string" &&
+      body.job.otherDetails.trim().length > 0
+        ? body.job.otherDetails.trim()
+        : null;
 
-    const quoteId = quoteRow?.id ?? null;
-    if (quoteId) {
-      try {
-        const { firstName, lastName } = normalizeName(body.contact.name);
-        const normalizedPhone = normalizePhone(body.contact.phone);
-        const utm = body.utm ?? {};
-        const referrer = request.headers.get("referer") ?? undefined;
-        const otherDetails =
-          typeof body.job.otherDetails === "string" && body.job.otherDetails.trim().length > 0
-            ? body.job.otherDetails.trim()
-            : null;
-
-        await db.transaction(async (tx) => {
-          const contact = await upsertContact(tx, {
-            firstName,
-            lastName,
-            phoneRaw: normalizedPhone.raw,
-            phoneE164: normalizedPhone.e164,
-            source: "brush_quote",
-            email: null
-          });
-          await claimPublicInstantQuoteMediaReferences({
-            instantQuoteId: quoteId,
-            contactId: contact.id,
-            references: preparedPhotoMedia,
-            database: tx,
-          });
-
-          const [existingProperty] = await tx
-            .select({ id: properties.id })
-            .from(properties)
-            .where(eq(properties.contactId, contact.id))
-            .orderBy(desc(properties.createdAt))
-            .limit(1);
-
-          const property =
-            existingProperty?.id
-              ? { id: existingProperty.id }
-              : await upsertProperty(tx, {
-                  contactId: contact.id,
-                  addressLine1: `[Brush Quote ${quoteId.split("-")[0] ?? quoteId}] ZIP ${body.job.zip.trim()} (address pending)`,
-                  city: "Unknown",
-                  state: "GA",
-                  postalCode: body.job.zip.trim(),
-                  gated: false
-                });
-
-          const notesParts = [
-            body.job.notes ?? null,
-            otherDetails ? `Other: ${otherDetails}` : null,
-            `Brush type: ${primaryType}`,
-            `Access: ${body.job.access}`,
-            `Difficulty: ${body.job.difficulty}`,
-            `Haul away: ${body.job.haulAway ? "yes" : "no"}`
-          ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
-
-          const [leadRow] = await tx
-            .insert(leads)
-            .values({
-              contactId: contact.id,
-              propertyId: property.id,
-              servicesRequested: ["brush_clearing", primaryType],
-              notes: notesParts.length ? notesParts.join("\n") : null,
-              status: "new",
-              source: "brush_quote",
-              utmSource: utm.source,
-              utmMedium: utm.medium,
-              utmCampaign: utm.campaign,
-              utmTerm: utm.term,
-              utmContent: utm.content,
-              gclid: utm.gclid,
-              fbclid: utm.fbclid,
-              referrer,
-              formPayload: {
-                instantQuoteId: quoteId,
-                timeframe: body.contact.timeframe,
-                zip: body.job.zip.trim(),
-                primary: body.job.primary,
-                perceivedSize: body.job.perceivedSize,
-                difficulty: body.job.difficulty,
-                access: body.job.access,
-                haulAway: body.job.haulAway,
-                notes: body.job.notes ?? null,
-                otherDetails,
-                aiResult: storedAiResult
-              },
-              instantQuoteId: quoteId
-            })
-            .returning({ id: leads.id });
-
-          if (leadRow?.id) {
-            await tx.insert(outboxEvents).values({
-              type: "lead.alert",
-              payload: {
-                leadId: leadRow.id,
-                source: "brush_quote"
-              }
-            });
-          }
-
-          const [pipelineRow] = await tx
-            .select({ stage: crmPipeline.stage })
-            .from(crmPipeline)
-            .where(eq(crmPipeline.contactId, contact.id))
-            .limit(1);
-
-          const previousStage = typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
-          if (previousStage !== "quoted") {
-            await tx
-              .insert(crmPipeline)
-              .values({ contactId: contact.id, stage: "quoted" })
-              .onConflictDoUpdate({
-                target: crmPipeline.contactId,
-                set: { stage: "quoted", updatedAt: new Date() }
-              });
-
-            await tx.insert(outboxEvents).values({
-              type: "pipeline.auto_stage_change",
-              payload: {
-                contactId: contact.id,
-                fromStage: previousStage,
-                toStage: "quoted",
-                reason: "brush_quote.created",
-                meta: {
-                  instantQuoteId: quoteId,
-                  leadId: leadRow?.id ?? null
-                }
-              }
-            });
-          }
-
-          if (leadRow?.id) {
-            await tx.insert(outboxEvents).values({
-              type: "followup.schedule",
-              payload: {
-                leadId: leadRow.id,
-                contactId: contact.id,
-                reason: "brush_quote.created"
-              }
-            });
-          }
-        });
-      } catch (error) {
-        if (preparedPhotoMedia.length > 0) {
-          await db
-            .delete(instantQuotes)
-            .where(eq(instantQuotes.id, quoteId))
-            .catch(() => undefined);
-          throw error;
-        }
-        console.error("[brush-quote] lead_create_failed", { quoteId, error: String(error) });
+    const quoteId = await db.transaction(async (tx) => {
+      const [quoteRow] = await tx
+        .insert(instantQuotes)
+        .values({
+          source: body.source ?? "public_site",
+          contactName: body.contact.name.trim(),
+          contactPhone: body.contact.phone.trim(),
+          timeframe: body.contact.timeframe,
+          zip: body.job.zip.trim(),
+          jobTypes: ["brush_clearing", primaryType],
+          perceivedSize: body.job.perceivedSize,
+          notes: body.job.notes ?? null,
+          photoUrls: body.job.photoUrls ?? [],
+          aiResult: storedAiResult,
+        })
+        .returning({ id: instantQuotes.id });
+      const quoteId = quoteRow?.id;
+      if (!quoteId) {
+        throw new Error("instant_quote_insert_failed");
       }
-    }
+
+      const contact = await upsertContact(tx, {
+        firstName,
+        lastName,
+        phoneRaw: normalizedPhone.raw,
+        phoneE164: normalizedPhone.e164,
+        source: "brush_quote",
+        email: null,
+      });
+      await claimPublicInstantQuoteMediaReferences({
+        instantQuoteId: quoteId,
+        contactId: contact.id,
+        references: preparedPhotoMedia,
+        database: tx,
+      });
+
+      const existingProperty = await findLatestContactProperty(tx, contact.id);
+
+      const property = existingProperty?.id
+        ? { id: existingProperty.id }
+        : await upsertProperty(tx, {
+            contactId: contact.id,
+            addressLine1: `[Brush Quote ${quoteId.split("-")[0] ?? quoteId}] ZIP ${body.job.zip.trim()} (address pending)`,
+            city: "Unknown",
+            state: "GA",
+            postalCode: body.job.zip.trim(),
+            gated: false,
+          });
+
+      await ensureContactPropertyAssociation(tx, {
+        contactId: contact.id,
+        propertyId: property.id,
+      });
+      const [linkedQuote] = await tx
+        .update(instantQuotes)
+        .set({
+          contactId: contact.id,
+          propertyId: property.id,
+        })
+        .where(eq(instantQuotes.id, quoteId))
+        .returning({ id: instantQuotes.id });
+      if (!linkedQuote?.id) {
+        throw new Error("instant_quote_relationship_failed");
+      }
+
+      const notesParts = [
+        body.job.notes ?? null,
+        otherDetails ? `Other: ${otherDetails}` : null,
+        `Brush type: ${primaryType}`,
+        `Access: ${body.job.access}`,
+        `Difficulty: ${body.job.difficulty}`,
+        `Haul away: ${body.job.haulAway ? "yes" : "no"}`,
+      ].filter(
+        (v): v is string => typeof v === "string" && v.trim().length > 0,
+      );
+
+      const [leadRow] = await tx
+        .insert(leads)
+        .values({
+          contactId: contact.id,
+          propertyId: property.id,
+          servicesRequested: ["brush_clearing", primaryType],
+          notes: notesParts.length ? notesParts.join("\n") : null,
+          status: "new",
+          source: "brush_quote",
+          utmSource: utm.source,
+          utmMedium: utm.medium,
+          utmCampaign: utm.campaign,
+          utmTerm: utm.term,
+          utmContent: utm.content,
+          gclid: utm.gclid,
+          fbclid: utm.fbclid,
+          referrer,
+          formPayload: {
+            instantQuoteId: quoteId,
+            timeframe: body.contact.timeframe,
+            zip: body.job.zip.trim(),
+            primary: body.job.primary,
+            perceivedSize: body.job.perceivedSize,
+            difficulty: body.job.difficulty,
+            access: body.job.access,
+            haulAway: body.job.haulAway,
+            notes: body.job.notes ?? null,
+            otherDetails,
+            aiResult: storedAiResult,
+          },
+          instantQuoteId: quoteId,
+        })
+        .returning({ id: leads.id });
+      if (!leadRow?.id) {
+        throw new Error("lead_insert_failed");
+      }
+
+      await tx.insert(outboxEvents).values({
+        type: "lead.alert",
+        payload: {
+          leadId: leadRow.id,
+          source: "brush_quote",
+        },
+      });
+
+      const [pipelineRow] = await tx
+        .select({ stage: crmPipeline.stage })
+        .from(crmPipeline)
+        .where(eq(crmPipeline.contactId, contact.id))
+        .limit(1);
+
+      const previousStage =
+        typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
+      if (previousStage !== "quoted") {
+        await tx
+          .insert(crmPipeline)
+          .values({ contactId: contact.id, stage: "quoted" })
+          .onConflictDoUpdate({
+            target: crmPipeline.contactId,
+            set: { stage: "quoted", updatedAt: new Date() },
+          });
+
+        await tx.insert(outboxEvents).values({
+          type: "pipeline.auto_stage_change",
+          payload: {
+            contactId: contact.id,
+            fromStage: previousStage,
+            toStage: "quoted",
+            reason: "brush_quote.created",
+            meta: {
+              instantQuoteId: quoteId,
+              leadId: leadRow?.id ?? null,
+            },
+          },
+        });
+      }
+
+      await tx.insert(outboxEvents).values({
+        type: "followup.schedule",
+        payload: {
+          leadId: leadRow.id,
+          contactId: contact.id,
+          reason: "brush_quote.created",
+        },
+      });
+
+      return quoteId;
+    });
 
     const discountPercent = await resolveInstantQuoteDiscountPercent(db);
     const discountMultiplier = discountPercent > 0 ? 1 - discountPercent : 1;
-    const priceLowDiscounted = discountPercent > 0 ? Math.max(0, Math.round(base.priceLow * discountMultiplier)) : undefined;
-    const priceHighDiscounted = discountPercent > 0 ? Math.max(0, Math.round(base.priceHigh * discountMultiplier)) : undefined;
+    const priceLowDiscounted =
+      discountPercent > 0
+        ? Math.max(0, Math.round(base.priceLow * discountMultiplier))
+        : undefined;
+    const priceHighDiscounted =
+      discountPercent > 0
+        ? Math.max(0, Math.round(base.priceHigh * discountMultiplier))
+        : undefined;
 
     return corsJson(
       {
@@ -711,12 +860,23 @@ export async function POST(request: NextRequest): Promise<Response> {
           ...base,
           discountPercent: discountPercent > 0 ? discountPercent : undefined,
           priceLowDiscounted: priceLowDiscounted ?? undefined,
-          priceHighDiscounted: priceHighDiscounted ?? undefined
-        }
+          priceHighDiscounted: priceHighDiscounted ?? undefined,
+        },
       },
-      requestOrigin
+      requestOrigin,
     );
   } catch (error) {
+    if (error instanceof PublicContactPersistenceError) {
+      return corsJson(
+        {
+          ok: false,
+          error: error.publicCode,
+          message: error.publicMessage,
+        },
+        null,
+        { status: error.status },
+      );
+    }
     if (error instanceof PublicQuoteMediaError) {
       return corsJson(
         {

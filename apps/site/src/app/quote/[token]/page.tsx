@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -36,6 +37,7 @@ interface PublicQuoteResponse {
     depositDue: number;
     balanceDue: number;
     jobDurationMinutes: number;
+    revision: number;
     clientScope: string | null;
     sentAt: string | null;
     expiresAt: string | null;
@@ -63,6 +65,75 @@ interface AvailabilityResponse {
   days?: Array<{ date: string; slots: QuoteSlot[] }>;
   durationMinutes?: number;
   timezone?: string;
+}
+
+const PUBLIC_IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,199}$/u;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isPublicQuoteMutationSuccess(
+  value: unknown,
+  expectedQuoteId: string,
+  expectedStatus?: "accepted" | "declined",
+): value is {
+  ok: true;
+  quoteId: string;
+  status?: "accepted" | "declined";
+  refreshRequestedAt?: string;
+} {
+  if (!isRecord(value)) return false;
+  const candidate = value;
+  if (candidate["ok"] !== true || candidate["quoteId"] !== expectedQuoteId) {
+    return false;
+  }
+  if (expectedStatus && candidate["status"] !== expectedStatus) return false;
+  return true;
+}
+
+async function postPublicQuoteAction(input: {
+  token: string;
+  expectedQuoteId: string;
+  idempotencyKey: string;
+  body: Record<string, unknown>;
+  expectedStatus?: "accepted" | "declined";
+  requireRefreshTimestamp?: boolean;
+}): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${encodeURIComponent(input.token)}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": input.idempotencyKey,
+          "x-correlation-id": randomUUID(),
+        },
+        body: JSON.stringify(input.body),
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as unknown;
+    if (
+      !response.ok ||
+      !isPublicQuoteMutationSuccess(
+        payload,
+        input.expectedQuoteId,
+        input.expectedStatus,
+      )
+    ) {
+      return false;
+    }
+    if (
+      input.requireRefreshTimestamp &&
+      typeof payload.refreshRequestedAt !== "string"
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function fetchQuote(
@@ -187,20 +258,34 @@ export async function acceptQuoteAction(formData: FormData) {
   "use server";
 
   const token = formData.get("token");
+  const quoteId = formData.get("quoteId");
+  const idempotencyKey = formData.get("idempotencyKey");
   const notes = formData.get("customerNote");
-  if (typeof token !== "string" || token.trim().length === 0) return;
+  if (
+    typeof token !== "string" ||
+    token.trim().length === 0 ||
+    typeof quoteId !== "string" ||
+    quoteId.trim().length === 0 ||
+    typeof idempotencyKey !== "string" ||
+    !PUBLIC_IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)
+  ) {
+    return;
+  }
 
-  await fetch(`${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${token}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const succeeded = await postPublicQuoteAction({
+    token,
+    expectedQuoteId: quoteId,
+    idempotencyKey,
+    expectedStatus: "accepted",
+    body: {
       decision: "accepted",
       notes:
         typeof notes === "string" && notes.trim().length > 0
           ? notes.trim()
           : undefined,
-    }),
+    },
   });
+  if (!succeeded) redirect(`/quote/${token}?approval=failed`);
 
   revalidatePath(`/quote/${token}`);
   redirect(`/quote/${token}?approval=received`);
@@ -210,14 +295,27 @@ export async function declineQuoteAction(formData: FormData) {
   "use server";
 
   const token = formData.get("token");
+  const quoteId = formData.get("quoteId");
+  const idempotencyKey = formData.get("idempotencyKey");
   const reason = formData.get("reason");
   const notes = formData.get("notes");
-  if (typeof token !== "string" || token.trim().length === 0) return;
+  if (
+    typeof token !== "string" ||
+    token.trim().length === 0 ||
+    typeof quoteId !== "string" ||
+    quoteId.trim().length === 0 ||
+    typeof idempotencyKey !== "string" ||
+    !PUBLIC_IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)
+  ) {
+    return;
+  }
 
-  await fetch(`${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${token}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const succeeded = await postPublicQuoteAction({
+    token,
+    expectedQuoteId: quoteId,
+    idempotencyKey,
+    expectedStatus: "declined",
+    body: {
       decision: "declined",
       reason:
         typeof reason === "string" && reason.trim().length > 0
@@ -227,24 +325,39 @@ export async function declineQuoteAction(formData: FormData) {
         typeof notes === "string" && notes.trim().length > 0
           ? notes.trim()
           : undefined,
-    }),
+    },
   });
+  if (!succeeded) redirect(`/quote/${token}?decision=failed`);
 
   revalidatePath(`/quote/${token}`);
-  redirect(`/quote/${token}`);
+  redirect(`/quote/${token}?decision=received`);
 }
 
 export async function refreshQuoteAction(formData: FormData) {
   "use server";
 
   const token = formData.get("token");
-  if (typeof token !== "string" || token.trim().length === 0) return;
+  const quoteId = formData.get("quoteId");
+  const idempotencyKey = formData.get("idempotencyKey");
+  if (
+    typeof token !== "string" ||
+    token.trim().length === 0 ||
+    typeof quoteId !== "string" ||
+    quoteId.trim().length === 0 ||
+    typeof idempotencyKey !== "string" ||
+    !PUBLIC_IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)
+  ) {
+    return;
+  }
 
-  await fetch(`${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${token}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "refresh" }),
+  const succeeded = await postPublicQuoteAction({
+    token,
+    expectedQuoteId: quoteId,
+    idempotencyKey,
+    body: { action: "refresh" },
+    requireRefreshTimestamp: true,
   });
+  if (!succeeded) redirect(`/quote/${token}?refresh=failed`);
 
   revalidatePath(`/quote/${token}`);
   redirect(`/quote/${token}`);
@@ -254,15 +367,33 @@ export async function requestQuoteChangesAction(formData: FormData) {
   "use server";
 
   const token = formData.get("token");
+  const quoteId = formData.get("quoteId");
+  const expectedRevisionRaw = formData.get("expectedRevision");
+  const idempotencyKey = formData.get("idempotencyKey");
   const reason = formData.get("reason");
   const message = formData.get("message");
-  if (typeof token !== "string" || token.trim().length === 0) return;
+  if (
+    typeof token !== "string" ||
+    token.trim().length === 0 ||
+    typeof quoteId !== "string" ||
+    quoteId.trim().length === 0 ||
+    typeof expectedRevisionRaw !== "string" ||
+    typeof idempotencyKey !== "string" ||
+    !PUBLIC_IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)
+  ) {
+    return;
+  }
+  const expectedRevision = Number(expectedRevisionRaw);
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) return;
 
-  await fetch(
+  const response = await fetch(
     `${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${token}/changes`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+      },
       body: JSON.stringify({
         reason:
           typeof reason === "string" && reason.trim().length > 0
@@ -275,6 +406,15 @@ export async function requestQuoteChangesAction(formData: FormData) {
       }),
     },
   );
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (
+    !response.ok ||
+    !isRecord(payload) ||
+    payload["ok"] !== true ||
+    typeof payload["changeRequestId"] !== "string"
+  ) {
+    redirect(`/quote/${token}?changes=failed`);
+  }
 
   revalidatePath(`/quote/${token}`);
   redirect(`/quote/${token}?changes=sent`);
@@ -284,29 +424,53 @@ export async function bookQuoteAction(formData: FormData) {
   "use server";
 
   const token = formData.get("token");
+  const quoteId = formData.get("quoteId");
+  const expectedRevisionRaw = formData.get("expectedRevision");
+  const idempotencyKey = formData.get("idempotencyKey");
   const startAt = formData.get("startAt");
   const customerNote = formData.get("customerNote");
   if (
     typeof token !== "string" ||
     token.trim().length === 0 ||
+    typeof quoteId !== "string" ||
+    quoteId.trim().length === 0 ||
+    typeof expectedRevisionRaw !== "string" ||
+    typeof idempotencyKey !== "string" ||
+    !PUBLIC_IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey) ||
     typeof startAt !== "string" ||
     startAt.trim().length === 0
   ) {
     return;
   }
+  const expectedRevision = Number(expectedRevisionRaw);
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) return;
 
   const holdResponse = await fetch(
     `${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${token}/hold`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startAt }),
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": `${idempotencyKey}:hold`,
+      },
+      body: JSON.stringify({
+        quoteId,
+        expectedRevision,
+        startAt,
+      }),
     },
   );
-  const hold = (await holdResponse.json().catch(() => null)) as {
-    holdId?: string;
-  } | null;
-  if (!holdResponse.ok || !hold?.holdId) {
+  const hold = (await holdResponse.json().catch(() => null)) as unknown;
+  if (
+    !holdResponse.ok ||
+    !isRecord(hold) ||
+    hold["ok"] !== true ||
+    hold["quoteId"] !== quoteId ||
+    hold["version"] !== expectedRevision ||
+    typeof hold["holdId"] !== "string" ||
+    typeof hold["expiresAt"] !== "string" ||
+    typeof hold["auditEventId"] !== "string"
+  ) {
     redirect(`/quote/${token}?booking=failed`);
   }
 
@@ -314,10 +478,15 @@ export async function bookQuoteAction(formData: FormData) {
     `${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${token}/book`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": `${idempotencyKey}:book`,
+      },
       body: JSON.stringify({
+        quoteId,
+        expectedRevision,
         startAt,
-        holdId: hold.holdId,
+        holdId: hold["holdId"],
         customerNote:
           typeof customerNote === "string" && customerNote.trim().length > 0
             ? customerNote.trim()
@@ -325,7 +494,19 @@ export async function bookQuoteAction(formData: FormData) {
       }),
     },
   );
-  if (!bookResponse.ok) {
+  const booking = (await bookResponse.json().catch(() => null)) as unknown;
+  if (
+    !bookResponse.ok ||
+    !isRecord(booking) ||
+    booking["ok"] !== true ||
+    booking["quoteId"] !== quoteId ||
+    booking["quoteStatus"] !== "accepted" ||
+    booking["pipelineStage"] !== "won" ||
+    booking["quoteRevision"] !== expectedRevision + 1 ||
+    typeof booking["appointmentId"] !== "string" ||
+    typeof booking["startAt"] !== "string" ||
+    typeof booking["auditEventId"] !== "string"
+  ) {
     redirect(`/quote/${token}?booking=failed`);
   }
 
@@ -349,6 +530,10 @@ export default async function PublicQuotePage({
     typeof query["booking"] === "string" ? query["booking"] : null;
   const approvalFlag =
     typeof query["approval"] === "string" ? query["approval"] : null;
+  const decisionFlag =
+    typeof query["decision"] === "string" ? query["decision"] : null;
+  const refreshFlag =
+    typeof query["refresh"] === "string" ? query["refresh"] : null;
   const changesFlag =
     typeof query["changes"] === "string" ? query["changes"] : null;
   const quote = await fetchQuote(token, preview);
@@ -372,6 +557,10 @@ export default async function PublicQuotePage({
   );
   const smsHref = `sms:${company.phoneE164}`;
   const mailHref = `mailto:${company.email}?subject=${encodeURIComponent(`Question about quote ${quote.quoteNumber}`)}`;
+  const acceptIdempotencyKey = randomUUID();
+  const declineIdempotencyKey = randomUUID();
+  const refreshIdempotencyKey = randomUUID();
+  const changesIdempotencyKey = randomUUID();
 
   return (
     <main className="min-h-screen bg-[#f6f4ef] text-neutral-950">
@@ -446,7 +635,7 @@ export default async function PublicQuotePage({
 
       <div className="mx-auto grid max-w-6xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-8">
         <div className="space-y-6">
-          {bookingFlag === "confirmed" ? (
+          {bookingFlag === "confirmed" && quote.acceptedAppointmentId ? (
             <section className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm font-medium text-emerald-900">
               Your service window is booked. Stonegate will send a confirmation
               and follow up if anything needs clarification.
@@ -458,15 +647,57 @@ export default async function PublicQuotePage({
               window.
             </section>
           ) : null}
-          {approvalFlag === "received" ? (
+          {approvalFlag === "received" && quote.status === "accepted" ? (
             <section className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm font-medium text-emerald-900">
               Quote approved. Stonegate will follow up to schedule the job.
+            </section>
+          ) : null}
+          {approvalFlag === "failed" ? (
+            <section
+              className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-sm font-medium text-rose-800"
+              role="alert"
+            >
+              We could not confirm your approval. Your quote was not shown as
+              approved. Refresh the page and try again, or contact Stonegate.
+            </section>
+          ) : null}
+          {decisionFlag === "received" &&
+          (quote.status === "accepted" || quote.status === "declined") ? (
+            <section className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm font-medium text-emerald-900">
+              Your quote decision was recorded.
+            </section>
+          ) : null}
+          {decisionFlag === "failed" ? (
+            <section
+              className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-sm font-medium text-rose-800"
+              role="alert"
+            >
+              We could not confirm your decision. Refresh the page before trying
+              again, or contact Stonegate.
+            </section>
+          ) : null}
+          {refreshFlag === "failed" ? (
+            <section
+              className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-sm font-medium text-rose-800"
+              role="alert"
+            >
+              We could not confirm the refresh request. Refresh the page and try
+              again, or contact Stonegate.
             </section>
           ) : null}
           {changesFlag === "sent" ? (
             <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm font-medium text-amber-900">
               Change request received. Your quote is still available to approve
               while Stonegate reviews your request.
+            </section>
+          ) : null}
+          {changesFlag === "failed" ? (
+            <section
+              className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-sm font-medium text-rose-800"
+              role="alert"
+            >
+              We could not confirm the change request. Keep your note, refresh
+              the page, and try again or contact Stonegate directly.
             </section>
           ) : null}
 
@@ -616,51 +847,58 @@ export default async function PublicQuotePage({
             </div>
           </section>
 
-          <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm sm:p-8">
-            <details>
-              <summary className="cursor-pointer list-none text-lg font-semibold text-primary-950">
-                Request changes to this quote
-              </summary>
-              <p className="mt-2 text-sm text-neutral-600">
-                Send a structured request to Stonegate. The quote stays
-                available to approve while the team reviews it.
-              </p>
-              <form
-                action={requestQuoteChangesAction}
-                className="mt-5 space-y-4"
-              >
-                <input type="hidden" name="token" value={token} />
-                <label className="block text-sm font-semibold text-neutral-700">
-                  What needs to change?
-                  <select
-                    name="reason"
-                    className="mt-2 w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
-                  >
-                    <option value="Scope changed">Scope changed</option>
-                    <option value="Price question">Price question</option>
-                    <option value="Timing issue">Timing issue</option>
-                    <option value="Address issue">Address issue</option>
-                    <option value="Need to add/remove items">
-                      Need to add/remove items
-                    </option>
-                    <option value="Other">Other</option>
-                  </select>
-                </label>
-                <label className="block text-sm font-semibold text-neutral-700">
-                  Details
-                  <textarea
-                    name="message"
-                    rows={4}
-                    className="mt-2 w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
-                    placeholder="Tell us what should change."
+          {!preview ? (
+            <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm sm:p-8">
+              <details>
+                <summary className="cursor-pointer list-none text-lg font-semibold text-primary-950">
+                  Request changes to this quote
+                </summary>
+                <p className="mt-2 text-sm text-neutral-600">
+                  Send a structured request to Stonegate. The quote stays
+                  available to approve while the team reviews it.
+                </p>
+                <form
+                  action={requestQuoteChangesAction}
+                  className="mt-5 space-y-4"
+                >
+                  <input type="hidden" name="token" value={token} />
+                  <input
+                    type="hidden"
+                    name="idempotencyKey"
+                    value={changesIdempotencyKey}
                   />
-                </label>
-                <button className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 hover:bg-amber-100">
-                  Send change request
-                </button>
-              </form>
-            </details>
-          </section>
+                  <label className="block text-sm font-semibold text-neutral-700">
+                    What needs to change?
+                    <select
+                      name="reason"
+                      className="mt-2 w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
+                    >
+                      <option value="Scope changed">Scope changed</option>
+                      <option value="Price question">Price question</option>
+                      <option value="Timing issue">Timing issue</option>
+                      <option value="Address issue">Address issue</option>
+                      <option value="Need to add/remove items">
+                        Need to add/remove items
+                      </option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </label>
+                  <label className="block text-sm font-semibold text-neutral-700">
+                    Details
+                    <textarea
+                      name="message"
+                      rows={4}
+                      className="mt-2 w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
+                      placeholder="Tell us what should change."
+                    />
+                  </label>
+                  <button className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 hover:bg-amber-100">
+                    Send change request
+                  </button>
+                </form>
+              </details>
+            </section>
+          ) : null}
 
           <section className="rounded-3xl border border-neutral-200 bg-white p-6 text-sm text-neutral-700 shadow-sm sm:p-8">
             <h2 className="text-lg font-semibold text-primary-950">
@@ -682,7 +920,12 @@ export default async function PublicQuotePage({
             <h2 className="mt-2 text-2xl font-semibold text-primary-950">
               Ready to move forward?
             </h2>
-            {showRefreshForm ? (
+            {preview ? (
+              <div className="mt-5 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-900">
+                Read-only staff preview. Approval, booking, decline, refresh,
+                and change-request controls are disabled here.
+              </div>
+            ) : showRefreshForm ? (
               <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
                 {quote.refreshRequestedAt ? (
                   <p>
@@ -696,6 +939,12 @@ export default async function PublicQuotePage({
                       Stonegate will follow up.
                     </p>
                     <input type="hidden" name="token" value={token} />
+                    <input type="hidden" name="quoteId" value={quote.id} />
+                    <input
+                      type="hidden"
+                      name="idempotencyKey"
+                      value={refreshIdempotencyKey}
+                    />
                     <button className="w-full rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">
                       Request refresh
                     </button>
@@ -707,6 +956,17 @@ export default async function PublicQuotePage({
                 {hasAvailableSlots ? (
                   <form action={bookQuoteAction} className="space-y-4">
                     <input type="hidden" name="token" value={token} />
+                    <input type="hidden" name="quoteId" value={quote.id} />
+                    <input
+                      type="hidden"
+                      name="expectedRevision"
+                      value={String(quote.revision)}
+                    />
+                    <input
+                      type="hidden"
+                      name="idempotencyKey"
+                      value={acceptIdempotencyKey}
+                    />
                     <label className="block text-sm font-semibold text-neutral-700">
                       Optional note for scheduling
                       <textarea
@@ -751,9 +1011,15 @@ export default async function PublicQuotePage({
                       .
                     </p>
                   </form>
-                ) : (
+                ) : quote.status === "sent" ? (
                   <form action={acceptQuoteAction} className="space-y-3">
                     <input type="hidden" name="token" value={token} />
+                    <input type="hidden" name="quoteId" value={quote.id} />
+                    <input
+                      type="hidden"
+                      name="idempotencyKey"
+                      value={acceptIdempotencyKey}
+                    />
                     <label className="block text-sm font-semibold text-neutral-700">
                       Optional note for scheduling
                       <textarea
@@ -781,6 +1047,12 @@ export default async function PublicQuotePage({
                       .
                     </p>
                   </form>
+                ) : (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900">
+                    This quote is already approved. No online windows are
+                    available right now, so Stonegate will contact you to
+                    schedule the service.
+                  </div>
                 )}
               </div>
             ) : quote.acceptedAppointmentId ? (
@@ -821,37 +1093,48 @@ export default async function PublicQuotePage({
             </div>
           </section>
 
-          <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm">
-            <details>
-              <summary className="cursor-pointer list-none text-sm font-semibold text-neutral-700">
-                Decline quote
-              </summary>
-              <form action={declineQuoteAction} className="mt-4 space-y-3">
-                <input type="hidden" name="token" value={token} />
-                <select
-                  name="reason"
-                  className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
-                >
-                  <option value="">Prefer not to say</option>
-                  <option value="Price">Price</option>
-                  <option value="Timing">Timing</option>
-                  <option value="Scope changed">Scope changed</option>
-                  <option value="Chose another provider">
-                    Chose another provider
-                  </option>
-                </select>
-                <textarea
-                  name="notes"
-                  rows={3}
-                  className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
-                  placeholder="Optional note"
-                />
-                <button className="w-full rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 hover:bg-rose-100">
-                  Send rejection
-                </button>
-              </form>
-            </details>
-          </section>
+          {!preview &&
+          quote.status === "sent" &&
+          !quote.expired &&
+          !quote.acceptedAppointmentId ? (
+            <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm">
+              <details>
+                <summary className="cursor-pointer list-none text-sm font-semibold text-neutral-700">
+                  Decline quote
+                </summary>
+                <form action={declineQuoteAction} className="mt-4 space-y-3">
+                  <input type="hidden" name="token" value={token} />
+                  <input type="hidden" name="quoteId" value={quote.id} />
+                  <input
+                    type="hidden"
+                    name="idempotencyKey"
+                    value={declineIdempotencyKey}
+                  />
+                  <select
+                    name="reason"
+                    className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
+                  >
+                    <option value="">Prefer not to say</option>
+                    <option value="Price">Price</option>
+                    <option value="Timing">Timing</option>
+                    <option value="Scope changed">Scope changed</option>
+                    <option value="Chose another provider">
+                      Chose another provider
+                    </option>
+                  </select>
+                  <textarea
+                    name="notes"
+                    rows={3}
+                    className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
+                    placeholder="Optional note"
+                  />
+                  <button className="w-full rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 hover:bg-rose-100">
+                    Send rejection
+                  </button>
+                </form>
+              </details>
+            </section>
+          ) : null}
         </aside>
       </div>
 

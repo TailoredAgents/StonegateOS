@@ -1,14 +1,16 @@
 import { sql } from "drizzle-orm";
+import {
+  resolveMetaGraphApiEndpoint,
+  validateMetaGraphPaginationUrl,
+} from "@myst-os/sdk";
 import { getDb, metaAdsInsightsDaily } from "@/db";
 
 export class MetaGraphApiError extends Error {
   readonly status: number;
-  readonly body: string;
 
-  constructor(status: number, body: string) {
+  constructor(status: number) {
     super(`meta_graph_api_error:${status}`);
     this.status = status;
-    this.body = body;
   }
 }
 
@@ -104,10 +106,12 @@ export async function syncMetaAdsInsightsDaily(input: {
     "impressions",
     "clicks",
     "reach",
-    "spend"
+    "spend",
   ].join(",");
 
-  const baseUrl = new URL(`https://graph.facebook.com/v24.0/${adAccountId}/insights`);
+  const baseUrl = new URL(
+    resolveMetaGraphApiEndpoint([adAccountId, "insights"], process.env),
+  );
   baseUrl.searchParams.set("access_token", accessToken);
   baseUrl.searchParams.set("level", "ad");
   baseUrl.searchParams.set("time_increment", "1");
@@ -124,18 +128,14 @@ export async function syncMetaAdsInsightsDaily(input: {
   while (nextUrl) {
     pages += 1;
     const response: Response = await fetch(nextUrl, { method: "GET" });
-    const text: string = await response.text();
     if (!response.ok) {
-      throw new MetaGraphApiError(response.status, text);
+      await response.body?.cancel().catch(() => undefined);
+      throw new MetaGraphApiError(response.status);
     }
 
-    const json: MetaInsightsResponse | null = (() => {
-      try {
-        return JSON.parse(text) as MetaInsightsResponse;
-      } catch {
-        return null;
-      }
-    })();
+    const json = (await response
+      .json()
+      .catch(() => null)) as MetaInsightsResponse | null;
 
     if (!json || !Array.isArray(json.data)) {
       throw new Error("meta_ads_insights_invalid_response");
@@ -146,7 +146,8 @@ export async function syncMetaAdsInsightsDaily(input: {
       const now = new Date();
       const values = rows
         .map((row: MetaInsightsRow) => {
-          const dateStart = typeof row.date_start === "string" ? row.date_start : null;
+          const dateStart =
+            typeof row.date_start === "string" ? row.date_start : null;
           const entityId = typeof row.ad_id === "string" ? row.ad_id : null;
           if (!dateStart || !entityId) {
             return null;
@@ -160,11 +161,17 @@ export async function syncMetaAdsInsightsDaily(input: {
             entityId,
             dateStart,
             dateStop: typeof row.date_stop === "string" ? row.date_stop : null,
-            currency: typeof row.account_currency === "string" ? row.account_currency : null,
-            campaignId: typeof row.campaign_id === "string" ? row.campaign_id : null,
-            campaignName: typeof row.campaign_name === "string" ? row.campaign_name : null,
+            currency:
+              typeof row.account_currency === "string"
+                ? row.account_currency
+                : null,
+            campaignId:
+              typeof row.campaign_id === "string" ? row.campaign_id : null,
+            campaignName:
+              typeof row.campaign_name === "string" ? row.campaign_name : null,
             adsetId: typeof row.adset_id === "string" ? row.adset_id : null,
-            adsetName: typeof row.adset_name === "string" ? row.adset_name : null,
+            adsetName:
+              typeof row.adset_name === "string" ? row.adset_name : null,
             adId: typeof row.ad_id === "string" ? row.ad_id : null,
             adName: typeof row.ad_name === "string" ? row.ad_name : null,
             impressions: parseIntLike(row.impressions),
@@ -172,7 +179,7 @@ export async function syncMetaAdsInsightsDaily(input: {
             reach: parseIntLike(row.reach),
             spend: parseMoneyLike(row.spend),
             raw,
-            fetchedAt: now
+            fetchedAt: now,
           };
         })
         .filter((row): row is NonNullable<typeof row> => Boolean(row));
@@ -186,7 +193,7 @@ export async function syncMetaAdsInsightsDaily(input: {
               metaAdsInsightsDaily.accountId,
               metaAdsInsightsDaily.level,
               metaAdsInsightsDaily.entityId,
-              metaAdsInsightsDaily.dateStart
+              metaAdsInsightsDaily.dateStart,
             ],
             set: {
               dateStop: sql`excluded.date_stop`,
@@ -202,14 +209,17 @@ export async function syncMetaAdsInsightsDaily(input: {
               reach: sql`excluded.reach`,
               spend: sql`excluded.spend`,
               raw: sql`excluded.raw`,
-              fetchedAt: now
-            }
+              fetchedAt: now,
+            },
           });
         processed += values.length;
       }
     }
 
-    nextUrl = typeof json.paging?.next === "string" ? json.paging.next : null;
+    nextUrl =
+      typeof json.paging?.next === "string"
+        ? validateMetaGraphPaginationUrl(json.paging.next, process.env)
+        : null;
   }
 
   return { processed, pages };

@@ -1,6 +1,10 @@
 import React, { type ReactElement } from "react";
+import {
+  hasTeamPermission,
+  requireCurrentTeamPrincipal,
+} from "@/lib/team-principal";
 import { PaymentsList } from "../PaymentsList";
-import { callAdminApi } from "../lib/api";
+import { callAdminApiAs } from "../lib/api";
 import { attachPaymentAction, detachPaymentAction } from "../actions";
 
 type PaymentDto = {
@@ -23,6 +27,7 @@ type PaymentDto = {
   receiptUrl: string | null;
   legacySource: string | null;
   createdAt: string;
+  updatedAt: string;
   appointment: null | {
     id: string;
     status: string;
@@ -32,7 +37,8 @@ type PaymentDto = {
 };
 
 export async function PaymentsSection(): Promise<ReactElement> {
-  const res = await callAdminApi("/api/payments?status=all");
+  const principal = await requireCurrentTeamPrincipal();
+  const res = await callAdminApiAs(principal, "/api/payments?status=all");
   if (!res.ok) throw new Error("Failed to load payments");
 
   const payload = (await res.json()) as {
@@ -51,6 +57,10 @@ export async function PaymentsSection(): Promise<ReactElement> {
       summary={payload.summary}
       attachAction={attachPaymentAction}
       detachAction={detachPaymentAction}
+      canChangeAssociations={
+        hasTeamPermission(principal, "payments.reconcile") &&
+        hasTeamPermission(principal, "payments.manage")
+      }
     />
   );
 }

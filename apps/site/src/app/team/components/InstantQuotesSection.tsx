@@ -1,8 +1,15 @@
 import React from "react";
-import { callAdminApi } from "../lib/api";
+import { randomUUID } from "node:crypto";
+import Link from "next/link";
+import { requireCurrentTeamPrincipal } from "@/lib/team-principal";
+import { hasTeamPermissionValue } from "@/lib/team-permissions";
+import { callAdminApiAs } from "../lib/api";
+import { quoteWorkspaceHref } from "../quotes-workspace";
 import { deleteInstantQuoteAction } from "../actions";
 import { DeleteInstantQuoteForm } from "./DeleteInstantQuoteForm";
+import { teamButtonClass } from "./team-ui";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
+import { parseInstantQuoteListResponse } from "../lib/instant-quote-response";
 
 function formatLabel(value: string | null | undefined): string {
   if (typeof value !== "string" || value.trim().length === 0) return "Unknown";
@@ -403,7 +410,12 @@ type AppointmentPreservationSummaryDto = {
     unknown: AppointmentPreservationBucketDto;
   };
   learned: {
-    strongestTouchKind: "requested" | "rescheduled" | "reminder" | "other" | null;
+    strongestTouchKind:
+      | "requested"
+      | "rescheduled"
+      | "reminder"
+      | "other"
+      | null;
     needsHumanBackup: boolean;
   };
 };
@@ -633,7 +645,10 @@ function formatUsdCents(value: number | null | undefined): string {
   }).format(value / 100);
 }
 
-function renderFollowupLearning(label: string, summary: FollowupSliceDto): React.ReactElement {
+function renderFollowupLearning(
+  label: string,
+  summary: FollowupSliceDto,
+): React.ReactElement {
   const preferredChannel =
     summary.learned.preferredChannel === "sms"
       ? "SMS"
@@ -645,27 +660,37 @@ function renderFollowupLearning(label: string, summary: FollowupSliceDto): React
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
       <div className="font-semibold text-slate-900">{label}</div>
       <div className="mt-1 text-[11px] text-slate-600">
-        Quotes with follow-up: {summary.quotesWithFollowup} | Booked: {summary.bookedQuotes} (
+        Quotes with follow-up: {summary.quotesWithFollowup} | Booked:{" "}
+        {summary.bookedQuotes} (
         {formatPercent(
-          summary.quotesWithFollowup > 0 ? summary.bookedQuotes / summary.quotesWithFollowup : 0,
+          summary.quotesWithFollowup > 0
+            ? summary.bookedQuotes / summary.quotesWithFollowup
+            : 0,
         )}
         )
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        SMS {formatPercent(summary.byChannel.sms.bookRate)} | Messenger {formatPercent(summary.byChannel.dm.bookRate)} |
-        Email {formatPercent(summary.byChannel.email.bookRate)}
+        SMS {formatPercent(summary.byChannel.sms.bookRate)} | Messenger{" "}
+        {formatPercent(summary.byChannel.dm.bookRate)} | Email{" "}
+        {formatPercent(summary.byChannel.email.bookRate)}
       </div>
       <div className="text-[11px] text-slate-500">
-        Fast follow-up {formatPercent(summary.byTiming.fast.bookRate)} | Delayed {formatPercent(summary.byTiming.delayed.bookRate)}
+        Fast follow-up {formatPercent(summary.byTiming.fast.bookRate)} | Delayed{" "}
+        {formatPercent(summary.byTiming.delayed.bookRate)}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        {preferredChannel ? `Learned channel lean: ${preferredChannel}` : "Learned channel lean: not strong enough yet"}
+        {preferredChannel
+          ? `Learned channel lean: ${preferredChannel}`
+          : "Learned channel lean: not strong enough yet"}
         {" | "}
-        {summary.learned.preferFast ? "Fast first follow-up is outperforming." : "No strong fast-follow-up edge yet."}
+        {summary.learned.preferFast
+          ? "Fast first follow-up is outperforming."
+          : "No strong fast-follow-up edge yet."}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        First touch {formatPercent(summary.byDepth.first.bookRate)} | Second touch {formatPercent(summary.byDepth.second.bookRate)} |
-        Third plus {formatPercent(summary.byDepth.third_plus.bookRate)}
+        First touch {formatPercent(summary.byDepth.first.bookRate)} | Second
+        touch {formatPercent(summary.byDepth.second.bookRate)} | Third plus{" "}
+        {formatPercent(summary.byDepth.third_plus.bookRate)}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
         {summary.learned.secondTouchStillWorthwhile
@@ -681,13 +706,19 @@ function renderFollowupLearning(label: string, summary: FollowupSliceDto): React
           : "No strong late-stage softness warning yet."}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        Short {formatPercent(summary.byStyle.short.bookRate)} | Single ask {formatPercent(summary.byStyle.single_ask.bookRate)} |
-        Photo ask {formatPercent(summary.byStyle.photo_ask.bookRate)} | Booking ask {formatPercent(summary.byStyle.booking_ask.bookRate)}
+        Short {formatPercent(summary.byStyle.short.bookRate)} | Single ask{" "}
+        {formatPercent(summary.byStyle.single_ask.bookRate)} | Photo ask{" "}
+        {formatPercent(summary.byStyle.photo_ask.bookRate)} | Booking ask{" "}
+        {formatPercent(summary.byStyle.booking_ask.bookRate)}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        {summary.learned.keepShort ? "Short quote nudges are working better." : "No strong short-follow-up edge yet."}
+        {summary.learned.keepShort
+          ? "Short quote nudges are working better."
+          : "No strong short-follow-up edge yet."}
         {" | "}
-        {summary.learned.keepSingleAsk ? "One clear ask is performing better." : "No strong single-ask edge yet."}
+        {summary.learned.keepSingleAsk
+          ? "One clear ask is performing better."
+          : "No strong single-ask edge yet."}
         {" | "}
         {summary.learned.openWithPhotoAsk
           ? "Photo-first follow-ups are converting better."
@@ -701,7 +732,10 @@ function renderFollowupLearning(label: string, summary: FollowupSliceDto): React
   );
 }
 
-function renderFirstResponseLearning(label: string, summary: FirstResponseSliceDto): React.ReactElement {
+function renderFirstResponseLearning(
+  label: string,
+  summary: FirstResponseSliceDto,
+): React.ReactElement {
   const preferredChannel =
     summary.learned.preferredChannel === "sms"
       ? "SMS"
@@ -713,32 +747,49 @@ function renderFirstResponseLearning(label: string, summary: FirstResponseSliceD
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
       <div className="font-semibold text-slate-900">{label}</div>
       <div className="mt-1 text-[11px] text-slate-600">
-        First touches: {summary.attempts} | Replied: {summary.replied} ({formatPercent(summary.replyRate)})
+        First touches: {summary.attempts} | Replied: {summary.replied} (
+        {formatPercent(summary.replyRate)})
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        SMS reply {formatPercent(summary.byChannel.sms.replyRate)} | Messenger reply {formatPercent(summary.byChannel.dm.replyRate)} |
-        Email reply {formatPercent(summary.byChannel.email.replyRate)}
+        SMS reply {formatPercent(summary.byChannel.sms.replyRate)} | Messenger
+        reply {formatPercent(summary.byChannel.dm.replyRate)} | Email reply{" "}
+        {formatPercent(summary.byChannel.email.replyRate)}
       </div>
       <div className="text-[11px] text-slate-500">
-        Fast first touch {formatPercent(summary.byTiming.fast.replyRate)} | Delayed {formatPercent(summary.byTiming.delayed.replyRate)}
+        Fast first touch {formatPercent(summary.byTiming.fast.replyRate)} |
+        Delayed {formatPercent(summary.byTiming.delayed.replyRate)}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        {preferredChannel ? `Learned channel lean: ${preferredChannel}` : "Learned channel lean: not strong enough yet"}
+        {preferredChannel
+          ? `Learned channel lean: ${preferredChannel}`
+          : "Learned channel lean: not strong enough yet"}
         {" | "}
-        {summary.learned.preferFast ? "Fast first response is outperforming." : "No strong fast-first-touch edge yet."}
+        {summary.learned.preferFast
+          ? "Fast first response is outperforming."
+          : "No strong fast-first-touch edge yet."}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        Short opener {formatPercent(summary.byStyle.short.replyRate)} | Single ask {formatPercent(summary.byStyle.single_ask.replyRate)} |
-        Photo ask {formatPercent(summary.byStyle.photo_ask.replyRate)} | Booking ask {formatPercent(summary.byStyle.booking_ask.replyRate)}
+        Short opener {formatPercent(summary.byStyle.short.replyRate)} | Single
+        ask {formatPercent(summary.byStyle.single_ask.replyRate)} | Photo ask{" "}
+        {formatPercent(summary.byStyle.photo_ask.replyRate)} | Booking ask{" "}
+        {formatPercent(summary.byStyle.booking_ask.replyRate)}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        {summary.learned.keepShort ? "Short openers are winning." : "No strong short-opener edge yet."}
+        {summary.learned.keepShort
+          ? "Short openers are winning."
+          : "No strong short-opener edge yet."}
         {" | "}
-        {summary.learned.keepSingleAsk ? "One clear ask is performing better." : "No strong single-ask edge yet."}
+        {summary.learned.keepSingleAsk
+          ? "One clear ask is performing better."
+          : "No strong single-ask edge yet."}
         {" | "}
-        {summary.learned.openWithPhotoAsk ? "Photo-first openers are working better." : "No strong photo-first edge yet."}
+        {summary.learned.openWithPhotoAsk
+          ? "Photo-first openers are working better."
+          : "No strong photo-first edge yet."}
         {" | "}
-        {summary.learned.avoidHardBookingAsk ? "Hard booking asks are underperforming on first touch." : "No strong hard-booking warning yet."}
+        {summary.learned.avoidHardBookingAsk
+          ? "Hard booking asks are underperforming on first touch."
+          : "No strong hard-booking warning yet."}
       </div>
     </div>
   );
@@ -752,15 +803,17 @@ function renderQuoteAccuracyLearning(
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
       <div className="font-semibold text-slate-900">{label}</div>
       <div className="mt-1 text-[11px] text-slate-600">
-        Completed jobs: {summary.attempts} | Within range: {summary.withinRange} (
-        {formatPercent(summary.withinRangeRate)})
+        Completed jobs: {summary.attempts} | Within range: {summary.withinRange}{" "}
+        ({formatPercent(summary.withinRangeRate)})
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        Above range {formatPercent(summary.aboveRangeRate)} | Below range {formatPercent(summary.belowRangeRate)}
+        Above range {formatPercent(summary.aboveRangeRate)} | Below range{" "}
+        {formatPercent(summary.belowRangeRate)}
       </div>
       <div className="text-[11px] text-slate-500">
-        High-confidence within range {formatPercent(summary.byConfidence.high.withinRangeRate)} | Low-confidence{" "}
-        {formatPercent(summary.byConfidence.low.withinRangeRate)}
+        High-confidence within range{" "}
+        {formatPercent(summary.byConfidence.high.withinRangeRate)} |
+        Low-confidence {formatPercent(summary.byConfidence.low.withinRangeRate)}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
         Avg miss outside range: {formatUsdCents(summary.averageOutsideByCents)}
@@ -784,16 +837,21 @@ function renderObjectionLearning(
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
       <div className="font-semibold text-slate-900">{label}</div>
       <div className="mt-1 text-[11px] text-slate-600">
-        Attempts: {summary.attempts} | Reopened: {summary.reopened} ({formatPercent(summary.reopenRate)})
+        Attempts: {summary.attempts} | Reopened: {summary.reopened} (
+        {formatPercent(summary.reopenRate)})
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        SMS reopen {formatPercent(summary.byChannel.sms.reopenRate)} | Messenger reopen{" "}
-        {formatPercent(summary.byChannel.dm.reopenRate)}
+        SMS reopen {formatPercent(summary.byChannel.sms.reopenRate)} | Messenger
+        reopen {formatPercent(summary.byChannel.dm.reopenRate)}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        {preferredChannel ? `Learned channel lean: ${preferredChannel}` : "Learned channel lean: not strong enough yet"}
+        {preferredChannel
+          ? `Learned channel lean: ${preferredChannel}`
+          : "Learned channel lean: not strong enough yet"}
         {" | "}
-        {summary.learned.keepSofter ? "Softer save is safer." : "No strong softer-save warning yet."}
+        {summary.learned.keepSofter
+          ? "Softer save is safer."
+          : "No strong softer-save warning yet."}
       </div>
     </div>
   );
@@ -818,20 +876,29 @@ function renderQuoteHotWindowLearning(
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
       <div className="font-semibold text-slate-900">{label}</div>
       <div className="mt-1 text-[11px] text-slate-600">
-        Quotes: {summary.quotes} | Booked: {summary.bookedQuotes} ({formatPercent(summary.bookRate)})
+        Quotes: {summary.quotes} | Booked: {summary.bookedQuotes} (
+        {formatPercent(summary.bookRate)})
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        Under 6h {formatPercent(summary.byWindow.under_6h.bookRate)} | Same day {formatPercent(summary.byWindow.same_day.bookRate)}
+        Under 6h {formatPercent(summary.byWindow.under_6h.bookRate)} | Same day{" "}
+        {formatPercent(summary.byWindow.same_day.bookRate)}
       </div>
       <div className="text-[11px] text-slate-500">
-        1 to 3 days {formatPercent(summary.byWindow.day_1_3.bookRate)} | After 3 days {formatPercent(summary.byWindow.after_3d.bookRate)}
+        1 to 3 days {formatPercent(summary.byWindow.day_1_3.bookRate)} | After 3
+        days {formatPercent(summary.byWindow.after_3d.bookRate)}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        {hotWindow ? `Learned hot window: ${hotWindow}` : "Learned hot window: not strong enough yet"}
+        {hotWindow
+          ? `Learned hot window: ${hotWindow}`
+          : "Learned hot window: not strong enough yet"}
         {" | "}
-        {summary.learned.urgencyDecayFast ? "Urgency decays fast after the hot window." : "No strong urgency-decay warning yet."}
+        {summary.learned.urgencyDecayFast
+          ? "Urgency decays fast after the hot window."
+          : "No strong urgency-decay warning yet."}
         {" | "}
-        {summary.learned.sameDayStillStrong ? "Same-day quotes are still closing strongly." : "No strong same-day hold yet."}
+        {summary.learned.sameDayStillStrong
+          ? "Same-day quotes are still closing strongly."
+          : "No strong same-day hold yet."}
       </div>
     </div>
   );
@@ -846,10 +913,12 @@ function renderCloseLoopLearning(
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
       <div className="font-semibold text-slate-900">{label}</div>
       <div className="mt-1 text-[11px] text-slate-600">
-        Attempts: {summary.attempts} | Replied: {summary.replied} ({formatPercent(summary.replyRate)})
+        Attempts: {summary.attempts} | Replied: {summary.replied} (
+        {formatPercent(summary.replyRate)})
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        Preserved {formatPercent(summary.preservedRate)} | Completed {formatPercent(summary.completedRate)}
+        Preserved {formatPercent(summary.preservedRate)} | Completed{" "}
+        {formatPercent(summary.completedRate)}
       </div>
       {options?.kind === "support" ? (
         <div className="mt-1 text-[11px] text-slate-500">
@@ -873,11 +942,15 @@ function renderCloseLoopSliceLearning(
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
       <div className="font-semibold text-slate-900">{label}</div>
       <div className="mt-1 text-[11px] text-slate-600">
-        Attempts: {summary.attempts} | Replied: {summary.replied} ({formatPercent(summary.replyRate)})
+        Attempts: {summary.attempts} | Replied: {summary.replied} (
+        {formatPercent(summary.replyRate)})
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
-        Pre-appointment preserve {formatPercent(summary.byAction.appointment_checkin.preservedRate)} | Support preserve{" "}
-        {formatPercent(summary.byAction.appointment_support.preservedRate)} | Post-job repeat{" "}
+        Pre-appointment preserve{" "}
+        {formatPercent(summary.byAction.appointment_checkin.preservedRate)} |
+        Support preserve{" "}
+        {formatPercent(summary.byAction.appointment_support.preservedRate)} |
+        Post-job repeat{" "}
         {formatPercent(summary.byAction.post_job_checkin.repeatBookRate)}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
@@ -897,28 +970,73 @@ function renderCloseLoopSliceLearning(
   );
 }
 
+function InstantQuotesUnavailable({ detail }: { detail: string }) {
+  return (
+    <section
+      className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900"
+      role="alert"
+      aria-labelledby="instant-quotes-unavailable-title"
+    >
+      <h3 id="instant-quotes-unavailable-title" className="font-semibold">
+        Instant quotes are unavailable
+      </h3>
+      <p className="mt-1">{detail} This is not an empty quote list.</p>
+      <a
+        className={`mt-3 ${teamButtonClass("secondary", "sm")}`}
+        href={quoteWorkspaceHref("instant", { query: { retry: "1" } })}
+      >
+        Retry instant quotes
+      </a>
+    </section>
+  );
+}
+
 export async function InstantQuotesSection(): Promise<React.ReactElement> {
-  const res = await callAdminApi("/api/admin/instant-quotes?limit=25");
-  if (!res.ok) {
-    return <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Instant quotes unavailable.</div>;
+  const principal = await requireCurrentTeamPrincipal();
+  let res: Response;
+  try {
+    res = await callAdminApiAs(principal, "/api/admin/instant-quotes?limit=25");
+  } catch {
+    return (
+      <InstantQuotesUnavailable detail="The CRM service could not be reached." />
+    );
   }
-  const data = (await res.json()) as {
-    quotes?: InstantQuoteDto[];
-    summary?: InstantQuoteSummaryDto;
-    appointmentPreservationSummary?: AppointmentPreservationSummaryDto;
-    appointmentReminderSummary?: AppointmentReminderSummaryDto;
-    channelHandoffSummary?: ChannelHandoffSummaryDto;
-    closeLoopSummary?: CloseLoopSummaryDto;
-    firstResponseSummary?: FirstResponseSummaryDto;
-    missingInfoSummary?: MissingInfoSummaryDto;
-    objectionSummary?: ObjectionSummaryDto;
-    quoteAccuracySummary?: QuoteAccuracySummaryDto;
-    quoteHotWindowSummary?: QuoteHotWindowSummaryDto;
-    quoteCloseSummary?: QuoteCloseSummaryDto;
-    followupSummary?: FollowupSummaryDto;
-    reactivationSummary?: ReactivationSummaryDto;
-  };
-  const quotes = data.quotes ?? [];
+  if (!res.ok) {
+    return (
+      <InstantQuotesUnavailable
+        detail={`The CRM returned HTTP ${res.status}.`}
+      />
+    );
+  }
+  const parsed = parseInstantQuoteListResponse(
+    await res.json().catch(() => null),
+  );
+  if (!parsed.success) {
+    return (
+      <InstantQuotesUnavailable detail="The CRM returned an unreadable response." />
+    );
+  }
+  const data: {
+    quotes: InstantQuoteDto[];
+    summary: InstantQuoteSummaryDto;
+    appointmentPreservationSummary: AppointmentPreservationSummaryDto;
+    appointmentReminderSummary: AppointmentReminderSummaryDto;
+    channelHandoffSummary: ChannelHandoffSummaryDto;
+    closeLoopSummary: CloseLoopSummaryDto;
+    firstResponseSummary: FirstResponseSummaryDto;
+    missingInfoSummary: MissingInfoSummaryDto;
+    objectionSummary: ObjectionSummaryDto;
+    quoteAccuracySummary: QuoteAccuracySummaryDto;
+    quoteHotWindowSummary: QuoteHotWindowSummaryDto;
+    quoteCloseSummary: QuoteCloseSummaryDto;
+    followupSummary: FollowupSummaryDto;
+    reactivationSummary: ReactivationSummaryDto;
+  } = parsed.data;
+  const quotes = data.quotes;
+  const canDelete = hasTeamPermissionValue(
+    principal.permissions,
+    "quotes.delete",
+  );
   const summary = data.summary;
   const appointmentPreservationSummary = data.appointmentPreservationSummary;
   const appointmentReminderSummary = data.appointmentReminderSummary;
@@ -937,102 +1055,182 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
     <section className="space-y-4 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-slate-900">Instant Quotes</h3>
+          <h3 className="text-sm font-semibold text-slate-900">
+            Instant Quotes
+          </h3>
           <p className="text-xs text-slate-500">Latest 25 photo/AI quotes</p>
         </div>
-        <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">{quotes.length}</span>
+        <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
+          {quotes.length}
+        </span>
       </div>
       {summary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
           <div className="font-semibold text-slate-900">Last 90 days</div>
           <div className="mt-1">
-            Media-informed quotes booked {summary.mediaInformed.bookedQuotes} of {summary.mediaInformed.quotes} (
-            {formatPercent(summary.mediaInformed.bookRate)}), compared with {summary.standard.bookedQuotes} of{" "}
-            {summary.standard.quotes} ({formatPercent(summary.standard.bookRate)}) for standard quotes.
+            Media-informed quotes booked {summary.mediaInformed.bookedQuotes} of{" "}
+            {summary.mediaInformed.quotes} (
+            {formatPercent(summary.mediaInformed.bookRate)}), compared with{" "}
+            {summary.standard.bookedQuotes} of {summary.standard.quotes} (
+            {formatPercent(summary.standard.bookRate)}) for standard quotes.
           </div>
           <div className="mt-2 text-[11px] text-slate-500">
-            High-confidence media quotes: {summary.mediaInformed.highConfidence.bookedQuotes} of{" "}
-            {summary.mediaInformed.highConfidence.quotes} ({formatPercent(summary.mediaInformed.highConfidence.bookRate)})
-            {" | "}Low-confidence: {summary.mediaInformed.lowConfidence.bookedQuotes} of{" "}
-            {summary.mediaInformed.lowConfidence.quotes} ({formatPercent(summary.mediaInformed.lowConfidence.bookRate)})
-            {" | "}Missing-view cases: {summary.mediaInformed.missingViews.bookedQuotes} of{" "}
-            {summary.mediaInformed.missingViews.quotes} ({formatPercent(summary.mediaInformed.missingViews.bookRate)})
+            High-confidence media quotes:{" "}
+            {summary.mediaInformed.highConfidence.bookedQuotes} of{" "}
+            {summary.mediaInformed.highConfidence.quotes} (
+            {formatPercent(summary.mediaInformed.highConfidence.bookRate)})
+            {" | "}Low-confidence:{" "}
+            {summary.mediaInformed.lowConfidence.bookedQuotes} of{" "}
+            {summary.mediaInformed.lowConfidence.quotes} (
+            {formatPercent(summary.mediaInformed.lowConfidence.bookRate)})
+            {" | "}Missing-view cases:{" "}
+            {summary.mediaInformed.missingViews.bookedQuotes} of{" "}
+            {summary.mediaInformed.missingViews.quotes} (
+            {formatPercent(summary.mediaInformed.missingViews.bookRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Weak media quotes later tightened: {summary.mediaInformed.tightenedAfterMoreMedia.bookedQuotes} of{" "}
+            Weak media quotes later tightened:{" "}
+            {summary.mediaInformed.tightenedAfterMoreMedia.bookedQuotes} of{" "}
             {summary.mediaInformed.tightenedAfterMoreMedia.quotes} (
-            {formatPercent(summary.mediaInformed.tightenedAfterMoreMedia.bookRate)})
-            {" | "}Still unresolved weak quotes: {summary.mediaInformed.unresolvedWeakMedia.bookedQuotes} of{" "}
+            {formatPercent(
+              summary.mediaInformed.tightenedAfterMoreMedia.bookRate,
+            )}
+            ){" | "}Still unresolved weak quotes:{" "}
+            {summary.mediaInformed.unresolvedWeakMedia.bookedQuotes} of{" "}
             {summary.mediaInformed.unresolvedWeakMedia.quotes} (
             {formatPercent(summary.mediaInformed.unresolvedWeakMedia.bookRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Booked from quote means the quote is linked to a non-canceled appointment.
+            Booked from quote means the quote is linked to a non-canceled
+            appointment.
           </div>
         </div>
       ) : null}
       {followupSummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">Quote follow-up learning</div>
+          <div className="font-semibold text-slate-900">
+            Quote follow-up learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Planner guidance is now learning from first real follow-up outcomes after a quote, segmented by service family and lead source.
+            Planner guidance is now learning from first real follow-up outcomes
+            after a quote, segmented by service family and lead source.
           </div>
           <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
             {renderFollowupLearning("Overall", followupSummary)}
-            {renderFollowupLearning("Junk quotes", followupSummary.byServiceFamily.junk)}
-            {renderFollowupLearning("Demo quotes", followupSummary.byServiceFamily.demo)}
-            {renderFollowupLearning("Brush quotes", followupSummary.byServiceFamily.brush)}
-            {renderFollowupLearning("Facebook-sourced", followupSummary.bySourceFamily.facebook)}
-            {renderFollowupLearning("Public-site sourced", followupSummary.bySourceFamily.public_site)}
+            {renderFollowupLearning(
+              "Junk quotes",
+              followupSummary.byServiceFamily.junk,
+            )}
+            {renderFollowupLearning(
+              "Demo quotes",
+              followupSummary.byServiceFamily.demo,
+            )}
+            {renderFollowupLearning(
+              "Brush quotes",
+              followupSummary.byServiceFamily.brush,
+            )}
+            {renderFollowupLearning(
+              "Facebook-sourced",
+              followupSummary.bySourceFamily.facebook,
+            )}
+            {renderFollowupLearning(
+              "Public-site sourced",
+              followupSummary.bySourceFamily.public_site,
+            )}
           </div>
         </div>
       ) : null}
       {quoteHotWindowSummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">Quote hot-window learning</div>
+          <div className="font-semibold text-slate-900">
+            Quote hot-window learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            This tracks how long different quote segments stay hot before booking rates fall off, so the planner can tune urgency instead of using one generic pace.
+            This tracks how long different quote segments stay hot before
+            booking rates fall off, so the planner can tune urgency instead of
+            using one generic pace.
           </div>
           <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
             {renderQuoteHotWindowLearning("Overall", quoteHotWindowSummary)}
-            {renderQuoteHotWindowLearning("Junk quotes", quoteHotWindowSummary.byServiceFamily.junk)}
-            {renderQuoteHotWindowLearning("Demo quotes", quoteHotWindowSummary.byServiceFamily.demo)}
-            {renderQuoteHotWindowLearning("Brush quotes", quoteHotWindowSummary.byServiceFamily.brush)}
-            {renderQuoteHotWindowLearning("Facebook-sourced", quoteHotWindowSummary.bySourceFamily.facebook)}
-            {renderQuoteHotWindowLearning("Public-site sourced", quoteHotWindowSummary.bySourceFamily.public_site)}
+            {renderQuoteHotWindowLearning(
+              "Junk quotes",
+              quoteHotWindowSummary.byServiceFamily.junk,
+            )}
+            {renderQuoteHotWindowLearning(
+              "Demo quotes",
+              quoteHotWindowSummary.byServiceFamily.demo,
+            )}
+            {renderQuoteHotWindowLearning(
+              "Brush quotes",
+              quoteHotWindowSummary.byServiceFamily.brush,
+            )}
+            {renderQuoteHotWindowLearning(
+              "Facebook-sourced",
+              quoteHotWindowSummary.bySourceFamily.facebook,
+            )}
+            {renderQuoteHotWindowLearning(
+              "Public-site sourced",
+              quoteHotWindowSummary.bySourceFamily.public_site,
+            )}
           </div>
         </div>
       ) : null}
       {firstResponseSummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">First-response learning</div>
+          <div className="font-semibold text-slate-900">
+            First-response learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            This tracks the first real outbound touch after a new lead arrives and measures whether it turns into a live conversation and eventually books.
+            This tracks the first real outbound touch after a new lead arrives
+            and measures whether it turns into a live conversation and
+            eventually books.
           </div>
           <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
             {renderFirstResponseLearning("Overall", firstResponseSummary)}
-            {renderFirstResponseLearning("Junk leads", firstResponseSummary.byServiceFamily.junk)}
-            {renderFirstResponseLearning("Demo leads", firstResponseSummary.byServiceFamily.demo)}
-            {renderFirstResponseLearning("Brush leads", firstResponseSummary.byServiceFamily.brush)}
-            {renderFirstResponseLearning("Facebook-sourced", firstResponseSummary.bySourceFamily.facebook)}
-            {renderFirstResponseLearning("Public-site sourced", firstResponseSummary.bySourceFamily.public_site)}
+            {renderFirstResponseLearning(
+              "Junk leads",
+              firstResponseSummary.byServiceFamily.junk,
+            )}
+            {renderFirstResponseLearning(
+              "Demo leads",
+              firstResponseSummary.byServiceFamily.demo,
+            )}
+            {renderFirstResponseLearning(
+              "Brush leads",
+              firstResponseSummary.byServiceFamily.brush,
+            )}
+            {renderFirstResponseLearning(
+              "Facebook-sourced",
+              firstResponseSummary.bySourceFamily.facebook,
+            )}
+            {renderFirstResponseLearning(
+              "Public-site sourced",
+              firstResponseSummary.bySourceFamily.public_site,
+            )}
           </div>
         </div>
       ) : null}
       {channelHandoffSummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">Messenger handoff learning</div>
+          <div className="font-semibold text-slate-900">
+            Messenger handoff learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            This tracks real Messenger to SMS handoffs and whether they reopened the lead, actually shifted the conversation into text, and still booked.
+            This tracks real Messenger to SMS handoffs and whether they reopened
+            the lead, actually shifted the conversation into text, and still
+            booked.
           </div>
           <div className="mt-2 text-[11px] text-slate-600">
-            Attempts: {channelHandoffSummary.attempts} | Reopened: {channelHandoffSummary.reopened} (
-            {formatPercent(channelHandoffSummary.reopenRate)}) | Booked later: {channelHandoffSummary.booked} (
+            Attempts: {channelHandoffSummary.attempts} | Reopened:{" "}
+            {channelHandoffSummary.reopened} (
+            {formatPercent(channelHandoffSummary.reopenRate)}) | Booked later:{" "}
+            {channelHandoffSummary.booked} (
             {formatPercent(channelHandoffSummary.bookRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Shifted into SMS {formatPercent(channelHandoffSummary.smsTransitionRate)} | Stayed in Messenger{" "}
-            {formatPercent(channelHandoffSummary.stayDmRate)}
+            Shifted into SMS{" "}
+            {formatPercent(channelHandoffSummary.smsTransitionRate)} | Stayed in
+            Messenger {formatPercent(channelHandoffSummary.stayDmRate)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
             {channelHandoffSummary.learned.smsTransitionHealthy
@@ -1051,23 +1249,36 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
       ) : null}
       {reactivationSummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">Dormant-lead reactivation learning</div>
+          <div className="font-semibold text-slate-900">
+            Dormant-lead reactivation learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            This tracks real outbound follow-ups sent after at least 24 hours of silence and measures whether they reopen the conversation or eventually book.
+            This tracks real outbound follow-ups sent after at least 24 hours of
+            silence and measures whether they reopen the conversation or
+            eventually book.
           </div>
           <div className="mt-2 text-[11px] text-slate-600">
-            Attempts: {reactivationSummary.attempts} | Reopened: {reactivationSummary.reopened} (
-            {formatPercent(reactivationSummary.reopenRate)}) | Booked later: {reactivationSummary.booked} (
+            Attempts: {reactivationSummary.attempts} | Reopened:{" "}
+            {reactivationSummary.reopened} (
+            {formatPercent(reactivationSummary.reopenRate)}) | Booked later:{" "}
+            {reactivationSummary.booked} (
             {formatPercent(reactivationSummary.bookRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            SMS reopen {formatPercent(reactivationSummary.byChannel.sms.reopenRate)} | Messenger reopen{" "}
-            {formatPercent(reactivationSummary.byChannel.dm.reopenRate)} | Email reopen{" "}
+            SMS reopen{" "}
+            {formatPercent(reactivationSummary.byChannel.sms.reopenRate)} |
+            Messenger reopen{" "}
+            {formatPercent(reactivationSummary.byChannel.dm.reopenRate)} | Email
+            reopen{" "}
             {formatPercent(reactivationSummary.byChannel.email.reopenRate)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            1 to 3 day silence reopen {formatPercent(reactivationSummary.byDormancy.day_1_3.reopenRate)} | 3 plus day silence reopen{" "}
-            {formatPercent(reactivationSummary.byDormancy.day_3_plus.reopenRate)}
+            1 to 3 day silence reopen{" "}
+            {formatPercent(reactivationSummary.byDormancy.day_1_3.reopenRate)} |
+            3 plus day silence reopen{" "}
+            {formatPercent(
+              reactivationSummary.byDormancy.day_3_plus.reopenRate,
+            )}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
             {reactivationSummary.learned.preferredChannel === "sms"
@@ -1088,23 +1299,40 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
       ) : null}
       {quoteAccuracySummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">Quote accuracy learning</div>
+          <div className="font-semibold text-slate-900">
+            Quote accuracy learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            This compares completed jobs linked to instant quotes against the original displayed quote range, so the agent can learn when instant estimates are trustworthy versus when they should stay softer.
+            This compares completed jobs linked to instant quotes against the
+            original displayed quote range, so the agent can learn when instant
+            estimates are trustworthy versus when they should stay softer.
           </div>
           <div className="mt-2 text-[11px] text-slate-600">
-            Completed jobs: {quoteAccuracySummary.attempts} | Finished inside range: {quoteAccuracySummary.withinRange} (
-            {formatPercent(quoteAccuracySummary.withinRangeRate)}) | Above range: {quoteAccuracySummary.aboveRange} (
-            {formatPercent(quoteAccuracySummary.aboveRangeRate)}) | Below range: {quoteAccuracySummary.belowRange} (
+            Completed jobs: {quoteAccuracySummary.attempts} | Finished inside
+            range: {quoteAccuracySummary.withinRange} (
+            {formatPercent(quoteAccuracySummary.withinRangeRate)}) | Above
+            range: {quoteAccuracySummary.aboveRange} (
+            {formatPercent(quoteAccuracySummary.aboveRangeRate)}) | Below range:{" "}
+            {quoteAccuracySummary.belowRange} (
             {formatPercent(quoteAccuracySummary.belowRangeRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            High-confidence within range {formatPercent(quoteAccuracySummary.byConfidence.high.withinRangeRate)} | Medium{" "}
-            {formatPercent(quoteAccuracySummary.byConfidence.medium.withinRangeRate)} | Low{" "}
-            {formatPercent(quoteAccuracySummary.byConfidence.low.withinRangeRate)}
+            High-confidence within range{" "}
+            {formatPercent(
+              quoteAccuracySummary.byConfidence.high.withinRangeRate,
+            )}{" "}
+            | Medium{" "}
+            {formatPercent(
+              quoteAccuracySummary.byConfidence.medium.withinRangeRate,
+            )}{" "}
+            | Low{" "}
+            {formatPercent(
+              quoteAccuracySummary.byConfidence.low.withinRangeRate,
+            )}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Average miss when outside range: {formatUsdCents(quoteAccuracySummary.averageOutsideByCents)}
+            Average miss when outside range:{" "}
+            {formatUsdCents(quoteAccuracySummary.averageOutsideByCents)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
             {quoteAccuracySummary.learned.highConfidenceTrustworthy
@@ -1124,34 +1352,57 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
               : "No strong above-range skew yet."}
           </div>
           <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {renderQuoteAccuracyLearning("Junk quotes", quoteAccuracySummary.byServiceFamily.junk)}
-            {renderQuoteAccuracyLearning("Demo quotes", quoteAccuracySummary.byServiceFamily.demo)}
-            {renderQuoteAccuracyLearning("Brush quotes", quoteAccuracySummary.byServiceFamily.brush)}
-            {renderQuoteAccuracyLearning("Facebook-sourced", quoteAccuracySummary.bySourceFamily.facebook)}
-            {renderQuoteAccuracyLearning("Public-site sourced", quoteAccuracySummary.bySourceFamily.public_site)}
+            {renderQuoteAccuracyLearning(
+              "Junk quotes",
+              quoteAccuracySummary.byServiceFamily.junk,
+            )}
+            {renderQuoteAccuracyLearning(
+              "Demo quotes",
+              quoteAccuracySummary.byServiceFamily.demo,
+            )}
+            {renderQuoteAccuracyLearning(
+              "Brush quotes",
+              quoteAccuracySummary.byServiceFamily.brush,
+            )}
+            {renderQuoteAccuracyLearning(
+              "Facebook-sourced",
+              quoteAccuracySummary.bySourceFamily.facebook,
+            )}
+            {renderQuoteAccuracyLearning(
+              "Public-site sourced",
+              quoteAccuracySummary.bySourceFamily.public_site,
+            )}
           </div>
         </div>
       ) : null}
       {quoteCloseSummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">Quote close learning</div>
+          <div className="font-semibold text-slate-900">
+            Quote close learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            This tracks real agent-driven quote follow-ups and measures whether they turned into booked jobs or ended in lost dispositions within 14 days.
+            This tracks real agent-driven quote follow-ups and measures whether
+            they turned into booked jobs or ended in lost dispositions within 14
+            days.
           </div>
           <div className="mt-2 text-[11px] text-slate-600">
-            Attempts: {quoteCloseSummary.attempts} | Booked: {quoteCloseSummary.booked} (
-            {formatPercent(quoteCloseSummary.bookRate)}) | Lost: {quoteCloseSummary.lost} (
+            Attempts: {quoteCloseSummary.attempts} | Booked:{" "}
+            {quoteCloseSummary.booked} (
+            {formatPercent(quoteCloseSummary.bookRate)}) | Lost:{" "}
+            {quoteCloseSummary.lost} (
             {formatPercent(quoteCloseSummary.lostRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            SMS book {formatPercent(quoteCloseSummary.byChannel.sms.bookRate)} | Messenger book{" "}
-            {formatPercent(quoteCloseSummary.byChannel.dm.bookRate)} | Email book{" "}
-            {formatPercent(quoteCloseSummary.byChannel.email.bookRate)}
+            SMS book {formatPercent(quoteCloseSummary.byChannel.sms.bookRate)} |
+            Messenger book{" "}
+            {formatPercent(quoteCloseSummary.byChannel.dm.bookRate)} | Email
+            book {formatPercent(quoteCloseSummary.byChannel.email.bookRate)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            SMS lost {formatPercent(quoteCloseSummary.byChannel.sms.lostRate)} | Messenger lost{" "}
-            {formatPercent(quoteCloseSummary.byChannel.dm.lostRate)} | Email lost{" "}
-            {formatPercent(quoteCloseSummary.byChannel.email.lostRate)}
+            SMS lost {formatPercent(quoteCloseSummary.byChannel.sms.lostRate)} |
+            Messenger lost{" "}
+            {formatPercent(quoteCloseSummary.byChannel.dm.lostRate)} | Email
+            lost {formatPercent(quoteCloseSummary.byChannel.email.lostRate)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
             {quoteCloseSummary.learned.preferredChannel === "sms"
@@ -1168,19 +1419,26 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
       ) : null}
       {objectionSummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">Objection-save learning</div>
+          <div className="font-semibold text-slate-900">
+            Objection-save learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            This tracks real sent price-objection save attempts and whether they reopened the conversation within 48 hours.
+            This tracks real sent price-objection save attempts and whether they
+            reopened the conversation within 48 hours.
           </div>
           <div className="mt-2 text-[11px] text-slate-600">
-            Attempts: {objectionSummary.attempts} | Reopened: {objectionSummary.reopened} (
-            {formatPercent(objectionSummary.reopenRate)}) | Booked later: {objectionSummary.booked} (
+            Attempts: {objectionSummary.attempts} | Reopened:{" "}
+            {objectionSummary.reopened} (
+            {formatPercent(objectionSummary.reopenRate)}) | Booked later:{" "}
+            {objectionSummary.booked} (
             {formatPercent(objectionSummary.bookRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            SMS reopen {formatPercent(objectionSummary.byChannel.sms.reopenRate)} | Messenger reopen{" "}
-            {formatPercent(objectionSummary.byChannel.dm.reopenRate)} | Email reopen{" "}
-            {formatPercent(objectionSummary.byChannel.email.reopenRate)}
+            SMS reopen{" "}
+            {formatPercent(objectionSummary.byChannel.sms.reopenRate)} |
+            Messenger reopen{" "}
+            {formatPercent(objectionSummary.byChannel.dm.reopenRate)} | Email
+            reopen {formatPercent(objectionSummary.byChannel.email.reopenRate)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
             {objectionSummary.learned.preferredChannel === "sms"
@@ -1194,31 +1452,52 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
               : "No strong softer-save warning yet."}
           </div>
           <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-            {renderObjectionLearning("Price only", objectionSummary.byType.price)}
-            {renderObjectionLearning("Comparison shopping", objectionSummary.byType.comparison_shopping)}
-            {renderObjectionLearning("Decision maker", objectionSummary.byType.decision_maker)}
-            {renderObjectionLearning("Timing hesitation", objectionSummary.byType.timing)}
+            {renderObjectionLearning(
+              "Price only",
+              objectionSummary.byType.price,
+            )}
+            {renderObjectionLearning(
+              "Comparison shopping",
+              objectionSummary.byType.comparison_shopping,
+            )}
+            {renderObjectionLearning(
+              "Decision maker",
+              objectionSummary.byType.decision_maker,
+            )}
+            {renderObjectionLearning(
+              "Timing hesitation",
+              objectionSummary.byType.timing,
+            )}
           </div>
         </div>
       ) : null}
       {missingInfoSummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">Missing-info learning</div>
+          <div className="font-semibold text-slate-900">
+            Missing-info learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            This tracks real sent missing-detail requests and whether the customer actually sent back the needed info within 48 hours.
+            This tracks real sent missing-detail requests and whether the
+            customer actually sent back the needed info within 48 hours.
           </div>
           <div className="mt-2 text-[11px] text-slate-600">
-            Attempts: {missingInfoSummary.attempts} | Resolved: {missingInfoSummary.resolved} (
-            {formatPercent(missingInfoSummary.resolutionRate)}) | Booked later: {missingInfoSummary.booked} (
+            Attempts: {missingInfoSummary.attempts} | Resolved:{" "}
+            {missingInfoSummary.resolved} (
+            {formatPercent(missingInfoSummary.resolutionRate)}) | Booked later:{" "}
+            {missingInfoSummary.booked} (
             {formatPercent(missingInfoSummary.bookRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Resolved with media {formatPercent(missingInfoSummary.mediaResolutionRate)} | Resolved with text{" "}
-            {formatPercent(missingInfoSummary.textResolutionRate)}
+            Resolved with media{" "}
+            {formatPercent(missingInfoSummary.mediaResolutionRate)} | Resolved
+            with text {formatPercent(missingInfoSummary.textResolutionRate)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            SMS resolve {formatPercent(missingInfoSummary.byChannel.sms.resolutionRate)} | Messenger resolve{" "}
-            {formatPercent(missingInfoSummary.byChannel.dm.resolutionRate)} | Email resolve{" "}
+            SMS resolve{" "}
+            {formatPercent(missingInfoSummary.byChannel.sms.resolutionRate)} |
+            Messenger resolve{" "}
+            {formatPercent(missingInfoSummary.byChannel.dm.resolutionRate)} |
+            Email resolve{" "}
             {formatPercent(missingInfoSummary.byChannel.email.resolutionRate)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
@@ -1240,23 +1519,39 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
       ) : null}
       {appointmentReminderSummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">Appointment reminder learning</div>
+          <div className="font-semibold text-slate-900">
+            Appointment reminder learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            This tracks real appointment reminder texts, how often they get acknowledged, and whether reschedule requests are getting preserved instead of turning into lost jobs.
+            This tracks real appointment reminder texts, how often they get
+            acknowledged, and whether reschedule requests are getting preserved
+            instead of turning into lost jobs.
           </div>
           <div className="mt-2 text-[11px] text-slate-600">
-            Attempts: {appointmentReminderSummary.attempts} | Acknowledged: {appointmentReminderSummary.acknowledged} (
-            {formatPercent(appointmentReminderSummary.acknowledgedRate)}) | No-shows: {appointmentReminderSummary.noShows} (
+            Attempts: {appointmentReminderSummary.attempts} | Acknowledged:{" "}
+            {appointmentReminderSummary.acknowledged} (
+            {formatPercent(appointmentReminderSummary.acknowledgedRate)}) |
+            No-shows: {appointmentReminderSummary.noShows} (
             {formatPercent(appointmentReminderSummary.noShowRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Confirm replies {formatPercent(appointmentReminderSummary.confirmRate)} | Reschedule requests{" "}
-            {formatPercent(appointmentReminderSummary.rescheduleRequestRate)} | Rescheduled after request{" "}
+            Confirm replies{" "}
+            {formatPercent(appointmentReminderSummary.confirmRate)} | Reschedule
+            requests{" "}
+            {formatPercent(appointmentReminderSummary.rescheduleRequestRate)} |
+            Rescheduled after request{" "}
             {formatPercent(appointmentReminderSummary.rescheduleSaveRate)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            24h reminder ack {formatPercent(appointmentReminderSummary.byWindow["24h"].acknowledgedRate)} | 2h reminder ack{" "}
-            {formatPercent(appointmentReminderSummary.byWindow["2h"].acknowledgedRate)} | Completed after reminder{" "}
+            24h reminder ack{" "}
+            {formatPercent(
+              appointmentReminderSummary.byWindow["24h"].acknowledgedRate,
+            )}{" "}
+            | 2h reminder ack{" "}
+            {formatPercent(
+              appointmentReminderSummary.byWindow["2h"].acknowledgedRate,
+            )}{" "}
+            | Completed after reminder{" "}
             {formatPercent(appointmentReminderSummary.completedRate)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
@@ -1278,43 +1573,93 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
       ) : null}
       {appointmentPreservationSummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">Appointment preservation learning</div>
+          <div className="font-semibold text-slate-900">
+            Appointment preservation learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            This tracks real post-booking confirmation-loop touches and measures which ones correlate with kept jobs versus cancellations and no-shows.
+            This tracks real post-booking confirmation-loop touches and measures
+            which ones correlate with kept jobs versus cancellations and
+            no-shows.
           </div>
           <div className="mt-2 text-[11px] text-slate-600">
-            Attempts: {appointmentPreservationSummary.attempts} | Preserved: {appointmentPreservationSummary.preserved} (
-            {formatPercent(appointmentPreservationSummary.preservedRate)}) | Completed: {appointmentPreservationSummary.completed} (
+            Attempts: {appointmentPreservationSummary.attempts} | Preserved:{" "}
+            {appointmentPreservationSummary.preserved} (
+            {formatPercent(appointmentPreservationSummary.preservedRate)}) |
+            Completed: {appointmentPreservationSummary.completed} (
             {formatPercent(appointmentPreservationSummary.completedRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Canceled {formatPercent(appointmentPreservationSummary.canceledRate)} | No-show {formatPercent(appointmentPreservationSummary.noShowRate)}
+            Canceled{" "}
+            {formatPercent(appointmentPreservationSummary.canceledRate)} |
+            No-show {formatPercent(appointmentPreservationSummary.noShowRate)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Initial confirmation preserve {formatPercent(appointmentPreservationSummary.byKind.requested.preservedRate)} | Reschedule confirmation preserve{" "}
-            {formatPercent(appointmentPreservationSummary.byKind.rescheduled.preservedRate)} | Reminder preserve{" "}
-            {formatPercent(appointmentPreservationSummary.byKind.reminder.preservedRate)}
+            Initial confirmation preserve{" "}
+            {formatPercent(
+              appointmentPreservationSummary.byKind.requested.preservedRate,
+            )}{" "}
+            | Reschedule confirmation preserve{" "}
+            {formatPercent(
+              appointmentPreservationSummary.byKind.rescheduled.preservedRate,
+            )}{" "}
+            | Reminder preserve{" "}
+            {formatPercent(
+              appointmentPreservationSummary.byKind.reminder.preservedRate,
+            )}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Estimate preserve {formatPercent(appointmentPreservationSummary.byAppointmentType.estimate.preservedRate)} | In person quote{" "}
-            {formatPercent(appointmentPreservationSummary.byAppointmentType.in_person_quote.preservedRate)} | Job{" "}
-            {formatPercent(appointmentPreservationSummary.byAppointmentType.job.preservedRate)}
+            Estimate preserve{" "}
+            {formatPercent(
+              appointmentPreservationSummary.byAppointmentType.estimate
+                .preservedRate,
+            )}{" "}
+            | In person quote{" "}
+            {formatPercent(
+              appointmentPreservationSummary.byAppointmentType.in_person_quote
+                .preservedRate,
+            )}{" "}
+            | Job{" "}
+            {formatPercent(
+              appointmentPreservationSummary.byAppointmentType.job
+                .preservedRate,
+            )}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Junk preserve {formatPercent(appointmentPreservationSummary.byServiceFamily.junk.preservedRate)} | Demo{" "}
-            {formatPercent(appointmentPreservationSummary.byServiceFamily.demo.preservedRate)} | Brush{" "}
-            {formatPercent(appointmentPreservationSummary.byServiceFamily.brush.preservedRate)}
+            Junk preserve{" "}
+            {formatPercent(
+              appointmentPreservationSummary.byServiceFamily.junk.preservedRate,
+            )}{" "}
+            | Demo{" "}
+            {formatPercent(
+              appointmentPreservationSummary.byServiceFamily.demo.preservedRate,
+            )}{" "}
+            | Brush{" "}
+            {formatPercent(
+              appointmentPreservationSummary.byServiceFamily.brush
+                .preservedRate,
+            )}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            Facebook preserve {formatPercent(appointmentPreservationSummary.bySourceFamily.facebook.preservedRate)} | Public-site{" "}
-            {formatPercent(appointmentPreservationSummary.bySourceFamily.public_site.preservedRate)}
+            Facebook preserve{" "}
+            {formatPercent(
+              appointmentPreservationSummary.bySourceFamily.facebook
+                .preservedRate,
+            )}{" "}
+            | Public-site{" "}
+            {formatPercent(
+              appointmentPreservationSummary.bySourceFamily.public_site
+                .preservedRate,
+            )}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            {appointmentPreservationSummary.learned.strongestTouchKind === "requested"
+            {appointmentPreservationSummary.learned.strongestTouchKind ===
+            "requested"
               ? "Learned appointment-preservation lean: initial confirmations"
-              : appointmentPreservationSummary.learned.strongestTouchKind === "rescheduled"
+              : appointmentPreservationSummary.learned.strongestTouchKind ===
+                  "rescheduled"
                 ? "Learned appointment-preservation lean: reschedule confirmations"
-                : appointmentPreservationSummary.learned.strongestTouchKind === "reminder"
+                : appointmentPreservationSummary.learned.strongestTouchKind ===
+                    "reminder"
                   ? "Learned appointment-preservation lean: pre-job reminders"
                   : "Learned appointment-preservation lean: not strong enough yet"}
             {" | "}
@@ -1326,14 +1671,22 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
       ) : null}
       {closeLoopSummary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-          <div className="font-semibold text-slate-900">Close-loop learning</div>
+          <div className="font-semibold text-slate-900">
+            Close-loop learning
+          </div>
           <div className="mt-1 text-[11px] text-slate-500">
-            This tracks the newer pre-appointment, booked-job support, and post-job touches so those lifecycle actions can start learning from real outcomes too.
+            This tracks the newer pre-appointment, booked-job support, and
+            post-job touches so those lifecycle actions can start learning from
+            real outcomes too.
           </div>
           <div className="mt-2 text-[11px] text-slate-600">
-            Attempts: {closeLoopSummary.attempts} | Replied: {closeLoopSummary.replied} ({formatPercent(closeLoopSummary.replyRate)})
-            {" | "}Preserved: {closeLoopSummary.preserved} ({formatPercent(closeLoopSummary.preservedRate)})
-            {" | "}Completed: {closeLoopSummary.completed} ({formatPercent(closeLoopSummary.completedRate)})
+            Attempts: {closeLoopSummary.attempts} | Replied:{" "}
+            {closeLoopSummary.replied} (
+            {formatPercent(closeLoopSummary.replyRate)}){" | "}Preserved:{" "}
+            {closeLoopSummary.preserved} (
+            {formatPercent(closeLoopSummary.preservedRate)}){" | "}Completed:{" "}
+            {closeLoopSummary.completed} (
+            {formatPercent(closeLoopSummary.completedRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
             {closeLoopSummary.learned.appointmentCheckinWorthwhile
@@ -1353,20 +1706,46 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
               : "No strong post-job check-in edge yet."}
           </div>
           <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {renderCloseLoopLearning("Pre-appointment check in", closeLoopSummary.byAction.appointment_checkin)}
-            {renderCloseLoopLearning("Booked-job support", closeLoopSummary.byAction.appointment_support, {
-              kind: "support",
-            })}
-            {renderCloseLoopLearning("Post-job check in", closeLoopSummary.byAction.post_job_checkin, {
-              kind: "post_job",
-            })}
+            {renderCloseLoopLearning(
+              "Pre-appointment check in",
+              closeLoopSummary.byAction.appointment_checkin,
+            )}
+            {renderCloseLoopLearning(
+              "Booked-job support",
+              closeLoopSummary.byAction.appointment_support,
+              {
+                kind: "support",
+              },
+            )}
+            {renderCloseLoopLearning(
+              "Post-job check in",
+              closeLoopSummary.byAction.post_job_checkin,
+              {
+                kind: "post_job",
+              },
+            )}
           </div>
           <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {renderCloseLoopSliceLearning("Junk jobs", closeLoopSummary.byServiceFamily.junk)}
-            {renderCloseLoopSliceLearning("Demo jobs", closeLoopSummary.byServiceFamily.demo)}
-            {renderCloseLoopSliceLearning("Brush jobs", closeLoopSummary.byServiceFamily.brush)}
-            {renderCloseLoopSliceLearning("Facebook-sourced", closeLoopSummary.bySourceFamily.facebook)}
-            {renderCloseLoopSliceLearning("Public-site sourced", closeLoopSummary.bySourceFamily.public_site)}
+            {renderCloseLoopSliceLearning(
+              "Junk jobs",
+              closeLoopSummary.byServiceFamily.junk,
+            )}
+            {renderCloseLoopSliceLearning(
+              "Demo jobs",
+              closeLoopSummary.byServiceFamily.demo,
+            )}
+            {renderCloseLoopSliceLearning(
+              "Brush jobs",
+              closeLoopSummary.byServiceFamily.brush,
+            )}
+            {renderCloseLoopSliceLearning(
+              "Facebook-sourced",
+              closeLoopSummary.bySourceFamily.facebook,
+            )}
+            {renderCloseLoopSliceLearning(
+              "Public-site sourced",
+              closeLoopSummary.bySourceFamily.public_site,
+            )}
           </div>
         </div>
       ) : null}
@@ -1380,10 +1759,14 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
               key={q.id}
               className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm"
             >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="font-semibold text-slate-900">{q.contactName}</div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-semibold text-slate-900">
+                  {q.contactName}
+                </div>
                 <div className="text-[11px] text-slate-500">
-                  {new Date(q.createdAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })}
+                  {new Date(q.createdAt).toLocaleString(undefined, {
+                    timeZone: TEAM_TIME_ZONE,
+                  })}
                 </div>
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -1415,19 +1798,26 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
                 ) : null}
               </div>
               <div className="text-[12px] text-slate-600">
-                {q.aiResult.displayTierLabel} - {q.aiResult.loadFractionEstimate.toFixed(2)} trailer - {q.aiResult.reasonSummary}
+                {q.aiResult.displayTierLabel} -{" "}
+                {q.aiResult.loadFractionEstimate.toFixed(2)} trailer -{" "}
+                {q.aiResult.reasonSummary}
               </div>
               {q.aiResult.mediaAnalysis ? (
                 <div className="text-[11px] text-slate-500">
-                  Visible {formatLabel(q.aiResult.mediaAnalysis.visibleVolumeRange)} | Merged{" "}
-                  {formatLabel(q.aiResult.mediaAnalysis.mergedVolumeRange)} | {formatLabel(q.aiResult.mediaAnalysis.confidence)}
-                  {typeof q.aiResult.addOnTotal === "number" && q.aiResult.addOnTotal > 0
+                  Visible{" "}
+                  {formatLabel(q.aiResult.mediaAnalysis.visibleVolumeRange)} |
+                  Merged{" "}
+                  {formatLabel(q.aiResult.mediaAnalysis.mergedVolumeRange)} |{" "}
+                  {formatLabel(q.aiResult.mediaAnalysis.confidence)}
+                  {typeof q.aiResult.addOnTotal === "number" &&
+                  q.aiResult.addOnTotal > 0
                     ? ` | Add-ons +$${q.aiResult.addOnTotal}`
                     : ""}
                 </div>
               ) : null}
               <div className="text-[12px] text-slate-600">
-                Types: {q.jobTypes.join(", ")} | Size: {q.perceivedSize} | Photos: {q.photoCount}
+                Types: {q.jobTypes.join(", ")} | Size: {q.perceivedSize} |
+                Photos: {q.photoCount}
               </div>
               {q.aiResult.needsInPersonEstimate ? (
                 <div className="mt-1 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
@@ -1436,19 +1826,28 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
               ) : null}
               <div className="mt-2">
                 <div className="flex flex-wrap items-center gap-3">
-                  <a
+                  <Link
                     href={`/team/instant-quotes/${q.id}`}
                     className="text-[11px] font-semibold text-primary-700 underline"
                   >
                     View details / book from quote
-                  </a>
-                  <DeleteInstantQuoteForm instantQuoteId={q.id} action={deleteInstantQuoteAction} />
+                  </Link>
+                  {canDelete ? (
+                    <DeleteInstantQuoteForm
+                      instantQuoteId={q.id}
+                      expectedVersion={q.createdAt}
+                      idempotencyKey={`instant-quote-delete:${randomUUID()}`}
+                      action={deleteInstantQuoteAction}
+                    />
+                  ) : null}
                 </div>
               </div>
             </div>
           );
         })}
-        {!quotes.length ? <div className="text-xs text-slate-500">No instant quotes yet.</div> : null}
+        {!quotes.length ? (
+          <div className="text-xs text-slate-500">No instant quotes yet.</div>
+        ) : null}
       </div>
     </section>
   );

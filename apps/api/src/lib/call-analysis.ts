@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
+
+export const CALL_AI_REQUEST_TIMEOUT_MS = 90_000;
 
 export type CallExtracted = {
   firstName?: string | null;
@@ -35,39 +38,64 @@ function getOpenAIKey(): string | null {
 
 export async function transcribeAudio(
   buffer: Buffer,
-  options?: { contentType?: string; filename?: string }
+  options?: { contentType?: string; filename?: string },
 ): Promise<string | null> {
   const apiKey = getOpenAIKey();
   if (!apiKey) return null;
 
-  const contentType = options?.contentType && options.contentType.trim().length ? options.contentType : "audio/mpeg";
-  const filename = options?.filename && options.filename.trim().length ? options.filename : "call.mp3";
+  const contentType =
+    options?.contentType && options.contentType.trim().length
+      ? options.contentType
+      : "audio/mpeg";
+  const filename =
+    options?.filename && options.filename.trim().length
+      ? options.filename
+      : "call.mp3";
 
   const form = new FormData();
   form.append("model", "whisper-1");
-  form.append("file", new Blob([new Uint8Array(buffer)], { type: contentType }), filename);
+  form.append(
+    "file",
+    new Blob([new Uint8Array(buffer)], { type: contentType }),
+    filename,
+  );
 
-  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`
+  const response = await fetch(
+    resolveOpenAiApiEndpoint("audio/transcriptions", process.env),
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: form,
+      signal: AbortSignal.timeout(CALL_AI_REQUEST_TIMEOUT_MS),
     },
-    body: form
-  });
+  );
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    console.warn("[call.transcribe] openai_failed", { status: response.status, text: text.slice(0, 240) });
+    console.warn("[call.transcribe] openai_failed", {
+      status: response.status,
+      text: text.slice(0, 240),
+    });
     return null;
   }
 
-  const payload = (await response.json().catch(() => null)) as { text?: unknown } | null;
-  const transcript = typeof payload?.text === "string" ? payload.text.trim() : "";
+  const payload = (await response.json().catch(() => null)) as {
+    text?: unknown;
+  } | null;
+  const transcript =
+    typeof payload?.text === "string" ? payload.text.trim() : "";
   return transcript.length ? transcript : null;
 }
 
-export async function transcribeAudioMp3(buffer: Buffer): Promise<string | null> {
-  return transcribeAudio(buffer, { contentType: "audio/mpeg", filename: "call.mp3" });
+export async function transcribeAudioMp3(
+  buffer: Buffer,
+): Promise<string | null> {
+  return transcribeAudio(buffer, {
+    contentType: "audio/mpeg",
+    filename: "call.mp3",
+  });
 }
 
 const AnalysisSchema = z.object({
@@ -87,11 +115,11 @@ const AnalysisSchema = z.object({
         email: z.number().min(0).max(1).nullable(),
         postalCode: z.number().min(0).max(1).nullable(),
         timeframe: z.number().min(0).max(1).nullable(),
-        items: z.number().min(0).max(1).nullable()
+        items: z.number().min(0).max(1).nullable(),
       })
       .nullable()
-      .optional()
-  })
+      .optional(),
+  }),
 });
 
 function capSentences(text: string, maxSentences: number): string {
@@ -121,7 +149,7 @@ export async function analyzeCallTranscript(input: {
     "- coaching must be 2 to 6 short bullets",
     "- extracted fields nullable when unknown",
     "",
-    "Return JSON only (no prose)."
+    "Return JSON only (no prose).",
   ].join("\n");
 
   const userPrompt = [
@@ -135,7 +163,7 @@ export async function analyzeCallTranscript(input: {
     "- summary: a tight internal summary of what happened and next step",
     "- coaching: 2 to 6 bullets (internal coaching, specific)",
     "- extracted: best-effort structured fields (nullable when unknown)",
-    "- extracted.confidence: numbers 0 to 1 for fields you are confident about (e.g. firstName, lastName, email, postalCode)"
+    "- extracted.confidence: numbers 0 to 1 for fields you are confident about (e.g. firstName, lastName, email, postalCode)",
   ].join("\n");
 
   const schema = {
@@ -165,25 +193,40 @@ export async function analyzeCallTranscript(input: {
                   email: { anyOf: [{ type: "number" }, { type: "null" }] },
                   postalCode: { anyOf: [{ type: "number" }, { type: "null" }] },
                   timeframe: { anyOf: [{ type: "number" }, { type: "null" }] },
-                  items: { anyOf: [{ type: "number" }, { type: "null" }] }
+                  items: { anyOf: [{ type: "number" }, { type: "null" }] },
                 },
-                required: ["firstName", "lastName", "email", "postalCode", "timeframe", "items"]
+                required: [
+                  "firstName",
+                  "lastName",
+                  "email",
+                  "postalCode",
+                  "timeframe",
+                  "items",
+                ],
               },
-              { type: "null" }
-            ]
-          }
+              { type: "null" },
+            ],
+          },
         },
-        required: ["firstName", "lastName", "email", "postalCode", "timeframe", "items", "confidence"]
-      }
+        required: [
+          "firstName",
+          "lastName",
+          "email",
+          "postalCode",
+          "timeframe",
+          "items",
+          "confidence",
+        ],
+      },
     },
-    required: ["summary", "coaching", "extracted"]
+    required: ["summary", "coaching", "extracted"],
   };
 
   const payload: Record<string, unknown> = {
     model,
     input: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt }
+      { role: "user", content: userPrompt },
     ],
     max_output_tokens: 900,
     text: {
@@ -192,40 +235,48 @@ export async function analyzeCallTranscript(input: {
         type: "json_schema",
         name: "call_analysis",
         strict: true,
-        schema
-      }
-    }
+        schema,
+      },
+    },
   };
 
   if (supportsReasoningEffort(model)) {
     payload["reasoning"] = { effort: "low" };
   }
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
+  const response = await fetch(
+    resolveOpenAiApiEndpoint("responses", process.env),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(CALL_AI_REQUEST_TIMEOUT_MS),
     },
-    body: JSON.stringify(payload)
-  });
+  );
 
   if (!response.ok) {
     const bodyText = await response.text().catch(() => "");
-    console.warn("[call.analysis] openai_failed", { model, status: response.status, bodyText: bodyText.slice(0, 240) });
+    console.warn("[call.analysis] openai_failed", {
+      model,
+      status: response.status,
+      bodyText: bodyText.slice(0, 240),
+    });
     return null;
   }
 
-  const data = (await response.json().catch(() => null)) as
-    | { output_text?: unknown; output?: Array<{ content?: Array<{ text?: unknown }> }> }
-    | null;
+  const data = (await response.json().catch(() => null)) as {
+    output_text?: unknown;
+    output?: Array<{ content?: Array<{ text?: unknown }> }>;
+  } | null;
 
   const raw =
     (typeof data?.output_text === "string" ? data?.output_text : null) ??
     data?.output
       ?.flatMap((item) => item.content ?? [])
-      .find((chunk) => typeof chunk.text === "string")
-      ?.text ??
+      .find((chunk) => typeof chunk.text === "string")?.text ??
     null;
 
   if (typeof raw !== "string" || !raw.trim()) {
@@ -243,14 +294,16 @@ export async function analyzeCallTranscript(input: {
 
   const parsed = AnalysisSchema.safeParse(parsedJson);
   if (!parsed.success) {
-    console.warn("[call.analysis] schema_mismatch", { issues: parsed.error.issues.slice(0, 3) });
+    console.warn("[call.analysis] schema_mismatch", {
+      issues: parsed.error.issues.slice(0, 3),
+    });
     return null;
   }
 
   const normalized: CallAnalysis = {
     summary: capSentences(parsed.data.summary, 7).slice(0, 900).trim(),
     coaching: parsed.data.coaching.slice(0, 6),
-    extracted: parsed.data.extracted
+    extracted: parsed.data.extracted,
   };
 
   return normalized;

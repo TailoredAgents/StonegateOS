@@ -1,4 +1,6 @@
 export type LeadSourceType = "google" | "facebook" | "team_member" | "referral";
+const MAXIMUM_CENTS = 2_147_483_647;
+const MAXIMUM_CUSTOM_LOADS = 100;
 export type PriceInputMode = "range" | "exact" | "both";
 export type LoadSizeKind =
   | "quarter_to_half"
@@ -57,6 +59,13 @@ export type AppointmentBookingDetails = {
 };
 
 export type AppointmentLeadSource = AppointmentBookingDetails["source"];
+
+export type AppointmentBookingDetailsPrefill = {
+  serviceType?: AppointmentServiceType | null;
+  source?: AppointmentLeadSource | null;
+  pricing?: AppointmentBookingDetails["pricing"] | null;
+  loadSize?: AppointmentBookingDetails["loadSize"];
+};
 
 type LeadSourceInput = {
   type: LeadSourceType;
@@ -383,6 +392,9 @@ export function parseAppointmentBookingFormData(
   if (!pickupDate) {
     return { ok: false, error: "Pickup date is required." };
   }
+  if (!isCalendarDate(pickupDate)) {
+    return { ok: false, error: "Pickup date must be a valid calendar date." };
+  }
   if (!placementLocation) {
     return { ok: false, error: "Placement location is required." };
   }
@@ -624,15 +636,31 @@ function parseUsdToCents(value: FormDataEntryValue | null): number | null {
   if (!text) return null;
   const parsed = Number(text.replace(/[$,\s]/g, ""));
   if (!Number.isFinite(parsed) || parsed < 0) return null;
-  return Math.round(parsed * 100);
+  const cents = Math.round(parsed * 100);
+  return cents <= MAXIMUM_CENTS ? cents : null;
 }
 
 function parsePositiveDecimal(value: FormDataEntryValue | null): number | null {
   const text = readText(value);
   if (!text) return null;
   const parsed = Number(text);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  if (
+    !Number.isFinite(parsed) ||
+    parsed <= 0 ||
+    parsed > MAXIMUM_CUSTOM_LOADS
+  ) {
+    return null;
+  }
   return parsed;
+}
+
+function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return (
+    !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === value
+  );
 }
 
 function parseYesNoBoolean(value: FormDataEntryValue | null): boolean | null {

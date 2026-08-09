@@ -1,6 +1,11 @@
 "use client";
 
 import React from "react";
+import {
+  classifyContactResourceResponse,
+  contactResourceFailureMessage,
+  type ContactResourceFailure,
+} from "../contact-resource-state";
 import { teamButtonClass } from "./team-ui";
 
 type SalesAgentMemoryPayload = {
@@ -27,7 +32,11 @@ type SalesAgentMemoryPayload = {
       updatedAt?: string | null;
     }> | null;
     derived?: {
-      dmEntrySource?: "facebook_ad_lead" | "organic_messenger" | "unknown" | null;
+      dmEntrySource?:
+        | "facebook_ad_lead"
+        | "organic_messenger"
+        | "unknown"
+        | null;
     } | null;
   } | null;
   error?: string;
@@ -35,7 +44,32 @@ type SalesAgentMemoryPayload = {
 
 type Props = {
   contactId: string;
+  canRefresh?: boolean;
+  includeQuotePrice?: boolean;
 };
+
+type MemoryStatus = "loading" | "ready" | "empty" | ContactResourceFailure;
+
+async function readMemoryResponse(
+  response: Response,
+): Promise<
+  | { ok: true; data: SalesAgentMemoryPayload }
+  | { ok: false; failure: ContactResourceFailure }
+> {
+  let parsed = true;
+  const data = (await response.json().catch(() => {
+    parsed = false;
+    return null;
+  })) as SalesAgentMemoryPayload | null;
+  const failure = classifyContactResourceResponse({
+    status: response.status,
+    parsed,
+    okFlag: data?.ok,
+  });
+  return failure || !data
+    ? { ok: false, failure: failure ?? "malformed" }
+    : { ok: true, data };
+}
 
 function formatList(items: string[] | null | undefined): string {
   const safe = Array.isArray(items)
@@ -65,7 +99,10 @@ function formatTimestamp(value: string | null | undefined): string | null {
   }).format(parsed);
 }
 
-function compactText(value: string | null | undefined, maxLen = 220): string | null {
+function compactText(
+  value: string | null | undefined,
+  maxLen = 220,
+): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.replace(/\s+/g, " ").trim();
   if (!normalized) return null;
@@ -73,12 +110,18 @@ function compactText(value: string | null | undefined, maxLen = 220): string | n
   return `${normalized.slice(0, Math.max(0, maxLen - 3))}...`;
 }
 
-export function ContactSalesAgentMemoryClient({ contactId }: Props): React.ReactElement {
-  const [payload, setPayload] = React.useState<SalesAgentMemoryPayload | null>(null);
-  const [status, setStatus] = React.useState<"idle" | "loading" | "error">("loading");
+export function ContactSalesAgentMemoryClient({
+  contactId,
+  canRefresh = false,
+  includeQuotePrice = false,
+}: Props): React.ReactElement {
+  const [payload, setPayload] = React.useState<SalesAgentMemoryPayload | null>(
+    null,
+  );
+  const [status, setStatus] = React.useState<MemoryStatus>("loading");
   const [rebuilding, setRebuilding] = React.useState(false);
 
-  const requestUrl = `/api/team/contacts/sales-agent-memory?contactId=${encodeURIComponent(contactId)}&includeQuotePrice=1`;
+  const requestUrl = `/api/team/contacts/sales-agent-memory?contactId=${encodeURIComponent(contactId)}${includeQuotePrice ? "&includeQuotePrice=1" : ""}`;
 
   const loadMemory = React.useCallback(async () => {
     setRebuilding(true);
@@ -87,15 +130,40 @@ export function ContactSalesAgentMemoryClient({ contactId }: Props): React.React
         method: "POST",
         headers: { Accept: "application/json" },
       });
-      const data = (await response.json().catch(() => null)) as SalesAgentMemoryPayload | null;
-      if (!response.ok || !data?.ok) {
-        throw new Error(typeof data?.error === "string" ? data.error : "Unable to load agent memory.");
+      const result = await readMemoryResponse(response);
+      if (!result.ok) {
+        setPayload(null);
+        setStatus(result.failure);
+        return;
       }
-      setPayload(data);
-      setStatus("idle");
+      setPayload(result.data);
+      setStatus(result.data.memory ? "ready" : "empty");
     } catch {
       setPayload(null);
-      setStatus("error");
+      setStatus("unavailable");
+    } finally {
+      setRebuilding(false);
+    }
+  }, [requestUrl]);
+
+  const retryMemory = React.useCallback(async () => {
+    setRebuilding(true);
+    setStatus("loading");
+    try {
+      const response = await fetch(requestUrl, {
+        headers: { Accept: "application/json" },
+      });
+      const result = await readMemoryResponse(response);
+      if (!result.ok) {
+        setPayload(null);
+        setStatus(result.failure);
+        return;
+      }
+      setPayload(result.data);
+      setStatus(result.data.memory ? "ready" : "empty");
+    } catch {
+      setPayload(null);
+      setStatus("unavailable");
     } finally {
       setRebuilding(false);
     }
@@ -111,16 +179,18 @@ export function ContactSalesAgentMemoryClient({ contactId }: Props): React.React
           headers: { Accept: "application/json" },
           signal: controller.signal,
         });
-        const data = (await response.json().catch(() => null)) as SalesAgentMemoryPayload | null;
-        if (!response.ok || !data?.ok) {
-          throw new Error(typeof data?.error === "string" ? data.error : "Unable to load agent memory.");
+        const result = await readMemoryResponse(response);
+        if (!result.ok) {
+          setPayload(null);
+          setStatus(result.failure);
+          return;
         }
-        setPayload(data);
-        setStatus("idle");
+        setPayload(result.data);
+        setStatus(result.data.memory ? "ready" : "empty");
       } catch (error) {
         if ((error as { name?: string }).name === "AbortError") return;
         setPayload(null);
-        setStatus("error");
+        setStatus("unavailable");
       }
     })();
 
@@ -132,35 +202,56 @@ export function ContactSalesAgentMemoryClient({ contactId }: Props): React.React
   const dmEntrySource = payload?.liveContext?.derived?.dmEntrySource ?? null;
   const latestReviewNote =
     (payload?.liveContext?.recentNotes ?? []).find((note) => {
-      const title = typeof note?.title === "string" ? note.title.trim().toLowerCase() : "";
+      const title =
+        typeof note?.title === "string" ? note.title.trim().toLowerCase() : "";
       return title.startsWith("agent review");
     }) ?? null;
   const latestReviewNoteBody = compactText(latestReviewNote?.notes, 280);
-  const latestReviewNoteUpdatedAt = formatTimestamp(latestReviewNote?.updatedAt);
+  const latestReviewNoteUpdatedAt = formatTimestamp(
+    latestReviewNote?.updatedAt,
+  );
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sales Agent</div>
-          <div className="text-sm font-semibold text-slate-900">Agent memory</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Sales Agent
+          </div>
+          <div className="text-sm font-semibold text-slate-900">
+            Agent memory
+          </div>
         </div>
-        <button
-          type="button"
-          className={teamButtonClass("secondary", "sm")}
-          onClick={() => void loadMemory()}
-          disabled={rebuilding}
-        >
-          {rebuilding ? "Refreshing..." : "Refresh"}
-        </button>
+        {canRefresh ? (
+          <button
+            type="button"
+            className={teamButtonClass("secondary", "sm")}
+            onClick={() => void loadMemory()}
+            disabled={rebuilding}
+          >
+            {rebuilding ? "Refreshing..." : "Refresh"}
+          </button>
+        ) : null}
       </div>
 
-      <div className="mt-3 space-y-3 text-xs text-slate-600">
+      <div className="mt-3 space-y-3 text-xs text-slate-600" aria-live="polite">
         {status === "loading" ? (
           <div>Loading agent memory...</div>
-        ) : status === "error" ? (
-          <div className="text-rose-600">Unable to load agent memory.</div>
-        ) : memory ? (
+        ) : status !== "ready" && status !== "empty" ? (
+          <div className="space-y-2 text-rose-600" role="alert">
+            <p>{contactResourceFailureMessage("agent memory", status)}</p>
+            {status !== "forbidden" && status !== "not-found" ? (
+              <button
+                type="button"
+                className={teamButtonClass("secondary", "sm")}
+                onClick={() => void retryMemory()}
+                disabled={rebuilding}
+              >
+                Retry agent memory
+              </button>
+            ) : null}
+          </div>
+        ) : status === "ready" && memory ? (
           <>
             {memory.summary ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
@@ -174,20 +265,28 @@ export function ContactSalesAgentMemoryClient({ contactId }: Props): React.React
                 <div>{formatLabel(memory.customerIntent)}</div>
               </div>
               <div>
-                <div className="font-semibold text-slate-700">Preferred channel</div>
+                <div className="font-semibold text-slate-700">
+                  Preferred channel
+                </div>
                 <div>{formatLabel(memory.channelPreference)}</div>
               </div>
               <div>
-                <div className="font-semibold text-slate-700">Booking readiness</div>
+                <div className="font-semibold text-slate-700">
+                  Booking readiness
+                </div>
                 <div>{formatLabel(memory.bookingReadiness)}</div>
               </div>
               <div>
-                <div className="font-semibold text-slate-700">Quote confidence</div>
+                <div className="font-semibold text-slate-700">
+                  Quote confidence
+                </div>
                 <div>{formatLabel(memory.quoteConfidence)}</div>
               </div>
               {dmEntrySource ? (
                 <div>
-                  <div className="font-semibold text-slate-700">Messenger entry</div>
+                  <div className="font-semibold text-slate-700">
+                    Messenger entry
+                  </div>
                   <div>{formatLabel(dmEntrySource)}</div>
                 </div>
               ) : null}
@@ -195,38 +294,52 @@ export function ContactSalesAgentMemoryClient({ contactId }: Props): React.React
 
             {memory.pricingContext ? (
               <div>
-                <div className="font-semibold text-slate-700">Pricing context</div>
+                <div className="font-semibold text-slate-700">
+                  Pricing context
+                </div>
                 <div>{memory.pricingContext}</div>
               </div>
             ) : null}
 
             {memory.lastPromisedNextStep ? (
               <div>
-                <div className="font-semibold text-slate-700">Last promised next step</div>
+                <div className="font-semibold text-slate-700">
+                  Last promised next step
+                </div>
                 <div>{memory.lastPromisedNextStep}</div>
               </div>
             ) : null}
 
             {latestReviewNoteBody ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
-                <div className="font-semibold uppercase tracking-wide">Latest operator review note</div>
-                <div className="mt-1 text-sm font-normal leading-6">{latestReviewNoteBody}</div>
+                <div className="font-semibold uppercase tracking-wide">
+                  Latest operator review note
+                </div>
+                <div className="mt-1 text-sm font-normal leading-6">
+                  {latestReviewNoteBody}
+                </div>
                 {latestReviewNoteUpdatedAt ? (
-                  <div className="mt-1 text-[11px] text-amber-800">Saved {latestReviewNoteUpdatedAt}</div>
+                  <div className="mt-1 text-[11px] text-amber-800">
+                    Saved {latestReviewNoteUpdatedAt}
+                  </div>
                 ) : null}
               </div>
             ) : null}
 
             {memory.lastHumanSummary ? (
               <div>
-                <div className="font-semibold text-slate-700">Last human summary</div>
+                <div className="font-semibold text-slate-700">
+                  Last human summary
+                </div>
                 <div>{memory.lastHumanSummary}</div>
               </div>
             ) : null}
 
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div>
-                <div className="font-semibold text-slate-700">Missing fields</div>
+                <div className="font-semibold text-slate-700">
+                  Missing fields
+                </div>
                 <div>{formatList(memory.missingFields)}</div>
               </div>
               <div>
@@ -236,11 +349,15 @@ export function ContactSalesAgentMemoryClient({ contactId }: Props): React.React
             </div>
 
             {updatedAt ? (
-              <div className="text-[11px] text-slate-500">Updated {updatedAt}</div>
+              <div className="text-[11px] text-slate-500">
+                Updated {updatedAt}
+              </div>
             ) : null}
           </>
         ) : (
-          <div>No agent memory on file yet.</div>
+          <div role="status">
+            No agent memory has been created for this contact yet.
+          </div>
         )}
       </div>
     </div>

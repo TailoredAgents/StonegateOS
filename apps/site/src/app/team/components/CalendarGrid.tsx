@@ -1,5 +1,11 @@
 import React from "react";
-import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
+import {
+  addCalendarDays,
+  calendarDayKeyForLabel,
+  formatCalendarDayKey,
+  getCalendarWeekStart,
+  TEAM_TIME_ZONE,
+} from "../lib/calendar-time";
 import {
   formatCalendarEventAmounts,
   formatUsdCents,
@@ -24,7 +30,10 @@ export type CalendarEvent = {
   status?: string | null;
   quotedTotalCents?: number | null;
   finalTotalCents?: number | null;
+  version?: string | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
+  crewMemberIds?: string[];
+  crewNames?: string[];
 };
 
 type Props = {
@@ -37,8 +46,6 @@ type Props = {
   onSelectEvent?: (id: string) => void;
 };
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 export function CalendarGrid({
   events,
   conflicts,
@@ -48,17 +55,15 @@ export function CalendarGrid({
   onSelectDay,
   onSelectEvent,
 }: Props): React.ReactElement {
-  const anchor = parseDayKey(anchorDay) ?? new Date();
-  const weekday = getWeekdayIndex(anchor);
-  const startOfWeek = new Date(anchor.getTime() - weekday * DAY_MS);
-
-  const days = Array.from({ length: 7 }).map(
-    (_, i) => new Date(startOfWeek.getTime() + i * DAY_MS),
-  );
+  const startOfWeek = getCalendarWeekStart(anchorDay);
+  const days = Array.from({ length: 7 }).map((_, index) => {
+    const key = addCalendarDays(startOfWeek, index);
+    return { key, date: calendarDayKeyForLabel(key) ?? new Date() };
+  });
 
   const dayBuckets: Record<string, CalendarEvent[]> = {};
   for (const day of days) {
-    const key = formatDayKey(day);
+    const key = day.key;
     if (key) {
       dayBuckets[key] = [];
     }
@@ -66,7 +71,9 @@ export function CalendarGrid({
 
   for (const evt of events) {
     const parsed = new Date(evt.start);
-    const dayKey = Number.isNaN(parsed.getTime()) ? "" : formatDayKey(parsed);
+    const dayKey = Number.isNaN(parsed.getTime())
+      ? ""
+      : formatCalendarDayKey(parsed);
     if (dayBuckets[dayKey]) {
       dayBuckets[dayKey].push(evt);
     }
@@ -80,8 +87,7 @@ export function CalendarGrid({
 
   return (
     <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 lg:grid-cols-7">
-      {days.map((day) => {
-        const key = formatDayKey(day);
+      {days.map(({ key, date }) => {
         const bucket = dayBuckets[key] ?? [];
         const revenueSummary = revenueSummaryByDay[key] ?? null;
         const revenueLabel = revenueSummary
@@ -106,14 +112,14 @@ export function CalendarGrid({
                   ? `${revenueSummary.label} revenue ${revenueLabel}`
                   : undefined
               }
-              className={`mb-2 w-full text-left text-xs font-semibold uppercase ${
+              className={`mb-2 min-h-11 w-full text-left text-xs font-semibold uppercase ${
                 isSelected
                   ? "text-primary-700"
                   : "text-slate-500 hover:text-primary-700"
               }`}
             >
               <span className="block">
-                {day.toLocaleDateString(undefined, {
+                {date.toLocaleDateString(undefined, {
                   timeZone: TEAM_TIME_ZONE,
                   weekday: "short",
                   month: "short",
@@ -140,20 +146,23 @@ export function CalendarGrid({
                     return (
                       <button
                         key={evt.id}
-                        className={`block w-full max-w-full overflow-hidden rounded-lg border px-2 py-1 text-left ${getCalendarEventSurfaceClass(evt)} ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
+                        className={`block min-h-11 w-full max-w-full overflow-hidden rounded-lg border px-2 py-1 text-left ${getCalendarEventSurfaceClass(evt)} ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
                         onClick={() => onSelectEvent?.(evt.id)}
                         type="button"
+                        aria-label={`${formatTimeRange(evt.start, evt.end)}, ${evt.title}${isConflict(evt.id) ? ", scheduling conflict" : ""}`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <span className="whitespace-nowrap font-semibold tabular-nums text-slate-800">
                             {formatTimeRange(evt.start, evt.end)}
                           </span>
                           <div className="flex flex-wrap items-center justify-end gap-1 text-[11px] text-slate-600">
-                            <span className="hidden rounded-full bg-white px-1.5 text-[10px] uppercase text-slate-500 sm:inline-flex">
-                              {evt.source === "db" ? "appt" : "google"}
+                            <span className="inline-flex rounded-full bg-white px-1.5 text-[10px] uppercase text-slate-500">
+                              {evt.source === "db" ? "CRM" : "Google"}
                             </span>
                             {isInPersonQuote(evt) ? (
-                              <span className={`rounded-full px-1.5 text-[10px] uppercase ${getCalendarEventBadgeClass(evt)}`}>
+                              <span
+                                className={`rounded-full px-1.5 text-[10px] uppercase ${getCalendarEventBadgeClass(evt)}`}
+                              >
                                 quote
                               </span>
                             ) : null}
@@ -215,44 +224,4 @@ function formatTime(iso: string): string {
 
 function formatTimeRange(startIso: string, endIso: string): string {
   return `${formatTime(startIso)} - ${formatTime(endIso)}`;
-}
-
-function parseDayKey(dayKey: string): Date | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey.trim());
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (
-    !Number.isFinite(year) ||
-    !Number.isFinite(month) ||
-    !Number.isFinite(day)
-  )
-    return null;
-  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
-}
-
-function getWeekdayIndex(date: Date): number {
-  const weekday = new Intl.DateTimeFormat("en-US", {
-    timeZone: TEAM_TIME_ZONE,
-    weekday: "short",
-  }).format(date);
-  switch (weekday.toLowerCase().slice(0, 3)) {
-    case "sun":
-      return 0;
-    case "mon":
-      return 1;
-    case "tue":
-      return 2;
-    case "wed":
-      return 3;
-    case "thu":
-      return 4;
-    case "fri":
-      return 5;
-    case "sat":
-      return 6;
-    default:
-      return 0;
-  }
 }

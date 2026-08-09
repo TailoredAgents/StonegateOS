@@ -3,11 +3,18 @@ import type { NextRequest } from "next/server";
 function normalizeBaseUrl(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  const withScheme = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
   try {
     const url = new URL(withScheme);
     const lowered = url.hostname.toLowerCase();
-    if (lowered === "localhost" || lowered === "127.0.0.1" || lowered === "0.0.0.0") return null;
+    if (
+      lowered === "localhost" ||
+      lowered === "127.0.0.1" ||
+      lowered === "0.0.0.0"
+    )
+      return null;
     return url.toString().replace(/\/$/, "");
   } catch {
     return null;
@@ -15,11 +22,19 @@ function normalizeBaseUrl(raw: string): string | null {
 }
 
 function getRequestOrigin(request: NextRequest): string {
-  const forwardedProto = (request.headers.get("x-forwarded-proto") ?? request.headers.get("x-forwarded-protocol") ?? "")
+  const forwardedProto = (
+    request.headers.get("x-forwarded-proto") ??
+    request.headers.get("x-forwarded-protocol") ??
+    ""
+  )
     .split(",")[0]
     ?.trim()
     ?.toLowerCase();
-  const forwardedHost = (request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "")
+  const forwardedHost = (
+    request.headers.get("x-forwarded-host") ??
+    request.headers.get("host") ??
+    ""
+  )
     .split(",")[0]
     ?.trim();
 
@@ -36,7 +51,10 @@ function getRequestOrigin(request: NextRequest): string {
   return request.nextUrl.origin;
 }
 
-export function getSafeRedirectUrl(request: NextRequest, fallbackPath = "/team?tab=owner"): URL {
+export function getSafeRedirectUrl(
+  request: NextRequest,
+  fallbackPath = "/team?tab=owner",
+): URL {
   const origin = getRequestOrigin(request);
   const fallback = new URL(fallbackPath, origin);
   const referer = request.headers.get("referer");

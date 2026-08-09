@@ -12,13 +12,14 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import crypto from "node:crypto";
 import { nanoid } from "nanoid";
 import { DateTime } from "luxon";
+import { resolveMetaGraphApiEndpoint } from "@myst-os/sdk";
 import {
   getDb,
   outboxEvents,
-  callRecords,
   callCoaching,
   appointments,
   automationSettings,
@@ -26,7 +27,6 @@ import {
   instantQuotes,
   contacts,
   crmTasks,
-  policySettings,
   properties,
   quotes,
   crmPipeline,
@@ -60,6 +60,7 @@ import {
   downloadTwilioRecordingAudio,
   listTwilioRecordingsForCall,
 } from "@/lib/twilio-recordings";
+import { createTwilioOutboundCall } from "@/lib/twilio-calls";
 import type {
   EstimateNotificationPayload,
   QuoteNotificationPayload,
@@ -72,6 +73,10 @@ import {
   sendQuoteDecisionNotification,
 } from "@/lib/notifications";
 import type { AppointmentCalendarPayload } from "@/lib/calendar";
+import {
+  buildGoogleCalendarEventId,
+  deleteCalendarEvent,
+} from "@/lib/calendar";
 import {
   createCalendarEventWithRetry,
   updateCalendarEventWithRetry,
@@ -94,6 +99,7 @@ import {
 } from "@/lib/sales-autopilot";
 import { handleFacebookSalesEvaluate } from "@/lib/facebook-sales-autopilot";
 import { recordAuditEvent } from "@/lib/audit";
+import { queueSystemOutboundMessage } from "@/lib/system-outbound";
 import {
   AppointmentMediaError,
   importAppointmentRelatedMedia,
@@ -120,6 +126,52 @@ import {
   recordLeadFromFacebook,
 } from "@/lib/facebook-webhooks";
 import { recordInboundMessage } from "@/lib/inbox";
+import {
+  getOutboxRetryDelayMs,
+  planContactScopedOutboxReconciliation,
+  planOutboxOutcomeFinalization,
+} from "@/lib/outbox-finalization";
+import {
+  claimMessageDispatch,
+  ensureMessageDispatchRequested,
+  finalizeMessageDispatch,
+  type ExternalMessageChannel,
+} from "@/lib/external-message-dispatch";
+import {
+  parseQuoteDecisionOutboxPayload,
+  resolveQuoteSendAttemptId,
+  shouldNotifyCustomerForQuoteDecision,
+} from "@/lib/quote-outbox-contract";
+import { resolveUsableQuoteDeliveryChannels } from "@/lib/contact-outbound-safety";
+import {
+  buildTwilioWebhookUrl,
+  getTwilioWebhookPublicBaseUrl,
+} from "@/lib/twilio-webhook-auth";
+import { buildLegacyOutboxProviderRequestKey } from "@/lib/outbox-provider-request-key";
+import {
+  finalizeSalesEscalationCallAttempt,
+  prepareSalesEscalationCallAttempt,
+  reconcileSalesEscalationAfterStorageFailure,
+  resumeSalesEscalationCallAttempt,
+} from "@/lib/sales-escalation-call-operations";
+import {
+  claimRecordingProcessingLease,
+  deferRecordingProcessingLease,
+  finalizeRecordingDelete,
+  persistAnalyzedRecording,
+  persistSkippedRecordingProcessing,
+  prepareRecordingDelete,
+  quarantineRecordingDeleteEvent,
+  recordVerifiedEmptyRecordingPoll,
+} from "@/lib/call-recording-persistence";
+import {
+  getTeamOperationKillSwitch,
+  getTeamOperationKillSwitchForRisk,
+} from "@/lib/team-operation-kill-switch";
+import {
+  finalizeStaffNotificationDispatch,
+  prepareStaffNotificationDispatch,
+} from "@/lib/staff-notification-operations";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -138,10 +190,45 @@ type OutboxOutcome = {
   status: "processed" | "skipped" | "retry";
   error?: string | null;
   nextAttemptAt?: Date | null;
+  /** The dispatch state machine already deferred or quarantined this event. */
+  skipFinalization?: boolean;
 };
 
+class ContactDispatchGuardFailure extends Error {
+  constructor(cause: unknown) {
+    super(`contact_dispatch_guard_failed:${String(cause)}`);
+    this.name = "ContactDispatchGuardFailure";
+  }
+}
+
+class OutboxFinalizationFailure extends Error {
+  constructor(cause: unknown) {
+    super(`outbox_finalization_failed:${String(cause)}`);
+    this.name = "OutboxFinalizationFailure";
+  }
+}
+
 const MAX_MESSAGE_SEND_ATTEMPTS = 3;
-const MESSAGE_SEND_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
+const CONTACT_MESSAGE_ENQUEUE_EVENT_TYPES = new Set([
+  "estimate.requested",
+  "estimate.rescheduled",
+  "estimate.status_changed",
+  "estimate.reminder",
+  "lead.created",
+  "review.request",
+  "quote.sent",
+  "quote.decision",
+  // This handler owns a separate durable provider ledger and must not execute
+  // inside the contact-scoped transaction that surrounds ordinary handlers.
+  "sales.escalation.call",
+  // Recording processing performs provider/model work before one atomic local
+  // commit and acquires the same contact advisory lock inside that commit.
+  // Nesting it under the outer contact lock would deadlock across connections.
+  "call.recording.process",
+  // Staff alerts have their own pre-dispatch state and uncertainty ledger.
+  // They must not run inside the ordinary contact-scoped transaction.
+  "staff_notification.dispatch",
+]);
 const HUMANISTIC_DELAY_MIN_MS = 10_000;
 const HUMANISTIC_DELAY_MAX_MS = 30_000;
 const AUTO_FIRST_TOUCH_SMS_ENABLED =
@@ -189,16 +276,57 @@ function isValidAppointmentStatus(value: unknown): value is AppointmentStatus {
   return typeof value === "string" && VALID_APPOINTMENT_STATUSES.has(value);
 }
 
-function getRetryDelayMs(attempt: number): number {
-  if (!Number.isFinite(attempt) || attempt <= 0) {
-    return MESSAGE_SEND_RETRY_DELAYS_MS[0] ?? 60_000;
+function outcomeForOutboxHandlerError(
+  event: Pick<OutboxEventRecord, "attempts" | "id" | "type">,
+  error: unknown,
+): OutboxOutcome {
+  const message = error instanceof Error ? error.message : String(error);
+  const attempt = (event.attempts ?? 0) + 1;
+  const canRetry =
+    (event.type === "message.send" && attempt < MAX_MESSAGE_SEND_ATTEMPTS) ||
+    // Dedicated provider-operation ledgers, not the generic outbox counter,
+    // own bounded attempts and no-repeat decisions. Retrying an unexpected
+    // handler/storage exception is safe: a pre-dispatch failure can resume,
+    // while a committed `dispatched` marker becomes reconciliation work
+    // before the provider could be called again.
+    event.type === "sales.escalation.call" ||
+    event.type === "staff_notification.dispatch" ||
+    // Calendar creates use a deterministic provider ID, while updates always
+    // target the already-persisted ID. Both operations therefore converge on
+    // retry instead of treating an ambiguous provider response as success.
+    event.type === "appointment.calendar_sync_requested" ||
+    (event.type.startsWith("facebook.") && attempt < 5) ||
+    event.type.startsWith("call.recording.");
+  console.warn("[outbox] handler_error", {
+    id: event.id,
+    type: event.type,
+    error: message,
+  });
+  return canRetry
+    ? { status: "retry", error: message }
+    : { status: "processed", error: message };
+}
+
+async function finalizeOutboxEvent(
+  db: Pick<ReturnType<typeof getDb>, "update">,
+  event: OutboxEventRecord,
+  outcome: OutboxOutcome,
+  now = new Date(),
+): Promise<void> {
+  const [finalized] = await db
+    .update(outboxEvents)
+    .set(planOutboxOutcomeFinalization(event, outcome, now))
+    .where(
+      and(
+        eq(outboxEvents.id, event.id),
+        isNull(outboxEvents.processedAt),
+        isNull(outboxEvents.quarantinedAt),
+      ),
+    )
+    .returning({ id: outboxEvents.id });
+  if (!finalized?.id) {
+    throw new OutboxFinalizationFailure("event_not_dispatchable");
   }
-  const index = Math.min(attempt - 1, MESSAGE_SEND_RETRY_DELAYS_MS.length - 1);
-  return (
-    MESSAGE_SEND_RETRY_DELAYS_MS[index] ??
-    MESSAGE_SEND_RETRY_DELAYS_MS[0] ??
-    60_000
-  );
 }
 
 function parseSmsFailureStatus(detail: string): number | null {
@@ -221,7 +349,9 @@ function isRetryableSendFailure(detail: string | null): boolean {
   if (
     normalized.includes("not_configured") ||
     normalized.includes("missing_recipient") ||
-    normalized.includes("unsupported_channel")
+    normalized.includes("unsupported_channel") ||
+    normalized.includes("email_request_invalid") ||
+    normalized.includes("email_rejected:permanent")
   ) {
     return false;
   }
@@ -306,6 +436,476 @@ function readStringValue(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+type AppointmentCustomerMessageIntent =
+  | "status_notification"
+  | "review_request";
+type AppointmentMessageAuthorizationEvidence = {
+  auditEventId: string;
+  actorId: string;
+  sessionId: string;
+  authMethod: "team_session" | "break_glass";
+  correlationId: string;
+  operationId: string;
+  requiredPermission: "messages.send";
+};
+type AppointmentMessageAuthorization =
+  | { state: "not_requested" | "invalid"; evidence: null }
+  | {
+      state: "authorized";
+      evidence: AppointmentMessageAuthorizationEvidence;
+    };
+
+const UUID_VALUE_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/**
+ * Customer messaging from an appointment-status event is allowed only when
+ * the committed status mutation explicitly requested that exact effect. The
+ * outbox marker is not trusted on its own: it must resolve to the immutable
+ * success audit row produced in the same database transaction.
+ */
+async function verifyAppointmentMessageAuthorization(input: {
+  db: ReturnType<typeof getDb>;
+  payload: Record<string, unknown> | null;
+  appointmentId: string;
+  status: string | null;
+  intent: AppointmentCustomerMessageIntent;
+  requested: boolean;
+}): Promise<AppointmentMessageAuthorization> {
+  if (!input.requested) return { state: "not_requested", evidence: null };
+  const authorization =
+    input.payload && isRecord(input.payload["messageAuthorization"])
+      ? input.payload["messageAuthorization"]
+      : null;
+  const auditEventId = readStringValue(authorization?.["auditEventId"]);
+  const actorId = readStringValue(authorization?.["actorId"]);
+  const sessionId = readStringValue(authorization?.["sessionId"]);
+  const authMethod = readStringValue(authorization?.["authMethod"]);
+  const correlationId = readStringValue(authorization?.["correlationId"]);
+  const operationId = readStringValue(authorization?.["operationId"]);
+  const requiredPermission = readStringValue(
+    authorization?.["requiredPermission"],
+  );
+  const payloadCorrelationId = readStringValue(
+    input.payload?.["correlationId"],
+  );
+  const payloadVersion = readStringValue(input.payload?.["version"]);
+  if (
+    !auditEventId ||
+    !UUID_VALUE_PATTERN.test(auditEventId) ||
+    !actorId ||
+    !sessionId ||
+    (authMethod !== "team_session" && authMethod !== "break_glass") ||
+    !correlationId ||
+    correlationId !== payloadCorrelationId ||
+    !operationId ||
+    requiredPermission !== "messages.send" ||
+    !payloadVersion
+  ) {
+    return { state: "invalid", evidence: null };
+  }
+
+  const [audit] = await input.db
+    .select({
+      actorType: auditLogs.actorType,
+      actorId: auditLogs.actorId,
+      sessionId: auditLogs.sessionId,
+      authMethod: auditLogs.authMethod,
+      correlationId: auditLogs.correlationId,
+      requiredPermissions: auditLogs.requiredPermissions,
+      outcome: auditLogs.outcome,
+      action: auditLogs.action,
+      entityType: auditLogs.entityType,
+      entityId: auditLogs.entityId,
+      meta: auditLogs.meta,
+    })
+    .from(auditLogs)
+    .where(eq(auditLogs.id, auditEventId))
+    .limit(1);
+  const meta = isRecord(audit?.meta) ? audit.meta : null;
+  const after = meta && isRecord(meta["after"]) ? meta["after"] : null;
+  const expectedIntentMetadata =
+    input.intent === "status_notification"
+      ? "customerNotificationRequested"
+      : "reviewRequestRequested";
+  const authorized =
+    audit?.actorType === "human" &&
+    audit.actorId === actorId &&
+    audit.sessionId === sessionId &&
+    audit.authMethod === authMethod &&
+    audit.correlationId === correlationId &&
+    audit.outcome === "succeeded" &&
+    audit.action === "appointment.status.updated" &&
+    audit.entityType === "appointment" &&
+    audit.entityId === input.appointmentId &&
+    Array.isArray(audit.requiredPermissions) &&
+    audit.requiredPermissions.includes("messages.send") &&
+    meta?.["operationId"] === operationId &&
+    meta?.[expectedIntentMetadata] === true &&
+    after?.["status"] === input.status &&
+    after?.["version"] === payloadVersion;
+  return authorized
+    ? {
+        state: "authorized",
+        evidence: {
+          auditEventId,
+          actorId,
+          sessionId,
+          authMethod,
+          correlationId,
+          operationId,
+          requiredPermission: "messages.send",
+        },
+      }
+    : { state: "invalid", evidence: null };
+}
+
+async function verifyAppointmentCancellationCalendarAuthorization(input: {
+  db: ReturnType<typeof getDb>;
+  payload: Record<string, unknown>;
+  appointmentId: string;
+  requestedVersion: string;
+  requestedCalendarEventId: string;
+}): Promise<boolean> {
+  const auditEventId = readStringValue(input.payload["sourceAuditEventId"]);
+  const actorId = readStringValue(input.payload["actorId"]);
+  const sessionId = readStringValue(input.payload["sessionId"]);
+  const authMethod = readStringValue(input.payload["authMethod"]);
+  const correlationId = readStringValue(input.payload["correlationId"]);
+  const operationId = readStringValue(input.payload["operationId"]);
+  const requiredPermission = readStringValue(
+    input.payload["requiredPermission"],
+  );
+  const isTeamAuthorization =
+    (authMethod === "team_session" || authMethod === "break_glass") &&
+    requiredPermission === "appointments.update";
+  const isPartnerAuthorization =
+    authMethod === "partner_session" &&
+    requiredPermission === "partner.bookings.cancel";
+  if (
+    !auditEventId ||
+    !UUID_VALUE_PATTERN.test(auditEventId) ||
+    !actorId ||
+    !sessionId ||
+    !correlationId ||
+    !operationId ||
+    (!isTeamAuthorization && !isPartnerAuthorization)
+  ) {
+    return false;
+  }
+
+  const [audit] = await input.db
+    .select({
+      actorType: auditLogs.actorType,
+      actorId: auditLogs.actorId,
+      sessionId: auditLogs.sessionId,
+      authMethod: auditLogs.authMethod,
+      correlationId: auditLogs.correlationId,
+      requiredPermissions: auditLogs.requiredPermissions,
+      outcome: auditLogs.outcome,
+      action: auditLogs.action,
+      entityType: auditLogs.entityType,
+      entityId: auditLogs.entityId,
+      meta: auditLogs.meta,
+    })
+    .from(auditLogs)
+    .where(eq(auditLogs.id, auditEventId))
+    .limit(1);
+  const meta = isRecord(audit?.meta) ? audit.meta : null;
+  const before = meta && isRecord(meta["before"]) ? meta["before"] : null;
+  const after = meta && isRecord(meta["after"]) ? meta["after"] : null;
+  const commonEvidence = Boolean(
+    audit?.actorType === "human" &&
+      audit.actorId === actorId &&
+      audit.sessionId === sessionId &&
+      audit.authMethod === authMethod &&
+      audit.correlationId === correlationId &&
+      audit.outcome === "succeeded" &&
+      audit.entityType === "appointment" &&
+      audit.entityId === input.appointmentId &&
+      Array.isArray(audit.requiredPermissions) &&
+      audit.requiredPermissions.includes(requiredPermission) &&
+      meta?.["operationId"] === operationId &&
+      meta?.["calendarSync"] === "requested" &&
+      before?.["calendarEventId"] === input.requestedCalendarEventId &&
+      after?.["status"] === "canceled" &&
+      after?.["version"] === input.requestedVersion,
+  );
+  if (!commonEvidence) return false;
+  return isTeamAuthorization
+    ? audit?.action === "appointment.status.updated"
+    : audit?.action === "partner.booking.canceled";
+}
+
+/**
+ * Resolve every currently supported CRM reference carried by an outbox
+ * payload back to its contact and current deletion state. This runs
+ * immediately before a handler, so provider calls do not rely only on the
+ * delete-time scan.
+ */
+type OutboxContactScope = {
+  contactId: string;
+  deletedAt: Date | null;
+};
+
+async function resolveContactForOutboxEvent(
+  event: OutboxEventRecord,
+): Promise<OutboxContactScope | null> {
+  const payload = isRecord(event.payload) ? event.payload : null;
+  if (!payload) return null;
+
+  const predicates: SQL<unknown>[] = [];
+  const contactId = readStringValue(payload["contactId"]);
+  if (contactId) {
+    predicates.push(sql`${contacts.id}::text = ${contactId}`);
+  }
+
+  const leadId = readStringValue(payload["leadId"]);
+  if (leadId) {
+    predicates.push(sql`EXISTS (
+      SELECT 1 FROM "leads" AS guarded_lead
+      WHERE guarded_lead."contact_id" = ${contacts.id}
+        AND guarded_lead."id"::text = ${leadId}
+    )`);
+  }
+
+  const appointmentId = readStringValue(payload["appointmentId"]);
+  if (appointmentId) {
+    predicates.push(sql`EXISTS (
+      SELECT 1 FROM "appointments" AS guarded_appointment
+      WHERE guarded_appointment."contact_id" = ${contacts.id}
+        AND guarded_appointment."id"::text = ${appointmentId}
+    )`);
+  }
+
+  const quoteId = readStringValue(payload["quoteId"]);
+  if (quoteId) {
+    predicates.push(sql`EXISTS (
+      SELECT 1 FROM "quotes" AS guarded_quote
+      WHERE guarded_quote."contact_id" = ${contacts.id}
+        AND guarded_quote."id"::text = ${quoteId}
+    )`);
+  }
+
+  const taskId = readStringValue(payload["taskId"]);
+  if (taskId) {
+    predicates.push(sql`EXISTS (
+      SELECT 1 FROM "crm_tasks" AS guarded_task
+      WHERE guarded_task."contact_id" = ${contacts.id}
+        AND guarded_task."id"::text = ${taskId}
+    )`);
+  }
+
+  const threadId = readStringValue(payload["threadId"]);
+  if (threadId) {
+    predicates.push(sql`EXISTS (
+      SELECT 1 FROM "conversation_threads" AS guarded_thread
+      WHERE guarded_thread."contact_id" = ${contacts.id}
+        AND guarded_thread."id"::text = ${threadId}
+    )`);
+  }
+
+  for (const messageKey of [
+    "messageId",
+    "draftMessageId",
+    "inboundMessageId",
+  ] as const) {
+    const messageId = readStringValue(payload[messageKey]);
+    if (!messageId) continue;
+    predicates.push(sql`EXISTS (
+      SELECT 1
+      FROM "conversation_messages" AS guarded_message
+      INNER JOIN "conversation_threads" AS guarded_message_thread
+        ON guarded_message_thread."id" = guarded_message."thread_id"
+      WHERE guarded_message_thread."contact_id" = ${contacts.id}
+        AND guarded_message."id"::text = ${messageId}
+    )`);
+  }
+
+  const callRecordId = readStringValue(payload["callRecordId"]);
+  const callSid = readStringValue(payload["callSid"]);
+  if (callRecordId || callSid) {
+    predicates.push(sql`EXISTS (
+      SELECT 1 FROM "call_records" AS guarded_call
+      WHERE guarded_call."contact_id" = ${contacts.id}
+        AND (
+          guarded_call."id"::text = ${callRecordId}
+          OR guarded_call."call_sid" = ${callSid}
+        )
+    )`);
+  }
+
+  if (predicates.length === 0) return null;
+  const [contact] = await getDb()
+    .select({ id: contacts.id, deletedAt: contacts.deletedAt })
+    .from(contacts)
+    .where(or(...predicates))
+    .limit(1);
+
+  return contact
+    ? { contactId: contact.id, deletedAt: contact.deletedAt }
+    : null;
+}
+
+async function quarantineOutboxEventForDeletedContact(
+  event: OutboxEventRecord,
+  contactId: string,
+): Promise<void> {
+  const db = getDb();
+  const quarantinedAt = new Date();
+  await db.transaction(async (tx) => {
+    const [quarantined] = await tx
+      .update(outboxEvents)
+      .set({
+        quarantinedAt,
+        quarantinedBy: null,
+        quarantineReason: "contact_soft_deleted",
+        quarantinedContactId: contactId,
+        lastError: "contact_soft_deleted",
+      })
+      .where(
+        and(
+          eq(outboxEvents.id, event.id),
+          isNull(outboxEvents.processedAt),
+          isNull(outboxEvents.quarantinedAt),
+        ),
+      )
+      .returning({ id: outboxEvents.id });
+
+    if (!quarantined?.id) return;
+    await tx.insert(auditLogs).values({
+      actorType: "worker",
+      actorId: null,
+      actorRole: null,
+      actorLabel: "outbox",
+      action: "contact.outbox_quarantined",
+      entityType: "contact",
+      entityId: contactId,
+      meta: {
+        outboxEventId: event.id,
+        outboxEventType: event.type,
+        reason: "contact_soft_deleted",
+        outcome: "succeeded",
+      },
+      createdAt: quarantinedAt,
+    });
+  });
+}
+
+async function quarantineOutboxEventForFinalizationReconciliation(
+  event: OutboxEventRecord,
+  contactId: string,
+  options: { writeAudit?: boolean } = {},
+): Promise<"quarantined" | "already_terminal"> {
+  const db = getDb();
+  const quarantinedAt = new Date();
+  return db.transaction(async (tx) => {
+    // Reacquire the contact lock before changing terminal state. This closes
+    // the ordinary worker race after the provider transaction rolls back,
+    // while the durable provider-state-machine work remains the crash-safe
+    // solution for a database outage or process death in this narrow window.
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${contactId}, 0))`,
+    );
+    const [quarantined] = await tx
+      .update(outboxEvents)
+      .set(
+        planContactScopedOutboxReconciliation(event, contactId, quarantinedAt),
+      )
+      .where(
+        and(
+          eq(outboxEvents.id, event.id),
+          isNull(outboxEvents.processedAt),
+          isNull(outboxEvents.quarantinedAt),
+        ),
+      )
+      .returning({ id: outboxEvents.id });
+
+    if (!quarantined?.id) return "already_terminal";
+    if (options.writeAudit !== false) {
+      await tx.insert(auditLogs).values({
+        actorType: "worker",
+        actorId: null,
+        actorRole: null,
+        actorLabel: "outbox",
+        action: "contact.outbox_reconciliation_required",
+        entityType: "contact",
+        entityId: contactId,
+        meta: {
+          outboxEventId: event.id,
+          outboxEventType: event.type,
+          reason: "provider_effect_finalization_uncertain",
+          outcome: "reconciliation_required",
+          redispatchPrevented: true,
+        },
+        createdAt: quarantinedAt,
+      });
+    }
+    return "quarantined";
+  });
+}
+
+async function handleContactScopedOutboxEvent(
+  event: OutboxEventRecord,
+  contactId: string,
+): Promise<
+  | { kind: "handled"; outcome: OutboxOutcome }
+  | { kind: "deleted" }
+  | { kind: "unavailable" }
+> {
+  const db = getDb();
+  let handlerStarted = false;
+  try {
+    return await db.transaction(async (tx) => {
+      // This lock is shared with contact DELETE. A handler that wins the lock
+      // finishes all provider effects before deletion can commit; a deletion
+      // that wins makes this recheck block the handler before any provider call.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${contactId}, 0))`,
+      );
+      const [dispatchableEvent] = await tx
+        .select({ id: outboxEvents.id })
+        .from(outboxEvents)
+        .where(
+          and(
+            eq(outboxEvents.id, event.id),
+            isNull(outboxEvents.processedAt),
+            isNull(outboxEvents.quarantinedAt),
+          ),
+        )
+        .limit(1);
+      if (!dispatchableEvent?.id) return { kind: "unavailable" as const };
+
+      const [contact] = await tx
+        .select({ deletedAt: contacts.deletedAt })
+        .from(contacts)
+        .where(eq(contacts.id, contactId))
+        .limit(1);
+      if (contact?.deletedAt) return { kind: "deleted" as const };
+
+      handlerStarted = true;
+      let outcome: OutboxOutcome;
+      try {
+        outcome = contact
+          ? await handleOutboxEvent(event)
+          : { status: "skipped", error: "contact_missing" };
+      } catch (error) {
+        outcome = outcomeForOutboxHandlerError(event, error);
+      }
+      try {
+        await finalizeOutboxEvent(tx, event, outcome);
+      } catch (error) {
+        throw new OutboxFinalizationFailure(error);
+      }
+      return { kind: "handled" as const, outcome };
+    });
+  } catch (error) {
+    if (error instanceof OutboxFinalizationFailure) throw error;
+    if (!handlerStarted) throw new ContactDispatchGuardFailure(error);
+    throw error;
+  }
+}
+
 function readMetadataString(
   metadata: Record<string, unknown> | null,
   key: string,
@@ -342,6 +942,51 @@ function mergeMetadata(
   updates: Record<string, unknown>,
 ): Record<string, unknown> {
   return { ...(existing ?? {}), ...updates };
+}
+
+function readEmailAttachments(
+  metadata: Record<string, unknown> | null,
+):
+  | Array<{ filename: string; content: string; contentType: string }>
+  | null
+  | undefined {
+  const raw = metadata?.["emailAttachments"];
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) return null;
+  if (raw.length > 4) return null;
+  const attachments = raw
+    .map((value) => {
+      if (!isRecord(value)) return null;
+      const filename = readStringValue(value["filename"]);
+      const content = readStringValue(value["content"]);
+      const contentType = readStringValue(value["contentType"]);
+      if (
+        !filename ||
+        !content ||
+        !contentType ||
+        filename.length > 160 ||
+        content.length > 250_000 ||
+        !/^text\/calendar(?:;|$)/iu.test(contentType)
+      ) {
+        return null;
+      }
+      return {
+        filename: filename.replace(/[^a-z0-9._-]/giu, "_"),
+        content,
+        contentType,
+      };
+    })
+    .filter(
+      (
+        value,
+      ): value is {
+        filename: string;
+        content: string;
+        contentType: string;
+      } => value !== null,
+    );
+  if (attachments.length !== raw.length) return null;
+  return attachments;
 }
 
 function isDmWebhookConfigured(): boolean {
@@ -441,37 +1086,6 @@ async function resolveDmRecipient(
     : null;
 }
 
-function resolvePublicApiBaseUrl(): string | null {
-  const raw = (
-    process.env["API_BASE_URL"] ??
-    process.env["NEXT_PUBLIC_API_BASE_URL"] ??
-    ""
-  ).trim();
-  if (!raw) {
-    return process.env["NODE_ENV"] === "production"
-      ? null
-      : "http://localhost:3000";
-  }
-  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  try {
-    const url = new URL(withScheme);
-    const lowered = url.hostname.toLowerCase();
-    const isLocalhost =
-      lowered === "localhost" ||
-      lowered === "0.0.0.0" ||
-      lowered === "127.0.0.1" ||
-      lowered.endsWith(".internal");
-    if (process.env["NODE_ENV"] === "production" && isLocalhost) {
-      return null;
-    }
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return process.env["NODE_ENV"] === "production"
-      ? null
-      : "http://localhost:3000";
-  }
-}
-
 function normalizePhoneE164(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -523,64 +1137,6 @@ function nextSalesWindowStart(now: Date): Date | null {
   return null;
 }
 
-async function createTwilioCall(input: {
-  agentPhone: string;
-  requestUrl: string;
-  statusCallbackUrl: string;
-}): Promise<
-  { ok: true; callSid: string | null } | { ok: false; detail: string }
-> {
-  const sid = process.env["TWILIO_ACCOUNT_SID"];
-  const token = process.env["TWILIO_AUTH_TOKEN"];
-  const from = process.env["TWILIO_FROM"];
-  const baseUrl = (
-    process.env["TWILIO_API_BASE_URL"] ?? "https://api.twilio.com"
-  ).replace(/\/$/, "");
-
-  if (!sid || !token || !from) {
-    return { ok: false, detail: "twilio_not_configured" };
-  }
-
-  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
-  const formParams = new URLSearchParams({
-    To: input.agentPhone,
-    From: from,
-    Url: input.requestUrl,
-    Method: "POST",
-    StatusCallback: input.statusCallbackUrl,
-    StatusCallbackMethod: "POST",
-  });
-
-  for (const event of ["initiated", "ringing", "answered", "completed"]) {
-    formParams.append("StatusCallbackEvent", event);
-  }
-
-  const response = await fetch(
-    `${baseUrl}/2010-04-01/Accounts/${sid}/Calls.json`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${auth}`,
-      },
-      body: formParams.toString(),
-    },
-  );
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    const detail = text.trim().length
-      ? text.trim()
-      : `twilio_call_failed_${response.status}`;
-    return { ok: false, detail };
-  }
-
-  const payload = (await response.json().catch(() => null)) as {
-    sid?: string;
-  } | null;
-  return { ok: true, callSid: payload?.sid ?? null };
-}
-
 function buildQuoteShareUrl(token: string): string | null {
   const base = resolvePublicSiteBaseUrl();
   if (!base) return null;
@@ -607,28 +1163,21 @@ function parseLeadAlertRecipients(raw: string | undefined): string[] {
     .filter((value) => value.length > 0);
 }
 
-function readPhoneMapValue(value: unknown): Record<string, string> {
-  if (!isRecord(value)) return {};
-  const phonesRaw = value["phones"];
-  if (!isRecord(phonesRaw)) return {};
-  const phones: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(phonesRaw)) {
-    if (typeof raw === "string" && raw.trim().length > 0) {
-      phones[key] = raw.trim();
-    }
-  }
-  return phones;
-}
-
 async function getTeamMemberPhoneMap(
   db: ReturnType<typeof getDb>,
 ): Promise<Record<string, string>> {
-  const [row] = await db
-    .select({ value: policySettings.value })
-    .from(policySettings)
-    .where(eq(policySettings.key, "team_member_phones"))
-    .limit(1);
-  return readPhoneMapValue(row?.value);
+  const rows = await db
+    .select({ id: teamMembers.id, phoneE164: teamMembers.phoneE164 })
+    .from(teamMembers)
+    .where(eq(teamMembers.active, true));
+  return Object.fromEntries(
+    rows.flatMap((row) => {
+      const phoneE164 = row.phoneE164?.trim() ?? "";
+      return /^\+[1-9][0-9]{9,14}$/u.test(phoneE164)
+        ? [[row.id, phoneE164] as const]
+        : [];
+    }),
+  );
 }
 
 function buildInboundInboxAlertText(input: {
@@ -1037,11 +1586,7 @@ async function ensureSalesFollowupsForLead(input: {
         });
       }
 
-      if (
-        SALES_ESCALATION_CALL_ENABLED &&
-        hasPhone &&
-        isSpeedToLeadTask
-      ) {
+      if (SALES_ESCALATION_CALL_ENABLED && hasPhone && isSpeedToLeadTask) {
         const delayMs = 30_000;
         const instantAt = isWithinBusinessHours
           ? new Date(now.getTime() + delayMs)
@@ -1297,11 +1842,7 @@ async function ensureSalesFollowupsForContact(input: {
         });
       }
 
-      if (
-        SALES_ESCALATION_CALL_ENABLED &&
-        hasPhone &&
-        isSpeedToLeadTask
-      ) {
+      if (SALES_ESCALATION_CALL_ENABLED && hasPhone && isSpeedToLeadTask) {
         if (!allowInstantCallEscalation) continue;
         const delayMs = 30_000;
         const instantAt = isWithinBusinessHours
@@ -1926,7 +2467,6 @@ async function buildNotificationPayload(
 async function buildQuoteNotificationPayload(
   quoteId: string,
   overrides?: {
-    shareToken?: string | null;
     notes?: string | null;
   },
 ): Promise<QuoteNotificationPayload | null> {
@@ -1970,7 +2510,7 @@ async function buildQuoteNotificationPayload(
       )
     : [];
 
-  const shareToken = overrides?.shareToken ?? row.shareToken ?? null;
+  const shareToken = row.shareToken ?? null;
   const shareUrl = shareToken ? buildQuoteShareUrl(shareToken) : null;
   if (!shareUrl) {
     console.warn("[outbox] quote_missing_share_url", {
@@ -1992,14 +2532,19 @@ async function buildQuoteNotificationPayload(
   const total = Number(row.total ?? 0);
   const depositDue = Number(row.depositDue ?? 0);
   const balanceDue = Number(row.balanceDue ?? 0);
+  const deliveryChannels = resolveUsableQuoteDeliveryChannels({
+    email: row.contactEmail,
+    phone: row.contactPhone,
+    phoneE164: row.contactPhoneE164,
+  });
 
   return {
     quoteId,
     services,
     contact: {
       name: customerName,
-      email: row.contactEmail ?? null,
-      phone: row.contactPhoneE164 ?? row.contactPhone ?? null,
+      email: deliveryChannels.email,
+      phone: deliveryChannels.phone,
     },
     contactId: row.contactId ?? null,
     total,
@@ -2009,6 +2554,21 @@ async function buildQuoteNotificationPayload(
     expiresAt: row.expiresAt ?? null,
     notes: overrides?.notes ?? null,
   };
+}
+
+async function loadQuoteWorkflowContactId(
+  quoteId: string,
+): Promise<string | null> {
+  const [quote] = await getDb()
+    .select({ contactId: quotes.contactId })
+    .from(quotes)
+    .where(eq(quotes.id, quoteId))
+    .limit(1);
+  if (!quote) {
+    console.warn("[outbox] quote_workflow_not_found", { quoteId });
+    return null;
+  }
+  return quote.contactId;
 }
 
 async function updatePipelineStageForContact(
@@ -2082,6 +2642,7 @@ function mapAppointmentStatusToStage(status: string): PipelineStage {
 
 async function clearLeadFollowups(
   leadId: string | null | undefined,
+  options?: { excludeOutboxEventId?: string },
 ): Promise<void> {
   if (!leadId) return;
   const db = getDb();
@@ -2097,15 +2658,17 @@ async function clearLeadFollowups(
     })
     .where(eq(leadAutomationStates.leadId, leadId));
 
-  await db
-    .delete(outboxEvents)
-    .where(
-      and(
-        eq(outboxEvents.type, "followup.send"),
-        isNull(outboxEvents.processedAt),
-        sql`(payload->>'leadId') = ${leadId}`,
-      ),
-    );
+  const outboxFilters: SQL<unknown>[] = [
+    eq(outboxEvents.type, "followup.send"),
+    isNull(outboxEvents.processedAt),
+    isNull(outboxEvents.quarantinedAt),
+    sql`(payload->>'leadId') = ${leadId}`,
+  ];
+  if (options?.excludeOutboxEventId) {
+    outboxFilters.push(ne(outboxEvents.id, options.excludeOutboxEventId));
+  }
+
+  await db.delete(outboxEvents).where(and(...outboxFilters));
 }
 
 async function getAutomationMode(
@@ -2595,7 +3158,7 @@ async function scheduleLeadFollowups(
       phoneE164: contacts.phoneE164,
     })
     .from(contacts)
-    .where(eq(contacts.id, contactId))
+    .where(and(eq(contacts.id, contactId), isNull(contacts.deletedAt)))
     .limit(1);
 
   if (!contact) {
@@ -2666,6 +3229,7 @@ async function clearPendingReminders(appointmentId: string): Promise<void> {
       and(
         eq(outboxEvents.type, "estimate.reminder"),
         isNull(outboxEvents.processedAt),
+        isNull(outboxEvents.quarantinedAt),
         sql`(payload->>'appointmentId') = ${appointmentId}`,
       ),
     );
@@ -2727,10 +3291,408 @@ async function scheduleAppointmentReminders(
   }
 }
 
+async function recordCalendarSyncOutcomeOnce(input: {
+  outboxEventId: string;
+  appointmentId: string;
+  action:
+    | "appointment.calendar_sync.succeeded"
+    | "appointment.calendar_sync.reconciliation_required";
+  outcome: "succeeded" | "failed";
+  correlationId: string | null;
+  version: string;
+  status?: string;
+  syncReason?: string;
+  providerEventId?: string;
+  reason?: string;
+}): Promise<void> {
+  const db = getDb();
+  const [existing] = await db
+    .select({ id: auditLogs.id })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.action, input.action),
+        eq(auditLogs.entityType, "appointment"),
+        eq(auditLogs.entityId, input.appointmentId),
+        sql`${auditLogs.meta} ->> 'outboxEventId' = ${input.outboxEventId}`,
+      ),
+    )
+    .limit(1);
+  if (existing?.id) return;
+
+  await recordAuditEvent({
+    actor: { type: "worker", label: "outbox" },
+    action: input.action,
+    entityType: "appointment",
+    entityId: input.appointmentId,
+    outcome: input.outcome,
+    correlationId: input.correlationId,
+    surface: "/team/calendar",
+    meta: {
+      outboxEventId: input.outboxEventId,
+      status: input.status ?? "canceled",
+      version: input.version,
+      calendarSync:
+        input.outcome === "succeeded" ? "succeeded" : "reconciliation_required",
+      ...(input.syncReason ? { syncReason: input.syncReason } : {}),
+      ...(input.providerEventId
+        ? { providerEventId: input.providerEventId }
+        : {}),
+      ...(input.reason ? { reason: input.reason } : {}),
+    },
+  });
+}
+
+async function handleAppointmentCalendarSyncRequested(
+  event: OutboxEventRecord,
+): Promise<OutboxOutcome> {
+  if (getTeamOperationKillSwitchForRisk("external") === "external_sends") {
+    return {
+      status: "retry",
+      error: "calendar_sync_external_changes_disabled",
+      nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+    };
+  }
+  const payload = isRecord(event.payload) ? event.payload : null;
+  const appointmentId = readStringValue(payload?.["appointmentId"]);
+  const requestedVersion = readStringValue(payload?.["version"]);
+  const correlationId = readStringValue(payload?.["correlationId"]);
+  const syncReason = readStringValue(payload?.["reason"]);
+  const rawRequestedCalendarEventId = payload?.["requestedCalendarEventId"];
+  const requestedCalendarEventId =
+    rawRequestedCalendarEventId === null
+      ? null
+      : readStringValue(rawRequestedCalendarEventId);
+  if (
+    !appointmentId ||
+    !requestedVersion ||
+    !syncReason ||
+    (rawRequestedCalendarEventId !== null && !requestedCalendarEventId)
+  ) {
+    return { status: "skipped", error: "calendar_sync_payload_invalid" };
+  }
+
+  const db = getDb();
+  const [appointment] = await db
+    .select({
+      id: appointments.id,
+      status: appointments.status,
+      startAt: appointments.startAt,
+      durationMinutes: appointments.durationMinutes,
+      travelBufferMinutes: appointments.travelBufferMinutes,
+      rescheduleToken: appointments.rescheduleToken,
+      calendarEventId: appointments.calendarEventId,
+      updatedAt: appointments.updatedAt,
+      contactFirstName: contacts.firstName,
+      contactLastName: contacts.lastName,
+      contactEmail: contacts.email,
+      contactPhone: contacts.phone,
+      contactPhoneE164: contacts.phoneE164,
+      propertyAddressLine1: properties.addressLine1,
+      propertyCity: properties.city,
+      propertyState: properties.state,
+      propertyPostalCode: properties.postalCode,
+      leadServices: leads.servicesRequested,
+      leadNotes: leads.notes,
+    })
+    .from(appointments)
+    .leftJoin(contacts, eq(appointments.contactId, contacts.id))
+    .leftJoin(properties, eq(appointments.propertyId, properties.id))
+    .leftJoin(leads, eq(appointments.leadId, leads.id))
+    .where(eq(appointments.id, appointmentId))
+    .limit(1);
+  if (!appointment) {
+    return { status: "skipped", error: "calendar_sync_appointment_missing" };
+  }
+
+  const currentVersion = appointment.updatedAt.toISOString();
+  const deterministicEventId = buildGoogleCalendarEventId(appointmentId);
+  const calendarStateBelongsToRequest =
+    appointment.calendarEventId === requestedCalendarEventId ||
+    (deterministicEventId !== null &&
+      appointment.calendarEventId === deterministicEventId);
+  if (currentVersion !== requestedVersion || !calendarStateBelongsToRequest) {
+    await recordCalendarSyncOutcomeOnce({
+      outboxEventId: event.id,
+      appointmentId,
+      action: "appointment.calendar_sync.reconciliation_required",
+      outcome: "failed",
+      correlationId,
+      version: currentVersion,
+      status: appointment.status,
+      syncReason,
+      reason:
+        currentVersion !== requestedVersion
+          ? "appointment_version_changed"
+          : "calendar_event_changed",
+    });
+    return {
+      status: "skipped",
+      error: "calendar_sync_state_changed_reconciliation_required",
+    };
+  }
+
+  if (syncReason === "appointment.canceled") {
+    if (
+      appointment.status !== "canceled" ||
+      !requestedCalendarEventId ||
+      appointment.calendarEventId !== requestedCalendarEventId
+    ) {
+      await recordCalendarSyncOutcomeOnce({
+        outboxEventId: event.id,
+        appointmentId,
+        action: "appointment.calendar_sync.reconciliation_required",
+        outcome: "failed",
+        correlationId,
+        version: currentVersion,
+        status: appointment.status,
+        syncReason,
+        reason: "cancellation_state_invalid",
+      });
+      return {
+        status: "skipped",
+        error: "calendar_cancel_state_reconciliation_required",
+      };
+    }
+
+    if (
+      !payload ||
+      !(await verifyAppointmentCancellationCalendarAuthorization({
+        db,
+        payload,
+        appointmentId,
+        requestedVersion,
+        requestedCalendarEventId,
+      }))
+    ) {
+      return {
+        status: "skipped",
+        error: "calendar_cancel_not_explicitly_authorized",
+      };
+    }
+
+    const deleted = await deleteCalendarEvent(requestedCalendarEventId);
+    if (!deleted) throw new Error("calendar_delete_unconfirmed");
+    const cleared = await db
+      .update(appointments)
+      .set({
+        calendarEventId: null,
+        // Provider bookkeeping belongs to the status mutation's version.
+        updatedAt: appointment.updatedAt,
+      })
+      .where(
+        and(
+          eq(appointments.id, appointmentId),
+          eq(appointments.status, "canceled"),
+          eq(appointments.calendarEventId, requestedCalendarEventId),
+          eq(appointments.updatedAt, appointment.updatedAt),
+        ),
+      )
+      .returning({ id: appointments.id });
+    if (cleared.length !== 1) {
+      throw new Error("calendar_state_changed_after_provider_delete");
+    }
+    await recordCalendarSyncOutcomeOnce({
+      outboxEventId: event.id,
+      appointmentId,
+      action: "appointment.calendar_sync.succeeded",
+      outcome: "succeeded",
+      correlationId,
+      version: requestedVersion,
+      status: appointment.status,
+      syncReason,
+      providerEventId: requestedCalendarEventId,
+    });
+    return { status: "processed" };
+  }
+
+  if (!appointment.startAt) {
+    throw new Error("calendar_sync_payload_unavailable");
+  }
+
+  const contactName = [
+    readStringValue(appointment.contactFirstName),
+    readStringValue(appointment.contactLastName),
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" ")
+    .trim();
+  const rescheduleToken = readStringValue(appointment.rescheduleToken);
+  const rescheduleUrl = rescheduleToken
+    ? (buildRescheduleUrlForAppointment(appointmentId, rescheduleToken) ??
+      undefined)
+    : undefined;
+  const calendarPayload: AppointmentCalendarPayload = {
+    appointmentId,
+    startAt: appointment.startAt,
+    durationMinutes: appointment.durationMinutes,
+    travelBufferMinutes: appointment.travelBufferMinutes,
+    services: coerceServices(appointment.leadServices),
+    notes:
+      typeof appointment.leadNotes === "string" ? appointment.leadNotes : null,
+    contact: {
+      name: contactName || "Stonegate Customer",
+      email: readStringValue(appointment.contactEmail),
+      phone:
+        readStringValue(appointment.contactPhoneE164) ??
+        readStringValue(appointment.contactPhone),
+    },
+    property: {
+      addressLine1:
+        readStringValue(appointment.propertyAddressLine1) ??
+        "Undisclosed address",
+      city: readStringValue(appointment.propertyCity) ?? "",
+      state: readStringValue(appointment.propertyState) ?? "",
+      postalCode: readStringValue(appointment.propertyPostalCode) ?? "",
+    },
+    ...(rescheduleUrl ? { rescheduleUrl } : {}),
+  };
+
+  let providerEventId: string;
+  if (appointment.calendarEventId) {
+    providerEventId = appointment.calendarEventId;
+    const updated = await updateCalendarEventWithRetry(
+      providerEventId,
+      calendarPayload,
+    );
+    if (!updated) {
+      // The provider may have accepted the update even when the response was
+      // lost. Retrying the same ID is safe; creating here could duplicate it.
+      throw new Error("calendar_sync_existing_update_unconfirmed");
+    }
+  } else {
+    const createdEventId = await createCalendarEventWithRetry(calendarPayload);
+    if (!createdEventId) {
+      throw new Error("calendar_sync_provider_unconfirmed");
+    }
+    providerEventId = createdEventId;
+  }
+
+  if (providerEventId !== appointment.calendarEventId) {
+    const currentCalendarPredicate = appointment.calendarEventId
+      ? eq(appointments.calendarEventId, appointment.calendarEventId)
+      : isNull(appointments.calendarEventId);
+    const changed = await db
+      .update(appointments)
+      .set({
+        calendarEventId: providerEventId,
+        // Provider bookkeeping belongs to the conversion version and must not
+        // make an already-rendered If-Match stale.
+        updatedAt: appointment.updatedAt,
+      })
+      .where(
+        and(
+          eq(appointments.id, appointmentId),
+          eq(appointments.updatedAt, appointment.updatedAt),
+          currentCalendarPredicate,
+        ),
+      )
+      .returning({ id: appointments.id });
+    if (changed.length !== 1) {
+      await recordCalendarSyncOutcomeOnce({
+        outboxEventId: event.id,
+        appointmentId,
+        action: "appointment.calendar_sync.reconciliation_required",
+        outcome: "failed",
+        correlationId,
+        version: requestedVersion,
+        status: appointment.status,
+        syncReason,
+        providerEventId,
+        reason: "appointment_changed_after_provider_success",
+      });
+      return {
+        status: "skipped",
+        error: "calendar_sync_storage_reconciliation_required",
+      };
+    }
+  }
+
+  await recordCalendarSyncOutcomeOnce({
+    outboxEventId: event.id,
+    appointmentId,
+    action: "appointment.calendar_sync.succeeded",
+    outcome: "succeeded",
+    correlationId,
+    version: requestedVersion,
+    status: appointment.status,
+    syncReason,
+    providerEventId,
+  });
+  return { status: "processed" };
+}
+
 async function handleOutboxEvent(
   event: OutboxEventRecord,
 ): Promise<OutboxOutcome> {
   switch (event.type) {
+    case "staff_notification.dispatch": {
+      if (getTeamOperationKillSwitchForRisk("external") === "external_sends") {
+        return {
+          status: "retry",
+          error: "staff_notification_external_sends_disabled",
+          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+        };
+      }
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const operationId = readStringValue(payload?.["operationId"]);
+      if (!operationId) {
+        return {
+          status: "skipped",
+          error: "staff_notification_operation_missing",
+        };
+      }
+
+      const db = getDb();
+      const prepared = await db.transaction((tx) =>
+        prepareStaffNotificationDispatch(tx, {
+          operationId,
+          outboxEventId: event.id,
+        }),
+      );
+      if (prepared.kind === "unavailable") {
+        return {
+          status: "skipped",
+          error: "staff_notification_operation_unavailable",
+        };
+      }
+      if (prepared.kind === "terminal") {
+        return { status: "processed" };
+      }
+      if (prepared.kind === "in_flight") {
+        return {
+          status: "retry",
+          error: "staff_notification_provider_effect_pending",
+          nextAttemptAt: prepared.retryAt,
+        };
+      }
+
+      const result = await sendSmsMessage(
+        prepared.operation.recipientAddress,
+        prepared.operation.body,
+        null,
+        { idempotencyKey: prepared.operation.providerRequestKey },
+      );
+      const finalized = await db.transaction((tx) =>
+        finalizeStaffNotificationDispatch(tx, {
+          operationId,
+          outboxEventId: event.id,
+          result,
+        }),
+      );
+      if (finalized.kind === "retry") {
+        return {
+          status: "retry",
+          error: finalized.error,
+          nextAttemptAt: finalized.retryAt,
+        };
+      }
+      return { status: "processed" };
+    }
+
+    case "appointment.calendar_sync_requested":
+      return handleAppointmentCalendarSyncRequested(event);
+
     case "appointment_media.import_message": {
       if (!isMediaAutoImportEnabled()) {
         return {
@@ -3002,7 +3964,7 @@ async function handleOutboxEvent(
       }
 
       await ensureCalendarEventCreated(notification);
-      await sendEstimateConfirmation(notification, "requested");
+      await sendEstimateConfirmation(notification, "requested", event.id);
       await scheduleAppointmentReminders(
         appointmentId,
         notification.appointment.startAt,
@@ -3135,7 +4097,7 @@ async function handleOutboxEvent(
       }
 
       await syncCalendarEventForReschedule(notification);
-      await sendEstimateConfirmation(notification, "rescheduled");
+      await sendEstimateConfirmation(notification, "rescheduled", event.id);
       await scheduleAppointmentReminders(
         appointmentId,
         notification.appointment.startAt,
@@ -3167,20 +4129,17 @@ async function handleOutboxEvent(
         return { status: "skipped" };
       }
 
-      const shareToken =
-        typeof payload?.["shareToken"] === "string" &&
-        payload["shareToken"].trim().length > 0
-          ? payload["shareToken"].trim()
-          : null;
+      const sendAttemptId = resolveQuoteSendAttemptId(
+        payload?.["sendAttemptId"],
+        event.id,
+      );
 
-      const notification = await buildQuoteNotificationPayload(quoteId, {
-        shareToken,
-      });
+      const notification = await buildQuoteNotificationPayload(quoteId);
       if (!notification) {
         return { status: "skipped" };
       }
 
-      await sendQuoteSentNotification(notification);
+      await sendQuoteSentNotification({ ...notification, sendAttemptId });
       await updatePipelineStageForContact(
         notification.contactId ?? null,
         "quoted",
@@ -3203,58 +4162,51 @@ async function handleOutboxEvent(
     }
 
     case "quote.decision": {
-      const payload = isRecord(event.payload) ? event.payload : null;
-      const quoteId =
-        typeof payload?.["quoteId"] === "string" ? payload["quoteId"] : null;
-      const rawDecision =
-        typeof payload?.["decision"] === "string" ? payload["decision"] : null;
-      const decision =
-        rawDecision === "accepted" || rawDecision === "declined"
-          ? rawDecision
-          : null;
-      if (!quoteId || !decision) {
+      const decisionPayload = parseQuoteDecisionOutboxPayload(event.payload);
+      if (!decisionPayload) {
         console.warn("[outbox] quote.decision.missing_data", { id: event.id });
+        return {
+          status: "skipped",
+          error: "invalid_quote_decision_payload_or_source",
+        };
+      }
+      const { quoteId, decision, source, notes } = decisionPayload;
+      const contactId = await loadQuoteWorkflowContactId(quoteId);
+      if (!contactId) {
         return { status: "skipped" };
       }
-
-      const rawSource =
-        typeof payload?.["source"] === "string" ? payload["source"] : null;
-      const source: "customer" | "admin" =
-        rawSource === "customer" || rawSource === "admin"
-          ? rawSource
-          : "customer";
-      const notes =
-        typeof payload?.["notes"] === "string" ? payload["notes"] : null;
-
-      const notification = await buildQuoteNotificationPayload(quoteId, {
-        notes,
-      });
-      if (!notification) {
-        return { status: "skipped" };
-      }
-
-      await sendQuoteDecisionNotification({
-        ...notification,
-        decision,
-        source,
-      });
       const targetStage: PipelineStage =
         decision === "accepted" ? "won" : "lost";
       await updatePipelineStageForContact(
-        notification.contactId ?? null,
+        contactId,
         targetStage,
         "quote.decision",
         { quoteId, decision, source },
       );
-      if (notification.contactId) {
-        const db = getDb();
-        const [leadRow] = await db
-          .select({ id: leads.id })
-          .from(leads)
-          .where(eq(leads.contactId, notification.contactId))
-          .orderBy(desc(leads.updatedAt), desc(leads.createdAt))
-          .limit(1);
-        await clearLeadFollowups(leadRow?.id ?? null);
+      const db = getDb();
+      const [leadRow] = await db
+        .select({ id: leads.id })
+        .from(leads)
+        .where(eq(leads.contactId, contactId))
+        .orderBy(desc(leads.updatedAt), desc(leads.createdAt))
+        .limit(1);
+      await clearLeadFollowups(leadRow?.id ?? null);
+
+      if (shouldNotifyCustomerForQuoteDecision(source)) {
+        const notification = await buildQuoteNotificationPayload(quoteId, {
+          notes,
+        });
+        if (!notification) {
+          return {
+            status: "skipped",
+            error: "quote_decision_notification_unavailable",
+          };
+        }
+        await sendQuoteDecisionNotification({
+          ...notification,
+          decision,
+          source: "customer",
+        });
       }
       return { status: "processed" };
     }
@@ -3262,39 +4214,187 @@ async function handleOutboxEvent(
     case "estimate.status_changed":
     case "lead.created": {
       const payload = isRecord(event.payload) ? event.payload : null;
-      const leadId =
+      let leadId =
         typeof payload?.["leadId"] === "string" ? payload["leadId"] : null;
+      const appointmentIdFromPayload =
+        typeof payload?.["appointmentId"] === "string"
+          ? payload["appointmentId"]
+          : null;
       const status =
         typeof payload?.["status"] === "string" ? payload["status"] : null;
+      const eventVersion = readStringValue(payload?.["version"]);
+      // Legacy events did not carry statusChanged, so their internal CRM
+      // reconciliation remains intact. Customer messaging has a separate,
+      // fail-closed authorization gate below. Conversion events can explicitly
+      // identify a real lifecycle transition without pretending their generic
+      // status notification was approved.
+      const shouldApplyInternalStatusEffects =
+        event.type !== "estimate.status_changed" ||
+        payload?.["statusChanged"] !== false ||
+        payload?.["lifecycleStatusChanged"] === true;
       const services = coerceServices(payload?.["services"]);
       const schedulingOverride =
         payload && isRecord(payload["scheduling"])
           ? payload["scheduling"]
           : null;
 
-      if (!leadId) {
-        console.warn("[outbox] lead.created.missing_lead", { id: event.id });
-        return { status: "skipped" };
-      }
-
       const db = getDb();
-      const rows = await db
-        .select({
-          id: appointments.id,
-        })
-        .from(appointments)
-        .where(eq(appointments.leadId, leadId))
-        .limit(1);
+      const rows = appointmentIdFromPayload
+        ? await db
+            .select({
+              id: appointments.id,
+              leadId: appointments.leadId,
+              contactId: appointments.contactId,
+              status: appointments.status,
+              calendarEventId: appointments.calendarEventId,
+              updatedAt: appointments.updatedAt,
+            })
+            .from(appointments)
+            .where(eq(appointments.id, appointmentIdFromPayload))
+            .limit(1)
+        : leadId
+          ? await db
+              .select({
+                id: appointments.id,
+                leadId: appointments.leadId,
+                contactId: appointments.contactId,
+                status: appointments.status,
+                calendarEventId: appointments.calendarEventId,
+                updatedAt: appointments.updatedAt,
+              })
+              .from(appointments)
+              .where(eq(appointments.leadId, leadId))
+              .limit(1)
+          : [];
 
       const appointment = rows[0];
       if (!appointment?.id) {
-        console.info("[outbox] lead.created.no_appointment", {
+        // Appointmentless web leads are valid. Their durable lead.alert event
+        // owns staff notification and follow-up scheduling, so this domain
+        // event has completed without an appointment-specific side effect.
+        if (event.type === "lead.created") {
+          return { status: "processed" };
+        }
+        console.info("[outbox] appointment_notification.no_appointment", {
           id: event.id,
-          leadId,
+        });
+        return { status: "skipped" };
+      }
+      leadId = leadId ?? appointment.leadId ?? null;
+
+      if (
+        event.type === "estimate.status_changed" &&
+        status &&
+        appointment.status !== status
+      ) {
+        console.info("[outbox] appointment_notification.superseded", {
+          id: event.id,
+          appointmentId: appointment.id,
         });
         return { status: "skipped" };
       }
 
+      if (!shouldApplyInternalStatusEffects) {
+        return { status: "processed" };
+      }
+
+      if (
+        status === "canceled" ||
+        status === "no_show" ||
+        status === "completed"
+      ) {
+        await clearPendingReminders(appointment.id);
+      }
+      if (event.type === "estimate.status_changed") {
+        await clearLeadFollowups(leadId);
+      }
+      if (appointment.contactId) {
+        await completeSalesTasksForContact(
+          db,
+          appointment.contactId,
+          new Date(),
+        );
+      }
+      if (appointment.contactId) {
+        const targetStage: PipelineStage =
+          event.type === "estimate.status_changed" && status
+            ? mapAppointmentStatusToStage(status)
+            : "qualified";
+        await updatePipelineStageForContact(
+          appointment.contactId,
+          targetStage,
+          event.type,
+          {
+            appointmentId: appointment.id,
+            status: status ?? null,
+          },
+        );
+      }
+
+      const statusNotificationRequested =
+        event.type === "estimate.status_changed" &&
+        payload?.["customerNotificationRequested"] === true;
+      const authorization =
+        event.type === "estimate.status_changed"
+          ? await verifyAppointmentMessageAuthorization({
+              db,
+              payload,
+              appointmentId: appointment.id,
+              status,
+              intent: "status_notification",
+              requested: statusNotificationRequested,
+            })
+          : null;
+      if (authorization?.state === "invalid") {
+        console.warn(
+          "[outbox] appointment_notification.authorization_invalid",
+          { id: event.id, appointmentId: appointment.id },
+        );
+        return {
+          status: "processed",
+          error: "status_notification_not_explicitly_authorized",
+        };
+      }
+      if (
+        event.type === "estimate.status_changed" &&
+        authorization?.state === "not_requested"
+      ) {
+        return { status: "processed" };
+      }
+      if (event.type === "estimate.status_changed" && status !== "canceled") {
+        return {
+          status: "processed",
+          error: "status_notification_status_not_supported",
+        };
+      }
+      if (
+        event.type === "estimate.status_changed" &&
+        eventVersion &&
+        appointment.updatedAt.toISOString() !== eventVersion
+      ) {
+        return {
+          status: "processed",
+          error: "status_notification_state_changed",
+        };
+      }
+      if (getTeamOperationKillSwitchForRisk("external") === "external_sends") {
+        return {
+          status: "retry",
+          error: "appointment_notification_external_sends_disabled",
+          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+        };
+      }
+      if (!leadId) {
+        console.info("[outbox] appointment_notification.no_lead", {
+          id: event.id,
+          appointmentId: appointment.id,
+        });
+        return { status: "processed" };
+      }
+
+      /* The row above deliberately resolves by the event's appointment ID
+       * when present. This prevents a reused lead from moving an old status
+       * event onto a different appointment. */
       const notification = await buildNotificationPayload(appointment.id, {
         services,
         scheduling: schedulingOverride
@@ -3316,55 +4416,36 @@ async function handleOutboxEvent(
         notes:
           typeof payload?.["notes"] === "string" ? payload["notes"] : undefined,
       });
+      if (!notification) return { status: "skipped" };
 
-      if (!notification) {
-        return { status: "skipped" };
-      }
-
-      if (event.type === "estimate.status_changed" && status === "canceled") {
-        await sendEstimateCancellation(notification);
-      } else if (
-        event.type !== "estimate.status_changed" ||
-        (status !== "no_show" && status !== "completed")
-      ) {
-        const reason =
-          event.type === "estimate.status_changed"
-            ? "rescheduled"
-            : "requested";
-        await sendEstimateConfirmation(notification, reason);
-      }
-
-      if (
-        status === "canceled" ||
-        status === "no_show" ||
-        status === "completed"
-      ) {
-        await clearPendingReminders(appointment.id);
-      }
       if (event.type === "estimate.status_changed") {
-        await clearLeadFollowups(leadId);
-      }
-      if (notification.contactId) {
-        await completeSalesTasksForContact(
-          db,
-          notification.contactId,
-          new Date(),
-        );
-      }
-      if (notification.contactId) {
-        const targetStage: PipelineStage =
-          event.type === "estimate.status_changed" && status
-            ? mapAppointmentStatusToStage(status)
-            : "qualified";
-        await updatePipelineStageForContact(
-          notification.contactId,
-          targetStage,
-          event.type,
+        if (authorization?.state !== "authorized") {
+          return {
+            status: "processed",
+            error: "status_notification_not_explicitly_authorized",
+          };
+        }
+        if (!notification.contactId) {
+          return {
+            status: "skipped",
+            error: "status_notification_contact_missing",
+          };
+        }
+        await sendEstimateCancellation(
+          notification,
+          authorization.evidence.operationId,
           {
-            appointmentId: appointment.id,
-            status: status ?? null,
+            sourceStatusOutboxEventId: event.id,
+            sourceStatusAuditEventId: authorization.evidence.auditEventId,
+            sourceCorrelationId: authorization.evidence.correlationId,
+            sourceOperationId: authorization.evidence.operationId,
+            sourceActorId: authorization.evidence.actorId,
+            sourceAuthMethod: authorization.evidence.authMethod,
+            sourceRequiredPermission: authorization.evidence.requiredPermission,
           },
         );
+      } else {
+        await sendEstimateConfirmation(notification, "requested", event.id);
       }
       return { status: "processed" };
     }
@@ -3375,14 +4456,48 @@ async function handleOutboxEvent(
         typeof payload?.["appointmentId"] === "string"
           ? payload["appointmentId"]
           : null;
-      if (!appointmentId) {
+      const status = readStringValue(payload?.["status"]);
+      const requested = payload?.["requested"] === true;
+      if (!appointmentId || !status) {
         console.warn("[outbox] review.request.missing_appointment", {
           id: event.id,
         });
         return { status: "skipped" };
       }
+      if (status !== "completed") {
+        return {
+          status: "skipped",
+          error: "review_request_status_not_supported",
+        };
+      }
 
       const db = getDb();
+      const authorization = await verifyAppointmentMessageAuthorization({
+        db,
+        payload,
+        appointmentId,
+        status,
+        intent: "review_request",
+        requested,
+      });
+      if (authorization.state !== "authorized") {
+        console.warn("[outbox] review.request.authorization_invalid", {
+          id: event.id,
+          appointmentId,
+          authorizationState: authorization.state,
+        });
+        return {
+          status: "skipped",
+          error: "review_request_not_explicitly_authorized",
+        };
+      }
+      if (getTeamOperationKillSwitchForRisk("external") === "external_sends") {
+        return {
+          status: "retry",
+          error: "review_request_external_sends_disabled",
+          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+        };
+      }
       const policy = await getReviewRequestPolicy(db);
       if (!policy.enabled) {
         return { status: "processed" };
@@ -3400,19 +4515,13 @@ async function handleOutboxEvent(
       const [row] = await db
         .select({
           appointmentId: appointments.id,
+          appointmentStatus: appointments.status,
+          appointmentUpdatedAt: appointments.updatedAt,
           contactId: appointments.contactId,
           contactPhoneE164: contacts.phoneE164,
-          threadSmsId: conversationThreads.id,
         })
         .from(appointments)
         .innerJoin(contacts, eq(appointments.contactId, contacts.id))
-        .leftJoin(
-          conversationThreads,
-          and(
-            eq(conversationThreads.contactId, contacts.id),
-            eq(conversationThreads.channel, "sms"),
-          ),
-        )
         .where(eq(appointments.id, appointmentId))
         .limit(1);
 
@@ -3422,6 +4531,17 @@ async function handleOutboxEvent(
           appointmentId,
         });
         return { status: "skipped" };
+      }
+      const requestedVersion = readStringValue(payload?.["version"]);
+      if (
+        !requestedVersion ||
+        row.appointmentStatus !== "completed" ||
+        row.appointmentUpdatedAt.toISOString() !== requestedVersion
+      ) {
+        return {
+          status: "skipped",
+          error: "review_request_state_changed",
+        };
       }
 
       const contactPhone =
@@ -3437,26 +4557,6 @@ async function handleOutboxEvent(
         return { status: "skipped" };
       }
 
-      const [alreadyQueued] = await db
-        .select({ id: conversationMessages.id })
-        .from(conversationMessages)
-        .innerJoin(
-          conversationThreads,
-          eq(conversationMessages.threadId, conversationThreads.id),
-        )
-        .where(
-          and(
-            eq(conversationThreads.contactId, row.contactId),
-            eq(conversationMessages.direction, "outbound"),
-            sql`${conversationMessages.metadata} ->> 'reviewRequestAppointmentId' = ${appointmentId}`,
-          ),
-        )
-        .limit(1);
-
-      if (alreadyQueued?.id) {
-        return { status: "processed" };
-      }
-
       const templates = await getTemplatesPolicy(db);
       const base =
         resolveTemplateForChannel(templates.reviews, {
@@ -3465,32 +4565,25 @@ async function handleOutboxEvent(
         }) ?? "Thanks for choosing Stonegate! Would you leave a quick review?";
       const body = base.includes(reviewUrl) ? base : `${base} ${reviewUrl}`;
 
-      const threadId =
-        (typeof row.threadSmsId === "string" && row.threadSmsId.length > 0
-          ? row.threadSmsId
-          : await ensureThreadForContactChannel(db, {
-              contactId: row.contactId,
-              channel: "sms",
-            })) ?? null;
-
-      if (!threadId) {
-        console.warn("[outbox] review.request.no_thread", {
-          id: event.id,
-          appointmentId,
-          contactId: row.contactId,
-        });
-        return { status: "skipped" };
-      }
-
-      const messageId = await queueOutboundMessage({
-        db,
-        threadId,
+      // Message creation and its provider-dispatch event commit atomically.
+      // Retrying this review event after any later failure resolves the same
+      // operation key instead of creating another customer effect.
+      const messageId = await queueSystemOutboundMessage({
+        contactId: row.contactId,
         channel: "sms",
         toAddress: contactPhone,
         body,
+        dedupeKey: `appointment.review-request:${appointmentId}:${authorization.evidence.operationId}`,
         metadata: {
           reviewRequestAppointmentId: appointmentId,
-          system: "reviews",
+          messageKind: "review_request",
+          reviewRequestOutboxEventId: event.id,
+          sourceStatusAuditEventId: authorization.evidence.auditEventId,
+          sourceCorrelationId: authorization.evidence.correlationId,
+          sourceOperationId: authorization.evidence.operationId,
+          sourceActorId: authorization.evidence.actorId,
+          sourceAuthMethod: authorization.evidence.authMethod,
+          sourceRequiredPermission: authorization.evidence.requiredPermission,
         },
       });
 
@@ -3508,7 +4601,14 @@ async function handleOutboxEvent(
         action: "review.request.queued",
         entityType: "appointment",
         entityId: appointmentId,
-        meta: { contactId: row.contactId, messageId },
+        meta: {
+          contactId: row.contactId,
+          messageId,
+          reviewRequestOutboxEventId: event.id,
+          sourceStatusAuditEventId: authorization.evidence.auditEventId,
+          correlationId: authorization.evidence.correlationId,
+          operationId: authorization.evidence.operationId,
+        },
       });
 
       return { status: "processed" };
@@ -3677,10 +4777,6 @@ async function handleOutboxEvent(
     }
 
     case "sales.escalation.call": {
-      if (!SALES_ESCALATION_CALL_ENABLED) {
-        return { status: "processed" };
-      }
-
       const payload = isRecord(event.payload) ? event.payload : null;
       const taskId =
         typeof payload?.["taskId"] === "string" ? payload["taskId"].trim() : "";
@@ -3695,6 +4791,37 @@ async function handleOutboxEvent(
       }
 
       const db = getDb();
+      // A committed provider-boundary operation owns the event from this
+      // point forward. Resume it before consulting feature flags, kill
+      // switches, or mutable task/contact state so accepted calls always
+      // reach a terminal callback or explicit reconciliation without redial.
+      const resumed = await resumeSalesEscalationCallAttempt({
+        db,
+        outboxEventId: event.id,
+        taskId,
+      });
+      if (resumed?.kind === "settled") {
+        if (resumed.retryAt) {
+          return {
+            status: "retry",
+            error: resumed.error,
+            nextAttemptAt: resumed.retryAt,
+          };
+        }
+        return { status: "processed", error: resumed.error };
+      }
+
+      if (!SALES_ESCALATION_CALL_ENABLED) {
+        return { status: "processed" };
+      }
+      if (getTeamOperationKillSwitch(["calls.place"])) {
+        return {
+          status: "retry",
+          error: "external_sends_disabled",
+          nextAttemptAt: new Date(Date.now() + 60_000),
+        };
+      }
+
       const [row] = await db
         .select({
           taskId: crmTasks.id,
@@ -3702,12 +4829,13 @@ async function handleOutboxEvent(
           taskNotes: crmTasks.notes,
           taskDueAt: crmTasks.dueAt,
           taskCreatedAt: crmTasks.createdAt,
+          taskUpdatedAt: crmTasks.updatedAt,
           contactId: crmTasks.contactId,
           assignedTo: crmTasks.assignedTo,
-          firstName: contacts.firstName,
-          lastName: contacts.lastName,
           phone: contacts.phone,
           phoneE164: contacts.phoneE164,
+          contactDoNotContact: contacts.doNotContact,
+          contactDeletedAt: contacts.deletedAt,
         })
         .from(crmTasks)
         .leftJoin(contacts, eq(crmTasks.contactId, contacts.id))
@@ -3724,7 +4852,7 @@ async function handleOutboxEvent(
 
       const contactId =
         typeof row.contactId === "string" ? row.contactId : null;
-      if (!contactId) {
+      if (!contactId || row.contactDeletedAt || row.contactDoNotContact) {
         return { status: "processed" };
       }
 
@@ -3803,6 +4931,7 @@ async function handleOutboxEvent(
         .where(
           and(
             eq(auditLogs.action, "call.started"),
+            eq(auditLogs.outcome, "succeeded"),
             eq(auditLogs.entityType, "contact"),
             eq(auditLogs.entityId, contactId),
             eq(auditLogs.actorId, memberId),
@@ -3862,71 +4991,141 @@ async function handleOutboxEvent(
         }
       }
 
-      const phoneMap = await getTeamMemberPhoneMap(db);
-      const agentPhone = normalizePhoneE164(phoneMap[memberId] ?? "");
-      if (!agentPhone) {
+      const [agent] = await db
+        .select({
+          phoneE164: teamMembers.phoneE164,
+          active: teamMembers.active,
+        })
+        .from(teamMembers)
+        .where(eq(teamMembers.id, memberId))
+        .limit(1);
+      const agentPhone = normalizePhoneE164(agent?.phoneE164 ?? "");
+      if (!agent?.active || !agentPhone) {
         console.warn("[outbox] sales.escalation.missing_agent_phone", {
-          taskId,
-          memberId,
+          eventId: event.id,
         });
         return { status: "processed" };
       }
 
-      const apiBaseUrl = resolvePublicApiBaseUrl();
-      if (!apiBaseUrl) {
-        console.warn("[outbox] sales.escalation.missing_api_base_url", {
-          taskId,
-        });
-        return { status: "processed" };
+      let apiBaseUrl: string;
+      try {
+        apiBaseUrl = getTwilioWebhookPublicBaseUrl();
+      } catch {
+        console.warn(
+          "[outbox] sales.escalation.twilio_webhook_configuration_unavailable",
+        );
+        return {
+          status: "retry",
+          error: "twilio_webhook_configuration_unavailable",
+        };
       }
 
-      const callbackUrl = new URL("/api/webhooks/twilio/escalate", apiBaseUrl);
-      callbackUrl.searchParams.set("to", customerPhone);
-      callbackUrl.searchParams.set("taskId", taskId);
-      callbackUrl.searchParams.set("contactId", contactId);
-      const leadName = `${row.firstName ?? ""} ${row.lastName ?? ""}`
-        .trim()
-        .replace(/\s+/g, " ");
-      if (leadName.length > 0) {
-        callbackUrl.searchParams.set("name", leadName.slice(0, 80));
+      const prepared = await prepareSalesEscalationCallAttempt({
+        db,
+        outboxEventId: event.id,
+        taskId,
+        taskUpdatedAt: row.taskUpdatedAt,
+        contactId,
+        agentMemberId: memberId,
+        agentPhoneE164: agentPhone,
+        customerPhoneE164: customerPhone,
+        mode: isInstant ? "instant" : "scheduled",
+      });
+      if (prepared.kind === "settled") {
+        if (prepared.retryAt) {
+          return {
+            status: "retry",
+            error: prepared.error,
+            nextAttemptAt: prepared.retryAt,
+          };
+        }
+        return {
+          status: "processed",
+          error: prepared.error,
+        };
       }
 
-      const statusCallbackUrl = new URL(
+      const callbackUrl = buildTwilioWebhookUrl(
+        "/api/webhooks/twilio/escalate",
+        apiBaseUrl,
+      );
+      callbackUrl.searchParams.set("eventKey", event.id);
+      callbackUrl.searchParams.set(
+        "operationKey",
+        prepared.operation.providerRequestKey,
+      );
+
+      const statusCallbackUrl = buildTwilioWebhookUrl(
         "/api/webhooks/twilio/call-status",
         apiBaseUrl,
       );
       statusCallbackUrl.searchParams.set("leg", "agent");
       statusCallbackUrl.searchParams.set("mode", "sales_escalation");
+      statusCallbackUrl.searchParams.set("eventKey", event.id);
+      statusCallbackUrl.searchParams.set(
+        "operationKey",
+        prepared.operation.providerRequestKey,
+      );
 
-      const result = await createTwilioCall({
-        agentPhone,
+      const result = await createTwilioOutboundCall({
+        to: prepared.operation.agentPhoneE164,
         requestUrl: callbackUrl.toString(),
         statusCallbackUrl: statusCallbackUrl.toString(),
       });
 
-      if (!result.ok) {
-        console.warn("[outbox] sales.escalation.call_failed", {
-          taskId,
-          detail: result.detail,
+      let finalized: Awaited<
+        ReturnType<typeof finalizeSalesEscalationCallAttempt>
+      >;
+      try {
+        finalized = await finalizeSalesEscalationCallAttempt({
+          db,
+          operationId: prepared.operation.id,
+          providerResult: result,
         });
-        return { status: "retry", error: result.detail };
+      } catch {
+        try {
+          await reconcileSalesEscalationAfterStorageFailure({
+            db,
+            operationId: prepared.operation.id,
+            providerOperationId: result.ok ? result.callSid : null,
+          });
+        } catch (reconciliationError) {
+          console.error("[outbox] sales.escalation.receipt_unavailable", {
+            eventId: event.id,
+            providerAccepted: result.ok,
+            errorName:
+              reconciliationError instanceof Error
+                ? reconciliationError.name
+                : "UnknownError",
+          });
+        }
+        // Never finalize the outbox event while the operation receipt is
+        // uncertain. A later run re-reads the durable `dispatched` marker,
+        // moves it to reconciliation_required, and cannot call the provider
+        // again. Marking this outbox row processed here could strand a
+        // dispatched operation forever if the best-effort reconciliation
+        // write above failed but the generic outbox update later succeeded.
+        return {
+          status: "retry",
+          error: "sales_escalation_result_storage_failed",
+          skipFinalization: true,
+        };
       }
 
-      await recordAuditEvent({
-        actor: { type: "worker", label: "outbox" },
-        action: "sales.escalation.call.started",
-        entityType: "crm_task",
-        entityId: taskId,
-        meta: {
-          contactId,
-          assignedTo: memberId,
-          agentPhone,
-          customerPhone,
-          callSid: result.callSid,
-        },
-      });
-
-      return { status: "processed" };
+      if (finalized.state === "failed" && finalized.retryable) {
+        return {
+          status: "retry",
+          error: finalized.error ?? "sales_escalation_not_dispatched",
+        };
+      }
+      if (finalized.state === "succeeded" && finalized.retryAt) {
+        return {
+          status: "retry",
+          error: "sales_escalation_callback_pending",
+          nextAttemptAt: finalized.retryAt,
+        };
+      }
+      return { status: "processed", error: finalized.error };
     }
 
     case "sales.queue.nudge.sms": {
@@ -4344,32 +5543,52 @@ async function handleOutboxEvent(
               lead_event_source: leadEventSource,
             },
             event_name: eventName,
+            event_id: event.id,
             event_time: eventTime,
             user_data: userData,
           },
         ],
       };
 
-      const response = await fetch(
-        `https://graph.facebook.com/v24.0/${datasetId}/events?access_token=${accessToken}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payloadBody),
-        },
+      const metaEventsUrl = new URL(
+        resolveMetaGraphApiEndpoint([datasetId, "events"], process.env),
       );
+      metaEventsUrl.searchParams.set("access_token", accessToken);
+      const response = await fetch(metaEventsUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payloadBody),
+      });
 
       if (!response.ok) {
-        const text = await response.text();
+        await response.body?.cancel().catch(() => undefined);
         const retryable = response.status >= 500 || response.status === 429;
+        const detail = `meta_lead_event_failed:${response.status}`;
         console.warn("[outbox] meta.lead_event.failed", {
           id: event.id,
           status: response.status,
-          error: text,
         });
         return retryable
-          ? { status: "retry", error: text }
-          : { status: "processed", error: text };
+          ? { status: "retry", error: detail }
+          : { status: "processed", error: detail };
+      }
+
+      const responseBody = (await response.json().catch(() => null)) as {
+        events_received?: unknown;
+      } | null;
+      if (
+        !responseBody ||
+        typeof responseBody.events_received !== "number" ||
+        responseBody.events_received < 1
+      ) {
+        console.warn("[outbox] meta.lead_event.invalid_response", {
+          id: event.id,
+          status: response.status,
+        });
+        return {
+          status: "retry",
+          error: "meta_lead_event_invalid_response",
+        };
       }
 
       return { status: "processed" };
@@ -4425,8 +5644,8 @@ async function handleOutboxEvent(
       } catch (error) {
         const detail =
           error instanceof MetaGraphApiError
-            ? `meta_ads_insights_failed:${error.status}:${error.body}`
-            : `meta_ads_insights_error:${String(error)}`;
+            ? `meta_ads_insights_failed:${error.status}`
+            : "meta_ads_insights_error";
 
         await recordProviderFailureSafe("meta_ads", detail);
 
@@ -4489,7 +5708,7 @@ async function handleOutboxEvent(
       } catch (error) {
         const detail =
           error instanceof GoogleAdsApiError
-            ? `google_ads_failed:${error.status}:${error.body}`
+            ? `google_ads_failed:${error.status}:${error.failureCode}`
             : `google_ads_error:${String(error)}`;
 
         await recordProviderFailureSafe("google_ads", detail);
@@ -4596,7 +5815,7 @@ async function handleOutboxEvent(
         return { status: "skipped" };
       }
 
-      await sendEstimateReminder(notification, windowMinutes);
+      await sendEstimateReminder(notification, windowMinutes, event.id);
       return { status: "processed" };
     }
 
@@ -4672,7 +5891,7 @@ async function handleOutboxEvent(
       }
 
       if (leadRow.status === "scheduled") {
-        await clearLeadFollowups(leadId);
+        await clearLeadFollowups(leadId, { excludeOutboxEventId: event.id });
         return { status: "processed" };
       }
 
@@ -4688,7 +5907,7 @@ async function handleOutboxEvent(
         .limit(1);
 
       if (appointment?.id) {
-        await clearLeadFollowups(leadId);
+        await clearLeadFollowups(leadId, { excludeOutboxEventId: event.id });
         return { status: "processed" };
       }
 
@@ -4699,13 +5918,13 @@ async function handleOutboxEvent(
         state.humanTakeover ||
         state.followupState === "stopped"
       ) {
-        await clearLeadFollowups(leadId);
+        await clearLeadFollowups(leadId, { excludeOutboxEventId: event.id });
         return { status: "processed" };
       }
 
       const mode = await getAutomationMode(db, channel);
       if (mode === "draft") {
-        await clearLeadFollowups(leadId);
+        await clearLeadFollowups(leadId, { excludeOutboxEventId: event.id });
         return { status: "processed" };
       }
 
@@ -4716,14 +5935,16 @@ async function handleOutboxEvent(
           phoneE164: contacts.phoneE164,
         })
         .from(contacts)
-        .where(eq(contacts.id, leadRow.contactId))
+        .where(
+          and(eq(contacts.id, leadRow.contactId), isNull(contacts.deletedAt)),
+        )
         .limit(1);
 
       const toAddress = contact
         ? getContactChannelAddress(contact, channel)
         : null;
       if (!toAddress) {
-        await clearLeadFollowups(leadId);
+        await clearLeadFollowups(leadId, { excludeOutboxEventId: event.id });
         return { status: "processed" };
       }
 
@@ -4734,7 +5955,7 @@ async function handleOutboxEvent(
         channel,
       });
       if (!threadId) {
-        await clearLeadFollowups(leadId);
+        await clearLeadFollowups(leadId, { excludeOutboxEventId: event.id });
         return { status: "processed" };
       }
 
@@ -4806,21 +6027,23 @@ async function handleOutboxEvent(
       }
 
       const db = getDb();
-      const [call] = await db
-        .select({
-          id: callRecords.id,
-          callSid: callRecords.callSid,
-          parentCallSid: callRecords.parentCallSid,
-          contactId: callRecords.contactId,
-          assignedTo: callRecords.assignedTo,
-          noteTaskId: callRecords.noteTaskId,
-          processedAt: callRecords.processedAt,
-        })
-        .from(callRecords)
-        .where(eq(callRecords.callSid, callSid))
-        .limit(1);
-
-      if (!call?.id) {
+      const lease = await claimRecordingProcessingLease({
+        db,
+        outboxEventId: event.id,
+        callSid,
+      });
+      if (lease.kind === "deferred") {
+        return {
+          status: "retry",
+          error: "recording_processing_lease_active",
+          nextAttemptAt: lease.retryAt,
+          skipFinalization: true,
+        };
+      }
+      if (lease.kind === "already_terminal") {
+        return { status: "processed", skipFinalization: true };
+      }
+      if (lease.kind === "call_missing") {
         return {
           status: "retry",
           error: "call_record_missing",
@@ -4828,292 +6051,159 @@ async function handleOutboxEvent(
         };
       }
 
-      if (call.processedAt instanceof Date) {
-        return { status: "processed" };
-      }
+      const { call, leaseToken } = lease;
+      const deferLease = async (
+        error: string,
+        nextAttemptAt = new Date(Date.now() + 60_000),
+      ): Promise<OutboxOutcome> => {
+        const result = await deferRecordingProcessingLease({
+          db,
+          outboxEventId: event.id,
+          leaseToken,
+          error,
+          nextAttemptAt,
+        });
+        return {
+          status: result === "deferred" ? "retry" : "skipped",
+          error,
+          nextAttemptAt,
+          skipFinalization: true,
+        };
+      };
 
-      let recordings = await listTwilioRecordingsForCall(callSid);
-      if (
-        !recordings.length &&
-        typeof call.parentCallSid === "string" &&
-        call.parentCallSid.trim().length > 0
-      ) {
-        recordings = await listTwilioRecordingsForCall(
-          call.parentCallSid.trim(),
-        );
-      }
-
-      if (!recordings.length) {
-        const attempts =
-          typeof event.attempts === "number" ? event.attempts : 0;
-        if (attempts < 5) {
-          return {
-            status: "retry",
-            error: "recordings_not_ready",
-            nextAttemptAt: new Date(Date.now() + 60_000),
-          };
+      try {
+        let recordingList = await listTwilioRecordingsForCall(callSid);
+        if (!recordingList.ok) {
+          return deferLease(`recording_list_${recordingList.code}`);
         }
-        await db
-          .update(callRecords)
-          .set({
-            processedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(callRecords.id, call.id));
-        return { status: "processed" };
-      }
-
-      const best = recordings
-        .slice()
-        .sort((a, b) => (b.durationSec ?? 0) - (a.durationSec ?? 0))[0];
-
-      if (!best) {
-        await db
-          .update(callRecords)
-          .set({
-            processedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(callRecords.id, call.id));
-        return { status: "processed" };
-      }
-
-      const audio = await downloadTwilioRecordingAudio(best.sid);
-      if (!audio.ok) {
-        if (audio.retryable) {
-          return {
-            status: "retry",
-            error: "recording_download_failed",
-            nextAttemptAt: new Date(Date.now() + 60_000),
-          };
-        }
-        return { status: "processed" };
-      }
-
-      const transcript = await transcribeAudio(audio.buffer, {
-        contentType: audio.contentType,
-        filename: audio.filename,
-      });
-      if (!transcript) {
-        const hasKey =
-          typeof process.env["OPENAI_API_KEY"] === "string" &&
-          process.env["OPENAI_API_KEY"].trim().length > 0;
-        if (!hasKey) {
-          await db
-            .update(callRecords)
-            .set({
-              recordingSid: best.sid,
-              recordingDurationSec: best.durationSec ?? null,
-              recordingCreatedAt: best.dateCreated
-                ? new Date(best.dateCreated)
-                : null,
-              processedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(eq(callRecords.id, call.id));
-          return { status: "processed" };
-        }
-        return { status: "retry", error: "transcription_failed" };
-      }
-
-      const companyProfile = await getCompanyProfilePolicy(db);
-      let agentName = "Sales";
-      if (call.assignedTo) {
-        const [member] = await db
-          .select({ name: teamMembers.name })
-          .from(teamMembers)
-          .where(eq(teamMembers.id, call.assignedTo))
-          .limit(1);
-        if (typeof member?.name === "string" && member.name.trim().length > 0) {
-          agentName = member.name.trim();
-        }
-      } else {
-        const autopilot = await getSalesAutopilotPolicy(db);
         if (
-          typeof autopilot.agentDisplayName === "string" &&
-          autopilot.agentDisplayName.trim().length > 0
+          recordingList.empty &&
+          typeof call.parentCallSid === "string" &&
+          call.parentCallSid.trim().length > 0
         ) {
-          agentName = autopilot.agentDisplayName.trim();
-        }
-      }
-
-      const analysis = await analyzeCallTranscript({
-        transcript,
-        agentName,
-        businessName: companyProfile.businessName,
-      });
-      if (!analysis) {
-        return { status: "retry", error: "analysis_failed" };
-      }
-
-      const now = new Date();
-      const deleteAfter = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
-      const recordingCreatedAt = best.dateCreated
-        ? new Date(best.dateCreated)
-        : null;
-      const coachingText = analysis.coaching.join("\n").trim();
-
-      await db
-        .update(callRecords)
-        .set({
-          recordingSid: best.sid,
-          recordingDurationSec: best.durationSec ?? null,
-          recordingCreatedAt:
-            recordingCreatedAt && !Number.isNaN(recordingCreatedAt.getTime())
-              ? recordingCreatedAt
-              : null,
-          transcript,
-          extracted: analysis.extracted as unknown as Record<string, unknown>,
-          summary: analysis.summary,
-          coaching: coachingText.length ? coachingText : null,
-          deleteAfter,
-          updatedAt: now,
-        })
-        .where(eq(callRecords.id, call.id));
-
-      if (call.contactId) {
-        const confidence = analysis.extracted.confidence ?? {};
-
-        const [existingContact] = await db
-          .select({
-            firstName: contacts.firstName,
-            lastName: contacts.lastName,
-            email: contacts.email,
-            salespersonMemberId: contacts.salespersonMemberId,
-          })
-          .from(contacts)
-          .where(eq(contacts.id, call.contactId))
-          .limit(1);
-
-        if (existingContact) {
-          const updates: Record<string, unknown> = {};
-          const firstName = analysis.extracted.firstName ?? null;
-          const lastName = analysis.extracted.lastName ?? null;
-          const email = analysis.extracted.email ?? null;
-
-          const firstConf =
-            typeof confidence["firstName"] === "number"
-              ? confidence["firstName"]
-              : 0;
-          const lastConf =
-            typeof confidence["lastName"] === "number"
-              ? confidence["lastName"]
-              : 0;
-          const emailConf =
-            typeof confidence["email"] === "number" ? confidence["email"] : 0;
-
-          const isPlaceholderName =
-            existingContact.firstName.trim().toLowerCase() === "unknown" ||
-            existingContact.lastName.trim().toLowerCase() === "contact";
-
-          if (isPlaceholderName && firstName && firstConf >= 0.8) {
-            updates["firstName"] = firstName;
-          }
-          if (isPlaceholderName && lastName && lastConf >= 0.8) {
-            updates["lastName"] = lastName;
-          }
-          if (!existingContact.email && email && emailConf >= 0.8) {
-            updates["email"] = email;
-          }
-
-          if (Object.keys(updates).length) {
-            await db
-              .update(contacts)
-              .set(updates)
-              .where(eq(contacts.id, call.contactId));
+          recordingList = await listTwilioRecordingsForCall(
+            call.parentCallSid.trim(),
+          );
+          if (!recordingList.ok) {
+            return deferLease(`recording_parent_list_${recordingList.code}`);
           }
         }
 
-        const when = DateTime.fromJSDate(now)
-          .setZone((await getBusinessHoursPolicy(db)).timezone)
-          .toFormat("LLL d, yyyy h:mm a");
-        const extractedBits = [
-          analysis.extracted.postalCode
-            ? `ZIP ${analysis.extracted.postalCode}`
-            : null,
-          analysis.extracted.timeframe
-            ? `Timing: ${analysis.extracted.timeframe}`
-            : null,
-          analysis.extracted.items
-            ? `Items: ${analysis.extracted.items}`
-            : null,
-        ].filter(Boolean);
-        const note = [
-          `Call ${when}`,
-          analysis.summary,
-          extractedBits.length ? extractedBits.join(" | ") : null,
-        ]
-          .filter(Boolean)
-          .join("\n");
-
-        const [pipelineRow] = await db
-          .select({ notes: crmPipeline.notes })
-          .from(crmPipeline)
-          .where(eq(crmPipeline.contactId, call.contactId))
-          .limit(1);
-        const existingNotes =
-          typeof pipelineRow?.notes === "string"
-            ? pipelineRow.notes.trim()
-            : "";
-        const combined = [existingNotes, note].filter(Boolean).join("\n\n");
-        const capped =
-          combined.length > 8000
-            ? combined.slice(combined.length - 8000)
-            : combined;
-
-        await db
-          .insert(crmPipeline)
-          .values({
-            contactId: call.contactId,
-            stage: "new",
-            notes: capped,
-            createdAt: now,
-            updatedAt: now,
-          })
-          .onConflictDoUpdate({
-            target: crmPipeline.contactId,
-            set: { notes: capped, updatedAt: now },
+        if (recordingList.empty) {
+          const poll = await recordVerifiedEmptyRecordingPoll({
+            db,
+            outboxEventId: event.id,
+            callRecordId: call.id,
+            leaseToken,
           });
+          if (poll.kind === "retry") {
+            return {
+              status: "retry",
+              error: "recordings_not_ready",
+              skipFinalization: true,
+            };
+          }
+          return {
+            status: poll.kind === "lease_lost" ? "skipped" : "processed",
+            skipFinalization: true,
+          };
+        }
 
-        if (!call.noteTaskId) {
-          const noteBody =
-            note.length > 3500 ? `${note.slice(0, 3497)}...` : note;
-          const noteTitleRaw = analysis.summary.trim().split("\n")[0] ?? "";
-          const noteTitle =
-            noteTitleRaw.trim().length > 0
-              ? noteTitleRaw.trim().slice(0, 60).trimEnd()
-              : "Call note";
-          const title =
-            noteTitle.length > 60 ? `${noteTitle.slice(0, 57)}...` : noteTitle;
+        const best = recordingList.recordings
+          .slice()
+          .sort((a, b) => (b.durationSec ?? 0) - (a.durationSec ?? 0))[0];
 
-          const [createdNote] = await db
-            .insert(crmTasks)
-            .values({
-              contactId: call.contactId,
-              title,
-              notes: noteBody,
-              status: "completed",
-              assignedTo: call.assignedTo ?? null,
-            })
-            .returning({ id: crmTasks.id });
+        if (!best) {
+          return deferLease("recording_list_inconsistent");
+        }
 
-          if (createdNote?.id) {
-            await db
-              .update(callRecords)
-              .set({ noteTaskId: createdNote.id, updatedAt: now })
-              .where(eq(callRecords.id, call.id));
+        const audio = await downloadTwilioRecordingAudio(best.sid);
+        if (!audio.ok) {
+          return deferLease(
+            `recording_download_${audio.code}`,
+            new Date(
+              Date.now() + (audio.retryable ? 60_000 : 24 * 60 * 60_000),
+            ),
+          );
+        }
+
+        const transcript = await transcribeAudio(audio.buffer, {
+          contentType: audio.contentType,
+          filename: audio.filename,
+        });
+        if (!transcript) {
+          const hasKey =
+            typeof process.env["OPENAI_API_KEY"] === "string" &&
+            process.env["OPENAI_API_KEY"].trim().length > 0;
+          if (!hasKey) {
+            const recordingCreatedAt = best.dateCreated
+              ? new Date(best.dateCreated)
+              : null;
+            const persisted = await persistSkippedRecordingProcessing({
+              db,
+              outboxEventId: event.id,
+              leaseToken,
+              callRecordId: call.id,
+              recording: {
+                callSid,
+                recordingSid: best.sid,
+                durationSec: best.durationSec,
+                createdAt:
+                  recordingCreatedAt &&
+                  !Number.isNaN(recordingCreatedAt.getTime())
+                    ? recordingCreatedAt
+                    : null,
+              },
+              reason: "transcription_not_configured",
+            });
+            return {
+              status: persisted === "lease_lost" ? "skipped" : "processed",
+              skipFinalization: true,
+            };
+          }
+          return deferLease("transcription_failed");
+        }
+
+        const companyProfile = await getCompanyProfilePolicy(db);
+        let agentName = "Sales";
+        if (call.assignedTo) {
+          const [member] = await db
+            .select({ name: teamMembers.name })
+            .from(teamMembers)
+            .where(eq(teamMembers.id, call.assignedTo))
+            .limit(1);
+          if (
+            typeof member?.name === "string" &&
+            member.name.trim().length > 0
+          ) {
+            agentName = member.name.trim();
+          }
+        } else {
+          const autopilot = await getSalesAutopilotPolicy(db);
+          if (
+            typeof autopilot.agentDisplayName === "string" &&
+            autopilot.agentDisplayName.trim().length > 0
+          ) {
+            agentName = autopilot.agentDisplayName.trim();
           }
         }
 
-        try {
-          const coachingMemberId =
-            call.assignedTo ??
-            (typeof existingContact?.salespersonMemberId === "string" &&
-            existingContact.salespersonMemberId.trim().length > 0
-              ? existingContact.salespersonMemberId
-              : null);
+        const analysis = await analyzeCallTranscript({
+          transcript,
+          agentName,
+          businessName: companyProfile.businessName,
+        });
+        if (!analysis) {
+          return deferLease("analysis_failed");
+        }
 
-          const [existingInbound] = await db
+        const now = new Date();
+        const deleteAfter = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+        const recordingCreatedAt = best.dateCreated
+          ? new Date(best.dateCreated)
+          : null;
+        const [existingInbound, existingOutbound] = await Promise.all([
+          db
             .select({ id: callCoaching.id })
             .from(callCoaching)
             .where(
@@ -5123,9 +6213,8 @@ async function handleOutboxEvent(
                 eq(callCoaching.version, 1),
               ),
             )
-            .limit(1);
-
-          const [existingOutbound] = await db
+            .limit(1),
+          db
             .select({ id: callCoaching.id })
             .from(callCoaching)
             .where(
@@ -5135,111 +6224,68 @@ async function handleOutboxEvent(
                 eq(callCoaching.version, 1),
               ),
             )
-            .limit(1);
-
-          if (!existingInbound?.id || !existingOutbound?.id) {
-            const inboundCoaching = existingInbound?.id
-              ? null
-              : await scoreCallTranscript({
+            .limit(1),
+        ]);
+        // All provider/model work completes before the single local transaction.
+        const [inboundCoaching, outboundCoaching, businessHours] =
+          await Promise.all([
+            existingInbound[0]?.id
+              ? Promise.resolve(null)
+              : scoreCallTranscript({
                   transcript,
                   agentName,
                   businessName: companyProfile.businessName,
                   rubric: "inbound",
-                });
-            const outboundCoaching = existingOutbound?.id
-              ? null
-              : await scoreCallTranscript({
+                }),
+            existingOutbound[0]?.id
+              ? Promise.resolve(null)
+              : scoreCallTranscript({
                   transcript,
                   agentName,
                   businessName: companyProfile.businessName,
                   rubric: "outbound",
-                });
+                }),
+            getBusinessHoursPolicy(db),
+          ]);
+        const when = DateTime.fromJSDate(now)
+          .setZone(businessHours.timezone)
+          .toFormat("LLL d, yyyy h:mm a");
 
-            if (inboundCoaching) {
-              await db
-                .insert(callCoaching)
-                .values({
-                  callRecordId: call.id,
-                  memberId: coachingMemberId,
-                  rubric: "inbound",
-                  version: 1,
-                  model: inboundCoaching.model,
-                  scoreOverall: inboundCoaching.scoreOverall,
-                  scoreBreakdown: inboundCoaching.scoreBreakdown,
-                  wins: inboundCoaching.wins,
-                  improvements: inboundCoaching.improvements,
-                  createdAt: now,
-                  updatedAt: now,
-                })
-                .onConflictDoNothing();
-            }
-
-            if (outboundCoaching) {
-              await db
-                .insert(callCoaching)
-                .values({
-                  callRecordId: call.id,
-                  memberId: coachingMemberId,
-                  rubric: "outbound",
-                  version: 1,
-                  model: outboundCoaching.model,
-                  scoreOverall: outboundCoaching.scoreOverall,
-                  scoreBreakdown: outboundCoaching.scoreBreakdown,
-                  wins: outboundCoaching.wins,
-                  improvements: outboundCoaching.improvements,
-                  createdAt: now,
-                  updatedAt: now,
-                })
-                .onConflictDoNothing();
-            }
-          }
-        } catch (error) {
-          console.warn("[call.coaching] store_failed", {
+        const persisted = await persistAnalyzedRecording({
+          db,
+          outboxEventId: event.id,
+          leaseToken,
+          callRecordId: call.id,
+          expectedContactId: call.contactId,
+          recording: {
             callSid,
-            error: String(error),
-          });
-        }
-      }
-
-      await recordAuditEvent({
-        actor: { type: "worker", label: "outbox" },
-        action: "call.recording.processed",
-        entityType: "call_record",
-        entityId: call.id,
-        meta: {
-          callSid,
-          recordingSid: best.sid,
-          deleteAfter: deleteAfter.toISOString(),
-        },
-      });
-
-      const [existingDelete] = await db
-        .select({ id: outboxEvents.id })
-        .from(outboxEvents)
-        .where(
-          and(
-            eq(outboxEvents.type, "call.recording.delete"),
-            isNull(outboxEvents.processedAt),
-            sql`(payload->>'callSid') = ${callSid}`,
-          ),
-        )
-        .limit(1);
-
-      if (!existingDelete?.id) {
-        await db.insert(outboxEvents).values({
-          type: "call.recording.delete",
-          payload: { callSid, recordingSid: best.sid },
-          nextAttemptAt: deleteAfter,
-          createdAt: now,
+            recordingSid: best.sid,
+            durationSec: best.durationSec,
+            createdAt:
+              recordingCreatedAt && !Number.isNaN(recordingCreatedAt.getTime())
+                ? recordingCreatedAt
+                : null,
+          },
+          transcript,
+          analysis,
+          noteTimestampLabel: when,
+          inboundCoaching,
+          outboundCoaching,
+          deleteAfter,
+          now,
         });
+
+        return {
+          status: persisted === "lease_lost" ? "skipped" : "processed",
+          skipFinalization: true,
+        };
+      } catch (error) {
+        console.warn("[outbox] call.recording.process.failed", {
+          eventId: event.id,
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        });
+        return deferLease("recording_processing_failed");
       }
-
-      await db
-        .update(callRecords)
-        .set({ processedAt: now, updatedAt: now })
-        .where(eq(callRecords.id, call.id));
-
-      return { status: "processed" };
     }
 
     case "call.recording.delete": {
@@ -5256,70 +6302,64 @@ async function handleOutboxEvent(
         console.warn("[outbox] call.recording.delete.missing_payload", {
           id: event.id,
         });
-        return { status: "skipped" };
+        await quarantineRecordingDeleteEvent({
+          db: getDb(),
+          outboxEventId: event.id,
+          reason: "recording_delete_payload_invalid",
+        });
+        return { status: "skipped", skipFinalization: true };
       }
 
       const db = getDb();
-      const [call] = await db
-        .select({
-          id: callRecords.id,
-          deleteAfter: callRecords.deleteAfter,
-          deletedAt: callRecords.deletedAt,
-        })
-        .from(callRecords)
-        .where(eq(callRecords.callSid, callSid))
-        .limit(1);
-
-      if (!call?.id) {
-        return { status: "processed" };
+      const prepared = await prepareRecordingDelete({
+        db,
+        outboxEventId: event.id,
+        callSid,
+        recordingSid,
+      });
+      if (prepared.kind === "quarantined") {
+        return { status: "skipped", skipFinalization: true };
       }
-
-      if (call.deletedAt instanceof Date) {
+      if (prepared.kind === "already_terminal") {
         return { status: "processed" };
       }
 
       const now = new Date();
       if (
-        call.deleteAfter instanceof Date &&
-        call.deleteAfter.getTime() > now.getTime()
+        prepared.target.deleteAfter instanceof Date &&
+        prepared.target.deleteAfter.getTime() > now.getTime()
       ) {
         return {
           status: "retry",
           error: "not_due_yet",
-          nextAttemptAt: call.deleteAfter,
+          nextAttemptAt: prepared.target.deleteAfter,
         };
       }
 
-      const ok = await deleteTwilioRecording(recordingSid);
-      if (!ok) {
-        const attempts =
-          typeof event.attempts === "number" ? event.attempts : 0;
-        if (attempts >= 5) {
-          console.warn("[outbox] call.recording.delete.failed", {
-            callSid,
-            recordingSid,
-          });
-          return { status: "processed" };
-        }
+      const deletion = await deleteTwilioRecording(
+        prepared.target.recordingSid,
+      );
+      if (!deletion.ok) {
         return {
           status: "retry",
-          error: "delete_failed",
-          nextAttemptAt: new Date(now.getTime() + 60 * 60_000),
+          error: `recording_delete_${deletion.code}`,
+          nextAttemptAt: new Date(
+            now.getTime() +
+              (deletion.retryable ? 60 * 60_000 : 24 * 60 * 60_000),
+          ),
         };
       }
 
-      await db
-        .update(callRecords)
-        .set({ deletedAt: now, updatedAt: now })
-        .where(eq(callRecords.id, call.id));
-      await recordAuditEvent({
-        actor: { type: "worker", label: "outbox" },
-        action: "call.recording.deleted",
-        entityType: "call_record",
-        entityId: call.id,
-        meta: { callSid, recordingSid },
+      const finalized = await finalizeRecordingDelete({
+        db,
+        outboxEventId: event.id,
+        target: prepared.target,
+        alreadyAbsent: deletion.alreadyAbsent,
+        now,
       });
-
+      if (finalized === "quarantined") {
+        return { status: "skipped", skipFinalization: true };
+      }
       return { status: "processed" };
     }
 
@@ -5363,13 +6403,11 @@ async function handleOutboxEvent(
         return { status: "processed" };
       }
 
-      await getDb()
-        .insert(outboxEvents)
-        .values({
-          type: "facebook.sales.evaluate",
-          payload: { messageId },
-          createdAt: new Date(),
-        });
+      await getDb().insert(outboxEvents).values({
+        type: "facebook.sales.evaluate",
+        payload: { messageId },
+        createdAt: new Date(),
+      });
       return { status: "processed" };
     }
 
@@ -5459,6 +6497,7 @@ async function handleOutboxEvent(
           deliveryStatus: conversationMessages.deliveryStatus,
           sentAt: conversationMessages.sentAt,
           contactId: conversationThreads.contactId,
+          contactDeletedAt: contacts.deletedAt,
           contactPhone: contacts.phone,
           contactPhoneE164: contacts.phoneE164,
           contactEmail: contacts.email,
@@ -5476,6 +6515,13 @@ async function handleOutboxEvent(
       if (!message) {
         console.warn("[outbox] message.send.not_found", { messageId });
         return { status: "skipped" };
+      }
+
+      // Defense in depth: processOutboxBatch quarantines the event before the
+      // handler, but this local check guarantees no typing indicator or send
+      // can occur if the handler is ever invoked through another code path.
+      if (message.contactId && message.contactDeletedAt) {
+        return { status: "skipped", error: "contact_soft_deleted" };
       }
 
       if (
@@ -5530,11 +6576,11 @@ async function handleOutboxEvent(
         metadata?.["automation"] === true ||
         metadata?.["autoFirstTouch"] === true ||
         metadata?.["salesAutopilot"] === true;
+      const allowDncOverride = metadata?.["allowDncOverride"] === true;
       const bypassQuietHours =
         metadata?.["autoReply"] === true ||
         metadata?.["confirmationLoop"] === true ||
-        metadata?.["autoFirstTouch"] === true ||
-        metadata?.["salesAutopilot"] === true;
+        metadata?.["autoFirstTouch"] === true;
 
       if (isAutomated && !bypassQuietHours) {
         const quietHours = await getQuietHoursPolicy(db);
@@ -5618,11 +6664,226 @@ async function handleOutboxEvent(
         return { status: "processed" };
       }
 
+      if (
+        message.contactId &&
+        (channel === "sms" || channel === "email" || channel === "dm")
+      ) {
+        // Persist the resolved destination before the durable request. The
+        // dispatch ledger deliberately stores no raw recipient PII.
+        await db
+          .update(conversationMessages)
+          .set({ toAddress })
+          .where(eq(conversationMessages.id, message.id));
+
+        let requested: Awaited<
+          ReturnType<typeof ensureMessageDispatchRequested>
+        >;
+        try {
+          requested = await ensureMessageDispatchRequested({
+            outboxEventId: event.id,
+            messageId: message.id,
+            contactId: message.contactId,
+            channel: channel as ExternalMessageChannel,
+            attemptNumber: attempt,
+            allowDncOverride,
+            now,
+          });
+        } catch (error) {
+          // Do not advance the outbox attempt when persistence itself is
+          // uncertain. A later run must re-read this same durable attempt.
+          console.error("[outbox] message.dispatch_request_uncertain", {
+            eventId: event.id,
+            messageId,
+            error: String(error),
+          });
+          return {
+            status: "retry",
+            error: "message_dispatch_request_uncertain",
+            skipFinalization: true,
+          };
+        }
+
+        if (requested.kind === "unavailable") {
+          return { status: "skipped", skipFinalization: true };
+        }
+        if (requested.kind === "contact_unavailable") {
+          return {
+            status: "skipped",
+            error: requested.reason,
+            skipFinalization: true,
+          };
+        }
+
+        let claimed: Awaited<ReturnType<typeof claimMessageDispatch>>;
+        try {
+          claimed = await claimMessageDispatch({
+            dispatchId: requested.dispatch.id,
+            now: new Date(),
+          });
+        } catch (error) {
+          console.error("[outbox] message.dispatch_claim_uncertain", {
+            eventId: event.id,
+            messageId,
+            dispatchId: requested.dispatch.id,
+            error: String(error),
+          });
+          return {
+            status: "retry",
+            error: "message_dispatch_claim_uncertain",
+            skipFinalization: true,
+          };
+        }
+
+        if (claimed.kind === "unavailable") {
+          return {
+            status: "skipped",
+            error: "message_dispatch_unavailable",
+            skipFinalization: true,
+          };
+        }
+        if (claimed.kind === "in_flight") {
+          return {
+            status: "retry",
+            error: "message_dispatch_in_flight",
+            nextAttemptAt: claimed.retryAt,
+            skipFinalization: true,
+          };
+        }
+        if (claimed.kind === "settled") {
+          return {
+            status: claimed.retryable ? "retry" : "processed",
+            error: claimed.error,
+            skipFinalization: claimed.outboxFinalized,
+          };
+        }
+
+        let durableResult: Awaited<ReturnType<typeof sendSmsMessage>>;
+        try {
+          const emailAttachments =
+            channel === "email" ? readEmailAttachments(metadata) : undefined;
+          const options = {
+            idempotencyKey: claimed.providerRequestKey,
+            emailAttachments: emailAttachments ?? undefined,
+          };
+          if (channel === "email" && emailAttachments === null) {
+            durableResult = {
+              ok: false,
+              provider: "smtp",
+              providerIdempotencySupported: false,
+              deliveryCertainty: "not_sent",
+              detail: "email_attachment_invalid",
+            };
+          } else if (channel === "sms") {
+            durableResult = await sendSmsMessage(
+              toAddress,
+              body,
+              mediaUrls,
+              options,
+            );
+          } else if (channel === "email") {
+            durableResult = await sendEmailMessage(
+              toAddress,
+              subject,
+              body,
+              options,
+            );
+          } else {
+            durableResult = await sendDmMessage(
+              toAddress,
+              body,
+              metadata,
+              mediaUrls,
+              options,
+            );
+          }
+        } catch {
+          // Provider helpers normally return uncertainty rather than throw.
+          // This final guard ensures an unexpected transport exception can
+          // never enter the automatic retry path.
+          durableResult = {
+            ok: false,
+            provider: channel,
+            providerIdempotencySupported: false,
+            deliveryCertainty: "uncertain",
+            detail: "provider_dispatch_exception",
+          };
+        }
+
+        const detail = durableResult.detail ?? null;
+        const retryable =
+          durableResult.deliveryCertainty !== "uncertain" &&
+          isRetryableSendFailure(detail) &&
+          attempt < MAX_MESSAGE_SEND_ATTEMPTS;
+        let finalized: Awaited<ReturnType<typeof finalizeMessageDispatch>>;
+        try {
+          finalized = await finalizeMessageDispatch({
+            dispatchId: claimed.dispatchId,
+            result: durableResult,
+            retryable,
+            now: new Date(),
+          });
+        } catch (error) {
+          // dispatched was committed before the provider call. If result
+          // persistence is unavailable, leave that attempt untouched and let
+          // its uncertainty deadline force manual reconciliation.
+          console.error("[outbox] message.dispatch_finalize_uncertain", {
+            eventId: event.id,
+            messageId,
+            dispatchId: claimed.dispatchId,
+            error: String(error),
+          });
+          return {
+            status: "retry",
+            error: "message_dispatch_finalize_uncertain",
+            skipFinalization: true,
+          };
+        }
+
+        const providerHealth =
+          channel === "sms" || channel === "email" ? channel : null;
+        if (providerHealth) {
+          if (finalized.state === "succeeded") {
+            await recordProviderSuccessSafe(providerHealth);
+          } else {
+            await recordProviderFailureSafe(providerHealth, finalized.error);
+          }
+        }
+
+        if (channel === "dm" && typingSentAt && toAddress) {
+          const typingOff = await sendDmTyping(
+            toAddress,
+            "typing_off",
+            metadata,
+          );
+          if (!typingOff.ok) {
+            console.warn("[outbox] dm.typing_off_failed", {
+              messageId,
+              detail: typingOff.detail,
+            });
+          }
+        }
+
+        return {
+          status: finalized.retryable ? "retry" : "processed",
+          error: finalized.error,
+          skipFinalization: finalized.outboxFinalized,
+        };
+      }
+
+      const legacyProviderRequestKey = buildLegacyOutboxProviderRequestKey({
+        outboxEventId: event.id,
+        messageId: message.id,
+        channel,
+        attemptNumber: attempt,
+      });
       let result: Awaited<ReturnType<typeof sendSmsMessage>>;
       if (channel === "sms") {
         result = await sendSmsMessage(toAddress, body, mediaUrls);
       } else if (channel === "email") {
-        result = await sendEmailMessage(toAddress, subject, body);
+        result = await sendEmailMessage(toAddress, subject, body, {
+          // Stable Message-ID evidence only; SMTP is not exactly-once.
+          idempotencyKey: legacyProviderRequestKey,
+        });
       } else if (channel === "dm") {
         result = await sendDmMessage(toAddress, body, metadata, mediaUrls);
       } else {
@@ -5637,7 +6898,10 @@ async function handleOutboxEvent(
 
       if (!result.ok) {
         const retryable = isRetryableSendFailure(detail);
-        const canRetry = retryable && attempt < MAX_MESSAGE_SEND_ATTEMPTS;
+        const canRetry =
+          result.deliveryCertainty !== "uncertain" &&
+          retryable &&
+          attempt < MAX_MESSAGE_SEND_ATTEMPTS;
         const providerHealth =
           channel === "sms" || channel === "email" ? channel : null;
 
@@ -5666,7 +6930,6 @@ async function handleOutboxEvent(
           entityId: message.id,
           meta: {
             channel,
-            toAddress,
             provider: result.provider ?? null,
             detail,
             attempt,
@@ -5711,7 +6974,6 @@ async function handleOutboxEvent(
         entityId: message.id,
         meta: {
           channel,
-          toAddress,
           provider: result.provider ?? null,
           detail,
         },
@@ -5752,6 +7014,7 @@ export async function processOutboxBatch(
     .where(
       and(
         isNull(outboxEvents.processedAt),
+        isNull(outboxEvents.quarantinedAt),
         or(
           isNull(outboxEvents.nextAttemptAt),
           lte(outboxEvents.nextAttemptAt, now),
@@ -5769,24 +7032,164 @@ export async function processOutboxBatch(
   };
 
   for (const event of events) {
-    let outcome: OutboxOutcome = { status: "skipped" };
+    let contactScope: OutboxContactScope | null = null;
+    // Fail closed before any handler can call a provider. Delete-time
+    // quarantine catches already queued rows; this guard catches events
+    // inserted later or by a concurrent webhook/worker.
     try {
-      outcome = await handleOutboxEvent(event);
+      contactScope = await resolveContactForOutboxEvent(event);
+      if (contactScope?.deletedAt && event.type !== "sales.escalation.call") {
+        await quarantineOutboxEventForDeletedContact(
+          event,
+          contactScope.contactId,
+        );
+        stats.skipped += 1;
+        continue;
+      }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       const attempt = (event.attempts ?? 0) + 1;
-      const canRetry =
-        (event.type === "message.send" &&
-          attempt < MAX_MESSAGE_SEND_ATTEMPTS) ||
-        (event.type.startsWith("facebook.") && attempt < 5);
-      outcome = canRetry
-        ? { status: "retry", error: message }
-        : { status: "processed", error: message };
-      console.warn("[outbox] handler_error", {
+      const detail = `contact_dispatch_guard_failed:${String(error)}`;
+      stats.errors += 1;
+      console.warn("[outbox] contact_dispatch_guard_failed", {
         id: event.id,
         type: event.type,
-        error: message,
+        error: String(error),
       });
+      try {
+        await db
+          .update(outboxEvents)
+          .set({
+            attempts: attempt,
+            nextAttemptAt: new Date(
+              Date.now() + getOutboxRetryDelayMs(attempt),
+            ),
+            lastError: detail,
+          })
+          .where(eq(outboxEvents.id, event.id));
+      } catch (updateError) {
+        console.warn("[outbox] contact_dispatch_guard_retry_failed", {
+          id: event.id,
+          error: String(updateError),
+        });
+      }
+      continue;
+    }
+
+    let outcome: OutboxOutcome = { status: "skipped" };
+    let finalizedWithinContactLock = false;
+    try {
+      if (
+        contactScope &&
+        event.type !== "message.send" &&
+        !CONTACT_MESSAGE_ENQUEUE_EVENT_TYPES.has(event.type)
+      ) {
+        const guarded = await handleContactScopedOutboxEvent(
+          event,
+          contactScope.contactId,
+        );
+        if (guarded.kind === "deleted") {
+          try {
+            await quarantineOutboxEventForDeletedContact(
+              event,
+              contactScope.contactId,
+            );
+          } catch (error) {
+            throw new ContactDispatchGuardFailure(error);
+          }
+          stats.skipped += 1;
+          continue;
+        }
+        if (guarded.kind === "unavailable") {
+          stats.skipped += 1;
+          continue;
+        }
+        outcome = guarded.outcome;
+        finalizedWithinContactLock = true;
+      } else {
+        outcome = await handleOutboxEvent(event);
+      }
+    } catch (error) {
+      if (error instanceof ContactDispatchGuardFailure) {
+        const attempt = (event.attempts ?? 0) + 1;
+        stats.errors += 1;
+        console.warn("[outbox] contact_dispatch_guard_failed", {
+          id: event.id,
+          type: event.type,
+          error: error.message,
+        });
+        try {
+          await db
+            .update(outboxEvents)
+            .set({
+              attempts: attempt,
+              nextAttemptAt: new Date(
+                Date.now() + getOutboxRetryDelayMs(attempt),
+              ),
+              lastError: error.message,
+            })
+            .where(eq(outboxEvents.id, event.id));
+        } catch (updateError) {
+          console.warn("[outbox] contact_dispatch_guard_retry_failed", {
+            id: event.id,
+            error: String(updateError),
+          });
+        }
+        continue;
+      }
+      if (error instanceof OutboxFinalizationFailure) {
+        stats.errors += 1;
+        console.error("[outbox] finalization_reconciliation_required", {
+          id: event.id,
+          type: event.type,
+          error: error.message,
+        });
+        try {
+          if (!contactScope) {
+            throw new Error("contact_scope_missing_for_reconciliation");
+          }
+          const reconciliationState =
+            await quarantineOutboxEventForFinalizationReconciliation(
+              event,
+              contactScope.contactId,
+            );
+          if (reconciliationState === "already_terminal") {
+            console.warn("[outbox] reconciliation_event_already_terminal", {
+              id: event.id,
+              type: event.type,
+            });
+          }
+        } catch (updateError) {
+          console.error("[outbox] reconciliation_marker_failed", {
+            id: event.id,
+            error: String(updateError),
+          });
+          // If only the audit write failed, prioritize preventing a duplicate
+          // provider effect and emit an explicit operational error. A total
+          // persistence outage can still defeat this best-effort fallback;
+          // durable pre-dispatch/provider idempotency remains required.
+          if (contactScope) {
+            try {
+              await quarantineOutboxEventForFinalizationReconciliation(
+                event,
+                contactScope.contactId,
+                { writeAudit: false },
+              );
+              console.error(
+                "[outbox] reconciliation_quarantined_without_audit",
+                { id: event.id, type: event.type },
+              );
+            } catch (persistenceError) {
+              console.error("[outbox] reconciliation_persistence_unavailable", {
+                id: event.id,
+                type: event.type,
+                error: String(persistenceError),
+              });
+            }
+          }
+        }
+        continue;
+      }
+      outcome = outcomeForOutboxHandlerError(event, error);
     }
 
     if (outcome.status === "processed") {
@@ -5797,31 +7200,11 @@ export async function processOutboxBatch(
       stats.errors += 1;
     }
 
-    const attempt = (event.attempts ?? 0) + 1;
-    const lastError = outcome.error ?? null;
+    if (finalizedWithinContactLock) continue;
+    if (outcome.skipFinalization) continue;
+
     try {
-      if (outcome.status === "retry") {
-        const retryDelayMs = getRetryDelayMs(attempt);
-        await db
-          .update(outboxEvents)
-          .set({
-            attempts: attempt,
-            nextAttemptAt:
-              outcome.nextAttemptAt ?? new Date(Date.now() + retryDelayMs),
-            lastError,
-          })
-          .where(eq(outboxEvents.id, event.id));
-      } else {
-        await db
-          .update(outboxEvents)
-          .set({
-            attempts: attempt,
-            processedAt: new Date(),
-            nextAttemptAt: null,
-            lastError,
-          })
-          .where(eq(outboxEvents.id, event.id));
-      }
+      await finalizeOutboxEvent(db, event, outcome);
     } catch (error) {
       console.warn("[outbox] mark_processed_failed", {
         id: event.id,

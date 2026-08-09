@@ -13,23 +13,39 @@ export class ApiClient {
     return fetch(`${this.baseUrl}/api/healthz`, { cache: "no-store" });
   }
 
-  async get<T = unknown>(path: string, opts: { admin?: boolean } = {}): Promise<T> {
-    return this.request<T>(path, { admin: opts.admin });
-  }
-
-  async post<T = unknown>(path: string, data: unknown, opts: { admin?: boolean } = {}): Promise<T> {
+  async get<T = unknown>(
+    path: string,
+    opts: { admin?: boolean; headers?: Record<string, string> } = {},
+  ): Promise<T> {
     return this.request<T>(path, {
-      method: "POST",
-      body: JSON.stringify(data),
-      headers: { "content-type": "application/json" },
-      admin: opts.admin
+      admin: opts.admin,
+      headers: opts.headers,
     });
   }
 
-  private async request<T>(path: string, init: RequestInit & { admin?: boolean } = {}): Promise<T> {
+  async post<T = unknown>(
+    path: string,
+    data: unknown,
+    opts: { admin?: boolean; headers?: Record<string, string> } = {},
+  ): Promise<T> {
+    return this.request<T>(path, {
+      method: "POST",
+      body: JSON.stringify(data),
+      headers: {
+        "content-type": "application/json",
+        ...opts.headers,
+      },
+      admin: opts.admin,
+    });
+  }
+
+  private async request<T>(
+    path: string,
+    init: RequestInit & { admin?: boolean } = {},
+  ): Promise<T> {
     const url = `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
     const headers: Record<string, string> = {
-      ...(init.headers as Record<string, string>)
+      ...(init.headers as Record<string, string>),
     };
 
     if (init.body && !headers["content-type"]) {
@@ -43,12 +59,14 @@ export class ApiClient {
     const { admin: _admin, ...fetchInit } = init;
     const response = await fetch(url, {
       ...fetchInit,
-      headers
+      headers,
     });
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      throw new Error(`API request failed ${response.status} ${response.statusText} (${url}) ${text}`);
+      throw new Error(
+        `API request failed ${response.status} ${response.statusText} (${url}) ${text}`,
+      );
     }
 
     const text = await response.text();

@@ -1,9 +1,14 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { headers } from "next/headers";
+import {
+  isExactAgentRecordVersion,
+  resolveOpenAiApiEndpoint,
+} from "@myst-os/sdk";
 import { formatServiceLabel } from "@/lib/service-labels";
-import { requireTeamRole } from "@/app/api/team/auth";
 import { isAgentBotRequest } from "./bot-auth";
+import { callAdminApiAs } from "@/app/team/lib/api";
+import type { TeamRequestPrincipal } from "@/lib/team-principal";
+import { callPublicChatBookingApi } from "./service-api";
 import {
   formatJarvisToolResultsForSystem,
   runJarvisReadTool,
@@ -14,7 +19,6 @@ import {
 
 const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const PUBLIC_VOICE_MODEL = "gpt-4.1-mini";
-const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 type ReasoningEffort = "low" | "medium" | "high";
 
 const PUBLIC_SYSTEM_PROMPT = `You are Stonegate Assist, the warm front-office voice for Stonegate Junk Removal in North Metro Atlanta. Think like a helpful local office rep, not a call script.
@@ -35,22 +39,6 @@ Principles:
 - Do not fabricate knowledge, link to other pages, or repeat contact info if it was already provided in this conversation.
 
 Stay personable, concise, and helpful.`;
-
-const TEAM_SYSTEM_PROMPT = `You are StonegateOS Ops Agent — an internal “Jarvis”-style assistant for the Stonegate Junk Removal team.
-
-Your job:
-- Help the team move faster inside StonegateOS: scheduling, follow-ups, tasking, notes, pipeline hygiene, pricing checks, and quick summaries.
-- You are speaking to internal users (owner/office/crew), not customers.
-
-Rules:
-- Be decisive and operational. If the user asks for an outcome, give a recommended next step and any needed clarifying question(s).
-- Keep it clear and skimmable. Use short paragraphs or bullets when helpful.
-- Never claim an action was executed unless it truly was executed by the system. When proposing an action (send a text, reschedule, create contact, etc.), phrase it as a proposal to run after explicit approval.
-- Don’t ask for info the system likely already has. If context is missing, ask for the minimum needed (name/phone/address/date/time).
-- When drafting outbound messages, keep them short, human, and aligned with Stonegate’s pricing (trailer-volume only) and service area.
-- Prefer accuracy over creativity. If unsure, say what’s unknown and what you’d check next.
-
-You may be given a “Context pack” with contact/property/quote/appointment details. Treat that as source-of-truth.`;
 
 type OpenAIResponsesData = {
   output?: Array<{ content?: Array<{ text?: string }> }>;
@@ -80,7 +68,7 @@ Actions and approvals:
 - If multiple actions are possible, propose the top 1-2 and explain the tradeoff briefly.
 
 Context pack:
-- You may be given a \"Context pack\" with contact/property/quote/appointment details. Treat it as source-of-truth.
+- You may be given a "Context pack" with contact/property/quote/appointment details. Treat it as source-of-truth.
 - Do not contradict it. Do not re-ask questions that the context pack already answers.`;
 
 function extractOpenAIResponseText(data: OpenAIResponsesData): string {
@@ -103,14 +91,17 @@ async function fetchOpenAIText(
 ): Promise<
   { ok: true; text: string } | { ok: false; status: number; error: string }
 > {
-  const response = await fetch(OPENAI_RESPONSES_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+  const response = await fetch(
+    resolveOpenAiApiEndpoint("responses", process.env),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  });
+  );
 
   if (!response.ok) {
     const bodyText = await response.text().catch(() => "");
@@ -146,20 +137,6 @@ type BookingPayload = {
   propertyLabel?: string;
 };
 
-type ScheduleSummary = {
-  ok: boolean;
-  total: number;
-  byStatus: Record<string, number>;
-  byDay: Array<{ date: string; count: number }>;
-};
-
-type RevenueForecast = {
-  ok: boolean;
-  totalCents: number;
-  currency: string | null;
-  count: number;
-};
-
 type JarvisReadToolPlan = {
   toolCalls: JarvisReadToolCall[];
   clarification: { question: string; options: string[] } | null;
@@ -176,7 +153,7 @@ type ChatRequest = {
     state?: string;
     postalCode?: string;
   };
-  mode?: "team" | "public" | string;
+  mode?: string;
   action?: { type?: string; startAt?: string } | null;
 };
 
@@ -263,6 +240,7 @@ type RescheduleAppointmentAction = {
   summary: string;
   payload: {
     appointmentId?: string;
+    expectedVersion?: string;
     startAt: string;
     durationMinutes?: number;
     travelBufferMinutes?: number;
@@ -276,6 +254,7 @@ type CancelAppointmentAction = {
   summary: string;
   payload: {
     appointmentId?: string;
+    expectedVersion?: string;
     appointmentCandidates?: AppointmentCandidate[];
   };
 };
@@ -308,8 +287,9 @@ type GoogleAdsRecommendationsBulkUpdateAction = {
   type: "google_ads_recommendations_bulk_update";
   summary: string;
   payload: {
-    ids: string[];
+    items: Array<{ id: string; expectedVersion: string }>;
     status: "approved" | "ignored" | "proposed";
+    confirmation: "approve" | "ignore" | "reset";
     note?: string | null;
   };
 };
@@ -319,7 +299,8 @@ type GoogleAdsRecommendationsBulkApplyAction = {
   type: "google_ads_recommendations_bulk_apply";
   summary: string;
   payload: {
-    ids: string[];
+    items: Array<{ id: string; expectedVersion: string }>;
+    confirmation: "apply_google_ads_changes";
   };
 };
 
@@ -373,20 +354,12 @@ type AppointmentCandidate = {
   id: string;
   status: string | null;
   startAt: string | null;
+  updatedAt: string;
   addressLine1: string | null;
   city: string | null;
   state: string | null;
   postalCode: string | null;
 };
-
-function getAdminContext() {
-  const apiBase =
-    process.env["API_BASE_URL"] ??
-    process.env["NEXT_PUBLIC_API_BASE_URL"] ??
-    "http://localhost:3001";
-  const adminKey = process.env["ADMIN_API_KEY"];
-  return { apiBase: apiBase.replace(/\/$/, ""), adminKey };
-}
 
 function normalizePhoneDigits(value: string): string {
   return value.replace(/[^\d]/g, "");
@@ -474,15 +447,13 @@ function toCandidateLabel(candidate: ContactCandidate): string {
 
 async function resolveContactTarget(
   message: string,
+  principal: TeamRequestPrincipal,
 ): Promise<{
   resolved: ContactCandidate | null;
   candidates: ContactCandidate[];
 }> {
   const query = extractContactQueryFromMessage(message);
   if (!query) return { resolved: null, candidates: [] };
-
-  const { apiBase, adminKey } = getAdminContext();
-  if (!adminKey) return { resolved: null, candidates: [] };
 
   const qValue = query.value.trim();
   if (!qValue.length) return { resolved: null, candidates: [] };
@@ -493,12 +464,9 @@ async function resolveContactTarget(
   search.set("q", qValue);
 
   try {
-    const res = await fetch(
-      `${apiBase}/api/admin/contacts?${search.toString()}`,
-      {
-        headers: { "x-api-key": adminKey },
-        cache: "no-store",
-      },
+    const res = await callAdminApiAs(
+      principal,
+      `/api/admin/contacts?${search.toString()}`,
     );
     if (!res.ok) return { resolved: null, candidates: [] };
     const payload = (await res.json().catch(() => null)) as unknown;
@@ -507,24 +475,16 @@ async function resolveContactTarget(
 
     const mapped = results
       .map((c) => {
-        const id = typeof c["id"] === "string" ? (c["id"] as string) : null;
+        const id = typeof c["id"] === "string" ? c["id"] : null;
         const name =
-          (typeof c["name"] === "string" ? (c["name"] as string) : null) ??
-          (typeof c["contactName"] === "string"
-            ? (c["contactName"] as string)
-            : null);
-        const phone =
-          typeof c["phone"] === "string" ? (c["phone"] as string) : null;
+          (typeof c["name"] === "string" ? c["name"] : null) ??
+          (typeof c["contactName"] === "string" ? c["contactName"] : null);
+        const phone = typeof c["phone"] === "string" ? c["phone"] : null;
         const phoneE164 =
-          typeof c["phoneE164"] === "string"
-            ? (c["phoneE164"] as string)
-            : null;
-        const email =
-          typeof c["email"] === "string" ? (c["email"] as string) : null;
+          typeof c["phoneE164"] === "string" ? c["phoneE164"] : null;
+        const email = typeof c["email"] === "string" ? c["email"] : null;
         const lastActivityAt =
-          typeof c["lastActivityAt"] === "string"
-            ? (c["lastActivityAt"] as string)
-            : null;
+          typeof c["lastActivityAt"] === "string" ? c["lastActivityAt"] : null;
 
         const props = Array.isArray(c["properties"])
           ? (c["properties"] as Array<Record<string, unknown>>)
@@ -535,19 +495,19 @@ async function resolveContactTarget(
             : null;
         const addressLine1 =
           firstProp && typeof firstProp["addressLine1"] === "string"
-            ? (firstProp["addressLine1"] as string)
+            ? firstProp["addressLine1"]
             : null;
         const city =
           firstProp && typeof firstProp["city"] === "string"
-            ? (firstProp["city"] as string)
+            ? firstProp["city"]
             : null;
         const state =
           firstProp && typeof firstProp["state"] === "string"
-            ? (firstProp["state"] as string)
+            ? firstProp["state"]
             : null;
         const postalCode =
           firstProp && typeof firstProp["postalCode"] === "string"
-            ? (firstProp["postalCode"] as string)
+            ? firstProp["postalCode"]
             : null;
         if (!id) return null;
         return {
@@ -699,8 +659,7 @@ function readPublicBookingState(
   if (!raw) return null;
   const parsed = safeJsonParse(raw);
   if (!parsed || typeof parsed !== "object") return null;
-  const phase =
-    typeof parsed["phase"] === "string" ? (parsed["phase"] as string) : "idle";
+  const phase = typeof parsed["phase"] === "string" ? parsed["phase"] : "idle";
   const allowed: PublicBookingPhase[] = [
     "idle",
     "awaiting_name",
@@ -713,10 +672,24 @@ function readPublicBookingState(
   const suggestionsRaw = parsed["suggestions"];
   const suggestions = Array.isArray(suggestionsRaw)
     ? suggestionsRaw
-        .map((s) => ({
-          startAt: typeof s?.["startAt"] === "string" ? s["startAt"] : "",
-          endAt: typeof s?.["endAt"] === "string" ? s["endAt"] : "",
-        }))
+        .map((suggestion) =>
+          isRecord(suggestion)
+            ? {
+                startAt:
+                  typeof suggestion["startAt"] === "string"
+                    ? suggestion["startAt"]
+                    : "",
+                endAt:
+                  typeof suggestion["endAt"] === "string"
+                    ? suggestion["endAt"]
+                    : "",
+              }
+            : null,
+        )
+        .filter(
+          (suggestion): suggestion is { startAt: string; endAt: string } =>
+            suggestion !== null,
+        )
         .filter((s) => s.startAt.length > 0 && s.endAt.length > 0)
         .slice(0, 6)
     : undefined;
@@ -1114,7 +1087,7 @@ Return ONLY JSON with the key "answerDraft".
   const parsed = safeJsonParse(res.text);
   const draft =
     typeof parsed?.["answerDraft"] === "string"
-      ? (parsed["answerDraft"] as string).trim()
+      ? parsed["answerDraft"].trim()
       : "";
   return draft.length ? draft : null;
 }
@@ -1176,15 +1149,8 @@ function fmtBookingTime(iso: string): string {
 async function createContactAndPropertyFromState(
   state: PublicBookingState,
 ): Promise<{ contactId: string; propertyId: string } | null> {
-  const { apiBase, adminKey } = getAdminContext();
-  if (!adminKey) return null;
-
-  const res = await fetch(`${apiBase}/api/admin/tools/contact`, {
+  const res = await callPublicChatBookingApi("/api/admin/tools/contact", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": adminKey,
-    },
     body: JSON.stringify({
       contactName: state.contactName,
       phone: state.phone,
@@ -1196,7 +1162,9 @@ async function createContactAndPropertyFromState(
       postalCode: state.postalCode,
       source: "public_chat",
     }),
-  });
+  }).catch(() => null);
+
+  if (!res) return null;
 
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
@@ -1228,15 +1196,8 @@ async function bookSlotForState(
   startAt?: string;
   error?: string;
 }> {
-  const { apiBase, adminKey } = getAdminContext();
-  if (!adminKey) return { ok: false, error: "admin_key_missing" };
-
-  const res = await fetch(`${apiBase}/api/admin/booking/book`, {
+  const res = await callPublicChatBookingApi("/api/admin/booking/book", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": adminKey,
-    },
     body: JSON.stringify({
       contactId: state.contactId,
       propertyId: state.propertyId,
@@ -1245,7 +1206,9 @@ async function bookSlotForState(
       travelBufferMinutes: 30,
       services: ["junk_removal_primary"],
     }),
-  });
+  }).catch(() => null);
+
+  if (!res) return { ok: false, error: "booking_unavailable" };
 
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
@@ -1477,7 +1440,10 @@ async function handlePublicBookingMessage(
   };
 }
 
-export async function POST(request: NextRequest) {
+export async function handleChatRequest(
+  request: NextRequest,
+  verifiedTeamPrincipal: TeamRequestPrincipal | null = null,
+) {
   try {
     const body = (await request.json().catch(() => ({}))) as ChatRequest;
     const message = typeof body.message === "string" ? body.message : "";
@@ -1488,19 +1454,13 @@ export async function POST(request: NextRequest) {
     const propertyId = body.propertyId;
     const property = body.property;
     const isBot = isAgentBotRequest(request);
-    const requestedAudience = body.mode === "team" || isBot ? "team" : "public";
+    // Browser team traffic enters through /api/team/agent, which verifies the
+    // principal before this shared handler parses the body. The public route
+    // cannot promote itself to the internal audience by setting mode=team.
+    const requestedAudience =
+      verifiedTeamPrincipal || isBot ? "team" : "public";
     const action = body.action ?? null;
-
-    if (requestedAudience === "team") {
-      if (!isAgentBotRequest(request)) {
-        const auth = await requireTeamRole(request, {
-          returnJson: true,
-          roles: ["owner", "office", "crew"],
-          flashError: "Please sign in again to use the agent.",
-        });
-        if (!auth.ok) return auth.response as NextResponse;
-      }
-    }
+    const teamPrincipal = verifiedTeamPrincipal;
 
     const audience = requestedAudience === "team" ? "team" : "public";
     const isTeamChat = requestedAudience === "team";
@@ -1640,7 +1600,13 @@ export async function POST(request: NextRequest) {
       messageContactQuery &&
       (messageContactQuery.kind !== "zip" || messageMentionsContactContext)
     ) {
-      const resolved = await resolveContactTarget(trimmedMessage);
+      if (!teamPrincipal) {
+        return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+      }
+      const resolved = await resolveContactTarget(
+        trimmedMessage,
+        teamPrincipal,
+      );
       resolvedContactId = resolved.resolved?.id ?? null;
       resolvedCandidates = resolved.candidates;
 
@@ -1663,13 +1629,17 @@ export async function POST(request: NextRequest) {
 
     const effectiveContactId = contactId ?? resolvedContactId ?? undefined;
 
-    const teamContext = isTeamChat
-      ? await buildTeamChatContext({
-          contactId: effectiveContactId,
-          propertyId,
-          property,
-        })
-      : null;
+    const teamContext =
+      isTeamChat && teamPrincipal
+        ? await buildTeamChatContext(
+            {
+              contactId: effectiveContactId,
+              propertyId,
+              property,
+            },
+            teamPrincipal,
+          )
+        : null;
 
     let liveDataContext: string | null = null;
     let liveDataResults: JarvisReadToolResult[] = [];
@@ -1741,10 +1711,17 @@ export async function POST(request: NextRequest) {
         })
         .slice(0, 6);
 
-      if (calls.length) {
-        const { apiBase, adminKey } = getAdminContext();
+      if (calls.length && teamPrincipal) {
         liveDataResults = await Promise.all(
-          calls.map((call) => runJarvisReadTool({ apiBase, adminKey }, call)),
+          calls.map((call) =>
+            runJarvisReadTool(
+              {
+                callApi: (path, init) =>
+                  callAdminApiAs(teamPrincipal, path, init),
+              },
+              call,
+            ),
+          ),
         );
         liveDataContext = formatJarvisToolResultsForSystem(liveDataResults);
       }
@@ -1872,29 +1849,37 @@ export async function POST(request: NextRequest) {
 
     const reply = brainRes.text.trim();
 
-    const booking = await maybeGetSuggestions(trimmedMessage, {
-      contactId: effectiveContactId,
-      propertyId,
-      property,
-    });
-    const classification = CLASSIFIER_ENABLED
-      ? await classifyIntent(trimmedMessage)
-      : null;
-
-    const actions = CHAT_ACTIONS_ENABLED
-      ? await buildActionSuggestions(
+    const booking = teamPrincipal
+      ? await maybeGetSuggestions(
           trimmedMessage,
           {
             contactId: effectiveContactId,
             propertyId,
             property,
           },
-          booking,
-          classification,
-          reply,
-          liveDataResults,
+          teamPrincipal,
         )
-      : [];
+      : null;
+    const classification = CLASSIFIER_ENABLED
+      ? await classifyIntent(trimmedMessage)
+      : null;
+
+    const actions =
+      CHAT_ACTIONS_ENABLED && teamPrincipal
+        ? await buildActionSuggestions(
+            trimmedMessage,
+            {
+              contactId: effectiveContactId,
+              propertyId,
+              property,
+            },
+            booking,
+            classification,
+            reply,
+            liveDataResults,
+            teamPrincipal,
+          )
+        : [];
     const actionNote = actions.length
       ? actions.map((action) => `Action: ${action.summary}`).join("\n")
       : null;
@@ -1919,6 +1904,10 @@ export async function POST(request: NextRequest) {
   }
 }
 
+export async function POST(request: NextRequest) {
+  return handleChatRequest(request);
+}
+
 async function maybeGetSuggestions(
   message: string,
   ctx: {
@@ -1932,6 +1921,7 @@ async function maybeGetSuggestions(
     };
     propertyLabel?: string;
   },
+  principal: TeamRequestPrincipal,
 ): Promise<BookingPayload | null> {
   const keywords = ["book", "schedule", "slot", "time", "appointment"];
   const lower = message.toLowerCase();
@@ -1943,11 +1933,14 @@ async function maybeGetSuggestions(
     BOOKING_TIME_ZONE,
   );
   const preference = preferenceUpdate?.clear ? null : preferenceUpdate;
-  const suggestions = await fetchBookingSuggestions({
-    ...ctx,
-    preferredStartHour: preference?.preferredStartHour,
-    preferredEndHour: preference?.preferredEndHour,
-  });
+  const suggestions = await fetchBookingSuggestions(
+    {
+      ...ctx,
+      preferredStartHour: preference?.preferredStartHour,
+      preferredEndHour: preference?.preferredEndHour,
+    },
+    principal,
+  );
   if (!suggestions || !suggestions.length) return null;
   const filtered = preference
     ? applyBookingPreference(
@@ -1972,23 +1965,21 @@ async function maybeGetSuggestions(
   };
 }
 
-async function fetchBookingSuggestions(ctx: {
-  contactId?: string;
-  propertyId?: string;
-  property?: {
-    addressLine1?: string;
-    city?: string;
-    state?: string;
-    postalCode?: string;
-  };
-  preferredStartHour?: number;
-  preferredEndHour?: number;
-}): Promise<BookingSuggestion[] | null> {
-  const { apiBase, adminKey } = getAdminContext();
-  const hdrs = await headers();
-  const apiKey = adminKey ?? hdrs.get("x-api-key");
-  if (!apiKey) return null;
-
+async function fetchBookingSuggestions(
+  ctx: {
+    contactId?: string;
+    propertyId?: string;
+    property?: {
+      addressLine1?: string;
+      city?: string;
+      state?: string;
+      postalCode?: string;
+    };
+    preferredStartHour?: number;
+    preferredEndHour?: number;
+  },
+  principal?: TeamRequestPrincipal,
+): Promise<BookingSuggestion[] | null> {
   try {
     const body: {
       durationMinutes: number;
@@ -2019,14 +2010,15 @@ async function fetchBookingSuggestions(ctx: {
       body.endHour = ctx.preferredEndHour;
     }
 
-    const res = await fetch(`${apiBase}/api/admin/booking/assist`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify(body),
-    });
+    const res = principal
+      ? await callAdminApiAs(principal, "/api/admin/booking/assist", {
+          method: "POST",
+          body: JSON.stringify(body),
+        })
+      : await callPublicChatBookingApi("/api/admin/booking/assist", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
     if (!res.ok) return null;
     const data = (await res.json()) as {
       suggestions?: Array<{
@@ -2314,36 +2306,38 @@ Tool hints:
   const parsed = safeJsonParse(res.text);
   if (!parsed) return null;
   const rawCalls = Array.isArray(parsed["toolCalls"])
-    ? (parsed["toolCalls"] as any[])
+    ? parsed["toolCalls"]
     : [];
   const toolCalls: JarvisReadToolCall[] = rawCalls
-    .map((c) => {
+    .map((candidate) => {
+      if (!isRecord(candidate)) return null;
       const tool =
-        typeof c?.tool === "string" ? (c.tool as JarvisReadToolName) : null;
-      const args =
-        c?.args && typeof c.args === "object"
-          ? (c.args as Record<string, unknown>)
-          : {};
+        typeof candidate["tool"] === "string"
+          ? (candidate["tool"] as JarvisReadToolName)
+          : null;
+      const args = isRecord(candidate["args"]) ? candidate["args"] : {};
       if (!tool || !(toolNames as readonly string[]).includes(tool))
         return null;
       return { tool, args };
     })
     .filter((c): c is JarvisReadToolCall => Boolean(c));
 
-  const clarification =
-    parsed["clarification"] && typeof parsed["clarification"] === "object"
-      ? {
-          question:
-            typeof (parsed["clarification"] as any).question === "string"
-              ? ((parsed["clarification"] as any).question as string)
-              : "",
-          options: Array.isArray((parsed["clarification"] as any).options)
-            ? (((parsed["clarification"] as any).options as unknown[]).filter(
-                (o) => typeof o === "string",
-              ) as string[])
-            : [],
-        }
-      : null;
+  const clarificationRecord = isRecord(parsed["clarification"])
+    ? parsed["clarification"]
+    : null;
+  const clarification = clarificationRecord
+    ? {
+        question:
+          typeof clarificationRecord["question"] === "string"
+            ? clarificationRecord["question"]
+            : "",
+        options: Array.isArray(clarificationRecord["options"])
+          ? clarificationRecord["options"].filter(
+              (option): option is string => typeof option === "string",
+            )
+          : [],
+      }
+    : null;
 
   const finalClarification =
     clarification &&
@@ -2418,7 +2412,10 @@ function deriveFallbackReadToolCalls(message: string): JarvisReadToolCall[] {
   ) {
     calls.push({
       tool: "google.ads.analyst.recommendations",
-      args: { status: "proposed" },
+      // Agent apply is a two-step workflow: first approve a current proposed
+      // item, then fetch its new approved version before apply. Returning all
+      // states is required to make that second, version-bound step possible.
+      args: {},
     });
     return calls;
   }
@@ -2554,57 +2551,6 @@ function pickGoogleAdsSpendRelative(
   return null;
 }
 
-function fmtUsdFromNumericString(value: string): string {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "$0.00";
-  return `$${n.toFixed(2)}`;
-}
-
-async function fetchGoogleAdsSpendReply(message: string): Promise<string> {
-  const relative = pickGoogleAdsSpendRelative(message) ?? "yesterday";
-  const { apiBase, adminKey } = getAdminContext();
-  if (!adminKey) {
-    return "I can’t pull Google Ads spend yet because `ADMIN_API_KEY` isn’t set on the site service.";
-  }
-
-  const url = `${apiBase}/api/admin/google/ads/spend?relative=${encodeURIComponent(relative)}`;
-  const res = await fetch(url, {
-    headers: { "x-api-key": adminKey },
-    cache: "no-store",
-  }).catch(() => null);
-  if (!res) return "I couldn’t reach the Google Ads endpoint right now.";
-
-  const data = (await res.json().catch(() => null)) as any;
-  if (!res.ok) {
-    const err = typeof data?.error === "string" ? data.error : "unknown_error";
-    if (err === "google_ads_not_configured") {
-      return "Google Ads isn’t connected in StonegateOS yet, so I don’t have spend data to report.";
-    }
-    return `Google Ads spend lookup failed (${res.status}): ${err}`;
-  }
-
-  const date = typeof data?.date === "string" ? data.date : "";
-  const cost = typeof data?.totals?.cost === "string" ? data.totals.cost : "0";
-  const clicks = Number(data?.totals?.clicks ?? 0) || 0;
-  const impressions = Number(data?.totals?.impressions ?? 0) || 0;
-
-  const label = relative === "today" ? "Today" : "Yesterday";
-  const dateText = date ? ` (${date})` : "";
-  return `${label}${dateText} Google Ads spend: ${fmtUsdFromNumericString(cost)}. Clicks: ${clicks}. Impressions: ${impressions}.`;
-}
-
-function fmtMoney(cents: number, currency: string | null): string {
-  if (!Number.isFinite(cents)) return "$0";
-  try {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: currency ?? "USD",
-    }).format(cents / 100);
-  } catch {
-    return `$${(cents / 100).toFixed(2)}`;
-  }
-}
-
 function pickRange(
   message: string,
 ): "today" | "tomorrow" | "this_week" | "next_week" {
@@ -2634,12 +2580,8 @@ type TeamChatContext = {
 
 async function buildTeamChatContext(
   ctx: TeamChatContext,
+  principal: TeamRequestPrincipal,
 ): Promise<string | null> {
-  const { apiBase, adminKey } = getAdminContext();
-  const hdrs = await headers();
-  const apiKey = adminKey ?? hdrs.get("x-api-key");
-  if (!apiKey) return null;
-
   if (!ctx.contactId) {
     return [
       "You are assisting internal ops and office staff.",
@@ -2658,19 +2600,15 @@ async function buildTeamChatContext(
       : null;
 
   const [taskRes, inboxRes, appt] = await Promise.all([
-    fetch(
-      `${apiBase}/api/admin/crm/tasks?contactId=${encodeURIComponent(contactId)}&status=all`,
-      {
-        headers: { "x-api-key": apiKey },
-      },
+    callAdminApiAs(
+      principal,
+      `/api/admin/crm/tasks?contactId=${encodeURIComponent(contactId)}&status=all`,
     ).catch(() => null),
-    fetch(
-      `${apiBase}/api/admin/inbox/threads?contactId=${encodeURIComponent(contactId)}&limit=3`,
-      {
-        headers: { "x-api-key": apiKey },
-      },
+    callAdminApiAs(
+      principal,
+      `/api/admin/inbox/threads?contactId=${encodeURIComponent(contactId)}&limit=3`,
     ).catch(() => null),
-    findAppointmentForContext(contactId, ctx.propertyId),
+    findAppointmentForContext(contactId, ctx.propertyId, principal),
   ]);
 
   const notes: Array<{ body: string; createdAt?: string | null }> = [];
@@ -2683,7 +2621,7 @@ async function buildTeamChatContext(
     const data = (await taskRes.json().catch(() => null)) as {
       tasks?: Array<Record<string, unknown>>;
     } | null;
-    const tasks = Array.isArray(data?.tasks) ? data!.tasks : [];
+    const tasks = Array.isArray(data?.tasks) ? data.tasks : [];
     for (const task of tasks) {
       const status = typeof task["status"] === "string" ? task["status"] : null;
       const dueAt = typeof task["dueAt"] === "string" ? task["dueAt"] : null;
@@ -2715,7 +2653,7 @@ async function buildTeamChatContext(
     const data = (await inboxRes.json().catch(() => null)) as {
       threads?: Array<Record<string, unknown>>;
     } | null;
-    const threads = Array.isArray(data?.threads) ? data!.threads : [];
+    const threads = Array.isArray(data?.threads) ? data.threads : [];
     for (const thread of threads.slice(0, 3)) {
       const channel =
         typeof thread["channel"] === "string" ? thread["channel"] : "unknown";
@@ -2786,87 +2724,6 @@ async function buildTeamChatContext(
   return contextLines.join("\n");
 }
 
-async function fetchScheduleSummary(
-  range: string,
-  opts?: { statuses?: string[] },
-): Promise<string | null> {
-  const { apiBase, adminKey } = getAdminContext();
-  const hdrs = await headers();
-  const apiKey = adminKey ?? hdrs.get("x-api-key");
-  if (!apiKey) return null;
-
-  try {
-    const search = new URLSearchParams({ range });
-    if (opts?.statuses?.length) {
-      search.set("statuses", opts.statuses.join(","));
-    }
-    const res = await fetch(
-      `${apiBase}/api/admin/schedule/summary?${search.toString()}`,
-      {
-        headers: {
-          "x-api-key": apiKey,
-        },
-      },
-    );
-    if (!res.ok) return null;
-    const data = (await res.json()) as ScheduleSummary;
-    if (!data.ok) return null;
-    const label =
-      range === "today"
-        ? "today"
-        : range === "tomorrow"
-          ? "tomorrow"
-          : range === "next_week"
-            ? "next week"
-            : "this week";
-    if (!data.total) return `Schedule ${label}: no appointments on the books.`;
-    const statusParts = Object.entries(data.byStatus)
-      .map(([k, v]) => `${k}: ${v}`)
-      .join(", ");
-    const byDay = data.byDay
-      .slice(0, 3)
-      .map((d) => `${d.date}: ${d.count}`)
-      .join(", ");
-    return `Schedule ${label}: ${data.total} appointment(s)${statusParts ? ` (${statusParts})` : ""}${byDay ? `. Busiest days: ${byDay}` : ""}`;
-  } catch (error) {
-    console.warn("[chat] schedule_summary_failed", error);
-    return null;
-  }
-}
-
-async function fetchRevenueForecast(range: string): Promise<string | null> {
-  const { apiBase, adminKey } = getAdminContext();
-  const hdrs = await headers();
-  const apiKey = adminKey ?? hdrs.get("x-api-key");
-  if (!apiKey) return null;
-
-  try {
-    const res = await fetch(
-      `${apiBase}/api/admin/revenue/forecast?range=${encodeURIComponent(range)}`,
-      {
-        headers: {
-          "x-api-key": apiKey,
-        },
-      },
-    );
-    if (!res.ok) return null;
-    const data = (await res.json()) as RevenueForecast;
-    if (!data.ok) return null;
-    const label =
-      range === "today"
-        ? "today"
-        : range === "tomorrow"
-          ? "tomorrow"
-          : range === "next_week"
-            ? "next week"
-            : "this week";
-    return `Revenue ${label}: ${fmtMoney(data.totalCents, data.currency)} across ${data.count} payment(s).`;
-  } catch (error) {
-    console.warn("[chat] revenue_forecast_failed", error);
-    return null;
-  }
-}
-
 async function buildActionSuggestions(
   message: string,
   ctx: {
@@ -2883,6 +2740,7 @@ async function buildActionSuggestions(
   classification?: IntentClassification | null,
   replyText?: string | null,
   liveDataResults?: JarvisReadToolResult[] | null,
+  principal?: TeamRequestPrincipal,
 ): Promise<ActionSuggestion[]> {
   const actions: ActionSuggestion[] = [];
   const note = extractActionNote(message) ?? classification?.note ?? null;
@@ -2904,9 +2762,10 @@ async function buildActionSuggestions(
     !ctx.contactId && maybeTargetedAction
       ? extractContactQueryFromMessage(message)
       : null;
-  const contactResolve = contactQuery
-    ? await resolveContactTarget(message)
-    : { resolved: null, candidates: [] };
+  const contactResolve =
+    contactQuery && principal
+      ? await resolveContactTarget(message, principal)
+      : { resolved: null, candidates: [] };
   const contactTarget = contactResolve.resolved;
   const baseCtx =
     contactQuery && !contactTarget ? { ...ctx, contactId: undefined } : ctx;
@@ -2933,7 +2792,9 @@ async function buildActionSuggestions(
     actions.push(quoteAction);
   }
 
-  const taskAction = await extractTaskSuggestion(message, resolvedCtx, note);
+  const taskAction = principal
+    ? await extractTaskSuggestion(message, resolvedCtx, note, principal)
+    : null;
   if (taskAction) {
     actions.push(taskAction);
   }
@@ -2974,20 +2835,26 @@ async function buildActionSuggestions(
     actions.push(sendTextAction);
   }
 
-  const cancelAction = await extractCancelAppointmentSuggestion(
-    message,
-    resolvedCtx,
-    when ?? null,
-  );
+  const cancelAction = principal
+    ? await extractCancelAppointmentSuggestion(
+        message,
+        resolvedCtx,
+        when ?? null,
+        principal,
+      )
+    : null;
   if (cancelAction) {
     actions.push(cancelAction);
   }
 
-  const rescheduleAction = await extractRescheduleAppointmentSuggestion(
-    message,
-    resolvedCtx,
-    when ?? null,
-  );
+  const rescheduleAction = principal
+    ? await extractRescheduleAppointmentSuggestion(
+        message,
+        resolvedCtx,
+        when ?? null,
+        principal,
+      )
+    : null;
   if (rescheduleAction) {
     actions.push(rescheduleAction);
   }
@@ -3057,28 +2924,31 @@ function extractGoogleAdsRecommendationActions(
 
   const items: Array<{
     id: string;
+    expectedVersion: string;
     status?: string | null;
     kind?: string | null;
   }> = [];
-  if (!uuid && Array.isArray(liveData)) {
+  if (Array.isArray(liveData)) {
     const recTool = liveData.find(
       (r) =>
         r.tool === "google.ads.analyst.recommendations" && r.status === "ok",
     );
     const data = recTool?.data;
-    if (
-      data &&
-      typeof data === "object" &&
-      Array.isArray((data as any).items)
-    ) {
-      for (const it of (data as any).items as any[]) {
-        if (!it || typeof it !== "object") continue;
-        const id = typeof it.id === "string" ? it.id : null;
-        if (!id) continue;
+    if (isRecord(data) && Array.isArray(data["items"])) {
+      for (const item of data["items"]) {
+        if (!isRecord(item)) continue;
+        const id = typeof item["id"] === "string" ? item["id"] : null;
+        const expectedVersion = isExactAgentRecordVersion(item["version"])
+          ? item["version"]
+          : isExactAgentRecordVersion(item["updatedAt"])
+            ? item["updatedAt"]
+            : null;
+        if (!id || !expectedVersion) continue;
         items.push({
           id,
-          status: typeof it.status === "string" ? it.status : null,
-          kind: typeof it.kind === "string" ? it.kind : null,
+          expectedVersion,
+          status: typeof item["status"] === "string" ? item["status"] : null,
+          kind: typeof item["kind"] === "string" ? item["kind"] : null,
         });
       }
     }
@@ -3086,28 +2956,51 @@ function extractGoogleAdsRecommendationActions(
 
   const pickIds = (): Array<{
     id: string;
+    expectedVersion: string;
     status?: string | null;
     kind?: string | null;
   }> => {
-    if (uuid) return [{ id: uuid }];
-    const pool = wantsNegativeOnly
+    if (uuid) {
+      const matched = items.find((item) => item.id === uuid);
+      return matched ? [matched] : [];
+    }
+    const kindPool = wantsNegativeOnly
       ? items.filter((i) => i.kind === "negative_keyword")
       : items;
+    const pool = wantsApply
+      ? kindPool.filter(
+          (item) =>
+            item.status !== "applied" &&
+            item.status !== "applying" &&
+            item.status !== "failed",
+        )
+      : wantsIgnore
+        ? kindPool.filter(
+            (item) => item.status === "proposed" || item.status === "approved",
+          )
+        : kindPool.filter(
+            (item) => item.status !== "approved" && item.status !== "applied",
+          );
     if (!pool.length) return [];
     if (wantsAll) return pool.slice(0, 20);
+    if (wantsApply) {
+      return [pool.find((item) => item.status === "approved") ?? pool[0]!];
+    }
     return [pool[0]!];
   };
 
   const selected = pickIds();
   if (!selected.length) return [];
 
-  const ids = selected.map((s) => s.id);
   const needsApprove = selected.filter(
     (s) =>
       (s.status ?? "proposed") !== "approved" &&
       (s.status ?? "proposed") !== "applied",
   );
-  const approvedOrWillBe = ids;
+  const versionedItems = selected.map(({ id, expectedVersion }) => ({
+    id,
+    expectedVersion,
+  }));
 
   const actions: ActionSuggestion[] = [];
 
@@ -3115,8 +3008,12 @@ function extractGoogleAdsRecommendationActions(
     actions.push({
       id: newActionId(),
       type: "google_ads_recommendations_bulk_update",
-      summary: `Ignore Google Ads recommendation${ids.length === 1 ? "" : "s"} (${ids.length})`,
-      payload: { ids, status: "ignored" },
+      summary: `Ignore Google Ads recommendation${versionedItems.length === 1 ? "" : "s"} (${versionedItems.length})`,
+      payload: {
+        items: versionedItems,
+        status: "ignored",
+        confirmation: "ignore",
+      },
     });
     return actions;
   }
@@ -3126,15 +3023,31 @@ function extractGoogleAdsRecommendationActions(
       actions.push({
         id: newActionId(),
         type: "google_ads_recommendations_bulk_update",
-        summary: `Approve Google Ads recommendation${ids.length === 1 ? "" : "s"} (${ids.length})`,
-        payload: { ids: needsApprove.map((s) => s.id), status: "approved" },
+        summary: `Approve Google Ads recommendation${needsApprove.length === 1 ? "" : "s"} (${needsApprove.length})`,
+        payload: {
+          items: needsApprove.map(({ id, expectedVersion }) => ({
+            id,
+            expectedVersion,
+          })),
+          status: "approved",
+          confirmation: "approve",
+        },
       });
+      return actions;
     }
+    const approved = selected.filter((item) => item.status === "approved");
+    if (approved.length !== selected.length) return [];
     actions.push({
       id: newActionId(),
       type: "google_ads_recommendations_bulk_apply",
-      summary: `Apply Google Ads recommendation${approvedOrWillBe.length === 1 ? "" : "s"} (${approvedOrWillBe.length})`,
-      payload: { ids: approvedOrWillBe },
+      summary: `Apply Google Ads recommendation${approved.length === 1 ? "" : "s"} (${approved.length})`,
+      payload: {
+        items: approved.map(({ id, expectedVersion }) => ({
+          id,
+          expectedVersion,
+        })),
+        confirmation: "apply_google_ads_changes",
+      },
     });
     return actions;
   }
@@ -3143,8 +3056,12 @@ function extractGoogleAdsRecommendationActions(
     actions.push({
       id: newActionId(),
       type: "google_ads_recommendations_bulk_update",
-      summary: `Approve Google Ads recommendation${ids.length === 1 ? "" : "s"} (${ids.length})`,
-      payload: { ids, status: "approved" },
+      summary: `Approve Google Ads recommendation${versionedItems.length === 1 ? "" : "s"} (${versionedItems.length})`,
+      payload: {
+        items: versionedItems,
+        status: "approved",
+        confirmation: "approve",
+      },
     });
     return actions;
   }
@@ -3169,7 +3086,7 @@ function extractDirectBookingSuggestion(
   if (!hasIntent) return null;
 
   const whenTextRaw = classification?.when?.trim().length
-    ? (classification!.when as string)
+    ? classification.when
     : null;
   const whenText = whenTextRaw ?? (looksLikeTimeHint(message) ? message : null);
   if (!whenText) return null;
@@ -3299,10 +3216,10 @@ function pickSmsDraft(replyText: string | null): string | null {
 
   const cleaned = candidate
     .replace(
-      /^(here(?:'s| is)\s+)?(a\s+)?(text|sms|message)\s*(you\s+can\s+send|to\s+send)\s*[:\-]\s*/i,
+      /^(here(?:'s| is)\s+)?(a\s+)?(text|sms|message)\s*(you\s+can\s+send|to\s+send)\s*[:-]\s*/i,
       "",
     )
-    .replace(/^(sure|ok|okay|got it)[\s,:\-]+/i, "")
+    .replace(/^(sure|ok|okay|got it)[\s,:-]+/i, "")
     .trim();
 
   if (!cleaned) return null;
@@ -3313,6 +3230,7 @@ async function extractCancelAppointmentSuggestion(
   message: string,
   ctx: { contactId?: string },
   whenHint: string | null,
+  principal: TeamRequestPrincipal,
 ): Promise<CancelAppointmentAction | null> {
   const lower = message.toLowerCase();
   const hasIntent =
@@ -3323,7 +3241,10 @@ async function extractCancelAppointmentSuggestion(
   if (!hasIntent) return null;
   if (!ctx.contactId) return null;
 
-  const appts = await fetchUpcomingAppointmentsForContact(ctx.contactId);
+  const appts = await fetchUpcomingAppointmentsForContact(
+    ctx.contactId,
+    principal,
+  );
   if (!appts.length) return null;
 
   const shouldUseWhen =
@@ -3356,7 +3277,10 @@ async function extractCancelAppointmentSuggestion(
       id: newActionId(),
       type: "cancel_appointment",
       summary: `Cancel appointment (${whenLabel})`,
-      payload: { appointmentId: only.id },
+      payload: {
+        appointmentId: only.id,
+        expectedVersion: only.updatedAt,
+      },
     };
   }
 
@@ -3372,6 +3296,7 @@ async function extractRescheduleAppointmentSuggestion(
   message: string,
   ctx: { contactId?: string },
   whenHint: string | null,
+  principal: TeamRequestPrincipal,
 ): Promise<RescheduleAppointmentAction | null> {
   const lower = message.toLowerCase();
   const hasIntent =
@@ -3384,23 +3309,29 @@ async function extractRescheduleAppointmentSuggestion(
   const parsed = parseWhen(when);
   if (!parsed?.iso) return null;
 
+  if (!ctx.contactId) return null;
+
+  const appts = await fetchUpcomingAppointmentsForContact(
+    ctx.contactId,
+    principal,
+  );
+  if (!appts.length) return null;
+
   const appointmentId = extractUuidFromText(message);
   if (appointmentId) {
+    const exact = appts.find((appointment) => appointment.id === appointmentId);
+    if (!exact) return null;
     return {
       id: newActionId(),
       type: "reschedule_appointment",
       summary: `Reschedule appointment to ${new Date(parsed.iso).toLocaleString()}`,
       payload: {
-        appointmentId,
+        appointmentId: exact.id,
+        expectedVersion: exact.updatedAt,
         startAt: parsed.iso,
       },
     };
   }
-
-  if (!ctx.contactId) return null;
-
-  const appts = await fetchUpcomingAppointmentsForContact(ctx.contactId);
-  if (!appts.length) return null;
 
   if (appts.length === 1) {
     return {
@@ -3409,6 +3340,7 @@ async function extractRescheduleAppointmentSuggestion(
       summary: `Reschedule appointment to ${new Date(parsed.iso).toLocaleString()}`,
       payload: {
         appointmentId: appts[0]!.id,
+        expectedVersion: appts[0]!.updatedAt,
         startAt: parsed.iso,
       },
     };
@@ -3511,9 +3443,7 @@ function extractContactSuggestion(
   };
 }
 
-function parseAddress(
-  raw: string,
-): {
+function parseAddress(raw: string): {
   addressLine1: string;
   addressLine2?: string | null;
   city: string;
@@ -3782,7 +3712,7 @@ function normalizeServiceArray(services?: string[] | null): string[] {
 }
 
 function extractActionNote(message: string): string | null {
-  const match = message.match(/(?:note|notes|details|message)[:\-]\s*(.+)$/i);
+  const match = message.match(/(?:note|notes|details|message)[:-]\s*(.+)$/i);
   if (match && typeof match[1] === "string") {
     const text = match[1].trim();
     if (text.length > 0) {
@@ -3840,6 +3770,7 @@ async function extractTaskSuggestion(
     };
   },
   note?: string | null,
+  principal?: TeamRequestPrincipal,
 ): Promise<CreateTaskAction | null> {
   const lower = message.toLowerCase();
   const hasIntent =
@@ -3849,9 +3780,13 @@ async function extractTaskSuggestion(
     lower.includes("checklist");
   if (!hasIntent) return null;
 
-  if (!ctx.contactId || !ctx.propertyId) return null;
+  if (!ctx.contactId || !ctx.propertyId || !principal) return null;
 
-  const appt = await findAppointmentForContext(ctx.contactId, ctx.propertyId);
+  const appt = await findAppointmentForContext(
+    ctx.contactId,
+    ctx.propertyId,
+    principal,
+  );
   if (!appt) return null;
 
   const title = buildTaskTitle(message, note);
@@ -3874,11 +3809,9 @@ async function extractTaskSuggestion(
 async function findAppointmentForContext(
   contactId?: string,
   propertyId?: string,
+  principal?: TeamRequestPrincipal,
 ): Promise<{ id: string; startAt: string | null } | null> {
-  const { apiBase, adminKey } = getAdminContext();
-  const hdrs = await headers();
-  const apiKey = adminKey ?? hdrs.get("x-api-key");
-  if (!apiKey || !contactId || !propertyId) return null;
+  if (!principal || !contactId || !propertyId) return null;
 
   try {
     const search = new URLSearchParams({
@@ -3887,11 +3820,9 @@ async function findAppointmentForContext(
       propertyId,
       limit: "25",
     });
-    const res = await fetch(
-      `${apiBase}/api/appointments?${search.toString()}`,
-      {
-        headers: { "x-api-key": apiKey },
-      },
+    const res = await callAdminApiAs(
+      principal,
+      `/api/appointments?${search.toString()}`,
     );
     if (!res.ok) return null;
     const data = (await res.json()) as {
@@ -3927,11 +3858,9 @@ async function findAppointmentForContext(
 
 async function fetchUpcomingAppointmentsForContact(
   contactId: string,
+  principal: TeamRequestPrincipal,
 ): Promise<AppointmentCandidate[]> {
-  const { apiBase, adminKey } = getAdminContext();
-  const hdrs = await headers();
-  const apiKey = adminKey ?? hdrs.get("x-api-key");
-  if (!apiKey || !contactId) return [];
+  if (!contactId) return [];
 
   try {
     const search = new URLSearchParams({
@@ -3939,41 +3868,61 @@ async function fetchUpcomingAppointmentsForContact(
       contactId,
       limit: "25",
     });
-    const res = await fetch(
-      `${apiBase}/api/appointments?${search.toString()}`,
-      {
-        headers: { "x-api-key": apiKey },
-        cache: "no-store",
-      },
+    const res = await callAdminApiAs(
+      principal,
+      `/api/appointments?${search.toString()}`,
     );
     if (!res.ok) return [];
-    const data = (await res.json().catch(() => null)) as any;
-    const items: any[] = Array.isArray(data?.data)
-      ? data.data
-      : Array.isArray(data?.appointments)
-        ? data.appointments
-        : [];
+    const data: unknown = await res.json().catch(() => null);
+    const items =
+      isRecord(data) && Array.isArray(data["data"])
+        ? data["data"]
+        : isRecord(data) && Array.isArray(data["appointments"])
+          ? data["appointments"]
+          : [];
 
     const mapped = items
-      .map((appt) => {
-        const id = typeof appt?.id === "string" ? appt.id : null;
+      .map((appointment) => {
+        if (!isRecord(appointment)) return null;
+        const id =
+          typeof appointment["id"] === "string" ? appointment["id"] : null;
         if (!id) return null;
-        const status = typeof appt?.status === "string" ? appt.status : null;
-        const startAt = typeof appt?.startAt === "string" ? appt.startAt : null;
-        const prop =
-          appt?.property && typeof appt.property === "object"
-            ? appt.property
+        const status =
+          typeof appointment["status"] === "string"
+            ? appointment["status"]
             : null;
+        const startAt =
+          typeof appointment["startAt"] === "string"
+            ? appointment["startAt"]
+            : null;
+        const updatedAt =
+          typeof appointment["updatedAt"] === "string" &&
+          !Number.isNaN(Date.parse(appointment["updatedAt"])) &&
+          new Date(appointment["updatedAt"]).toISOString() ===
+            appointment["updatedAt"]
+            ? appointment["updatedAt"]
+            : null;
+        if (!updatedAt) return null;
+        const property = isRecord(appointment["property"])
+          ? appointment["property"]
+          : null;
         const addressLine1 =
-          typeof prop?.addressLine1 === "string" ? prop.addressLine1 : null;
-        const city = typeof prop?.city === "string" ? prop.city : null;
-        const state = typeof prop?.state === "string" ? prop.state : null;
+          typeof property?.["addressLine1"] === "string"
+            ? property["addressLine1"]
+            : null;
+        const city =
+          typeof property?.["city"] === "string" ? property["city"] : null;
+        const state =
+          typeof property?.["state"] === "string" ? property["state"] : null;
         const postalCode =
-          typeof prop?.postalCode === "string" ? prop.postalCode : null;
+          typeof property?.["postalCode"] === "string"
+            ? property["postalCode"]
+            : null;
         return {
           id,
           status,
           startAt,
+          updatedAt,
           addressLine1,
           city,
           state,
@@ -4089,7 +4038,7 @@ function extractContactNoteSuggestion(
     lower.startsWith("note ");
   if (!hasIntent) return null;
 
-  const fallbackMatch = message.match(/(?:note|notes)\s*[:\-]\s*(.+)$/i);
+  const fallbackMatch = message.match(/(?:note|notes)\s*[:-]\s*(.+)$/i);
   const body = (note ?? fallbackMatch?.[1] ?? "").trim();
   if (!body.length) return null;
 
@@ -4193,9 +4142,14 @@ Keep note short (<120 chars). If unsure, use intent "none".
   return null;
 }
 
-function safeJsonParse(text: string): Record<string, any> | null {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function safeJsonParse(text: string): Record<string, unknown> | null {
   try {
-    return JSON.parse(text);
+    const parsed: unknown = JSON.parse(text);
+    return isRecord(parsed) ? parsed : null;
   } catch {
     return null;
   }

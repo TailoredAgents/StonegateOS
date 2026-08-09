@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { SubmitButton } from "@/components/SubmitButton";
+import { teamSurfaceHref } from "./surface-registry";
 
 type Payment = {
   id: string;
@@ -23,6 +25,7 @@ type Payment = {
   receiptUrl: string | null;
   legacySource: string | null;
   createdAt: string;
+  updatedAt: string;
   appointment: null | {
     id: string;
     status: string;
@@ -65,6 +68,7 @@ export function PaymentsList({
   summary,
   attachAction,
   detachAction,
+  canChangeAssociations,
 }: {
   initial: Payment[];
   summary: {
@@ -75,6 +79,7 @@ export function PaymentsList({
   };
   attachAction: AttachAction;
   detachAction: AttachAction;
+  canChangeAssociations: boolean;
 }) {
   const [q, setQ] = useState("");
   const [scope, setScope] = useState<string>("all");
@@ -178,23 +183,71 @@ export function PaymentsList({
               ) : null}
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
-              {p.appointment ? (
+              {!canChangeAssociations ? (
+                <p className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  You can review this payment, but changing appointment links
+                  requires payment reconciliation and management access.
+                </p>
+              ) : p.appointment ? (
                 <details className="w-full rounded-md border border-neutral-200 p-2">
                   <summary className="cursor-pointer text-xs font-semibold text-neutral-700">
                     Detach for owner review
                   </summary>
                   <form action={detachAction} className="mt-2 space-y-2">
                     <input type="hidden" name="paymentId" value={p.id} />
-                    <textarea
-                      name="reviewNote"
-                      required
-                      minLength={3}
-                      maxLength={500}
-                      placeholder="Why this payment is attached to the wrong job"
-                      className="min-h-16 w-full rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                    <input
+                      type="hidden"
+                      name="expectedAppointmentId"
+                      value={p.appointment.id}
                     />
+                    <input
+                      type="hidden"
+                      name="expectedVersion"
+                      value={p.updatedAt}
+                    />
+                    <input
+                      type="hidden"
+                      name="expectedProvider"
+                      value={p.provider}
+                    />
+                    <input
+                      type="hidden"
+                      name="expectedProviderPaymentId"
+                      value={p.providerPaymentId ?? ""}
+                    />
+                    <input
+                      type="hidden"
+                      name="expectedProviderOrderId"
+                      value={p.providerOrderId ?? ""}
+                    />
+                    <input
+                      type="hidden"
+                      name="expectedStripeChargeId"
+                      value={p.stripeChargeId ?? ""}
+                    />
+                    <label className="block text-xs font-medium text-neutral-700">
+                      Review reason
+                      <textarea
+                        name="reviewNote"
+                        required
+                        minLength={3}
+                        maxLength={500}
+                        placeholder="Why this payment is attached to the wrong job"
+                        className="mt-1 min-h-20 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block text-xs font-medium text-neutral-700">
+                      Type DETACH PAYMENT to confirm
+                      <input
+                        name="confirmation"
+                        required
+                        autoComplete="off"
+                        pattern="DETACH PAYMENT"
+                        className="mt-1 min-h-11 w-full rounded-md border border-rose-300 px-3 py-2 text-sm"
+                      />
+                    </label>
                     <SubmitButton
-                      className="rounded-md border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-800"
+                      className="min-h-11 rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800"
                       pendingLabel="Detaching..."
                     >
                       Detach and flag
@@ -208,11 +261,40 @@ export function PaymentsList({
                 >
                   <input type="hidden" name="paymentId" value={p.id} />
                   <input
-                    list={`appts-${p.id}`}
-                    name="appointmentId"
-                    placeholder="Search or enter ID"
-                    className="min-w-[220px] rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                    type="hidden"
+                    name="expectedVersion"
+                    value={p.updatedAt}
                   />
+                  <input
+                    type="hidden"
+                    name="expectedProvider"
+                    value={p.provider}
+                  />
+                  <input
+                    type="hidden"
+                    name="expectedProviderPaymentId"
+                    value={p.providerPaymentId ?? ""}
+                  />
+                  <input
+                    type="hidden"
+                    name="expectedProviderOrderId"
+                    value={p.providerOrderId ?? ""}
+                  />
+                  <input
+                    type="hidden"
+                    name="expectedStripeChargeId"
+                    value={p.stripeChargeId ?? ""}
+                  />
+                  <label className="text-xs font-medium text-neutral-700">
+                    Appointment
+                    <input
+                      list={`appts-${p.id}`}
+                      name="appointmentId"
+                      required
+                      placeholder="Search or enter ID"
+                      className="mt-1 min-h-11 min-w-[220px] rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                    />
+                  </label>
                   <datalist id={`appts-${p.id}`}>
                     {appts.map((a) => (
                       <option
@@ -221,44 +303,71 @@ export function PaymentsList({
                       >{`${a.contact.name} - ${a.property.addressLine1}, ${a.property.city}`}</option>
                     ))}
                   </datalist>
-                  <input
-                    name="jobAmount"
-                    inputMode="decimal"
-                    required
-                    defaultValue={(p.jobAmountCents / 100).toFixed(2)}
-                    aria-label="Job amount"
-                    className="w-28 rounded-md border border-neutral-300 px-2 py-1 text-xs"
-                  />
-                  <input
-                    name="tipAmount"
-                    inputMode="decimal"
-                    required
-                    defaultValue={(p.tipCents / 100).toFixed(2)}
-                    aria-label="Tip amount"
-                    className="w-24 rounded-md border border-neutral-300 px-2 py-1 text-xs"
-                  />
-                  <textarea
-                    name="reviewNote"
-                    required
-                    minLength={3}
-                    maxLength={500}
-                    placeholder="Reason this Stripe charge belongs to this job"
-                    className="min-h-16 min-w-[260px] flex-1 rounded-md border border-neutral-300 px-2 py-1 text-xs"
-                  />
+                  <label className="text-xs font-medium text-neutral-700">
+                    Job amount
+                    <input
+                      name="jobAmount"
+                      inputMode="decimal"
+                      type="number"
+                      min="0"
+                      max="1000000"
+                      step="0.01"
+                      required
+                      defaultValue={(p.jobAmountCents / 100).toFixed(2)}
+                      className="mt-1 min-h-11 w-32 rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="text-xs font-medium text-neutral-700">
+                    Tip amount
+                    <input
+                      name="tipAmount"
+                      inputMode="decimal"
+                      type="number"
+                      min="0"
+                      max="100000"
+                      step="0.01"
+                      required
+                      defaultValue={(p.tipCents / 100).toFixed(2)}
+                      className="mt-1 min-h-11 w-28 rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="min-w-[260px] flex-1 text-xs font-medium text-neutral-700">
+                    Review reason
+                    <textarea
+                      name="reviewNote"
+                      required
+                      minLength={3}
+                      maxLength={500}
+                      placeholder="Why this Stripe charge belongs to this job"
+                      className="mt-1 min-h-20 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="min-w-[220px] text-xs font-medium text-neutral-700">
+                    Type ATTACH PAYMENT to confirm
+                    <input
+                      name="confirmation"
+                      required
+                      autoComplete="off"
+                      pattern="ATTACH PAYMENT"
+                      className="mt-1 min-h-11 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                    />
+                  </label>
                   <SubmitButton
-                    className="rounded-md bg-primary-800 px-3 py-1 text-xs font-semibold text-white"
+                    className="min-h-11 rounded-md bg-primary-800 px-3 py-2 text-xs font-semibold text-white"
                     pendingLabel="Resolving..."
                   >
                     Attach and resolve
                   </SubmitButton>
                 </form>
               ) : (
-                <a
-                  href="/team?tab=owner&ownerView=payments"
+                <Link
+                  href={teamSurfaceHref("owner", {
+                    query: { ownerView: "payments" },
+                  })}
                   className="text-xs font-semibold text-primary-700 underline"
                 >
                   Review in Owner HQ
-                </a>
+                </Link>
               )}
             </div>
           </li>

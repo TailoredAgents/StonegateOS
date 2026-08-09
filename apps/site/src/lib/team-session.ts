@@ -7,6 +7,13 @@ export function teamSessionCookieOptions() {
     secure: process.env["NODE_ENV"] === "production",
     path: "/",
     // Keep this longer than the old admin/crew cookies; the token can be revoked server-side.
-    maxAge: 60 * 60 * 24 * 30 // 30 days
+    maxAge: 60 * 60 * 24 * 30, // 30 days
+  };
+}
+
+export function breakGlassTeamSessionCookieOptions() {
+  return {
+    ...teamSessionCookieOptions(),
+    maxAge: 60 * 60, // The API independently expires recovery sessions in one hour.
   };
 }

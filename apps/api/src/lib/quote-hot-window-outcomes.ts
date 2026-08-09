@@ -1,6 +1,6 @@
-import { getDb } from "@/db";
+import type { getDb } from "@/db";
 import { sql } from "drizzle-orm";
-import { getQuoteFollowupLearningScope, type QuoteFollowupLearningScope } from "@/lib/quote-followup-outcomes";
+import type { QuoteFollowupLearningScope } from "@/lib/quote-followup-outcomes";
 
 type DbExecutor = ReturnType<typeof getDb>;
 type BookingWindow = "under_6h" | "same_day" | "day_1_3" | "after_3d";

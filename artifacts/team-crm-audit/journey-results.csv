@@ -1,0 +1,8 @@
+journey,participant_or_automated_actor,steps,completion,duration_seconds,errors,backtracks,ease_score_1_to_7,data_integrity_result,linked_findings,blocker
+Lead to booked job,owner/office automated,"Inbound message > response > enrichment > quote > acceptance > booking > pipeline",not-run,,,,,not-run,"TEAM-AUTHZ-002;TEAM-REL-006;TEAM-QUAL-020",E2E database services provider fakes unavailable
+Day of service,office/crew automated,"Calendar > detail > notes/reschedule > completion > final total > payment > crew",not-run,,,,,not-run,"TEAM-AUTHZ-005;TEAM-REL-006;TEAM-DATA-008",E2E database services Square sandbox unavailable
+Lead recovery,sales automated and staff,"Sales HQ > call/disposition > reminder/draft > Inbox > outcome",not-run,,,,,not-run,"TEAM-AUTHZ-003;TEAM-INBOX-013;TEAM-IA-021",Sales role rejected and staff session unavailable
+Outbound partner acquisition,sales/owner automated,"Import > assignment > call/message > disposition/callback > partner > portal",not-run,,,,,not-run,"TEAM-AUTHZ-003;TEAM-REL-015;TEAM-IA-021",E2E database provider fakes unavailable
+Money close,owner automated,"Completion > reconciliation/refund > expense > commissions > lock/pay > P&L",not-run,,,,,not-run,"TEAM-AUTHZ-004;TEAM-DATA-008;TEAM-QUAL-020",E2E database Square sandbox unavailable
+Automation safety,owner/office automated,"Policy > mode > simulation > real approval > Sales/Audit evidence",not-run,,,,,not-run,"TEAM-AUTHZ-002;TEAM-AUTHZ-005;TEAM-AUDIT-023",E2E database provider/AI fakes unavailable
+Administration,owner/custom automated,"Create role/member > login > allow/deny > deactivate/revoke",not-run,,,,,not-run,"TEAM-AUTH-001;TEAM-AUTHZ-003;TEAM-AUTHZ-005;TEAM-AUTHUX-024;TEAM-ACCESS-025",Current authorization gate and E2E services unavailable

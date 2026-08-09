@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
-import { getDb, salesAgentNextActions } from "@/db";
+import type { getDb} from "@/db";
+import { salesAgentNextActions } from "@/db";
 import type { AppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import type { AppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import {

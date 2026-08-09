@@ -10,6 +10,7 @@ import {
   inArray,
   isNotNull,
   lt,
+  sql,
 } from "drizzle-orm";
 import {
   getDb,
@@ -206,16 +207,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       updatedAt: string;
     }
   >();
-  const attachmentsMap = new Map<
-    string,
-    {
-      id: string;
-      filename: string;
-      url: string;
-      contentType: string | null;
-      createdAt: string;
-    }[]
-  >();
+  const legacyAttachmentCountMap = new Map<string, number>();
   const tasksMap = new Map<
     string,
     { id: string; title: string; status: string; createdAt: string }[]
@@ -301,31 +293,15 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (appointmentIds.length > 0) {
     const attachmentRows = await db
       .select({
-        id: appointmentAttachments.id,
         appointmentId: appointmentAttachments.appointmentId,
-        filename: appointmentAttachments.filename,
-        url: appointmentAttachments.url,
-        contentType: appointmentAttachments.contentType,
-        createdAt: appointmentAttachments.createdAt,
+        count: sql<number>`count(*)`,
       })
       .from(appointmentAttachments)
-      .where(inArray(appointmentAttachments.appointmentId, appointmentIds));
+      .where(inArray(appointmentAttachments.appointmentId, appointmentIds))
+      .groupBy(appointmentAttachments.appointmentId);
 
     for (const att of attachmentRows) {
-      if (!attachmentsMap.has(att.appointmentId)) {
-        attachmentsMap.set(att.appointmentId, []);
-      }
-      attachmentsMap.get(att.appointmentId)!.push({
-        id: att.id,
-        filename: att.filename,
-        url: att.url,
-        contentType: att.contentType,
-        createdAt: att.createdAt.toISOString(),
-      });
-    }
-
-    for (const attList of attachmentsMap.values()) {
-      attList.sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
+      legacyAttachmentCountMap.set(att.appointmentId, Number(att.count));
     }
 
     const taskRows = await db
@@ -455,7 +431,15 @@ export async function GET(request: NextRequest): Promise<Response> {
         pendingDraft: null,
       },
       notes: row.contactId ? (notesMap.get(row.contactId) ?? []) : [],
-      attachments: attachmentsMap.get(row.id) ?? [],
+      // Compatibility shape: unsafe legacy bytes/URLs are never exposed.
+      // The dedicated media API lists bounded metadata and the secure
+      // migration state instead.
+      attachments: [],
+      legacyAttachmentSummary: {
+        count: legacyAttachmentCountMap.get(row.id) ?? 0,
+        rawContentWithheld: true,
+        migrationRequired: (legacyAttachmentCountMap.get(row.id) ?? 0) > 0,
+      },
       tasks: tasksMap.get(row.id) ?? [],
     };
   });

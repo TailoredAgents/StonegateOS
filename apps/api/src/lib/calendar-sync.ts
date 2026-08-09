@@ -1,16 +1,28 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
+import {
+  parseGoogleCalendarEventListResponse,
+  parseGoogleCalendarWatchResponse,
+  resolveGoogleCalendarApiEndpoint,
+  type GoogleCalendarApiEndpoint,
+} from "@myst-os/sdk";
 import { getDb, appointments, calendarSyncState } from "@/db";
 import type { DatabaseClient } from "@/db";
 import type { CalendarConfig } from "./calendar";
-import { getCalendarConfig, getAccessToken, isGoogleCalendarEnabled } from "./calendar";
+import {
+  getCalendarConfig,
+  getAccessToken,
+  isGoogleCalendarEnabled,
+} from "./calendar";
 
-const GOOGLE_API_BASE = "https://www.googleapis.com/calendar/v3";
 const WATCH_RENEW_BUFFER_MS = 10 * 60 * 1000;
 const WATCH_TTL_SECONDS = 7 * 24 * 60 * 60;
 const MAX_SYNC_ITERATIONS = 20;
 const DEFAULT_LOOKBACK_DAYS = (() => {
-  const raw = Number.parseInt(process.env["GOOGLE_CALENDAR_SYNC_LOOKBACK_DAYS"] ?? "", 10);
+  const raw = Number.parseInt(
+    process.env["GOOGLE_CALENDAR_SYNC_LOOKBACK_DAYS"] ?? "",
+    10,
+  );
   return Number.isFinite(raw) && raw > 0 ? raw : 45;
 })();
 
@@ -35,12 +47,6 @@ interface GoogleCalendarEvent {
   };
 }
 
-interface CalendarEventsListResponse {
-  items?: GoogleCalendarEvent[];
-  nextPageToken?: string;
-  nextSyncToken?: string;
-}
-
 interface FetchEventsOk {
   kind: "ok";
   items: GoogleCalendarEvent[];
@@ -55,7 +61,7 @@ interface FetchEventsReset {
 interface FetchEventsError {
   kind: "error";
   status: number;
-  text: string;
+  detail: "request_failed" | "provider_rejected" | "malformed_response";
 }
 
 type FetchEventsResult = FetchEventsOk | FetchEventsReset | FetchEventsError;
@@ -87,6 +93,14 @@ export interface CalendarNotificationMetadata {
 
 let syncInFlight: Promise<CalendarSyncResult> | null = null;
 
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : "UnknownError";
+}
+
+async function discardProviderBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
 export async function ensureCalendarWatch(): Promise<boolean> {
   if (!isGoogleCalendarEnabled()) {
     return false;
@@ -101,22 +115,23 @@ export async function ensureCalendarWatch(): Promise<boolean> {
   const state = await getOrCreateState(db, config.calendarId);
   const accessToken = await getAccessToken(config);
   if (!accessToken) {
-    console.warn("[calendar-sync] ensure_watch_failed", { reason: "token_error" });
+    console.warn("[calendar-sync] ensure_watch_failed", {
+      reason: "token_error",
+    });
     return false;
   }
 
   const result = await ensureWatchForState(db, config, state, accessToken);
   if (result.registered) {
-    console.info("[calendar-sync] watch_registered", {
-      calendarId: config.calendarId,
-      channelId: result.state.channelId
-    });
+    console.info("[calendar-sync] watch_registered", { registered: true });
   }
 
   return result.registered;
 }
 
-export async function syncGoogleCalendar(options: SyncOptions = {}): Promise<CalendarSyncResult> {
+export async function syncGoogleCalendar(
+  options: SyncOptions = {},
+): Promise<CalendarSyncResult> {
   if (!isGoogleCalendarEnabled()) {
     return { ok: true, reason: "disabled" };
   }
@@ -132,7 +147,9 @@ export async function syncGoogleCalendar(options: SyncOptions = {}): Promise<Cal
   return syncInFlight;
 }
 
-export async function recordCalendarNotification(metadata: CalendarNotificationMetadata): Promise<void> {
+export async function recordCalendarNotification(
+  metadata: CalendarNotificationMetadata,
+): Promise<void> {
   const config = getCalendarConfig();
   if (!config) {
     return;
@@ -141,16 +158,19 @@ export async function recordCalendarNotification(metadata: CalendarNotificationM
   const db = getDb();
   const state = await getOrCreateState(db, config.calendarId);
 
-  if (state.channelId && metadata.channelId && state.channelId !== metadata.channelId) {
+  if (
+    state.channelId &&
+    metadata.channelId &&
+    state.channelId !== metadata.channelId
+  ) {
     console.warn("[calendar-sync] notification_channel_mismatch", {
-      expected: state.channelId,
-      received: metadata.channelId
+      reason: "channel_mismatch",
     });
     return;
   }
 
   const updates: Partial<typeof calendarSyncState.$inferInsert> = {
-    lastNotificationAt: new Date()
+    lastNotificationAt: new Date(),
   };
 
   if (!state.channelId && metadata.channelId) {
@@ -196,13 +216,15 @@ async function performSync(options: SyncOptions): Promise<CalendarSyncResult> {
   let updated = 0;
   let cancelled = 0;
 
-  const timeMin = new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const timeMin = new Date(
+    Date.now() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
 
   while (pages < MAX_SYNC_ITERATIONS) {
     const result = await fetchEventPage(config, accessToken, {
       syncToken,
       pageToken,
-      timeMin: syncToken ? undefined : timeMin
+      timeMin: syncToken ? undefined : timeMin,
     });
 
     if (result.kind === "reset") {
@@ -210,7 +232,7 @@ async function performSync(options: SyncOptions): Promise<CalendarSyncResult> {
       nextSyncToken = null;
       pageToken = undefined;
       resets += 1;
-      console.info("[calendar-sync] sync_token_reset", { calendarId: config.calendarId, resets });
+      console.info("[calendar-sync] sync_token_reset", { resets });
       if (resets > 1) {
         break;
       }
@@ -222,12 +244,12 @@ async function performSync(options: SyncOptions): Promise<CalendarSyncResult> {
         ok: false,
         reason: "google_error",
         status: result.status,
-        details: result.text,
+        details: result.detail,
         pages,
         updated,
         cancelled,
         resets,
-        watchRegistered: watchResult.registered
+        watchRegistered: watchResult.registered,
       };
     }
 
@@ -251,7 +273,7 @@ async function performSync(options: SyncOptions): Promise<CalendarSyncResult> {
     lastSyncedAt: new Date(),
     channelId: state.channelId,
     resourceId: state.resourceId,
-    channelExpiresAt: state.channelExpiresAt
+    channelExpiresAt: state.channelExpiresAt,
   });
 
   return {
@@ -260,7 +282,7 @@ async function performSync(options: SyncOptions): Promise<CalendarSyncResult> {
     cancelled,
     pages,
     resets,
-    watchRegistered: watchResult.registered
+    watchRegistered: watchResult.registered,
   };
 }
 
@@ -268,7 +290,7 @@ async function ensureWatchForState(
   db: DatabaseClient,
   config: CalendarConfig,
   state: CalendarSyncStateRow,
-  accessToken?: string | null
+  accessToken?: string | null,
 ): Promise<{ state: CalendarSyncStateRow; registered: boolean }> {
   const address = process.env["GOOGLE_CALENDAR_WEBHOOK_URL"];
   if (!address) {
@@ -284,7 +306,9 @@ async function ensureWatchForState(
 
   const token = accessToken ?? (await getAccessToken(config));
   if (!token) {
-    console.warn("[calendar-sync] ensure_watch_failed", { reason: "token_error" });
+    console.warn("[calendar-sync] ensure_watch_failed", {
+      reason: "token_error",
+    });
     return { state, registered: false };
   }
 
@@ -296,7 +320,7 @@ async function ensureWatchForState(
   await upsertState(db, config.calendarId, {
     channelId: registration.channelId,
     resourceId: registration.resourceId ?? state.resourceId ?? null,
-    channelExpiresAt: registration.expiresAt ?? null
+    channelExpiresAt: registration.expiresAt ?? null,
   });
 
   const refreshed = await getOrCreateState(db, config.calendarId);
@@ -306,48 +330,65 @@ async function ensureWatchForState(
 async function registerWatch(
   config: CalendarConfig,
   accessToken: string,
-  address: string
-): Promise<{ channelId: string; resourceId: string | null; expiresAt: Date | null } | null> {
+  address: string,
+): Promise<{
+  channelId: string;
+  resourceId: string | null;
+  expiresAt: Date | null;
+} | null> {
   const channelId = randomUUID();
-  const response = await calendarFetch(config, accessToken, "events/watch", {
-    method: "POST",
-    body: JSON.stringify({
-      id: channelId,
-      type: "webhook",
-      address,
-      params: {
-        ttl: WATCH_TTL_SECONDS.toString()
-      }
-    })
-  });
+  const response = await calendarFetch(
+    accessToken,
+    { kind: "watch", calendarId: config.calendarId },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        id: channelId,
+        type: "webhook",
+        address,
+        params: {
+          ttl: WATCH_TTL_SECONDS.toString(),
+        },
+      }),
+    },
+  );
 
   if (!response) {
     return null;
   }
 
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
+    await discardProviderBody(response);
     console.warn("[calendar-sync] watch_registration_failed", {
       status: response.status,
-      text
     });
     return null;
   }
 
-  const data = (await response.json()) as { resourceId?: string; expiration?: string };
-  const expirationMs = data.expiration ? Number.parseInt(data.expiration, 10) : undefined;
+  const data = parseGoogleCalendarWatchResponse(
+    await response.json().catch(() => null),
+  );
+  if (!data) {
+    console.warn("[calendar-sync] watch_registration_malformed_response", {
+      status: response.status,
+    });
+    return null;
+  }
+  const expirationMs = data.expiration
+    ? Number.parseInt(data.expiration, 10)
+    : undefined;
 
   return {
     channelId,
-    resourceId: data.resourceId ?? null,
-    expiresAt: Number.isFinite(expirationMs) ? new Date(expirationMs!) : null
+    resourceId: data.resourceId,
+    expiresAt: Number.isFinite(expirationMs) ? new Date(expirationMs!) : null,
   };
 }
 
 async function fetchEventPage(
   config: CalendarConfig,
   accessToken: string,
-  options: { syncToken: string | null; pageToken?: string; timeMin?: string }
+  options: { syncToken: string | null; pageToken?: string; timeMin?: string },
 ): Promise<FetchEventsResult> {
   const params = new URLSearchParams();
   params.set("maxResults", "250");
@@ -365,12 +406,15 @@ async function fetchEventPage(
     params.set("orderBy", "updated");
   }
 
-  const response = await calendarFetch(config, accessToken, `events?${params.toString()}`, {
-    method: "GET"
-  });
+  const response = await calendarFetch(
+    accessToken,
+    { kind: "events", calendarId: config.calendarId },
+    { method: "GET" },
+    params,
+  );
 
   if (!response) {
-    return { kind: "error", status: 503, text: "request_failed" };
+    return { kind: "error", status: 503, detail: "request_failed" };
   }
 
   if (response.status === 410) {
@@ -378,30 +422,48 @@ async function fetchEventPage(
   }
 
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    console.warn("[calendar-sync] events_list_failed", { status: response.status, text });
-    return { kind: "error", status: response.status, text };
+    await discardProviderBody(response);
+    console.warn("[calendar-sync] events_list_failed", {
+      status: response.status,
+    });
+    return {
+      kind: "error",
+      status: response.status,
+      detail: "provider_rejected",
+    };
   }
 
-  const data = (await response.json()) as CalendarEventsListResponse;
+  const data = parseGoogleCalendarEventListResponse(
+    await response.json().catch(() => null),
+  );
+  if (!data) {
+    console.warn("[calendar-sync] events_list_malformed_response", {
+      status: response.status,
+    });
+    return {
+      kind: "error",
+      status: 502,
+      detail: "malformed_response",
+    };
+  }
   return {
     kind: "ok",
-    items: Array.isArray(data.items) ? data.items : [],
+    items: data.items as GoogleCalendarEvent[],
     nextPageToken: data.nextPageToken ?? undefined,
-    nextSyncToken: data.nextSyncToken ?? null
+    nextSyncToken: data.nextSyncToken ?? null,
   };
 }
 
 async function applyEventsToAppointments(
   db: DatabaseClient,
-  events: GoogleCalendarEvent[]
+  events: GoogleCalendarEvent[],
 ): Promise<{ updated: number; cancelled: number }> {
   const appointmentIds = Array.from(
     new Set(
       events
         .map(resolveAppointmentId)
-        .filter((id): id is string => Boolean(id))
-    )
+        .filter((id): id is string => Boolean(id)),
+    ),
   );
 
   if (appointmentIds.length === 0) {
@@ -415,7 +477,7 @@ async function applyEventsToAppointments(
       durationMinutes: appointments.durationMinutes,
       travelBufferMinutes: appointments.travelBufferMinutes,
       status: appointments.status,
-      calendarEventId: appointments.calendarEventId
+      calendarEventId: appointments.calendarEventId,
     })
     .from(appointments)
     .where(inArray(appointments.id, appointmentIds));
@@ -446,7 +508,10 @@ async function applyEventsToAppointments(
       }
 
       if (Object.keys(updates).length > 0) {
-        await db.update(appointments).set(updates).where(eq(appointments.id, appointmentId));
+        await db
+          .update(appointments)
+          .set(updates)
+          .where(eq(appointments.id, appointmentId));
         cancelled += 1;
       }
 
@@ -460,7 +525,9 @@ async function applyEventsToAppointments(
       updates.calendarEventId = event.id;
     }
 
-    const travelBufferRaw = privateProps["travelBufferMinutes"] ?? privateProps["travel_buffer_minutes"];
+    const travelBufferRaw =
+      privateProps["travelBufferMinutes"] ??
+      privateProps["travel_buffer_minutes"];
     let travelBuffer = parseInteger(travelBufferRaw);
     if (travelBuffer === null || travelBuffer < 0) {
       travelBuffer = existing.travelBufferMinutes ?? 0;
@@ -470,8 +537,13 @@ async function applyEventsToAppointments(
     if (startIso) {
       const baseStart = new Date(startIso);
       if (!Number.isNaN(baseStart.getTime())) {
-        const actualStart = new Date(baseStart.getTime() + travelBuffer * 60_000);
-        if (!existing.startAt || existing.startAt.getTime() !== actualStart.getTime()) {
+        const actualStart = new Date(
+          baseStart.getTime() + travelBuffer * 60_000,
+        );
+        if (
+          !existing.startAt ||
+          existing.startAt.getTime() !== actualStart.getTime()
+        ) {
           updates.startAt = actualStart;
         }
       }
@@ -481,15 +553,21 @@ async function applyEventsToAppointments(
       updates.travelBufferMinutes = travelBuffer;
     }
 
-    const durationRaw = privateProps["durationMinutes"] ?? privateProps["duration_minutes"];
+    const durationRaw =
+      privateProps["durationMinutes"] ?? privateProps["duration_minutes"];
     let duration = parseInteger(durationRaw);
     if (duration === null || duration <= 0) {
       const endIso = event.end?.dateTime ?? event.end?.date ?? null;
       if (startIso && endIso) {
         const baseStart = new Date(startIso);
         const baseEnd = new Date(endIso);
-        if (!Number.isNaN(baseStart.getTime()) && !Number.isNaN(baseEnd.getTime())) {
-          const totalMinutes = Math.round((baseEnd.getTime() - baseStart.getTime()) / 60000);
+        if (
+          !Number.isNaN(baseStart.getTime()) &&
+          !Number.isNaN(baseEnd.getTime())
+        ) {
+          const totalMinutes = Math.round(
+            (baseEnd.getTime() - baseStart.getTime()) / 60000,
+          );
           if (totalMinutes > 0) {
             duration = Math.max(totalMinutes - travelBuffer, 15);
           }
@@ -505,7 +583,10 @@ async function applyEventsToAppointments(
     }
 
     if (Object.keys(updates).length > 0) {
-      await db.update(appointments).set(updates).where(eq(appointments.id, appointmentId));
+      await db
+        .update(appointments)
+        .set(updates)
+        .where(eq(appointments.id, appointmentId));
       updated += 1;
     }
   }
@@ -514,35 +595,41 @@ async function applyEventsToAppointments(
 }
 
 async function calendarFetch(
-  config: CalendarConfig,
   accessToken: string,
-  path: string,
-  init: RequestInit
+  endpoint: GoogleCalendarApiEndpoint,
+  init: RequestInit,
+  query?: URLSearchParams,
 ): Promise<Response | null> {
-  const url = `${GOOGLE_API_BASE}/calendars/${encodeURIComponent(config.calendarId)}/${path}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const url = resolveGoogleCalendarApiEndpoint(endpoint, process.env, query);
 
     const response = await fetch(url, {
       ...init,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         ...(init.body ? { "Content-Type": "application/json" } : {}),
-        ...(init.headers ?? {})
+        ...(init.headers ?? {}),
       },
-      signal: controller.signal
+      signal: controller.signal,
     });
 
-    clearTimeout(timeout);
     return response;
   } catch (error) {
-    console.warn("[calendar-sync] request_error", { path, error: String(error) });
+    console.warn("[calendar-sync] request_error", {
+      operation: endpoint.kind,
+      errorName: errorName(error),
+    });
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-function parseInteger(value: string | number | null | undefined): number | null {
+function parseInteger(
+  value: string | number | null | undefined,
+): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
   }
@@ -578,7 +665,10 @@ function resolveAppointmentId(event: GoogleCalendarEvent): string | null {
   return null;
 }
 
-async function getOrCreateState(db: DatabaseClient, calendarId: string): Promise<CalendarSyncStateRow> {
+async function getOrCreateState(
+  db: DatabaseClient,
+  calendarId: string,
+): Promise<CalendarSyncStateRow> {
   const existing = await db
     .select()
     .from(calendarSyncState)
@@ -589,7 +679,10 @@ async function getOrCreateState(db: DatabaseClient, calendarId: string): Promise
     return existing[0]!;
   }
 
-  await db.insert(calendarSyncState).values({ calendarId }).onConflictDoNothing();
+  await db
+    .insert(calendarSyncState)
+    .values({ calendarId })
+    .onConflictDoNothing();
 
   const created = await db
     .select()
@@ -607,9 +700,12 @@ async function getOrCreateState(db: DatabaseClient, calendarId: string): Promise
 async function upsertState(
   db: DatabaseClient,
   calendarId: string,
-  values: Partial<typeof calendarSyncState.$inferInsert>
+  values: Partial<typeof calendarSyncState.$inferInsert>,
 ): Promise<void> {
-  await db.insert(calendarSyncState).values({ calendarId }).onConflictDoNothing();
+  await db
+    .insert(calendarSyncState)
+    .values({ calendarId })
+    .onConflictDoNothing();
 
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(values)) {
@@ -624,10 +720,3 @@ async function upsertState(
     .set(sanitized)
     .where(eq(calendarSyncState.calendarId, calendarId));
 }
-
-
-
-
-
-
-

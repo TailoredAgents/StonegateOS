@@ -41,6 +41,7 @@ import {
   recordProviderFailure,
   recordProviderSuccess,
 } from "@/lib/provider-health";
+import type { TeamMutationTransaction } from "@/lib/team-mutation";
 
 export type SquareAttemptReconciliationResult =
   | {
@@ -57,6 +58,125 @@ export type SquareAttemptReconciliationResult =
       errorCode: string;
       paymentId?: string;
     };
+
+export type SquareReturnOperationExpectation = {
+  operationId: string;
+  callbackHash: string;
+  providerOrderId: string;
+};
+
+type SquareAttemptReconciliationFinalizer = (
+  tx: TeamMutationTransaction,
+  result: SquareAttemptReconciliationResult,
+) => Promise<void>;
+
+type StoredSquareReturnOperation = {
+  phase?: unknown;
+  operationId?: unknown;
+  callbackHash?: unknown;
+  providerOrderId?: unknown;
+};
+
+export function squareReturnOperationMatches(
+  metadata: Record<string, unknown> | null | undefined,
+  expected: SquareReturnOperationExpectation,
+): boolean {
+  const operation = metadata?.["squareReturnOperation"];
+  if (!operation || typeof operation !== "object" || Array.isArray(operation)) {
+    return false;
+  }
+  const stored = operation as StoredSquareReturnOperation;
+  return (
+    stored.phase === "dispatched" &&
+    stored.operationId === expected.operationId &&
+    stored.callbackHash === expected.callbackHash &&
+    stored.providerOrderId === expected.providerOrderId
+  );
+}
+
+export function squarePaymentBindingMatches(input: {
+  payment: {
+    provider: string;
+    appointmentId: string | null;
+    paymentAttemptId: string | null;
+    providerOrderId: string | null;
+    providerPaymentId: string | null;
+    jobAmountCents: number | null;
+    tipCents: number;
+    totalAmountCents: number | null;
+    amount: number;
+    currency: string;
+    canonicalStatus: string | null;
+  };
+  appointmentId: string;
+  attemptId: string;
+  verified: Pick<
+    VerifiedSquarePayment,
+    | "providerOrderId"
+    | "providerPaymentId"
+    | "jobAmountCents"
+    | "tipCents"
+    | "totalAmountCents"
+    | "currency"
+  >;
+}): boolean {
+  const { payment, verified } = input;
+  return (
+    payment.provider === "square" &&
+    payment.canonicalStatus === "completed" &&
+    payment.appointmentId === input.appointmentId &&
+    payment.paymentAttemptId === input.attemptId &&
+    payment.providerOrderId === verified.providerOrderId &&
+    payment.providerPaymentId === verified.providerPaymentId &&
+    payment.jobAmountCents === verified.jobAmountCents &&
+    payment.tipCents === verified.tipCents &&
+    payment.totalAmountCents === verified.totalAmountCents &&
+    payment.amount === verified.totalAmountCents &&
+    payment.currency.toUpperCase() === verified.currency
+  );
+}
+
+export function completedSquarePaymentMatchesAttempt(input: {
+  payment: {
+    provider: string;
+    appointmentId: string | null;
+    paymentAttemptId: string | null;
+    providerOrderId: string | null;
+    providerPaymentId: string | null;
+    jobAmountCents: number | null;
+    tipCents: number;
+    totalAmountCents: number | null;
+    amount: number;
+    currency: string;
+    canonicalStatus: string | null;
+  };
+  attempt: {
+    id: string;
+    appointmentId: string;
+    requestedJobAmountCents: number;
+    providerOrderId: string | null;
+    providerPaymentId: string | null;
+  };
+  orderId: string;
+}): boolean {
+  const { payment, attempt } = input;
+  return (
+    payment.provider === "square" &&
+    payment.canonicalStatus === "completed" &&
+    payment.appointmentId === attempt.appointmentId &&
+    payment.paymentAttemptId === attempt.id &&
+    payment.providerOrderId === input.orderId &&
+    attempt.providerOrderId === input.orderId &&
+    payment.providerPaymentId !== null &&
+    payment.providerPaymentId === attempt.providerPaymentId &&
+    payment.jobAmountCents === attempt.requestedJobAmountCents &&
+    payment.tipCents >= 0 &&
+    payment.totalAmountCents ===
+      attempt.requestedJobAmountCents + payment.tipCents &&
+    payment.amount === payment.totalAmountCents &&
+    payment.currency.toUpperCase() === "USD"
+  );
+}
 
 export function squareProviderReferenceConflicts(input: {
   storedOrderId?: string | null;
@@ -102,18 +222,6 @@ function errorCode(error: unknown): string {
   return "square_verification_failed";
 }
 
-function databaseErrorCode(error: unknown): string | null {
-  if (!error || typeof error !== "object") return null;
-  const record = error as Record<string, unknown>;
-  if (typeof record["code"] === "string") return record["code"];
-  const cause = record["cause"];
-  if (cause && typeof cause === "object") {
-    const code = (cause as Record<string, unknown>)["code"];
-    return typeof code === "string" ? code : null;
-  }
-  return null;
-}
-
 export function isRetryableSquareError(error: unknown): boolean {
   if (error instanceof SquareApiError) {
     return (
@@ -124,7 +232,13 @@ export function isRetryableSquareError(error: unknown): boolean {
       error.status >= 500
     );
   }
-  return error instanceof TypeError || errorCode(error) === "fetch failed";
+  const code = errorCode(error);
+  return (
+    error instanceof TypeError ||
+    code === "fetch failed" ||
+    code === "square_order_not_completed" ||
+    code === "square_payment_not_completed"
+  );
 }
 
 function canonicalRefundStatus(providerStatus: string | undefined): string {
@@ -210,19 +324,24 @@ async function safelyRecordSquareHealth(
 export async function reconcileSquareAttempt(input: {
   attemptId: string;
   orderId?: string | null;
+  expectedReturnOperation?: SquareReturnOperationExpectation;
+  finalize?: SquareAttemptReconciliationFinalizer;
 }): Promise<SquareAttemptReconciliationResult> {
   const db = getDb();
+  const selectAttempt = {
+    id: paymentAttempts.id,
+    appointmentId: paymentAttempts.appointmentId,
+    status: paymentAttempts.status,
+    requestedJobAmountCents: paymentAttempts.requestedJobAmountCents,
+    currency: paymentAttempts.currency,
+    providerOrderId: paymentAttempts.providerOrderId,
+    providerPaymentId: paymentAttempts.providerPaymentId,
+    squareLocationId: paymentAttempts.squareLocationId,
+    initiatedByMemberId: paymentAttempts.initiatedByMemberId,
+    metadata: paymentAttempts.metadata,
+  };
   const [attempt] = await db
-    .select({
-      id: paymentAttempts.id,
-      appointmentId: paymentAttempts.appointmentId,
-      status: paymentAttempts.status,
-      requestedJobAmountCents: paymentAttempts.requestedJobAmountCents,
-      currency: paymentAttempts.currency,
-      providerOrderId: paymentAttempts.providerOrderId,
-      squareLocationId: paymentAttempts.squareLocationId,
-      initiatedByMemberId: paymentAttempts.initiatedByMemberId,
-    })
+    .select(selectAttempt)
     .from(paymentAttempts)
     .where(
       and(
@@ -233,80 +352,17 @@ export async function reconcileSquareAttempt(input: {
     .limit(1);
   if (!attempt) throw new Error("payment_attempt_not_found");
 
-  if (attempt.status === "completed") {
-    const [existing] = await db
-      .select({
-        id: payments.id,
-        providerPaymentId: payments.providerPaymentId,
-        providerOrderId: payments.providerOrderId,
-      })
-      .from(payments)
-      .where(eq(payments.paymentAttemptId, attempt.id))
-      .limit(1);
-    if (existing?.providerPaymentId) {
-      const incomingOrderId = input.orderId?.trim() || null;
-      if (
-        squareProviderReferenceConflicts({
-          storedOrderId: existing.providerOrderId ?? attempt.providerOrderId,
-          storedPaymentId: existing.providerPaymentId,
-          incomingOrderId,
-        })
-      ) {
-        try {
-          const expectedLocationId =
-            attempt.squareLocationId?.trim() ??
-            process.env["SQUARE_LOCATION_ID"]?.trim();
-          if (!expectedLocationId) {
-            throw new Error("SQUARE_LOCATION_ID is not set");
-          }
-          const verifiedAdditional = await retrieveAndVerifySquarePayment({
-            orderId: incomingOrderId!,
-            expectedAttemptId: attempt.id,
-            expectedJobAmountCents: attempt.requestedJobAmountCents,
-            expectedLocationId,
-          });
-          const reviewPaymentId = await upsertSquarePaymentForReview(
-            verifiedAdditional.rawPayment,
-            {
-              reconciliation: "additional_payment_for_completed_attempt",
-              suspectedAttemptId: attempt.id,
-              storedProviderOrderId:
-                existing.providerOrderId ?? attempt.providerOrderId,
-            },
-          );
-          await safelyRecordSquareHealth(
-            "failure",
-            "square_additional_payment_for_completed_attempt",
-          );
-          return {
-            status: "needs_review",
-            appointmentId: attempt.appointmentId,
-            attemptId: attempt.id,
-            paymentId: reviewPaymentId,
-            errorCode: "square_additional_payment_for_completed_attempt",
-          };
-        } catch (error) {
-          const code = errorCode(error);
-          await safelyRecordSquareHealth("failure", code);
-          return {
-            status: "needs_review",
-            appointmentId: attempt.appointmentId,
-            attemptId: attempt.id,
-            errorCode: code,
-          };
-        }
-      }
-      return {
-        status: "verified",
-        appointmentId: attempt.appointmentId,
-        attemptId: attempt.id,
-        paymentId: existing.id,
-        providerPaymentId: existing.providerPaymentId,
-      };
-    }
+  const requestedOrderId = input.orderId?.trim() || null;
+  const storedOrderId = attempt.providerOrderId?.trim() || null;
+  if (requestedOrderId && storedOrderId && requestedOrderId !== storedOrderId) {
+    return {
+      status: "needs_review",
+      appointmentId: attempt.appointmentId,
+      attemptId: attempt.id,
+      errorCode: "square_order_id_conflict",
+    };
   }
-
-  const orderId = input.orderId?.trim() || attempt.providerOrderId?.trim();
+  const orderId = requestedOrderId ?? storedOrderId;
   if (!orderId) {
     return {
       status: "pending_verification",
@@ -320,62 +376,276 @@ export async function reconcileSquareAttempt(input: {
     process.env["SQUARE_LOCATION_ID"]?.trim();
   if (!expectedLocationId) throw new Error("SQUARE_LOCATION_ID is not set");
 
-  let verifiedPayment: VerifiedSquarePayment | null = null;
+  const assertLockedAttempt = (locked: typeof attempt): void => {
+    if (
+      locked.appointmentId !== attempt.appointmentId ||
+      locked.requestedJobAmountCents !== attempt.requestedJobAmountCents ||
+      locked.currency !== attempt.currency ||
+      locked.squareLocationId !== attempt.squareLocationId ||
+      locked.initiatedByMemberId !== attempt.initiatedByMemberId ||
+      (locked.providerOrderId !== null &&
+        locked.providerOrderId.trim() !== orderId)
+    ) {
+      throw new Error("square_attempt_changed_during_reconciliation");
+    }
+    if (
+      input.expectedReturnOperation &&
+      !squareReturnOperationMatches(
+        locked.metadata,
+        input.expectedReturnOperation,
+      )
+    ) {
+      throw new Error("square_return_operation_changed");
+    }
+  };
+
+  const paymentProjection = {
+    id: payments.id,
+    provider: payments.provider,
+    appointmentId: payments.appointmentId,
+    paymentAttemptId: payments.paymentAttemptId,
+    providerOrderId: payments.providerOrderId,
+    providerPaymentId: payments.providerPaymentId,
+    jobAmountCents: payments.jobAmountCents,
+    tipCents: payments.tipCents,
+    totalAmountCents: payments.totalAmountCents,
+    amount: payments.amount,
+    currency: payments.currency,
+    canonicalStatus: payments.canonicalStatus,
+  };
+
+  if (attempt.status === "completed") {
+    const [existing] = await db
+      .select(paymentProjection)
+      .from(payments)
+      .where(eq(payments.paymentAttemptId, attempt.id))
+      .limit(1);
+    if (
+      existing &&
+      existing.providerPaymentId !== null &&
+      completedSquarePaymentMatchesAttempt({
+        payment: existing,
+        attempt,
+        orderId,
+      })
+    ) {
+      const result: SquareAttemptReconciliationResult = {
+        status: "verified",
+        appointmentId: attempt.appointmentId,
+        attemptId: attempt.id,
+        paymentId: existing.id,
+        providerPaymentId: existing.providerPaymentId,
+      };
+      if (input.finalize) {
+        await db.transaction(async (tx) => {
+          await tx.execute(
+            sql`select pg_advisory_xact_lock(hashtext('square_payment_attempt'), hashtext(${attempt.id}))`,
+          );
+          const [locked] = await tx
+            .select(selectAttempt)
+            .from(paymentAttempts)
+            .where(
+              and(
+                eq(paymentAttempts.id, attempt.id),
+                eq(paymentAttempts.provider, "square"),
+              ),
+            )
+            .for("update")
+            .limit(1);
+          if (!locked || locked.status !== "completed") {
+            throw new Error("square_attempt_changed_during_reconciliation");
+          }
+          assertLockedAttempt(locked);
+          await input.finalize!(tx, result);
+        });
+      }
+      return result;
+    }
+    return {
+      status: "needs_review",
+      appointmentId: attempt.appointmentId,
+      attemptId: attempt.id,
+      errorCode: "square_completed_attempt_binding_mismatch",
+    };
+  }
+
+  let verified: VerifiedSquarePayment;
   try {
-    verifiedPayment = await retrieveAndVerifySquarePayment({
+    // Provider I/O deliberately occurs outside every database transaction.
+    verified = await retrieveAndVerifySquarePayment({
       orderId,
       expectedAttemptId: attempt.id,
       expectedJobAmountCents: attempt.requestedJobAmountCents,
       expectedLocationId,
     });
-    const verified = verifiedPayment;
+  } catch (error) {
+    const code = errorCode(error);
+    const pending = isRetryableSquareError(error);
     const result = await db.transaction(async (tx) => {
-      const [conflict] = await tx
-        .select({
-          id: payments.id,
-          appointmentId: payments.appointmentId,
-          paymentAttemptId: payments.paymentAttemptId,
-        })
-        .from(payments)
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext('square_payment_attempt'), hashtext(${attempt.id}))`,
+      );
+      const [locked] = await tx
+        .select(selectAttempt)
+        .from(paymentAttempts)
         .where(
           and(
-            eq(payments.provider, "square"),
-            eq(payments.providerPaymentId, verified.providerPaymentId),
+            eq(paymentAttempts.id, attempt.id),
+            eq(paymentAttempts.provider, "square"),
           ),
         )
+        .for("update")
         .limit(1);
+      if (!locked) throw new Error("payment_attempt_not_found");
+      assertLockedAttempt(locked);
+      if (locked.status === "completed") {
+        const [completedPayment] = await tx
+          .select(paymentProjection)
+          .from(payments)
+          .where(eq(payments.paymentAttemptId, locked.id))
+          .for("update")
+          .limit(1);
+        const exactProviderPaymentId = completedPayment?.providerPaymentId;
+        const exact =
+          completedPayment !== undefined &&
+          exactProviderPaymentId !== null &&
+          exactProviderPaymentId !== undefined &&
+          completedSquarePaymentMatchesAttempt({
+            payment: completedPayment,
+            attempt: locked,
+            orderId,
+          });
+        const reconciliation: SquareAttemptReconciliationResult = exact
+          ? {
+              status: "verified",
+              appointmentId: locked.appointmentId,
+              attemptId: locked.id,
+              paymentId: completedPayment.id,
+              providerPaymentId: exactProviderPaymentId,
+            }
+          : {
+              status: "needs_review",
+              appointmentId: locked.appointmentId,
+              attemptId: locked.id,
+              errorCode: "square_completed_attempt_binding_mismatch",
+            };
+        await input.finalize?.(tx, reconciliation);
+        return reconciliation;
+      }
+      const reconciliation: SquareAttemptReconciliationResult = {
+        status: pending ? "pending_verification" : "needs_review",
+        appointmentId: locked.appointmentId,
+        attemptId: locked.id,
+        errorCode: code,
+      };
+      const now = new Date();
+      await tx
+        .update(paymentAttempts)
+        .set({
+          status: pending ? "pending_verification" : "needs_review",
+          providerOrderId: orderId,
+          errorCode: code,
+          errorMessage: code,
+          ...(pending ? {} : { resolvedAt: now }),
+          updatedAt: now,
+        })
+        .where(eq(paymentAttempts.id, locked.id));
+      await input.finalize?.(tx, reconciliation);
+      return reconciliation;
+    });
+    await safelyRecordSquareHealth(
+      result.status === "verified" ? "success" : "failure",
+      result.status === "verified" ? undefined : code,
+    );
+    return result;
+  }
 
-      if (
-        conflict &&
-        ((conflict.appointmentId != null &&
-          conflict.appointmentId !== attempt.appointmentId) ||
-          (conflict.paymentAttemptId &&
-            conflict.paymentAttemptId !== attempt.id))
-      ) {
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext('square_payment_attempt'), hashtext(${attempt.id}))`,
+    );
+    const [locked] = await tx
+      .select(selectAttempt)
+      .from(paymentAttempts)
+      .where(
+        and(
+          eq(paymentAttempts.id, attempt.id),
+          eq(paymentAttempts.provider, "square"),
+        ),
+      )
+      .for("update")
+      .limit(1);
+    if (!locked) throw new Error("payment_attempt_not_found");
+    assertLockedAttempt(locked);
+
+    const [byProviderPayment] = await tx
+      .select(paymentProjection)
+      .from(payments)
+      .where(
+        and(
+          eq(payments.provider, "square"),
+          eq(payments.providerPaymentId, verified.providerPaymentId),
+        ),
+      )
+      .for("update")
+      .limit(1);
+    const [byAttempt] = await tx
+      .select(paymentProjection)
+      .from(payments)
+      .where(eq(payments.paymentAttemptId, locked.id))
+      .for("update")
+      .limit(1);
+
+    const existing = byProviderPayment ?? byAttempt ?? null;
+    const existingIsExact =
+      existing !== null &&
+      squarePaymentBindingMatches({
+        payment: existing,
+        appointmentId: locked.appointmentId,
+        attemptId: locked.id,
+        verified,
+      });
+    if (
+      (byProviderPayment &&
+        byAttempt &&
+        byProviderPayment.id !== byAttempt.id) ||
+      (existing && !existingIsExact)
+    ) {
+      const reconciliation: SquareAttemptReconciliationResult = {
+        status: "needs_review",
+        appointmentId: locked.appointmentId,
+        attemptId: locked.id,
+        errorCode: "square_payment_already_linked",
+      };
+      const now = new Date();
+      if (locked.status !== "completed") {
         await tx
           .update(paymentAttempts)
           .set({
             status: "needs_review",
             providerOrderId: orderId,
-            providerPaymentId: verified.providerPaymentId,
             errorCode: "square_payment_already_linked",
             errorMessage:
               "Square payment is already linked to a different appointment or attempt.",
-            resolvedAt: new Date(),
-            updatedAt: new Date(),
+            resolvedAt: now,
+            updatedAt: now,
           })
-          .where(eq(paymentAttempts.id, attempt.id));
-        return null;
+          .where(eq(paymentAttempts.id, locked.id));
       }
+      await input.finalize?.(tx, reconciliation);
+      return reconciliation;
+    }
 
-      const now = new Date();
-      const [payment] = await tx
+    const now = new Date();
+    let paymentId = existing?.id ?? null;
+    if (!paymentId) {
+      const [inserted] = await tx
         .insert(payments)
         .values({
           provider: "square",
           providerPaymentId: verified.providerPaymentId,
           providerOrderId: verified.providerOrderId,
-          paymentAttemptId: attempt.id,
+          paymentAttemptId: locked.id,
           amount: verified.totalAmountCents,
           jobAmountCents: verified.jobAmountCents,
           tipCents: verified.tipCents,
@@ -392,8 +662,8 @@ export async function reconcileSquareAttempt(input: {
           last4: verified.last4,
           receiptUrl: verified.receiptUrl,
           squareLocationId: verified.locationId,
-          initiatedByMemberId: attempt.initiatedByMemberId,
-          appointmentId: attempt.appointmentId,
+          initiatedByMemberId: locked.initiatedByMemberId,
+          appointmentId: locked.appointmentId,
           metadata: {
             reconciliation: "verified_from_square",
             apiVersion: "2026-07-15",
@@ -404,139 +674,84 @@ export async function reconcileSquareAttempt(input: {
           createdAt: verified.providerCreatedAt ?? now,
           updatedAt: now,
         })
-        .onConflictDoUpdate({
-          target: [payments.provider, payments.providerPaymentId],
-          set: {
-            providerOrderId: verified.providerOrderId,
-            paymentAttemptId: attempt.id,
-            amount: verified.totalAmountCents,
-            jobAmountCents: verified.jobAmountCents,
-            tipCents: verified.tipCents,
-            totalAmountCents: verified.totalAmountCents,
-            refundedAmountCents: verified.refundedAmountCents,
-            status: verified.providerStatus.toLowerCase(),
-            canonicalStatus: "completed",
-            providerStatus: verified.providerStatus,
-            method: "card",
-            tenderType: verified.tenderType,
-            entryMethod: verified.entryMethod,
-            cardBrand: verified.cardBrand,
-            last4: verified.last4,
-            receiptUrl: verified.receiptUrl,
-            squareLocationId: verified.locationId,
-            appointmentId: attempt.appointmentId,
-            paidAt: verified.providerUpdatedAt ?? now,
-            capturedAt: verified.providerUpdatedAt ?? now,
-            updatedAt: now,
-          },
-        })
+        // Never let a provider/payment or attempt uniqueness conflict rewrite
+        // an existing financial relationship.
+        .onConflictDoNothing()
         .returning({ id: payments.id });
-      if (!payment) throw new Error("square_payment_upsert_failed");
-
-      await tx
-        .update(paymentAttempts)
-        .set({
-          status: "completed",
-          providerOrderId: verified.providerOrderId,
-          providerPaymentId: verified.providerPaymentId,
-          squareLocationId: verified.locationId,
-          resolvedAt: now,
-          errorCode: null,
-          errorMessage: null,
-          updatedAt: now,
-        })
-        .where(eq(paymentAttempts.id, attempt.id));
-
-      await syncAppointmentCardTipCents(tx, attempt.appointmentId);
-      return payment;
-    });
-
-    if (!result) {
-      await safelyRecordSquareHealth(
-        "failure",
-        "square_payment_already_linked",
-      );
-      return {
-        status: "needs_review",
-        appointmentId: attempt.appointmentId,
-        attemptId: attempt.id,
-        errorCode: "square_payment_already_linked",
-      };
-    }
-    await safelyRecordSquareHealth("success");
-    return {
-      status: "verified",
-      appointmentId: attempt.appointmentId,
-      attemptId: attempt.id,
-      paymentId: result.id,
-      providerPaymentId: verified.providerPaymentId,
-    };
-  } catch (error) {
-    if (verifiedPayment && databaseErrorCode(error) === "23505") {
-      const [linkedPayment] = await db
-        .select({
-          id: payments.id,
-          providerOrderId: payments.providerOrderId,
-          providerPaymentId: payments.providerPaymentId,
-        })
-        .from(payments)
-        .where(eq(payments.paymentAttemptId, attempt.id))
-        .limit(1);
-      if (
-        linkedPayment?.providerPaymentId ===
-          verifiedPayment.providerPaymentId &&
-        linkedPayment.providerOrderId === verifiedPayment.providerOrderId
-      ) {
-        return {
-          status: "verified",
-          appointmentId: attempt.appointmentId,
-          attemptId: attempt.id,
-          paymentId: linkedPayment.id,
-          providerPaymentId: linkedPayment.providerPaymentId,
-        };
+      paymentId = inserted?.id ?? null;
+      if (!paymentId) {
+        const [concurrent] = await tx
+          .select(paymentProjection)
+          .from(payments)
+          .where(
+            and(
+              eq(payments.provider, "square"),
+              eq(payments.providerPaymentId, verified.providerPaymentId),
+            ),
+          )
+          .for("update")
+          .limit(1);
+        if (
+          !concurrent ||
+          !squarePaymentBindingMatches({
+            payment: concurrent,
+            appointmentId: locked.appointmentId,
+            attemptId: locked.id,
+            verified,
+          })
+        ) {
+          throw new Error("square_payment_concurrency_conflict");
+        }
+        paymentId = concurrent.id;
       }
-      const reviewPaymentId = await upsertSquarePaymentForReview(
-        verifiedPayment.rawPayment,
-        {
-          reconciliation: "concurrent_additional_payment_for_attempt",
-          suspectedAttemptId: attempt.id,
-          storedProviderOrderId: linkedPayment?.providerOrderId ?? null,
-          storedProviderPaymentId: linkedPayment?.providerPaymentId ?? null,
-        },
-      );
-      await safelyRecordSquareHealth(
-        "failure",
-        "square_additional_payment_for_completed_attempt",
-      );
-      return {
-        status: "needs_review",
-        appointmentId: attempt.appointmentId,
-        attemptId: attempt.id,
-        paymentId: reviewPaymentId,
-        errorCode: "square_additional_payment_for_completed_attempt",
-      };
     }
-    const code = errorCode(error);
-    const pending = isRetryableSquareError(error);
-    await db
+
+    const [attemptUpdated] = await tx
       .update(paymentAttempts)
       .set({
-        status: pending ? "pending_verification" : "needs_review",
-        providerOrderId: orderId,
-        errorCode: code,
-        errorMessage: code,
-        ...(pending ? {} : { resolvedAt: new Date() }),
-        updatedAt: new Date(),
+        status: "completed",
+        providerOrderId: verified.providerOrderId,
+        providerPaymentId: verified.providerPaymentId,
+        squareLocationId: verified.locationId,
+        resolvedAt: now,
+        errorCode: null,
+        errorMessage: null,
+        updatedAt: now,
       })
-      .where(eq(paymentAttempts.id, attempt.id));
-    await safelyRecordSquareHealth("failure", code);
-    return {
-      status: pending ? "pending_verification" : "needs_review",
-      appointmentId: attempt.appointmentId,
-      attemptId: attempt.id,
-      errorCode: code,
+      .where(
+        and(
+          eq(paymentAttempts.id, locked.id),
+          eq(paymentAttempts.provider, "square"),
+          inArray(paymentAttempts.status, [
+            "created",
+            "launched",
+            "pending_verification",
+            "completed",
+          ]),
+        ),
+      )
+      .returning({ id: paymentAttempts.id });
+    if (!attemptUpdated) {
+      throw new Error("square_attempt_completion_conflict");
+    }
+
+    await syncAppointmentCardTipCents(tx, locked.appointmentId);
+    const reconciliation: SquareAttemptReconciliationResult = {
+      status: "verified",
+      appointmentId: locked.appointmentId,
+      attemptId: locked.id,
+      paymentId,
+      providerPaymentId: verified.providerPaymentId,
     };
-  }
+    await input.finalize?.(tx, reconciliation);
+    return reconciliation;
+  });
+
+  await safelyRecordSquareHealth(
+    result.status === "verified" ? "success" : "failure",
+    result.status === "verified" ? undefined : result.errorCode,
+  );
+  return result;
 }
 
 async function upsertSquarePaymentForReview(
@@ -546,7 +761,7 @@ async function upsertSquarePaymentForReview(
   const normalized = normalizeSquarePaymentForReview(payment);
   const now = new Date();
   const db = getDb();
-  const [row] = await db
+  const [inserted] = await db
     .insert(payments)
     .values({
       provider: "square",
@@ -580,23 +795,23 @@ async function upsertSquarePaymentForReview(
       createdAt: normalized.providerCreatedAt ?? now,
       updatedAt: now,
     })
-    .onConflictDoUpdate({
-      target: [payments.provider, payments.providerPaymentId],
-      set: {
-        providerOrderId: normalized.providerOrderId,
-        amount: normalized.totalAmountCents,
-        jobAmountCents: normalized.jobAmountCents,
-        tipCents: normalized.tipCents,
-        totalAmountCents: normalized.totalAmountCents,
-        refundedAmountCents: normalized.refundedAmountCents,
-        status: normalized.providerStatus.toLowerCase(),
-        providerStatus: normalized.providerStatus,
-        updatedAt: now,
-      },
-    })
+    // A review import may discover an existing payment, but must never rewrite
+    // or take over that payment's financial binding.
+    .onConflictDoNothing()
     .returning({ id: payments.id });
-  if (!row) throw new Error("square_unmatched_payment_upsert_failed");
-  return row.id;
+  if (inserted) return inserted.id;
+  const [existing] = await db
+    .select({ id: payments.id })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.provider, "square"),
+        eq(payments.providerPaymentId, normalized.providerPaymentId),
+      ),
+    )
+    .limit(1);
+  if (!existing) throw new Error("square_unmatched_payment_insert_conflict");
+  return existing.id;
 }
 
 export async function upsertUnmatchedSquarePayment(
@@ -1007,8 +1222,7 @@ export function canReclaimSquareProviderEvent(input: {
   const leaseStartedAt = input.processedAt ?? input.receivedAt;
   const now = input.now ?? new Date();
   return (
-    leaseStartedAt.getTime() <=
-    now.getTime() - SQUARE_PROVIDER_EVENT_LEASE_MS
+    leaseStartedAt.getTime() <= now.getTime() - SQUARE_PROVIDER_EVENT_LEASE_MS
   );
 }
 

@@ -1,14 +1,13 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, plaidItems, plaidAccounts, plaidTransactions } from "@/db";
-import { isAdminRequest } from "../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 import { eq, inArray } from "drizzle-orm";
 import { plaidConfigured } from "@/lib/plaid";
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const permissionError = await requirePermission(request, "finance.read");
+  if (permissionError) return permissionError as NextResponse;
   if (!plaidConfigured()) {
     return NextResponse.json({ ok: false, configured: false });
   }

@@ -1,15 +1,51 @@
+import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getDb, quotes, contacts, properties, outboxEvents } from "@/db";
-import { eq, sql } from "drizzle-orm";
+import {
+  auditLogs,
+  contacts,
+  crmPipeline,
+  getDb,
+  leadAutomationStates,
+  leads,
+  outboxEvents,
+  properties,
+  publicQuoteMutationReceipts,
+  quotes,
+} from "@/db";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
+import {
+  isPublicQuoteMutationSuccessBody,
+  normalizePublicQuoteIdempotencyKey,
+  PUBLIC_QUOTE_MUTATION_RECEIPT_TTL_MS,
+  publicQuoteMutationKeyHash,
+  publicQuoteMutationRequestHash,
+} from "@/lib/public-quote-mutation";
 
-const PublicQuoteActionSchema = z.object({
-  decision: z.enum(["accepted", "declined"]).optional(),
-  action: z.enum(["refresh"]).optional(),
-  reason: z.string().max(120).optional(),
-  notes: z.string().max(1000).optional()
-}).refine((value) => Boolean(value.decision || value.action), "decision_or_action_required");
+const PublicQuoteActionSchema = z
+  .object({
+    decision: z.enum(["accepted", "declined"]).optional(),
+    action: z.enum(["refresh"]).optional(),
+    reason: z.string().trim().max(120).optional(),
+    notes: z.string().trim().max(1000).optional(),
+  })
+  .superRefine((value, context) => {
+    if (Boolean(value.decision) === Boolean(value.action)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "exactly_one_quote_action_required",
+      });
+    }
+  });
+
+const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
+
+function publicCorrelationId(request: NextRequest): string {
+  const candidate = request.headers.get("x-correlation-id")?.trim() ?? "";
+  return CORRELATION_ID_PATTERN.test(candidate) ? candidate : randomUUID();
+}
 
 function displayStatus(row: {
   status: string;
@@ -22,7 +58,12 @@ function displayStatus(row: {
   if (row.refreshRequestedAt) return "refresh_requested";
   if (row.status === "declined") return "rejected";
   if (row.status === "accepted") return "accepted";
-  if (row.status === "sent" && row.expiresAt && row.expiresAt.getTime() < Date.now()) return "expired";
+  if (
+    row.status === "sent" &&
+    row.expiresAt &&
+    row.expiresAt.getTime() < Date.now()
+  )
+    return "expired";
   if (row.status === "sent" && row.viewedAt) return "viewed";
   if (row.status === "sent") return "sent";
   return "draft";
@@ -95,17 +136,20 @@ function mapPublicQuote(row: {
     decisionAt: row.decisionAt ? row.decisionAt.toISOString() : null,
     expired,
     decisionNotes: row.decisionNotes,
-    refreshRequestedAt: row.refreshRequestedAt ? row.refreshRequestedAt.toISOString() : null,
+    refreshRequestedAt: row.refreshRequestedAt
+      ? row.refreshRequestedAt.toISOString()
+      : null,
     acceptedAppointmentId: row.acceptedAppointmentId,
-    customerName: customerName && customerName.length ? customerName : "Customer",
+    customerName:
+      customerName && customerName.length ? customerName : "Customer",
     addressLine1: row.propertyAddressLine1?.trim() ?? "",
-    serviceArea: serviceArea.length ? serviceArea : ""
+    serviceArea: serviceArea.length ? serviceArea : "",
   };
 }
 
 export async function GET(
   request: NextRequest,
-  context: { params: Promise<{ token: string }> }
+  context: { params: Promise<{ token: string }> },
 ): Promise<Response> {
   const { token } = await context.params;
   if (!token) {
@@ -141,7 +185,7 @@ export async function GET(
       propertyAddressLine1: properties.addressLine1,
       propertyCity: properties.city,
       propertyState: properties.state,
-      propertyPostalCode: properties.postalCode
+      propertyPostalCode: properties.postalCode,
     })
     .from(quotes)
     .leftJoin(contacts, eq(quotes.contactId, contacts.id))
@@ -164,130 +208,580 @@ export async function GET(
         viewedAt: quote.viewedAt ?? now,
         lastViewedAt: now,
         viewCount: sql`${quotes.viewCount} + 1`,
-        updatedAt: now
+        updatedAt: now,
       })
       .where(eq(quotes.id, quote.id))
       .returning({
         viewedAt: quotes.viewedAt,
         lastViewedAt: quotes.lastViewedAt,
-        viewCount: quotes.viewCount
+        viewCount: quotes.viewCount,
       });
     if (viewed) {
       responseQuote = {
         ...quote,
         viewedAt: viewed.viewedAt,
         lastViewedAt: viewed.lastViewedAt,
-        viewCount: viewed.viewCount
+        viewCount: viewed.viewCount,
       };
     }
   }
 
   return NextResponse.json({
-    quote: mapPublicQuote(responseQuote)
+    quote: mapPublicQuote(responseQuote),
   });
 }
 
 export async function POST(
   request: NextRequest,
-  context: { params: Promise<{ token: string }> }
+  context: { params: Promise<{ token: string }> },
 ): Promise<Response> {
   const { token } = await context.params;
   if (!token) {
     return NextResponse.json({ error: "missing_token" }, { status: 400 });
   }
 
-  const parsedBody = PublicQuoteActionSchema.safeParse(await request.json().catch(() => ({})));
-  if (!parsedBody.success) {
+  const idempotencyKey = normalizePublicQuoteIdempotencyKey(
+    request.headers.get("idempotency-key"),
+  );
+  if (!idempotencyKey) {
     return NextResponse.json(
-      { error: "invalid_payload", details: parsedBody.error.flatten() },
-      { status: 400 }
+      {
+        ok: false,
+        error: "idempotency_key_required",
+        message: "Refresh the quote page before trying this action again.",
+      },
+      { status: 422 },
     );
   }
 
+  const parsedBody = PublicQuoteActionSchema.safeParse(
+    await request.json().catch(() => ({})),
+  );
+  if (!parsedBody.success) {
+    return NextResponse.json(
+      { error: "invalid_payload", details: parsedBody.error.flatten() },
+      { status: 400 },
+    );
+  }
+
+  const action = parsedBody.data.decision ? "decision" : "refresh";
+  const normalizedReason = parsedBody.data.reason || null;
+  const normalizedNotes = parsedBody.data.notes || null;
+  const keyHash = publicQuoteMutationKeyHash(idempotencyKey);
+  const requestHash = publicQuoteMutationRequestHash({
+    action,
+    decision: parsedBody.data.decision,
+    reason: normalizedReason,
+    notes: normalizedNotes,
+  });
+  const correlationId = publicCorrelationId(request);
   const db = getDb();
-  const rows = await db
-    .select({
-      id: quotes.id,
-      status: quotes.status,
-      expiresAt: quotes.expiresAt
-    })
-    .from(quotes)
-    .where(eq(quotes.shareToken, token))
-    .limit(1);
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [quote] = await tx
+        .select({
+          id: quotes.id,
+          contactId: quotes.contactId,
+          status: quotes.status,
+          revision: quotes.revision,
+          expiresAt: quotes.expiresAt,
+          refreshRequestedAt: quotes.refreshRequestedAt,
+        })
+        .from(quotes)
+        .where(eq(quotes.shareToken, token))
+        .for("update")
+        .limit(1);
 
-  const quote = rows[0];
-  if (!quote) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
-  }
+      if (!quote) return { kind: "not_found" as const };
 
-  const nowMs = Date.now();
-  const expired = quote.expiresAt ? quote.expiresAt.getTime() < nowMs : false;
-  if (parsedBody.data.action === "refresh") {
-    const requestedAt = new Date();
-    const [updated] = await db
-      .update(quotes)
-      .set({ refreshRequestedAt: requestedAt, updatedAt: requestedAt })
-      .where(eq(quotes.id, quote.id))
-      .returning({ id: quotes.id, refreshRequestedAt: quotes.refreshRequestedAt });
-    if (!updated) {
-      return NextResponse.json({ error: "update_failed" }, { status: 500 });
-    }
-    return NextResponse.json({
-      ok: true,
-      quoteId: updated.id,
-      refreshRequestedAt: updated.refreshRequestedAt?.toISOString() ?? requestedAt.toISOString()
+      const [receipt] = await tx
+        .select({
+          requestHash: publicQuoteMutationReceipts.requestHash,
+          responseStatus: publicQuoteMutationReceipts.responseStatus,
+          responseBody: publicQuoteMutationReceipts.responseBody,
+          expiresAt: publicQuoteMutationReceipts.expiresAt,
+        })
+        .from(publicQuoteMutationReceipts)
+        .where(
+          and(
+            eq(publicQuoteMutationReceipts.quoteId, quote.id),
+            eq(publicQuoteMutationReceipts.action, action),
+            eq(publicQuoteMutationReceipts.keyHash, keyHash),
+          ),
+        )
+        .limit(1);
+      if (receipt) {
+        if (receipt.requestHash !== requestHash) {
+          await tx.insert(auditLogs).values({
+            actorType: "system",
+            actorLabel: "public-quote-capability",
+            correlationId,
+            outcome: "failed",
+            surface: "/quote/[token]",
+            idempotencyKeyHash: keyHash,
+            action: `quote.public_${action}`,
+            entityType: "quote",
+            entityId: quote.id,
+            meta: sanitizeAuditMetadata({
+              reason: "idempotency_key_reused_with_different_request",
+              source: "customer",
+              capabilityTokenStored: false,
+            }),
+          });
+          return { kind: "idempotency_conflict" as const };
+        }
+        if (receipt.expiresAt.getTime() <= Date.now()) {
+          await tx.insert(auditLogs).values({
+            actorType: "system",
+            actorLabel: "public-quote-capability",
+            correlationId,
+            outcome: "failed",
+            surface: "/quote/[token]",
+            idempotencyKeyHash: keyHash,
+            action: `quote.public_${action}`,
+            entityType: "quote",
+            entityId: quote.id,
+            meta: sanitizeAuditMetadata({
+              reason: "idempotency_key_expired",
+              source: "customer",
+              capabilityTokenStored: false,
+            }),
+          });
+          return { kind: "idempotency_expired" as const };
+        }
+        if (!isPublicQuoteMutationSuccessBody(receipt.responseBody)) {
+          throw new Error("public_quote_receipt_corrupt");
+        }
+        return {
+          kind: "replay" as const,
+          status: receipt.responseStatus,
+          body: receipt.responseBody,
+        };
+      }
+
+      if (parsedBody.data.action === "refresh") {
+        const refreshAllowed =
+          quote.status === "sent" &&
+          quote.expiresAt !== null &&
+          quote.expiresAt.getTime() < Date.now() &&
+          quote.refreshRequestedAt === null;
+        if (!refreshAllowed) {
+          await tx.insert(auditLogs).values({
+            actorType: "system",
+            actorLabel: "public-quote-capability",
+            correlationId,
+            outcome: "failed",
+            surface: "/quote/[token]",
+            idempotencyKeyHash: keyHash,
+            action: "quote.public_refresh",
+            entityType: "quote",
+            entityId: quote.id,
+            meta: sanitizeAuditMetadata({
+              reason: quote.refreshRequestedAt
+                ? "refresh_already_requested"
+                : quote.status !== "sent"
+                  ? "quote_not_open_for_refresh"
+                  : "quote_not_expired",
+              source: "customer",
+              capabilityTokenStored: false,
+            }),
+          });
+          return { kind: "refresh_not_allowed" as const };
+        }
+        const requestedAt = new Date();
+        const nextRevision = quote.revision + 1;
+        const [updated] = await tx
+          .update(quotes)
+          .set({
+            refreshRequestedAt: requestedAt,
+            revision: nextRevision,
+            updatedAt: requestedAt,
+          })
+          .where(
+            and(eq(quotes.id, quote.id), eq(quotes.revision, quote.revision)),
+          )
+          .returning({
+            id: quotes.id,
+            revision: quotes.revision,
+            refreshRequestedAt: quotes.refreshRequestedAt,
+          });
+        if (!updated) {
+          await tx.insert(auditLogs).values({
+            actorType: "system",
+            actorLabel: "public-quote-capability",
+            correlationId,
+            outcome: "failed",
+            surface: "/quote/[token]",
+            idempotencyKeyHash: keyHash,
+            action: "quote.public_refresh",
+            entityType: "quote",
+            entityId: quote.id,
+            meta: sanitizeAuditMetadata({
+              reason: "concurrent_quote_change",
+              source: "customer",
+              capabilityTokenStored: false,
+            }),
+          });
+          return { kind: "conflict" as const };
+        }
+        const responseBody = {
+          ok: true as const,
+          quoteId: updated.id,
+          revision: updated.revision,
+          refreshRequestedAt:
+            updated.refreshRequestedAt?.toISOString() ??
+            requestedAt.toISOString(),
+        };
+        await tx.insert(auditLogs).values({
+          actorType: "system",
+          actorLabel: "public-quote-capability",
+          correlationId,
+          outcome: "succeeded",
+          surface: "/quote/[token]",
+          idempotencyKeyHash: keyHash,
+          action: "quote.public_refresh",
+          entityType: "quote",
+          entityId: quote.id,
+          meta: sanitizeAuditMetadata({
+            source: "customer",
+            beforeRevision: quote.revision,
+            afterRevision: updated.revision,
+            capabilityTokenStored: false,
+          }),
+          createdAt: requestedAt,
+        });
+        await tx.insert(publicQuoteMutationReceipts).values({
+          quoteId: quote.id,
+          action,
+          keyHash,
+          requestHash,
+          responseStatus: 200,
+          responseBody,
+          createdAt: requestedAt,
+          expiresAt: new Date(
+            requestedAt.getTime() + PUBLIC_QUOTE_MUTATION_RECEIPT_TTL_MS,
+          ),
+        });
+        return { kind: "refreshed" as const, body: responseBody };
+      }
+
+      const decision = parsedBody.data.decision;
+      if (!decision) return { kind: "missing_decision" as const };
+      if (quote.status === "accepted" || quote.status === "declined") {
+        await tx.insert(auditLogs).values({
+          actorType: "system",
+          actorLabel: "public-quote-capability",
+          correlationId,
+          outcome: "failed",
+          surface: "/quote/[token]",
+          idempotencyKeyHash: keyHash,
+          action: "quote.public_decision",
+          entityType: "quote",
+          entityId: quote.id,
+          meta: sanitizeAuditMetadata({
+            reason: "quote_already_terminal",
+            existingStatus: quote.status,
+            requestedDecision: decision,
+            source: "customer",
+            capabilityTokenStored: false,
+          }),
+        });
+        return {
+          kind: "already_decided" as const,
+          status: quote.status,
+        };
+      }
+      if (quote.status !== "sent") {
+        await tx.insert(auditLogs).values({
+          actorType: "system",
+          actorLabel: "public-quote-capability",
+          correlationId,
+          outcome: "failed",
+          surface: "/quote/[token]",
+          idempotencyKeyHash: keyHash,
+          action: "quote.public_decision",
+          entityType: "quote",
+          entityId: quote.id,
+          meta: sanitizeAuditMetadata({
+            reason: "quote_not_issued",
+            existingStatus: quote.status,
+            source: "customer",
+            capabilityTokenStored: false,
+          }),
+        });
+        return { kind: "not_issued" as const };
+      }
+      const expired = quote.expiresAt
+        ? quote.expiresAt.getTime() < Date.now()
+        : false;
+      if (expired) {
+        await tx.insert(auditLogs).values({
+          actorType: "system",
+          actorLabel: "public-quote-capability",
+          correlationId,
+          outcome: "failed",
+          surface: "/quote/[token]",
+          idempotencyKeyHash: keyHash,
+          action: "quote.public_decision",
+          entityType: "quote",
+          entityId: quote.id,
+          meta: sanitizeAuditMetadata({
+            reason: "quote_expired",
+            source: "customer",
+            capabilityTokenStored: false,
+          }),
+        });
+        return { kind: "expired" as const };
+      }
+
+      const decisionAt = new Date();
+      const noteParts = [
+        normalizedReason ? `Reason: ${normalizedReason}` : null,
+        normalizedNotes,
+      ].filter((part): part is string => Boolean(part));
+      const nextRevision = quote.revision + 1;
+      const [updated] = await tx
+        .update(quotes)
+        .set({
+          status: decision,
+          decisionAt,
+          decisionNotes: noteParts.length ? noteParts.join("\n") : null,
+          refreshRequestedAt: null,
+          revision: nextRevision,
+          updatedAt: decisionAt,
+        })
+        .where(
+          and(eq(quotes.id, quote.id), eq(quotes.revision, quote.revision)),
+        )
+        .returning({
+          id: quotes.id,
+          status: quotes.status,
+          revision: quotes.revision,
+          decisionAt: quotes.decisionAt,
+          decisionNotes: quotes.decisionNotes,
+        });
+      if (!updated) {
+        await tx.insert(auditLogs).values({
+          actorType: "system",
+          actorLabel: "public-quote-capability",
+          correlationId,
+          outcome: "failed",
+          surface: "/quote/[token]",
+          idempotencyKeyHash: keyHash,
+          action: "quote.public_decision",
+          entityType: "quote",
+          entityId: quote.id,
+          meta: sanitizeAuditMetadata({
+            reason: "concurrent_quote_change",
+            source: "customer",
+            capabilityTokenStored: false,
+          }),
+        });
+        return { kind: "conflict" as const };
+      }
+
+      const targetStage = decision === "accepted" ? "won" : "lost";
+      await tx
+        .insert(crmPipeline)
+        .values({
+          contactId: quote.contactId,
+          stage: targetStage,
+          updatedAt: decisionAt,
+        })
+        .onConflictDoUpdate({
+          target: crmPipeline.contactId,
+          set: { stage: targetStage, updatedAt: decisionAt },
+        });
+      const contactLeadIds = tx
+        .select({ id: leads.id })
+        .from(leads)
+        .where(eq(leads.contactId, quote.contactId));
+      await tx
+        .update(leadAutomationStates)
+        .set({
+          followupState: "stopped",
+          followupStep: 0,
+          nextFollowupAt: null,
+          updatedAt: decisionAt,
+        })
+        .where(inArray(leadAutomationStates.leadId, contactLeadIds));
+      await tx.delete(outboxEvents).where(
+        and(
+          eq(outboxEvents.type, "followup.send"),
+          isNull(outboxEvents.processedAt),
+          isNull(outboxEvents.quarantinedAt),
+          sql`(${outboxEvents.payload}->>'leadId') IN (
+              SELECT ${leads.id}::text
+              FROM ${leads}
+              WHERE ${leads.contactId} = ${quote.contactId}
+            )`,
+        ),
+      );
+
+      const [outbox] = await tx
+        .insert(outboxEvents)
+        .values({
+          type: "quote.decision",
+          payload: {
+            quoteId: updated.id,
+            decision,
+            source: "customer",
+            notes: updated.decisionNotes,
+          },
+        })
+        .returning({ id: outboxEvents.id });
+      if (!outbox?.id) {
+        throw new Error("public_quote_decision_outbox_not_persisted");
+      }
+      const responseBody = {
+        ok: true as const,
+        quoteId: updated.id,
+        status: updated.status,
+        revision: updated.revision,
+        decisionAt: updated.decisionAt?.toISOString() ?? null,
+      };
+      await tx.insert(auditLogs).values({
+        actorType: "system",
+        actorLabel: "public-quote-capability",
+        correlationId,
+        outcome: "succeeded",
+        surface: "/quote/[token]",
+        idempotencyKeyHash: keyHash,
+        action: "quote.public_decision",
+        entityType: "quote",
+        entityId: quote.id,
+        meta: sanitizeAuditMetadata({
+          source: "customer",
+          decision,
+          beforeRevision: quote.revision,
+          afterRevision: updated.revision,
+          pipelineStage: targetStage,
+          outboxEventId: outbox.id,
+          hasReason: Boolean(normalizedReason),
+          hasNotes: Boolean(normalizedNotes),
+          capabilityTokenStored: false,
+        }),
+        createdAt: decisionAt,
+      });
+      await tx.insert(publicQuoteMutationReceipts).values({
+        quoteId: quote.id,
+        action,
+        keyHash,
+        requestHash,
+        responseStatus: 200,
+        responseBody,
+        createdAt: decisionAt,
+        expiresAt: new Date(
+          decisionAt.getTime() + PUBLIC_QUOTE_MUTATION_RECEIPT_TTL_MS,
+        ),
+      });
+      return { kind: "decided" as const, body: responseBody };
     });
-  }
 
-  const decision = parsedBody.data.decision;
-  if (!decision) {
-    return NextResponse.json({ error: "missing_decision" }, { status: 400 });
-  }
-
-  if (expired) {
-    return NextResponse.json({ error: "expired" }, { status: 410 });
-  }
-
-  const decisionAt = new Date();
-  const noteParts = [
-    parsedBody.data.reason ? `Reason: ${parsedBody.data.reason}` : null,
-    parsedBody.data.notes?.trim() ? parsedBody.data.notes.trim() : null
-  ].filter((part): part is string => Boolean(part));
-  const [updated] = await db
-    .update(quotes)
-    .set({
-      status: decision,
-      decisionAt,
-      decisionNotes: noteParts.length ? noteParts.join("\n") : null,
-      refreshRequestedAt: null,
-      updatedAt: decisionAt
-    })
-    .where(eq(quotes.id, quote.id))
-    .returning({
-      id: quotes.id,
-      status: quotes.status,
-      decisionAt: quotes.decisionAt,
-      decisionNotes: quotes.decisionNotes
-    });
-  if (!updated) {
-    return NextResponse.json({ error: "update_failed" }, { status: 500 });
-  }
-
-  await db.insert(outboxEvents).values({
-    type: "quote.decision",
-    payload: {
-      quoteId: updated.id,
-      decision,
-      source: "customer",
-      notes: noteParts.length ? noteParts.join("\n") : null
+    switch (result.kind) {
+      case "not_found":
+        return NextResponse.json({ error: "not_found" }, { status: 404 });
+      case "missing_decision":
+        return NextResponse.json(
+          { error: "missing_decision" },
+          { status: 400 },
+        );
+      case "idempotency_conflict":
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "idempotency_key_reused",
+            message:
+              "This request key was already used for different quote details.",
+          },
+          { status: 409, headers: { "x-correlation-id": correlationId } },
+        );
+      case "idempotency_expired":
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "idempotency_key_expired",
+            message: "Refresh the quote page before trying again.",
+          },
+          { status: 409, headers: { "x-correlation-id": correlationId } },
+        );
+      case "replay":
+        return NextResponse.json(result.body, {
+          status: result.status,
+          headers: {
+            "idempotency-replayed": "true",
+            "x-correlation-id": correlationId,
+          },
+        });
+      case "already_decided":
+        return NextResponse.json(
+          { error: "already_decided", status: result.status },
+          { status: 409 },
+        );
+      case "not_issued":
+        return NextResponse.json(
+          { error: "quote_not_issued" },
+          { status: 409 },
+        );
+      case "refresh_not_allowed":
+        return NextResponse.json(
+          {
+            error: "refresh_not_allowed",
+            message: "This quote is not eligible for another refresh request.",
+          },
+          { status: 409 },
+        );
+      case "expired":
+        return NextResponse.json({ error: "expired" }, { status: 410 });
+      case "conflict":
+        return NextResponse.json(
+          { error: "quote_changed", retryable: true },
+          { status: 409 },
+        );
+      case "refreshed":
+        return NextResponse.json(result.body, {
+          headers: { "x-correlation-id": correlationId },
+        });
+      case "decided":
+        return NextResponse.json(result.body, {
+          headers: { "x-correlation-id": correlationId },
+        });
     }
-  });
-
-  return NextResponse.json({
-    ok: true,
-    quoteId: updated.id,
-    status: updated.status,
-    decisionAt: updated.decisionAt ? updated.decisionAt.toISOString() : null,
-    decisionNotes: updated.decisionNotes
-  });
+  } catch {
+    // The business transaction has already rolled back. Record only a safe,
+    // token-free failure if the database remains available; audit failure must
+    // never change the truthful 500 response.
+    await (async () => {
+      try {
+        const [quote] = await db
+          .select({ id: quotes.id })
+          .from(quotes)
+          .where(eq(quotes.shareToken, token))
+          .limit(1);
+        if (!quote) return;
+        await db.insert(auditLogs).values({
+          actorType: "system",
+          actorLabel: "public-quote-capability",
+          correlationId,
+          outcome: "failed",
+          surface: "/quote/[token]",
+          idempotencyKeyHash: keyHash,
+          action: `quote.public_${action}`,
+          entityType: "quote",
+          entityId: quote.id,
+          meta: sanitizeAuditMetadata({
+            reason: "unexpected_mutation_failure",
+            source: "customer",
+            capabilityTokenStored: false,
+          }),
+        });
+      } catch {
+        // A failed action remains failed even if failure evidence is unavailable.
+      }
+    })();
+    return NextResponse.json(
+      { error: "update_failed" },
+      { status: 500, headers: { "x-correlation-id": correlationId } },
+    );
+  }
 }

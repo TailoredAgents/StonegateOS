@@ -18,10 +18,19 @@ describe("appointment media object storage", () => {
     "MEDIA_OBJECT_AUTO_CREATE_BUCKET",
     "LOCALSTACK_ENDPOINT",
     "R2_ACCOUNT_ID",
+    "NODE_ENV",
+    "E2E_RUN_ID",
+    "TEAM_CRM_AUDIT_MODE",
   ] as const;
   const original = Object.fromEntries(
     keys.map((key) => [key, process.env[key]]),
   ) as Record<(typeof keys)[number], string | undefined>;
+
+  beforeEach(() => {
+    process.env["NODE_ENV"] = "test";
+    delete process.env["E2E_RUN_ID"];
+    delete process.env["TEAM_CRM_AUDIT_MODE"];
+  });
 
   afterEach(() => {
     resetMediaStorageForTests();
@@ -128,5 +137,75 @@ describe("appointment media object storage", () => {
     } finally {
       send.mockRestore();
     }
+  });
+
+  it("rejects local endpoints and bucket auto-create in ordinary production", () => {
+    process.env["NODE_ENV"] = "production";
+    process.env["MEDIA_OBJECT_ENDPOINT"] = "http://localhost:4566";
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"] = "0";
+    expect(() => readMediaStorageConfig()).toThrow(
+      "media_storage_local_endpoint_forbidden_in_production",
+    );
+
+    process.env["MEDIA_OBJECT_ENDPOINT"] =
+      "https://account.r2.cloudflarestorage.com";
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"] = "1";
+    expect(() => readMediaStorageConfig()).toThrow(
+      "media_storage_auto_create_forbidden_in_production",
+    );
+  });
+
+  it("allows LocalStack auto-create for a dual-sentinel production-build audit", () => {
+    process.env["NODE_ENV"] = "production";
+    process.env["E2E_RUN_ID"] = "production-build-audit";
+    process.env["TEAM_CRM_AUDIT_MODE"] = "1";
+    process.env["MEDIA_OBJECT_ENDPOINT"] = "http://127.0.0.1:4566";
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"] = "1";
+
+    expect(readMediaStorageConfig()).toMatchObject({
+      endpoint: "http://127.0.0.1:4566",
+      autoCreateBucket: true,
+    });
+  });
+
+  it.each([
+    { E2E_RUN_ID: "production-build-audit", TEAM_CRM_AUDIT_MODE: undefined },
+    { E2E_RUN_ID: undefined, TEAM_CRM_AUDIT_MODE: "1" },
+    {
+      E2E_RUN_ID: "production-build-audit",
+      TEAM_CRM_AUDIT_MODE: "true",
+    },
+  ])("rejects partial production test sentinels %j", (sentinels) => {
+    process.env["NODE_ENV"] = "production";
+    if (sentinels.E2E_RUN_ID === undefined) {
+      delete process.env["E2E_RUN_ID"];
+    } else {
+      process.env["E2E_RUN_ID"] = sentinels.E2E_RUN_ID;
+    }
+    if (sentinels.TEAM_CRM_AUDIT_MODE === undefined) {
+      delete process.env["TEAM_CRM_AUDIT_MODE"];
+    } else {
+      process.env["TEAM_CRM_AUDIT_MODE"] = sentinels.TEAM_CRM_AUDIT_MODE;
+    }
+    process.env["MEDIA_OBJECT_ENDPOINT"] =
+      "https://account.r2.cloudflarestorage.com";
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"] = "0";
+
+    expect(() => readMediaStorageConfig()).toThrow(
+      "Production provider-test runtime requires both",
+    );
+  });
+
+  it("refuses public object storage in a controlled provider-test runtime", () => {
+    process.env["NODE_ENV"] = "production";
+    process.env["E2E_RUN_ID"] = "production-build-audit";
+    process.env["TEAM_CRM_AUDIT_MODE"] = "1";
+    process.env["MEDIA_OBJECT_ENDPOINT"] =
+      "https://account.r2.cloudflarestorage.com";
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"] = "0";
+
+    expect(() => readMediaStorageConfig()).toThrow(
+      "media_storage_test_runtime_requires_local_endpoint",
+    );
   });
 });

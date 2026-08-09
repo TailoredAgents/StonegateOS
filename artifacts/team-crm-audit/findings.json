@@ -1,0 +1,920 @@
+{
+  "schema": "AuditFindingEnvelope{findings:AuditFinding[]}",
+  "generatedAt": "2026-08-05",
+  "findings": [
+    {
+      "id": "TEAM-AUTH-001",
+      "surface": "Login, shell, and all owner routes",
+      "subview": "Legacy owner and crew sessions",
+      "role": "anonymous attacker",
+      "viewport": "all",
+      "dataState": "any",
+      "category": "authentication",
+      "severity": "P0",
+      "confidence": "high-static",
+      "prerequisites": [
+        "Site has ADMIN_API_KEY and normal site-to-API connectivity"
+      ],
+      "reproduction": [
+        "Set Cookie: myst-admin-session=definitely-not-the-admin-key.",
+        "Request /team?tab=access or an owner /api/team/access route.",
+        "Observe that source logic treats cookie presence as owner and callAdminApi adds the genuine server key and owner actor role."
+      ],
+      "expected": "A fabricated legacy cookie is rejected before page rendering or upstream access.",
+      "actual": "Any nonempty legacy admin cookie is accepted as owner; the equivalent crew cookie is accepted as crew.",
+      "evidence": [
+        "apps/site/src/app/team/page.tsx:145-158",
+        "apps/site/src/app/api/team/auth.ts:18-20",
+        "apps/site/src/app/team/lib/api.ts:69-85,114-147",
+        "apps/site/src/app/api/team/access/roles/route.ts:14-15,45-51,77-80",
+        "apps/api/src/lib/permissions.ts:140-143",
+        "apps/site/middleware.ts:32-65"
+      ],
+      "impact": "Authentication bypass can expose PII and permit owner-only financial, access, messaging, automation, export, and destructive actions.",
+      "likelyCause": "Duplicated break-glass cookie presence checks instead of a centralized verified principal.",
+      "recommendation": "Centralize session verification, validate or remove legacy cookies, and reject before any server-side privileged helper runs.",
+      "effort": "M",
+      "acceptanceCriteria": [
+        "Arbitrary and empty admin/crew cookie values redirect to /team/login and return 401 from JSON routes.",
+        "Only a cryptographically verified, unexpired, active principal reaches owner or crew content.",
+        "The upstream API is not called when verification fails.",
+        "Regression tests cover page loads, exports, uploads, proxy routes, and representative mutations."
+      ]
+    },
+    {
+      "id": "TEAM-AUTHZ-002",
+      "surface": "Same-origin /api/team proxies, server actions, and auxiliary instant-quote page",
+      "subview": "Media analysis, agent memory/next action, quote photos, Inbox suggestion, instant-quote detail/list",
+      "role": "anonymous or identity-less human request",
+      "viewport": "n/a",
+      "dataState": "known contact/thread UUID for resource-specific proxies; any path segment for the instant-quote page/list",
+      "category": "authorization",
+      "severity": "P0",
+      "confidence": "high-static",
+      "prerequisites": [
+        "Site ADMIN_API_KEY and Site-to-API connectivity",
+        "Known resource UUID only for resource-specific probes",
+        "AI/provider configuration only for cost-generating probes"
+      ],
+      "reproduction": [
+        "Without cookies, call /api/team/contacts/media-analysis?contactId=<known-id>.",
+        "Repeat against sales-agent-memory, sales-agent-next-action, quote-photos, and Inbox suggestion routes.",
+        "Without cookies, request /team/instant-quotes/not-a-real-id; the page has no auth layout/guard and still renders a privileged latest-25 list request.",
+        "Use a Delete form from that latest-25 list; no authenticated principal is checked before deleteInstantQuoteAction calls the key-only DELETE endpoint.",
+        "Observe that handlers parse parameters and call callAdminApi without requireTeamRole.",
+        "Observe that key-only upstreams accept the injected server key; permission-gated upstreams return full access when actor role and ID are both absent."
+      ],
+      "expected": "Every human-facing proxy and server action authenticates and authorizes before input parsing or upstream access; missing identity fails closed.",
+      "actual": "Multiple public proxies and the auxiliary page call callAdminApi without user authentication. Key-only upstreams accept the injected server key unconditionally; permission-gated upstreams additionally fail open when both actor role and actor ID are absent (an environment-provided default actor can alter that second path).",
+      "evidence": [
+        "apps/site/src/app/api/team/contacts/media-analysis/route.ts:8-45",
+        "apps/site/src/app/api/team/contacts/quote-photos/route.ts:4-17",
+        "apps/site/src/app/api/team/contacts/sales-agent-memory/route.ts:8-45",
+        "apps/site/src/app/api/team/contacts/sales-agent-next-action/route.ts:76-310",
+        "apps/site/src/app/api/team/inbox/threads/[threadId]/suggest/route.ts:8-30",
+        "apps/site/src/app/team/instant-quotes/[id]/page.tsx:1-12",
+        "apps/site/src/app/layout.tsx:35-39",
+        "apps/site/src/app/team/components/InstantQuoteDetail.tsx:53-62",
+        "apps/site/src/app/team/components/InstantQuotesSection.tsx:900-910,1440-1445",
+        "apps/site/src/app/team/components/DeleteInstantQuoteForm.tsx:16-24",
+        "apps/site/src/app/team/actions.ts:518-545",
+        "apps/api/app/api/admin/instant-quotes/route.ts",
+        "apps/api/app/api/admin/instant-quotes/[id]/route.ts:11-33",
+        "apps/api/src/lib/permissions.ts:131-138,200-206",
+        "apps/site/src/app/team/actions.ts:2758-2802"
+      ],
+      "impact": "The source establishes unauthenticated PII/quote-analytics disclosure and an unauthenticated instant-quote deletion path; the sibling route also inherits the root's index/follow default because /team has no shared noindex layout. Other exposed proxies can trigger AI cost or draft, automation, and task mutations; outbound messaging through separately unguarded action references remains runtime-conditional.",
+      "likelyCause": "The internal admin credential is reused as end-user authorization and the permission layer deliberately fails open for missing actor headers.",
+      "recommendation": "Require one verified user/service principal everywhere, fail closed, and enforce permissions on the upstream endpoint as defense in depth.",
+      "effort": "L",
+      "acceptanceCriteria": [
+        "All /api/team routes return 401 before parameter validation for anonymous requests.",
+        "Anonymous instant-quote detail/list requests redirect or return 401 before any customer or aggregate fetch.",
+        "Anonymous users cannot render or invoke instant-quote delete forms, and the upstream DELETE independently requires an authorized human principal.",
+        "A shared authenticated-product layout applies noindex/nofollow to every /team route, including auxiliary detail pages.",
+        "Authenticated denied users receive 403 and no upstream request occurs.",
+        "Human requests with no actor role/ID fail closed; workers use explicit service principals.",
+        "Direct server-action tests reject anonymous and underprivileged callers.",
+        "Contacts, properties, pipeline, and CRM task APIs enforce explicit read/write permissions."
+      ]
+    },
+    {
+      "id": "TEAM-AUTHZ-003",
+      "surface": "All /team navigation and team proxies",
+      "subview": "sales, read_only, and custom roles",
+      "role": "sales, read_only, custom grant/deny",
+      "viewport": "all",
+      "dataState": "valid active session",
+      "category": "role-based access",
+      "severity": "P0",
+      "confidence": "high-static",
+      "prerequisites": [
+        "Active session for a non-owner/non-office/non-crew role"
+      ],
+      "reproduction": [
+        "Create a valid sales, read_only, or custom role and session.",
+        "Load /team: page authentication accepts only owner, office, or crew and redirects.",
+        "POST directly to /api/team/contacts with that valid low-privilege session: resolveTeamRoleFromRequest coerces the role to office for the proxy's local gate.",
+        "Observe that callAdminApi forwards the original member/role, but the upstream contact create endpoint checks only the shared key and performs no granular permission check."
+      ],
+      "expected": "The exact role and effective grants/denies govern navigation, direct URLs, reads, mutations, exports, and current sessions.",
+      "actual": "Supported roles are locked out of the page yet coerced to office for site-proxy role gates. The original principal reaches upstream, but key-only core APIs still accept unauthorized reads and mutations.",
+      "evidence": [
+        "apps/site/src/app/team/page.tsx:150-158,161-220",
+        "apps/site/src/app/api/team/auth.ts:28-40",
+        "apps/site/src/app/team/lib/api.ts:69-147",
+        "apps/api/app/api/admin/roles/route.ts:9-79,128-170",
+        "apps/site/src/app/api/team/contacts/route.ts:23-28,52-59",
+        "apps/api/app/api/admin/contacts/route.ts:96-101,499-507",
+        "apps/api/app/api/admin/contacts/[contactId]/route.ts:31-34,238-241"
+      ],
+      "impact": "Least privilege is unreliable: legitimate staff are blocked while low-privilege users may reach office-level contact reads or mutations through proxies.",
+      "likelyCause": "Three separate authorization models—role slug gates, effective permissions, and internal-key API gates—drift independently.",
+      "recommendation": "Make effective permissions the sole source of truth and preserve exact role/principal data through every hop.",
+      "effort": "XL",
+      "acceptanceCriteria": [
+        "Owner, office, sales, crew, read-only, and custom roles can authenticate without coercion.",
+        "Deny wins immediately in navigation, direct URLs, reads, mutations, exports, and existing sessions.",
+        "No role slug is implicitly promoted to office.",
+        "A generated role × permission × tab × action integration matrix passes."
+      ]
+    },
+    {
+      "id": "TEAM-AUTHZ-004",
+      "surface": "Commissions and Contacts",
+      "subview": "Payout settings/runs/overrides/reimbursements and note edit/delete",
+      "role": "valid team owner or team office",
+      "viewport": "all",
+      "dataState": "normal",
+      "category": "workflow authorization",
+      "severity": "P1",
+      "confidence": "high-static",
+      "prerequisites": [
+        "Valid team session without a legacy admin/crew cookie"
+      ],
+      "reproduction": [
+        "Sign in as a team owner and open Commissions.",
+        "Submit payout-run or settings forms.",
+        "Observe that the proxy checks only myst-admin-session and rejects the valid team session.",
+        "As a valid team user, create a contact note and then attempt edit/delete; those handlers also check only legacy cookies."
+      ],
+      "expected": "A valid team principal can complete every action allowed by effective permissions without a second legacy login.",
+      "actual": "The UI renders, then selected mutations return unauthorized or Owner login required.",
+      "evidence": [
+        "apps/site/src/app/team/page.tsx:150-153,849-854",
+        "apps/site/src/app/api/team/commissions/payout-runs/route.ts:10-23",
+        "apps/site/src/app/api/team/commissions/settings/route.ts:22-35",
+        "apps/site/src/app/api/team/commissions/crew-pool-overrides/route.ts:19-32",
+        "apps/site/src/app/api/team/commissions/payout-runs/[payoutRunId]/reimbursements/route.ts:28-44",
+        "apps/site/src/app/api/team/contacts/notes/[noteId]/route.ts:24-45,120-141"
+      ],
+      "impact": "Critical financial and CRM maintenance workflows are blocked for the supported login path.",
+      "likelyCause": "Migration from break-glass cookies to team sessions is incomplete.",
+      "recommendation": "Route every mutation through the centralized principal/permission helper and remove route-local cookie checks.",
+      "effort": "M",
+      "acceptanceCriteria": [
+        "A team owner can create, adjust, lock, pay, and reimburse a payout run without a legacy cookie; report/export routes retain their existing team-owner support.",
+        "Allowed team users can edit/delete notes and denied users receive 403.",
+        "All actions record the team member actor, not team-console."
+      ]
+    },
+    {
+      "id": "TEAM-AUTHZ-005",
+      "surface": "Navigation and tab rendering",
+      "subview": "Quotes, Policy, Automation, Marketing, SEO, Sales Log, Audit",
+      "role": "crew and office",
+      "viewport": "all",
+      "dataState": "normal",
+      "category": "role-based access",
+      "severity": "P1",
+      "confidence": "high-static",
+      "prerequisites": ["Role default permissions"],
+      "reproduction": [
+        "As office, navigate to Policy, Automation, or Audit: permissions allow the tab but render branches require owner.",
+        "As crew, open Quotes: nav requires appointments.read and render allows crew, while quote APIs require quote permissions the default crew lacks."
+      ],
+      "expected": "One permission map controls visibility, rendering, and the API action set.",
+      "actual": "Navigation can expose blank or nonfunctional surfaces because nav requirements, role render gates, and API permissions disagree.",
+      "evidence": [
+        "apps/site/src/app/team/page.tsx:161-211,413-418,480-531,767-775,841-917",
+        "apps/api/app/api/quotes/route.ts:190-195,288-293"
+      ],
+      "impact": "Users encounter blank pages or visible workflows that fail after effort; support cannot reason reliably about access.",
+      "likelyCause": "Permission metadata is duplicated in tab declarations, JSX role checks, and API routes.",
+      "recommendation": "Generate nav and render policy from the same permission contract used by the API.",
+      "effort": "L",
+      "acceptanceCriteria": [
+        "Every visible tab renders a meaningful allowed state for the current principal.",
+        "Direct URL behavior matches navigation visibility.",
+        "Crew quote visibility and available actions match effective quote permissions.",
+        "Denied tabs render a deliberate 403/redirect state, never an empty main region."
+      ]
+    },
+    {
+      "id": "TEAM-REL-006",
+      "surface": "Calendar and Quotes",
+      "subview": "Appointment status/notes and quote decision",
+      "role": "allowed mutating user",
+      "viewport": "all",
+      "dataState": "upstream non-2xx response",
+      "category": "resilience and feedback",
+      "severity": "P1",
+      "confidence": "high-static",
+      "prerequisites": ["Upstream returns non-2xx without throwing"],
+      "reproduction": [
+        "Force appointment status, appointment note, or quote decision upstream response to 403/409/500.",
+        "Submit the action.",
+        "Observe that the response is not checked and a success flash is written."
+      ],
+      "expected": "Non-success responses preserve input/state and show an actionable error; the UI never claims success.",
+      "actual": "Selected actions unconditionally display Appointment updated, Note added, or Quote updated after any returned response.",
+      "evidence": [
+        "apps/site/src/app/team/actions.ts:97-129",
+        "apps/site/src/app/team/actions.ts:204-222",
+        "apps/site/src/app/team/actions.ts:476-493"
+      ],
+      "impact": "Staff can act on false state, miss failed notes or decisions, and create customer/revenue discrepancies.",
+      "likelyCause": "Early server actions predate the shared error-response pattern used by newer actions.",
+      "recommendation": "Require checked response helpers, preserve form state, and make retries idempotent.",
+      "effort": "S",
+      "acceptanceCriteria": [
+        "All mutations branch on response.ok and map 401/403/409/422/429/500/timeout distinctly.",
+        "No success flash appears when the database mutation did not commit.",
+        "Duplicate click and retry tests prove idempotency or safe conflict handling."
+      ]
+    },
+    {
+      "id": "TEAM-QUOTE-007",
+      "surface": "Orphaned auxiliary Instant Quote Detail (not mounted or linked from canonical /team)",
+      "subview": "Book from this quote",
+      "role": "intended staff user (route is anonymous under TEAM-AUTHZ-002)",
+      "viewport": "all",
+      "dataState": "valid instant quote",
+      "category": "functionality",
+      "severity": "P2",
+      "confidence": "high-static",
+      "prerequisites": ["A valid instant quote"],
+      "reproduction": [
+        "Open /team/instant-quotes/<id>.",
+        "Activate Book from this quote.",
+        "Observe that the link targets the same detail URL with prefill query parameters.",
+        "Observe that the page component accepts only params.id and never consumes searchParams."
+      ],
+      "expected": "The CTA enters a real booking flow with quote/contact/property data prefilled exactly once.",
+      "actual": "The CTA reloads the same detail/list page and ignores the prefill parameters.",
+      "evidence": [
+        "apps/site/src/app/team/components/InstantQuoteDetail.tsx:158-166",
+        "apps/site/src/app/team/instant-quotes/[id]/page.tsx:5-12",
+        "apps/site/src/app/team/page.tsx:1-51,406-539,727-925"
+      ],
+      "impact": "Users who reach the auxiliary surface cannot convert from its primary CTA. No canonical /team ingress is present, so primary-workflow reach is unproven without telemetry or staff evidence.",
+      "likelyCause": "The handoff route was never connected after the auxiliary detail page was introduced.",
+      "recommendation": "Handoff to the canonical booking workflow and consolidate instant quotes into Quotes.",
+      "effort": "M",
+      "acceptanceCriteria": [
+        "The CTA opens the canonical booking UI, not the same detail route.",
+        "Contact, property, scope, price, source quote, and attribution are prefilled and reviewable.",
+        "Successful booking links the appointment and quote and is idempotent on refresh."
+      ]
+    },
+    {
+      "id": "TEAM-DATA-008",
+      "surface": "Contacts and Merge Queue",
+      "subview": "Contact/property deletion and merge approval",
+      "role": "owner or allowed editor",
+      "viewport": "all",
+      "dataState": "record with linked appointments, quotes, tasks, messages, payments, or partner data",
+      "category": "destructive safety",
+      "severity": "P1",
+      "confidence": "high-static",
+      "prerequisites": ["A linked record"],
+      "reproduction": [
+        "Enter raw primary and duplicate contact UUIDs in Manual merge and submit; the form offers no identity/impact preview or confirmation.",
+        "Select a merge suggestion and activate Approve merge; no impact preview or confirmation is presented.",
+        "Approve and decline the same pending suggestion concurrently; both paths perform an unlocked read/status check and later updates do not predicate on status=pending.",
+        "Merge a source with AI-memory/next-action or partner user/rate/booking rows; mergeContacts moves only selected core rows and source deletion cascades the rest.",
+        "Delete a contact whose normalized phone is shared by another quote customer; the endpoint deletes every instant quote matching those digits.",
+        "Observe that the UI does not enumerate affected linked entities or a recovery path."
+      ],
+      "expected": "Destructive operations show exact affected entities, require explicit confirmation, enforce concurrency, audit the transaction, and document recovery.",
+      "actual": "Merge approval is one click; concurrent decisions are not compare-and-set; source-only AI/partner state cascades away; the merge suggestion itself cascades away instead of remaining a ledger; and contact deletion removes instant quotes by shared normalized phone rather than contact identity.",
+      "evidence": [
+        "apps/site/src/app/team/components/MergeQueueSection.tsx:120-173",
+        "apps/site/src/app/team/components/MergeQueueSection.tsx:62-100",
+        "apps/api/src/lib/merge-queue.ts:315-447",
+        "apps/api/app/api/admin/merge-suggestions/[suggestionId]/route.ts:38-110",
+        "apps/api/src/db/schema.ts:579-585,678-719,854-857,1022-1025,1108-1111,2125-2128",
+        "apps/api/app/api/admin/contacts/[contactId]/properties/[propertyId]/route.ts:149 onward",
+        "apps/api/app/api/admin/contacts/[contactId]/route.ts:253-299"
+      ],
+      "impact": "A mistaken or racing click can silently lose source-only AI/partner state, produce conflicting reviewer outcomes, delete another customer's same-phone quote, or unlink/remove operational and financial context.",
+      "likelyCause": "Database cascade behavior and UI confirmation patterns evolved independently.",
+      "recommendation": "Add server-generated previews, explicit typed confirmation for high-impact cases, optimistic concurrency, and a reversible merge ledger/backup process.",
+      "effort": "L",
+      "acceptanceCriteria": [
+        "Preview counts and identifies properties, threads, tasks, appointments, quotes, payments, partners, and automation state.",
+        "Contact deletion targets instant quotes by an explicit relationship, never merely a shared normalized phone.",
+        "Stale or duplicate requests return 409 and make no changes.",
+        "Post-transaction links and audit evidence identify source, target, actor, and consolidation rules.",
+        "A tested recovery procedure exists."
+      ]
+    },
+    {
+      "id": "TEAM-DATA-009",
+      "surface": "Contacts",
+      "subview": "Properties and duplicate handling",
+      "role": "office or owner",
+      "viewport": "all",
+      "dataState": "same-address contacts or partial address edit",
+      "category": "data integrity",
+      "severity": "P1",
+      "confidence": "high-static",
+      "prerequisites": [
+        "Two contacts at one address or a partial property patch"
+      ],
+      "reproduction": [
+        "Add the same street/postal/state property to two different contacts; the global unique index rejects it.",
+        "Observe contact creation maps a property uniqueness conflict to contact_already_exists.",
+        "Patch only city/state/postal or one address field; geocoding is called with omitted fields replaced by empty/undefined and may clear coordinates."
+      ],
+      "expected": "Shared addresses are modeled intentionally, conflicts name the real entity, and partial edits geocode the complete merged address without losing valid coordinates on provider failure.",
+      "actual": "Address uniqueness is global, errors are mislabeled, and partial patches can geocode incomplete data then null coordinates.",
+      "evidence": [
+        "apps/api/src/db/schema.ts:335-340",
+        "apps/api/app/api/admin/contacts/route.ts:818-864",
+        "apps/api/app/api/admin/contacts/[contactId]/properties/[propertyId]/route.ts:86-104"
+      ],
+      "impact": "Households/property managers cannot be represented reliably and valid geolocation may be silently lost.",
+      "likelyCause": "Address deduplication was implemented as ownership uniqueness and patch logic does not merge persisted fields before geocoding.",
+      "recommendation": "Separate property identity from contact association or scope uniqueness correctly; geocode a full merged address transactionally.",
+      "effort": "L",
+      "acceptanceCriteria": [
+        "Documented same-address scenarios can be stored without duplicate property corruption.",
+        "409 responses identify the conflicting property/contact accurately.",
+        "Partial edits preserve untouched address fields and coordinates when geocoding fails.",
+        "Dependent appointment/quote links remain intact after edits."
+      ]
+    },
+    {
+      "id": "TEAM-SEC-010",
+      "surface": "Dormant /team Estimates attachment path",
+      "subview": "Unmounted upload action and attachment link renderer",
+      "role": "intended /team editor; no active canonical /team submitter",
+      "viewport": "all",
+      "dataState": "malicious URL, MIME mismatch, or large data URL",
+      "category": "upload security",
+      "severity": "P3",
+      "confidence": "high-static",
+      "prerequisites": [
+        "Legacy EstimatesSection or its attachment action is intentionally remounted"
+      ],
+      "reproduction": [
+        "Inspect EstimatesSection and addApptAttachmentAction: the legacy form converts a File to a base64 data URL and renders stored URLs as links.",
+        "Inspect the shared API boundary: it accepts an arbitrary nonempty URL/claimed contentType and can store up to 20 MB inline.",
+        "Confirm canonical /team Calendar neither mounts EstimatesSection nor offers this attachment form/link renderer."
+      ],
+      "expected": "Dormant upload code is removed, or it is security-reviewed and hardened before any /team remount.",
+      "actual": "The only /team submitter/renderer is unmounted, but its retained action would store inline data URLs through an API that accepts arbitrary nonempty URLs without signature or scheme validation.",
+      "evidence": [
+        "apps/api/app/api/appointments/[id]/attachments/route.ts:10-113",
+        "apps/site/src/app/team/actions/attachments.ts:1-35",
+        "apps/site/src/app/team/components/EstimatesSection.tsx:328-418",
+        "apps/site/src/app/team/page.tsx:261-278,727-925"
+      ],
+      "impact": "There is no active canonical /team exploit path, but a future legacy remount could reintroduce unsafe-scheme links and database/storage amplification without a fresh security review.",
+      "likelyCause": "Attachment metadata and file storage are conflated in one field.",
+      "recommendation": "Remove the dormant path, or gate any remount on private object storage, signed access, MIME/signature validation, scans, and quotas.",
+      "effort": "L",
+      "acceptanceCriteria": [
+        "The orphaned action/component is removed or explicitly owned and tested before remount.",
+        "If retained, javascript:, file:, untrusted data:, and non-allowlisted remote URLs are rejected.",
+        "MIME extension and file signature mismatches are rejected.",
+        "Oversized and repeated uploads cannot amplify database storage.",
+        "Downloads require the same contact/appointment permission and are audited."
+      ]
+    },
+    {
+      "id": "TEAM-SEC-011",
+      "surface": "Team authentication API and Access",
+      "subview": "Password attempts, magic-link issue/exchange, and normalized identity",
+      "role": "anonymous",
+      "viewport": "all",
+      "dataState": "repeated attempts, duplicate normalized identity, and concurrent exchange of one magic-link token",
+      "category": "authentication resilience",
+      "severity": "P1",
+      "confidence": "medium-static",
+      "prerequisites": [
+        "Repeated authentication requests",
+        "Ability to create duplicate normalized member identities",
+        "One valid magic-link token and two concurrent exchange callers"
+      ],
+      "reproduction": [
+        "Send repeated password attempts or magic-link requests; handlers contain no visible rate limiter, cooldown, lockout, or challenge.",
+        "Create two members from case/whitespace variants that normalize to the same stored email; the schema does not make that normalized value unique.",
+        "Request multiple magic links for one member; creation inserts each token without revoking prior unexpired tokens.",
+        "Issue two concurrent exchange-link requests for one valid token; both can SELECT it before either DELETE, and the unchecked delete does not gate either session insert."
+      ],
+      "expected": "Credential and delivery abuse is throttled per identity/IP/device, token replay is atomic, older links are invalidated according to a documented policy, and normalized login identity is unique.",
+      "actual": "No application-level throttling is visible; multiple rows can store the same normalized email; requesting links does not revoke older unexpired tokens; and token consumption is a non-transactional select/delete/session-insert whose delete result is unchecked.",
+      "evidence": [
+        "apps/api/app/api/public/team/login-password/route.ts:1-19",
+        "apps/api/app/api/public/team/request-link/route.ts:1-75",
+        "apps/api/src/lib/team-auth.ts:159-179,195-249,377-401",
+        "apps/api/app/api/admin/team/members/route.ts:163-180",
+        "apps/api/app/api/admin/team/members/[memberId]/route.ts:109-114",
+        "apps/api/src/db/schema.ts:471-516"
+      ],
+      "impact": "Password guessing, SMS/email cost abuse, ambiguous account selection, and multiple sessions from concurrent reuse of one token are plausible or statically established.",
+      "likelyCause": "Anti-abuse was deferred to infrastructure and identity normalization is not expressed as a database invariant.",
+      "recommendation": "Add layered throttling/monitoring, a migration-safe normalized unique identity constraint, a documented prior-link invalidation policy, and atomic conditional token consumption before session insertion.",
+      "effort": "M",
+      "acceptanceCriteria": [
+        "Documented thresholds return 429 without revealing account existence.",
+        "Expired and replayed tokens cannot create sessions, including concurrent exchange.",
+        "Duplicate normalized team identities are prevented or explicitly resolved.",
+        "Security events are privacy-safe and observable."
+      ]
+    },
+    {
+      "id": "TEAM-AUTHUX-024",
+      "surface": "Team login, magic-link callback, and Settings",
+      "subview": "Stale-cookie recovery and first-login password setup handoff",
+      "role": "anonymous with invalid/expired cookie; newly authenticated team member",
+      "viewport": "all",
+      "dataState": "stale session cookie or needsPasswordSetup=true",
+      "category": "authentication UX",
+      "severity": "P2",
+      "confidence": "high-static",
+      "prerequisites": [
+        "An invalid or expired myst-team-session cookie",
+        "Or a successful magic-link exchange returning needsPasswordSetup"
+      ],
+      "reproduction": [
+        "Place an expired or invalid myst-team-session cookie and open /team/login; cookie presence alone renders You're already signed in, while /team rejects the same token and redirects back to login.",
+        "Exchange a valid magic link whose response needs password setup; /team/auth redirects to /team?setup=1, but /team defaults to Inbox/Calendar and the setup prompt/form only exists in Settings."
+      ],
+      "expected": "Invalid cookies are validated/cleared before login rendering, and password setup lands on a visible, focused, announced Settings form.",
+      "actual": "Cookie presence can trap the user between login and /team, while the setup callback creates a valid session but lands on a default tab with no setup UI; users can recover only by manually navigating to Settings.",
+      "evidence": [
+        "apps/site/src/app/team/login/page.tsx:13-25",
+        "apps/site/src/app/team/auth/route.ts:58-75",
+        "apps/site/src/app/team/page.tsx:272-278,338,928-1003"
+      ],
+      "impact": "Users can be caught in a login loop or miss the intended optional first-login password prompt, increasing support load and leaving password sign-in undiscoverable until Settings is opened.",
+      "likelyCause": "Login UI trusts cookie presence instead of session validity, and the callback does not encode the tab that owns setup UI.",
+      "recommendation": "Validate and clear stale cookies on login; redirect setup to /team?tab=settings&setup=1 and manage focus/announcement.",
+      "effort": "S",
+      "acceptanceCriteria": [
+        "Invalid/expired cookies never hide the login form and are cleared or safely replaced.",
+        "needsPasswordSetup redirects to /team?tab=settings&setup=1.",
+        "The password form is visible, receives deliberate focus, and its context is announced.",
+        "Back/refresh preserve a recoverable path without redirect loops."
+      ]
+    },
+    {
+      "id": "TEAM-NAV-012",
+      "surface": "Modern and classic shell",
+      "subview": "Invalid tab parameter",
+      "role": "any accepted user",
+      "viewport": "all",
+      "dataState": "tab=unknown",
+      "category": "navigation",
+      "severity": "P2",
+      "confidence": "high-static",
+      "prerequisites": ["Authenticated request with an invalid tab"],
+      "reproduction": [
+        "Load /team?tab=not-a-real-tab.",
+        "Observe activeTab falls back to the first nav item, but the tab variable remains invalid.",
+        "Observe every content branch checks the invalid value, leaving a shell with no tab content."
+      ],
+      "expected": "Unknown tabs canonically redirect to the role landing tab with a clear notice or render a deliberate not-found state.",
+      "actual": "The shell title/nav and content resolution can disagree, producing an empty main region.",
+      "evidence": ["apps/site/src/app/team/page.tsx:256-278,608-618,727-928"],
+      "impact": "Broken bookmarks or mistyped URLs look like missing data and are hard to recover from.",
+      "likelyCause": "Active navigation fallback is computed separately from content routing.",
+      "recommendation": "Normalize or redirect the route before nav/content rendering.",
+      "effort": "S",
+      "acceptanceCriteria": [
+        "Every invalid tab produces one deterministic role-allowed destination.",
+        "The URL, selected navigation item, title, and content agree after refresh and Back/Forward."
+      ]
+    },
+    {
+      "id": "TEAM-INBOX-013",
+      "surface": "Inbox",
+      "subview": "Thread listing pagination",
+      "role": "office or owner",
+      "viewport": "all",
+      "dataState": "more than one page of threads",
+      "category": "functionality",
+      "severity": "P2",
+      "confidence": "high-static",
+      "prerequisites": ["Thread count exceeds page size"],
+      "reproduction": [
+        "Use the Inbox pagination link, which writes inbox_offset.",
+        "Observe page.tsx hardcodes inboxOffset to undefined and passes no offset into InboxSection.",
+        "Observe the listing request remains on the first page."
+      ],
+      "expected": "Offset survives URL navigation, refresh, copy/paste, filters, and Back/Forward.",
+      "actual": "The pagination parameter is generated but discarded by the page resolver.",
+      "evidence": [
+        "apps/site/src/app/team/page.tsx:304-334",
+        "apps/site/src/app/team/components/InboxSection.tsx:499-525,628-634"
+      ],
+      "impact": "Older conversations become inaccessible through the primary Inbox list.",
+      "likelyCause": "Parameter rename/migration left parsing disabled.",
+      "recommendation": "Parse and validate inbox_offset consistently and add dense-data navigation tests.",
+      "effort": "S",
+      "acceptanceCriteria": [
+        "Next/Previous changes the API offset and visible rows.",
+        "Pagination composes with all filters and survives refresh/history navigation.",
+        "Deleted/stale rows do not trap the user on an empty page."
+      ]
+    },
+    {
+      "id": "TEAM-INBOX-014",
+      "surface": "Inbox",
+      "subview": "New lead banner",
+      "role": "office or owner",
+      "viewport": "all",
+      "dataState": "multiple new inbound leads",
+      "category": "workflow utility",
+      "severity": "P2",
+      "confidence": "high-static",
+      "prerequisites": [
+        "At least two new leads including one outside the latest 12 contacts"
+      ],
+      "reproduction": [
+        "Dismiss one new lead for 24 hours.",
+        "Observe the action sets a global hidden-until cookie and hides the entire banner, not only that lead.",
+        "Observe discovery loads only 12 contacts before finding a new stage."
+      ],
+      "expected": "Dismissal is per lead/user, remaining leads stay discoverable, and queue counts derive from all eligible leads.",
+      "actual": "One dismissal hides all banners for 24 hours and discovery is limited to 12 contacts.",
+      "evidence": [
+        "apps/site/src/app/team/actions.ts:4827-4852",
+        "apps/site/src/app/team/page.tsx:643-664"
+      ],
+      "impact": "Staff may miss time-sensitive leads and speed-to-lead goals.",
+      "likelyCause": "A notification banner is standing in for a durable per-user queue state.",
+      "recommendation": "Back the queue with explicit lead/user acknowledgment state and accurate pagination/counts.",
+      "effort": "M",
+      "acceptanceCriteria": [
+        "Dismissing lead A never hides lead B.",
+        "All eligible leads are reachable regardless of contact ordering.",
+        "State is consistent across sessions and audited when appropriate."
+      ]
+    },
+    {
+      "id": "TEAM-REL-015",
+      "surface": "Partners, Pipeline, and Inbox",
+      "subview": "Partial API failure",
+      "role": "allowed user",
+      "viewport": "all",
+      "dataState": "provider or ancillary endpoint failure",
+      "category": "error-state integrity",
+      "severity": "P2",
+      "confidence": "high-static",
+      "prerequisites": ["One upstream request fails"],
+      "reproduction": [
+        "Fail Partners list/directory requests and observe empty arrays with no primary error.",
+        "Fail Pipeline audit and observe the component returns null.",
+        "Fail Inbox provider health, failed sends, directory, detail, timeline, or AI ancillary calls and observe several are converted to empty/null."
+      ],
+      "expected": "The UI distinguishes true empty, partial data, stale cache, timeout, permission denied, and provider degradation.",
+      "actual": "Several failures disappear or become empty-looking states.",
+      "evidence": [
+        "apps/site/src/app/team/components/PartnersSection.tsx:94-136",
+        "apps/site/src/app/team/components/PipelineAudit.tsx:29-43",
+        "apps/site/src/app/team/components/InboxSection.tsx:637-707"
+      ],
+      "impact": "Staff cannot tell whether there is no work or the CRM failed to load it, risking missed tasks and unsafe retries.",
+      "likelyCause": "Broad catch-to-null patterns were used to keep composite pages rendering.",
+      "recommendation": "Track per-panel completeness and expose actionable partial-failure banners with retry and timestamp.",
+      "effort": "M",
+      "acceptanceCriteria": [
+        "Every injected 401/403/404/409/422/429/500/malformed/timeout/offline state is distinguishable from empty.",
+        "Partial panels name stale or missing data and offer scoped retry.",
+        "No action is enabled using silently incomplete prerequisites."
+      ]
+    },
+    {
+      "id": "TEAM-A11Y-016",
+      "surface": "Modern shell",
+      "subview": "Mobile drawer and collapsed sidebar",
+      "role": "all",
+      "viewport": "320-1024",
+      "dataState": "drawer open or sidebar collapsed",
+      "category": "accessibility",
+      "severity": "P2",
+      "confidence": "high-static",
+      "prerequisites": ["Keyboard or screen reader"],
+      "reproduction": [
+        "Open the mobile navigation and press Escape; no key handler closes it.",
+        "Tab through the page; no focus trap/initial focus/return focus is implemented.",
+        "Collapse desktop navigation; collapse/expand and icon-only utility controls can lose visible/programmatic names.",
+        "Observe the mobile drawer reuses persisted desktop collapsed state."
+      ],
+      "expected": "A modal drawer traps and restores focus, closes with Escape, labels itself, and ignores desktop collapse state; every icon control has an accessible name.",
+      "actual": "The dialog has role/aria-modal but lacks modal keyboard behavior and shares collapse state.",
+      "evidence": [
+        "apps/site/src/app/team/components/TeamAppShell.tsx:554-615,637-795,811-941"
+      ],
+      "impact": "Keyboard and screen-reader users can become disoriented or unable to close/navigate the shell.",
+      "likelyCause": "A visual drawer was implemented without a reusable dialog/focus primitive.",
+      "recommendation": "Use a tested dialog/navigation primitive and explicit accessible labels.",
+      "effort": "M",
+      "acceptanceCriteria": [
+        "Focus enters the drawer, stays inside, Escape closes it, and focus returns to Open navigation.",
+        "Desktop collapse preference does not hide mobile drawer labels.",
+        "All interactive elements pass computed-name checks at every breakpoint."
+      ]
+    },
+    {
+      "id": "TEAM-A11Y-017",
+      "surface": "Modern shell and all tabs",
+      "subview": "Headings, loading, flash messages, and forms",
+      "role": "all",
+      "viewport": "all including 200% and 400% zoom",
+      "dataState": "loading, success, error, and search forms",
+      "category": "accessibility",
+      "severity": "P2",
+      "confidence": "high-static",
+      "prerequisites": ["Keyboard/screen reader or reduced motion"],
+      "reproduction": [
+        "Inspect the modern shell title: it is a div and most tab surfaces start with h2, leaving no page h1.",
+        "Inspect TeamSkeletonCard: it animates without status/busy semantics or reduced-motion treatment.",
+        "Inspect flash messages: no live region is attached.",
+        "Inspect placeholder-only search inputs such as Contacts."
+      ],
+      "expected": "Each page has one descriptive h1; status changes are announced; loaders expose busy state and honor reduced motion; every input has a persistent label.",
+      "actual": "Heading hierarchy, live announcements, busy semantics, reduced-motion behavior, and labels are inconsistent or absent.",
+      "evidence": [
+        "apps/site/src/app/team/components/TeamAppShell.tsx:811-875",
+        "apps/site/src/app/team/components/TeamSkeleton.tsx:1-27",
+        "apps/site/src/app/team/page.tsx:670-725,928-1048",
+        "apps/site/src/app/team/components/ContactsSection.tsx:203-230"
+      ],
+      "impact": "Screen-reader users receive weak page orientation and no reliable feedback after important actions.",
+      "likelyCause": "Accessibility semantics are applied component-by-component without a CRM form/status layer.",
+      "recommendation": "Establish shared page-header, field, status, dialog, table/card, and skeleton primitives and run WCAG 2.2 AA automation/manual journeys.",
+      "effort": "L",
+      "acceptanceCriteria": [
+        "Every tab and modal has a correct heading/landmark hierarchy.",
+        "Success, warning, error, and loading changes are announced once without focus theft.",
+        "Critical journeys complete keyboard-only at 200% and 400% zoom.",
+        "Zero unexplained serious/critical automated violations remain."
+      ]
+    },
+    {
+      "id": "TEAM-PERF-018",
+      "surface": "Inbox, Pipeline, Contacts, and Owner HQ",
+      "subview": "Initial load, polling, dense data, and inactive views",
+      "role": "typical staff",
+      "viewport": "all",
+      "dataState": "p95 volume and slow 4G",
+      "category": "performance and resilience",
+      "severity": "P2",
+      "confidence": "high-static-risk; runtime-unmeasured",
+      "prerequisites": ["Production-like seeded volume and trace tooling"],
+      "reproduction": [
+        "Inspect Inbox: five requests run in parallel, followed by serial contact timeline/summary/task/next-action work; live updates poll every 8 seconds and attachment media performs HEAD requests.",
+        "Inspect Pipeline: the entire board is requested with no page/window in the UI.",
+        "Inspect Contacts: directory/list/selected record are sequenced.",
+        "Inspect Owner HQ: revenue, expenses, commissions/payroll, and source data load before most view selection; Payments adds large reconciliation requests."
+      ],
+      "expected": "Only active-view critical data loads, polling cannot overlap, dense datasets are paginated/windowed, and user-specified Web Vitals targets are met over five runs.",
+      "actual": "Static request topology creates waterfall, polling, fan-out, and unbounded-data risk; no live trace could be captured because Chrome DevTools MCP and the app stack are unavailable.",
+      "evidence": [
+        "apps/site/src/app/team/components/InboxSection.tsx:637-1050",
+        "apps/site/src/app/team/components/InboxLiveUpdatesClient.tsx:146-272",
+        "apps/site/src/app/team/components/InboxMediaGallery.tsx:37",
+        "apps/site/src/app/team/components/PipelineSection.tsx:14-55",
+        "apps/site/src/app/team/components/ContactsSection.tsx:115-196",
+        "apps/site/src/app/team/components/OwnerSection.tsx:430-557"
+      ],
+      "impact": "Dense accounts and mobile connections may see slow navigation, background request contention, provider cost, and stale race conditions.",
+      "likelyCause": "Composite server components fetch independently without a per-tab data budget or cancellation/overlap policy.",
+      "recommendation": "Measure first with the specified profiles, then parallelize/cache/window by active view and replace per-item probes with batched metadata.",
+      "effort": "L",
+      "acceptanceCriteria": [
+        "Five-run medians meet LCP <=2.5s, INP <=200ms, CLS <=0.1, and TTFB <=800ms for representative states.",
+        "Visible action feedback begins within 100ms.",
+        "Inbox polling has cancellation/single-flight behavior and no per-attachment HEAD fan-out.",
+        "Pipeline and reconciliation loads remain bounded at documented maximum volume."
+      ]
+    },
+    {
+      "id": "TEAM-PRIV-019",
+      "surface": "Root application layout",
+      "subview": "/team route analytics",
+      "role": "all staff",
+      "viewport": "all",
+      "dataState": "deep links containing contact/thread/report/campaign IDs",
+      "category": "privacy and observability",
+      "severity": "P2",
+      "confidence": "medium-static",
+      "prerequisites": ["NEXT_PUBLIC_GA4_ID or Google Ads tag configured"],
+      "reproduction": [
+        "Load a /team deep link while Google tags are configured.",
+        "Observe GoogleTag is mounted in the root layout that wraps /team.",
+        "Observe initial gtag config can send a page view for the current location; SPA page-view handling uses pathname only, creating inconsistent query treatment."
+      ],
+      "expected": "Authenticated CRM routes have an explicit privacy-safe telemetry policy; customer/resource IDs and message data never reach marketing vendors.",
+      "actual": "Marketing tags are globally mounted and no /team exclusion/redaction is visible at the root boundary.",
+      "evidence": [
+        "apps/site/src/app/layout.tsx:38-69",
+        "apps/site/src/components/GoogleTag.tsx:1-52",
+        "apps/site/src/components/GoogleTagPageView.tsx:1-30"
+      ],
+      "impact": "Internal route metadata or identifiers may be sent to a marketing analytics provider, while useful privacy-safe CRM telemetry is absent.",
+      "likelyCause": "Public marketing and authenticated product surfaces share the root layout.",
+      "recommendation": "Exclude authenticated surfaces from marketing tags or enforce a documented allowlist/redaction boundary; add first-party privacy-safe product telemetry.",
+      "effort": "M",
+      "acceptanceCriteria": [
+        "Network capture proves no contact/thread/message/report IDs or content reaches marketing providers from /team.",
+        "CRM telemetry uses stable non-PII event names and role-safe metadata.",
+        "Consent/privacy documentation matches actual authenticated-route behavior."
+      ]
+    },
+    {
+      "id": "TEAM-QUAL-020",
+      "surface": "Entire /team product",
+      "subview": "Automated regression and static quality gates",
+      "role": "all",
+      "viewport": "all",
+      "dataState": "all specified states",
+      "category": "test coverage",
+      "severity": "P2",
+      "confidence": "high",
+      "prerequisites": [],
+      "reproduction": [
+        "List the configured Playwright suite: 115 cases exist, but desktop /team coverage is concentrated in one Inbox CRM workflow file.",
+        "Search for all-tab, role-matrix, axe, visual, and performance suites; none exist in the current default suite.",
+        "Run raw lint: 991 errors remain, including 126 errors and 6 warnings in /team; the ratchet passes because the baseline permits 1027."
+      ],
+      "expected": "All tabs, roles, critical journeys, accessibility, visual states, and high-risk mutations have deterministic gates; new lint debt is prevented and old debt is burned down.",
+      "actual": "The current gates can pass without broad /team coverage and with substantial grandfathered static debt.",
+      "evidence": [
+        "playwright.config.ts:1-55",
+        "tests/e2e/specs/inbox-crm-workflows.spec.ts",
+        "artifacts/team-crm-audit/baseline-results.json",
+        "playwright.team-audit.config.ts",
+        "tests/e2e/audit/team-console-audit.spec.ts"
+      ],
+      "impact": "Cross-tab and role regressions can ship undetected, especially where UI hiding substitutes for authorization.",
+      "likelyCause": "E2E investment grew around public/mobile flows and selected Inbox work rather than a canonical CRM risk matrix.",
+      "recommendation": "Adopt the separate audit suite, add provider fakes and DB assertions, then promote stable security/smoke/journey slices into CI.",
+      "effort": "XL",
+      "acceptanceCriteria": [
+        "All-tab smoke and forged-cookie/no-cookie proxy gates run on every PR.",
+        "Role matrix and seven critical journeys run in a deterministic nightly/staging suite.",
+        "Accessibility/visual/performance evidence covers the requested viewport/theme states.",
+        "The /team lint baseline trends to zero with no new violations."
+      ]
+    },
+    {
+      "id": "TEAM-IA-021",
+      "surface": "Navigation and information architecture",
+      "subview": "Overlapping and advanced tabs",
+      "role": "all",
+      "viewport": "all",
+      "dataState": "normal",
+      "category": "simplicity and utility",
+      "severity": "P2",
+      "confidence": "medium-static; staff-validation-required",
+      "prerequisites": ["Representative role usability sessions"],
+      "reproduction": [
+        "Compare Contacts and Pipeline detail; Sales HQ and Sales Log; Expenses/Commissions and Owner HQ; Policy and Automation; Agent and Simulated Chat; Ads, Analytics, and SEO.",
+        "Observe duplicate context and controls across top-level destinations, while advanced/high-risk panels are mixed with daily work."
+      ],
+      "expected": "Primary navigation reflects a small set of daily jobs; overlapping context and advanced administration are consolidated or progressively disclosed.",
+      "actual": "Twenty-three top-level tab IDs expose overlapping detail, reporting, agent, marketing, and administration mental models.",
+      "evidence": [
+        "apps/site/src/app/team/page.tsx:406-607",
+        "apps/site/src/app/team/components/QuotesHubSection.tsx:23-60",
+        "apps/site/src/app/team/components/AutomationSection.tsx:184-917",
+        "apps/site/src/app/team/components/SalesActivityLogSection.tsx:304-715"
+      ],
+      "impact": "Discoverability and training cost rise; staff may use overlapping sources inconsistently.",
+      "likelyCause": "Capabilities were promoted to tabs as they shipped rather than through a durable task-based IA.",
+      "recommendation": "Retain five core anchors, consolidate Marketing, move Partners/Sales Log under Sales, and move agent/admin tools under explicit Advanced groups—pending staff validation.",
+      "effort": "XL",
+      "acceptanceCriteria": [
+        "Five role-representative sessions validate first-click accuracy, completion, time, errors, backtracks, assistance, and ease.",
+        "Every current tab has an agreed keep/simplify/combine/move/advanced/deprecate decision.",
+        "No critical task requires knowledge of two overlapping detail implementations."
+      ]
+    },
+    {
+      "id": "TEAM-LEGACY-022",
+      "surface": "Aliases, classic layout, documentation, and orphaned components",
+      "subview": "quote-builder, canvass, marketing, myday, estimates, legacy components",
+      "role": "all",
+      "viewport": "all",
+      "dataState": "bookmark/deep link",
+      "category": "maintenance and simplicity",
+      "severity": "P3",
+      "confidence": "high-static",
+      "prerequisites": [],
+      "reproduction": [
+        "Load each legacy tab alias and observe silent in-memory remapping.",
+        "Load quote-builder or canvass; page.tsx derives a quoteMode but QuotesHubSection does not destructure or use it, so canvass opens the generic Quotes workspace rather than CanvassSection.",
+        "From the modern shell, activate Classic layout; classicHref is built by a helper that returns the unchanged URL while the current page is modern, so the button pushes the same route without layout=classic.",
+        "Inspect unmounted CanvassSection, EstimatesSection, MyDaySection, and PaymentsSection.",
+        "Compare README/critical-flow coverage to the 23 canonical tab inventory; simulated-chat and many admin surfaces are omitted."
+      ],
+      "expected": "Supported routes, deprecation windows, canonical redirects, ownership, and documentation are explicit and measurable.",
+      "actual": "Aliases and a full classic shell increase the matrix; quote-builder/canvass submode intent is ignored; the modern Classic layout button is a no-op; and legacy components/docs obscure the current product boundary.",
+      "evidence": [
+        "apps/site/src/app/team/page.tsx:256-278,541-547,1082-1218",
+        "apps/site/src/app/team/components/QuotesHubSection.tsx:16-22",
+        "apps/site/src/app/team/components/TeamAppShell.tsx:627-635,781-793",
+        "apps/site/src/app/team/components/CanvassSection.tsx",
+        "apps/site/src/app/team/components/EstimatesSection.tsx",
+        "apps/site/src/app/team/components/MyDaySection.tsx",
+        "apps/site/src/app/team/components/PaymentsSection.tsx",
+        "README.md:11-29",
+        "docs/CRITICAL_FLOWS.md:18-67"
+      ],
+      "impact": "Regression cost and operator confusion persist; removal decisions cannot be evidence-based without usage telemetry.",
+      "likelyCause": "Incremental migrations retained compatibility paths without exit criteria.",
+      "recommendation": "Instrument privacy-safe alias/classic usage, set a deprecation threshold/date, redirect canonically, remove unreachable components, and update docs.",
+      "effort": "M",
+      "acceptanceCriteria": [
+        "Every legacy alias has a canonical redirect and measured usage owner.",
+        "A retained canvass deep link reaches an intentionally supported canvass workflow, or redirects with a clear retirement notice; quoteMode is never silently ignored.",
+        "If retained, the modern Classic layout control changes to a URL containing layout=classic and direct desktop/phone compatibility smoke passes.",
+        "Classic is regression-only with documented parity boundaries and a retirement trigger.",
+        "Unreachable components are either mounted intentionally with tests or removed.",
+        "README and critical-flow docs match the canonical inventory."
+      ]
+    },
+    {
+      "id": "TEAM-ACCESS-025",
+      "surface": "Access",
+      "subview": "Owner member update, deactivation, role change, and deletion",
+      "role": "owner",
+      "viewport": "all",
+      "dataState": "self account or final active owner",
+      "category": "administrative safety",
+      "severity": "P2",
+      "confidence": "high-static",
+      "prerequisites": [
+        "One active owner, or an owner editing their own member record"
+      ],
+      "reproduction": [
+        "As the only active owner, PATCH the current member to active=false or assign a non-owner role.",
+        "Alternatively DELETE the same/last-owner member after the typed UI confirmation.",
+        "Observe that handlers authorize the current request but do not enforce a self-deactivation or last-active-owner invariant before the mutation."
+      ],
+      "expected": "At least one active recoverable owner always remains; self-deactivation/role loss/deletion requires a safe handoff and explicit session consequences.",
+      "actual": "The member PATCH/DELETE paths permit self or last-owner removal and rely on legacy break-glass recovery rather than a server invariant.",
+      "evidence": [
+        "apps/api/app/api/admin/team/members/[memberId]/route.ts:85-299,302-390"
+      ],
+      "impact": "Administrators can lock all normal team-owner sessions out of Access and require break-glass recovery.",
+      "likelyCause": "Member CRUD validates fields and permissions but not organization-wide ownership invariants.",
+      "recommendation": "Enforce a transactional last-active-owner rule and require explicit ownership transfer/session-revocation messaging for self changes.",
+      "effort": "M",
+      "acceptanceCriteria": [
+        "PATCH and DELETE return 409 without mutation when they would remove the last active owner.",
+        "Self-deactivation, self-role loss, and self-delete require an explicit supported handoff and immediately revoke affected sessions.",
+        "Concurrent owner removals cannot both pass the invariant.",
+        "The denied attempt and successful ownership transfer are attributed in Audit Log."
+      ]
+    },
+    {
+      "id": "TEAM-AUDIT-023",
+      "surface": "Audit Log",
+      "subview": "Event review",
+      "role": "owner/auditor",
+      "viewport": "all",
+      "dataState": "more than 50 events or incident investigation",
+      "category": "observability and utility",
+      "severity": "P2",
+      "confidence": "high-static",
+      "prerequisites": ["More than 50 events"],
+      "reproduction": [
+        "Open Audit Log with a production-like event history.",
+        "Observe the component requests/displays the latest 50 with no filter, search, pagination, correlation, export, or detail affordance.",
+        "Attempt to investigate a specific actor/entity/outcome outside the visible window."
+      ],
+      "expected": "Auditors can filter by actor, role, action, entity, outcome, and time; paginate through retained immutable data; inspect safe metadata and correlations.",
+      "actual": "The surface is a fixed recent feed that cannot support coverage verification or incident investigation.",
+      "evidence": [
+        "apps/site/src/app/team/components/AuditLogSection.tsx:33-88"
+      ],
+      "impact": "Unauthorized or failed actions can be difficult to reconstruct, and the audit completeness matrix cannot be verified through the product.",
+      "likelyCause": "The tab began as an operational recent-events widget.",
+      "recommendation": "Define the audit event contract/retention first, then add server-side filtering, pagination, correlation, safe export, and tamper checks.",
+      "effort": "L",
+      "acceptanceCriteria": [
+        "A sensitive-action coverage matrix passes for every tab.",
+        "Filters and cursor pagination find events beyond the first 50 deterministically.",
+        "Actor, role, entity, timestamp, outcome, and safe metadata are accurate for human and system actions.",
+        "Audit writes are transactionally consistent or independently durable without turning committed work into misleading failure."
+      ]
+    }
+  ]
+}

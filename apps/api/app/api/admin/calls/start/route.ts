@@ -1,20 +1,106 @@
 import type { NextRequest } from "next/server";
-import { NextResponse } from "next/server";
-import { and, asc, eq, ilike, isNotNull } from "drizzle-orm";
-import { getDb, contacts, crmTasks, policySettings, teamMembers } from "@/db";
-import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
-import { isAdminRequest } from "../../../web/admin";
-import { normalizePhone } from "../../../web/utils";
-import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
-import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
+import { getDb } from "@/db";
+import {
+  finalizeManualCallOperation,
+  prepareManualCallOperation,
+  reconcileManualCallAfterTerminalStorageFailure,
+  type FinalizedManualCallOperation,
+  type ManualCallAttemptMetadata,
+  type PreparedManualCallOperation,
+} from "@/lib/manual-call-operations";
+import {
+  TeamMutationFailure,
+  beginTeamMutation,
+  recordTeamMutationFailure,
+  teamMutationErrorResponse,
+  teamMutationExceptionResponse,
+  teamMutationResultResponse,
+} from "@/lib/team-mutation";
+import {
+  claimTeamMutationIdempotency,
+  extendTeamMutationIdempotencyLease,
+  settleTeamMutationIdempotencyFailure,
+  teamMutationIdempotencyReplayResponse,
+  type TeamMutationIdempotencyClaim,
+} from "@/lib/team-mutation-idempotency";
+import { createTwilioOutboundCall } from "@/lib/twilio-calls";
+import {
+  buildTwilioWebhookUrl,
+  getTwilioWebhookPublicBaseUrl,
+} from "@/lib/twilio-webhook-auth";
 
 type StartCallPayload = {
   contactId?: string;
-  taskId?: string;
-  agentMemberId?: string;
-  agentPhone?: string;
-  toPhone?: string;
+  taskId?: string | null;
+  agentMemberId?: string | null;
 };
+
+function withCallAttemptHeaders(
+  response: Response,
+  attempt: Partial<ManualCallAttemptMetadata> & {
+    state: ManualCallAttemptMetadata["state"];
+    newAttempt: ManualCallAttemptMetadata["newAttempt"];
+  },
+): Response {
+  response.headers.set("x-call-attempt-state", attempt.state);
+  response.headers.set("x-call-new-attempt", attempt.newAttempt);
+  if (attempt.operationId) {
+    response.headers.set("x-call-operation-id", attempt.operationId);
+  }
+  if (attempt.operationVersion) {
+    response.headers.set(
+      "x-call-operation-version",
+      String(attempt.operationVersion),
+    );
+  }
+  return response;
+}
+
+function finalizedCallResponse(
+  finalized: FinalizedManualCallOperation,
+  correlationId: string,
+): Response {
+  return withCallAttemptHeaders(
+    teamMutationResultResponse(
+      finalized.result,
+      finalized.status,
+      correlationId,
+    ),
+    finalized.callAttempt,
+  );
+}
+
+function replayCallResponse(
+  replay: Parameters<typeof teamMutationIdempotencyReplayResponse>[0],
+): Response {
+  const result = replay.result as typeof replay.result & {
+    callAttempt?: ManualCallAttemptMetadata;
+    data?: { callOperationId?: unknown; state?: unknown };
+    receipt?: { version?: unknown };
+  };
+  const response = teamMutationIdempotencyReplayResponse(replay);
+  if (result.callAttempt) {
+    return withCallAttemptHeaders(response, result.callAttempt);
+  }
+  if (
+    result.ok &&
+    typeof result.data?.callOperationId === "string" &&
+    Number.isInteger(result.receipt?.version)
+  ) {
+    return withCallAttemptHeaders(response, {
+      operationId: result.data.callOperationId,
+      operationVersion: Number(result.receipt?.version),
+      state:
+        result.data.state === "succeeded"
+          ? "succeeded"
+          : result.data.state === "failed"
+            ? "failed"
+            : "active",
+      newAttempt: result.data.state === "failed" ? "explicit" : "none",
+    });
+  }
+  return response;
+}
 
 function readString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -22,320 +108,283 @@ function readString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function readPhoneMap(value: unknown): Record<string, string> {
-  if (!isRecord(value)) return {};
-  const phonesRaw = value["phones"];
-  if (!isRecord(phonesRaw)) return {};
-  const phones: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(phonesRaw)) {
-    if (typeof raw === "string" && raw.trim().length > 0) {
-      phones[key] = raw.trim();
-    }
-  }
-  return phones;
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+    value,
+  );
 }
 
-async function resolveFallbackDefaultAssigneeMemberId(): Promise<string | null> {
-  try {
-    const config = await getSalesScorecardConfig();
-    return config.defaultAssigneeMemberId ?? null;
-  } catch {
-    const db = getDb();
-    const [member] = await db
-      .select({ id: teamMembers.id })
-      .from(teamMembers)
-      .orderBy(asc(teamMembers.createdAt))
-      .limit(1);
-    return member?.id ?? null;
-  }
+async function invalidCallRequest(
+  mutation: Parameters<typeof recordTeamMutationFailure>[0],
+  input: {
+    message: string;
+    fieldErrors: Record<string, string>;
+    entityId?: string | null;
+  },
+): Promise<Response> {
+  await recordTeamMutationFailure(mutation, {
+    entityType: input.entityId ? "contact" : "team_call",
+    entityId: input.entityId ?? null,
+    code: "invalid",
+    metadata: { boundary: "input_validation", providerCalled: false },
+  });
+  return withCallAttemptHeaders(
+    teamMutationErrorResponse("invalid", input.message, {
+      fieldErrors: input.fieldErrors,
+      correlationId: mutation.correlationId,
+    }),
+    { state: "confirmed_not_sent", newAttempt: "explicit" },
+  );
 }
 
-function resolveApiBaseUrl(request: NextRequest): string {
-  const candidates = [
-    process.env["NEXT_PUBLIC_API_BASE_URL"],
-    process.env["API_BASE_URL"]
-  ]
-    .map((value) => (typeof value === "string" ? value.trim() : ""))
-    .filter((value) => value.length > 0);
-
-  for (const candidate of candidates) {
-    try {
-      const url = new URL(candidate);
-      if (url.protocol !== "https:" && url.protocol !== "http:") continue;
-      const host = url.hostname.toLowerCase();
-      const isLocalhost =
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".internal");
-      if (isLocalhost) continue;
-      return url.toString().replace(/\/$/, "");
-    } catch {
-      continue;
-    }
-  }
-
-  return request.nextUrl.origin.replace(/\/$/, "");
-}
-
-async function createTwilioCall(input: { agentPhone: string; toPhone: string; request: NextRequest; taskId?: string | null }) {
-  const sid = process.env["TWILIO_ACCOUNT_SID"];
-  const token = process.env["TWILIO_AUTH_TOKEN"];
-  const from = process.env["TWILIO_FROM"];
-  const baseUrl = (process.env["TWILIO_API_BASE_URL"] ?? "https://api.twilio.com").replace(/\/$/, "");
-
-  if (!sid || !token || !from) {
-    return { ok: false as const, error: "twilio_not_configured", message: "Twilio is not configured on the API service." };
-  }
-
-  const callbackUrl = new URL(`${resolveApiBaseUrl(input.request)}/api/webhooks/twilio/connect`);
-  callbackUrl.searchParams.set("to", input.toPhone);
-  if (input.taskId) {
-    callbackUrl.searchParams.set("taskId", input.taskId);
-  }
-
-  const statusCallbackUrl = new URL(`${resolveApiBaseUrl(input.request)}/api/webhooks/twilio/call-status`);
+function providerUrls(
+  publicBaseUrl: string,
+  operation: PreparedManualCallOperation,
+): { requestUrl: string; statusCallbackUrl: string } {
+  const callbackUrl = buildTwilioWebhookUrl(
+    "/api/webhooks/twilio/connect",
+    publicBaseUrl,
+  );
+  callbackUrl.searchParams.set("requestKey", operation.providerRequestKey);
+  const statusCallbackUrl = buildTwilioWebhookUrl(
+    "/api/webhooks/twilio/call-status",
+    publicBaseUrl,
+  );
   statusCallbackUrl.searchParams.set("leg", "agent");
-
-  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
-  const formParams = new URLSearchParams({
-    To: input.agentPhone,
-    From: from,
-    Url: callbackUrl.toString(),
-    Method: "POST",
-    StatusCallback: statusCallbackUrl.toString(),
-    StatusCallbackMethod: "POST"
-  });
-
-  for (const event of ["initiated", "ringing", "answered", "completed"]) {
-    formParams.append("StatusCallbackEvent", event);
-  }
-
-  const form = formParams.toString();
-
-  const response = await fetch(`${baseUrl}/2010-04-01/Accounts/${sid}/Calls.json`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${auth}`
-    },
-    body: form
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    let detail = text.trim();
-    try {
-      const parsed = JSON.parse(text) as { message?: unknown; code?: unknown; more_info?: unknown };
-      const message = typeof parsed.message === "string" ? parsed.message.trim() : "";
-      const code = typeof parsed.code === "number" ? parsed.code : null;
-      const moreInfo = typeof parsed.more_info === "string" ? parsed.more_info.trim() : "";
-
-      const parts = [
-        message.length ? message : null,
-        code ? `code ${code}` : null,
-        moreInfo.length ? moreInfo : null
-      ].filter(Boolean);
-
-      if (parts.length) {
-        detail = parts.join(" - ");
-      }
-    } catch {
-      // ignore json parsing; fall back to raw text
-    }
-
-    const message = detail.length
-      ? `Twilio rejected the call request (${response.status}): ${detail}`
-      : `Twilio rejected the call request (${response.status}).`;
-    return { ok: false as const, error: "twilio_call_failed", message };
-  }
-
-  const payload = (await response.json().catch(() => null)) as { sid?: string } | null;
-  return { ok: true as const, callSid: payload?.sid ?? null };
+  statusCallbackUrl.searchParams.set(
+    "requestKey",
+    operation.providerRequestKey,
+  );
+  return {
+    requestUrl: callbackUrl.toString(),
+    statusCallbackUrl: statusCallbackUrl.toString(),
+  };
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // The verified principal, permission, Origin, kill switch, and required
+  // caller key are checked before request parsing or database/provider work.
+  const boundary = await beginTeamMutation(request, {
+    principalTypes: ["human"],
+    requiredPermissions: ["calls.place"],
+    risk: "external",
+    requiresIdempotency: true,
+    auditAction: "call.started",
+  });
+  if (!boundary.ok) {
+    return withCallAttemptHeaders(boundary.response, {
+      state: "confirmed_not_sent",
+      newAttempt: "explicit",
+    });
   }
+  const { mutation } = boundary;
 
-  let json: StartCallPayload;
+  let parsedJson: unknown;
   try {
-    json = (await request.json()) as StartCallPayload;
+    parsedJson = await request.json();
   } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+    return invalidCallRequest(mutation, {
+      message: "The call request is not valid JSON.",
+      fieldErrors: { request: "Send a valid JSON object." },
+    });
   }
+  if (!isRecord(parsedJson)) {
+    return invalidCallRequest(mutation, {
+      message: "The call request must be a JSON object.",
+      fieldErrors: { request: "Send one valid call object." },
+    });
+  }
+  const json = parsedJson as StartCallPayload;
 
   const contactId = readString(json.contactId);
-  const taskIdRaw = readString(json.taskId);
-  const agentMemberIdRaw = readString(json.agentMemberId);
-  const agentPhoneRaw = readString(json.agentPhone);
-  const toPhoneRaw = readString(json.toPhone);
-  const taskId = taskIdRaw && isUuid(taskIdRaw) ? taskIdRaw : null;
-  if (agentMemberIdRaw && !isUuid(agentMemberIdRaw)) {
-    return NextResponse.json({ error: "invalid_agent_member" }, { status: 400 });
+  const taskId = readString(json.taskId);
+  const requestedAgentMemberId = readString(json.agentMemberId);
+  if (!contactId || !isUuid(contactId)) {
+    return invalidCallRequest(mutation, {
+      message: "A valid contact is required.",
+      fieldErrors: { contactId: "Choose a valid contact." },
+    });
   }
-  const agentMemberId = agentMemberIdRaw ?? null;
+  if (
+    (json.taskId !== undefined &&
+      json.taskId !== null &&
+      typeof json.taskId !== "string") ||
+    (taskId !== null && !isUuid(taskId))
+  ) {
+    return invalidCallRequest(mutation, {
+      message: "The call task is invalid.",
+      fieldErrors: { taskId: "Refresh the Sales queue." },
+      entityId: contactId,
+    });
+  }
+  if (
+    (json.agentMemberId !== undefined &&
+      json.agentMemberId !== null &&
+      typeof json.agentMemberId !== "string") ||
+    (requestedAgentMemberId !== null && !isUuid(requestedAgentMemberId))
+  ) {
+    return invalidCallRequest(mutation, {
+      message: "The selected salesperson is invalid.",
+      fieldErrors: { agentMemberId: "Choose an active salesperson." },
+      entityId: contactId,
+    });
+  }
 
   const db = getDb();
+  let claim: TeamMutationIdempotencyClaim | null = null;
+  let dispatchedOperation: PreparedManualCallOperation | null = null;
 
-  let toPhone: string | null = null;
-  let resolvedContactId: string | null = null;
-  let resolvedAssigneeMemberId: string | null = null;
-  if (toPhoneRaw) {
+  try {
+    // Resolve the exact externally configured Twilio signing origin before a
+    // durable operation can enter dispatched state.
+    const twilioWebhookBaseUrl = getTwilioWebhookPublicBaseUrl();
+    const claimResult = await claimTeamMutationIdempotency(db, mutation, {
+      route: "POST /api/admin/calls/start",
+      entityType: "contact",
+      entityId: contactId,
+      payload: {
+        contactId,
+        taskId,
+        requestedAgentMemberId,
+      },
+    });
+    if (claimResult.kind === "replay") {
+      return replayCallResponse(claimResult.replay);
+    }
+    claim = claimResult.claim;
+    await extendTeamMutationIdempotencyLease(
+      db,
+      mutation,
+      claim,
+      2 * 60 * 1_000,
+    );
+
+    const prepared = await prepareManualCallOperation({
+      db,
+      mutation,
+      claim,
+      contactId,
+      taskId,
+      requestedAgentMemberId,
+    });
+    if (prepared.kind === "settled") {
+      return finalizedCallResponse(prepared.finalized, mutation.correlationId);
+    }
+    dispatchedOperation = prepared.operation;
+
+    const urls = providerUrls(twilioWebhookBaseUrl, dispatchedOperation);
+    const providerResult = await createTwilioOutboundCall({
+      to: dispatchedOperation.agentPhone,
+      requestUrl: urls.requestUrl,
+      statusCallbackUrl: urls.statusCallbackUrl,
+    });
+
     try {
-      toPhone = normalizePhone(toPhoneRaw).e164;
-    } catch {
-      return NextResponse.json({ error: "invalid_to_phone" }, { status: 400 });
+      const finalized = await finalizeManualCallOperation({
+        db,
+        mutation,
+        claim,
+        operationId: dispatchedOperation.id,
+        providerResult,
+      });
+      return finalizedCallResponse(finalized, mutation.correlationId);
+    } catch (settlementError) {
+      // If the provider may have received work, never release the caller key
+      // for automatic redispatch. Quarantine the durable dispatched attempt.
+      try {
+        const reconciled = await reconcileManualCallAfterTerminalStorageFailure(
+          {
+            db,
+            mutation,
+            claim,
+            operationId: dispatchedOperation.id,
+            providerOperationId: providerResult.ok
+              ? providerResult.callSid
+              : null,
+          },
+        );
+        return finalizedCallResponse(reconciled, mutation.correlationId);
+      } catch {
+        await recordTeamMutationFailure(mutation, {
+          entityType: "contact",
+          entityId: contactId,
+          code: "provider_failed",
+          providerOperationId: providerResult.ok
+            ? providerResult.callSid
+            : null,
+          metadata: {
+            callOperationId: dispatchedOperation.id,
+            boundary: "terminal_receipt",
+            reconciliationRequired: true,
+            providerExactlyOnceClaimed: false,
+            settlementErrorName:
+              settlementError instanceof Error
+                ? settlementError.name
+                : "UnknownError",
+          },
+        });
+        return withCallAttemptHeaders(
+          teamMutationErrorResponse(
+            "provider_failed",
+            "The call may have been accepted, but its CRM receipt could not be confirmed. Do not retry; check Twilio activity and reconcile this attempt.",
+            {
+              retryable: false,
+              correlationId: mutation.correlationId,
+            },
+          ),
+          {
+            operationId: dispatchedOperation.id,
+            operationVersion: dispatchedOperation.version,
+            state: "reconciliation_required",
+            newAttempt: "blocked",
+          },
+        );
+      }
     }
-  } else if (contactId) {
-    const [row] = await db
-      .select({
-        id: contacts.id,
-        phone: contacts.phone,
-        phoneE164: contacts.phoneE164,
-        salespersonMemberId: contacts.salespersonMemberId
-      })
-      .from(contacts)
-      .where(eq(contacts.id, contactId))
-      .limit(1);
-
-    if (!row?.id) {
-      return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
+  } catch (error) {
+    // Only pre-dispatch failures may release or terminally store the generic
+    // caller claim. A durable dispatched operation is handled above and is
+    // never made automatically retryable.
+    if (claim && !dispatchedOperation) {
+      await settleTeamMutationIdempotencyFailure(
+        db,
+        mutation,
+        claim,
+        error,
+      ).catch(() => undefined);
     }
-
-    resolvedContactId = row.id;
-    resolvedAssigneeMemberId = row.salespersonMemberId ?? null;
-    const phoneCandidate = row.phoneE164 ?? row.phone ?? null;
-    if (!phoneCandidate) {
-      return NextResponse.json({ error: "contact_missing_phone" }, { status: 400 });
-    }
-
-    try {
-      toPhone = normalizePhone(phoneCandidate).e164;
-    } catch {
-      return NextResponse.json({ error: "contact_invalid_phone" }, { status: 400 });
-    }
-  }
-
-  if (!toPhone) {
-    return NextResponse.json({ error: "missing_to_phone" }, { status: 400 });
-  }
-
-  let agentPhone: string;
-  let auditActorOverride: ReturnType<typeof getAuditActorFromRequest> | null = null;
-
-  if (agentPhoneRaw) {
-    try {
-      agentPhone = normalizePhone(agentPhoneRaw).e164;
-    } catch {
-      return NextResponse.json({ error: "invalid_agent_phone" }, { status: 400 });
-    }
-  } else {
-    const assigneeMemberId =
-      agentMemberId ??
-      resolvedAssigneeMemberId ??
-      (await resolveFallbackDefaultAssigneeMemberId());
-
-    if (!assigneeMemberId) {
-      return NextResponse.json({ error: "missing_agent_phone", message: "No default salesperson is configured." }, { status: 400 });
-    }
-
-    const [phoneSetting] = await db
-      .select({ value: policySettings.value })
-      .from(policySettings)
-      .where(eq(policySettings.key, "team_member_phones"))
-      .limit(1);
-    const phoneMap = readPhoneMap(phoneSetting?.value);
-    const phoneCandidate = phoneMap[assigneeMemberId] ?? null;
-    if (!phoneCandidate) {
-      const phoneOwnerLabel = agentMemberId ? "selected team member" : "assigned salesperson";
-      return NextResponse.json(
+    await recordTeamMutationFailure(mutation, {
+      entityType: "contact",
+      entityId: contactId,
+      code: error instanceof TeamMutationFailure ? error.code : "internal",
+      metadata: {
+        boundary: dispatchedOperation ? "post_dispatch" : "pre_dispatch",
+        providerCalled: false,
+        redispatchAllowed: !dispatchedOperation,
+      },
+    });
+    if (dispatchedOperation) {
+      return withCallAttemptHeaders(
+        teamMutationErrorResponse(
+          "provider_failed",
+          "The call dispatch result could not be confirmed. Do not retry; check Twilio activity and reconcile this attempt.",
+          { retryable: false, correlationId: mutation.correlationId },
+        ),
         {
-          error: "missing_agent_phone",
-          message: `No phone is configured for the ${phoneOwnerLabel}. Set it in Team Console: Access.`
+          operationId: dispatchedOperation.id,
+          operationVersion: dispatchedOperation.version,
+          state: "reconciliation_required",
+          newAttempt: "blocked",
         },
-        { status: 400 }
       );
     }
-
-    try {
-      agentPhone = normalizePhone(phoneCandidate).e164;
-    } catch {
-      const phoneOwnerLabel = agentMemberId ? "Selected team member" : "Assigned salesperson";
-      return NextResponse.json({ error: "invalid_agent_phone", message: `${phoneOwnerLabel} phone is invalid.` }, { status: 400 });
-    }
-
-    if (!agentMemberId) {
-      auditActorOverride = {
-        type: "system",
-        id: assigneeMemberId,
-        label: "assigned_salesperson"
-      };
-    }
+    return withCallAttemptHeaders(
+      teamMutationExceptionResponse(error, mutation),
+      { state: "confirmed_not_sent", newAttempt: "explicit" },
+    );
   }
-
-  const result = await createTwilioCall({ agentPhone, toPhone, request, taskId });
-  if (!result.ok) {
-    console.warn("[calls.start] twilio_call_failed", {
-      contactId: resolvedContactId ?? contactId ?? null,
-      agentPhone,
-      toPhone,
-      detail: result.error,
-      message: result.message
-    });
-    return NextResponse.json({ error: result.error, message: result.message }, { status: 502 });
-  }
-
-  const actor = auditActorOverride ?? getAuditActorFromRequest(request);
-  await recordAuditEvent({
-    actor,
-    action: "call.started",
-    entityType: "contact",
-    entityId: resolvedContactId ?? contactId ?? null,
-    meta: {
-      agentPhone,
-      toPhone,
-      callSid: result.callSid,
-      taskId
-    }
-  });
-
-  const contactEntityId = resolvedContactId ?? contactId ?? null;
-  if (contactEntityId && actor.id) {
-    try {
-      const now = new Date();
-      await db
-        .update(crmTasks)
-        .set({ status: "completed", updatedAt: now })
-        .where(
-          and(
-            eq(crmTasks.contactId, contactEntityId),
-            eq(crmTasks.assignedTo, actor.id),
-            eq(crmTasks.status, "open"),
-            isNotNull(crmTasks.notes),
-            ilike(crmTasks.notes, "%kind=speed_to_lead%")
-          )
-        );
-
-      await completeNextFollowupTaskOnTouch({
-        db,
-        contactId: contactEntityId,
-        memberId: actor.id,
-        now
-      });
-    } catch (error) {
-      console.warn("[calls.start] task_touch_update_failed", { contactId: contactEntityId, actorId: actor.id, error: String(error) });
-    }
-  }
-
-  return NextResponse.json({ ok: true, callSid: result.callSid });
 }

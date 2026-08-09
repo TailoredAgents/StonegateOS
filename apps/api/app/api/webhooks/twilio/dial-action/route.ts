@@ -1,31 +1,33 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, eq, ilike, isNotNull, or } from "drizzle-orm";
-import { getDb, crmTasks } from "@/db";
-import { recordAuditEvent } from "@/lib/audit";
+import { getDb } from "@/db";
+import {
+  handleManualCallDialActionCallback,
+  ManualCallCallbackError,
+} from "@/lib/manual-call-callbacks";
+import {
+  adoptLegacySalesEscalationCallback,
+  handleSalesEscalationDialActionCallback,
+  SalesEscalationCallbackError,
+} from "@/lib/sales-escalation-call-operations";
+import { verifyTwilioWebhookRequest } from "@/lib/twilio-webhook-auth";
+import { escapeTwilioXmlText } from "@/lib/twilio-xml";
 
 export const dynamic = "force-dynamic";
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
 
 function twimlResponse(xml: string, status = 200): Response {
   return new NextResponse(xml, {
     status,
     headers: {
-      "Content-Type": "text/xml; charset=utf-8"
-    }
+      "Content-Type": "text/xml; charset=utf-8",
+    },
   });
 }
 
 function readString(value: FormDataEntryValue | null): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
 }
 
 function readNumber(value: FormDataEntryValue | null): number | null {
@@ -35,20 +37,25 @@ function readNumber(value: FormDataEntryValue | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function readBoolean(value: FormDataEntryValue | null): boolean | null {
+  const raw = readString(value)?.toLowerCase();
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return null;
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
-  let formData: FormData;
-  try {
-    formData = await request.formData();
-  } catch {
-    return twimlResponse(
-      `<?xml version="1.0" encoding="UTF-8"?><Response><Say>We could not complete the call.</Say><Hangup/></Response>`,
-      200
-    );
-  }
+  const verified = await verifyTwilioWebhookRequest(request);
+  if (!verified.ok) return verified.response;
+  const { formData } = verified;
 
   const leg = request.nextUrl.searchParams.get("leg")?.trim() || "unknown";
   const mode = request.nextUrl.searchParams.get("mode")?.trim() || null;
-  const taskId = request.nextUrl.searchParams.get("taskId")?.trim() || null;
+  let eventKey = request.nextUrl.searchParams.get("eventKey")?.trim() || "";
+  let operationKey =
+    request.nextUrl.searchParams.get("operationKey")?.trim() || "";
+  const requestKey =
+    request.nextUrl.searchParams.get("requestKey")?.trim() || null;
 
   const payload = {
     leg,
@@ -63,75 +70,116 @@ export async function POST(request: NextRequest): Promise<Response> {
     dialBridged: readString(formData.get("DialBridged")),
     dialSipResponseCode: readString(formData.get("DialSipResponseCode")),
     dialHangupCause: readString(formData.get("DialHangupCause")),
-    dialCallQuality: readString(formData.get("DialCallQuality"))
+    dialCallQuality: readString(formData.get("DialCallQuality")),
   };
 
-  console.info("[twilio.dial_action]", payload);
+  console.info("[twilio.dial_action]", {
+    leg: payload.leg,
+    hasCallSid: Boolean(payload.callSid),
+    hasParentCallSid: Boolean(payload.parentCallSid),
+    callStatus: payload.callStatus,
+    hasDialCallSid: Boolean(payload.dialCallSid),
+    dialCallStatus: payload.dialCallStatus,
+    dialCallDuration: payload.dialCallDuration,
+    dialBridged: payload.dialBridged,
+    dialSipResponseCode: payload.dialSipResponseCode,
+    dialHangupCause: payload.dialHangupCause,
+    dialCallQuality: payload.dialCallQuality,
+    hasFrom: Boolean(payload.from),
+    hasTo: Boolean(payload.to),
+  });
 
-  let agentMessage: string | null = null;
-  if (mode === "sales_escalation" && leg === "customer") {
-    const status = (payload.dialCallStatus ?? payload.callStatus ?? "").toLowerCase();
-    if (status.includes("busy")) agentMessage = "Their line is busy. Please try again.";
-    else if (status.includes("no-answer") || status.includes("noanswer")) agentMessage = "No answer. Please try again.";
-    else if (status.includes("failed")) agentMessage = "That call could not be completed. Please try again.";
-  }
-
-  if (mode === "sales_escalation" && taskId && leg === "customer") {
+  if (requestKey) {
+    if (leg !== "customer") {
+      return twimlResponse(
+        `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`,
+        400,
+      );
+    }
     try {
-      const duration = payload.dialCallDuration ?? 0;
-      const status = payload.dialCallStatus ?? null;
-      const answered = duration > 0 && (status === null || status === "completed");
-      if (answered) {
-        const db = getDb();
-        const [row] = await db
-          .select({
-            contactId: crmTasks.contactId,
-            assignedTo: crmTasks.assignedTo
-          })
-          .from(crmTasks)
-          .where(eq(crmTasks.id, taskId))
-          .limit(1);
-
-        if (row?.contactId && row.assignedTo) {
-          const now = new Date();
-          await db
-            .update(crmTasks)
-            .set({ status: "completed", updatedAt: now })
-            .where(
-              and(
-                eq(crmTasks.contactId, row.contactId),
-                eq(crmTasks.assignedTo, row.assignedTo),
-                eq(crmTasks.status, "open"),
-                isNotNull(crmTasks.notes),
-                ilike(crmTasks.notes, "%kind=speed_to_lead%")
-              )
-            );
-
-          await recordAuditEvent({
-            actor: { type: "system", id: row.assignedTo, label: "sales_escalation" },
-            action: "sales.escalation.call.connected",
-            entityType: "crm_task",
-            entityId: taskId,
-            meta: {
-              contactId: row.contactId,
-              dialCallDuration: duration,
-              dialCallStatus: status
-            }
-          });
-        }
-      }
+      await handleManualCallDialActionCallback({
+        db: getDb(),
+        requestKey,
+        parentCallSid: payload.callSid ?? payload.parentCallSid,
+        customerCallSid: payload.dialCallSid,
+        dialCallStatus: payload.dialCallStatus,
+        dialCallDuration: payload.dialCallDuration,
+        dialBridged: readBoolean(formData.get("DialBridged")),
+      });
+      return twimlResponse(
+        `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`,
+        200,
+      );
     } catch (error) {
-      console.warn("[twilio.dial_action] sales_escalation_update_failed", { taskId, error: String(error) });
+      return twimlResponse(
+        `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`,
+        error instanceof ManualCallCallbackError ? error.status : 500,
+      );
     }
   }
 
-  if (agentMessage) {
-    const safe = escapeXml(agentMessage);
-    return twimlResponse(
-      `<?xml version="1.0" encoding="UTF-8"?><Response><Say>${safe}</Say><Hangup/></Response>`,
-      200
-    );
+  if (mode === "sales_escalation") {
+    if (leg !== "customer") {
+      return twimlResponse(
+        `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`,
+        400,
+      );
+    }
+    if (!eventKey && !operationKey) {
+      try {
+        const adopted = await adoptLegacySalesEscalationCallback({
+          db: getDb(),
+          parentCallSid: payload.callSid ?? payload.parentCallSid,
+        });
+        eventKey = adopted.eventKey;
+        operationKey = adopted.operationKey;
+      } catch (error) {
+        return twimlResponse(
+          `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`,
+          error instanceof SalesEscalationCallbackError ? error.status : 500,
+        );
+      }
+    }
+    try {
+      const result = await handleSalesEscalationDialActionCallback({
+        db: getDb(),
+        eventKey,
+        operationKey,
+        parentCallSid: payload.callSid ?? payload.parentCallSid,
+        customerCallSid: payload.dialCallSid,
+        status: payload.dialCallStatus ?? payload.callStatus,
+        durationSec: payload.dialCallDuration,
+        bridged: readBoolean(formData.get("DialBridged")),
+      });
+      const agentMessage =
+        result.outcome === "connected"
+          ? null
+          : result.outcome === "not_connected"
+            ? "The customer did not connect. Please try again later."
+            : "The call result needs review before another attempt.";
+      return agentMessage
+        ? twimlResponse(
+            `<?xml version="1.0" encoding="UTF-8"?><Response><Say>${escapeTwilioXmlText(agentMessage)}</Say><Hangup/></Response>`,
+            200,
+          )
+        : twimlResponse(
+            `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`,
+            200,
+          );
+    } catch (error) {
+      console.warn("[twilio.dial_action] sales_escalation_callback_failed", {
+        hasEventKey: true,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+      return twimlResponse(
+        `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`,
+        error instanceof SalesEscalationCallbackError ? error.status : 500,
+      );
+    }
   }
 
-  return twimlResponse(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`, 200);
+  return twimlResponse(
+    `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`,
+    200,
+  );
 }

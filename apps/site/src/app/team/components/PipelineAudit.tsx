@@ -1,5 +1,6 @@
 import React from "react";
-import { callAdminApi } from "../lib/api";
+import { requireCurrentTeamPrincipal } from "@/lib/team-principal";
+import { callAdminApiAs } from "../lib/api";
 import { labelForPipelineStage } from "./pipeline.stages";
 
 type AuditEvent = {
@@ -27,7 +28,11 @@ function formatAgo(iso: string): string {
 }
 
 export async function PipelineAudit(): Promise<React.ReactElement | null> {
-  const response = await callAdminApi("/api/admin/crm/pipeline/audit");
+  const principal = await requireCurrentTeamPrincipal();
+  const response = await callAdminApiAs(
+    principal,
+    "/api/admin/crm/pipeline/audit",
+  );
   if (!response.ok) {
     return null;
   }
@@ -46,8 +51,12 @@ export async function PipelineAudit(): Promise<React.ReactElement | null> {
     <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-base font-semibold text-slate-900">Recent pipeline automation</h3>
-          <p className="text-xs text-slate-500">Auto stage changes from quotes and appointments.</p>
+          <h3 className="text-base font-semibold text-slate-900">
+            Recent pipeline automation
+          </h3>
+          <p className="text-xs text-slate-500">
+            Auto stage changes from quotes and appointments.
+          </p>
         </div>
       </div>
       <ul className="divide-y divide-slate-200">
@@ -57,10 +66,13 @@ export async function PipelineAudit(): Promise<React.ReactElement | null> {
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                 {event.reason ?? "auto"}
               </span>
-              <span className="text-xs text-slate-500">{formatAgo(event.createdAt)}</span>
+              <span className="text-xs text-slate-500">
+                {formatAgo(event.createdAt)}
+              </span>
             </div>
             <div className="mt-1 text-sm font-medium text-slate-900">
-              {event.contactName ?? "Contact"} &mdash; {labelForPipelineStage(event.fromStage ?? "unknown")} →{" "}
+              {event.contactName ?? "Contact"} &mdash;{" "}
+              {labelForPipelineStage(event.fromStage ?? "unknown")} →{" "}
               {labelForPipelineStage(event.toStage ?? "unknown")}
             </div>
             {event.meta && typeof event.meta === "object" ? (
@@ -76,4 +88,3 @@ export async function PipelineAudit(): Promise<React.ReactElement | null> {
     </div>
   );
 }
-

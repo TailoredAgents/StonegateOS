@@ -1,11 +1,16 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi } from "@/app/team/lib/api";
-import { hasMobilePermission, resolveMobileSessionFromCookies } from "../../../../../mobile/lib/session";
+import { callAdminApiForCurrentSession } from "@/app/team/lib/api";
+import {
+  hasMobilePermission,
+  resolveMobileSessionFromCookies,
+} from "../../../../../mobile/lib/session";
 
 export const dynamic = "force-dynamic";
 
-function parseDataUrl(dataUrl: string): { contentType: string; buffer: Buffer } | null {
+function parseDataUrl(
+  dataUrl: string,
+): { contentType: string; buffer: Buffer } | null {
   if (!dataUrl.startsWith("data:")) return null;
   const match = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
   if (!match) return null;
@@ -20,7 +25,7 @@ function sanitizeFilename(name: string): string {
 
 export async function GET(
   _request: NextRequest,
-  context: { params: Promise<{ expenseId: string }> }
+  context: { params: Promise<{ expenseId: string }> },
 ): Promise<Response> {
   const session = await resolveMobileSessionFromCookies();
 
@@ -38,11 +43,17 @@ export async function GET(
     return NextResponse.json({ error: "missing_id" }, { status: 400 });
   }
 
-  const apiResponse = await callAdminApi(`/api/admin/expenses/${encodeURIComponent(normalizedExpenseId)}/receipt`, {
-    method: "GET"
-  });
+  const apiResponse = await callAdminApiForCurrentSession(
+    `/api/admin/expenses/${encodeURIComponent(normalizedExpenseId)}/receipt`,
+    {
+      method: "GET",
+    },
+  );
   if (!apiResponse.ok) {
-    return NextResponse.json({ error: "not_found" }, { status: apiResponse.status });
+    return NextResponse.json(
+      { error: "not_found" },
+      { status: apiResponse.status },
+    );
   }
 
   const payload = (await apiResponse.json().catch(() => null)) as {
@@ -69,8 +80,8 @@ export async function GET(
   return new Response(blob, {
     headers: {
       "Content-Type": contentType,
-      "Content-Disposition": `inline; filename=\"${filename}\"`,
-      "Cache-Control": "private, max-age=60"
-    }
+      "Content-Disposition": `inline; filename="${filename}"`,
+      "Cache-Control": "private, max-age=60",
+    },
   });
 }

@@ -3,12 +3,15 @@
 Use this checklist for changes that affect live operations (Stonegate or any TA deployment).
 
 ## Scope
+
 This checklist applies to:
+
 - `apps/site` (public site + `/team`)
 - `apps/api` (API + admin routes)
 - `outbox-worker` (background jobs)
 
 ## Before you merge / deploy
+
 1. Confirm the intent
    - What user-facing behavior should change?
    - What is the rollback plan (revert commit vs config toggle)?
@@ -20,7 +23,7 @@ This checklist applies to:
 
 3. Config/Secrets sanity
    - Any new env vars added? Ensure they’re set in Render for **site + api + worker** as needed.
-   - If URLs changed: confirm `API_BASE_URL`, `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SITE_URL`, `SITE_URL`.
+   - If URLs changed: confirm `API_BASE_URL`, `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SITE_URL`, `SITE_URL`, and the exact Twilio Console callback origin in `TWILIO_WEBHOOK_PUBLIC_BASE_URL`.
    - Confirm provider health is expected (Twilio/Meta/Google Ads/etc.).
 
 4. Deployment safety
@@ -28,26 +31,33 @@ This checklist applies to:
    - For high-risk changes, schedule outside peak hours.
 
 ## After deploy (must verify)
+
 Run a quick smoke check (recommended):
+
 - `pnpm -w smoke` (requires env vars; see `scripts/smoke.ts`)
 
 ### Running smoke checks on Render (recommended)
+
 You can run smoke checks directly from the Render shell for the **API** service (best default) because Render provides `RENDER_EXTERNAL_URL` automatically.
 
 From the Render shell:
+
 ```bash
 cd /opt/render/project/src
 npx -y pnpm@9.15.9 -w smoke
 ```
 
 Required env vars in the service:
+
 - `ADMIN_API_KEY`
 - Either `API_BASE_URL` (recommended) or Render's `RENDER_EXTERNAL_URL` (automatic)
 
 Optional:
+
 - `NEXT_PUBLIC_SITE_URL` or `SITE_URL` so the script checks `site.healthz` too.
 
 Manual verification (minimum):
+
 1. Site health
    - `GET https://{api}/api/healthz` returns OK
    - `GET https://{site}/api/healthz` returns OK
@@ -70,7 +80,9 @@ Manual verification (minimum):
    - Any background agent you rely on (SEO, marketing sync) is not erroring
 
 ## Rollback plan
+
 If production breaks:
+
 1. Roll back to the previous good Render deploy (fastest)
 2. Capture the error:
    - service logs (site/api/worker)

@@ -1,5 +1,5 @@
 import { formatDayKey, TEAM_TIME_ZONE } from "../../team/lib/timezone";
-import { callAdminApi } from "../../team/lib/api";
+import { callAdminApiForCurrentSession } from "../../team/lib/api";
 
 type CalendarEvent = {
   id: string;
@@ -151,6 +151,7 @@ export type MobilePayoutRun = {
   createdAt: string;
   lockedAt: string | null;
   paidAt: string | null;
+  version: string;
   reportGeneratedAt: string | null;
   totalCents: number;
   reimbursementTotalCents: number;
@@ -167,7 +168,7 @@ type PayoutRunsResponse = {
 };
 
 async function readJson<T>(path: string): Promise<T | null> {
-  const response = await callAdminApi(path, { method: "GET" });
+  const response = await callAdminApiForCurrentSession(path, { method: "GET" });
   if (!response.ok) return null;
   return (await response.json().catch(() => null)) as T | null;
 }

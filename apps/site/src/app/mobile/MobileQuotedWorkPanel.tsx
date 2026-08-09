@@ -50,8 +50,14 @@ type MediaResponse = {
     id: string;
     filename: string | null;
     contentType: string | null;
-    url: string;
+    createdAt: string;
+    migrationRequired: true;
   }>;
+  legacyAttachmentSummary?: {
+    visibleCount: number;
+    truncated: boolean;
+    rawContentWithheld: true;
+  };
 };
 
 type DeletedMediaItem = {
@@ -197,6 +203,9 @@ export function MobileQuotedWorkPanel({
   const [legacyFiles, setLegacyFiles] = React.useState<
     NonNullable<MediaResponse["legacyAttachments"]>
   >([]);
+  const [legacySummary, setLegacySummary] = React.useState<
+    MediaResponse["legacyAttachmentSummary"] | null
+  >(null);
   const [queue, setQueue] = React.useState<QueuedMediaUpload[]>([]);
   const [newCaption, setNewCaption] = React.useState("");
   const [captionDrafts, setCaptionDrafts] = React.useState<
@@ -297,6 +306,7 @@ export function MobileQuotedWorkPanel({
           ? payload.legacyAttachments
           : [],
       );
+      setLegacySummary(payload.legacyAttachmentSummary ?? null);
       const loadedScope = payload.quotedScopeText ?? initialScope ?? "";
       const canApplyLoadedScope =
         !scopeSaveInFlight.current &&
@@ -1046,21 +1056,35 @@ export function MobileQuotedWorkPanel({
           {legacyFiles.length ? (
             <details className="rounded-md border border-white/10 bg-slate-900 p-2">
               <summary className="cursor-pointer text-xs font-semibold text-slate-300">
-                Legacy files ({legacyFiles.length})
+                Legacy files ({legacyFiles.length}
+                {legacySummary?.truncated ? "+" : ""})
               </summary>
-              <div className="mt-2 space-y-1">
+              <p className="mt-2 text-xs leading-5 text-amber-100">
+                These historical files are listed for migration review. Their
+                old unverified links are withheld until the files are moved into
+                private, scanned storage.
+              </p>
+              {legacySummary?.truncated ? (
+                <p className="mt-2 text-xs leading-5 text-amber-100">
+                  More legacy records exist than can be shown here. Use the
+                  migration inventory before deciding that review is complete.
+                </p>
+              ) : null}
+              <ul className="mt-2 space-y-1">
                 {legacyFiles.map((file) => (
-                  <a
+                  <li
                     key={file.id}
-                    href={file.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block truncate rounded border border-white/10 px-2 py-2 text-xs text-cyan-100"
+                    className="rounded border border-white/10 px-2 py-2 text-xs text-slate-200"
                   >
-                    {file.filename || "Attachment"}
-                  </a>
+                    <span className="block truncate font-semibold">
+                      {file.filename || "Legacy attachment"}
+                    </span>
+                    <span className="mt-1 block text-[11px] text-slate-400">
+                      Secure migration required before download
+                    </span>
+                  </li>
                 ))}
-              </div>
+              </ul>
             </details>
           ) : null}
         </div>

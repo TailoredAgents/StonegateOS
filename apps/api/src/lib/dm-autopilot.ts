@@ -1,5 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
-import { conversationMessages, getDb } from "@/db";
+import type { getDb } from "@/db";
+import { conversationMessages } from "@/db";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
 import type { SalesAutopilotPolicy } from "@/lib/policy";
 

@@ -1,4 +1,5 @@
 import { eq, or, sql } from "drizzle-orm";
+import { resolveMetaGraphApiEndpoint } from "@myst-os/sdk";
 import { getDb, contacts, leads, outboxEvents } from "@/db";
 import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 import { normalizeName, normalizePhone } from "../../app/api/web/utils";
@@ -12,9 +13,9 @@ const PAGE_TOKEN_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const pageTokenCache = new Map<string, { token: string; fetchedAt: number }>();
 
 type FacebookResponseDiagnostics = {
-  fbTraceId: string | null;
-  fbDebug: string | null;
-  wwwAuthenticate: string | null;
+  fbTraceAvailable: boolean;
+  fbDebugAvailable: boolean;
+  authorizationChallengeAvailable: boolean;
 };
 
 export type FacebookLeadgenField = {
@@ -36,7 +37,9 @@ export type FacebookLeadgenDetails = {
 };
 
 type DatabaseClient = ReturnType<typeof getDb>;
-type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
+type TransactionExecutor = Parameters<
+  DatabaseClient["transaction"]
+>[0] extends (tx: infer Tx) => Promise<unknown>
   ? Tx
   : never;
 type DbExecutor = DatabaseClient | TransactionExecutor;
@@ -49,13 +52,18 @@ function normalizeFieldKey(value: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
-function buildFieldMap(fields?: FacebookLeadgenField[]): Record<string, string[]> {
+function buildFieldMap(
+  fields?: FacebookLeadgenField[],
+): Record<string, string[]> {
   const map: Record<string, string[]> = {};
   const items = Array.isArray(fields) ? fields : [];
   for (const field of items) {
     const label = typeof field.name === "string" ? field.name.trim() : "";
     const values = Array.isArray(field.values)
-      ? field.values.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      ? field.values.filter(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0,
+        )
       : [];
     if (!label || values.length === 0) {
       continue;
@@ -67,14 +75,17 @@ function buildFieldMap(fields?: FacebookLeadgenField[]): Record<string, string[]
 
 function buildCustomAnswers(
   fields?: FacebookLeadgenField[],
-  standardKeys?: Set<string>
+  standardKeys?: Set<string>,
 ): Record<string, string[]> {
   const answers: Record<string, string[]> = {};
   const items = Array.isArray(fields) ? fields : [];
   for (const field of items) {
     const label = typeof field.name === "string" ? field.name.trim() : "";
     const values = Array.isArray(field.values)
-      ? field.values.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      ? field.values.filter(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0,
+        )
       : [];
     if (!label || values.length === 0) {
       continue;
@@ -88,7 +99,10 @@ function buildCustomAnswers(
   return answers;
 }
 
-function firstFieldValue(map: Record<string, string[]>, keys: string[]): string | null {
+function firstFieldValue(
+  map: Record<string, string[]>,
+  keys: string[],
+): string | null {
   for (const key of keys) {
     const values = map[key];
     if (Array.isArray(values) && values.length > 0) {
@@ -98,7 +112,10 @@ function firstFieldValue(map: Record<string, string[]>, keys: string[]): string 
   return null;
 }
 
-function resolveFacebookToken(): { systemUserToken: string | null; pageAccessToken: string | null } {
+function resolveFacebookToken(): {
+  systemUserToken: string | null;
+  pageAccessToken: string | null;
+} {
   const pageAccessToken = process.env["FB_PAGE_ACCESS_TOKEN"] ?? null;
   const systemUserToken =
     process.env["FB_MESSENGER_ACCESS_TOKEN"] ??
@@ -106,63 +123,125 @@ function resolveFacebookToken(): { systemUserToken: string | null; pageAccessTok
     process.env["FB_LEADGEN_ACCESS_TOKEN"] ??
     null;
   return {
-    systemUserToken: systemUserToken && systemUserToken.trim().length > 0 ? systemUserToken.trim() : null,
-    pageAccessToken: pageAccessToken && pageAccessToken.trim().length > 0 ? pageAccessToken.trim() : null
+    systemUserToken:
+      systemUserToken && systemUserToken.trim().length > 0
+        ? systemUserToken.trim()
+        : null,
+    pageAccessToken:
+      pageAccessToken && pageAccessToken.trim().length > 0
+        ? pageAccessToken.trim()
+        : null,
   };
 }
 
 function readConfiguredFacebookPageId(): string | null {
   const value = process.env["FB_PAGE_ID"];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
 }
 
 function readConfiguredFacebookAppSecret(): string | null {
   const value = process.env["FB_APP_SECRET"];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
 }
 
-function getFacebookResponseDiagnostics(response: Response): FacebookResponseDiagnostics {
+function getFacebookResponseDiagnostics(
+  response: Response,
+): FacebookResponseDiagnostics {
   return {
-    fbTraceId: response.headers.get("x-fb-trace-id"),
-    fbDebug: response.headers.get("x-fb-debug"),
-    wwwAuthenticate: response.headers.get("www-authenticate")
+    fbTraceAvailable: response.headers.has("x-fb-trace-id"),
+    fbDebugAvailable: response.headers.has("x-fb-debug"),
+    authorizationChallengeAvailable: response.headers.has("www-authenticate"),
   };
 }
 
 type FacebookGraphGetResult = {
   ok: boolean;
   status: number;
-  text: string;
-  json: unknown | null;
+  json: unknown;
   diagnostics: FacebookResponseDiagnostics;
 };
 
 async function runFacebookGraphGet(url: URL): Promise<FacebookGraphGetResult> {
   const response = await fetch(url.toString(), { method: "GET" });
-  const text = await response.text();
-  let json: unknown | null = null;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = null;
-  }
+  const json: unknown = await response.json().catch(() => null);
 
   return {
     ok: response.ok,
     status: response.status,
-    text,
     json,
-    diagnostics: getFacebookResponseDiagnostics(response)
+    diagnostics: getFacebookResponseDiagnostics(response),
   };
 }
 
-export async function fetchFacebookPageAccessToken(pageId: string, systemUserToken: string): Promise<string | null> {
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function summarizeFacebookGraphPayload(
+  value: unknown,
+): Record<string, unknown> {
+  if (!isJsonRecord(value)) {
+    return {
+      shape:
+        value === null
+          ? "empty"
+          : Array.isArray(value)
+            ? "array"
+            : typeof value,
+    };
+  }
+
+  const error = isJsonRecord(value["error"]) ? value["error"] : null;
+  const data = Array.isArray(value["data"]) ? value["data"] : null;
+  return {
+    keys: Object.keys(value)
+      .filter((key) => key !== "access_token")
+      .sort()
+      .slice(0, 20),
+    accessTokenPresent: typeof value["access_token"] === "string",
+    idPresent: typeof value["id"] === "string",
+    namePresent: typeof value["name"] === "string",
+    dataCount: data?.length ?? null,
+    error:
+      error === null
+        ? null
+        : {
+            code:
+              typeof error["code"] === "number" ||
+              typeof error["code"] === "string"
+                ? error["code"]
+                : null,
+            subcode:
+              typeof error["error_subcode"] === "number" ||
+              typeof error["error_subcode"] === "string"
+                ? error["error_subcode"]
+                : null,
+            type:
+              typeof error["type"] === "string"
+                ? error["type"].slice(0, 80)
+                : null,
+          },
+  };
+}
+
+function providerErrorName(error: unknown): string {
+  return error instanceof Error && error.name ? error.name : "UnknownError";
+}
+
+export async function fetchFacebookPageAccessToken(
+  pageId: string,
+  systemUserToken: string,
+): Promise<string | null> {
   const cached = pageTokenCache.get(pageId);
   if (cached && Date.now() - cached.fetchedAt < PAGE_TOKEN_CACHE_TTL_MS) {
     return cached.token;
   }
 
-  const url = new URL(`https://graph.facebook.com/v24.0/${pageId}`);
+  const url = new URL(resolveMetaGraphApiEndpoint([pageId], process.env));
   url.searchParams.set("fields", "access_token");
   url.searchParams.set("access_token", systemUserToken);
 
@@ -171,25 +250,29 @@ export async function fetchFacebookPageAccessToken(pageId: string, systemUserTok
     if (!result.ok) {
       console.warn("[facebook] page_token_failed", {
         status: result.status,
-        pageId,
-        body: result.text,
-        ...result.diagnostics
+        ...result.diagnostics,
       });
       return null;
     }
-    const data = (result.json ?? null) as { access_token?: string | null } | null;
+    const data = (result.json ?? null) as {
+      access_token?: string | null;
+    } | null;
     const token = data?.access_token?.trim() ?? null;
     if (token) {
       pageTokenCache.set(pageId, { token, fetchedAt: Date.now() });
     }
     return token;
   } catch (error) {
-    console.warn("[facebook] page_token_error", { error: String(error) });
+    console.warn("[facebook] page_token_error", {
+      errorName: providerErrorName(error),
+    });
     return null;
   }
 }
 
-export async function resolveFacebookPageAccessToken(pageId: string | null): Promise<string | null> {
+export async function resolveFacebookPageAccessToken(
+  pageId: string | null,
+): Promise<string | null> {
   const resolvedPageId = pageId?.trim() || readConfiguredFacebookPageId();
   const { systemUserToken, pageAccessToken } = resolveFacebookToken();
   if (pageAccessToken) {
@@ -201,14 +284,17 @@ export async function resolveFacebookPageAccessToken(pageId: string | null): Pro
   return await fetchFacebookPageAccessToken(resolvedPageId, systemUserToken);
 }
 
-export async function fetchFacebookSenderName(pageId: string | null, senderId: string | null): Promise<string | null> {
+export async function fetchFacebookSenderName(
+  pageId: string | null,
+  senderId: string | null,
+): Promise<string | null> {
   if (!senderId) return null;
   const resolvedPageId = pageId?.trim() || readConfiguredFacebookPageId();
 
   const accessToken = await resolveFacebookPageAccessToken(resolvedPageId);
   if (!accessToken) return null;
 
-  const url = new URL(`https://graph.facebook.com/v24.0/${senderId}`);
+  const url = new URL(resolveMetaGraphApiEndpoint([senderId], process.env));
   url.searchParams.set("fields", "first_name,last_name,name");
   url.searchParams.set("access_token", accessToken);
 
@@ -217,14 +303,15 @@ export async function fetchFacebookSenderName(pageId: string | null, senderId: s
     if (!result.ok) {
       console.warn("[facebook] sender_lookup_failed", {
         status: result.status,
-        pageId: resolvedPageId,
-        senderId,
-        body: result.text,
-        ...result.diagnostics
+        ...result.diagnostics,
       });
       return null;
     }
-    const data = (result.json ?? null) as { name?: string; first_name?: string; last_name?: string } | null;
+    const data = (result.json ?? null) as {
+      name?: string;
+      first_name?: string;
+      last_name?: string;
+    } | null;
     const full =
       typeof data?.name === "string" && data.name.trim().length
         ? data.name.trim()
@@ -237,7 +324,9 @@ export async function fetchFacebookSenderName(pageId: string | null, senderId: s
     const combined = `${first} ${last}`.trim();
     return combined.length ? combined : null;
   } catch (error) {
-    console.warn("[facebook] sender_lookup_error", { pageId: resolvedPageId, senderId, error: String(error) });
+    console.warn("[facebook] sender_lookup_error", {
+      errorName: providerErrorName(error),
+    });
     return null;
   }
 }
@@ -253,19 +342,27 @@ export async function diagnoseFacebookMessengerLookup(input: {
   const appId = input.appId?.trim() || null;
 
   const result: Record<string, unknown> = {
-    pageId: resolvedPageId,
-    senderId: input.senderId,
-    tokenSource: pageAccessToken ? "page_access_token" : systemUserToken ? "system_user_token" : "missing",
+    pageIdConfigured: Boolean(resolvedPageId),
+    senderIdProvided: Boolean(input.senderId),
+    tokenSource: pageAccessToken
+      ? "page_access_token"
+      : systemUserToken
+        ? "system_user_token"
+        : "missing",
     env: {
       hasSystemUserToken: Boolean(systemUserToken),
       hasPageAccessToken: Boolean(pageAccessToken),
       hasAppSecret: Boolean(appSecret),
-      hasAppId: Boolean(appId)
-    }
+      hasAppId: Boolean(appId),
+    },
   };
 
   if (systemUserToken && appSecret && appId) {
-    const debugUrl = new URL("https://graph.facebook.com/debug_token");
+    const debugUrl = new URL(
+      resolveMetaGraphApiEndpoint(["debug_token"], process.env, {
+        versioned: false,
+      }),
+    );
     debugUrl.searchParams.set("input_token", systemUserToken);
     debugUrl.searchParams.set("access_token", `${appId}|${appSecret}`);
     try {
@@ -273,20 +370,22 @@ export async function diagnoseFacebookMessengerLookup(input: {
       result["systemTokenDebug"] = {
         ok: debugResult.ok,
         status: debugResult.status,
-        body: debugResult.json ?? debugResult.text,
-        ...debugResult.diagnostics
+        response: summarizeFacebookGraphPayload(debugResult.json),
+        ...debugResult.diagnostics,
       };
     } catch (error) {
       result["systemTokenDebug"] = {
         ok: false,
-        error: String(error)
+        error: providerErrorName(error),
       };
     }
   }
 
   let effectivePageToken: string | null = pageAccessToken;
   if (!effectivePageToken && resolvedPageId && systemUserToken) {
-    const pageTokenUrl = new URL(`https://graph.facebook.com/v24.0/${resolvedPageId}`);
+    const pageTokenUrl = new URL(
+      resolveMetaGraphApiEndpoint([resolvedPageId], process.env),
+    );
     pageTokenUrl.searchParams.set("fields", "id,name,access_token");
     pageTokenUrl.searchParams.set("access_token", systemUserToken);
     const pageTokenResult = await runFacebookGraphGet(pageTokenUrl);
@@ -295,7 +394,8 @@ export async function diagnoseFacebookMessengerLookup(input: {
         ? (pageTokenResult.json as Record<string, unknown>)
         : null;
     effectivePageToken =
-      typeof pageTokenBody?.["access_token"] === "string" && pageTokenBody["access_token"].trim().length > 0
+      typeof pageTokenBody?.["access_token"] === "string" &&
+      pageTokenBody["access_token"].trim().length > 0
         ? pageTokenBody["access_token"].trim()
         : null;
 
@@ -303,54 +403,60 @@ export async function diagnoseFacebookMessengerLookup(input: {
       ok: pageTokenResult.ok,
       status: pageTokenResult.status,
       pageTokenResolved: Boolean(effectivePageToken),
-      body:
-        pageTokenBody && typeof pageTokenBody["access_token"] === "string"
-          ? { ...pageTokenBody, access_token: "[redacted]" }
-          : pageTokenResult.json ?? pageTokenResult.text,
-      ...pageTokenResult.diagnostics
+      response: summarizeFacebookGraphPayload(pageTokenResult.json),
+      ...pageTokenResult.diagnostics,
     };
   }
 
   if (!effectivePageToken) {
     result["senderLookup"] = {
       ok: false,
-      error: "page_access_token_unavailable"
+      error: "page_access_token_unavailable",
     };
     return result;
   }
 
   if (resolvedPageId) {
-    const pageInspectUrl = new URL(`https://graph.facebook.com/v24.0/${resolvedPageId}`);
+    const pageInspectUrl = new URL(
+      resolveMetaGraphApiEndpoint([resolvedPageId], process.env),
+    );
     pageInspectUrl.searchParams.set("fields", "id,name");
     pageInspectUrl.searchParams.set("access_token", effectivePageToken);
     const pageInspectResult = await runFacebookGraphGet(pageInspectUrl);
     result["pageInspect"] = {
       ok: pageInspectResult.ok,
       status: pageInspectResult.status,
-      body: pageInspectResult.json ?? pageInspectResult.text,
-      ...pageInspectResult.diagnostics
+      response: summarizeFacebookGraphPayload(pageInspectResult.json),
+      ...pageInspectResult.diagnostics,
     };
 
-    const subscribedAppsUrl = new URL(`https://graph.facebook.com/v24.0/${resolvedPageId}/subscribed_apps`);
+    const subscribedAppsUrl = new URL(
+      resolveMetaGraphApiEndpoint(
+        [resolvedPageId, "subscribed_apps"],
+        process.env,
+      ),
+    );
     subscribedAppsUrl.searchParams.set("access_token", effectivePageToken);
     const subscribedAppsResult = await runFacebookGraphGet(subscribedAppsUrl);
     result["pageSubscribedApps"] = {
       ok: subscribedAppsResult.ok,
       status: subscribedAppsResult.status,
-      body: subscribedAppsResult.json ?? subscribedAppsResult.text,
-      ...subscribedAppsResult.diagnostics
+      response: summarizeFacebookGraphPayload(subscribedAppsResult.json),
+      ...subscribedAppsResult.diagnostics,
     };
   }
 
-  const senderLookupUrl = new URL(`https://graph.facebook.com/v24.0/${input.senderId}`);
+  const senderLookupUrl = new URL(
+    resolveMetaGraphApiEndpoint([input.senderId], process.env),
+  );
   senderLookupUrl.searchParams.set("fields", "id,name,first_name,last_name");
   senderLookupUrl.searchParams.set("access_token", effectivePageToken);
   const senderLookupResult = await runFacebookGraphGet(senderLookupUrl);
   result["senderLookup"] = {
     ok: senderLookupResult.ok,
     status: senderLookupResult.status,
-    body: senderLookupResult.json ?? senderLookupResult.text,
-    ...senderLookupResult.diagnostics
+    response: summarizeFacebookGraphPayload(senderLookupResult.json),
+    ...senderLookupResult.diagnostics,
   };
 
   return result;
@@ -358,14 +464,16 @@ export async function diagnoseFacebookMessengerLookup(input: {
 
 export async function fetchFacebookLeadgenDetails(
   leadgenId: string,
-  options?: { pageId?: string | null; accessToken?: string | null }
+  options?: { pageId?: string | null; accessToken?: string | null },
 ): Promise<FacebookLeadgenDetails> {
-  const accessToken = options?.accessToken?.trim() || (await resolveFacebookPageAccessToken(options?.pageId ?? null));
+  const accessToken =
+    options?.accessToken?.trim() ||
+    (await resolveFacebookPageAccessToken(options?.pageId ?? null));
   if (!accessToken) {
     throw new Error("facebook_access_token_missing");
   }
 
-  const url = new URL(`https://graph.facebook.com/v24.0/${leadgenId}`);
+  const url = new URL(resolveMetaGraphApiEndpoint([leadgenId], process.env));
   url.searchParams.set(
     "fields",
     [
@@ -377,31 +485,40 @@ export async function fetchFacebookLeadgenDetails(
       "adset_id",
       "adset_name",
       "campaign_id",
-      "campaign_name"
-    ].join(",")
+      "campaign_name",
+    ].join(","),
   );
   url.searchParams.set("access_token", accessToken);
 
   const response = await fetch(url.toString(), { method: "GET" });
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`leadgen_fetch_failed:${response.status}:${text}`);
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`leadgen_fetch_failed:${response.status}`);
   }
 
-  return (await response.json()) as FacebookLeadgenDetails;
+  const payload: unknown = await response.json().catch(() => null);
+  if (!isJsonRecord(payload) || typeof payload["id"] !== "string") {
+    throw new Error("leadgen_fetch_invalid_response");
+  }
+  return payload as FacebookLeadgenDetails;
 }
 
-async function upsertFacebookContact(db: DbExecutor, input: {
-  firstName: string;
-  lastName: string;
-  email: string | null;
-  phoneRaw: string | null;
-  phoneE164: string | null;
-}): Promise<{ id: string }> {
+async function upsertFacebookContact(
+  db: DbExecutor,
+  input: {
+    firstName: string;
+    lastName: string;
+    email: string | null;
+    phoneRaw: string | null;
+    phoneE164: string | null;
+  },
+): Promise<{ id: string }> {
   const email = input.email?.trim().toLowerCase() ?? null;
   const phoneRaw = input.phoneRaw?.trim() ?? null;
   const phoneE164 = input.phoneE164?.trim() ?? null;
-  const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(db as any);
+  const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(
+    db as Parameters<typeof getDefaultSalesAssigneeMemberId>[0],
+  );
 
   if (phoneE164 && phoneRaw) {
     const contact = await upsertContact(db, {
@@ -410,26 +527,25 @@ async function upsertFacebookContact(db: DbExecutor, input: {
       email,
       phoneRaw,
       phoneE164,
-      source: "facebook_lead"
+      source: "facebook_lead",
     });
     return { id: contact.id };
   }
 
-  let contact =
-    email
-      ? await db
-          .select({
-            id: contacts.id,
-            email: contacts.email,
-            phone: contacts.phone,
-            phoneE164: contacts.phoneE164,
-            salespersonMemberId: contacts.salespersonMemberId
-          })
-          .from(contacts)
-          .where(eq(contacts.email, email))
-          .limit(1)
-          .then((rows) => rows[0])
-      : null;
+  let contact = email
+    ? await db
+        .select({
+          id: contacts.id,
+          email: contacts.email,
+          phone: contacts.phone,
+          phoneE164: contacts.phoneE164,
+          salespersonMemberId: contacts.salespersonMemberId,
+        })
+        .from(contacts)
+        .where(eq(contacts.email, email))
+        .limit(1)
+        .then((rows) => rows[0])
+    : null;
 
   if (!contact && phoneRaw) {
     const predicates = [eq(contacts.phone, phoneRaw)];
@@ -442,7 +558,7 @@ async function upsertFacebookContact(db: DbExecutor, input: {
         email: contacts.email,
         phone: contacts.phone,
         phoneE164: contacts.phoneE164,
-        salespersonMemberId: contacts.salespersonMemberId
+        salespersonMemberId: contacts.salespersonMemberId,
       })
       .from(contacts)
       .where(or(...predicates))
@@ -454,7 +570,7 @@ async function upsertFacebookContact(db: DbExecutor, input: {
     const updatePayload: Record<string, unknown> = {
       firstName: input.firstName,
       lastName: input.lastName,
-      updatedAt: new Date()
+      updatedAt: new Date(),
     };
 
     if (email && !contact.email) {
@@ -470,7 +586,10 @@ async function upsertFacebookContact(db: DbExecutor, input: {
       updatePayload["salespersonMemberId"] = defaultAssigneeMemberId;
     }
 
-    await db.update(contacts).set(updatePayload).where(eq(contacts.id, contact.id));
+    await db
+      .update(contacts)
+      .set(updatePayload)
+      .where(eq(contacts.id, contact.id));
     return { id: contact.id };
   }
 
@@ -483,7 +602,7 @@ async function upsertFacebookContact(db: DbExecutor, input: {
       phone: phoneRaw ?? null,
       phoneE164: phoneE164 ?? null,
       salespersonMemberId: defaultAssigneeMemberId,
-      source: "facebook_lead"
+      source: "facebook_lead",
     })
     .onConflictDoNothing()
     .returning({ id: contacts.id });
@@ -562,13 +681,19 @@ export async function recordLeadFromFacebook(input: {
       "state",
       "zip",
       "zip_code",
-      "postal_code"
+      "postal_code",
     ]);
-    const customAnswers = buildCustomAnswers(input.details.field_data, standardKeys);
+    const customAnswers = buildCustomAnswers(
+      input.details.field_data,
+      standardKeys,
+    );
 
     const fullName =
       firstFieldValue(fieldMap, ["full_name", "name"]) ??
-      [firstFieldValue(fieldMap, ["first_name"]), firstFieldValue(fieldMap, ["last_name"])]
+      [
+        firstFieldValue(fieldMap, ["first_name"]),
+        firstFieldValue(fieldMap, ["last_name"]),
+      ]
         .filter(Boolean)
         .join(" ")
         .trim();
@@ -579,7 +704,11 @@ export async function recordLeadFromFacebook(input: {
     const resolvedLastName = lastName || resolvedName.lastName;
 
     const email = firstFieldValue(fieldMap, ["email", "email_address"]);
-    const rawPhone = firstFieldValue(fieldMap, ["phone_number", "phone", "mobile_phone"]);
+    const rawPhone = firstFieldValue(fieldMap, [
+      "phone_number",
+      "phone",
+      "mobile_phone",
+    ]);
     let normalizedPhone: ReturnType<typeof normalizePhone> | null = null;
     if (rawPhone) {
       try {
@@ -594,25 +723,38 @@ export async function recordLeadFromFacebook(input: {
       lastName: resolvedLastName,
       email: email ?? null,
       phoneRaw: normalizedPhone?.raw ?? rawPhone ?? null,
-      phoneE164: normalizedPhone?.e164 ?? null
+      phoneE164: normalizedPhone?.e164 ?? null,
     });
 
-    const addressLine1 = firstFieldValue(fieldMap, ["street_address", "address"]);
+    const addressLine1 = firstFieldValue(fieldMap, [
+      "street_address",
+      "address",
+    ]);
     const city = firstFieldValue(fieldMap, ["city"]);
     const state = firstFieldValue(fieldMap, ["state"]);
-    const postalCode = firstFieldValue(fieldMap, ["zip", "zip_code", "postal_code"]);
+    const postalCode = firstFieldValue(fieldMap, [
+      "zip",
+      "zip_code",
+      "postal_code",
+    ]);
 
     const hasFullAddress = Boolean(addressLine1 && city && state && postalCode);
     const placeholderId = input.leadgenId.slice(-6);
     const property = await upsertProperty(tx, {
       contactId: contact.id,
       addressLine1: hasFullAddress
-        ? addressLine1 ?? ""
+        ? (addressLine1 ?? "")
         : `[FB Lead ${placeholderId}] Address pending`,
-      city: hasFullAddress ? city ?? DEFAULT_PLACEHOLDER_CITY : DEFAULT_PLACEHOLDER_CITY,
-      state: hasFullAddress ? state ?? DEFAULT_PLACEHOLDER_STATE : DEFAULT_PLACEHOLDER_STATE,
-      postalCode: hasFullAddress ? postalCode ?? DEFAULT_PLACEHOLDER_POSTAL : DEFAULT_PLACEHOLDER_POSTAL,
-      gated: false
+      city: hasFullAddress
+        ? (city ?? DEFAULT_PLACEHOLDER_CITY)
+        : DEFAULT_PLACEHOLDER_CITY,
+      state: hasFullAddress
+        ? (state ?? DEFAULT_PLACEHOLDER_STATE)
+        : DEFAULT_PLACEHOLDER_STATE,
+      postalCode: hasFullAddress
+        ? (postalCode ?? DEFAULT_PLACEHOLDER_POSTAL)
+        : DEFAULT_PLACEHOLDER_POSTAL,
+      gated: false,
     });
 
     const notes =
@@ -644,10 +786,10 @@ export async function recordLeadFromFacebook(input: {
           campaignId: input.details.campaign_id ?? null,
           campaignName: input.details.campaign_name ?? null,
           fieldData: fieldMap,
-          customAnswers
+          customAnswers,
         },
         createdAt: now,
-        updatedAt: now
+        updatedAt: now,
       })
       .returning({ id: leads.id });
 
@@ -659,8 +801,8 @@ export async function recordLeadFromFacebook(input: {
       type: "lead.alert",
       payload: {
         leadId: lead.id,
-        source: "facebook_lead"
-      }
+        source: "facebook_lead",
+      },
     });
 
     await tx.insert(outboxEvents).values({
@@ -670,16 +812,16 @@ export async function recordLeadFromFacebook(input: {
         services: DEFAULT_SERVICES,
         appointmentType: "web_lead",
         source: "facebook_lead",
-        notes
-      }
+        notes,
+      },
     });
 
     await tx.insert(outboxEvents).values({
       type: "meta.lead_event",
       payload: {
         leadId: lead.id,
-        eventName: "Lead"
-      }
+        eventName: "Lead",
+      },
     });
 
     return { leadId: lead.id, duplicate: false };

@@ -1,11 +1,12 @@
-# SEO Agent (Autopublishing Blog) + Next Steps
+# SEO Agent Editorial Workflow + Next Steps
 
-This repo includes a v1 SEO agent that autopublishes blog posts and makes them indexable (routes + sitemap). This doc explains what is implemented, how to verify it is running, and what is still needed for broader SEO.
+The SEO agent generates private blog drafts. A verified team member must inspect a draft, submit it for review, and explicitly publish it before public routes or the sitemap can expose it.
 
 ## What is implemented (v1)
 
-### Autopublishing blog posts (2/week target)
-- A background job runs inside the outbox worker (`scripts/outbox-worker.ts`) and periodically attempts to publish blog content.
+### Private draft generation (2/week target)
+- A background job runs inside the outbox worker (`scripts/outbox-worker.ts`) and periodically attempts to generate a private draft.
+- Generation never sets `published_at`; only the separate, authenticated Review → Published transition can do that.
 - The agent is intentionally safe-by-default:
   - No automated backlink blasts.
   - No fabricated stats, awards, or partnerships.
@@ -16,7 +17,8 @@ This repo includes a v1 SEO agent that autopublishes blog posts and makes them i
 - Tables:
   - `blog_posts` (public posts; Markdown content + metadata)
   - `seo_agent_state` (cursor/state for topic rotation)
-- Migration: `apps/api/src/db/migrations/0007_seo_blog.sql`
+- Base migration: `apps/api/src/db/migrations/0007_seo_blog.sql`
+- Editorial safety migration: `apps/api/src/db/migrations/0074_seo_editorial_workflow.sql`
 
 ### Public API (read-only)
 - `GET /api/public/blog` (list published posts)
@@ -29,13 +31,10 @@ This repo includes a v1 SEO agent that autopublishes blog posts and makes them i
 
 ### Topic rotation
 - Topic list: `apps/api/src/lib/seo/topics.ts`
-- Publishing logic: `apps/api/src/lib/seo/agent.ts`
+- Draft-generation logic: `apps/api/src/lib/seo/agent.ts`
 
 ### Scheduling + limits
-The worker calls `maybeAutopublishBlogPost()` on an interval (default every ~6 hours), but publishing is gated:
-- Max 2 posts per 7 days
-- Minimum spacing of ~3 days between posts
-- Uses a Postgres advisory lock to avoid double-publishing when multiple worker instances run
+The worker calls `maybeGenerateSeoDraft()` on an interval (default every ~6 hours). Generation is gated to two drafts per seven days with roughly three days between scheduled drafts. A Postgres advisory lock prevents concurrent generation. Public publishing separately enforces at most two posts per seven days and at least three days between posts.
 
 ### Models used
 - Brain model for brief/strategy: `OPENAI_MODEL` (defaults to `gpt-5-mini`)
@@ -50,7 +49,7 @@ The worker calls `maybeAutopublishBlogPost()` on an interval (default every ~6 h
 2) Confirm the worker is deployed and running:
 - Render worker logs for `stonegate-outbox-worker`
 - Look for periodic JSON logs like:
-  - `{"ok":true,"seo":{"ok":true,"skipped":false,...}}` when it publishes
+  - `{"ok":true,"seoDraft":{"ok":true,"skipped":false,...}}` when it creates a private draft
   - or `skipped:true` with reasons such as `quota_met`, `too_soon`, or `openai_not_configured`
 
 3) Confirm the public endpoints:
@@ -61,15 +60,15 @@ The worker calls `maybeAutopublishBlogPost()` on an interval (default every ~6 h
 
 ## Controls / Ops
 
-### Disable autopublishing (optional)
-- Set env var on the worker: `SEO_AUTOPUBLISH_DISABLED=1`
+### Disable draft generation (optional)
+- Set the compatibility env var on the worker: `SEO_AUTOPUBLISH_DISABLED=1`
 
-### Adjust the autopublish check interval (optional)
-- Worker env var: `SEO_AUTOPUBLISH_INTERVAL_MS` (default ~6 hours)
+### Adjust the draft-generation check interval (optional)
+- Compatibility worker env var: `SEO_AUTOPUBLISH_INTERVAL_MS` (default ~6 hours)
 
-### Manual run (admin-only)
-There is an admin endpoint you can call (use `x-admin-api-key: ADMIN_API_KEY`):
-- `POST /api/admin/seo/run` with JSON `{ "force": true }`
+### Manual generation and publishing
+
+Use `/team/marketing/seo`. Human requests require a verified team session, `marketing.publish`, same-origin verification, and an idempotency key. `POST /api/admin/seo/run` only generates a private draft. Review and publish are separate, versioned and audited actions; publishing also requires typing the exact slug.
 
 ## What is still needed for broader SEO
 

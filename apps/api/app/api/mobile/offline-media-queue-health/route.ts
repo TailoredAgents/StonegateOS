@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, eq, lt } from "drizzle-orm";
-import { getDb, mobileOfflineMediaQueueHealth, teamMembers } from "@/db";
+import { getDb, mobileOfflineMediaQueueHealth } from "@/db";
 import { getAuditActorFromRequest } from "@/lib/audit";
 import {
   MAX_OFFLINE_MEDIA_HEALTH_PAYLOAD_BYTES,
@@ -9,7 +9,6 @@ import {
   parseTeamMemberActorId,
 } from "@/lib/mobile-offline-media-queue-health";
 import { requirePermission } from "@/lib/permissions";
-import { isAdminRequest } from "../../web/admin";
 
 function serializeQueueHealth(row: {
   clientDeviceId: string;
@@ -30,9 +29,8 @@ function serializeQueueHealth(row: {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const permissionError = await requirePermission(request, "appointments.read");
+  if (permissionError) return permissionError;
 
   const actor = getAuditActorFromRequest(request);
   const teamMemberId = parseTeamMemberActorId(actor.id);
@@ -42,22 +40,6 @@ export async function POST(request: NextRequest): Promise<Response> {
       { status: 401 },
     );
   }
-
-  const db = getDb();
-  const [teamMember] = await db
-    .select({ id: teamMembers.id })
-    .from(teamMembers)
-    .where(and(eq(teamMembers.id, teamMemberId), eq(teamMembers.active, true)))
-    .limit(1);
-  if (!teamMember) {
-    return NextResponse.json(
-      { error: "authenticated_team_member_required" },
-      { status: 401 },
-    );
-  }
-
-  const permissionError = await requirePermission(request, "appointments.read");
-  if (permissionError) return permissionError;
 
   const rawBody = await request.text();
   if (
@@ -85,6 +67,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const receivedAt = new Date();
   const report = parsed.report;
+  const db = getDb();
   const returned = await db
     .insert(mobileOfflineMediaQueueHealth)
     .values({

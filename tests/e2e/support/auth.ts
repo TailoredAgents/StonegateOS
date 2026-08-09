@@ -1,7 +1,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { getEnvVar } from "./env";
-import { ADMIN_SESSION_COOKIE, adminSessionCookieOptions } from "../../../apps/site/src/lib/admin-session";
+import {
+  ADMIN_SESSION_COOKIE,
+  adminSessionCookieOptions,
+} from "../../../apps/site/src/lib/admin-session";
 
 const storageDir = path.resolve(process.cwd(), "tests/e2e/storage");
 
@@ -23,7 +26,10 @@ type StorageState = {
   }>;
 };
 
-export async function ensureStorageState(filename: string, state?: StorageState): Promise<void> {
+export async function ensureStorageState(
+  filename: string,
+  state?: StorageState,
+): Promise<void> {
   await fs.mkdir(storageDir, { recursive: true });
   const filePath = path.resolve(process.cwd(), filename);
 
@@ -31,7 +37,7 @@ export async function ensureStorageState(filename: string, state?: StorageState)
     state ??
     ({
       cookies: [],
-      origins: []
+      origins: [],
     } as StorageState);
 
   await fs.writeFile(filePath, JSON.stringify(defaultState, null, 2));
@@ -42,19 +48,25 @@ export async function bootstrapVisitorStorage(filename: string): Promise<void> {
 }
 
 export async function bootstrapAdminStorage(filename: string): Promise<void> {
-  const adminKey = getEnvVar("ADMIN_API_KEY");
+  const adminSessionSecret = getEnvVar("ADMIN_SESSION_SECRET");
   const siteBase = getEnvVar("NEXT_PUBLIC_SITE_URL", "http://localhost:3000");
 
   try {
-    const storageState = await bootstrapViaSessionEndpoint(siteBase, adminKey);
+    const storageState = await bootstrapViaSessionEndpoint(
+      siteBase,
+      adminSessionSecret,
+    );
     await ensureStorageState(filename, storageState);
     return;
   } catch (error) {
     if (error instanceof AdminSessionEndpointMissingError) {
       console.warn(
-        `[e2e] ${error.message}; synthesizing admin session cookie directly for ${siteBase}.`
+        `[e2e] ${error.message}; synthesizing admin session cookie directly for ${siteBase}.`,
       );
-      const storageState = buildSyntheticAdminStorage(adminKey, siteBase);
+      const storageState = buildSyntheticAdminStorage(
+        adminSessionSecret,
+        siteBase,
+      );
       await ensureStorageState(filename, storageState);
       return;
     }
@@ -62,15 +74,21 @@ export async function bootstrapAdminStorage(filename: string): Promise<void> {
   }
 }
 
-async function bootstrapViaSessionEndpoint(siteBase: string, adminKey: string): Promise<StorageState> {
-  const response = await fetch(new URL("/api/admin/session", siteBase).toString(), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json"
+async function bootstrapViaSessionEndpoint(
+  siteBase: string,
+  sessionSecret: string,
+): Promise<StorageState> {
+  const response = await fetch(
+    new URL("/api/admin/session", siteBase).toString(),
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ key: sessionSecret }),
+      redirect: "manual",
     },
-    body: JSON.stringify({ key: adminKey }),
-    redirect: "manual"
-  });
+  );
 
   if (response.status === 404 || response.status === 405) {
     throw new AdminSessionEndpointMissingError(response.status);
@@ -78,7 +96,9 @@ async function bootstrapViaSessionEndpoint(siteBase: string, adminKey: string): 
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`Failed to bootstrap admin session (${response.status}): ${text}`);
+    throw new Error(
+      `Failed to bootstrap admin session (${response.status}): ${text}`,
+    );
   }
 
   const cookies = extractSetCookies(response);
@@ -89,30 +109,38 @@ async function bootstrapViaSessionEndpoint(siteBase: string, adminKey: string): 
   return buildStorageStateFromCookies(cookies, siteBase);
 }
 
-function buildSyntheticAdminStorage(adminKey: string, siteBase: string): StorageState {
+function buildSyntheticAdminStorage(
+  sessionSecret: string,
+  siteBase: string,
+): StorageState {
   const cookieOptions = adminSessionCookieOptions();
   const now = Math.floor(Date.now() / 1000);
-  const expires = cookieOptions.maxAge ? now + cookieOptions.maxAge : now + 60 * 60 * 8;
+  const expires = cookieOptions.maxAge
+    ? now + cookieOptions.maxAge
+    : now + 60 * 60 * 8;
   const url = new URL(siteBase);
 
   return {
     cookies: [
       {
         name: ADMIN_SESSION_COOKIE,
-        value: adminKey,
+        value: sessionSecret,
         domain: url.hostname,
         path: cookieOptions.path ?? "/",
         expires,
         httpOnly: cookieOptions.httpOnly ?? true,
         secure: cookieOptions.secure ?? url.protocol === "https:",
-        sameSite: parseSameSite(cookieOptions.sameSite) ?? "Lax"
-      }
+        sameSite: parseSameSite(cookieOptions.sameSite) ?? "Lax",
+      },
     ],
-    origins: []
+    origins: [],
   };
 }
 
-function buildStorageStateFromCookies(cookies: CookieParseResult[], siteBase: string): StorageState {
+function buildStorageStateFromCookies(
+  cookies: CookieParseResult[],
+  siteBase: string,
+): StorageState {
   const url = new URL(siteBase);
 
   return {
@@ -138,9 +166,9 @@ function buildStorageStateFromCookies(cookies: CookieParseResult[], siteBase: st
         : Math.floor(Date.now() / 1000) + 60 * 60 * 8,
       httpOnly: "httponly" in cookie.attributes,
       secure: "secure" in cookie.attributes,
-      sameSite: parseSameSite(cookie.attributes.samesite)
+      sameSite: parseSameSite(cookie.attributes.samesite),
     })),
-    origins: []
+    origins: [],
   };
 }
 
@@ -151,13 +179,24 @@ type CookieParseResult = {
 };
 
 function extractSetCookies(response: Response): CookieParseResult[] {
-  const headers = (response.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie?.() ?? [];
+  const headers =
+    (
+      response.headers as unknown as { getSetCookie?: () => string[] }
+    ).getSetCookie?.() ?? [];
   const fallbackHeader = response.headers.get("set-cookie");
-  const allHeaders = headers.length ? headers : fallbackHeader ? [fallbackHeader] : [];
-  return allHeaders.map(parseSetCookie).filter((cookie): cookie is CookieParseResult => Boolean(cookie));
+  const allHeaders = headers.length
+    ? headers
+    : fallbackHeader
+      ? [fallbackHeader]
+      : [];
+  return allHeaders
+    .map(parseSetCookie)
+    .filter((cookie): cookie is CookieParseResult => Boolean(cookie));
 }
 
-function parseSetCookie(header: string | undefined): CookieParseResult | undefined {
+function parseSetCookie(
+  header: string | undefined,
+): CookieParseResult | undefined {
   if (!header) {
     return undefined;
   }
@@ -184,11 +223,13 @@ function parseSetCookie(header: string | undefined): CookieParseResult | undefin
   return {
     name: name.trim(),
     value,
-    attributes
+    attributes,
   };
 }
 
-function parseSameSite(value: string | boolean | undefined): "Strict" | "Lax" | "None" | undefined {
+function parseSameSite(
+  value: string | boolean | undefined,
+): "Strict" | "Lax" | "None" | undefined {
   if (!value || typeof value !== "string") {
     return undefined;
   }

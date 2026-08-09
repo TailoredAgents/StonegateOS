@@ -1,7 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getDb, contacts, properties, crmPipeline } from "@/db";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import { getDb, contacts, crmPipeline } from "@/db";
 import { forwardGeocode } from "@/lib/geocode";
-import { isAdminRequest } from "../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
+import { resolveOrCreateContactProperty } from "@/lib/property-write";
 import { normalizeName, normalizePhone } from "../../../web/utils";
 
 type CreateContactPayload = {
@@ -17,9 +19,10 @@ type CreateContactPayload = {
 };
 
 export async function POST(request: NextRequest): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const permissionError = await requirePermission(request, ["contacts.write", "properties.write", "pipeline.write"], {
+    mode: "all"
+  });
+  if (permissionError) return permissionError;
 
   const payload = (await request.json().catch(() => null)) as CreateContactPayload | null;
   if (!payload || typeof payload !== "object") {
@@ -90,19 +93,22 @@ export async function POST(request: NextRequest): Promise<Response> {
         throw new Error("contact_insert_failed");
       }
 
-      const [property] = await tx
-        .insert(properties)
-        .values({
-          contactId: contact.id,
-          addressLine1,
-          addressLine2: addressLine2.length ? addressLine2 : null,
-          city,
-          state: state.slice(0, 2).toUpperCase(),
-          postalCode,
-          lat: geo?.lat !== undefined && geo?.lat !== null ? geo.lat.toString() : null,
-          lng: geo?.lng !== undefined && geo?.lng !== null ? geo.lng.toString() : null
-        })
-        .returning();
+      const { property } = await resolveOrCreateContactProperty(tx, {
+        contactId: contact.id,
+        addressLine1,
+        addressLine2: addressLine2.length ? addressLine2 : null,
+        city,
+        state,
+        postalCode,
+        lat:
+          geo?.lat !== undefined && geo?.lat !== null
+            ? geo.lat.toString()
+            : null,
+        lng:
+          geo?.lng !== undefined && geo?.lng !== null
+            ? geo.lng.toString()
+            : null,
+      });
 
       await tx
         .insert(crmPipeline)

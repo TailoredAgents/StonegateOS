@@ -6,6 +6,8 @@ import { commissionSettings, getDb } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import {
+  getCommissionCrewSplitConfigurationStatus,
+  getCommissionManagementConfigurationStatus,
   getOrCreateCommissionSettings,
   recalculateCurrentPayoutPeriodAppointments,
 } from "@/lib/commissions";
@@ -19,23 +21,40 @@ const SettingsSchema = z.object({
   salesRateBps: z.number().int().min(0).max(10000),
   marketingRateBps: z.number().int().min(0).max(10000),
   crewPoolRateBps: z.number().int().min(0).max(10000),
-  marketingMemberId: z.string().uuid().nullable().optional()
+  marketingMemberId: z.string().uuid().nullable().optional(),
 });
 
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "access.manage");
+  const permissionError = await requirePermission(request, "commissions.read");
   if (permissionError) return permissionError;
 
   const db = getDb();
   try {
     const settings = await getOrCreateCommissionSettings(db);
-    return NextResponse.json({ ok: true, settings });
+    const [management, crewSplits] = await Promise.all([
+      getCommissionManagementConfigurationStatus(db, settings.marketingRateBps),
+      getCommissionCrewSplitConfigurationStatus(db),
+    ]);
+    return NextResponse.json({
+      ok: true,
+      settings: {
+        ...settings,
+        managementReady: management.ready,
+        managementTotalSplitBps: management.totalSplitBps,
+        managementSplits: management.recipients,
+        crewSplitRulesReady: crewSplits.ready,
+        crewSplitRules: crewSplits.rules,
+      },
+    });
   } catch (error) {
     const code =
-      error && typeof error === "object" && "code" in error && typeof (error as { code?: unknown }).code === "string"
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      typeof (error as { code?: unknown }).code === "string"
         ? (error as { code: string }).code
         : null;
     if (code === "42P01" || code === "42703") {
@@ -49,7 +68,10 @@ export async function PUT(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "access.manage");
+  const permissionError = await requirePermission(
+    request,
+    "commissions.manage",
+  );
   if (permissionError) return permissionError;
 
   const payload = (await request.json().catch(() => null)) as unknown;
@@ -57,7 +79,7 @@ export async function PUT(request: NextRequest): Promise<Response> {
   if (!parsed.success) {
     return NextResponse.json(
       { error: "invalid_payload", message: parsed.error.flatten() },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -85,7 +107,7 @@ export async function PUT(request: NextRequest): Promise<Response> {
       marketingMemberId: settings.marketingMemberId ?? null,
       updatedBy: actor.id ?? null,
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
     })
     .onConflictDoUpdate({
       target: commissionSettings.key,
@@ -99,8 +121,8 @@ export async function PUT(request: NextRequest): Promise<Response> {
         crewPoolRateBps: settings.crewPoolRateBps,
         marketingMemberId: settings.marketingMemberId ?? null,
         updatedBy: actor.id ?? null,
-        updatedAt: new Date()
-      }
+        updatedAt: new Date(),
+      },
     });
 
   const [saved] = await db
@@ -113,7 +135,7 @@ export async function PUT(request: NextRequest): Promise<Response> {
       salesRateBps: commissionSettings.salesRateBps,
       marketingRateBps: commissionSettings.marketingRateBps,
       crewPoolRateBps: commissionSettings.crewPoolRateBps,
-      marketingMemberId: commissionSettings.marketingMemberId
+      marketingMemberId: commissionSettings.marketingMemberId,
     })
     .from(commissionSettings)
     .where(eq(commissionSettings.key, "default"))
@@ -126,7 +148,7 @@ export async function PUT(request: NextRequest): Promise<Response> {
     action: "commission.settings.updated",
     entityType: "commission_settings",
     entityId: "default",
-    meta: settings
+    meta: settings,
   });
 
   return NextResponse.json({ ok: true, settings: saved ?? settings });

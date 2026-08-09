@@ -14,6 +14,7 @@ const mockCalendarRows = [
     rescheduleToken: "with-total",
     quotedTotalCents: 32_500,
     finalTotalCents: 47_500,
+    updatedAt: new Date("2026-07-29T13:00:00.000Z"),
     quotedScopeText: "Quoted work",
     bookingDetails: null,
     contactFirstName: null,
@@ -33,6 +34,7 @@ const mockCalendarRows = [
     rescheduleToken: "without-total",
     quotedTotalCents: 20_000,
     finalTotalCents: null,
+    updatedAt: new Date("2026-07-29T15:00:00.000Z"),
     quotedScopeText: null,
     bookingDetails: null,
     contactFirstName: null,
@@ -76,10 +78,14 @@ jest.mock("drizzle-orm", () => ({
   eq: jest.fn((...values: unknown[]) => values),
   gte: jest.fn((...values: unknown[]) => values),
   inArray: jest.fn((...values: unknown[]) => values),
-  lte: jest.fn((...values: unknown[]) => values),
+  lt: jest.fn((...values: unknown[]) => values),
 }));
 
 jest.mock("@/db", () => ({
+  appointmentCrewMembers: {
+    appointmentId: "appointment_crew_members.appointment_id",
+    memberId: "appointment_crew_members.member_id",
+  },
   appointmentNotes: {
     id: "appointment_notes.id",
     appointmentId: "appointment_notes.appointment_id",
@@ -97,6 +103,7 @@ jest.mock("@/db", () => ({
     rescheduleToken: "appointments.reschedule_token",
     quotedTotalCents: "appointments.quoted_total_cents",
     finalTotalCents: "appointments.final_total_cents",
+    updatedAt: "appointments.updated_at",
     quotedScopeText: "appointments.quoted_scope_text",
     bookingDetails: "appointments.booking_details",
   },
@@ -120,6 +127,10 @@ jest.mock("@/db", () => ({
     city: "properties.city",
     state: "properties.state",
     postalCode: "properties.postal_code",
+  },
+  teamMembers: {
+    id: "team_members.id",
+    name: "team_members.name",
   },
 }));
 

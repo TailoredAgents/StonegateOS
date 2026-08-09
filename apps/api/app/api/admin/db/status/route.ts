@@ -1,10 +1,17 @@
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { isAdminRequest } from "../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function firstRecord(value: unknown): Record<string, unknown> | null {
+  if (!Array.isArray(value)) return null;
+  const first: unknown = value[0];
+  return isRecord(first) ? first : null;
 }
 
 async function hasColumn(db: ReturnType<typeof getDb>, table: string, column: string): Promise<boolean> {
@@ -15,14 +22,13 @@ async function hasColumn(db: ReturnType<typeof getDb>, table: string, column: st
       where table_schema='public' and table_name=${table} and column_name=${column}
     `
   );
-  const row = Array.isArray(res) && res[0] ? (res[0] as any) : null;
-  return Number(row?.cnt ?? 0) > 0;
+  const row = firstRecord(res);
+  return Number(row?.["cnt"] ?? 0) > 0;
 }
 
 export async function GET(request: NextRequest) {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  }
+  const permissionError = await requirePermission(request, "access.manage");
+  if (permissionError) return permissionError;
 
   try {
     const db = getDb();
@@ -31,14 +37,18 @@ export async function GET(request: NextRequest) {
       sql`select table_name from information_schema.tables where table_schema='public' order by table_name`
     );
     const tables = Array.isArray(tablesRes)
-      ? tablesRes.map((r: any) => r.table_name)
+      ? tablesRes.flatMap((row) =>
+          isRecord(row) && typeof row["table_name"] === "string"
+            ? [row["table_name"]]
+            : []
+        )
       : [];
 
     let migrations = 0;
     try {
       const migRes = await db.execute(sql`select count(*)::int as cnt from drizzle.__drizzle_migrations`);
-      const row = Array.isArray(migRes) && migRes[0] ? (migRes[0] as any) : null;
-      migrations = Number(row?.cnt ?? 0);
+      const row = firstRecord(migRes);
+      migrations = Number(row?.["cnt"] ?? 0);
     } catch {
       migrations = 0;
     }

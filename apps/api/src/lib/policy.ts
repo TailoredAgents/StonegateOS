@@ -1,6 +1,10 @@
 import { eq } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { getDb, policySettings } from "@/db";
+import {
+  evaluateMessagingAutomationPrecedence,
+  normalizeMessagingAutomationMode,
+} from "@/lib/messaging-automation";
 
 type DatabaseClient = ReturnType<typeof getDb>;
 type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
@@ -117,6 +121,8 @@ export type SalesAutopilotPolicy = {
   mode: SalesAutopilotMode;
   channelModes: Record<SalesAutopilotChannel, SalesAutopilotMode>;
   enabled: boolean;
+  emergencyStop: boolean;
+  dailyAutomaticSendCap: number;
   autoSendAfterMinutes: number;
   activityWindowMinutes: number;
   retryDelayMinutes: number;
@@ -233,6 +239,8 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
     dm: "full"
   },
   enabled: true,
+  emergencyStop: false,
+  dailyAutomaticSendCap: 100,
   autoSendAfterMinutes: 15,
   activityWindowMinutes: 15,
   retryDelayMinutes: 2,
@@ -1406,6 +1414,15 @@ export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise
     mode,
     channelModes,
     enabled,
+    emergencyStop:
+      typeof stored["emergencyStop"] === "boolean"
+        ? stored["emergencyStop"]
+        : DEFAULT_SALES_AUTOPILOT_POLICY.emergencyStop,
+    dailyAutomaticSendCap: coerceInt(
+      stored["dailyAutomaticSendCap"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.dailyAutomaticSendCap,
+      { min: 1, max: 1000 },
+    ),
     autoSendAfterMinutes: coerceInt(stored["autoSendAfterMinutes"], DEFAULT_SALES_AUTOPILOT_POLICY.autoSendAfterMinutes, {
       min: 15,
       max: 120
@@ -1494,9 +1511,20 @@ export function isSalesAutopilotLiveReplyEnabled(
   channel: string | null | undefined,
 ): boolean {
   const normalizedChannel = typeof channel === "string" ? channel.trim() : "";
+  const globalMode = normalizeMessagingAutomationMode(policy.mode) ?? "off";
+  const storedChannelMode = getSalesAutopilotChannelMode(
+    policy,
+    normalizedChannel,
+  );
+  const channelOverride =
+    normalizeMessagingAutomationMode(storedChannelMode) ?? "off";
+  const precedence = evaluateMessagingAutomationPrecedence({
+    globalMode,
+    channelOverride,
+    emergencyStop: policy.emergencyStop,
+  });
   return (
-    policy.mode === "full" &&
-    getSalesAutopilotChannelMode(policy, normalizedChannel) === "full" &&
+    precedence.automaticSendAllowed &&
     policy.liveReplyAutonomyEnabled === true &&
     !!normalizedChannel &&
     policy.liveReplyAutonomyChannels.includes(normalizedChannel)
@@ -1650,7 +1678,7 @@ export function buildSalesCloseLoopPolicySummary(input: {
     return {
       mode: "suggest_only",
       label: "Suggest only",
-      detail: "Partial mode keeps this booked-job support reply approval-only until the channel is in Full.",
+      detail: "Assist keeps this booked-job support reply approval-only until the channel is Automatic.",
       tone: "warn",
     };
   }
@@ -1674,7 +1702,16 @@ export function buildSalesCloseLoopPolicySummary(input: {
 
 export function evaluateSalesPlannerAutosendPolicy(
   policy: SalesAutopilotPolicy,
-  input: { channel?: string | null; actionType?: string | null; humanReviewRequired?: boolean },
+  input: {
+    channel?: string | null;
+    actionType?: string | null;
+    humanReviewRequired?: boolean;
+    dnc?: boolean;
+    humanTakeover?: boolean;
+    paused?: boolean;
+    quietHoursActive?: boolean;
+    capReached?: boolean;
+  },
 ): {
   allowed: boolean;
   channelMode: SalesAutopilotMode;
@@ -1687,6 +1724,13 @@ export function evaluateSalesPlannerAutosendPolicy(
     | "live_reply_channel_not_allowed"
     | "action_not_allowed"
     | "action_requires_full_mode"
+    | "action_requires_automatic_mode"
+    | "emergency_stop"
+    | "dnc"
+    | "human_takeover"
+    | "paused"
+    | "quiet_hours"
+    | "cap_reached"
     | "human_review_required"
     | null;
 } {
@@ -1695,15 +1739,33 @@ export function evaluateSalesPlannerAutosendPolicy(
   const actionType = typeof input.actionType === "string" ? input.actionType.trim() : "";
   const actionClass = getSalesPlannerActionClass(actionType);
 
+  const precedence = evaluateMessagingAutomationPrecedence({
+    globalMode: normalizeMessagingAutomationMode(policy.mode) ?? "off",
+    channelOverride:
+      normalizeMessagingAutomationMode(channelMode) ?? "off",
+    emergencyStop: policy.emergencyStop,
+    dnc: input.dnc,
+    humanTakeover: input.humanTakeover,
+    paused: input.paused,
+    quietHoursActive: input.quietHoursActive,
+    capReached: input.capReached,
+  });
+  if (!precedence.automaticSendAllowed) {
+    const reason =
+      precedence.reason === "channel_override" ||
+      precedence.reason === "global_mode"
+        ? precedence.effectiveMode === "assist"
+          ? "action_requires_automatic_mode"
+          : "channel_off"
+        : precedence.reason;
+    return { allowed: false, channelMode, actionClass, reason };
+  }
   if (input.humanReviewRequired) {
     return { allowed: false, channelMode, actionClass, reason: "human_review_required" };
   }
 
   if (!policy.plannerAutoSendEnabled) {
     return { allowed: false, channelMode, actionClass, reason: "planner_autosend_disabled" };
-  }
-  if (channelMode === "off") {
-    return { allowed: false, channelMode, actionClass, reason: "channel_off" };
   }
   if (actionClass === "live_reply" && !policy.liveReplyAutonomyEnabled) {
     return { allowed: false, channelMode, actionClass, reason: "live_reply_autonomy_disabled" };

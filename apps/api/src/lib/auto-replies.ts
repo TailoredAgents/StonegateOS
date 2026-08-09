@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import { and, asc, eq, gte, isNotNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import {
   appointments,
   automationSettings,
@@ -215,7 +215,13 @@ async function applyLeadDnc(input: {
   if (leadFilters.length > 0) {
     await input.db
       .delete(outboxEvents)
-      .where(and(eq(outboxEvents.type, "followup.send"), or(...leadFilters)));
+      .where(
+        and(
+          eq(outboxEvents.type, "followup.send"),
+          isNull(outboxEvents.quarantinedAt),
+          or(...leadFilters),
+        ),
+      );
   }
 
   await recordAuditEvent({
@@ -414,6 +420,7 @@ async function handleConfirmationReply(input: {
           .where(
             and(
               eq(outboxEvents.type, "estimate.reminder"),
+              isNull(outboxEvents.quarantinedAt),
               sql`(payload->>'appointmentId') = ${appointment.id}`,
             ),
           );
@@ -497,6 +504,7 @@ async function handleConfirmationReply(input: {
       .where(
         and(
           eq(outboxEvents.type, "estimate.reminder"),
+          isNull(outboxEvents.quarantinedAt),
           sql`(payload->>'appointmentId') = ${appointment.id}`
         )
       );

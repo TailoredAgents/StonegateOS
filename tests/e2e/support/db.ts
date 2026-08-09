@@ -307,26 +307,109 @@ export async function getAppointmentStartAt(
 
 export async function ensureE2ECommissionPrincipals(): Promise<void> {
   const sql = getSql();
-  await sql`
-    INSERT INTO team_members (id, name, active)
-    VALUES
-      (
-        ${E2E_COMMISSION_PRINCIPALS[0].id},
-        ${E2E_COMMISSION_PRINCIPALS[0].name},
-        false
-      ),
-      (
-        ${E2E_COMMISSION_PRINCIPALS[1].id},
-        ${E2E_COMMISSION_PRINCIPALS[1].name},
-        false
-      ),
-      (
-        ${E2E_COMMISSION_PRINCIPALS[2].id},
-        ${E2E_COMMISSION_PRINCIPALS[2].name},
-        false
+  await sql.begin(async (tx) => {
+    await tx`
+      INSERT INTO team_members (id, name, active, created_at, updated_at)
+      VALUES
+        (
+          ${E2E_COMMISSION_PRINCIPALS[0].id},
+          ${E2E_COMMISSION_PRINCIPALS[0].name},
+          true,
+          now(),
+          now()
+        ),
+        (
+          ${E2E_COMMISSION_PRINCIPALS[1].id},
+          ${E2E_COMMISSION_PRINCIPALS[1].name},
+          true,
+          now(),
+          now()
+        ),
+        (
+          ${E2E_COMMISSION_PRINCIPALS[2].id},
+          ${E2E_COMMISSION_PRINCIPALS[2].name},
+          true,
+          now(),
+          now()
+        )
+      ON CONFLICT (id) DO UPDATE SET
+        active = true,
+        updated_at = now()
+    `;
+
+    await tx`
+      INSERT INTO commission_settings (
+        key,
+        timezone,
+        payout_weekday,
+        payout_hour,
+        payout_minute,
+        sales_rate_bps,
+        marketing_rate_bps,
+        crew_pool_rate_bps,
+        marketing_member_id,
+        created_at,
+        updated_at
+      ) VALUES (
+        'default',
+        'America/New_York',
+        1,
+        12,
+        0,
+        0,
+        1700,
+        2000,
+        NULL,
+        now(),
+        now()
       )
-    ON CONFLICT (id) DO NOTHING
-  `;
+      ON CONFLICT (key) DO NOTHING
+    `;
+
+    // This helper runs only against the disposable E2E database. Disable any
+    // unrelated split rows so every journey proves the same established
+    // 12%/5% management allocation rather than inheriting ambient test state.
+    await tx`
+      UPDATE commission_management_splits
+      SET enabled = false, updated_at = now()
+      WHERE settings_key = 'default'
+        AND member_id NOT IN (
+          ${E2E_COMMISSION_PRINCIPALS[0].id},
+          ${E2E_COMMISSION_PRINCIPALS[2].id}
+        )
+    `;
+
+    await tx`
+      INSERT INTO commission_management_splits (
+        settings_key,
+        member_id,
+        split_bps,
+        enabled,
+        created_at,
+        updated_at
+      ) VALUES
+        (
+          'default',
+          ${E2E_COMMISSION_PRINCIPALS[2].id},
+          12000,
+          true,
+          now(),
+          now()
+        ),
+        (
+          'default',
+          ${E2E_COMMISSION_PRINCIPALS[0].id},
+          5000,
+          true,
+          now(),
+          now()
+        )
+      ON CONFLICT (settings_key, member_id) DO UPDATE SET
+        split_bps = EXCLUDED.split_bps,
+        enabled = true,
+        updated_at = now()
+    `;
+  });
 }
 
 export async function createE2EDraftPayoutRun(): Promise<string> {

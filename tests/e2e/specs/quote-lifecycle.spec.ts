@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { test, expect } from "../test";
 import {
   ApiClient,
@@ -12,6 +14,25 @@ import {
   drainOutbox,
 } from "../support/sdk";
 import { getEnvVar } from "../support/env";
+
+async function ownerMutationHeaders(
+  extra: Record<string, string> = {},
+): Promise<Record<string, string>> {
+  const storage = JSON.parse(
+    await readFile("tests/e2e/storage/mobile-owner.json", "utf8"),
+  ) as { cookies?: Array<{ name?: string; value?: string }> };
+  const session = storage.cookies?.find(
+    (cookie) => cookie.name === "myst-team-session",
+  )?.value;
+  if (!session) throw new Error("E2E owner team session is unavailable.");
+  const apiOrigin = new URL(getEnvVar("API_BASE_URL", "http://localhost:3001"))
+    .origin;
+  return {
+    authorization: `Bearer ${session}`,
+    origin: apiOrigin,
+    ...extra,
+  };
+}
 
 test.describe("Quote lifecycle journey", () => {
   test("admin issues a quote and customer accepts via public link", async ({
@@ -57,7 +78,12 @@ test.describe("Quote lifecycle journey", () => {
             campaign: "quote-lifecycle",
           },
         },
-        { admin: false },
+        {
+          admin: false,
+          headers: {
+            "idempotency-key": `quote-lead-intake-e2e:${randomUUID()}`,
+          },
+        },
       );
     });
 
@@ -67,28 +93,50 @@ test.describe("Quote lifecycle journey", () => {
 
     const sendResult = await test.step("Create and send quote", async () => {
       const quoteCreate = await api.post<{
-        ok: boolean;
-        quote: { id: string };
-      }>("/api/quotes", {
-        contactId: leadRecord.contactId,
-        propertyId: leadRecord.propertyId,
-        zoneId: "zone-core",
-        selectedServices: ["furniture"],
-        applyBundles: true,
-        notes: "Playwright automated quote scenario.",
-      });
+        ok: true;
+        data: { quote: { id: string; revision: number } };
+      }>(
+        "/api/quotes",
+        {
+          confirmation: "create_quote",
+          contactId: leadRecord.contactId,
+          propertyId: leadRecord.propertyId,
+          zoneId: "zone-core",
+          selectedServices: ["furniture"],
+          applyBundles: true,
+          notes: "Playwright automated quote scenario.",
+        },
+        {
+          headers: await ownerMutationHeaders({
+            "idempotency-key": `quote-e2e-create:${randomUUID()}`,
+          }),
+        },
+      );
 
       const sendResponse = await api.post<{
-        shareUrl: string;
-        shareToken: string;
-      }>(`/api/quotes/${quoteCreate.quote.id}/send`, {
-        expiresInDays: 7,
-        shareBaseUrl: publicSiteUrl,
-      });
+        ok: true;
+        data: { shareUrl: string; shareToken: string };
+      }>(
+        `/api/quotes/${quoteCreate.data.quote.id}/send`,
+        {
+          confirmation: "send_quote",
+          expiresInDays: 7,
+          shareBaseUrl: publicSiteUrl,
+        },
+        {
+          headers: await ownerMutationHeaders({
+            "idempotency-key": `quote-e2e-send:${randomUUID()}`,
+            "if-match": String(quoteCreate.data.quote.revision),
+          }),
+        },
+      );
 
       await drainOutbox(50);
       await drainOutbox(50);
-      return { quoteId: quoteCreate.quote.id, shareUrl: sendResponse.shareUrl };
+      return {
+        quoteId: quoteCreate.data.quote.id,
+        shareUrl: sendResponse.data.shareUrl,
+      };
     });
 
     const quoteId = sendResult.quoteId;

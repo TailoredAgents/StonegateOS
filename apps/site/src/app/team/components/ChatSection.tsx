@@ -1,6 +1,7 @@
 import React from "react";
+import { requireCurrentTeamPrincipal } from "@/lib/team-principal";
 import { TeamChatClient } from "./TeamChatClient";
-import { callAdminApi } from "../lib/api";
+import { callAdminApiAs } from "../lib/api";
 
 type ContactOption = {
   id: string;
@@ -16,7 +17,11 @@ type ContactOption = {
 };
 
 export async function ChatSection(): Promise<React.ReactElement> {
-  const response = await callAdminApi("/api/admin/contacts?limit=100");
+  const principal = await requireCurrentTeamPrincipal();
+  const response = await callAdminApiAs(
+    principal,
+    "/api/admin/contacts?limit=100",
+  );
   if (!response.ok) {
     throw new Error("Failed to load contacts");
   }
@@ -44,14 +49,13 @@ export async function ChatSection(): Promise<React.ReactElement> {
         addressLine1: p.addressLine1,
         city: p.city,
         state: p.state,
-        postalCode: p.postalCode
-      }))
+        postalCode: p.postalCode,
+      })),
     })) ?? [];
 
   return (
     <section className="space-y-6">
-      <TeamChatClient contacts={contacts} />
+      <TeamChatClient contacts={contacts} actorId={principal.memberId} />
     </section>
   );
 }
-

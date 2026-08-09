@@ -1,6 +1,8 @@
 "use client";
 
 import React from "react";
+import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 import type { ContactReminderSummary, ContactSummary } from "./contacts.types";
 import {
   PIPELINE_STAGES,
@@ -8,13 +10,12 @@ import {
   labelForPipelineStage,
 } from "./pipeline.stages";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
+import { teamSurfaceHref } from "../surface-registry";
 import { teamButtonClass } from "./team-ui";
 import { ContactNameEditorClient } from "./ContactNameEditorClient";
 import { ContactPhoneEditorClient } from "./ContactPhoneEditorClient";
 import { InboxContactNotesClient } from "./InboxContactNotesClient";
 import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
-import { ContactMediaAnalysisClient } from "./ContactMediaAnalysisClient";
-import { ContactSalesAgentMemoryClient } from "./ContactSalesAgentMemoryClient";
 import { SubmitButton } from "@/components/SubmitButton";
 import {
   addPropertyAction,
@@ -29,18 +30,90 @@ import { AppointmentBookingDetailsFields } from "./AppointmentBookingDetailsFiel
 import {
   APPOINTMENT_BOOKING_SELECTION_OPTIONS,
   resolveBookingSelection,
+  type AppointmentBookingDetailsPrefill,
   type AppointmentBookingSelection,
 } from "../lib/booking-details";
+import type { InstantQuoteHandoff } from "../lib/instant-quote-handoff";
+import { quoteWorkspaceHref } from "../quotes-workspace";
+import {
+  CONTACT_SUBVIEWS,
+  contactWorkspaceHref,
+  type ContactSubview,
+  type ContactWorkspaceCapabilities,
+  type ContactWorkspaceLocation,
+} from "../contacts-workspace";
+import {
+  classifyContactResourceResponse,
+  contactResourceFailureMessage,
+  type ContactResourceFailure,
+} from "../contact-resource-state";
+import {
+  pipelineExpectedVersion,
+  PIPELINE_ABSENT_VERSION,
+  PipelineStageRequestError,
+  requestPipelineStageMutation,
+} from "../lib/pipeline-stage-mutation";
+
+const ContactMediaAnalysisClient = dynamic(
+  () =>
+    import("./ContactMediaAnalysisClient").then(
+      (module) => module.ContactMediaAnalysisClient,
+    ),
+  { loading: () => <p role="status">Loading media analysis…</p> },
+);
+
+const ContactSalesAgentMemoryClient = dynamic(
+  () =>
+    import("./ContactSalesAgentMemoryClient").then(
+      (module) => module.ContactSalesAgentMemoryClient,
+    ),
+  { loading: () => <p role="status">Loading agent memory…</p> },
+);
 
 type Props = {
   contact: ContactSummary;
+  actorId: string;
   teamMembers: Array<{ id: string; name: string }>;
+  contactWorkspace?: boolean;
+  subview?: ContactSubview;
+  workspaceLocation?: Omit<ContactWorkspaceLocation, "contactId" | "subview">;
+  capabilities?: ContactWorkspaceCapabilities;
+  teamDirectoryAvailable?: boolean;
+  instantQuoteHandoff?: InstantQuoteHandoff | null;
 };
 
 type QuotePhotosPayload = {
   ok?: boolean;
   photoUrls?: string[];
   error?: string;
+};
+
+const CONTACT_SUBVIEW_LABELS: Readonly<Record<ContactSubview, string>> = {
+  overview: "Overview",
+  properties: "Properties",
+  activity: "Activity",
+  "jobs-quotes": "Jobs & quotes",
+  communications: "Communications",
+  intelligence: "Intelligence",
+};
+
+const LEGACY_EMBEDDED_CAPABILITIES: ContactWorkspaceCapabilities = {
+  callAttemptKeySeed: "legacy-call-actions-disabled",
+  canWriteContact: true,
+  canDeleteContact: true,
+  canReadProperties: true,
+  canWriteProperties: true,
+  canDeleteProperties: true,
+  canUpdatePipeline: true,
+  canCall: false,
+  canReadMessages: true,
+  canMessage: true,
+  canBook: true,
+  canReadCalendar: true,
+  canReadQuotes: true,
+  canWriteQuotes: true,
+  canReadPartners: true,
+  canInvitePartners: true,
 };
 
 function formatDateTime(value: string | null): string {
@@ -100,8 +173,29 @@ function buildMapsLinkForProperty(
 
 export function ContactsDetailsPaneClient({
   contact,
+  actorId,
   teamMembers,
+  contactWorkspace = false,
+  subview = "overview",
+  workspaceLocation = {},
+  capabilities = LEGACY_EMBEDDED_CAPABILITIES,
+  teamDirectoryAvailable = true,
+  instantQuoteHandoff = null,
 }: Props): React.ReactElement {
+  const router = useRouter();
+  const handoffInstantQuoteId = instantQuoteHandoff?.instantQuoteId ?? null;
+  const handoffAppointmentType =
+    instantQuoteHandoff?.bookingPrefill.appointmentType ?? "junk_removal";
+  const handoffLoadSizeKind =
+    instantQuoteHandoff?.bookingPrefill.loadSize.kind ?? null;
+  const handoffCustomLoads =
+    instantQuoteHandoff?.bookingPrefill.loadSize.customLoads ?? null;
+  const handoffPriceRangeMinCents =
+    instantQuoteHandoff?.bookingPrefill.priceRangeMinCents ?? null;
+  const handoffPriceRangeMaxCents =
+    instantQuoteHandoff?.bookingPrefill.priceRangeMaxCents ?? null;
+  const handoffSourceType =
+    instantQuoteHandoff?.bookingPrefill.source?.type ?? null;
   const memberNameById = React.useMemo(
     () => new Map(teamMembers.map((m) => [m.id, m.name])),
     [teamMembers],
@@ -109,41 +203,60 @@ export function ContactsDetailsPaneClient({
   const [stage, setStage] = React.useState(
     () => contact.pipeline?.stage ?? "new",
   );
+  const [pipelineUpdatedAt, setPipelineUpdatedAt] = React.useState<
+    string | null
+  >(() => contact.pipeline?.updatedAt ?? null);
   const [assignee, setAssignee] = React.useState<string | null>(
     () => contact.salespersonMemberId ?? null,
   );
-  const [showBookingForm, setShowBookingForm] = React.useState(false);
+  const [showBookingForm, setShowBookingForm] = React.useState(
+    () => handoffInstantQuoteId !== null,
+  );
   const [bookingAppointmentType, setBookingAppointmentType] =
-    React.useState<AppointmentBookingSelection>("junk_removal");
+    React.useState<AppointmentBookingSelection>(() => handoffAppointmentType);
   const [addingProperty, setAddingProperty] = React.useState(false);
   const [editingPropertyId, setEditingPropertyId] = React.useState<
     string | null
   >(null);
   const [quotePhotoUrls, setQuotePhotoUrls] = React.useState<string[]>([]);
   const [quotePhotosStatus, setQuotePhotosStatus] = React.useState<
-    "idle" | "loading" | "error"
+    "idle" | "loading" | "ready" | "empty" | ContactResourceFailure
   >("idle");
+  const [quotePhotosReloadKey, setQuotePhotosReloadKey] = React.useState(0);
 
   React.useEffect(() => {
-    setShowBookingForm(false);
-    setBookingAppointmentType("junk_removal");
+    setShowBookingForm(handoffInstantQuoteId !== null);
+    setBookingAppointmentType(handoffAppointmentType);
     setAddingProperty(false);
     setEditingPropertyId(null);
+  }, [contact.id, handoffAppointmentType, handoffInstantQuoteId]);
+
+  React.useEffect(() => {
     setStage(contact.pipeline?.stage ?? "new");
+    setPipelineUpdatedAt(contact.pipeline?.updatedAt ?? null);
+  }, [contact.id, contact.pipeline?.stage, contact.pipeline?.updatedAt]);
+
+  React.useEffect(() => {
     setAssignee(contact.salespersonMemberId ?? null);
+  }, [contact.id, contact.salespersonMemberId]);
+
+  React.useEffect(() => {
     setSystemTasks(
       (contact.reminders ?? [])
         .filter(isSystemTask)
         .sort((a, b) => Date.parse(a.dueAt ?? "") - Date.parse(b.dueAt ?? "")),
     );
-  }, [
-    contact.id,
-    contact.pipeline?.stage,
-    contact.reminders,
-    contact.salespersonMemberId,
-  ]);
+  }, [contact.id, contact.reminders]);
 
   React.useEffect(() => {
+    if (
+      contactWorkspace &&
+      (subview !== "intelligence" || !capabilities.canReadQuotes)
+    ) {
+      setQuotePhotoUrls([]);
+      setQuotePhotosStatus("idle");
+      return;
+    }
     const controller = new AbortController();
     setQuotePhotosStatus("loading");
 
@@ -156,32 +269,46 @@ export function ContactsDetailsPaneClient({
             signal: controller.signal,
           },
         );
-        const data = (await response
-          .json()
-          .catch(() => null)) as QuotePhotosPayload | null;
-        if (!response.ok || !data?.ok) {
-          throw new Error(
-            typeof data?.error === "string"
-              ? data.error
-              : "Unable to load quote photos.",
-          );
+        let parsed = true;
+        const data = (await response.json().catch(() => {
+          parsed = false;
+          return null;
+        })) as QuotePhotosPayload | null;
+        const failure = classifyContactResourceResponse({
+          status: response.status,
+          parsed,
+          okFlag: data?.ok,
+        });
+        if (failure) {
+          setQuotePhotoUrls([]);
+          setQuotePhotosStatus(failure);
+          return;
         }
-        const urls = Array.isArray(data.photoUrls)
-          ? data.photoUrls.filter(
-              (url) => typeof url === "string" && url.trim().length > 0,
-            )
-          : [];
+        if (!Array.isArray(data?.photoUrls)) {
+          setQuotePhotoUrls([]);
+          setQuotePhotosStatus("malformed");
+          return;
+        }
+        const urls = data.photoUrls.filter(
+          (url) => typeof url === "string" && url.trim().length > 0,
+        );
         setQuotePhotoUrls(urls);
-        setQuotePhotosStatus("idle");
+        setQuotePhotosStatus(urls.length > 0 ? "ready" : "empty");
       } catch (error) {
         if ((error as { name?: string }).name === "AbortError") return;
         setQuotePhotoUrls([]);
-        setQuotePhotosStatus("error");
+        setQuotePhotosStatus("unavailable");
       }
     })();
 
     return () => controller.abort();
-  }, [contact.id]);
+  }, [
+    capabilities.canReadQuotes,
+    contact.id,
+    contactWorkspace,
+    quotePhotosReloadKey,
+    subview,
+  ]);
 
   const [stageSaving, setStageSaving] = React.useState(false);
   const [stageError, setStageError] = React.useState<string | null>(null);
@@ -211,31 +338,60 @@ export function ContactsDetailsPaneClient({
 
   async function updateStage(nextStage: string) {
     if (stageSaving) return;
+    const previousStage = stage;
+    if (nextStage === previousStage) return;
+    const expectedVersion = pipelineExpectedVersion(pipelineUpdatedAt);
+    const idempotencyKey = `pipeline-stage:${contact.id}:${expectedVersion}:${nextStage}`;
     setStageSaving(true);
     setStageError(null);
     try {
-      const response = await fetch("/api/team/contacts/pipeline", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
+      const success = await requestPipelineStageMutation(
+        () =>
+          fetch("/api/team/contacts/pipeline", {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              "Idempotency-Key": idempotencyKey,
+              "If-Match": `"${expectedVersion}"`,
+            },
+            body: JSON.stringify({
+              contactId: contact.id,
+              stage: nextStage,
+              previousStage,
+            }),
+          }),
+        {
+          actorId,
+          contactId: contact.id,
+          stage: nextStage,
+          previousStage,
+          submittedVersion: expectedVersion,
         },
-        body: JSON.stringify({ contactId: contact.id, stage: nextStage }),
-      });
-
-      if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as {
-          message?: string;
-        } | null;
+      );
+      setStage(success.data.pipeline.stage);
+      setPipelineUpdatedAt(success.data.pipeline.updatedAt);
+      router.refresh();
+    } catch (error) {
+      if (error instanceof PipelineStageRequestError) {
+        if (error.status === 409 && error.current) {
+          setStage(error.current.stage);
+          setPipelineUpdatedAt(
+            error.current.version === PIPELINE_ABSENT_VERSION
+              ? null
+              : error.current.updatedAt,
+          );
+          router.refresh();
+        } else {
+          setStage(previousStage);
+        }
+        setStageError(error.message);
+      } else {
+        setStage(previousStage);
         setStageError(
-          typeof data?.message === "string"
-            ? data.message
-            : "Unable to update stage.",
+          "The pipeline stage could not be confirmed. Your previous stage was restored; try again.",
         );
-        return;
       }
-
-      setStage(nextStage);
     } finally {
       setStageSaving(false);
     }
@@ -291,7 +447,52 @@ export function ContactsDetailsPaneClient({
     ? (memberNameById.get(assignee) ?? "Assigned")
     : "Unassigned";
   const canCall = Boolean(contact.phoneE164 ?? contact.phone);
-  const primaryPropertyId = (contact.properties ?? [])[0]?.id ?? "";
+  const handoffPropertyIsAvailable = Boolean(
+    instantQuoteHandoff &&
+      (contact.properties ?? []).some(
+        (property) => property.id === instantQuoteHandoff.propertyId,
+      ),
+  );
+  const primaryPropertyId = handoffPropertyIsAvailable
+    ? (instantQuoteHandoff?.propertyId ?? "")
+    : instantQuoteHandoff
+      ? ""
+      : ((contact.properties ?? [])[0]?.id ?? "");
+  const bookingProperties = instantQuoteHandoff
+    ? (contact.properties ?? []).filter(
+        (property) => property.id === instantQuoteHandoff.propertyId,
+      )
+    : (contact.properties ?? []);
+  const bookingPrefill = React.useMemo<AppointmentBookingDetailsPrefill | null>(
+    () =>
+      handoffInstantQuoteId &&
+      handoffLoadSizeKind &&
+      handoffPriceRangeMinCents !== null &&
+      handoffPriceRangeMaxCents !== null
+        ? {
+            serviceType: handoffAppointmentType,
+            source: handoffSourceType ? { type: handoffSourceType } : null,
+            pricing: {
+              mode: "range",
+              rangeMinCents: handoffPriceRangeMinCents,
+              rangeMaxCents: handoffPriceRangeMaxCents,
+            },
+            loadSize: {
+              kind: handoffLoadSizeKind,
+              customLoads: handoffCustomLoads,
+            },
+          }
+        : null,
+    [
+      handoffAppointmentType,
+      handoffCustomLoads,
+      handoffInstantQuoteId,
+      handoffLoadSizeKind,
+      handoffPriceRangeMaxCents,
+      handoffPriceRangeMinCents,
+      handoffSourceType,
+    ],
+  );
   const hasBookingName = contact.name.trim().length > 0;
   const hasBookingPhone = Boolean(
     (contact.phoneE164 ?? contact.phone ?? "").trim(),
@@ -307,9 +508,22 @@ export function ContactsDetailsPaneClient({
     isInPersonQuoteBooking && quoteBookingBlockers.length > 0
       ? `Add ${quoteBookingBlockers.join(", ")} before booking an in-person quote.`
       : null;
+  const canOpenSubview = (candidate: ContactSubview): boolean => {
+    if (candidate === "properties") return capabilities.canReadProperties;
+    if (candidate === "communications") return capabilities.canReadMessages;
+    if (candidate === "jobs-quotes") {
+      return (
+        capabilities.canReadCalendar ||
+        capabilities.canReadQuotes ||
+        capabilities.canBook
+      );
+    }
+    return true;
+  };
+  const activeSubviewAllowed = canOpenSubview(subview);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 [&_button]:min-h-11 [&_input:not([type=hidden])]:min-h-11 [&_select]:min-h-11">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -340,187 +554,333 @@ export function ContactsDetailsPaneClient({
             </span>
           </div>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <ContactPhoneEditorClient
-            contactId={contact.id}
-            phone={contact.phone}
-            email={contact.email}
-          />
-          <ContactNameEditorClient
-            contactId={contact.id}
-            contactName={contact.name}
-          />
-        </div>
+        {capabilities.canWriteContact ? (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <ContactPhoneEditorClient
+              contactId={contact.id}
+              phone={contact.phone}
+              email={contact.email}
+            />
+            <ContactNameEditorClient
+              contactId={contact.id}
+              contactName={contact.name}
+            />
+          </div>
+        ) : null}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <form
-          action={startContactCallAction}
-          method="post"
-          className="inline"
-          onSubmit={(event) => {
-            if (!canCall) {
-              event.preventDefault();
-              return;
-            }
-            const label = contact.phone ?? "this contact";
-            if (
-              !window.confirm(
-                `Call ${contact.name} (${label}) from the Stonegate number?`,
-              )
-            ) {
-              event.preventDefault();
-            }
-          }}
+      {contactWorkspace ? (
+        <nav
+          aria-label="Contact details"
+          className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap"
         >
-          <input type="hidden" name="contactId" value={contact.id} />
-          <button
-            type="submit"
-            className={teamButtonClass("primary", "sm")}
-            disabled={!canCall}
+          {CONTACT_SUBVIEWS.map((candidate) => {
+            const allowed = canOpenSubview(candidate);
+            const active = subview === candidate;
+            return allowed ? (
+              <a
+                key={candidate}
+                href={contactWorkspaceHref({
+                  contactId: contact.id,
+                  subview: candidate,
+                  ...workspaceLocation,
+                  action:
+                    candidate === "jobs-quotes"
+                      ? workspaceLocation.action
+                      : undefined,
+                })}
+                aria-current={active ? "page" : undefined}
+                className={`inline-flex min-h-11 w-full items-center justify-center rounded-full border px-3 text-center text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary-200 sm:w-auto ${
+                  active
+                    ? "border-primary-600 bg-primary-600 text-white"
+                    : "border-slate-200 bg-white text-slate-700 hover:border-primary-300 hover:text-primary-700"
+                }`}
+              >
+                {CONTACT_SUBVIEW_LABELS[candidate]}
+              </a>
+            ) : (
+              <span
+                key={candidate}
+                aria-disabled="true"
+                title="Your current permissions do not include this contact view."
+                className="inline-flex min-h-11 w-full items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-3 text-center text-xs font-semibold text-slate-400 sm:w-auto"
+              >
+                {CONTACT_SUBVIEW_LABELS[candidate]}
+              </span>
+            );
+          })}
+        </nav>
+      ) : null}
+
+      <div
+        className="flex flex-wrap items-center gap-2"
+        aria-label="Contact quick actions"
+      >
+        {capabilities.canCall ? (
+          <form
+            action={startContactCallAction}
+            className="inline"
+            onSubmit={(event) => {
+              if (!canCall) {
+                event.preventDefault();
+                return;
+              }
+              const label = contact.phone ?? "this contact";
+              if (
+                !window.confirm(
+                  `Call ${contact.name} (${label}) from the Stonegate number?`,
+                )
+              ) {
+                event.preventDefault();
+              }
+            }}
           >
-            Call
+            <input type="hidden" name="contactId" value={contact.id} />
+            <input
+              type="hidden"
+              name="idempotencyKey"
+              value={`team-call:${capabilities.callAttemptKeySeed}:${contact.id}`}
+            />
+            <input
+              type="hidden"
+              name="explicitNewAttempt"
+              value="START NEW CALL"
+            />
+            <button
+              type="submit"
+              className={`${teamButtonClass("primary", "sm")} min-h-11`}
+              disabled={!canCall}
+            >
+              Call
+            </button>
+          </form>
+        ) : null}
+        {capabilities.canMessage ? (
+          <a
+            className={`${teamButtonClass("secondary", "sm")} min-h-11`}
+            href={teamSurfaceHref("inbox", {
+              query: { contactId: contact.id },
+            })}
+          >
+            Message
+          </a>
+        ) : null}
+        {capabilities.canBook ? (
+          <button
+            type="button"
+            className={`${teamButtonClass("secondary", "sm")} min-h-11`}
+            onClick={() => setShowBookingForm((prev) => !prev)}
+          >
+            {showBookingForm ? "Close booking" : "Book appointment"}
           </button>
-        </form>
+        ) : null}
+        {capabilities.canReadCalendar ? (
+          <a
+            className={`${teamButtonClass("secondary", "sm")} min-h-11`}
+            href={teamSurfaceHref("calendar", {
+              query: { contactId: contact.id },
+            })}
+          >
+            Calendar
+          </a>
+        ) : null}
+        {capabilities.canWriteQuotes ? (
+          <a
+            className={`${teamButtonClass("secondary", "sm")} min-h-11`}
+            href={quoteWorkspaceHref("create", {
+              query: { contactId: contact.id },
+            })}
+          >
+            Create quote
+          </a>
+        ) : null}
         <a
-          className={teamButtonClass("secondary", "sm")}
-          href={`/team?tab=inbox&contactId=${encodeURIComponent(contact.id)}`}
-        >
-          Message
-        </a>
-        <button
-          type="button"
-          className={teamButtonClass("secondary", "sm")}
-          onClick={() => setShowBookingForm((prev) => !prev)}
-        >
-          {showBookingForm ? "Close booking" : "Book appointment"}
-        </button>
-        <a
-          className={teamButtonClass("secondary", "sm")}
-          href={`/team?tab=calendar&contactId=${encodeURIComponent(contact.id)}`}
-        >
-          Calendar
-        </a>
-        <a
-          className={`${teamButtonClass("secondary", "sm")} ${mapsLink ? "" : "pointer-events-none opacity-50"}`}
+          className={`${teamButtonClass("secondary", "sm")} min-h-11 ${mapsLink ? "" : "pointer-events-none opacity-50"}`}
           href={mapsLink ?? "#"}
           target="_blank"
           rel="noreferrer"
         >
           Maps
         </a>
-        <form
-          action={deleteContactAction}
-          className="inline"
-          onSubmit={(event) => {
-            if (
-              !window.confirm(`Delete ${contact.name}? This cannot be undone.`)
-            ) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <input type="hidden" name="contactId" value={contact.id} />
-          <SubmitButton
-            className={teamButtonClass("danger", "sm")}
-            pendingLabel="Deleting..."
+        {capabilities.canDeleteContact ? (
+          <form
+            action={deleteContactAction}
+            className="inline"
+            onSubmit={(event) => {
+              if (
+                !window.confirm(
+                  `Move ${contact.name} to recovery? They will be hidden from active CRM views for 30 days. Automation will pause and queued operations will be quarantined for review.`,
+                )
+              ) {
+                event.preventDefault();
+              }
+            }}
           >
-            Delete
-          </SubmitButton>
-        </form>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-white p-4">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-900">
-              Partner portal
-            </h3>
-            <p className="mt-1 text-xs text-slate-500">
-              Invite this contact to the Partner Portal. Sending an invite also
-              marks them as a partner.
-            </p>
-          </div>
-          <a
-            className={teamButtonClass("secondary", "sm")}
-            href={`/team?tab=partners&p_selected=${encodeURIComponent(contact.id)}`}
-          >
-            Advanced setup
-          </a>
-        </div>
-
-        <form
-          action={partnerPortalInviteUserAction}
-          className="mt-4 grid gap-3 text-xs text-slate-600 sm:grid-cols-2"
-          onSubmit={(event) => {
-            const label =
-              contact.email ?? contact.phone ?? contact.name ?? "this contact";
-            if (!window.confirm(`Send a Partner Portal invite to ${label}?`)) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <input type="hidden" name="orgContactId" value={contact.id} />
-
-          <label className="flex flex-col gap-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Name
-            </span>
+            <input type="hidden" name="contactId" value={contact.id} />
             <input
-              name="name"
-              defaultValue={contact.name}
-              required
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              type="hidden"
+              name="expectedVersion"
+              value={contact.updatedAt}
             />
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Email
-            </span>
             <input
-              name="email"
-              type="email"
-              defaultValue={contact.email ?? ""}
-              placeholder="name@company.com"
-              required
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              type="hidden"
+              name="idempotencyKey"
+              value={`contact-delete:${contact.id}:${contact.updatedAt}`}
             />
-          </label>
-
-          <label className="flex flex-col gap-1 sm:col-span-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Phone (optional)
-            </span>
-            <input
-              name="phone"
-              type="tel"
-              defaultValue={contact.phoneE164 ?? contact.phone ?? ""}
-              placeholder="+1 404-555-1234"
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-            />
-          </label>
-
-          <div className="sm:col-span-2 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[11px] text-slate-500">
-              Invite includes a login link (expires in ~30 minutes).
-            </span>
             <SubmitButton
-              className={teamButtonClass("primary", "sm")}
-              pendingLabel="Sending..."
+              className={`${teamButtonClass("danger", "sm")} min-h-11`}
+              pendingLabel="Moving..."
             >
-              Send portal invite
+              Move to recovery
             </SubmitButton>
-          </div>
-        </form>
+          </form>
+        ) : null}
       </div>
 
-      {showBookingForm ? (
+      {contactWorkspace && !activeSubviewAllowed ? (
+        <section
+          className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"
+          role="alert"
+          aria-labelledby="contact-subview-denied-title"
+        >
+          <h3 id="contact-subview-denied-title" className="font-semibold">
+            This contact view is unavailable
+          </h3>
+          <p className="mt-1">
+            Your current permissions do not include{" "}
+            {CONTACT_SUBVIEW_LABELS[subview].toLowerCase()}. Choose an available
+            contact view above.
+          </p>
+        </section>
+      ) : null}
+
+      {(!contactWorkspace ||
+        (activeSubviewAllowed && subview === "overview")) &&
+      (capabilities.canReadPartners || capabilities.canInvitePartners) ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">
+                Partner portal
+              </h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Invite this contact to the Partner Portal. Sending an invite
+                also marks them as a partner.
+              </p>
+            </div>
+            {capabilities.canReadPartners ? (
+              <a
+                className={`${teamButtonClass("secondary", "sm")} min-h-11`}
+                href={teamSurfaceHref("partners", {
+                  query: { p_selected: contact.id },
+                })}
+              >
+                Advanced setup
+              </a>
+            ) : null}
+          </div>
+
+          {capabilities.canInvitePartners ? (
+            <form
+              action={partnerPortalInviteUserAction}
+              className="mt-4 grid gap-3 text-xs text-slate-600 sm:grid-cols-2"
+              onSubmit={(event) => {
+                const label =
+                  contact.email ??
+                  contact.phone ??
+                  contact.name ??
+                  "this contact";
+                if (
+                  !window.confirm(`Send a Partner Portal invite to ${label}?`)
+                ) {
+                  event.preventDefault();
+                }
+              }}
+            >
+              <input type="hidden" name="orgContactId" value={contact.id} />
+              <input type="hidden" name="expectedVersion" value="new" />
+              <input
+                type="hidden"
+                name="idempotencyKey"
+                value={`partner-invite:${contact.id}:${contact.updatedAt}`}
+              />
+
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Name
+                </span>
+                <input
+                  name="name"
+                  defaultValue={contact.name}
+                  required
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Email
+                </span>
+                <input
+                  name="email"
+                  type="email"
+                  defaultValue={contact.email ?? ""}
+                  placeholder="name@company.com"
+                  required
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1 sm:col-span-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Phone (optional)
+                </span>
+                <input
+                  name="phone"
+                  type="tel"
+                  defaultValue={contact.phoneE164 ?? contact.phone ?? ""}
+                  placeholder="+1 404-555-1234"
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                />
+              </label>
+
+              <div className="sm:col-span-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] text-slate-500">
+                  Invite includes a login link (expires in ~30 minutes).
+                </span>
+                <SubmitButton
+                  className={teamButtonClass("primary", "sm")}
+                  pendingLabel="Sending..."
+                >
+                  Send portal invite
+                </SubmitButton>
+              </div>
+            </form>
+          ) : (
+            <p className="mt-3 text-xs text-slate-500">
+              You can review the partner workspace, but sending portal invites
+              requires partner invitation access.
+            </p>
+          )}
+        </div>
+      ) : null}
+
+      {activeSubviewAllowed && capabilities.canBook && showBookingForm ? (
         <form
           action={bookAppointmentAction}
           className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-xs text-slate-600"
         >
           <input type="hidden" name="contactId" value={contact.id} />
+          {instantQuoteHandoff ? (
+            <>
+              <input
+                type="hidden"
+                name="instantQuoteId"
+                value={instantQuoteHandoff.instantQuoteId}
+              />
+              <input type="hidden" name="source" value="team_instant_quote" />
+            </>
+          ) : null}
           <input
             type="hidden"
             name="currentAssignedAssociateMemberId"
@@ -535,6 +895,29 @@ export function ContactsDetailsPaneClient({
           ) : null}
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {instantQuoteHandoff ? (
+              <div
+                className="sm:col-span-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs text-sky-950"
+                role="status"
+              >
+                <span className="font-semibold">
+                  Verified instant quote loaded.
+                </span>{" "}
+                The saved property, price range, estimated load, attribution,
+                and customer notes are prefilled below. Review them before
+                confirming.
+              </div>
+            ) : null}
+            {instantQuoteHandoff && !handoffPropertyIsAvailable ? (
+              <div
+                className="sm:col-span-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950"
+                role="alert"
+              >
+                The quote&apos;s verified property is not available in this
+                customer view. Refresh or repair the relationship before
+                booking; another address will not be substituted.
+              </div>
+            ) : null}
             <div className="sm:col-span-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
               Scheduling
             </div>
@@ -575,7 +958,7 @@ export function ContactsDetailsPaneClient({
                     ? "Select saved address"
                     : "No address yet (create placeholder)"}
                 </option>
-                {(contact.properties ?? []).map((property) => (
+                {bookingProperties.map((property) => (
                   <option key={property.id} value={property.id}>
                     {property.addressLine1}, {property.city}, {property.state}{" "}
                     {property.postalCode}
@@ -599,8 +982,8 @@ export function ContactsDetailsPaneClient({
 
             {isInPersonQuoteBooking ? (
               <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
-                In-person quote only uses the saved contact details plus a
-                saved address, date, and time.
+                In-person quote only uses the saved contact details plus a saved
+                address, date, and time.
                 {!hasBookingName ? " Add the contact name first." : ""}
                 {!hasBookingProperty ? " Add a property address first." : ""}
               </div>
@@ -695,6 +1078,7 @@ export function ContactsDetailsPaneClient({
                 <AppointmentBookingDetailsFields
                   teamMembers={teamMembers}
                   serviceType={bookingAppointmentType}
+                  bookingPrefill={bookingPrefill}
                   labelClassName="flex flex-col gap-1"
                   fieldClassName="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                 />
@@ -711,6 +1095,9 @@ export function ContactsDetailsPaneClient({
                   <textarea
                     name="notes"
                     rows={3}
+                    defaultValue={
+                      instantQuoteHandoff?.bookingPrefill.notes ?? ""
+                    }
                     placeholder="What did they say? Parking/gate notes? Items? Time constraints?"
                     className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                   />
@@ -723,7 +1110,10 @@ export function ContactsDetailsPaneClient({
             <SubmitButton
               className={teamButtonClass("primary", "sm")}
               pendingLabel="Booking..."
-              disabled={isInPersonQuoteBooking && !canSubmitQuoteBooking}
+              disabled={
+                (isInPersonQuoteBooking && !canSubmitQuoteBooking) ||
+                Boolean(instantQuoteHandoff && !handoffPropertyIsAvailable)
+              }
             >
               Confirm booking
             </SubmitButton>
@@ -751,162 +1141,225 @@ export function ContactsDetailsPaneClient({
         </form>
       ) : null}
 
-      <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="flex flex-col gap-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Stage
-            </span>
-            <select
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              value={stage}
-              disabled={stageSaving}
-              onChange={(e) => void updateStage(e.target.value)}
-            >
-              {PIPELINE_STAGES.map((value) => (
-                <option key={value} value={value}>
-                  {labelForPipelineStage(value)}
-                </option>
-              ))}
-            </select>
-            {stageError ? (
-              <span className="mt-1 text-xs font-semibold text-rose-600">
-                {stageError}
+      {!contactWorkspace || (activeSubviewAllowed && subview === "overview") ? (
+        <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Stage
               </span>
-            ) : null}
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Assigned to
-            </span>
-            <select
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              value={assignee ?? ""}
-              disabled={assigneeSaving}
-              onChange={(e) =>
-                void updateAssignee(
-                  e.target.value.trim().length ? e.target.value : null,
-                )
-              }
-            >
-              <option value="">(Unassigned)</option>
-              {teamMembers.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.name}
-                </option>
-              ))}
-            </select>
-            {assigneeError ? (
-              <span className="mt-1 text-xs font-semibold text-rose-600">
-                {assigneeError}
-              </span>
-            ) : null}
-          </label>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <span className="rounded-full bg-slate-100 px-3 py-1">
-            Appointments: {contact.stats?.appointments ?? 0}
-          </span>
-          <span className="rounded-full bg-slate-100 px-3 py-1">
-            Quotes: {contact.stats?.quotes ?? 0}
-          </span>
-          <span className="rounded-full bg-slate-100 px-3 py-1">
-            Notes: {contact.notesCount ?? contact.notes?.length ?? 0}
-          </span>
-        </div>
-        <div className="text-[11px] text-slate-500">
-          Last activity: {formatDateTime(contact.lastActivityAt)}
-        </div>
-      </div>
-
-      <ContactSalesAgentMemoryClient contactId={contact.id} />
-      <ContactMediaAnalysisClient contactId={contact.id} />
-
-      <div className="rounded-2xl border border-slate-200 bg-white p-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Address
-            </div>
-            <div className="text-sm font-semibold text-slate-900">
-              Properties
-            </div>
-          </div>
-          {addingProperty ? null : (
-            <button
-              type="button"
-              className={teamButtonClass("secondary", "sm")}
-              onClick={() => {
-                setAddingProperty(true);
-                setEditingPropertyId(null);
-              }}
-            >
-              Add property
-            </button>
-          )}
-        </div>
-
-        <div className="mt-3 space-y-3">
-          {(contact.properties ?? []).map((property) => {
-            const isEditing = editingPropertyId === property.id;
-            return (
-              <div
-                key={property.id}
-                className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3"
+              <select
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                value={stage}
+                disabled={stageSaving || !capabilities.canUpdatePipeline}
+                onChange={(e) => void updateStage(e.target.value)}
               >
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="text-xs text-slate-600">
-                    <div className="text-sm font-semibold text-slate-900">
-                      {property.addressLine1}
-                      {property.addressLine2
-                        ? `, ${property.addressLine2}`
-                        : ""}
+                {PIPELINE_STAGES.map((value) => (
+                  <option key={value} value={value}>
+                    {labelForPipelineStage(value)}
+                  </option>
+                ))}
+              </select>
+              {stageError ? (
+                <span className="mt-1 text-xs font-semibold text-rose-600">
+                  {stageError}
+                </span>
+              ) : null}
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Assigned to
+              </span>
+              <select
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                value={assignee ?? ""}
+                disabled={
+                  assigneeSaving ||
+                  !capabilities.canWriteContact ||
+                  !teamDirectoryAvailable
+                }
+                onChange={(e) =>
+                  void updateAssignee(
+                    e.target.value.trim().length ? e.target.value : null,
+                  )
+                }
+              >
+                <option value="">(Unassigned)</option>
+                {teamMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+              {assigneeError ? (
+                <span className="mt-1 text-xs font-semibold text-rose-600">
+                  {assigneeError}
+                </span>
+              ) : null}
+              {!teamDirectoryAvailable ? (
+                <span
+                  className="mt-1 text-xs font-medium text-amber-700"
+                  role="status"
+                >
+                  Assignment is unavailable until the team directory reloads.
+                </span>
+              ) : null}
+            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {capabilities.canReadCalendar ? (
+              <span className="rounded-full bg-slate-100 px-3 py-1">
+                Appointments: {contact.stats?.appointments ?? 0}
+              </span>
+            ) : null}
+            {capabilities.canReadQuotes ? (
+              <span className="rounded-full bg-slate-100 px-3 py-1">
+                Quotes: {contact.stats?.quotes ?? 0}
+              </span>
+            ) : null}
+            <span className="rounded-full bg-slate-100 px-3 py-1">
+              Notes: {contact.notesCount ?? contact.notes?.length ?? 0}
+            </span>
+          </div>
+          <div className="text-[11px] text-slate-500">
+            Last activity: {formatDateTime(contact.lastActivityAt)}
+          </div>
+        </div>
+      ) : null}
+
+      {!contactWorkspace ||
+      (activeSubviewAllowed && subview === "intelligence") ? (
+        <>
+          <ContactSalesAgentMemoryClient
+            contactId={contact.id}
+            canRefresh={capabilities.canWriteContact}
+            includeQuotePrice={capabilities.canReadQuotes}
+          />
+          <ContactMediaAnalysisClient
+            contactId={contact.id}
+            canRefresh={capabilities.canWriteContact}
+            includeQuotePrice={capabilities.canReadQuotes}
+          />
+        </>
+      ) : null}
+
+      {!contactWorkspace ||
+      (activeSubviewAllowed && subview === "properties") ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Address
+              </div>
+              <div className="text-sm font-semibold text-slate-900">
+                Properties
+              </div>
+            </div>
+            {addingProperty || !capabilities.canWriteProperties ? null : (
+              <button
+                type="button"
+                className={teamButtonClass("secondary", "sm")}
+                onClick={() => {
+                  setAddingProperty(true);
+                  setEditingPropertyId(null);
+                }}
+              >
+                Add property
+              </button>
+            )}
+          </div>
+
+          <div className="mt-3 space-y-3">
+            {(contact.properties ?? []).map((property) => {
+              const isEditing = editingPropertyId === property.id;
+              return (
+                <div
+                  key={property.id}
+                  className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="text-xs text-slate-600">
+                      <div className="text-sm font-semibold text-slate-900">
+                        {property.addressLine1}
+                        {property.addressLine2
+                          ? `, ${property.addressLine2}`
+                          : ""}
+                      </div>
+                      <div>
+                        {property.city}, {property.state} {property.postalCode}
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-500">
+                        Added {formatDateTime(property.createdAt)}
+                      </div>
                     </div>
-                    <div>
-                      {property.city}, {property.state} {property.postalCode}
-                    </div>
-                    <div className="mt-1 text-[11px] text-slate-500">
-                      Added {formatDateTime(property.createdAt)}
+                    <div className="flex flex-wrap gap-2">
+                      <a
+                        className={`${teamButtonClass("secondary", "sm")} min-h-11 ${buildMapsLinkForProperty(property) ? "" : "pointer-events-none opacity-50"}`}
+                        href={buildMapsLinkForProperty(property) ?? "#"}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Maps
+                      </a>
+                      {!capabilities.canWriteProperties ? null : isEditing ? (
+                        <button
+                          type="button"
+                          className={teamButtonClass("secondary", "sm")}
+                          onClick={() => setEditingPropertyId(null)}
+                        >
+                          Close
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className={teamButtonClass("secondary", "sm")}
+                          onClick={() => {
+                            setAddingProperty(false);
+                            setEditingPropertyId(property.id);
+                          }}
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {capabilities.canDeleteProperties ? (
+                        <form
+                          action={deletePropertyAction}
+                          onSubmit={(event) => {
+                            if (
+                              !window.confirm("Delete this property address?")
+                            ) {
+                              event.preventDefault();
+                            }
+                          }}
+                        >
+                          <input
+                            type="hidden"
+                            name="contactId"
+                            value={contact.id}
+                          />
+                          <input
+                            type="hidden"
+                            name="propertyId"
+                            value={property.id}
+                          />
+                          <SubmitButton
+                            className={teamButtonClass("danger", "sm")}
+                            pendingLabel="Deleting..."
+                          >
+                            Delete
+                          </SubmitButton>
+                        </form>
+                      ) : null}
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <a
-                      className={`${teamButtonClass("secondary", "sm")} ${buildMapsLinkForProperty(property) ? "" : "pointer-events-none opacity-50"}`}
-                      href={buildMapsLinkForProperty(property) ?? "#"}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Maps
-                    </a>
-                    {isEditing ? (
-                      <button
-                        type="button"
-                        className={teamButtonClass("secondary", "sm")}
-                        onClick={() => setEditingPropertyId(null)}
-                      >
-                        Close
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className={teamButtonClass("secondary", "sm")}
-                        onClick={() => {
-                          setAddingProperty(false);
-                          setEditingPropertyId(property.id);
-                        }}
-                      >
-                        Edit
-                      </button>
-                    )}
+
+                  {capabilities.canWriteProperties && isEditing ? (
                     <form
-                      action={deletePropertyAction}
-                      onSubmit={(event) => {
-                        if (!window.confirm("Delete this property address?")) {
-                          event.preventDefault();
-                        }
-                      }}
+                      action={updatePropertyAction}
+                      className="mt-3 grid grid-cols-1 gap-3 text-xs text-slate-600 sm:grid-cols-2"
+                      onSubmit={() => setEditingPropertyId(null)}
                     >
                       <input
                         type="hidden"
@@ -918,265 +1371,377 @@ export function ContactsDetailsPaneClient({
                         name="propertyId"
                         value={property.id}
                       />
-                      <SubmitButton
-                        className={teamButtonClass("danger", "sm")}
-                        pendingLabel="Deleting..."
-                      >
-                        Delete
-                      </SubmitButton>
-                    </form>
-                  </div>
-                </div>
-
-                {isEditing ? (
-                  <form
-                    action={updatePropertyAction}
-                    className="mt-3 grid grid-cols-1 gap-3 text-xs text-slate-600 sm:grid-cols-2"
-                    onSubmit={() => setEditingPropertyId(null)}
-                  >
-                    <input type="hidden" name="contactId" value={contact.id} />
-                    <input
-                      type="hidden"
-                      name="propertyId"
-                      value={property.id}
-                    />
-                    <label className="flex flex-col gap-1 sm:col-span-2">
-                      <span>Address line 1</span>
-                      <input
-                        name="addressLine1"
-                        defaultValue={property.addressLine1}
-                        required
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 sm:col-span-2">
-                      <span>Address line 2</span>
-                      <input
-                        name="addressLine2"
-                        defaultValue={property.addressLine2 ?? ""}
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span>City</span>
-                      <input
-                        name="city"
-                        defaultValue={property.city}
-                        required
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                      />
-                    </label>
-                    <div className="grid grid-cols-2 gap-3">
-                      <label className="flex flex-col gap-1">
-                        <span>State</span>
+                      <label className="flex flex-col gap-1 sm:col-span-2">
+                        <span>Address line 1</span>
                         <input
-                          name="state"
-                          defaultValue={property.state}
-                          required
-                          maxLength={2}
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 uppercase"
-                        />
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        <span>Postal code</span>
-                        <input
-                          name="postalCode"
-                          defaultValue={property.postalCode}
+                          name="addressLine1"
+                          defaultValue={property.addressLine1}
                           required
                           className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                         />
                       </label>
-                    </div>
-                    <div className="flex flex-wrap gap-2 sm:col-span-2">
-                      <SubmitButton
-                        className={teamButtonClass("primary", "sm")}
-                        pendingLabel="Saving..."
-                      >
-                        Save
-                      </SubmitButton>
-                      <button
-                        type="button"
-                        className={teamButtonClass("secondary", "sm")}
-                        onClick={() => setEditingPropertyId(null)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </form>
-                ) : null}
-              </div>
-            );
-          })}
+                      <label className="flex flex-col gap-1 sm:col-span-2">
+                        <span>Address line 2</span>
+                        <input
+                          name="addressLine2"
+                          defaultValue={property.addressLine2 ?? ""}
+                          className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span>City</span>
+                        <input
+                          name="city"
+                          defaultValue={property.city}
+                          required
+                          className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                        />
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <label className="flex flex-col gap-1">
+                          <span>State</span>
+                          <input
+                            name="state"
+                            defaultValue={property.state}
+                            required
+                            maxLength={2}
+                            className="rounded-xl border border-slate-200 bg-white px-3 py-2 uppercase"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span>Postal code</span>
+                          <input
+                            name="postalCode"
+                            defaultValue={property.postalCode}
+                            required
+                            className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                          />
+                        </label>
+                      </div>
+                      <div className="flex flex-wrap gap-2 sm:col-span-2">
+                        <SubmitButton
+                          className={teamButtonClass("primary", "sm")}
+                          pendingLabel="Saving..."
+                        >
+                          Save
+                        </SubmitButton>
+                        <button
+                          type="button"
+                          className={teamButtonClass("secondary", "sm")}
+                          onClick={() => setEditingPropertyId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  ) : null}
+                </div>
+              );
+            })}
 
-          {addingProperty ? (
-            <form
-              action={addPropertyAction}
-              className="grid grid-cols-1 gap-3 rounded-2xl border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-600 sm:grid-cols-2"
-              onSubmit={() => setAddingProperty(false)}
-            >
-              <input type="hidden" name="contactId" value={contact.id} />
-              <label className="flex flex-col gap-1 sm:col-span-2">
-                <span>Address line 1</span>
-                <input
-                  name="addressLine1"
-                  required
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                />
-              </label>
-              <label className="flex flex-col gap-1 sm:col-span-2">
-                <span>Address line 2</span>
-                <input
-                  name="addressLine2"
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span>City</span>
-                <input
-                  name="city"
-                  required
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                />
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="flex flex-col gap-1">
-                  <span>State</span>
+            {addingProperty && capabilities.canWriteProperties ? (
+              <form
+                action={addPropertyAction}
+                className="grid grid-cols-1 gap-3 rounded-2xl border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-600 sm:grid-cols-2"
+                onSubmit={() => setAddingProperty(false)}
+              >
+                <input type="hidden" name="contactId" value={contact.id} />
+                <label className="flex flex-col gap-1 sm:col-span-2">
+                  <span>Address line 1</span>
                   <input
-                    name="state"
-                    required
-                    maxLength={2}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 uppercase"
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span>Postal code</span>
-                  <input
-                    name="postalCode"
+                    name="addressLine1"
                     required
                     className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                   />
                 </label>
-              </div>
-              <div className="flex flex-wrap gap-2 sm:col-span-2">
-                <SubmitButton
-                  className={teamButtonClass("primary", "sm")}
-                  pendingLabel="Saving..."
-                >
-                  Save
-                </SubmitButton>
-                <button
-                  type="button"
-                  className={teamButtonClass("secondary", "sm")}
-                  onClick={() => setAddingProperty(false)}
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          ) : null}
-
-          {!addingProperty && (contact.properties ?? []).length === 0 ? (
-            <div className="text-xs text-slate-500">
-              No address yet. Add a property to save the job location.
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-white p-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Instant Quote
-            </div>
-            <div className="text-sm font-semibold text-slate-900">
-              Quote photos
-            </div>
-          </div>
-          <div className="text-xs text-slate-500">
-            {quotePhotoUrls.length ? `${quotePhotoUrls.length} photo(s)` : ""}
-          </div>
-        </div>
-        <div className="mt-3 text-xs text-slate-600">
-          {quotePhotosStatus === "loading" ? (
-            <div>Loading photos…</div>
-          ) : quotePhotosStatus === "error" ? (
-            <div className="text-rose-600">Unable to load quote photos.</div>
-          ) : quotePhotoUrls.length === 0 ? (
-            <div>No quote photos on file yet.</div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {quotePhotoUrls.map((url) => (
-                <a
-                  key={url}
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="group relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={url}
-                    alt="Quote photo"
-                    className="h-28 w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                <label className="flex flex-col gap-1 sm:col-span-2">
+                  <span>Address line 2</span>
+                  <input
+                    name="addressLine2"
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                   />
-                </a>
-              ))}
-            </div>
-          )}
-          <div className="mt-2 text-[11px] text-slate-500">
-            Photos can expire after 7 days.
-          </div>
-        </div>
-      </div>
-
-      {systemTasks.length > 0 ? (
-        <div className="space-y-2">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            System tasks
-          </div>
-          <div className="space-y-2">
-            {systemTasks.slice(0, 6).map((task) => (
-              <div
-                key={task.id}
-                className="rounded-2xl border border-slate-200 bg-white p-3"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-800">
-                      {task.title}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {formatDateTime(task.dueAt)}
-                    </div>
-                    {task.notes ? (
-                      <div className="mt-1 text-xs text-slate-600 line-clamp-2">
-                        {task.notes}
-                      </div>
-                    ) : null}
-                  </div>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span>City</span>
+                  <input
+                    name="city"
+                    required
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                  />
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="flex flex-col gap-1">
+                    <span>State</span>
+                    <input
+                      name="state"
+                      required
+                      maxLength={2}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 uppercase"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span>Postal code</span>
+                    <input
+                      name="postalCode"
+                      required
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    />
+                  </label>
+                </div>
+                <div className="flex flex-wrap gap-2 sm:col-span-2">
+                  <SubmitButton
+                    className={teamButtonClass("primary", "sm")}
+                    pendingLabel="Saving..."
+                  >
+                    Save
+                  </SubmitButton>
                   <button
                     type="button"
                     className={teamButtonClass("secondary", "sm")}
-                    onClick={() => void completeSystemTask(task.id)}
+                    onClick={() => setAddingProperty(false)}
                   >
-                    Mark done
+                    Cancel
                   </button>
                 </div>
+              </form>
+            ) : null}
+
+            {!addingProperty && (contact.properties ?? []).length === 0 ? (
+              <div className="text-xs text-slate-500">
+                No address yet. Add a property to save the job location.
               </div>
-            ))}
+            ) : null}
           </div>
         </div>
       ) : null}
 
-      <InboxContactRemindersClient
-        contactId={contact.id}
-        initialReminders={manualReminders}
-      />
-      <InboxContactNotesClient
-        contactId={contact.id}
-        initialNotes={initialNotes}
-      />
+      {contactWorkspace && activeSubviewAllowed && subview === "jobs-quotes" ? (
+        <section
+          className="rounded-2xl border border-slate-200 bg-white p-4"
+          aria-labelledby="contact-jobs-quotes-title"
+        >
+          <h3
+            id="contact-jobs-quotes-title"
+            className="text-sm font-semibold text-slate-900"
+          >
+            Jobs and quotes
+          </h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Open the full, permission-checked workspace for detailed lifecycle
+            history. These counts come from the current contact snapshot.
+          </p>
+          <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+            {capabilities.canReadCalendar ? (
+              <div className="rounded-xl bg-slate-50 p-3">
+                <dt className="text-xs text-slate-500">Appointments</dt>
+                <dd className="mt-1 text-xl font-semibold text-slate-900">
+                  {contact.stats?.appointments ?? 0}
+                </dd>
+              </div>
+            ) : null}
+            {capabilities.canReadQuotes ? (
+              <div className="rounded-xl bg-slate-50 p-3">
+                <dt className="text-xs text-slate-500">Quotes</dt>
+                <dd className="mt-1 text-xl font-semibold text-slate-900">
+                  {contact.stats?.quotes ?? 0}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {capabilities.canReadCalendar ? (
+              <a
+                className={`${teamButtonClass("secondary", "sm")} min-h-11`}
+                href={teamSurfaceHref("calendar", {
+                  query: { contactId: contact.id },
+                })}
+              >
+                View calendar work
+              </a>
+            ) : null}
+            {capabilities.canReadQuotes ? (
+              <a
+                className={`${teamButtonClass("secondary", "sm")} min-h-11`}
+                href={teamSurfaceHref("quotes", {
+                  query: { contactId: contact.id },
+                })}
+              >
+                View quotes
+              </a>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {contactWorkspace &&
+      activeSubviewAllowed &&
+      subview === "communications" ? (
+        <section
+          className="rounded-2xl border border-slate-200 bg-white p-4"
+          aria-labelledby="contact-communications-title"
+        >
+          <h3
+            id="contact-communications-title"
+            className="text-sm font-semibold text-slate-900"
+          >
+            Communications
+          </h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Conversation history and delivery status live in Inbox so one
+            timeline remains the source of truth.
+          </p>
+          <dl className="mt-4 space-y-2 text-sm text-slate-700">
+            <div>
+              <dt className="text-xs font-semibold text-slate-500">Phone</dt>
+              <dd>{contact.phone ?? "No phone number on file"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold text-slate-500">Email</dt>
+              <dd className="break-all">
+                {contact.email ?? "No email address on file"}
+              </dd>
+            </div>
+          </dl>
+          <a
+            className={`${teamButtonClass("primary", "sm")} mt-4 min-h-11`}
+            href={teamSurfaceHref("inbox", {
+              query: { contactId: contact.id },
+            })}
+          >
+            Open conversation timeline
+          </a>
+        </section>
+      ) : null}
+
+      {capabilities.canReadQuotes &&
+      (!contactWorkspace ||
+        (activeSubviewAllowed && subview === "intelligence")) ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Instant Quote
+              </div>
+              <div className="text-sm font-semibold text-slate-900">
+                Quote photos
+              </div>
+            </div>
+            <div className="text-xs text-slate-500">
+              {quotePhotoUrls.length ? `${quotePhotoUrls.length} photo(s)` : ""}
+            </div>
+          </div>
+          <div className="mt-3 text-xs text-slate-600">
+            {quotePhotosStatus === "loading" || quotePhotosStatus === "idle" ? (
+              <div role="status">Loading photos…</div>
+            ) : quotePhotosStatus !== "ready" &&
+              quotePhotosStatus !== "empty" ? (
+              <div className="text-rose-600" role="alert">
+                <p>
+                  {contactResourceFailureMessage(
+                    "quote photos",
+                    quotePhotosStatus,
+                  )}
+                </p>
+                {quotePhotosStatus !== "forbidden" &&
+                quotePhotosStatus !== "not-found" ? (
+                  <button
+                    type="button"
+                    className={`${teamButtonClass("secondary", "sm")} mt-2`}
+                    onClick={() =>
+                      setQuotePhotosReloadKey((current) => current + 1)
+                    }
+                  >
+                    Retry quote photos
+                  </button>
+                ) : null}
+              </div>
+            ) : quotePhotosStatus === "empty" ? (
+              <div role="status">
+                No quote photos are on file for this contact.
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {quotePhotoUrls.map((url) => (
+                  <a
+                    key={url}
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={url}
+                      alt="Quote photo"
+                      className="h-28 w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                    />
+                  </a>
+                ))}
+              </div>
+            )}
+            <div className="mt-2 text-[11px] text-slate-500">
+              Photos can expire after 7 days.
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {!contactWorkspace || (activeSubviewAllowed && subview === "activity") ? (
+        <>
+          {systemTasks.length > 0 ? (
+            <div className="space-y-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                System tasks
+              </div>
+              <div className="space-y-2">
+                {systemTasks.slice(0, 6).map((task) => (
+                  <div
+                    key={task.id}
+                    className="rounded-2xl border border-slate-200 bg-white p-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-slate-800">
+                          {task.title}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {formatDateTime(task.dueAt)}
+                        </div>
+                        {task.notes ? (
+                          <div className="mt-1 text-xs text-slate-600 line-clamp-2">
+                            {task.notes}
+                          </div>
+                        ) : null}
+                      </div>
+                      {capabilities.canWriteContact ? (
+                        <button
+                          type="button"
+                          className={teamButtonClass("secondary", "sm")}
+                          onClick={() => void completeSystemTask(task.id)}
+                        >
+                          Mark done
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <InboxContactRemindersClient
+            key={contact.id}
+            contactId={contact.id}
+            initialReminders={manualReminders}
+            readOnly={!capabilities.canWriteContact}
+          />
+          <InboxContactNotesClient
+            contactId={contact.id}
+            initialNotes={initialNotes}
+            readOnly={!capabilities.canWriteContact}
+          />
+        </>
+      ) : null}
     </div>
   );
 }

@@ -1,15 +1,19 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { getDb, conversationThreads, leads, outboxEvents, properties } from "@/db";
+import { getDb, conversationThreads, leads, outboxEvents } from "@/db";
 import { recordInboundMessage } from "@/lib/inbox";
+import { resolveOrCreateContactProperty } from "@/lib/property-write";
+import { verifyTwilioWebhookRequest } from "@/lib/twilio-webhook-auth";
 
 export const dynamic = "force-dynamic";
 
 const DEFAULT_SERVICES = ["junk_removal_primary"];
 
 function readString(value: FormDataEntryValue | null): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
 }
 
 function parseDuration(value: string | null): number | null {
@@ -44,7 +48,7 @@ async function ensureLeadForThread(input: {
         id: conversationThreads.id,
         leadId: conversationThreads.leadId,
         contactId: conversationThreads.contactId,
-        propertyId: conversationThreads.propertyId
+        propertyId: conversationThreads.propertyId,
       })
       .from(conversationThreads)
       .where(eq(conversationThreads.id, input.threadId))
@@ -55,23 +59,17 @@ async function ensureLeadForThread(input: {
     }
 
     const shortId = input.threadId.split("-")[0] ?? input.threadId.slice(0, 8);
-    const [property] = await tx
-      .insert(properties)
-      .values({
-        contactId: thread.contactId,
-        addressLine1: `[Missed Call ${shortId}] Address pending`,
-        city: "Unknown",
-        state: "NA",
-        postalCode: "00000",
-        gated: false,
-        createdAt: now,
-        updatedAt: now
-      })
-      .returning({ id: properties.id });
-
-    if (!property?.id) {
-      throw new Error("missed_call_property_failed");
-    }
+    const { property } = await resolveOrCreateContactProperty(tx, {
+      contactId: thread.contactId,
+      // The thread-derived token intentionally keeps each unknown location
+      // distinct until staff replace it with a real physical address.
+      addressLine1: `[Missed Call ${shortId}] Address pending`,
+      city: "Unknown",
+      state: "NA",
+      postalCode: "00000",
+      gated: false,
+      now,
+    });
 
     const [lead] = await tx
       .insert(leads)
@@ -85,10 +83,10 @@ async function ensureLeadForThread(input: {
         formPayload: {
           source: "missed_call",
           callSid: input.callSid,
-          from: input.from
+          from: input.from,
         },
         createdAt: now,
-        updatedAt: now
+        updatedAt: now,
       })
       .returning({ id: leads.id });
 
@@ -100,8 +98,8 @@ async function ensureLeadForThread(input: {
       type: "lead.alert",
       payload: {
         leadId: lead.id,
-        source: "missed_call"
-      }
+        source: "missed_call",
+      },
     });
 
     await tx
@@ -109,19 +107,16 @@ async function ensureLeadForThread(input: {
       .set({
         leadId: lead.id,
         propertyId: property.id,
-        updatedAt: now
+        updatedAt: now,
       })
       .where(eq(conversationThreads.id, input.threadId));
   });
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  let formData: FormData;
-  try {
-    formData = await request.formData();
-  } catch {
-    return NextResponse.json({ error: "invalid_form" }, { status: 400 });
-  }
+  const verified = await verifyTwilioWebhookRequest(request);
+  if (!verified.ok) return verified.response;
+  const { formData } = verified;
 
   const from = readString(formData.get("From"));
   const to = readString(formData.get("To"));
@@ -149,11 +144,12 @@ export async function POST(request: NextRequest): Promise<Response> {
       providerMessageId: callSid ?? null,
       metadata: {
         callStatus: callStatus ?? null,
-        callDuration: duration
-      }
+        callDuration: duration,
+      },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "inbound_call_failed";
+    const message =
+      error instanceof Error ? error.message : "inbound_call_failed";
     const status = message === "invalid_phone" ? 400 : 500;
     return NextResponse.json({ error: message }, { status });
   }
@@ -162,7 +158,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     try {
       await ensureLeadForThread({ threadId: result.threadId, callSid, from });
     } catch (error) {
-      console.warn("[twilio] missed_call_lead_failed", { error: String(error) });
+      console.warn("[twilio] missed_call_lead_failed", {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
     }
   }
 

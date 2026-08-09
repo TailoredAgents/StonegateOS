@@ -24,17 +24,20 @@ function fmtMoney(cents: number): string {
 
 export async function GET(
   request: NextRequest,
-  context: { params: Promise<{ payoutRunId: string }> }
+  context: { params: Promise<{ payoutRunId: string }> },
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "access.manage");
+  const permissionError = await requirePermission(request, "commissions.read");
   if (permissionError) return permissionError;
 
   const { payoutRunId } = await context.params;
   if (!payoutRunId) {
-    return NextResponse.json({ error: "missing_payout_run_id" }, { status: 400 });
+    return NextResponse.json(
+      { error: "missing_payout_run_id" },
+      { status: 400 },
+    );
   }
 
   const db = getDb();
@@ -44,7 +47,8 @@ export async function GET(
       timezone: payoutRuns.timezone,
       periodStart: payoutRuns.periodStart,
       periodEnd: payoutRuns.periodEnd,
-      status: payoutRuns.status
+      status: payoutRuns.status,
+      updatedAt: payoutRuns.updatedAt,
     })
     .from(payoutRuns)
     .where(eq(payoutRuns.id, payoutRunId))
@@ -60,7 +64,7 @@ export async function GET(
       crewCents: payoutRunLines.crewCents,
       adjustmentsCents: payoutRunLines.adjustmentsCents,
       totalCents: payoutRunLines.totalCents,
-      memberName: teamMembers.name
+      memberName: teamMembers.name,
     })
     .from(payoutRunLines)
     .leftJoin(teamMembers, eq(payoutRunLines.memberId, teamMembers.id))
@@ -99,7 +103,7 @@ export async function GET(
     "Period Start",
     "Period End",
     "Timezone",
-    "Status"
+    "Status",
   ].join(",");
 
   const rows = lines
@@ -107,7 +111,7 @@ export async function GET(
     .map((line) => {
       const member = line.memberName ?? line.memberId ?? "Unknown";
       const reimbursementCents = line.memberId
-        ? reimbursementByMemberId.get(line.memberId) ?? 0
+        ? (reimbursementByMemberId.get(line.memberId) ?? 0)
         : 0;
       const otherAdjustmentsCents = line.adjustmentsCents - reimbursementCents;
       return [
@@ -121,7 +125,7 @@ export async function GET(
         run.periodStart.toISOString(),
         run.periodEnd.toISOString(),
         csvEscape(run.timezone),
-        csvEscape(run.status)
+        csvEscape(run.status),
       ].join(",");
     });
 
@@ -129,12 +133,16 @@ export async function GET(
   const filename = `payout-run-${run.periodStart.toISOString().slice(0, 10)}-to-${run.periodEnd
     .toISOString()
     .slice(0, 10)}.csv`;
+  const version = run.updatedAt.toISOString();
 
   return new NextResponse(csv, {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${filename}"`
-    }
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      ETag: `"${version}"`,
+      "x-record-version": version,
+      "Cache-Control": "private, no-store",
+    },
   });
 }

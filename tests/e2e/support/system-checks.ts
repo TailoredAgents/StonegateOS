@@ -53,12 +53,27 @@ export async function checkDependencies(): Promise<DependencyStatus> {
     getOptionalEnvVar("TWILIO_API_BASE_URL", "http://localhost:4010") ??
     "http://localhost:4010"
   ).replace(/\/$/, "");
+  const metaBase = (
+    getOptionalEnvVar("META_FAKE_CONTROL_URL", "http://127.0.0.1:4013") ??
+    "http://127.0.0.1:4013"
+  ).replace(/\/$/, "");
+  const squareBase = (
+    getOptionalEnvVar("SQUARE_FAKE_CONTROL_URL", "http://127.0.0.1:4015") ??
+    "http://127.0.0.1:4015"
+  ).replace(/\/$/, "");
+  const emailBase = (
+    getOptionalEnvVar("EMAIL_FAKE_CONTROL_URL", "http://127.0.0.1:4016") ??
+    "http://127.0.0.1:4016"
+  ).replace(/\/$/, "");
 
   const healthChecks = [
     { name: "site", url: new URL("/api/healthz", siteBase).toString() },
     { name: "api", url: new URL("/api/healthz", apiBase).toString() },
     { name: "mailhog", url: `${mailhogBase}/api/v2/messages` },
-    { name: "twilio-mock", url: `${twilioBase}/messages` },
+    { name: "twilio-mock", url: `${twilioBase}/healthz` },
+    { name: "meta-fake", url: `${metaBase}/healthz` },
+    { name: "square-fake", url: `${squareBase}/healthz` },
+    { name: "email-fake", url: `${emailBase}/healthz` },
   ];
 
   const results = await Promise.all(

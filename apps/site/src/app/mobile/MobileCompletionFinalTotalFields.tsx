@@ -44,14 +44,14 @@ export function MobileCompletionFinalTotalFields({
   quotedTotalCents,
   initialPaymentSummary,
   pricingContext,
-  isOwner,
+  canManagePayments,
 }: {
   appointmentId: string;
   initialFinalTotalCents: number | null;
   quotedTotalCents: number | null;
   initialPaymentSummary: AppointmentPaymentSummary | null;
   pricingContext: string | null;
-  isOwner: boolean;
+  canManagePayments: boolean;
 }) {
   const incomingFinalTotalCents =
     initialPaymentSummary?.jobTotalCents ?? initialFinalTotalCents;
@@ -129,7 +129,7 @@ export function MobileCompletionFinalTotalFields({
     };
   }, [appointmentId, applyIncomingTotal]);
 
-  const canEdit = isOwner || !paymentRecorded;
+  const canEdit = canManagePayments || !paymentRecorded;
 
   if (!canEdit) {
     return (
@@ -140,8 +140,8 @@ export function MobileCompletionFinalTotalFields({
           {formatMoney(latestFinalTotalCents)}
         </p>
         <p className="mt-1 text-xs leading-5 text-slate-500">
-          This job already has a recorded payment. Ask an owner to change the
-          total.
+          This job already has a recorded payment. Ask someone with payment
+          management access to change the total.
         </p>
       </div>
     );
@@ -221,7 +221,7 @@ export function MobileCompletionFinalTotalFields({
           placeholder="350"
         />
       </label>
-      {paymentRecorded && isOwner ? (
+      {paymentRecorded && canManagePayments ? (
         <label className="block">
           <span className="text-xs font-semibold text-slate-300">
             Reason for changing a paid job
@@ -237,8 +237,9 @@ export function MobileCompletionFinalTotalFields({
       ) : null}
       {paymentRecorded ? (
         <p className="mt-1 text-xs leading-5 text-slate-500">
-          This job already has a recorded payment. Only an owner can change its
-          total, and the total cannot be less than the amount paid.
+          This job already has a recorded payment. Payment-management access is
+          required to change its total, and the total cannot be less than the
+          amount paid.
         </p>
       ) : null}
     </>

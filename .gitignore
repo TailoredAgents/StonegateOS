@@ -2,6 +2,8 @@
 node_modules/
 .pnpm-store/
 .turbo/
+.cache/ms-playwright/
+.docker-e2e/
 
 # Next.js
 .next/
@@ -22,7 +24,25 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-artifacts/
+artifacts/*
+!artifacts/team-crm-audit/
+artifacts/team-crm-audit/*
+!artifacts/team-crm-audit/baseline-results.json
+!artifacts/team-crm-audit/auxiliary-scorecards.csv
+!artifacts/team-crm-audit/coverage-matrix.csv
+!artifacts/team-crm-audit/evidence-index.md
+!artifacts/team-crm-audit/findings.json
+!artifacts/team-crm-audit/journey-results.csv
+!artifacts/team-crm-audit/route-inventory.csv
+!artifacts/team-crm-audit/role-tab-access-matrix.csv
+!artifacts/team-crm-audit/sensitive-action-matrix.csv
+!artifacts/team-crm-audit/staff-session-guide.md
+!artifacts/team-crm-audit/surface-inventory.csv
+!artifacts/team-crm-audit/tab-scorecards.csv
+
+# Ephemeral audit bearer-session storage
+tests/e2e/storage/audit-*.json
+tests/e2e/storage/mobile-*.json
 
 # Editor
 .DS_Store

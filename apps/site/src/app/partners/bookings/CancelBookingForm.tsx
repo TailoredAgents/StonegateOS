@@ -1,8 +1,17 @@
 "use client";
 
 import { partnerCancelBookingAction } from "../actions";
+import { PartnerMutationSubmitButton } from "../PartnerMutationSubmitButton";
 
-export function CancelBookingForm({ appointmentId }: { appointmentId: string }) {
+export function CancelBookingForm({
+  appointmentId,
+  version,
+  operationKey,
+}: {
+  appointmentId: string;
+  version: number;
+  operationKey: string;
+}) {
   return (
     <form
       action={partnerCancelBookingAction}
@@ -13,10 +22,14 @@ export function CancelBookingForm({ appointmentId }: { appointmentId: string }) 
       }}
     >
       <input type="hidden" name="appointmentId" value={appointmentId} />
-      <button type="submit" className="font-semibold text-rose-700 underline">
+      <input type="hidden" name="version" value={String(version)} />
+      <input type="hidden" name="operationKey" value={operationKey} />
+      <PartnerMutationSubmitButton
+        className="min-h-11 font-semibold text-rose-700 underline disabled:cursor-wait disabled:opacity-60"
+        pendingLabel="Canceling…"
+      >
         Cancel booking
-      </button>
+      </PartnerMutationSubmitButton>
     </form>
   );
 }
-

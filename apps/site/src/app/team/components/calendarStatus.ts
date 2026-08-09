@@ -25,11 +25,6 @@ interface CalendarSyncBadge {
   detail?: string;
 }
 
-const defaultCalendarBadge: CalendarSyncBadge = {
-  tone: "idle",
-  headline: "Status unavailable"
-};
-
 export function evaluateCalendarHealth(payload: CalendarStatusApiResponse): CalendarSyncBadge {
   if (!payload.ok) {
     return {

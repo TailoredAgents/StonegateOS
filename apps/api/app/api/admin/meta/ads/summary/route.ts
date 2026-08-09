@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, eq, gte, lt, lte, sql } from "drizzle-orm";
 import { getDb, leads, metaAdsInsightsDaily } from "@/db";
-import { isAdminRequest } from "../../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 
 function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -15,7 +15,13 @@ function isIsoDateString(value: string): boolean {
 function parseRange(request: NextRequest): { since: string; until: string } {
   const sinceParam = request.nextUrl.searchParams.get("since");
   const untilParam = request.nextUrl.searchParams.get("until");
-  if (sinceParam && untilParam && isIsoDateString(sinceParam) && isIsoDateString(untilParam) && sinceParam <= untilParam) {
+  if (
+    sinceParam &&
+    untilParam &&
+    isIsoDateString(sinceParam) &&
+    isIsoDateString(untilParam) &&
+    sinceParam <= untilParam
+  ) {
     return { since: sinceParam, until: untilParam };
   }
 
@@ -43,9 +49,8 @@ function toNumber(value: unknown): number {
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const denied = await requirePermission(request, "marketing.read");
+  if (denied) return denied;
 
   const { since, until } = parseRange(request);
   const level = parseLevel(request);
@@ -55,29 +60,37 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const db = getDb();
 
-  const idColumn = level === "ad" ? metaAdsInsightsDaily.adId : metaAdsInsightsDaily.campaignId;
-  const nameColumn = level === "ad" ? metaAdsInsightsDaily.adName : metaAdsInsightsDaily.campaignName;
+  const idColumn =
+    level === "ad"
+      ? metaAdsInsightsDaily.adId
+      : metaAdsInsightsDaily.campaignId;
+  const nameColumn =
+    level === "ad"
+      ? metaAdsInsightsDaily.adName
+      : metaAdsInsightsDaily.campaignName;
 
   const insights = await db
     .select({
       id: idColumn,
       name: sql<string | null>`max(${nameColumn})`,
       campaignId: sql<string | null>`max(${metaAdsInsightsDaily.campaignId})`,
-      campaignName: sql<string | null>`max(${metaAdsInsightsDaily.campaignName})`,
+      campaignName: sql<
+        string | null
+      >`max(${metaAdsInsightsDaily.campaignName})`,
       adsetId: sql<string | null>`max(${metaAdsInsightsDaily.adsetId})`,
       adsetName: sql<string | null>`max(${metaAdsInsightsDaily.adsetName})`,
       spend: sql<string>`coalesce(sum(${metaAdsInsightsDaily.spend}), 0)`,
       impressions: sql<number>`coalesce(sum(${metaAdsInsightsDaily.impressions}), 0)`,
       clicks: sql<number>`coalesce(sum(${metaAdsInsightsDaily.clicks}), 0)`,
-      reach: sql<number>`coalesce(sum(${metaAdsInsightsDaily.reach}), 0)`
+      reach: sql<number>`coalesce(sum(${metaAdsInsightsDaily.reach}), 0)`,
     })
     .from(metaAdsInsightsDaily)
     .where(
       and(
         eq(metaAdsInsightsDaily.level, "ad"),
         gte(metaAdsInsightsDaily.dateStart, since),
-        lte(metaAdsInsightsDaily.dateStart, until)
-      )
+        lte(metaAdsInsightsDaily.dateStart, until),
+      ),
     )
     .groupBy(idColumn);
 
@@ -90,23 +103,35 @@ export async function GET(request: NextRequest): Promise<Response> {
     .select({
       key: leadKeyExpr,
       leads: sql<number>`count(*)`,
-      conversions: sql<number>`sum(case when ${leads.status} = 'scheduled' then 1 else 0 end)`
+      conversions: sql<number>`sum(case when ${leads.status} = 'scheduled' then 1 else 0 end)`,
     })
     .from(leads)
-    .where(and(eq(leads.source, "facebook_lead"), gte(leads.createdAt, startAt), lt(leads.createdAt, endAt)))
+    .where(
+      and(
+        eq(leads.source, "facebook_lead"),
+        gte(leads.createdAt, startAt),
+        lt(leads.createdAt, endAt),
+      ),
+    )
     .groupBy(leadKeyExpr);
 
-  const leadsMap = new Map<string | null, { leads: number; conversions: number }>();
+  const leadsMap = new Map<
+    string | null,
+    { leads: number; conversions: number }
+  >();
   for (const row of leadsByKey) {
     leadsMap.set(row.key ?? null, {
       leads: Number(row.leads ?? 0),
-      conversions: Number(row.conversions ?? 0)
+      conversions: Number(row.conversions ?? 0),
     });
   }
 
   const items = insights
     .map((row) => {
-      const stats = leadsMap.get(row.id ?? null) ?? { leads: 0, conversions: 0 };
+      const stats = leadsMap.get(row.id ?? null) ?? {
+        leads: 0,
+        conversions: 0,
+      };
       const spend = toNumber(row.spend);
       const leadsCount = stats.leads;
       const convCount = stats.conversions;
@@ -124,7 +149,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         leads: leadsCount,
         conversions: convCount,
         costPerLead: leadsCount > 0 ? spend / leadsCount : null,
-        costPerConversion: convCount > 0 ? spend / convCount : null
+        costPerConversion: convCount > 0 ? spend / convCount : null,
       };
     })
     .sort((a, b) => b.spend - a.spend);
@@ -139,7 +164,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       acc.conversions += row.conversions ?? 0;
       return acc;
     },
-    { spend: 0, impressions: 0, clicks: 0, reach: 0, leads: 0, conversions: 0 }
+    { spend: 0, impressions: 0, clicks: 0, reach: 0, leads: 0, conversions: 0 },
   );
 
   return NextResponse.json({
@@ -150,10 +175,11 @@ export async function GET(request: NextRequest): Promise<Response> {
     totals: {
       ...totals,
       costPerLead: totals.leads > 0 ? totals.spend / totals.leads : null,
-      costPerConversion: totals.conversions > 0 ? totals.spend / totals.conversions : null
+      costPerConversion:
+        totals.conversions > 0 ? totals.spend / totals.conversions : null,
     },
     items,
     ...(level === "campaign" ? { campaigns: items } : {}),
-    ...(level === "ad" ? { ads: items } : {})
+    ...(level === "ad" ? { ads: items } : {}),
   });
 }

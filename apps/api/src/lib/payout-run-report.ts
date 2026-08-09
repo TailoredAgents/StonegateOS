@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lt } from "drizzle-orm";
+import { and, asc, eq, gte, lt, sql } from "drizzle-orm";
 import type { DatabaseClient } from "@/db";
 import {
   appointmentCommissions,
@@ -19,11 +19,14 @@ type PayoutRunRecord = {
   scheduledPayoutAt: Date;
   status: "draft" | "locked" | "paid";
   createdAt: Date;
+  updatedAt: Date;
   lockedAt: Date | null;
   paidAt: Date | null;
   reportHtml: string | null;
   reportGeneratedAt: Date | null;
 };
+
+type PayoutRunReportDb = Pick<DatabaseClient, "select" | "update">;
 
 type CommissionDetailRow = {
   memberId: string | null;
@@ -178,7 +181,9 @@ function formatCrewPoolSource(source: string | null): string {
   return "crew pool";
 }
 
-export function describeCommissionMath(detail: Pick<CommissionDetailRow, "role" | "meta">): {
+export function describeCommissionMath(
+  detail: Pick<CommissionDetailRow, "role" | "meta">,
+): {
   mathLabel: string;
   effectivePercentLabel: string;
 } {
@@ -266,7 +271,7 @@ function toMemberKey(
 }
 
 async function getPayoutRunRecord(
-  db: DatabaseClient,
+  db: PayoutRunReportDb,
   payoutRunId: string,
 ): Promise<PayoutRunRecord | null> {
   const [run] = await db
@@ -278,6 +283,7 @@ async function getPayoutRunRecord(
       scheduledPayoutAt: payoutRuns.scheduledPayoutAt,
       status: payoutRuns.status,
       createdAt: payoutRuns.createdAt,
+      updatedAt: payoutRuns.updatedAt,
       lockedAt: payoutRuns.lockedAt,
       paidAt: payoutRuns.paidAt,
       reportHtml: payoutRuns.reportHtml,
@@ -291,7 +297,7 @@ async function getPayoutRunRecord(
 }
 
 export async function calculatePayoutRunLiveTotalCents(
-  db: DatabaseClient,
+  db: PayoutRunReportDb,
   run: Pick<PayoutRunRecord, "id" | "periodStart" | "periodEnd">,
 ): Promise<number> {
   const commissionRows = await db
@@ -330,7 +336,7 @@ export async function calculatePayoutRunLiveTotalCents(
 }
 
 export async function buildPayoutRunReportData(
-  db: DatabaseClient,
+  db: PayoutRunReportDb,
   payoutRunId: string,
 ): Promise<PayoutRunReportData> {
   const run = await getPayoutRunRecord(db, payoutRunId);
@@ -839,20 +845,33 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
 }
 
 export async function savePayoutRunReportHtml(
-  db: DatabaseClient,
+  db: PayoutRunReportDb,
   payoutRunId: string,
 ): Promise<{ html: string; report: PayoutRunReportData }> {
   const report = await buildPayoutRunReportData(db, payoutRunId);
   const html = renderPayoutRunReportHtml(report);
   const generatedAt = new Date();
 
-  await db
+  const [saved] = await db
     .update(payoutRuns)
     .set({
       reportHtml: html,
       reportGeneratedAt: generatedAt,
+      // Report materialization is derived data, not a financial revision.
+      // Preserve the version used to build the report and reject a concurrent
+      // run mutation instead of overwriting its version with a stale value.
+      updatedAt: report.run.updatedAt,
     })
-    .where(eq(payoutRuns.id, payoutRunId));
+    .where(
+      and(
+        eq(payoutRuns.id, payoutRunId),
+        sql`date_trunc('milliseconds', ${payoutRuns.updatedAt}) = ${report.run.updatedAt}`,
+      ),
+    )
+    .returning({ id: payoutRuns.id });
+  if (!saved) {
+    throw new Error("payout_run_report_state_conflict");
+  }
 
   return {
     html,
@@ -869,7 +888,7 @@ export async function savePayoutRunReportHtml(
 }
 
 export async function getPayoutRunReportHtml(
-  db: DatabaseClient,
+  db: PayoutRunReportDb,
   payoutRunId: string,
 ): Promise<{ html: string; report: PayoutRunReportData }> {
   const run = await getPayoutRunRecord(db, payoutRunId);
@@ -889,5 +908,8 @@ export async function getPayoutRunReportHtml(
     };
   }
 
-  return savePayoutRunReportHtml(db, payoutRunId);
+  // GET must remain read-only. Drafts and legacy finalized runs without a
+  // materialized report are rendered from current data but are not persisted.
+  const report = await buildPayoutRunReportData(db, payoutRunId);
+  return { html: renderPayoutRunReportHtml(report), report };
 }

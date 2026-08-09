@@ -1,20 +1,54 @@
 import { sql } from "drizzle-orm";
 import {
+  resolveGoogleAdsApiEndpoint,
+  resolveGoogleAdsTokenEndpoint,
+} from "@myst-os/sdk";
+import {
   getDb,
   googleAdsCampaignConversionsDaily,
   googleAdsConversionActions,
   googleAdsInsightsDaily,
-  googleAdsSearchTermsDaily
+  googleAdsSearchTermsDaily,
 } from "@/db";
 
 export class GoogleAdsApiError extends Error {
   readonly status: number;
-  readonly body: string;
+  readonly failureCode: string;
 
-  constructor(status: number, body: string) {
-    super(`google_ads_api_error:${status}`);
+  constructor(status: number, failureCode?: string) {
+    const safeFailureCode =
+      failureCode ?? `google_ads_provider_http_${String(status)}`;
+    super(safeFailureCode);
+    this.name = "GoogleAdsApiError";
     this.status = status;
-    this.body = body;
+    this.failureCode = safeFailureCode;
+  }
+}
+
+export type GoogleAdsMutationFailureCertainty =
+  | "confirmed_failed"
+  | "uncertain";
+
+/**
+ * Safe, persistence-ready classification for a Google Ads mutate request.
+ * The provider response body is intentionally excluded: it can contain
+ * account details and is not needed to decide whether redispatch is safe.
+ */
+export class GoogleAdsMutationDispatchError extends Error {
+  readonly certainty: GoogleAdsMutationFailureCertainty;
+  readonly failureCode: string;
+  readonly providerStatus: number | null;
+
+  constructor(input: {
+    certainty: GoogleAdsMutationFailureCertainty;
+    failureCode: string;
+    providerStatus?: number | null;
+  }) {
+    super(input.failureCode);
+    this.name = "GoogleAdsMutationDispatchError";
+    this.certainty = input.certainty;
+    this.failureCode = input.failureCode;
+    this.providerStatus = input.providerStatus ?? null;
   }
 }
 
@@ -27,8 +61,13 @@ type SyncResult = {
 
 type GoogleAdsKeywordMatchType = "BROAD" | "PHRASE" | "EXACT";
 
-function normalizeCustomerId(value: string): string {
-  return value.replace(/[^\d]/g, "");
+function normalizeCustomerId(value: string, field: string): string {
+  const supplied = value.trim();
+  if (!supplied) return "";
+  if (!/^(?:\d{10}|\d{3}-\d{3}-\d{4})$/u.test(supplied)) {
+    throw new Error(`google_ads_invalid_${field}`);
+  }
+  return supplied.replaceAll("-", "");
 }
 
 export function getGoogleAdsConfiguredIds(): {
@@ -37,23 +76,30 @@ export function getGoogleAdsConfiguredIds(): {
   apiVersion: string;
 } {
   const customerIdRaw = process.env["GOOGLE_ADS_CUSTOMER_ID"] ?? "";
-  const customerId = normalizeCustomerId(customerIdRaw);
+  const customerId = normalizeCustomerId(customerIdRaw, "customer_id");
 
   const loginCustomerIdRaw = process.env["GOOGLE_ADS_LOGIN_CUSTOMER_ID"] ?? "";
-  const loginCustomerId = loginCustomerIdRaw ? normalizeCustomerId(loginCustomerIdRaw) : null;
+  const loginCustomerId = loginCustomerIdRaw
+    ? normalizeCustomerId(loginCustomerIdRaw, "login_customer_id")
+    : null;
 
-  const apiVersionRaw = (process.env["GOOGLE_ADS_API_VERSION"] ?? "v20").trim();
-  const apiVersion = apiVersionRaw.startsWith("v") ? apiVersionRaw : `v${apiVersionRaw}`;
+  // v25 is the current major version as of 2026-08. v20 is already sunset,
+  // and v21 reaches its tentative sunset this month. Keep this overrideable
+  // for a controlled future upgrade, but never default to a dead endpoint.
+  const apiVersionRaw = (process.env["GOOGLE_ADS_API_VERSION"] ?? "v25").trim();
+  const apiVersion = apiVersionRaw.startsWith("v")
+    ? apiVersionRaw
+    : `v${apiVersionRaw}`;
 
   return {
     customerId: customerId || null,
     loginCustomerId,
-    apiVersion
+    apiVersion,
   };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readString(value: unknown): string | null {
@@ -81,7 +127,9 @@ function floatToNumeric(value: unknown): string {
   return Number.isFinite(num) ? num.toFixed(2) : "0.00";
 }
 
-function parseConversionActionIdFromResourceName(resourceName: string): string | null {
+function parseConversionActionIdFromResourceName(
+  resourceName: string,
+): string | null {
   // customers/{customerId}/conversionActions/{conversionActionId}
   const parts = resourceName.split("/").filter((part) => part.length > 0);
   const idx = parts.findIndex((part) => part === "conversionActions");
@@ -105,32 +153,36 @@ export async function getGoogleAdsAccessToken(): Promise<string> {
   body.set("refresh_token", refreshToken);
   body.set("grant_type", "refresh_token");
 
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await fetch(resolveGoogleAdsTokenEndpoint(process.env), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString()
+    body: body.toString(),
+    signal: AbortSignal.timeout(8_000),
   });
 
-  const text = await response.text();
   if (!response.ok) {
-    throw new GoogleAdsApiError(response.status, text);
+    await response.body?.cancel().catch(() => undefined);
+    throw new GoogleAdsApiError(response.status);
   }
 
-  let json: any = null;
+  const text = await response.text();
+  let json: unknown = null;
   try {
-    json = JSON.parse(text);
+    json = JSON.parse(text) as unknown;
   } catch {
     json = null;
   }
 
-  const token = json && typeof json.access_token === "string" ? json.access_token : null;
+  const token = isRecord(json) ? readString(json["access_token"]) : null;
   if (!token) {
     throw new Error("google_ads_token_missing");
   }
   return token;
 }
 
-export async function listGoogleAdsAccessibleCustomers(input: { accessToken: string }): Promise<string[]> {
+export async function listGoogleAdsAccessibleCustomers(input: {
+  accessToken: string;
+}): Promise<string[]> {
   const developerToken = process.env["GOOGLE_ADS_DEVELOPER_TOKEN"] ?? "";
   if (!developerToken) {
     throw new Error("google_ads_not_configured");
@@ -138,33 +190,47 @@ export async function listGoogleAdsAccessibleCustomers(input: { accessToken: str
 
   const { apiVersion, loginCustomerId } = getGoogleAdsConfiguredIds();
 
-  const url = `https://googleads.googleapis.com/${apiVersion}/customers:listAccessibleCustomers`;
+  const url = resolveGoogleAdsApiEndpoint(
+    { kind: "accessible_customers", apiVersion },
+    process.env,
+  );
   const response = await fetch(url, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${input.accessToken}`,
       "developer-token": developerToken,
-      ...(loginCustomerId ? { "login-customer-id": loginCustomerId } : {})
-    }
+      ...(loginCustomerId ? { "login-customer-id": loginCustomerId } : {}),
+    },
+    signal: AbortSignal.timeout(8_000),
   });
 
-  const text = await response.text();
   if (!response.ok) {
-    throw new GoogleAdsApiError(response.status, text);
+    await response.body?.cancel().catch(() => undefined);
+    throw new GoogleAdsApiError(response.status);
   }
 
-  let json: any = null;
+  const text = await response.text();
+  let json: unknown = null;
   try {
-    json = JSON.parse(text);
+    json = JSON.parse(text) as unknown;
   } catch {
     json = null;
   }
 
-  const names = Array.isArray(json?.resourceNames) ? json.resourceNames : [];
-  return names.filter((value: unknown): value is string => typeof value === "string");
+  if (!isRecord(json) || !Array.isArray(json["resourceNames"])) {
+    throw new Error("google_ads_accessible_customers_invalid_response");
+  }
+  const names: string[] = [];
+  for (const value of json["resourceNames"]) {
+    if (typeof value !== "string" || !/^customers\/\d{10}$/u.test(value)) {
+      throw new Error("google_ads_accessible_customers_invalid_response");
+    }
+    names.push(value);
+  }
+  return names;
 }
 
-async function googleAdsSearchStream(input: {
+export async function googleAdsSearchStream(input: {
   customerId: string;
   accessToken: string;
   query: string;
@@ -178,30 +244,38 @@ async function googleAdsSearchStream(input: {
   // Default to a currently served version; still overrideable via env var.
   const { apiVersion, loginCustomerId } = getGoogleAdsConfiguredIds();
 
-  const url = `https://googleads.googleapis.com/${apiVersion}/customers/${input.customerId}/googleAds:searchStream`;
+  const url = resolveGoogleAdsApiEndpoint(
+    {
+      kind: "search_stream",
+      apiVersion,
+      customerId: input.customerId,
+    },
+    process.env,
+  );
   const response = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${input.accessToken}`,
       "developer-token": developerToken,
       ...(loginCustomerId ? { "login-customer-id": loginCustomerId } : {}),
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      query: input.query
-    })
+      query: input.query,
+    }),
+    signal: AbortSignal.timeout(20_000),
   });
 
-  const text = await response.text();
   if (!response.ok) {
     const contentType = response.headers.get("content-type") ?? "";
-    const looksLikeHtml = contentType.includes("text/html") || /^\s*<!doctype html/i.test(text);
-    if (response.status === 404 && looksLikeHtml) {
+    await response.body?.cancel().catch(() => undefined);
+    if (response.status === 404 && contentType.includes("text/html")) {
       throw new Error(`google_ads_endpoint_not_found:${apiVersion}`);
     }
-    throw new GoogleAdsApiError(response.status, text);
+    throw new GoogleAdsApiError(response.status);
   }
 
+  const text = await response.text();
   let json: unknown = null;
   try {
     json = JSON.parse(text);
@@ -215,11 +289,18 @@ async function googleAdsSearchStream(input: {
 
   const rows: Array<Record<string, unknown>> = [];
   for (const chunk of json) {
-    if (!isRecord(chunk)) continue;
+    if (!isRecord(chunk)) {
+      throw new Error("google_ads_invalid_response");
+    }
     const results = chunk["results"];
-    if (!Array.isArray(results)) continue;
+    if (!Array.isArray(results)) {
+      throw new Error("google_ads_invalid_response");
+    }
     for (const row of results) {
-      if (isRecord(row)) rows.push(row);
+      if (!isRecord(row)) {
+        throw new Error("google_ads_invalid_response");
+      }
+      rows.push(row);
     }
   }
 
@@ -229,9 +310,8 @@ async function googleAdsSearchStream(input: {
 async function googleAdsMutate(input: {
   customerId: string;
   accessToken: string;
-  path: string;
   body: Record<string, unknown>;
-}): Promise<Record<string, unknown>> {
+}): Promise<{ body: Record<string, unknown>; status: number }> {
   const developerToken = process.env["GOOGLE_ADS_DEVELOPER_TOKEN"] ?? "";
   if (!developerToken) {
     throw new Error("google_ads_not_configured");
@@ -239,28 +319,74 @@ async function googleAdsMutate(input: {
 
   const { apiVersion, loginCustomerId } = getGoogleAdsConfiguredIds();
 
-  const url = `https://googleads.googleapis.com/${apiVersion}/customers/${input.customerId}/${input.path}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.accessToken}`,
-      "developer-token": developerToken,
-      ...(loginCustomerId ? { "login-customer-id": loginCustomerId } : {}),
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(input.body)
-  });
-
-  const text = await response.text();
-  if (!response.ok) {
-    const contentType = response.headers.get("content-type") ?? "";
-    const looksLikeHtml = contentType.includes("text/html") || /^\s*<!doctype html/i.test(text);
-    if (response.status === 404 && looksLikeHtml) {
-      throw new Error(`google_ads_endpoint_not_found:${apiVersion}`);
-    }
-    throw new GoogleAdsApiError(response.status, text);
+  let url: string;
+  try {
+    url = resolveGoogleAdsApiEndpoint(
+      {
+        kind: "mutate_customer_negative_criteria",
+        apiVersion,
+        customerId: input.customerId,
+      },
+      process.env,
+    );
+  } catch {
+    throw new GoogleAdsMutationDispatchError({
+      certainty: "confirmed_failed",
+      failureCode: "google_ads_mutation_endpoint_invalid",
+    });
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.accessToken}`,
+        "developer-token": developerToken,
+        ...(loginCustomerId ? { "login-customer-id": loginCustomerId } : {}),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input.body),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch {
+    // Once fetch begins, a timeout or connection failure cannot prove that
+    // Google did not accept the mutation. The caller must quarantine it.
+    throw new GoogleAdsMutationDispatchError({
+      certainty: "uncertain",
+      failureCode: "google_ads_mutation_transport_uncertain",
+    });
   }
 
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+    await response.body?.cancel().catch(() => undefined);
+    if (response.status === 404 && contentType.includes("text/html")) {
+      throw new GoogleAdsMutationDispatchError({
+        certainty: "confirmed_failed",
+        failureCode: `google_ads_endpoint_not_found:${apiVersion}`,
+        providerStatus: response.status,
+      });
+    }
+    const uncertain = response.status >= 500 || response.status === 408;
+    throw new GoogleAdsMutationDispatchError({
+      certainty: uncertain ? "uncertain" : "confirmed_failed",
+      failureCode: uncertain
+        ? `google_ads_mutation_provider_uncertain:${response.status}`
+        : `google_ads_mutation_rejected:${response.status}`,
+      providerStatus: response.status,
+    });
+  }
+
+  let text: string;
+  try {
+    text = await response.text();
+  } catch {
+    throw new GoogleAdsMutationDispatchError({
+      certainty: "uncertain",
+      failureCode: "google_ads_mutation_response_unreadable",
+      providerStatus: response.status,
+    });
+  }
   let json: unknown = null;
   try {
     json = JSON.parse(text);
@@ -269,19 +395,26 @@ async function googleAdsMutate(input: {
   }
 
   if (!isRecord(json)) {
-    throw new Error("google_ads_invalid_response");
+    throw new GoogleAdsMutationDispatchError({
+      certainty: "uncertain",
+      failureCode: "google_ads_mutation_invalid_success_response",
+      providerStatus: response.status,
+    });
   }
 
-  return json;
+  return { body: json, status: response.status };
 }
 
-function normalizeNegativeKeywordTerm(input: string): { term: string; matchType: GoogleAdsKeywordMatchType } {
+export function normalizeGoogleAdsNegativeKeywordTerm(input: string): {
+  term: string;
+  matchType: GoogleAdsKeywordMatchType;
+} {
   let term = input.trim();
   if (term.startsWith("[") && term.endsWith("]") && term.length > 2) {
     term = term.slice(1, -1).trim();
     return { term, matchType: "EXACT" };
   }
-  if (term.startsWith("\"") && term.endsWith("\"") && term.length > 2) {
+  if (term.startsWith('"') && term.endsWith('"') && term.length > 2) {
     term = term.slice(1, -1).trim();
     return { term, matchType: "PHRASE" };
   }
@@ -291,18 +424,34 @@ function normalizeNegativeKeywordTerm(input: string): { term: string; matchType:
   return { term, matchType: "BROAD" };
 }
 
-function readResourceName(result: unknown): string | null {
+function readResourceName(
+  result: unknown,
+  expectedCustomerId: string,
+): string | null {
   if (!isRecord(result)) return null;
   const resourceName = result["resourceName"];
-  return typeof resourceName === "string" ? resourceName : null;
+  if (typeof resourceName !== "string") return null;
+  const match = resourceName.match(
+    /^customers\/(\d{10})\/customerNegativeCriteria\/(\d+)$/u,
+  );
+  return match?.[1] === expectedCustomerId ? resourceName : null;
 }
 
 export async function applyCustomerNegativeKeyword(input: {
   customerId: string;
   accessToken: string;
   term: string;
-}): Promise<{ resourceName: string; term: string; matchType: GoogleAdsKeywordMatchType }> {
-  const normalized = normalizeNegativeKeywordTerm(input.term);
+}): Promise<{
+  resourceName: string;
+  term: string;
+  matchType: GoogleAdsKeywordMatchType;
+  providerStatus: number;
+}> {
+  const customerId = normalizeCustomerId(input.customerId, "customer_id");
+  if (!customerId) {
+    throw new Error("google_ads_invalid_customer_id");
+  }
+  const normalized = normalizeGoogleAdsNegativeKeywordTerm(input.term);
   const term = normalized.term;
 
   if (!term) {
@@ -318,35 +467,49 @@ export async function applyCustomerNegativeKeyword(input: {
         create: {
           keyword: {
             text: term,
-            matchType: normalized.matchType
-          }
-        }
-      }
+            matchType: normalized.matchType,
+          },
+        },
+      },
     ],
-    partialFailure: false
+    partialFailure: false,
   };
 
-  const json = await googleAdsMutate({
-    customerId: input.customerId,
+  const response = await googleAdsMutate({
+    customerId,
     accessToken: input.accessToken,
-    path: "customerNegativeCriteria:mutate",
-    body
+    body,
   });
 
-  const results = Array.isArray(json["results"]) ? (json["results"] as unknown[]) : [];
-  const resourceName = readResourceName(results[0]);
+  const results = Array.isArray(response.body["results"])
+    ? (response.body["results"] as unknown[])
+    : [];
+  const resourceName =
+    results.length === 1 ? readResourceName(results[0], customerId) : null;
   if (!resourceName) {
-    throw new Error("google_ads_mutate_missing_resource_name");
+    throw new GoogleAdsMutationDispatchError({
+      certainty: "uncertain",
+      failureCode: "google_ads_mutation_invalid_resource_name",
+      providerStatus: response.status,
+    });
   }
 
-  return { resourceName, term, matchType: normalized.matchType };
+  return {
+    resourceName,
+    term,
+    matchType: normalized.matchType,
+    providerStatus: response.status,
+  };
 }
 
 function isIsoDateString(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
-export async function syncGoogleAdsInsightsDaily(input: { since: string; until: string }): Promise<SyncResult> {
+export async function syncGoogleAdsInsightsDaily(input: {
+  since: string;
+  until: string;
+}): Promise<SyncResult> {
   const { customerId } = getGoogleAdsConfiguredIds();
   if (!customerId) {
     throw new Error("google_ads_not_configured");
@@ -355,7 +518,11 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
     throw new Error(`google_ads_invalid_customer_id:${customerId}`);
   }
 
-  if (!isIsoDateString(input.since) || !isIsoDateString(input.until) || input.since > input.until) {
+  if (
+    !isIsoDateString(input.since) ||
+    !isIsoDateString(input.until) ||
+    input.since > input.until
+  ) {
     throw new Error("google_ads_invalid_date_range");
   }
 
@@ -379,18 +546,21 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
   const conversionActionRows = await googleAdsSearchStream({
     customerId,
     accessToken,
-    query: conversionActionQuery
+    query: conversionActionQuery,
   });
 
   const conversionActionValues = conversionActionRows
     .map((row) => {
       const conversionAction = isRecord(row["conversionAction"])
-        ? (row["conversionAction"] as Record<string, unknown>)
+        ? row["conversionAction"]
         : isRecord(row["conversion_action"])
-          ? (row["conversion_action"] as Record<string, unknown>)
+          ? row["conversion_action"]
           : null;
 
-      const resourceName = readString(conversionAction?.["resourceName"] ?? conversionAction?.["resource_name"]);
+      const resourceName = readString(
+        conversionAction?.["resourceName"] ??
+          conversionAction?.["resource_name"],
+      );
       const actionId = readString(conversionAction?.["id"]);
       const name = readString(conversionAction?.["name"]);
       if (!resourceName || !actionId || !name) return null;
@@ -404,7 +574,7 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
         type: readString(conversionAction?.["type"]),
         status: readString(conversionAction?.["status"]),
         raw: row,
-        fetchedAt
+        fetchedAt,
       };
     })
     .filter((value): value is NonNullable<typeof value> => Boolean(value));
@@ -414,7 +584,10 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
       .insert(googleAdsConversionActions)
       .values(conversionActionValues)
       .onConflictDoUpdate({
-        target: [googleAdsConversionActions.customerId, googleAdsConversionActions.actionId],
+        target: [
+          googleAdsConversionActions.customerId,
+          googleAdsConversionActions.actionId,
+        ],
         set: {
           resourceName: sql`excluded.resource_name`,
           name: sql`excluded.name`,
@@ -422,8 +595,8 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
           type: sql`excluded.type`,
           status: sql`excluded.status`,
           raw: sql`excluded.raw`,
-          fetchedAt
-        }
+          fetchedAt,
+        },
       });
   }
 
@@ -443,18 +616,24 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
       AND campaign.status != 'REMOVED'
   `.trim();
 
-  const campaignRows = await googleAdsSearchStream({ customerId, accessToken, query: campaignQuery });
+  const campaignRows = await googleAdsSearchStream({
+    customerId,
+    accessToken,
+    query: campaignQuery,
+  });
 
   const campaignValues = campaignRows
     .map((row) => {
-      const segments = isRecord(row["segments"]) ? (row["segments"] as Record<string, unknown>) : null;
-      const metrics = isRecord(row["metrics"]) ? (row["metrics"] as Record<string, unknown>) : null;
-      const campaign = isRecord(row["campaign"]) ? (row["campaign"] as Record<string, unknown>) : null;
+      const segments = isRecord(row["segments"]) ? row["segments"] : null;
+      const metrics = isRecord(row["metrics"]) ? row["metrics"] : null;
+      const campaign = isRecord(row["campaign"]) ? row["campaign"] : null;
       const dateStart = readString(segments?.["date"]);
       const campaignId = readString(campaign?.["id"]);
       if (!dateStart || !campaignId) return null;
 
-      const costMicros = readNumber(metrics?.["costMicros"] ?? metrics?.["cost_micros"]);
+      const costMicros = readNumber(
+        metrics?.["costMicros"] ?? metrics?.["cost_micros"],
+      );
       return {
         customerId,
         dateStart,
@@ -464,9 +643,11 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
         clicks: Math.trunc(readNumber(metrics?.["clicks"])),
         cost: microsToDollars(costMicros),
         conversions: floatToNumeric(metrics?.["conversions"]),
-        conversionValue: floatToNumeric(metrics?.["conversionsValue"] ?? metrics?.["conversions_value"]),
+        conversionValue: floatToNumeric(
+          metrics?.["conversionsValue"] ?? metrics?.["conversions_value"],
+        ),
         raw: row,
-        fetchedAt
+        fetchedAt,
       };
     })
     .filter((value): value is NonNullable<typeof value> => Boolean(value));
@@ -479,7 +660,7 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
         target: [
           googleAdsInsightsDaily.customerId,
           googleAdsInsightsDaily.dateStart,
-          googleAdsInsightsDaily.campaignId
+          googleAdsInsightsDaily.campaignId,
         ],
         set: {
           campaignName: sql`excluded.campaign_name`,
@@ -489,8 +670,8 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
           conversions: sql`excluded.conversions`,
           conversionValue: sql`excluded.conversion_value`,
           raw: sql`excluded.raw`,
-          fetchedAt
-        }
+          fetchedAt,
+        },
       });
   }
 
@@ -511,27 +692,35 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
       AND campaign.status != 'REMOVED'
   `.trim();
 
-  const searchTermRows = await googleAdsSearchStream({ customerId, accessToken, query: searchTermsQuery });
+  const searchTermRows = await googleAdsSearchStream({
+    customerId,
+    accessToken,
+    query: searchTermsQuery,
+  });
 
   const searchTermValues = searchTermRows
     .map((row) => {
-      const segments = isRecord(row["segments"]) ? (row["segments"] as Record<string, unknown>) : null;
-      const metrics = isRecord(row["metrics"]) ? (row["metrics"] as Record<string, unknown>) : null;
-      const campaign = isRecord(row["campaign"]) ? (row["campaign"] as Record<string, unknown>) : null;
-      const adGroup = isRecord(row["adGroup"]) ? (row["adGroup"] as Record<string, unknown>) : null;
+      const segments = isRecord(row["segments"]) ? row["segments"] : null;
+      const metrics = isRecord(row["metrics"]) ? row["metrics"] : null;
+      const campaign = isRecord(row["campaign"]) ? row["campaign"] : null;
+      const adGroup = isRecord(row["adGroup"]) ? row["adGroup"] : null;
       const searchTermView = isRecord(row["searchTermView"])
-        ? (row["searchTermView"] as Record<string, unknown>)
-        : isRecord(row["searchTermView"] ?? null)
-          ? (row["searchTermView"] as Record<string, unknown>)
+        ? row["searchTermView"]
+        : isRecord(row["search_term_view"])
+          ? row["search_term_view"]
           : null;
 
       const dateStart = readString(segments?.["date"]);
       const campaignId = readString(campaign?.["id"]);
       const adGroupId = readString(adGroup?.["id"]);
-      const searchTerm = readString(searchTermView?.["searchTerm"] ?? searchTermView?.["search_term"]);
+      const searchTerm = readString(
+        searchTermView?.["searchTerm"] ?? searchTermView?.["search_term"],
+      );
       if (!dateStart || !campaignId || !adGroupId || !searchTerm) return null;
 
-      const costMicros = readNumber(metrics?.["costMicros"] ?? metrics?.["cost_micros"]);
+      const costMicros = readNumber(
+        metrics?.["costMicros"] ?? metrics?.["cost_micros"],
+      );
 
       return {
         customerId,
@@ -543,9 +732,11 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
         clicks: Math.trunc(readNumber(metrics?.["clicks"])),
         cost: microsToDollars(costMicros),
         conversions: floatToNumeric(metrics?.["conversions"]),
-        conversionValue: floatToNumeric(metrics?.["conversionsValue"] ?? metrics?.["conversions_value"]),
+        conversionValue: floatToNumeric(
+          metrics?.["conversionsValue"] ?? metrics?.["conversions_value"],
+        ),
         raw: row,
-        fetchedAt
+        fetchedAt,
       };
     })
     .filter((value): value is NonNullable<typeof value> => Boolean(value));
@@ -560,7 +751,7 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
           googleAdsSearchTermsDaily.dateStart,
           googleAdsSearchTermsDaily.campaignId,
           googleAdsSearchTermsDaily.adGroupId,
-          googleAdsSearchTermsDaily.searchTerm
+          googleAdsSearchTermsDaily.searchTerm,
         ],
         set: {
           impressions: sql`excluded.impressions`,
@@ -569,8 +760,8 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
           conversions: sql`excluded.conversions`,
           conversionValue: sql`excluded.conversion_value`,
           raw: sql`excluded.raw`,
-          fetchedAt
-        }
+          fetchedAt,
+        },
       });
   }
 
@@ -592,27 +783,30 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
   const campaignConversionRows = await googleAdsSearchStream({
     customerId,
     accessToken,
-    query: campaignConversionsQuery
+    query: campaignConversionsQuery,
   });
 
   const campaignConversionValues = campaignConversionRows
     .map((row) => {
-      const segments = isRecord(row["segments"]) ? (row["segments"] as Record<string, unknown>) : null;
-      const metrics = isRecord(row["metrics"]) ? (row["metrics"] as Record<string, unknown>) : null;
-      const campaign = isRecord(row["campaign"]) ? (row["campaign"] as Record<string, unknown>) : null;
+      const segments = isRecord(row["segments"]) ? row["segments"] : null;
+      const metrics = isRecord(row["metrics"]) ? row["metrics"] : null;
+      const campaign = isRecord(row["campaign"]) ? row["campaign"] : null;
 
       const dateStart = readString(segments?.["date"]);
       const campaignId = readString(campaign?.["id"]);
 
       const conversionActionResource = readString(
-        segments?.["conversionAction"] ?? segments?.["conversion_action"]
+        segments?.["conversionAction"] ?? segments?.["conversion_action"],
       );
       const conversionActionName = readString(
-        segments?.["conversionActionName"] ?? segments?.["conversion_action_name"]
+        segments?.["conversionActionName"] ??
+          segments?.["conversion_action_name"],
       );
 
       if (!dateStart || !campaignId || !conversionActionResource) return null;
-      const conversionActionId = parseConversionActionIdFromResourceName(conversionActionResource);
+      const conversionActionId = parseConversionActionIdFromResourceName(
+        conversionActionResource,
+      );
       if (!conversionActionId) return null;
 
       return {
@@ -622,9 +816,11 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
         conversionActionId,
         conversionActionName,
         conversions: floatToNumeric(metrics?.["conversions"]),
-        conversionValue: floatToNumeric(metrics?.["conversionsValue"] ?? metrics?.["conversions_value"]),
+        conversionValue: floatToNumeric(
+          metrics?.["conversionsValue"] ?? metrics?.["conversions_value"],
+        ),
         raw: row,
-        fetchedAt
+        fetchedAt,
       };
     })
     .filter((value): value is NonNullable<typeof value> => Boolean(value));
@@ -638,15 +834,15 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
           googleAdsCampaignConversionsDaily.customerId,
           googleAdsCampaignConversionsDaily.dateStart,
           googleAdsCampaignConversionsDaily.campaignId,
-          googleAdsCampaignConversionsDaily.conversionActionId
+          googleAdsCampaignConversionsDaily.conversionActionId,
         ],
         set: {
           conversionActionName: sql`excluded.conversion_action_name`,
           conversions: sql`excluded.conversions`,
           conversionValue: sql`excluded.conversion_value`,
           raw: sql`excluded.raw`,
-          fetchedAt
-        }
+          fetchedAt,
+        },
       });
   }
 
@@ -654,6 +850,6 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
     campaigns: campaignValues.length,
     searchTerms: searchTermValues.length,
     conversionActions: conversionActionValues.length,
-    campaignConversions: campaignConversionValues.length
+    campaignConversions: campaignConversionValues.length,
   };
 }

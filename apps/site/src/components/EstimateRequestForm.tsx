@@ -82,6 +82,10 @@ export function EstimateRequestForm({
 }) {
   const utm = useUTM();
   const trackedSubmitRef = React.useRef(false);
+  const submissionOperationRef = React.useRef<{
+    payload: string;
+    idempotencyKey: string;
+  } | null>(null);
   const resolvedInitialServices =
     context === "contractor" && (!initialServices || initialServices.length === 0)
       ? ["construction-debris"]
@@ -168,11 +172,22 @@ export function EstimateRequestForm({
         utm,
         hp_company: hpCompany
       };
+      const serializedPayload = JSON.stringify(payload);
+      if (submissionOperationRef.current?.payload !== serializedPayload) {
+        submissionOperationRef.current = {
+          payload: serializedPayload,
+          idempotencyKey: globalThis.crypto.randomUUID()
+        };
+      }
+      const idempotencyKey = submissionOperationRef.current.idempotencyKey;
 
       const res = await fetch(`${apiBase}/api/web/lead-intake`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey
+        },
+        body: serializedPayload
       });
 
       const data = (await res.json().catch(() => null)) as

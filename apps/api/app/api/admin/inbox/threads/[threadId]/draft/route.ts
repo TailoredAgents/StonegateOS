@@ -26,7 +26,7 @@ export async function POST(
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "messages.send");
+  const permissionError = await requirePermission(request, "messages.write");
   if (permissionError) return permissionError;
 
   const { threadId } = await context.params;

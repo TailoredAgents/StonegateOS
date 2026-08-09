@@ -1,32 +1,14 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { eq, getTableColumns } from "drizzle-orm";
-import { conversationMessages, conversationThreads, getDb, salesAgentNextActions } from "@/db";
+import {
+  conversationMessages,
+  conversationThreads,
+  getDb,
+  salesAgentNextActions,
+} from "@/db";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
-import {
-  buildSalesAgentNextAction,
-  getSalesAgentNextAction,
-  upsertSalesAgentNextAction,
-} from "@/lib/sales-agent-next-action";
-import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
-import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
-import { loadChannelHandoffOutcomeSummary } from "@/lib/channel-handoff-outcomes";
-import { loadCloseLoopOutcomeSummary } from "@/lib/close-loop-outcomes";
-import { loadFirstResponseOutcomeSummary } from "@/lib/first-response-outcomes";
-import {
-  buildSalesAgentMemory,
-  getSalesAgentMemory,
-  upsertSalesAgentMemory,
-  type SalesAgentMemoryRecord,
-} from "@/lib/sales-agent-memory";
-import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
-import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
-import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
-import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
-import { loadQuoteAccuracyOutcomeSummary } from "@/lib/quote-accuracy-outcomes";
-import { loadQuoteHotWindowOutcomeSummary } from "@/lib/quote-hot-window-outcomes";
-import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
-import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
+import { getSalesAgentNextAction } from "@/lib/sales-agent-next-action";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
@@ -38,7 +20,7 @@ import {
   getSalesAutopilotPolicy,
   isSalesAutopilotLiveReplyEnabled,
 } from "@/lib/policy";
-import { and, desc, inArray, sql } from "drizzle-orm";
+import { and, desc, sql } from "drizzle-orm";
 import { getDmLiveAutopilotState } from "@/lib/dm-autopilot";
 
 type RouteContext = {
@@ -46,37 +28,9 @@ type RouteContext = {
 };
 
 function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-function toMemoryRecord(memory: {
-  summary: string | null;
-  customerIntent: string | null;
-  jobType: string | null;
-  pricingContext: string | null;
-  objections: string[];
-  channelPreference: string | null;
-  lastPromisedNextStep: string | null;
-  lastHumanSummary: string | null;
-  bookingReadiness: string | null;
-  quoteConfidence: string | null;
-  missingFields: string[];
-  factsJson: Record<string, unknown> | null;
-}): SalesAgentMemoryRecord {
-  return {
-    summary: memory.summary,
-    customerIntent: memory.customerIntent,
-    jobType: memory.jobType,
-    pricingContext: memory.pricingContext,
-    objections: memory.objections,
-    channelPreference: memory.channelPreference,
-    lastPromisedNextStep: memory.lastPromisedNextStep,
-    lastHumanSummary: memory.lastHumanSummary,
-    bookingReadiness: memory.bookingReadiness,
-    quoteConfidence: memory.quoteConfidence,
-    missingFields: memory.missingFields,
-    factsJson: memory.factsJson ?? {},
-  };
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
 function parseIso(value: string | null | undefined): Date | null {
@@ -85,7 +39,9 @@ function parseIso(value: string | null | undefined): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function isSafeDraftPreparationAction(actionType: string | null | undefined): boolean {
+function isSafeDraftPreparationAction(
+  actionType: string | null | undefined,
+): boolean {
   return (
     actionType === "missed_call_recovery" ||
     actionType === "appointment_checkin" ||
@@ -99,21 +55,35 @@ function isSafeDraftPreparationAction(actionType: string | null | undefined): bo
   );
 }
 
-function isPlannerActionDue(value: { dueAt?: string | Date | null } | null | undefined, now: Date): boolean {
+function isPlannerActionDue(
+  value: { dueAt?: string | Date | null } | null | undefined,
+  now: Date,
+): boolean {
   if (!value) return false;
   const dueAt =
-    value.dueAt instanceof Date ? value.dueAt : parseIso(typeof value.dueAt === "string" ? value.dueAt : null);
+    value.dueAt instanceof Date
+      ? value.dueAt
+      : parseIso(typeof value.dueAt === "string" ? value.dueAt : null);
   if (!dueAt) return true;
   return dueAt.getTime() <= now.getTime();
 }
 
 function deriveRecentHumanReview(
-  recentNotes: Array<{ title: string | null; notes: string | null; updatedAt: string }> | null | undefined,
+  recentNotes:
+    | Array<{ title: string | null; notes: string | null; updatedAt: string }>
+    | null
+    | undefined,
   now: Date,
-): { active: true; label: string; detail: string | null; updatedAt: string } | null {
+): {
+  active: true;
+  label: string;
+  detail: string | null;
+  updatedAt: string;
+} | null {
   const latestReviewNote =
     (recentNotes ?? []).find((note) => {
-      const title = typeof note?.title === "string" ? note.title.trim().toLowerCase() : "";
+      const title =
+        typeof note?.title === "string" ? note.title.trim().toLowerCase() : "";
       return title.startsWith("agent review");
     }) ?? null;
   if (!latestReviewNote?.updatedAt) return null;
@@ -129,20 +99,25 @@ function deriveRecentHumanReview(
   };
 }
 
-export async function GET(request: NextRequest, context: RouteContext): Promise<Response> {
+export async function GET(
+  request: NextRequest,
+  context: RouteContext,
+): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "automation.read");
+  const permissionError = await requirePermission(request, "contacts.read");
   if (permissionError) return permissionError;
 
   const { contactId } = await context.params;
-  const contactIdTrimmed = typeof contactId === "string" ? contactId.trim() : "";
+  const contactIdTrimmed =
+    typeof contactId === "string" ? contactId.trim() : "";
   if (!contactIdTrimmed || !isUuid(contactIdTrimmed)) {
     return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
   }
 
-  const includeQuotePrice = request.nextUrl.searchParams.get("includeQuotePrice") === "1";
+  const includeQuotePrice =
+    request.nextUrl.searchParams.get("includeQuotePrice") === "1";
   const db = getDb();
   const liveContext = await loadOmniLeadContext(db, {
     contactId: contactIdTrimmed,
@@ -152,54 +127,10 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
   }
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
-  const appointmentPreservationOutcomeSummary = await loadAppointmentPreservationOutcomeSummary(db);
-  const appointmentReminderOutcomeSummary = await loadAppointmentReminderOutcomeSummary(db);
-  const channelHandoffOutcomeSummary = await loadChannelHandoffOutcomeSummary(db);
-  const closeLoopOutcomeSummary = await loadCloseLoopOutcomeSummary(db);
-  const firstResponseOutcomeSummary = await loadFirstResponseOutcomeSummary(db);
-  const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
-  const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
-  const objectionSaveOutcomeSummary = await loadObjectionSaveOutcomeSummary(db);
-  const quoteAccuracyOutcomeSummary = await loadQuoteAccuracyOutcomeSummary(db);
-  const quoteHotWindowOutcomeSummary = await loadQuoteHotWindowOutcomeSummary(db);
-  const quoteCloseOutcomeSummary = await loadQuoteCloseOutcomeSummary(db);
-  const quoteFollowupOutcomeSummary = await loadQuoteFollowupOutcomeSummary(db);
-  const reactivationOutcomeSummary = await loadReactivationOutcomeSummary(db);
 
-  let memory = await getSalesAgentMemory(db, contactIdTrimmed);
-  if (!memory) {
-    memory = await upsertSalesAgentMemory(db, {
-      contactId: contactIdTrimmed,
-      leadId: liveContext.latestLead?.id ?? null,
-      memory: buildSalesAgentMemory(liveContext),
-    });
-  }
-
-  let nextAction = await getSalesAgentNextAction(db, contactIdTrimmed);
-  if (!nextAction && memory) {
-    nextAction = await upsertSalesAgentNextAction(db, {
-      contactId: contactIdTrimmed,
-      leadId: liveContext.latestLead?.id ?? null,
-      action: buildSalesAgentNextAction({
-        context: liveContext,
-        memory: toMemoryRecord(memory),
-        appointmentPreservationOutcomeSummary,
-        appointmentReminderOutcomeSummary,
-        channelHandoffOutcomeSummary,
-        closeLoopOutcomeSummary,
-        firstResponseOutcomeSummary,
-        missingInfoOutcomeSummary,
-        objectionSaveOutcomeSummary,
-        mediaOutcomeSummary,
-        quoteAccuracyOutcomeSummary,
-        quoteHotWindowOutcomeSummary,
-        quoteCloseOutcomeSummary,
-        reactivationOutcomeSummary,
-        quoteFollowupOutcomeSummary,
-        autopilotPolicy,
-      }),
-    });
-  }
+  // GET is deliberately read-only. Users with contacts.write can explicitly
+  // generate or refresh intelligence through the rebuild endpoint.
+  const nextAction = await getSalesAgentNextAction(db, contactIdTrimmed);
 
   const now = new Date();
   const latestDraftRows = await db
@@ -210,37 +141,59 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       createdAt: conversationMessages.createdAt,
     })
     .from(conversationMessages)
-    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .innerJoin(
+      conversationThreads,
+      eq(conversationMessages.threadId, conversationThreads.id),
+    )
     .where(
       and(
         eq(conversationThreads.contactId, contactIdTrimmed),
         eq(conversationMessages.direction, "outbound"),
         sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') = 'true'`,
-        sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`
+        sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`,
       ),
     )
     .orderBy(desc(conversationMessages.createdAt))
     .limit(1);
   const latestDraft = latestDraftRows[0] ?? null;
   const automationState =
-    (liveContext.automation ?? []).find((row) => row?.channel === (nextAction?.channel ?? latestDraft?.channel ?? null)) ?? null;
+    (liveContext.automation ?? []).find(
+      (row) =>
+        row?.channel === (nextAction?.channel ?? latestDraft?.channel ?? null),
+    ) ?? null;
   const effectiveChannel = nextAction?.channel ?? latestDraft?.channel ?? null;
-  const channelMode = getSalesAutopilotChannelMode(autopilotPolicy, effectiveChannel);
-  const liveReplyAllowed = isSalesAutopilotLiveReplyEnabled(autopilotPolicy, effectiveChannel);
-  const draftCreatedAt = latestDraft?.createdAt instanceof Date ? latestDraft.createdAt : null;
+  const channelMode = getSalesAutopilotChannelMode(
+    autopilotPolicy,
+    effectiveChannel,
+  );
+  const liveReplyAllowed = isSalesAutopilotLiveReplyEnabled(
+    autopilotPolicy,
+    effectiveChannel,
+  );
+  const draftCreatedAt =
+    latestDraft?.createdAt instanceof Date ? latestDraft.createdAt : null;
   const draftIsOldEnough =
     draftCreatedAt instanceof Date &&
-    now.getTime() - draftCreatedAt.getTime() >= Math.max(60_000, autopilotPolicy.plannerAutoSendMinDraftAgeMinutes * 60_000);
+    now.getTime() - draftCreatedAt.getTime() >=
+      Math.max(
+        60_000,
+        autopilotPolicy.plannerAutoSendMinDraftAgeMinutes * 60_000,
+      );
   const autosendPolicy = evaluateSalesPlannerAutosendPolicy(autopilotPolicy, {
     channel: nextAction?.channel ?? latestDraft?.channel ?? null,
     actionType: nextAction?.actionType ?? null,
     humanReviewRequired:
-      nextAction?.actionType === "human_follow_up" || (liveContext.derived.exceptionSignals?.length ?? 0) > 0,
+      nextAction?.actionType === "human_follow_up" ||
+      (liveContext.derived.exceptionSignals?.length ?? 0) > 0,
   });
   const autosendPolicyAllowed = autosendPolicy.allowed;
-  const actionClass = getSalesPlannerActionClass(nextAction?.actionType ?? null);
+  const actionClass = getSalesPlannerActionClass(
+    nextAction?.actionType ?? null,
+  );
   const dmLiveAutopilotState =
-    effectiveChannel === "dm" && latestDraft?.threadId && actionClass === "live_reply"
+    effectiveChannel === "dm" &&
+    latestDraft?.threadId &&
+    actionClass === "live_reply"
       ? await getDmLiveAutopilotState(db, latestDraft.threadId)
       : null;
   const dmLiveAutopilotBlocked = Boolean(
@@ -254,10 +207,11 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       latestDraft &&
       draftIsOldEnough &&
       !dmLiveAutopilotBlocked &&
-      isPlannerActionDue(nextAction, now)
+      isPlannerActionDue(nextAction, now),
   );
   const humanReviewRequired =
-    nextAction?.actionType === "human_follow_up" || (liveContext.derived.exceptionSignals?.length ?? 0) > 0;
+    nextAction?.actionType === "human_follow_up" ||
+    (liveContext.derived.exceptionSignals?.length ?? 0) > 0;
   const closeLoopPolicySummary = buildSalesCloseLoopPolicySummary({
     actionType: nextAction?.actionType ?? null,
     channelMode,
@@ -271,19 +225,20 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     ? "Draft is ready and still aging before autosend."
     : dmLiveAutopilotBlocked
       ? `Messenger stays approval-only until there has been a real back-and-forth. Current DM warm-up: ${dmLiveAutopilotState?.meaningfulInboundCount ?? 0} meaningful inbound message${(dmLiveAutopilotState?.meaningfulInboundCount ?? 0) === 1 ? "" : "s"}.`
-    : autosendPolicy.reason === "live_reply_autonomy_disabled"
-      ? "Live reply autonomy is still off. This draft can be suggested, but it will not auto-send until you enable live reply autonomy in Automation."
-    : autosendPolicy.reason === "live_reply_channel_not_allowed"
-      ? "Live reply autonomy is enabled, but this channel is not allowed to auto-send live replies yet."
-    : autosendPolicy.reason === "human_review_required"
-      ? "This lead is flagged for human review, so autosend stays blocked even if live autonomy is enabled."
-    : autosendPolicy.reason === "action_requires_full_mode"
-      ? "Partial mode keeps this kind of live reply approval-only."
-      : autosendPolicy.reason === "channel_not_allowed" || autosendPolicy.reason === "action_not_allowed"
-        ? "Draft is ready, but autosend policy does not allow this action."
-        : liveReplyAllowed
-          ? "Draft is ready for review and send."
-          : "Draft is ready for review.";
+      : autosendPolicy.reason === "live_reply_autonomy_disabled"
+        ? "Live reply autonomy is still off. This draft can be suggested, but it will not auto-send until you enable live reply autonomy in Automation."
+        : autosendPolicy.reason === "live_reply_channel_not_allowed"
+          ? "Live reply autonomy is enabled, but this channel is not allowed to auto-send live replies yet."
+          : autosendPolicy.reason === "human_review_required"
+            ? "This lead is flagged for human review, so autosend stays blocked even if live autonomy is enabled."
+            : autosendPolicy.reason === "action_requires_full_mode"
+              ? "Partial mode keeps this kind of live reply approval-only."
+              : autosendPolicy.reason === "channel_not_allowed" ||
+                  autosendPolicy.reason === "action_not_allowed"
+                ? "Draft is ready, but autosend policy does not allow this action."
+                : liveReplyAllowed
+                  ? "Draft is ready for review and send."
+                  : "Draft is ready for review.";
   const executionState = automationState?.dnc
     ? {
         code: "blocked",
@@ -299,80 +254,96 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
           tone: "warn" as const,
         }
       : automationState?.paused
-      ? {
-          code: "paused",
-          label: "Paused",
-          detail: "Automation is paused on the current planner channel.",
-          tone: "warn" as const,
-      }
-        : nextAction?.actionType === "human_follow_up" && (liveContext.derived.exceptionSignals?.length ?? 0) > 0
+        ? {
+            code: "paused",
+            label: "Paused",
+            detail: "Automation is paused on the current planner channel.",
+            tone: "warn" as const,
+          }
+        : nextAction?.actionType === "human_follow_up" &&
+            (liveContext.derived.exceptionSignals?.length ?? 0) > 0
           ? {
               code: "human_review",
               label: "Needs human review",
-              detail: nextAction.summary ?? "This lead should not be auto-handled until a human reviews the risk.",
+              detail:
+                nextAction.summary ??
+                "This lead should not be auto-handled until a human reviews the risk.",
               tone: "bad" as const,
             }
-        : channelMode === "off"
-          ? {
-              code: "mode_off",
-              label: "Off mode",
-              detail: "This channel is in Off mode. The agent can draft and plan, but it will not send automatically.",
-              tone: "neutral" as const,
-            }
-        : autosendEligible
-          ? {
-              code: "autosend_due",
-              label: "Due for autosend",
-              detail: "The worker can send this follow-up automatically.",
-              tone: "good" as const,
-            }
-          : latestDraft
+          : channelMode === "off"
             ? {
-                code: "draft_ready",
-                label: "Ready to send",
-                detail: draftReadyDetail,
+                code: "mode_off",
+                label: "Off mode",
+                detail:
+                  "This channel is in Off mode. The agent can draft and plan, but it will not send automatically.",
                 tone: "neutral" as const,
               }
-            : nextAction?.actionType === "wait_for_appointment"
+            : autosendEligible
               ? {
-                  code: "waiting_for_appointment",
-                  label: "Waiting on appointment",
-                  detail: "This lead already has an upcoming appointment.",
+                  code: "autosend_due",
+                  label: "Due for autosend",
+                  detail: "The worker can send this follow-up automatically.",
                   tone: "good" as const,
                 }
-              : nextAction?.actionType === "do_not_contact"
+              : latestDraft
                 ? {
-                    code: "blocked",
-                    label: "Blocked",
-                    detail: "Do not contact is active for this lead.",
-                    tone: "bad" as const,
+                    code: "draft_ready",
+                    label: "Ready to send",
+                    detail: draftReadyDetail,
+                    tone: "neutral" as const,
                   }
-                : nextAction?.actionType && isSafeDraftPreparationAction(nextAction.actionType)
+                : nextAction?.actionType === "wait_for_appointment"
                   ? {
-                      code: "draft_pending",
-                      label: "Draft pending",
-                      detail: autosendPolicy.reason === "live_reply_autonomy_disabled"
-                        ? "The agent should prepare the draft, but live reply autonomy is still turned off."
-                        : autosendPolicy.reason === "live_reply_channel_not_allowed"
-                          ? "The agent should prepare the draft, but this channel is not yet approved for live reply autonomy."
-                        : autosendPolicy.reason === "action_requires_full_mode"
-                        ? "The agent should prepare the draft, but Partial mode will keep this live reply approval-only."
-                        : effectiveChannel === "dm" && actionClass === "live_reply"
-                          ? "The agent should prepare the Messenger draft, but DM live autopilot will stay approval-only until the customer has had a real back-and-forth."
-                        : channelMode === "partial"
-                          ? "The agent should prepare the next draft. Partial mode keeps live replies approval-only."
-                        : "The agent should prepare the next draft automatically.",
-                      tone: "neutral" as const,
+                      code: "waiting_for_appointment",
+                      label: "Waiting on appointment",
+                      detail: "This lead already has an upcoming appointment.",
+                      tone: "good" as const,
                     }
-                  : nextAction?.summary
+                  : nextAction?.actionType === "do_not_contact"
                     ? {
-                        code: "awaiting_action",
-                        label: "Awaiting action",
-                        detail: nextAction.summary,
-                        tone: nextAction.priority === "urgent" ? ("bad" as const) : ("neutral" as const),
+                        code: "blocked",
+                        label: "Blocked",
+                        detail: "Do not contact is active for this lead.",
+                        tone: "bad" as const,
                       }
-                    : null;
-  const recentHumanReview = deriveRecentHumanReview(liveContext.recentNotes, now);
+                    : nextAction?.actionType &&
+                        isSafeDraftPreparationAction(nextAction.actionType)
+                      ? {
+                          code: "draft_pending",
+                          label: "Draft pending",
+                          detail:
+                            autosendPolicy.reason ===
+                            "live_reply_autonomy_disabled"
+                              ? "The agent should prepare the draft, but live reply autonomy is still turned off."
+                              : autosendPolicy.reason ===
+                                  "live_reply_channel_not_allowed"
+                                ? "The agent should prepare the draft, but this channel is not yet approved for live reply autonomy."
+                                : autosendPolicy.reason ===
+                                    "action_requires_full_mode"
+                                  ? "The agent should prepare the draft, but Partial mode will keep this live reply approval-only."
+                                  : effectiveChannel === "dm" &&
+                                      actionClass === "live_reply"
+                                    ? "The agent should prepare the Messenger draft, but DM live autopilot will stay approval-only until the customer has had a real back-and-forth."
+                                    : channelMode === "partial"
+                                      ? "The agent should prepare the next draft. Partial mode keeps live replies approval-only."
+                                      : "The agent should prepare the next draft automatically.",
+                          tone: "neutral" as const,
+                        }
+                      : nextAction?.summary
+                        ? {
+                            code: "awaiting_action",
+                            label: "Awaiting action",
+                            detail: nextAction.summary,
+                            tone:
+                              nextAction.priority === "urgent"
+                                ? ("bad" as const)
+                                : ("neutral" as const),
+                          }
+                        : null;
+  const recentHumanReview = deriveRecentHumanReview(
+    liveContext.recentNotes,
+    now,
+  );
 
   return NextResponse.json({
     ok: true,
@@ -400,21 +371,28 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   });
 }
 
-export async function PATCH(request: NextRequest, context: RouteContext): Promise<Response> {
+export async function PATCH(
+  request: NextRequest,
+  context: RouteContext,
+): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "automation.write");
+  const permissionError = await requirePermission(request, "contacts.write");
   if (permissionError) return permissionError;
 
   const { contactId } = await context.params;
-  const contactIdTrimmed = typeof contactId === "string" ? contactId.trim() : "";
+  const contactIdTrimmed =
+    typeof contactId === "string" ? contactId.trim() : "";
   if (!contactIdTrimmed || !isUuid(contactIdTrimmed)) {
     return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
   }
 
-  const payload = (await request.json().catch(() => null)) as { status?: string } | null;
-  const nextStatus = typeof payload?.status === "string" ? payload.status.trim() : "";
+  const payload = (await request.json().catch(() => null)) as {
+    status?: string;
+  } | null;
+  const nextStatus =
+    typeof payload?.status === "string" ? payload.status.trim() : "";
   if (!nextStatus) {
     return NextResponse.json({ error: "status_required" }, { status: 400 });
   }
@@ -436,7 +414,10 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     });
 
   if (!updated) {
-    return NextResponse.json({ error: "next_action_not_found" }, { status: 404 });
+    return NextResponse.json(
+      { error: "next_action_not_found" },
+      { status: 404 },
+    );
   }
 
   await recordAuditEvent({

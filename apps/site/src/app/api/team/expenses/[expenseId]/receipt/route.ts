@@ -1,12 +1,20 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi, resolveTeamMemberFromSessionCookie } from "@/app/team/lib/api";
-import { ADMIN_SESSION_COOKIE } from "@/lib/admin-session";
-import { CREW_SESSION_COOKIE } from "@/lib/crew-session";
+import { requireTeamPrincipal } from "@/app/api/team/auth";
+import { callAdminApiAs } from "@/app/team/lib/api";
 
 export const dynamic = "force-dynamic";
 
-function parseDataUrl(dataUrl: string): { contentType: string; buffer: Buffer } | null {
+const SAFE_RECEIPT_CONTENT_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/pdf",
+]);
+
+function parseDataUrl(
+  dataUrl: string,
+): { contentType: string; buffer: Buffer } | null {
   if (!dataUrl.startsWith("data:")) return null;
   const match = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
   if (!match) return null;
@@ -19,46 +27,30 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "receipt";
 }
 
-function permissionMatches(granted: string, required: string): boolean {
-  if (granted === "*") return true;
-  if (required === "read") return granted === "read";
-  if (granted === "read") return required === "read" || required.endsWith(".read");
-  if (granted.endsWith(".*")) {
-    const prefix = granted.slice(0, -2);
-    return required.startsWith(prefix);
-  }
-  return granted === required;
-}
-
-function hasPermission(permissions: string[], required: string): boolean {
-  return permissions.some((permission) => permissionMatches(permission, required));
-}
-
-async function canReadExpenses(request: NextRequest): Promise<boolean> {
-  const jar = request.cookies;
-  if (jar.get(ADMIN_SESSION_COOKIE)?.value || jar.get(CREW_SESSION_COOKIE)?.value) return true;
-
-  const teamMember = await resolveTeamMemberFromSessionCookie();
-  if (teamMember?.roleSlug === "owner") return true;
-  return hasPermission(teamMember?.permissions ?? [], "expenses.read");
-}
-
 export async function GET(
   request: NextRequest,
-  context: { params: Promise<{ expenseId: string }> }
+  context: { params: Promise<{ expenseId: string }> },
 ): Promise<Response> {
-  if (!(await canReadExpenses(request))) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const auth = await requireTeamPrincipal(request, {
+    permissions: "expenses.read",
+    returnJson: true,
+  });
+  if (!auth.ok) return auth.response;
 
   const { expenseId } = await context.params;
   if (!expenseId) {
     return NextResponse.json({ error: "missing_id" }, { status: 400 });
   }
 
-  const apiResponse = await callAdminApi(`/api/admin/expenses/${encodeURIComponent(expenseId)}/receipt`);
+  const apiResponse = await callAdminApiAs(
+    auth.principal,
+    `/api/admin/expenses/${encodeURIComponent(expenseId)}/receipt`,
+  );
   if (!apiResponse.ok) {
-    return NextResponse.json({ error: "not_found" }, { status: apiResponse.status });
+    return NextResponse.json(
+      { error: "not_found" },
+      { status: apiResponse.status },
+    );
   }
 
   const payload = (await apiResponse.json()) as {
@@ -78,15 +70,22 @@ export async function GET(
   }
 
   const filename = sanitizeFilename(payload.filename ?? "receipt");
-  const contentType = payload.contentType ?? parsed.contentType;
+  const reportedContentType = payload.contentType ?? parsed.contentType;
+  const contentType =
+    reportedContentType === parsed.contentType &&
+    SAFE_RECEIPT_CONTENT_TYPES.has(parsed.contentType)
+      ? parsed.contentType
+      : "application/octet-stream";
   const arrayBuffer = new ArrayBuffer(parsed.buffer.byteLength);
   new Uint8Array(arrayBuffer).set(parsed.buffer);
   const blob = new Blob([arrayBuffer], { type: contentType });
   return new Response(blob, {
     headers: {
       "Content-Type": contentType,
-      "Content-Disposition": `inline; filename=\"${filename}\"`,
-      "Cache-Control": "private, max-age=60"
-    }
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Cache-Control": "private, no-store",
+      "Content-Security-Policy": "sandbox; default-src 'none'",
+      "X-Content-Type-Options": "nosniff",
+    },
   });
 }

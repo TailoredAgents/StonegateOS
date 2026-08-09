@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
 import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import {
@@ -8,7 +9,7 @@ import {
   googleAdsCampaignConversionsDaily,
   googleAdsConversionActions,
   googleAdsInsightsDaily,
-  googleAdsSearchTermsDaily
+  googleAdsSearchTermsDaily,
 } from "@/db";
 import { getGoogleAdsConfiguredIds } from "@/lib/google-ads-insights";
 import { getGoogleAdsAnalystPolicy } from "@/lib/policy";
@@ -23,7 +24,6 @@ export type GoogleAdsAnalystRunResult =
   | { ok: true; reportId: string; createdAt: string }
   | { ok: false; error: string; detail?: string | null };
 
-const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const DEFAULT_MODEL = "gpt-5-mini";
 
 const AnalystReportSchema = z.object({
@@ -31,7 +31,7 @@ const AnalystReportSchema = z.object({
   top_actions: z.array(z.string().min(5).max(220)).min(3).max(10),
   negatives_to_review: z.array(z.string().min(1).max(140)).max(50),
   pause_candidates_to_review: z.array(z.string().min(1).max(140)).max(50),
-  notes: z.string().min(0).max(1200)
+  notes: z.string().min(0).max(1200),
 });
 
 const OUT_OF_AREA_STATES = [
@@ -83,7 +83,7 @@ const OUT_OF_AREA_STATES = [
   "washington",
   "west virginia",
   "wisconsin",
-  "wyoming"
+  "wyoming",
 ];
 
 const NEGATIVE_DO_NOT_BLOCK_PHRASES = [
@@ -102,7 +102,7 @@ const NEGATIVE_DO_NOT_BLOCK_PHRASES = [
   "mattress removal",
   "furniture removal",
   "yard waste removal",
-  "construction debris removal"
+  "construction debris removal",
 ];
 
 const NEGATIVE_DO_NOT_BLOCK_TOKENS = [
@@ -122,21 +122,27 @@ const NEGATIVE_DO_NOT_BLOCK_TOKENS = [
   "hot tub",
   "debris",
   "yard",
-  "brush"
+  "brush",
 ];
 
-function inferNegativeMatchType(term: string, tier: NegativeTier): NegativeMatchType {
+function inferNegativeMatchType(
+  term: string,
+  tier: NegativeTier,
+): NegativeMatchType {
   const normalized = term.trim();
   if (tier === "A" && /\s/.test(normalized)) return "phrase";
-  if (tier === "A" && normalized.length <= 25 && !/\s/.test(normalized)) return "broad";
+  if (tier === "A" && normalized.length <= 25 && !/\s/.test(normalized))
+    return "broad";
   if (/\s/.test(normalized)) return "phrase";
   return "broad";
 }
 
 function normalizeForOverlap(input: string): string {
   let term = input.trim().toLowerCase();
-  if (term.startsWith("[") && term.endsWith("]")) term = term.slice(1, -1).trim();
-  if (term.startsWith("\"") && term.endsWith("\"")) term = term.slice(1, -1).trim();
+  if (term.startsWith("[") && term.endsWith("]"))
+    term = term.slice(1, -1).trim();
+  if (term.startsWith('"') && term.endsWith('"'))
+    term = term.slice(1, -1).trim();
   term = term.replace(/\s+/g, " ");
   return term;
 }
@@ -151,7 +157,10 @@ function assessNegativeRisk(input: {
   for (const phrase of NEGATIVE_DO_NOT_BLOCK_PHRASES) {
     const normalizedPhrase = normalizeForOverlap(phrase);
     if (normalizedPhrase && term.includes(normalizedPhrase)) {
-      return { risk: "high", reason: `Overlaps whitelist phrase \"${normalizedPhrase}\"` };
+      return {
+        risk: "high",
+        reason: `Overlaps whitelist phrase "${normalizedPhrase}"`,
+      };
     }
   }
 
@@ -165,13 +174,19 @@ function assessNegativeRisk(input: {
         term.startsWith(`${normalizedToken} `) ||
         term.endsWith(` ${normalizedToken}`)
       ) {
-        return { risk: "high", reason: `Broad negative overlaps core token \"${normalizedToken}\"` };
+        return {
+          risk: "high",
+          reason: `Broad negative overlaps core token "${normalizedToken}"`,
+        };
       }
     }
   }
 
   if (term.length <= 3 && input.matchType === "broad") {
-    return { risk: "medium", reason: "Very short broad negative can over-block" };
+    return {
+      risk: "medium",
+      reason: "Very short broad negative can over-block",
+    };
   }
 
   return { risk: "low", reason: null };
@@ -186,15 +201,27 @@ function computeConfidence(input: {
 }): number {
   const base = input.tier === "A" ? 0.92 : 0.55;
   const suff =
-    input.dataSufficiency === "green" ? 1 : input.dataSufficiency === "yellow" ? 0.85 : 0.6;
+    input.dataSufficiency === "green"
+      ? 1
+      : input.dataSufficiency === "yellow"
+        ? 0.85
+        : 0.6;
   const evidenceBoost =
-    input.impactClicks >= 12 || input.impactCost >= 25 ? 0.25 : input.impactClicks >= 3 ? 0.1 : 0;
-  const riskPenalty = input.risk === "high" ? 0.4 : input.risk === "medium" ? 0.15 : 0;
+    input.impactClicks >= 12 || input.impactCost >= 25
+      ? 0.25
+      : input.impactClicks >= 3
+        ? 0.1
+        : 0;
+  const riskPenalty =
+    input.risk === "high" ? 0.4 : input.risk === "medium" ? 0.15 : 0;
   const score = base * suff + evidenceBoost - riskPenalty;
   return Math.max(0.01, Math.min(0.99, score));
 }
 
-function formatNegativeTerm(term: string, matchType: NegativeMatchType): string {
+function formatNegativeTerm(
+  term: string,
+  matchType: NegativeMatchType,
+): string {
   const normalized = term.trim();
   if (!normalized) return "";
   if (matchType === "exact") return `[${normalized}]`;
@@ -202,10 +229,15 @@ function formatNegativeTerm(term: string, matchType: NegativeMatchType): string 
   return normalized;
 }
 
-function normalizeNegativeKey(term: string, matchType: NegativeMatchType): string {
+function normalizeNegativeKey(
+  term: string,
+  matchType: NegativeMatchType,
+): string {
   let normalized = term.trim().toLowerCase();
-  if (normalized.startsWith("[") && normalized.endsWith("]")) normalized = normalized.slice(1, -1).trim();
-  if (normalized.startsWith("\"") && normalized.endsWith("\"")) normalized = normalized.slice(1, -1).trim();
+  if (normalized.startsWith("[") && normalized.endsWith("]"))
+    normalized = normalized.slice(1, -1).trim();
+  if (normalized.startsWith('"') && normalized.endsWith('"'))
+    normalized = normalized.slice(1, -1).trim();
   return `${matchType}:${normalized}`;
 }
 
@@ -222,14 +254,18 @@ function classifyTierANegativeFromSearchTerm(searchTerm: string): Array<{
   reason: string;
 }> {
   const termLower = searchTerm.toLowerCase();
-  const out: Array<{ term: string; matchType: NegativeMatchType; reason: string }> = [];
+  const out: Array<{
+    term: string;
+    matchType: NegativeMatchType;
+    reason: string;
+  }> = [];
 
   const outOfArea = extractOutOfAreaState(termLower);
   if (outOfArea) {
     out.push({
       term: outOfArea,
       matchType: "broad",
-      reason: "Out-of-area location intent (state)."
+      reason: "Out-of-area location intent (state).",
     });
   }
 
@@ -237,7 +273,7 @@ function classifyTierANegativeFromSearchTerm(searchTerm: string): Array<{
     out.push({
       term: "job",
       matchType: "broad",
-      reason: "Hiring/job intent."
+      reason: "Hiring/job intent.",
     });
   }
 
@@ -245,7 +281,7 @@ function classifyTierANegativeFromSearchTerm(searchTerm: string): Array<{
     out.push({
       term: "donate",
       matchType: "broad",
-      reason: "Donation intent."
+      reason: "Donation intent.",
     });
   }
 
@@ -253,7 +289,7 @@ function classifyTierANegativeFromSearchTerm(searchTerm: string): Array<{
     out.push({
       term: "free",
       matchType: "broad",
-      reason: "Free/low-intent intent."
+      reason: "Free/low-intent intent.",
     });
   }
 
@@ -261,24 +297,34 @@ function classifyTierANegativeFromSearchTerm(searchTerm: string): Array<{
     out.push({
       term: "transfer station",
       matchType: "phrase",
-      reason: "Landfill/transfer station intent."
+      reason: "Landfill/transfer station intent.",
     });
   }
 
-  if (termLower.includes("dump hours") || termLower.includes("landfill hours")) {
+  if (
+    termLower.includes("dump hours") ||
+    termLower.includes("landfill hours")
+  ) {
     out.push({
       term: termLower.includes("landfill") ? "landfill hours" : "dump hours",
       matchType: "phrase",
-      reason: "Landfill/dump hours intent."
+      reason: "Landfill/dump hours intent.",
     });
   }
 
   return out;
 }
 
-function normalizeWeightPair(callWeight: number, bookingWeight: number): { callWeight: number; bookingWeight: number } {
-  const safeCall = Number.isFinite(callWeight) ? Math.max(0, Math.min(1, callWeight)) : 0.7;
-  const safeBook = Number.isFinite(bookingWeight) ? Math.max(0, Math.min(1, bookingWeight)) : 0.3;
+function normalizeWeightPair(
+  callWeight: number,
+  bookingWeight: number,
+): { callWeight: number; bookingWeight: number } {
+  const safeCall = Number.isFinite(callWeight)
+    ? Math.max(0, Math.min(1, callWeight))
+    : 0.7;
+  const safeBook = Number.isFinite(bookingWeight)
+    ? Math.max(0, Math.min(1, bookingWeight))
+    : 0.3;
   const sum = safeCall + safeBook;
   if (sum <= 0) return { callWeight: 0.7, bookingWeight: 0.3 };
   return { callWeight: safeCall / sum, bookingWeight: safeBook / sum };
@@ -293,7 +339,11 @@ function classifyConversionAction(input: {
   const category = (input.category ?? "").toLowerCase();
   const type = (input.type ?? "").toLowerCase();
 
-  if (category.includes("phone_call") || type.includes("call") || name.includes("call")) {
+  if (
+    category.includes("phone_call") ||
+    type.includes("call") ||
+    name.includes("call")
+  ) {
     return "call";
   }
 
@@ -317,50 +367,70 @@ function getOpenAIConfig(): { apiKey: string; model: string } | null {
   const apiKey = process.env["OPENAI_API_KEY"];
   if (!apiKey) return null;
   const configured = process.env["OPENAI_MODEL"];
-  const model = configured && configured.trim().length ? configured.trim() : DEFAULT_MODEL;
+  const model =
+    configured && configured.trim().length ? configured.trim() : DEFAULT_MODEL;
   return { apiKey, model };
 }
 
-function extractOutputText(data: any): string | null {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractOutputText(data: unknown): string | null {
   // Prefer structured outputs if present; `output_text` can include non-JSON text in some failure modes.
-  const output = Array.isArray(data?.output) ? data.output : [];
+  if (!isRecord(data)) return null;
+  const output = Array.isArray(data["output"]) ? data["output"] : [];
   for (const item of output) {
-    const content = Array.isArray(item?.content) ? item.content : [];
+    if (!isRecord(item)) continue;
+    const content = Array.isArray(item["content"]) ? item["content"] : [];
     const textChunks: string[] = [];
     for (const chunk of content) {
-      if (chunk?.json && typeof chunk.json === "object") {
+      if (!isRecord(chunk)) continue;
+      const json = chunk["json"];
+      if (json && typeof json === "object") {
         try {
-          return JSON.stringify(chunk.json);
+          return JSON.stringify(json);
         } catch {
           // ignore
         }
       }
-      if (typeof chunk?.text === "string" && chunk.text.trim()) textChunks.push(chunk.text);
+      const text = chunk["text"];
+      if (typeof text === "string" && text.trim()) textChunks.push(text);
     }
     const combined = textChunks.join("").trim();
     if (combined) return combined;
   }
-  if (typeof data?.output_text === "string" && data.output_text.trim()) return data.output_text.trim();
+  const outputText = data["output_text"];
+  if (typeof outputText === "string" && outputText.trim())
+    return outputText.trim();
   return null;
 }
 
-function extractOutputObject(data: any): unknown | null {
-  const output = Array.isArray(data?.output) ? data.output : [];
+function extractOutputObject(data: unknown): unknown {
+  if (!isRecord(data)) return null;
+  const output = Array.isArray(data["output"]) ? data["output"] : [];
   for (const item of output) {
-    const content = Array.isArray(item?.content) ? item.content : [];
+    if (!isRecord(item)) continue;
+    const content = Array.isArray(item["content"]) ? item["content"] : [];
     for (const chunk of content) {
-      if (chunk?.json && typeof chunk.json === "object") return chunk.json;
-      if (chunk?.type && typeof chunk.type === "string" && chunk.type.toLowerCase().includes("json")) {
-        if (chunk?.parsed && typeof chunk.parsed === "object") return chunk.parsed;
-        if (chunk?.value && typeof chunk.value === "object") return chunk.value;
+      if (!isRecord(chunk)) continue;
+      const json = chunk["json"];
+      if (json && typeof json === "object") return json;
+      const type = chunk["type"];
+      if (typeof type === "string" && type.toLowerCase().includes("json")) {
+        const parsed = chunk["parsed"];
+        if (parsed && typeof parsed === "object") return parsed;
+        const value = chunk["value"];
+        if (value && typeof value === "object") return value;
       }
     }
   }
-  if (data?.output_parsed && typeof data.output_parsed === "object") return data.output_parsed;
+  const outputParsed = data["output_parsed"];
+  if (outputParsed && typeof outputParsed === "object") return outputParsed;
   return null;
 }
 
-function parsePossiblyWrappedJson(raw: string): unknown | null {
+function parsePossiblyWrappedJson(raw: string): unknown {
   try {
     return JSON.parse(raw);
   } catch {
@@ -380,11 +450,22 @@ function parsePossiblyWrappedJson(raw: string): unknown | null {
 }
 
 function clampString(value: unknown, maxLen: number): string {
-  const raw = typeof value === "string" ? value : String(value ?? "");
+  const raw =
+    typeof value === "string"
+      ? value
+      : typeof value === "number" ||
+          typeof value === "boolean" ||
+          typeof value === "bigint"
+        ? String(value)
+        : "";
   return raw.trim().slice(0, maxLen);
 }
 
-function normalizeStringArray(value: unknown, maxItems: number, maxLen: number): string[] {
+function normalizeStringArray(
+  value: unknown,
+  maxItems: number,
+  maxLen: number,
+): string[] {
   const arr = Array.isArray(value) ? value : [];
   const out: string[] = [];
   for (const item of arr) {
@@ -401,12 +482,15 @@ async function callOpenAIAnalystJson(input: {
   model: string;
   systemPrompt: string;
   userPrompt: string;
-}): Promise<{ ok: true; report: z.infer<typeof AnalystReportSchema> } | { ok: false; error: string; detail?: string | null }> {
+}): Promise<
+  | { ok: true; report: z.infer<typeof AnalystReportSchema> }
+  | { ok: false; error: string; detail?: string | null }
+> {
   const basePayload: Record<string, unknown> = {
     model: input.model,
     input: [
       { role: "system", content: input.systemPrompt },
-      { role: "user", content: input.userPrompt }
+      { role: "user", content: input.userPrompt },
     ],
     // Keep this comfortably above the largest valid JSON output to avoid truncated JSON (which is un-parseable).
     max_output_tokens: 1600,
@@ -425,24 +509,30 @@ async function callOpenAIAnalystJson(input: {
               type: "array",
               minItems: 3,
               maxItems: 10,
-              items: { type: "string", minLength: 5, maxLength: 220 }
+              items: { type: "string", minLength: 5, maxLength: 220 },
             },
             negatives_to_review: {
               type: "array",
               maxItems: 50,
-              items: { type: "string", minLength: 1, maxLength: 140 }
+              items: { type: "string", minLength: 1, maxLength: 140 },
             },
             pause_candidates_to_review: {
               type: "array",
               maxItems: 50,
-              items: { type: "string", minLength: 1, maxLength: 140 }
+              items: { type: "string", minLength: 1, maxLength: 140 },
             },
-            notes: { type: "string", maxLength: 1200 }
+            notes: { type: "string", maxLength: 1200 },
           },
-          required: ["summary", "top_actions", "negatives_to_review", "pause_candidates_to_review", "notes"]
-        }
-      }
-    }
+          required: [
+            "summary",
+            "top_actions",
+            "negatives_to_review",
+            "pause_candidates_to_review",
+            "notes",
+          ],
+        },
+      },
+    },
   };
 
   if (input.model.trim().toLowerCase().startsWith("gpt-5")) {
@@ -463,33 +553,40 @@ async function callOpenAIAnalystJson(input: {
               {
                 role: "system",
                 content:
-                  "Output ONLY the JSON object that matches the schema. Keep it concise (prefer 5-7 top actions). No markdown, no extra commentary, no code fences."
+                  "Output ONLY the JSON object that matches the schema. Keep it concise (prefer 5-7 top actions). No markdown, no extra commentary, no code fences.",
               },
-              { role: "user", content: input.userPrompt }
-            ]
+              { role: "user", content: input.userPrompt },
+            ],
     };
 
-    const response = await fetch(OPENAI_RESPONSES_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${input.apiKey}`
+    const response = await fetch(
+      resolveOpenAiApiEndpoint("responses", process.env),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${input.apiKey}`,
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload)
-    });
+    );
 
     if (!response.ok) {
       const bodyText = await response.text().catch(() => "");
       const snippet = bodyText.slice(0, 400);
       errorTrail.push(`attempt_${attempt}:openai_request_failed:${snippet}`);
       // If OpenAI returns a 4xx (except rate limits), retrying won't help.
-      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+      if (
+        response.status >= 400 &&
+        response.status < 500 &&
+        response.status !== 429
+      ) {
         return { ok: false, error: "openai_request_failed", detail: snippet };
       }
       continue;
     }
 
-    const data = (await response.json().catch(() => ({}))) as any;
+    const data: unknown = await response.json().catch(() => ({}));
 
     let json: unknown = extractOutputObject(data);
     if (!json) {
@@ -500,27 +597,39 @@ async function callOpenAIAnalystJson(input: {
       }
       json = parsePossiblyWrappedJson(raw);
       if (!json) {
-        errorTrail.push(`attempt_${attempt}:openai_parse_failed:${raw.slice(0, 240)}`);
+        errorTrail.push(
+          `attempt_${attempt}:openai_parse_failed:${raw.slice(0, 240)}`,
+        );
         continue;
       }
     }
 
     // Clamp to reduce avoidable schema failures (the report is operator-facing suggestions).
     const normalized: Record<string, unknown> =
-      json && typeof json === "object" && !Array.isArray(json) ? (json as Record<string, unknown>) : {};
+      json && typeof json === "object" && !Array.isArray(json)
+        ? (json as Record<string, unknown>)
+        : {};
     const repaired = {
       summary: clampString(normalized["summary"], 1600),
       top_actions: normalizeStringArray(normalized["top_actions"], 10, 220),
-      negatives_to_review: normalizeStringArray(normalized["negatives_to_review"], 50, 140),
-      pause_candidates_to_review: normalizeStringArray(normalized["pause_candidates_to_review"], 50, 140),
-      notes: clampString(normalized["notes"], 1200)
+      negatives_to_review: normalizeStringArray(
+        normalized["negatives_to_review"],
+        50,
+        140,
+      ),
+      pause_candidates_to_review: normalizeStringArray(
+        normalized["pause_candidates_to_review"],
+        50,
+        140,
+      ),
+      notes: clampString(normalized["notes"], 1200),
     };
 
     if (repaired.top_actions.length < 3) {
       repaired.top_actions.push(
         "Review the highest spend search terms and add obvious negatives that have 0 conversions.",
         "Tighten locations to your target cities and exclude out-of-area search terms.",
-        "Test 1 new headline and 1 new description focused on fast availability and transparent pricing."
+        "Test 1 new headline and 1 new description focused on fast availability and transparent pricing.",
       );
       repaired.top_actions.splice(10);
     }
@@ -537,7 +646,13 @@ async function callOpenAIAnalystJson(input: {
 
   const detail = errorTrail.join(" | ").slice(0, 400);
   // Prefer a stable error key so provider health is easy to interpret.
-  return { ok: false, error: detail.includes("openai_request_failed") ? "openai_request_failed" : "openai_parse_failed", detail };
+  return {
+    ok: false,
+    error: detail.includes("openai_request_failed")
+      ? "openai_request_failed"
+      : "openai_parse_failed",
+    detail,
+  };
 }
 
 export async function runGoogleAdsAnalystReport(input: {
@@ -569,7 +684,10 @@ export async function runGoogleAdsAnalystReport(input: {
     typeof input.since === "string" && isIsoDate(input.since)
       ? input.since
       : now.minus({ days: rangeDays - 1 }).toISODate();
-  const until = typeof input.until === "string" && isIsoDate(input.until) ? input.until : now.toISODate();
+  const until =
+    typeof input.until === "string" && isIsoDate(input.until)
+      ? input.until
+      : now.toISODate();
 
   if (!since || !until || since > until) {
     return { ok: false, error: "invalid_date_range" };
@@ -581,92 +699,115 @@ export async function runGoogleAdsAnalystReport(input: {
 
   const db = getDb();
 
-  const [campaignTotals, searchTerms, conversionActions, campaignActionTotals] = await Promise.all([
-    db
-      .select({
-        customerId: googleAdsInsightsDaily.customerId,
-        campaignId: googleAdsInsightsDaily.campaignId,
-        campaignName: sql<string>`max(${googleAdsInsightsDaily.campaignName})`,
-        impressions: sql<number>`coalesce(sum(${googleAdsInsightsDaily.impressions}), 0)`.mapWith(Number),
-        clicks: sql<number>`coalesce(sum(${googleAdsInsightsDaily.clicks}), 0)`.mapWith(Number),
-        cost: sql<string>`coalesce(sum(${googleAdsInsightsDaily.cost}), 0)::text`,
-        conversions: sql<string>`coalesce(sum(${googleAdsInsightsDaily.conversions}), 0)::text`,
-        conversionValue: sql<string>`coalesce(sum(${googleAdsInsightsDaily.conversionValue}), 0)::text`
-      })
-      .from(googleAdsInsightsDaily)
-      .where(
-        and(
-          eq(googleAdsInsightsDaily.customerId, customerId),
-          gte(googleAdsInsightsDaily.dateStart, since),
-          lte(googleAdsInsightsDaily.dateStart, until)
+  const [campaignTotals, searchTerms, conversionActions, campaignActionTotals] =
+    await Promise.all([
+      db
+        .select({
+          customerId: googleAdsInsightsDaily.customerId,
+          campaignId: googleAdsInsightsDaily.campaignId,
+          campaignName: sql<string>`max(${googleAdsInsightsDaily.campaignName})`,
+          impressions:
+            sql<number>`coalesce(sum(${googleAdsInsightsDaily.impressions}), 0)`.mapWith(
+              Number,
+            ),
+          clicks:
+            sql<number>`coalesce(sum(${googleAdsInsightsDaily.clicks}), 0)`.mapWith(
+              Number,
+            ),
+          cost: sql<string>`coalesce(sum(${googleAdsInsightsDaily.cost}), 0)::text`,
+          conversions: sql<string>`coalesce(sum(${googleAdsInsightsDaily.conversions}), 0)::text`,
+          conversionValue: sql<string>`coalesce(sum(${googleAdsInsightsDaily.conversionValue}), 0)::text`,
+        })
+        .from(googleAdsInsightsDaily)
+        .where(
+          and(
+            eq(googleAdsInsightsDaily.customerId, customerId),
+            gte(googleAdsInsightsDaily.dateStart, since),
+            lte(googleAdsInsightsDaily.dateStart, until),
+          ),
         )
-      )
-      .groupBy(googleAdsInsightsDaily.customerId, googleAdsInsightsDaily.campaignId)
-      .orderBy(desc(sql`sum(${googleAdsInsightsDaily.cost})`))
-      .limit(25),
-    db
-      .select({
-        customerId: googleAdsSearchTermsDaily.customerId,
-        searchTerm: googleAdsSearchTermsDaily.searchTerm,
-        campaignId: googleAdsSearchTermsDaily.campaignId,
-        impressions: sql<number>`coalesce(sum(${googleAdsSearchTermsDaily.impressions}), 0)`.mapWith(Number),
-        clicks: sql<number>`coalesce(sum(${googleAdsSearchTermsDaily.clicks}), 0)`.mapWith(Number),
-        cost: sql<string>`coalesce(sum(${googleAdsSearchTermsDaily.cost}), 0)::text`,
-        conversions: sql<string>`coalesce(sum(${googleAdsSearchTermsDaily.conversions}), 0)::text`
-      })
-      .from(googleAdsSearchTermsDaily)
-      .where(
-        and(
-          eq(googleAdsSearchTermsDaily.customerId, customerId),
-          gte(googleAdsSearchTermsDaily.dateStart, since),
-          lte(googleAdsSearchTermsDaily.dateStart, until)
+        .groupBy(
+          googleAdsInsightsDaily.customerId,
+          googleAdsInsightsDaily.campaignId,
         )
-      )
-      .groupBy(googleAdsSearchTermsDaily.customerId, googleAdsSearchTermsDaily.searchTerm, googleAdsSearchTermsDaily.campaignId)
-      .orderBy(desc(sql`sum(${googleAdsSearchTermsDaily.cost})`))
-      .limit(75),
-    db
-      .select({
-        customerId: googleAdsConversionActions.customerId,
-        actionId: googleAdsConversionActions.actionId,
-        name: googleAdsConversionActions.name,
-        category: googleAdsConversionActions.category,
-        type: googleAdsConversionActions.type
-      })
-      .from(googleAdsConversionActions)
-      .where(eq(googleAdsConversionActions.customerId, customerId))
-      .orderBy(desc(googleAdsConversionActions.fetchedAt))
-      .limit(200),
-    db
-      .select({
-        customerId: googleAdsCampaignConversionsDaily.customerId,
-        campaignId: googleAdsCampaignConversionsDaily.campaignId,
-        actionId: googleAdsCampaignConversionsDaily.conversionActionId,
-        actionName: sql<string>`max(${googleAdsCampaignConversionsDaily.conversionActionName})`,
-        conversions: sql<string>`coalesce(sum(${googleAdsCampaignConversionsDaily.conversions}), 0)::text`,
-        conversionValue: sql<string>`coalesce(sum(${googleAdsCampaignConversionsDaily.conversionValue}), 0)::text`
-      })
-      .from(googleAdsCampaignConversionsDaily)
-      .where(
-        and(
-          eq(googleAdsCampaignConversionsDaily.customerId, customerId),
-          gte(googleAdsCampaignConversionsDaily.dateStart, since),
-          lte(googleAdsCampaignConversionsDaily.dateStart, until)
+        .orderBy(desc(sql`sum(${googleAdsInsightsDaily.cost})`))
+        .limit(25),
+      db
+        .select({
+          customerId: googleAdsSearchTermsDaily.customerId,
+          searchTerm: googleAdsSearchTermsDaily.searchTerm,
+          campaignId: googleAdsSearchTermsDaily.campaignId,
+          impressions:
+            sql<number>`coalesce(sum(${googleAdsSearchTermsDaily.impressions}), 0)`.mapWith(
+              Number,
+            ),
+          clicks:
+            sql<number>`coalesce(sum(${googleAdsSearchTermsDaily.clicks}), 0)`.mapWith(
+              Number,
+            ),
+          cost: sql<string>`coalesce(sum(${googleAdsSearchTermsDaily.cost}), 0)::text`,
+          conversions: sql<string>`coalesce(sum(${googleAdsSearchTermsDaily.conversions}), 0)::text`,
+        })
+        .from(googleAdsSearchTermsDaily)
+        .where(
+          and(
+            eq(googleAdsSearchTermsDaily.customerId, customerId),
+            gte(googleAdsSearchTermsDaily.dateStart, since),
+            lte(googleAdsSearchTermsDaily.dateStart, until),
+          ),
         )
-      )
-      .groupBy(
-        googleAdsCampaignConversionsDaily.customerId,
-        googleAdsCampaignConversionsDaily.campaignId,
-        googleAdsCampaignConversionsDaily.conversionActionId
-      )
-  ]);
+        .groupBy(
+          googleAdsSearchTermsDaily.customerId,
+          googleAdsSearchTermsDaily.searchTerm,
+          googleAdsSearchTermsDaily.campaignId,
+        )
+        .orderBy(desc(sql`sum(${googleAdsSearchTermsDaily.cost})`))
+        .limit(75),
+      db
+        .select({
+          customerId: googleAdsConversionActions.customerId,
+          actionId: googleAdsConversionActions.actionId,
+          name: googleAdsConversionActions.name,
+          category: googleAdsConversionActions.category,
+          type: googleAdsConversionActions.type,
+        })
+        .from(googleAdsConversionActions)
+        .where(eq(googleAdsConversionActions.customerId, customerId))
+        .orderBy(desc(googleAdsConversionActions.fetchedAt))
+        .limit(200),
+      db
+        .select({
+          customerId: googleAdsCampaignConversionsDaily.customerId,
+          campaignId: googleAdsCampaignConversionsDaily.campaignId,
+          actionId: googleAdsCampaignConversionsDaily.conversionActionId,
+          actionName: sql<string>`max(${googleAdsCampaignConversionsDaily.conversionActionName})`,
+          conversions: sql<string>`coalesce(sum(${googleAdsCampaignConversionsDaily.conversions}), 0)::text`,
+          conversionValue: sql<string>`coalesce(sum(${googleAdsCampaignConversionsDaily.conversionValue}), 0)::text`,
+        })
+        .from(googleAdsCampaignConversionsDaily)
+        .where(
+          and(
+            eq(googleAdsCampaignConversionsDaily.customerId, customerId),
+            gte(googleAdsCampaignConversionsDaily.dateStart, since),
+            lte(googleAdsCampaignConversionsDaily.dateStart, until),
+          ),
+        )
+        .groupBy(
+          googleAdsCampaignConversionsDaily.customerId,
+          googleAdsCampaignConversionsDaily.campaignId,
+          googleAdsCampaignConversionsDaily.conversionActionId,
+        ),
+    ]);
 
-  const actionById = new Map<string, { name: string | null; category: string | null; type: string | null }>();
+  const actionById = new Map<
+    string,
+    { name: string | null; category: string | null; type: string | null }
+  >();
   for (const action of conversionActions) {
     actionById.set(action.actionId, {
       name: action.name ?? null,
       category: action.category ?? null,
-      type: action.type ?? null
+      type: action.type ?? null,
     });
   }
 
@@ -676,21 +817,37 @@ export async function runGoogleAdsAnalystReport(input: {
   >();
 
   for (const row of campaignActionTotals) {
-    const actionMeta = actionById.get(row.actionId) ?? { name: row.actionName ?? null, category: null, type: null };
+    const actionMeta = actionById.get(row.actionId) ?? {
+      name: row.actionName ?? null,
+      category: null,
+      type: null,
+    };
     const cls = classifyConversionAction(actionMeta);
     const conversions = Number(row.conversions);
     const safeConversions = Number.isFinite(conversions) ? conversions : 0;
-    const current = campaignConversionBreakdown.get(row.campaignId) ?? { call: 0, booking: 0, other: 0, total: 0 };
+    const current = campaignConversionBreakdown.get(row.campaignId) ?? {
+      call: 0,
+      booking: 0,
+      other: 0,
+      total: 0,
+    };
     current[cls] += safeConversions;
     current.total += safeConversions;
     campaignConversionBreakdown.set(row.campaignId, current);
   }
 
   const enrichedCampaigns = campaignTotals.map((row) => {
-    const breakdown = campaignConversionBreakdown.get(row.campaignId) ?? { call: 0, booking: 0, other: 0, total: 0 };
+    const breakdown = campaignConversionBreakdown.get(row.campaignId) ?? {
+      call: 0,
+      booking: 0,
+      other: 0,
+      total: 0,
+    };
     const cost = Number(row.cost);
     const safeCost = Number.isFinite(cost) ? cost : 0;
-    const weightedConversions = breakdown.call * weights.callWeight + breakdown.booking * weights.bookingWeight;
+    const weightedConversions =
+      breakdown.call * weights.callWeight +
+      breakdown.booking * weights.bookingWeight;
     const cpa = weightedConversions > 0 ? safeCost / weightedConversions : null;
     return {
       campaignId: row.campaignId,
@@ -701,15 +858,24 @@ export async function runGoogleAdsAnalystReport(input: {
       conversions: Number(row.conversions) || 0,
       callConversions: breakdown.call,
       bookingConversions: breakdown.booking,
-      weightedConversions: Number.isFinite(weightedConversions) ? weightedConversions : 0,
-      weightedCpa: cpa && Number.isFinite(cpa) ? Number(cpa.toFixed(2)) : null
+      weightedConversions: Number.isFinite(weightedConversions)
+        ? weightedConversions
+        : 0,
+      weightedCpa: cpa && Number.isFinite(cpa) ? Number(cpa.toFixed(2)) : null,
     };
   });
 
-  const totalSpend = enrichedCampaigns.reduce((sum, row) => sum + (Number.isFinite(row.cost) ? row.cost : 0), 0);
-  const totalClicks = enrichedCampaigns.reduce((sum, row) => sum + (Number.isFinite(row.clicks) ? row.clicks : 0), 0);
+  const totalSpend = enrichedCampaigns.reduce(
+    (sum, row) => sum + (Number.isFinite(row.cost) ? row.cost : 0),
+    0,
+  );
+  const totalClicks = enrichedCampaigns.reduce(
+    (sum, row) => sum + (Number.isFinite(row.clicks) ? row.clicks : 0),
+    0,
+  );
   const hasEnoughDataForHeuristicRecs =
-    totalSpend >= policy.minSpendForNegatives && totalClicks >= policy.minClicksForNegatives;
+    totalSpend >= policy.minSpendForNegatives &&
+    totalClicks >= policy.minClicksForNegatives;
 
   const negativeCandidates = (hasEnoughDataForHeuristicRecs ? searchTerms : [])
     .filter((row) => {
@@ -728,13 +894,23 @@ export async function runGoogleAdsAnalystReport(input: {
       campaignId: row.campaignId,
       cost: Number(row.cost) || 0,
       clicks: row.clicks,
-      ...(campaignConversionBreakdown.get(row.campaignId) ?? { call: 0, booking: 0, other: 0, total: 0 })
+      ...(campaignConversionBreakdown.get(row.campaignId) ?? {
+        call: 0,
+        booking: 0,
+        other: 0,
+        total: 0,
+      }),
     }));
 
   const suggestedNegatives = negativeCandidates.map((row) => row.searchTerm);
 
-  const pauseCandidates = (hasEnoughDataForHeuristicRecs ? enrichedCampaigns : [])
-    .filter((row) => row.cost >= 150 && row.weightedConversions <= 0 && row.clicks >= 20)
+  const pauseCandidates = (
+    hasEnoughDataForHeuristicRecs ? enrichedCampaigns : []
+  )
+    .filter(
+      (row) =>
+        row.cost >= 150 && row.weightedConversions <= 0 && row.clicks >= 20,
+    )
     .slice(0, 10)
     .map((row) => ({
       campaignId: row.campaignId,
@@ -743,7 +919,7 @@ export async function runGoogleAdsAnalystReport(input: {
       clicks: row.clicks,
       callConversions: row.callConversions,
       bookingConversions: row.bookingConversions,
-      weightedConversions: row.weightedConversions
+      weightedConversions: row.weightedConversions,
     }));
 
   const systemPrompt = [
@@ -758,18 +934,18 @@ export async function runGoogleAdsAnalystReport(input: {
     "",
     "Constraints:",
     "- Output MUST be valid JSON that matches the provided schema.",
-    "- Be practical and specific. No generic advice like \"optimize targeting\" without naming what to do next.",
+    '- Be practical and specific. No generic advice like "optimize targeting" without naming what to do next.',
     "- Assume the operator will apply changes manually unless autonomous mode is enabled elsewhere.",
     "- Calls matter more than bookings. Use the provided weights and make that clear in the actions.",
     "- Keep the summary short and decisive.",
-    "- Prefer 5-7 top actions unless 3 is sufficient."
+    "- Prefer 5-7 top actions unless 3 is sufficient.",
   ].join("\n");
 
   const userPrompt = [
     `Time window: ${since} to ${until} (${rangeDays} days)`,
     `Weights: calls=${weights.callWeight.toFixed(2)} bookings=${weights.bookingWeight.toFixed(2)}`,
     `Heuristics enabled: ${hasEnoughDataForHeuristicRecs ? "yes" : "no"} (total spend=${totalSpend.toFixed(
-      2
+      2,
     )}, total clicks=${totalClicks})`,
     "",
     "Campaigns (sorted by spend):",
@@ -784,14 +960,14 @@ export async function runGoogleAdsAnalystReport(input: {
     "Return:",
     "- 3 to 10 top actions (prioritized)",
     "- a short list of negative keywords to review (0-50)",
-    "- a short list of pause candidates to review (0-50)"
+    "- a short list of pause candidates to review (0-50)",
   ].join("\n");
 
   const ai = await callOpenAIAnalystJson({
     apiKey: config.apiKey,
     model: config.model,
     systemPrompt,
-    userPrompt
+    userPrompt,
   });
 
   if (!ai.ok) {
@@ -807,21 +983,32 @@ export async function runGoogleAdsAnalystReport(input: {
       callWeight: weights.callWeight.toFixed(3),
       bookingWeight: weights.bookingWeight.toFixed(3),
       report: ai.report as unknown as Record<string, unknown>,
-      createdBy: input.createdBy ?? null
+      createdBy: input.createdBy ?? null,
     })
-    .returning({ id: googleAdsAnalystReports.id, createdAt: googleAdsAnalystReports.createdAt });
+    .returning({
+      id: googleAdsAnalystReports.id,
+      createdAt: googleAdsAnalystReports.createdAt,
+    });
 
   const reportId = row?.id ?? "";
 
   if (reportId) {
-    const aiNegatives = Array.isArray(ai.report.negatives_to_review) ? ai.report.negatives_to_review : [];
-    const aiPauseCandidates = Array.isArray(ai.report.pause_candidates_to_review) ? ai.report.pause_candidates_to_review : [];
-    const dataSufficiency = totalClicks >= 50 ? "green" : totalClicks >= 15 ? "yellow" : "red";
+    const aiNegatives = Array.isArray(ai.report.negatives_to_review)
+      ? ai.report.negatives_to_review
+      : [];
+    const aiPauseCandidates = Array.isArray(
+      ai.report.pause_candidates_to_review,
+    )
+      ? ai.report.pause_candidates_to_review
+      : [];
+    const dataSufficiency =
+      totalClicks >= 50 ? "green" : totalClicks >= 15 ? "yellow" : "red";
     const campaignNameById = new Map<string, string>();
     for (const campaign of campaignTotals) {
       if (!campaign.campaignId) continue;
       const name =
-        typeof campaign.campaignName === "string" && campaign.campaignName.trim().length
+        typeof campaign.campaignName === "string" &&
+        campaign.campaignName.trim().length
           ? campaign.campaignName.trim()
           : campaign.campaignId;
       campaignNameById.set(campaign.campaignId, name);
@@ -853,17 +1040,27 @@ export async function runGoogleAdsAnalystReport(input: {
       origin?: string | null;
       exampleSearchTerm?: string | null;
     }): void => {
-      const matchType = input.matchType ?? inferNegativeMatchType(input.term, input.tier);
+      const matchType =
+        input.matchType ?? inferNegativeMatchType(input.term, input.tier);
       const formatted = formatNegativeTerm(input.term, matchType);
       const key = normalizeNegativeKey(formatted, matchType);
       if (!formatted) return;
 
-      const campaignId = typeof input.campaignId === "string" ? input.campaignId.trim() : "";
-      const campaignName = campaignId ? (campaignNameById.get(campaignId) ?? campaignId) : "";
+      const campaignId =
+        typeof input.campaignId === "string" ? input.campaignId.trim() : "";
+      const campaignName = campaignId
+        ? (campaignNameById.get(campaignId) ?? campaignId)
+        : "";
 
-      const impactImpressions = Number.isFinite(input.impressions ?? NaN) ? Number(input.impressions) : 0;
-      const impactClicks = Number.isFinite(input.clicks ?? NaN) ? Number(input.clicks) : 0;
-      const impactCost = Number.isFinite(input.cost ?? NaN) ? Number(input.cost) : 0;
+      const impactImpressions = Number.isFinite(input.impressions ?? NaN)
+        ? Number(input.impressions)
+        : 0;
+      const impactClicks = Number.isFinite(input.clicks ?? NaN)
+        ? Number(input.clicks)
+        : 0;
+      const impactCost = Number.isFinite(input.cost ?? NaN)
+        ? Number(input.cost)
+        : 0;
 
       const assessed = assessNegativeRisk({ term: formatted, matchType });
       const confidence = computeConfidence({
@@ -871,7 +1068,7 @@ export async function runGoogleAdsAnalystReport(input: {
         risk: assessed.risk,
         dataSufficiency,
         impactClicks,
-        impactCost
+        impactCost,
       });
 
       const existingIndex = negativeIndexByKey.get(key);
@@ -880,75 +1077,109 @@ export async function runGoogleAdsAnalystReport(input: {
         if (!existing) {
           negativeIndexByKey.delete(key);
         } else {
-        const payload = existing.payload;
+          const payload = existing.payload;
 
-        const existingTier = String(payload["tier"] ?? "").toUpperCase();
-        const resolvedTier: NegativeTier = existingTier === "A" || input.tier === "A" ? "A" : "B";
+          const existingTier =
+            typeof payload["tier"] === "string"
+              ? payload["tier"].toUpperCase()
+              : "";
+          const resolvedTier: NegativeTier =
+            existingTier === "A" || input.tier === "A" ? "A" : "B";
 
-        const mergeArray = (field: string, value: string): string[] => {
-          const current = Array.isArray(payload[field]) ? (payload[field] as string[]) : [];
-          if (!value) return current;
-          if (!current.includes(value)) current.push(value);
-          return current;
-        };
-
-        const campaignIds = campaignId ? mergeArray("campaignIds", campaignId) : (Array.isArray(payload["campaignIds"]) ? (payload["campaignIds"] as string[]) : []);
-        const campaignNames = campaignName ? mergeArray("campaignNames", campaignName) : (Array.isArray(payload["campaignNames"]) ? (payload["campaignNames"] as string[]) : []);
-        const origins = input.origin ? mergeArray("origins", input.origin) : (Array.isArray(payload["origins"]) ? (payload["origins"] as string[]) : []);
-        const reasons = input.reason ? mergeArray("reasons", input.reason) : (Array.isArray(payload["reasons"]) ? (payload["reasons"] as string[]) : []);
-        const examples =
-          input.exampleSearchTerm && input.exampleSearchTerm.trim().length
-            ? (() => {
-                const cur = Array.isArray(payload["examples"]) ? (payload["examples"] as string[]) : [];
-                if (!cur.includes(input.exampleSearchTerm) && cur.length < 5) cur.push(input.exampleSearchTerm);
-                return cur;
-              })()
-            : Array.isArray(payload["examples"])
-              ? (payload["examples"] as string[])
+          const mergeArray = (field: string, value: string): string[] => {
+            const current = Array.isArray(payload[field])
+              ? (payload[field] as string[])
               : [];
+            if (!value) return current;
+            if (!current.includes(value)) current.push(value);
+            return current;
+          };
 
-        const mergedImpactImpressions = Number(payload["impactImpressions"] ?? 0) + impactImpressions;
-        const mergedImpactClicks = Number(payload["impactClicks"] ?? 0) + impactClicks;
-        const mergedImpactCost = Number(payload["impactCost"] ?? 0) + impactCost;
+          const campaignIds = campaignId
+            ? mergeArray("campaignIds", campaignId)
+            : Array.isArray(payload["campaignIds"])
+              ? (payload["campaignIds"] as string[])
+              : [];
+          const campaignNames = campaignName
+            ? mergeArray("campaignNames", campaignName)
+            : Array.isArray(payload["campaignNames"])
+              ? (payload["campaignNames"] as string[])
+              : [];
+          const origins = input.origin
+            ? mergeArray("origins", input.origin)
+            : Array.isArray(payload["origins"])
+              ? (payload["origins"] as string[])
+              : [];
+          const reasons = input.reason
+            ? mergeArray("reasons", input.reason)
+            : Array.isArray(payload["reasons"])
+              ? (payload["reasons"] as string[])
+              : [];
+          const examples =
+            input.exampleSearchTerm && input.exampleSearchTerm.trim().length
+              ? (() => {
+                  const cur = Array.isArray(payload["examples"])
+                    ? (payload["examples"] as string[])
+                    : [];
+                  if (!cur.includes(input.exampleSearchTerm) && cur.length < 5)
+                    cur.push(input.exampleSearchTerm);
+                  return cur;
+                })()
+              : Array.isArray(payload["examples"])
+                ? (payload["examples"] as string[])
+                : [];
 
-        const existingRisk = String(payload["risk"] ?? "low") as NegativeRisk;
-        const mergedRisk: NegativeRisk =
-          existingRisk === "high" || assessed.risk === "high"
-            ? "high"
-            : existingRisk === "medium" || assessed.risk === "medium"
-              ? "medium"
+          const mergedImpactImpressions =
+            Number(payload["impactImpressions"] ?? 0) + impactImpressions;
+          const mergedImpactClicks =
+            Number(payload["impactClicks"] ?? 0) + impactClicks;
+          const mergedImpactCost =
+            Number(payload["impactCost"] ?? 0) + impactCost;
+
+          const existingRisk: NegativeRisk =
+            payload["risk"] === "high" || payload["risk"] === "medium"
+              ? payload["risk"]
               : "low";
+          const mergedRisk: NegativeRisk =
+            existingRisk === "high" || assessed.risk === "high"
+              ? "high"
+              : existingRisk === "medium" || assessed.risk === "medium"
+                ? "medium"
+                : "low";
 
-        const mergedConfidence = computeConfidence({
-          tier: resolvedTier,
-          risk: mergedRisk,
-          dataSufficiency,
-          impactClicks: mergedImpactClicks,
-          impactCost: mergedImpactCost
-        });
+          const mergedConfidence = computeConfidence({
+            tier: resolvedTier,
+            risk: mergedRisk,
+            dataSufficiency,
+            impactClicks: mergedImpactClicks,
+            impactCost: mergedImpactCost,
+          });
 
-        existing.payload = {
-          ...payload,
-          tier: resolvedTier,
-          origin: payload["origin"] ?? input.origin ?? null,
-          origins,
-          reason: payload["reason"] ?? input.reason,
-          reasons,
-          campaignId: (payload["campaignId"] as string) ?? (campaignId || null),
-          campaignName: (payload["campaignName"] as string) ?? (campaignName || null),
-          campaignIds,
-          campaignNames,
-          examples,
-          impactImpressions: mergedImpactImpressions,
-          impactClicks: mergedImpactClicks,
-          impactCost: Number(mergedImpactCost.toFixed(2)),
-          clicks: mergedImpactClicks,
-          cost: Number(mergedImpactCost.toFixed(2)),
-          risk: mergedRisk,
-          riskReason: (payload["riskReason"] as string) ?? assessed.reason ?? null,
-          confidence: Number(mergedConfidence.toFixed(2))
-        };
-        return;
+          existing.payload = {
+            ...payload,
+            tier: resolvedTier,
+            origin: payload["origin"] ?? input.origin ?? null,
+            origins,
+            reason: payload["reason"] ?? input.reason,
+            reasons,
+            campaignId:
+              (payload["campaignId"] as string) ?? (campaignId || null),
+            campaignName:
+              (payload["campaignName"] as string) ?? (campaignName || null),
+            campaignIds,
+            campaignNames,
+            examples,
+            impactImpressions: mergedImpactImpressions,
+            impactClicks: mergedImpactClicks,
+            impactCost: Number(mergedImpactCost.toFixed(2)),
+            clicks: mergedImpactClicks,
+            cost: Number(mergedImpactCost.toFixed(2)),
+            risk: mergedRisk,
+            riskReason:
+              (payload["riskReason"] as string) ?? assessed.reason ?? null,
+            confidence: Number(mergedConfidence.toFixed(2)),
+          };
+          return;
         }
       }
 
@@ -980,17 +1211,19 @@ export async function runGoogleAdsAnalystReport(input: {
           bookingConversions: input.bookingConversions ?? null,
           risk: assessed.risk,
           riskReason: assessed.reason ?? null,
-          confidence: Number(confidence.toFixed(2))
+          confidence: Number(confidence.toFixed(2)),
         },
         decidedBy: null,
         decidedAt: null,
-        appliedAt: null
+        appliedAt: null,
       });
     };
 
     // Tier A: hard-block negatives from observed search terms (no thresholds).
     for (const termRow of searchTerms.slice(0, 200)) {
-      const candidates = classifyTierANegativeFromSearchTerm(termRow.searchTerm);
+      const candidates = classifyTierANegativeFromSearchTerm(
+        termRow.searchTerm,
+      );
       for (const candidate of candidates) {
         pushNegativeRec({
           term: candidate.term,
@@ -1002,7 +1235,7 @@ export async function runGoogleAdsAnalystReport(input: {
           impressions: termRow.impressions,
           clicks: termRow.clicks,
           cost: Number(termRow.cost),
-          exampleSearchTerm: termRow.searchTerm
+          exampleSearchTerm: termRow.searchTerm,
         });
       }
     }
@@ -1018,7 +1251,7 @@ export async function runGoogleAdsAnalystReport(input: {
         callConversions: candidate.call ?? 0,
         bookingConversions: candidate.booking ?? 0,
         origin: "threshold",
-        exampleSearchTerm: candidate.searchTerm
+        exampleSearchTerm: candidate.searchTerm,
       });
     }
 
@@ -1034,7 +1267,7 @@ export async function runGoogleAdsAnalystReport(input: {
             tier: "A",
             matchType: candidate.matchType,
             reason: candidate.reason,
-            origin: "ai_hard_block"
+            origin: "ai_hard_block",
           });
         }
         continue;
@@ -1045,7 +1278,7 @@ export async function runGoogleAdsAnalystReport(input: {
         tier: "B",
         reason: "AI suggested negative keyword",
         origin: "ai",
-        exampleSearchTerm: term
+        exampleSearchTerm: term,
       });
     }
 
@@ -1062,11 +1295,11 @@ export async function runGoogleAdsAnalystReport(input: {
           callConversions: candidate.callConversions,
           bookingConversions: candidate.bookingConversions,
           weightedConversions: candidate.weightedConversions,
-          reason: "High spend with 0 weighted conversions"
+          reason: "High spend with 0 weighted conversions",
         },
         decidedBy: null,
         decidedAt: null,
-        appliedAt: null
+        appliedAt: null,
       });
     }
 
@@ -1075,9 +1308,15 @@ export async function runGoogleAdsAnalystReport(input: {
       if (row.kind !== "pause_candidate") continue;
       const campaignIdRaw = row.payload["campaignId"];
       const campaignNameRaw = row.payload["campaignName"];
-      const campaignId = typeof campaignIdRaw === "string" ? campaignIdRaw.trim() : "";
-      const campaignName = typeof campaignNameRaw === "string" ? campaignNameRaw.trim() : "";
-      const key = campaignId ? `id:${campaignId}` : campaignName ? `name:${campaignName.toLowerCase()}` : "";
+      const campaignId =
+        typeof campaignIdRaw === "string" ? campaignIdRaw.trim() : "";
+      const campaignName =
+        typeof campaignNameRaw === "string" ? campaignNameRaw.trim() : "";
+      const key = campaignId
+        ? `id:${campaignId}`
+        : campaignName
+          ? `name:${campaignName.toLowerCase()}`
+          : "";
       if (key) pauseKeys.add(key);
     }
 
@@ -1093,11 +1332,11 @@ export async function runGoogleAdsAnalystReport(input: {
         status: "proposed",
         payload: {
           campaignName: candidate,
-          reason: "AI suggested pause candidate"
+          reason: "AI suggested pause candidate",
         },
         decidedBy: null,
         decidedAt: null,
-        appliedAt: null
+        appliedAt: null,
       });
     }
 
@@ -1109,6 +1348,8 @@ export async function runGoogleAdsAnalystReport(input: {
   return {
     ok: true,
     reportId,
-    createdAt: row?.createdAt ? row.createdAt.toISOString() : new Date().toISOString()
+    createdAt: row?.createdAt
+      ? row.createdAt.toISOString()
+      : new Date().toISOString(),
   };
 }

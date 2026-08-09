@@ -10,10 +10,13 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const permissionError = await requirePermission(request, "policy.write");
+  const permissionError = await requirePermission(request, "marketing.write");
   if (permissionError) return permissionError;
 
-  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  const body = (await request.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
   const rangeDaysRaw = body["rangeDays"];
   const rangeDays =
     typeof rangeDaysRaw === "number"
@@ -24,7 +27,9 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const payload: Record<string, unknown> = {
     invokedBy: "admin",
-    rangeDays: Number.isFinite(rangeDays) ? Math.min(Math.max(Math.floor(rangeDays), 1), 30) : 7
+    rangeDays: Number.isFinite(rangeDays)
+      ? Math.min(Math.max(Math.floor(rangeDays), 1), 30)
+      : 7,
   };
 
   const actor = getAuditActorFromRequest(request);
@@ -35,10 +40,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     .insert(outboxEvents)
     .values({
       type: "google.ads_analyst.run",
-      payload
+      payload,
     })
     .returning({ id: outboxEvents.id });
 
   return NextResponse.json({ ok: true, queued: true, id: event?.id ?? null });
 }
-

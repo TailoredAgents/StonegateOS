@@ -1,9 +1,43 @@
+import { randomUUID } from "node:crypto";
 import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
-import { callAdminApi } from "../lib/api";
+import {
+  hasTeamPermission,
+  requireCurrentTeamPrincipal,
+} from "@/lib/team-principal";
+import { callAdminApiAs } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
-import { runSeoAutopublishAction } from "../actions";
-import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE } from "./team-ui";
+import {
+  publishSeoPostAction,
+  runSeoDraftAction,
+  submitSeoPostForReviewAction,
+} from "../actions";
+import {
+  TEAM_CARD_PADDED,
+  TEAM_SECTION_SUBTITLE,
+  TEAM_SECTION_TITLE,
+  teamButtonClass,
+} from "./team-ui";
+
+type EditorialStatus = "draft" | "review" | "published" | "failed";
+
+type SeoPost = {
+  id: string;
+  slug: string;
+  title: string;
+  excerpt: string | null;
+  contentMarkdown: string;
+  metaTitle: string | null;
+  metaDescription: string | null;
+  editorialStatus: EditorialStatus;
+  version: number;
+  generatedAt: string;
+  reviewRequestedAt: string | null;
+  reviewedAt: string | null;
+  publishedAt: string | null;
+  lastError: string | null;
+  updatedAt: string | null;
+};
 
 type SeoStatusPayload = {
   ok: true;
@@ -18,259 +52,456 @@ type SeoStatusPayload = {
     brainModel: string | null;
     brainModelUsed: string | null;
     voiceModel: string | null;
+    lastGeneratedAt: string | null;
+    generatedLast7Days: number;
+    nextGenerationEligibleAt: string | null;
     lastPublishedAt: string | null;
     publishedLast7Days: number;
     nextEligibleAt: string | null;
   };
-  posts: Array<{
-    id: string;
-    slug: string;
-    title: string;
-    publishedAt: string | null;
-    updatedAt: string | null;
-  }>;
+  posts: SeoPost[];
 };
 
-function fmtDate(iso: string | null): string {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function fmtDate(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
   return new Intl.DateTimeFormat("en-US", {
     timeZone: TEAM_TIME_ZONE,
     year: "numeric",
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
-  }).format(d);
+    minute: "2-digit",
+  }).format(date);
 }
 
 function fmtRelativeMinutes(nowIso: string, iso: string | null): string | null {
   if (!iso) return null;
   const now = new Date(nowIso);
-  const d = new Date(iso);
-  if (Number.isNaN(now.getTime()) || Number.isNaN(d.getTime())) return null;
-  const minutes = Math.round((now.getTime() - d.getTime()) / (60 * 1000));
+  const date = new Date(iso);
+  if (Number.isNaN(now.getTime()) || Number.isNaN(date.getTime())) return null;
+  const minutes = Math.round((now.getTime() - date.getTime()) / 60_000);
   if (!Number.isFinite(minutes)) return null;
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
+  return `${Math.round(hours / 24)}d ago`;
 }
 
-function describeResult(result: unknown): { tone: "good" | "warn" | "bad" | "neutral"; text: string } {
-  if (!result || typeof result !== "object") return { tone: "neutral", text: "No runs recorded yet." };
-  const r = result as any;
-  if (r.ok === true && r.skipped === false && typeof r.slug === "string") {
-    return { tone: "good", text: `Published: /blog/${r.slug}` };
+function describeResult(result: unknown): {
+  tone: "good" | "warn" | "bad" | "neutral";
+  text: string;
+} {
+  if (!isRecord(result)) {
+    return { tone: "neutral", text: "No generation runs recorded yet." };
   }
-  if (r.ok === true && r.skipped === true && typeof r.reason === "string") {
-    return { tone: "warn", text: `Skipped: ${r.reason}` };
+  if (
+    result["ok"] === true &&
+    result["skipped"] === false &&
+    typeof result["title"] === "string"
+  ) {
+    return { tone: "good", text: `Private draft: ${result["title"]}` };
   }
-  if (r.ok === false && typeof r.error === "string") {
-    return { tone: "bad", text: `Error: ${r.error}` };
+  if (
+    result["ok"] === true &&
+    result["skipped"] === true &&
+    typeof result["reason"] === "string"
+  ) {
+    return { tone: "warn", text: `Skipped: ${result["reason"]}` };
   }
-  return { tone: "neutral", text: "Run recorded." };
+  if (result["ok"] === false && typeof result["error"] === "string") {
+    return { tone: "bad", text: `Error: ${result["error"]}` };
+  }
+  return { tone: "neutral", text: "Generation run recorded." };
 }
 
-function Pill({ tone, children }: { tone: "good" | "warn" | "bad" | "neutral"; children: React.ReactNode }) {
+function Pill({
+  tone,
+  children,
+}: {
+  tone: "good" | "warn" | "bad" | "neutral";
+  children: React.ReactNode;
+}) {
   const classes =
     tone === "good"
-      ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+      ? "border-emerald-200 bg-emerald-100 text-emerald-800"
       : tone === "warn"
-        ? "bg-amber-100 text-amber-800 border-amber-200"
+        ? "border-amber-200 bg-amber-100 text-amber-900"
         : tone === "bad"
-          ? "bg-rose-100 text-rose-700 border-rose-200"
-          : "bg-slate-100 text-slate-600 border-slate-200";
+          ? "border-rose-200 bg-rose-100 text-rose-800"
+          : "border-slate-200 bg-slate-100 text-slate-700";
   return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${classes}`}>
+    <span
+      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${classes}`}
+    >
       {children}
     </span>
   );
 }
 
+function statusTone(status: EditorialStatus): "good" | "warn" | "bad" | "neutral" {
+  if (status === "published") return "good";
+  if (status === "review") return "warn";
+  if (status === "failed") return "bad";
+  return "neutral";
+}
+
+function statusLabel(status: EditorialStatus): string {
+  if (status === "review") return "Review required";
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function SeoPostCard({
+  post,
+  canPublish,
+}: {
+  post: SeoPost;
+  canPublish: boolean;
+}) {
+  const title =
+    post.editorialStatus === "published" ? (
+      <a
+        href={`/blog/${encodeURIComponent(post.slug)}`}
+        target="_blank"
+        rel="noreferrer"
+        className="font-semibold text-[color:var(--team-text)] hover:text-primary-700"
+      >
+        {post.title}
+      </a>
+    ) : (
+      <h3 className="font-semibold text-[color:var(--team-text)]">
+        {post.title}
+      </h3>
+    );
+
+  return (
+    <article className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          {title}
+          <div className="mt-1 break-all font-mono text-xs text-[color:var(--team-text-muted)]">
+            {post.slug}
+          </div>
+        </div>
+        <Pill tone={statusTone(post.editorialStatus)}>
+          {statusLabel(post.editorialStatus)}
+        </Pill>
+      </div>
+
+      <dl className="mt-3 grid gap-1 text-xs text-[color:var(--team-text-muted)] sm:grid-cols-2">
+        <div>
+          <dt className="inline font-semibold">Generated: </dt>
+          <dd className="inline">{fmtDate(post.generatedAt)}</dd>
+        </div>
+        <div>
+          <dt className="inline font-semibold">Updated: </dt>
+          <dd className="inline">{fmtDate(post.updatedAt)}</dd>
+        </div>
+        <div>
+          <dt className="inline font-semibold">Review requested: </dt>
+          <dd className="inline">{fmtDate(post.reviewRequestedAt)}</dd>
+        </div>
+        <div>
+          <dt className="inline font-semibold">Published: </dt>
+          <dd className="inline">{fmtDate(post.publishedAt)}</dd>
+        </div>
+      </dl>
+
+      {post.excerpt ? (
+        <p className="mt-3 text-sm text-[color:var(--team-text-muted)]">
+          {post.excerpt}
+        </p>
+      ) : null}
+      {post.lastError ? (
+        <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900" role="alert">
+          {post.lastError}
+        </p>
+      ) : null}
+
+      <details className="mt-3 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] px-3 py-2">
+        <summary className="min-h-11 cursor-pointer py-2 text-sm font-semibold text-[color:var(--team-text)]">
+          Preview full draft and search metadata
+        </summary>
+        <dl className="mt-2 grid gap-2 text-xs text-[color:var(--team-text-muted)]">
+          <div>
+            <dt className="font-semibold">Meta title</dt>
+            <dd>{post.metaTitle ?? "Not set"}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold">Meta description</dt>
+            <dd>{post.metaDescription ?? "Not set"}</dd>
+          </div>
+        </dl>
+        <pre className="mt-3 max-h-[32rem] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">
+          {post.contentMarkdown}
+        </pre>
+      </details>
+
+      {!canPublish && post.editorialStatus !== "published" ? (
+        <p className="mt-3 text-xs text-[color:var(--team-text-muted)]">
+          Marketing publishing permission is required to change this post.
+        </p>
+      ) : null}
+
+      {canPublish && post.editorialStatus === "draft" ? (
+        <form action={submitSeoPostForReviewAction} className="mt-3">
+          <input type="hidden" name="postId" value={post.id} />
+          <input type="hidden" name="expectedVersion" value={post.version} />
+          <input
+            type="hidden"
+            name="idempotencyKey"
+            value={`seo-review:${post.id}:${post.version}:${randomUUID()}`}
+          />
+          <SubmitButton
+            className={teamButtonClass("secondary")}
+            pendingLabel="Submitting..."
+          >
+            Submit for review
+          </SubmitButton>
+          <p className="mt-2 text-xs text-[color:var(--team-text-muted)]">
+            This does not publish or expose the draft.
+          </p>
+        </form>
+      ) : null}
+
+      {canPublish && post.editorialStatus === "review" ? (
+        <form action={publishSeoPostAction} className="mt-3 space-y-3">
+          <input type="hidden" name="postId" value={post.id} />
+          <input type="hidden" name="expectedVersion" value={post.version} />
+          <input
+            type="hidden"
+            name="idempotencyKey"
+            value={`seo-publish:${post.id}:${post.version}:${randomUUID()}`}
+          />
+          <label className="block text-sm font-medium text-[color:var(--team-text)]">
+            Type <span className="font-mono">{post.slug}</span> to publish
+            <input
+              name="confirmation"
+              required
+              autoComplete="off"
+              className="mt-2 min-h-11 w-full rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] px-3 text-[color:var(--team-text)] focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+            />
+          </label>
+          <SubmitButton
+            className={teamButtonClass("danger")}
+            pendingLabel="Publishing..."
+          >
+            Publish publicly
+          </SubmitButton>
+          <p className="text-xs text-[color:var(--team-text-muted)]">
+            Publishing makes the post visible on the public blog and eligible
+            for indexing. It is rate-limited and audited.
+          </p>
+        </form>
+      ) : null}
+    </article>
+  );
+}
+
 export async function SeoAgentSection(): Promise<React.ReactElement> {
+  const principal = await requireCurrentTeamPrincipal();
+  const canPublish = hasTeamPermission(principal, "marketing.publish");
   let payload: SeoStatusPayload | null = null;
   let error: string | null = null;
 
   try {
-    const res = await callAdminApi("/api/admin/seo/status");
-    if (!res.ok) {
-      error = `SEO status unavailable (HTTP ${res.status})`;
+    const response = await callAdminApiAs(principal, "/api/admin/seo/status");
+    if (!response.ok) {
+      error = `SEO status unavailable (HTTP ${response.status}).`;
     } else {
-      payload = (await res.json()) as SeoStatusPayload;
+      payload = (await response.json()) as SeoStatusPayload;
     }
   } catch {
-    error = "SEO status unavailable.";
+    error = "SEO status unavailable. Try again after checking the API.";
   }
 
   const status = payload?.status ?? null;
   const nowIso = status?.now ?? new Date().toISOString();
   const resultMeta = describeResult(status?.lastResult ?? null);
-  const rel = fmtRelativeMinutes(nowIso, status?.lastAttemptAt ?? null);
+  const relativeRun = fmtRelativeMinutes(
+    nowIso,
+    status?.lastAttemptAt ?? null,
+  );
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-4" aria-labelledby="seo-workspace-title">
       <header className={TEAM_CARD_PADDED}>
-        <h2 className={TEAM_SECTION_TITLE}>SEO Agent</h2>
+        <h2 id="seo-workspace-title" className={TEAM_SECTION_TITLE}>
+          Marketing SEO
+        </h2>
         <p className={TEAM_SECTION_SUBTITLE}>
-          Shows whether the outbox worker is attempting SEO autopublish runs and what it last did. Use “Run now” to
-          force a publish attempt.
+          Generate a private draft, inspect it, submit it for review, and only
+          then publish it. Generation can never make a post public.
         </p>
       </header>
 
+      {error ? (
+        <div
+          className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-900"
+          role="alert"
+        >
+          {error} No missing data below is treated as zero.
+        </div>
+      ) : null}
+
       <div className={TEAM_CARD_PADDED}>
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-          <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
-            <div className="flex items-start justify-between gap-3">
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+          <section className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <div className="text-sm font-semibold text-slate-900">Last run</div>
-                <div className="mt-1 text-sm text-slate-600">
-                  {fmtDate(status?.lastAttemptAt ?? null)} {rel ? <span className="text-slate-500">({rel})</span> : null}
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
+                <h3 className="text-sm font-semibold text-[color:var(--team-text)]">
+                  Draft generator
+                </h3>
+                <p className="mt-1 text-sm text-[color:var(--team-text-muted)]">
+                  Last attempt: {fmtDate(status?.lastAttemptAt)}{" "}
+                  {relativeRun ? `(${relativeRun})` : ""}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
                   <Pill tone={resultMeta.tone}>{resultMeta.text}</Pill>
-                  {status?.invokedBy ? <Pill tone="neutral">by {status.invokedBy}</Pill> : null}
-                  {status?.codeVersion ? <Pill tone="neutral">v {status.codeVersion}</Pill> : null}
+                  {status?.invokedBy ? (
+                    <Pill tone="neutral">by {status.invokedBy}</Pill>
+                  ) : null}
                 </div>
               </div>
-              <form action={runSeoAutopublishAction}>
-                <SubmitButton className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary-700">
-                  Run now
-                </SubmitButton>
-              </form>
+              {canPublish ? (
+                <form action={runSeoDraftAction}>
+                  <input
+                    type="hidden"
+                    name="idempotencyKey"
+                    value={`seo-draft:${randomUUID()}`}
+                  />
+                  <SubmitButton
+                    className={teamButtonClass("primary")}
+                    pendingLabel="Generating..."
+                    disabled={Boolean(status?.disabled) || status?.openaiConfigured === false}
+                  >
+                    Generate draft
+                  </SubmitButton>
+                </form>
+              ) : null}
             </div>
             {status?.disabled ? (
-              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-                Autopublish is disabled (`SEO_AUTOPUBLISH_DISABLED=1`).
-              </div>
+              <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                Draft generation is disabled by the SEO safety switch.
+              </p>
             ) : null}
             {status?.openaiConfigured === false ? (
-              <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-900">
-                OpenAI is not configured (missing `OPENAI_API_KEY`).
-              </div>
+              <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-900">
+                Draft generation is unavailable because the AI provider is not configured.
+              </p>
             ) : null}
-            {error ? (
-              <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-900">
-                {error}
-              </div>
-            ) : null}
-          </div>
+          </section>
 
-          <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
-            <div className="text-sm font-semibold text-slate-900">Publishing limits</div>
-            <div className="mt-2 text-sm text-slate-700">
+          <section className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4 shadow-sm">
+            <h3 className="text-sm font-semibold text-[color:var(--team-text)]">
+              Schedule and limits
+            </h3>
+            <dl className="mt-3 grid gap-2 text-sm text-[color:var(--team-text-muted)]">
               <div>
-                Published last 7 days: <span className="font-semibold">{status?.publishedLast7Days ?? 0}</span>
+                <dt className="inline font-semibold">Generated in 7 days: </dt>
+                <dd className="inline">
+                  {status ? status.generatedLast7Days : "Unavailable"}
+                </dd>
               </div>
-              <div className="mt-1">
-                Last published: <span className="font-semibold">{fmtDate(status?.lastPublishedAt ?? null)}</span>
+              <div>
+                <dt className="inline font-semibold">Next generation: </dt>
+                <dd className="inline">
+                  {status ? fmtDate(status.nextGenerationEligibleAt) : "Unavailable"}
+                </dd>
               </div>
-              <div className="mt-1">
-                Next eligible: <span className="font-semibold">{fmtDate(status?.nextEligibleAt ?? null)}</span>
+              <div>
+                <dt className="inline font-semibold">Published in 7 days: </dt>
+                <dd className="inline">
+                  {status ? status.publishedLast7Days : "Unavailable"}
+                </dd>
               </div>
-            </div>
-          </div>
+              <div>
+                <dt className="inline font-semibold">Next publication: </dt>
+                <dd className="inline">
+                  {status ? fmtDate(status.nextEligibleAt) : "Unavailable"}
+                </dd>
+              </div>
+            </dl>
+          </section>
 
-          <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
-            <div className="text-sm font-semibold text-slate-900">Models</div>
-            <div className="mt-2 text-sm text-slate-700">
+          <section className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4 shadow-sm">
+            <h3 className="text-sm font-semibold text-[color:var(--team-text)]">
+              Provider and model
+            </h3>
+            <dl className="mt-3 grid gap-2 text-sm text-[color:var(--team-text-muted)]">
               <div>
-                Brain: <span className="font-semibold">{status?.brainModel ?? "—"}</span>
+                <dt className="inline font-semibold">Provider: </dt>
+                <dd className="inline">
+                  {status?.openaiConfigured === true
+                    ? "Ready"
+                    : status?.openaiConfigured === false
+                      ? "Not configured"
+                      : "Unknown"}
+                </dd>
               </div>
-              {status?.brainModelUsed && status?.brainModelUsed !== status?.brainModel ? (
-                <div className="mt-1">
-                  Brain used: <span className="font-semibold">{status.brainModelUsed}</span>
-                </div>
-              ) : null}
-              <div className="mt-1">
-                Writer: <span className="font-semibold">{status?.voiceModel ?? "—"}</span>
+              <div>
+                <dt className="inline font-semibold">Planner: </dt>
+                <dd className="inline">{status?.brainModel ?? "Unknown"}</dd>
               </div>
-            </div>
-            <div className="mt-3 text-xs text-slate-500">
-              If this tab shows no recent runs, the worker may be stopped or missing env vars.
-            </div>
-          </div>
+              <div>
+                <dt className="inline font-semibold">Writer: </dt>
+                <dd className="inline">{status?.voiceModel ?? "Unknown"}</dd>
+              </div>
+              <div>
+                <dt className="inline font-semibold">Code: </dt>
+                <dd className="inline">{status?.codeVersion ?? "Unknown"}</dd>
+              </div>
+            </dl>
+          </section>
         </div>
 
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
-          <div className="flex items-center justify-between gap-3">
+        <section className="mt-4" aria-labelledby="seo-posts-title">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-slate-900">Recent posts</div>
-              <div className="mt-1 text-xs text-slate-500">Published posts that are eligible to be indexed.</div>
+              <h3 id="seo-posts-title" className="text-lg font-semibold text-[color:var(--team-text)]">
+                Editorial queue
+              </h3>
+              <p className="mt-1 text-sm text-[color:var(--team-text-muted)]">
+                Draft → Review → Published. Only Published posts are public.
+              </p>
             </div>
             <a
               href="/blog"
               target="_blank"
               rel="noreferrer"
-              className="text-sm font-semibold text-primary-700 hover:text-primary-800"
+              className={teamButtonClass("secondary", "sm")}
             >
-              View blog →
+              View public blog
             </a>
           </div>
 
-          <div className="mt-3 space-y-3 sm:hidden">
-            {(payload?.posts ?? []).length ? (
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+            {(payload?.posts ?? []).length > 0 ? (
               payload!.posts.map((post) => (
-                <article key={post.id} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm shadow-sm">
-                  <a
-                    href={`/blog/${encodeURIComponent(post.slug)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-semibold text-slate-900 hover:text-primary-700"
-                  >
-                    {post.title}
-                  </a>
-                  <div className="mt-2 font-mono text-xs text-slate-600">{post.slug}</div>
-                  <div className="mt-1 text-xs text-slate-500">Published {fmtDate(post.publishedAt)}</div>
-                </article>
+                <SeoPostCard
+                  key={post.id}
+                  post={post}
+                  canPublish={canPublish}
+                />
               ))
             ) : (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-5 text-sm text-slate-600">
-                No published blog posts yet.
-              </div>
+              <p
+                className="rounded-2xl border border-dashed border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-4 py-6 text-sm text-[color:var(--team-text-muted)] xl:col-span-2"
+                role="status"
+              >
+                {payload
+                  ? "No SEO drafts or published posts exist yet."
+                  : "The editorial queue is unavailable."}
+              </p>
             )}
           </div>
-          <div className="mt-3 hidden overflow-x-auto sm:block">
-            <table className="min-w-full text-left text-sm">
-              <thead>
-                <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  <th className="py-2 pr-4">Title</th>
-                  <th className="py-2 pr-4">Slug</th>
-                  <th className="py-2 pr-4">Published</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {(payload?.posts ?? []).length ? (
-                  payload!.posts.map((post) => (
-                    <tr key={post.id} className="text-slate-800">
-                      <td className="py-2 pr-4 font-medium">
-                        <a
-                          href={`/blog/${encodeURIComponent(post.slug)}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="hover:text-primary-700"
-                        >
-                          {post.title}
-                        </a>
-                      </td>
-                      <td className="py-2 pr-4 font-mono text-xs text-slate-600">{post.slug}</td>
-                      <td className="py-2 pr-4 text-slate-600">{fmtDate(post.publishedAt)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td className="py-3 text-slate-600" colSpan={3}>
-                      No published blog posts yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        </section>
       </div>
     </section>
   );

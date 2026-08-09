@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { desc, eq, inArray } from "drizzle-orm";
 import { getDb, contacts, outboxEvents } from "@/db";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 
 type AuditEvent = {
@@ -19,13 +20,15 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "pipeline.read");
+  if (permissionError) return permissionError;
 
   const db = getDb();
   const rows = await db
     .select({
       id: outboxEvents.id,
       payload: outboxEvents.payload,
-      createdAt: outboxEvents.createdAt
+      createdAt: outboxEvents.createdAt,
     })
     .from(outboxEvents)
     .where(eq(outboxEvents.type, "pipeline.auto_stage_change"))
@@ -37,11 +40,14 @@ export async function GET(request: NextRequest): Promise<Response> {
       rows
         .map((row) => {
           const payload = row.payload as Record<string, unknown> | null;
-          const contactId = payload && typeof payload["contactId"] === "string" ? payload["contactId"] : null;
+          const contactId =
+            payload && typeof payload["contactId"] === "string"
+              ? payload["contactId"]
+              : null;
           return contactId ?? undefined;
         })
-        .filter((v): v is string => Boolean(v))
-    )
+        .filter((v): v is string => Boolean(v)),
+    ),
   );
 
   const contactNames: Map<string, string> = new Map();
@@ -50,34 +56,52 @@ export async function GET(request: NextRequest): Promise<Response> {
       .select({
         id: contacts.id,
         firstName: contacts.firstName,
-        lastName: contacts.lastName
+        lastName: contacts.lastName,
       })
       .from(contacts)
       .where(inArray(contacts.id, contactIds));
 
     for (const row of contactsRows) {
-      const name = [row.firstName, row.lastName].filter(Boolean).join(" ").trim();
+      const name = [row.firstName, row.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
       contactNames.set(row.id, name || "Contact");
     }
   }
 
   const events: AuditEvent[] = rows.map((row) => {
     const payload = row.payload as Record<string, unknown> | null;
-    const contactId = payload && typeof payload["contactId"] === "string" ? payload["contactId"] : null;
-    const fromStage = payload && typeof payload["fromStage"] === "string" ? payload["fromStage"] : null;
-    const toStage = payload && typeof payload["toStage"] === "string" ? payload["toStage"] : null;
-    const reason = payload && typeof payload["reason"] === "string" ? payload["reason"] : null;
-    const meta = payload && typeof payload["meta"] === "object" ? (payload["meta"] as Record<string, unknown>) : null;
+    const contactId =
+      payload && typeof payload["contactId"] === "string"
+        ? payload["contactId"]
+        : null;
+    const fromStage =
+      payload && typeof payload["fromStage"] === "string"
+        ? payload["fromStage"]
+        : null;
+    const toStage =
+      payload && typeof payload["toStage"] === "string"
+        ? payload["toStage"]
+        : null;
+    const reason =
+      payload && typeof payload["reason"] === "string"
+        ? payload["reason"]
+        : null;
+    const meta =
+      payload && typeof payload["meta"] === "object"
+        ? (payload["meta"] as Record<string, unknown>)
+        : null;
 
     return {
       id: row.id,
       contactId,
-      contactName: contactId ? contactNames.get(contactId) ?? null : null,
+      contactName: contactId ? (contactNames.get(contactId) ?? null) : null,
       fromStage,
       toStage,
       reason,
       createdAt: row.createdAt.toISOString(),
-      meta
+      meta,
     };
   });
 

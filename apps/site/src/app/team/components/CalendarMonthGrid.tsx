@@ -1,5 +1,12 @@
 import React from "react";
-import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
+import {
+  addCalendarDays,
+  calendarDayKeyForLabel,
+  formatCalendarDayKey,
+  getCalendarMonthGridStart,
+  parseCalendarDayKey,
+  TEAM_TIME_ZONE,
+} from "../lib/calendar-time";
 import {
   formatCalendarEventAmounts,
   formatUsdCents,
@@ -25,6 +32,9 @@ type CalendarEvent = {
   status?: string | null;
   quotedTotalCents?: number | null;
   finalTotalCents?: number | null;
+  version?: string | null;
+  crewMemberIds?: string[];
+  crewNames?: string[];
 };
 
 type Props = {
@@ -37,8 +47,6 @@ type Props = {
   onSelectDay?: (day: string) => void;
 };
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 export function CalendarMonthGrid({
   events,
   conflicts,
@@ -48,23 +56,23 @@ export function CalendarMonthGrid({
   selectedDay,
   onSelectDay,
 }: Props): React.ReactElement {
-  const anchor = parseDayKey(anchorDay) ?? new Date();
-  const firstOfMonth = getMonthStart(anchor);
-  const monthStartWeekday = getWeekdayIndex(firstOfMonth);
-  const startDate = new Date(
-    firstOfMonth.getTime() - monthStartWeekday * DAY_MS,
-  );
-  const cells = Array.from({ length: 42 }).map(
-    (_, i) => new Date(startDate.getTime() + i * DAY_MS),
-  );
+  const anchorParts = parseCalendarDayKey(anchorDay);
+  const anchorMonth = anchorParts?.month ?? new Date().getUTCMonth() + 1;
+  const gridStart = getCalendarMonthGridStart(anchorDay);
+  const cells = Array.from({ length: 42 }).map((_, index) => {
+    const key = addCalendarDays(gridStart, index);
+    return { key, date: calendarDayKeyForLabel(key) ?? new Date() };
+  });
 
   const buckets = new Map<string, CalendarEvent[]>();
   for (const cell of cells) {
-    buckets.set(formatDayKey(cell), []);
+    buckets.set(cell.key, []);
   }
   for (const evt of events) {
     const parsed = new Date(evt.start);
-    const key = Number.isNaN(parsed.getTime()) ? "" : formatDayKey(parsed);
+    const key = Number.isNaN(parsed.getTime())
+      ? ""
+      : formatCalendarDayKey(parsed);
     if (buckets.has(key)) {
       buckets.get(key)!.push(evt);
     }
@@ -78,9 +86,8 @@ export function CalendarMonthGrid({
 
   return (
     <div className="grid grid-cols-7 gap-2 text-sm">
-      {cells.map((day, idx) => {
-        const key = formatDayKey(day);
-        const inMonth = getMonthStart(day).getTime() === firstOfMonth.getTime();
+      {cells.map(({ key, date }, idx) => {
+        const inMonth = parseCalendarDayKey(key)?.month === anchorMonth;
         const bucket = buckets.get(key) ?? [];
         const revenueSummary = revenueSummaryByDay[key] ?? null;
         const revenueLabel = revenueSummary
@@ -107,12 +114,12 @@ export function CalendarMonthGrid({
                   ? `${revenueSummary.label} revenue ${revenueLabel}`
                   : undefined
               }
-              className={`mb-1 w-full text-left text-[11px] font-semibold uppercase ${
+              className={`mb-1 min-h-11 w-full text-left text-[11px] font-semibold uppercase ${
                 isSelected ? "text-primary-700" : "text-slate-500"
               }`}
             >
               <span className="block">
-                {day.toLocaleDateString(undefined, {
+                {date.toLocaleDateString(undefined, {
                   timeZone: TEAM_TIME_ZONE,
                   weekday: "short",
                   day: "numeric",
@@ -133,6 +140,7 @@ export function CalendarMonthGrid({
                 {bucket.slice(0, 3).map((evt) => (
                   <span
                     key={evt.id}
+                    aria-hidden="true"
                     className={`h-1.5 w-1.5 rounded-full ${getCalendarEventDotClass(evt)} ${isConflict(evt.id) ? "ring-1 ring-rose-400" : ""}`}
                   />
                 ))}
@@ -141,6 +149,14 @@ export function CalendarMonthGrid({
                     +{bucket.length - 3}
                   </span>
                 ) : null}
+                <span className="sr-only">
+                  {bucket
+                    .map(
+                      (event) =>
+                        `${event.source === "db" ? "CRM appointment" : "Google event"}: ${event.title}${isConflict(event.id) ? ", scheduling conflict" : ""}`,
+                    )
+                    .join("; ")}
+                </span>
               </div>
             ) : null}
             <div className="space-y-1">
@@ -161,6 +177,7 @@ export function CalendarMonthGrid({
                           className={`block w-full max-w-full overflow-hidden rounded border px-1 py-0.5 text-left text-[11px] ${getCalendarEventSurfaceClass(evt)} ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
                           onClick={() => onSelectEvent?.(evt.id)}
                           type="button"
+                          aria-label={`${formatTime(evt.start)}, ${evt.title}${isConflict(evt.id) ? ", scheduling conflict" : ""}`}
                         >
                           <div className="flex items-center gap-1">
                             <span className="whitespace-nowrap font-semibold tabular-nums text-slate-800">
@@ -169,8 +186,13 @@ export function CalendarMonthGrid({
                             <span className="min-w-0 flex-1 truncate text-slate-700">
                               {evt.title}
                             </span>
+                            <span className="rounded bg-white px-1 text-[10px] uppercase text-slate-500">
+                              {evt.source === "db" ? "CRM" : "Google"}
+                            </span>
                             {isInPersonQuote(evt) ? (
-                              <span className={`rounded px-1 text-[10px] uppercase ${getCalendarEventBadgeClass(evt)}`}>
+                              <span
+                                className={`rounded px-1 text-[10px] uppercase ${getCalendarEventBadgeClass(evt)}`}
+                              >
                                 quote
                               </span>
                             ) : null}
@@ -179,6 +201,11 @@ export function CalendarMonthGrid({
                                 className={`rounded px-1 text-[10px] uppercase ${getCalendarEventBadgeClass(evt)}`}
                               >
                                 {evt.status}
+                              </span>
+                            ) : null}
+                            {isConflict(evt.id) ? (
+                              <span className="rounded bg-rose-100 px-1 text-[10px] uppercase text-rose-800">
+                                Conflict
                               </span>
                             ) : null}
                           </div>
@@ -215,65 +242,4 @@ function formatTime(iso: string): string {
   const dayPeriod = dayPeriodRaw ? dayPeriodRaw.toLowerCase().slice(0, 1) : "";
   const minutePart = minute && minute !== "00" ? `:${minute}` : "";
   return `${hour}${minutePart}${dayPeriod}`;
-}
-
-function parseDayKey(dayKey: string): Date | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey.trim());
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (
-    !Number.isFinite(year) ||
-    !Number.isFinite(month) ||
-    !Number.isFinite(day)
-  )
-    return null;
-  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
-}
-
-function getWeekdayIndex(date: Date): number {
-  const weekday = new Intl.DateTimeFormat("en-US", {
-    timeZone: TEAM_TIME_ZONE,
-    weekday: "short",
-  }).format(date);
-  switch (weekday.toLowerCase().slice(0, 3)) {
-    case "sun":
-      return 0;
-    case "mon":
-      return 1;
-    case "tue":
-      return 2;
-    case "wed":
-      return 3;
-    case "thu":
-      return 4;
-    case "fri":
-      return 5;
-    case "sat":
-      return 6;
-    default:
-      return 0;
-  }
-}
-
-function getMonthStart(date: Date): Date {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: TEAM_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-  }).formatToParts(date);
-  const year = Number(parts.find((p) => p.type === "year")?.value ?? "");
-  const month = Number(parts.find((p) => p.type === "month")?.value ?? "");
-  if (
-    !Number.isFinite(year) ||
-    !Number.isFinite(month) ||
-    month < 1 ||
-    month > 12
-  ) {
-    return new Date(
-      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1, 12, 0, 0, 0),
-    );
-  }
-  return new Date(Date.UTC(year, month - 1, 1, 12, 0, 0, 0));
 }

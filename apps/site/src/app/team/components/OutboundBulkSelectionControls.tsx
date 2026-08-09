@@ -5,8 +5,14 @@ import { useEffect, useMemo, useState } from "react";
 function getCheckboxes(formId: string): HTMLInputElement[] {
   if (typeof document === "undefined") return [];
   return Array.from(
-    document.querySelectorAll<HTMLInputElement>(`input[form="${formId}"][name="taskIds"][type="checkbox"]`)
+    document.querySelectorAll<HTMLInputElement>(
+      `input[form="${formId}"][name="taskRefs"][type="checkbox"]`,
+    ),
   );
+}
+
+function getEligibleCheckboxes(formId: string): HTMLInputElement[] {
+  return getCheckboxes(formId).filter((checkbox) => !checkbox.disabled);
 }
 
 export function OutboundBulkSelectionControls({ formId }: { formId: string }) {
@@ -15,14 +21,14 @@ export function OutboundBulkSelectionControls({ formId }: { formId: string }) {
 
   const recompute = useMemo(() => {
     return () => {
-      const boxes = getCheckboxes(formId);
+      const boxes = getEligibleCheckboxes(formId);
       setTotalCount(boxes.length);
       setSelectedCount(boxes.filter((b) => b.checked).length);
     };
   }, [formId]);
 
   useEffect(() => {
-    const boxes = getCheckboxes(formId);
+    const boxes = getEligibleCheckboxes(formId);
     setTotalCount(boxes.length);
     setSelectedCount(boxes.filter((b) => b.checked).length);
 
@@ -36,14 +42,15 @@ export function OutboundBulkSelectionControls({ formId }: { formId: string }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 sm:justify-end">
       <div className="text-[11px] text-slate-500">
-        Selected {selectedCount}/{totalCount}
+        Selected {selectedCount}/{totalCount} eligible
       </div>
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-100"
+          className="min-h-11 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={totalCount === 0}
           onClick={() => {
-            const boxes = getCheckboxes(formId);
+            const boxes = getEligibleCheckboxes(formId);
             for (const box of boxes) box.checked = true;
             recompute();
           }}
@@ -52,9 +59,10 @@ export function OutboundBulkSelectionControls({ formId }: { formId: string }) {
         </button>
         <button
           type="button"
-          className="rounded-full border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50"
+          className="min-h-11 rounded-full border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={selectedCount === 0}
           onClick={() => {
-            const boxes = getCheckboxes(formId);
+            const boxes = getEligibleCheckboxes(formId);
             for (const box of boxes) box.checked = false;
             recompute();
           }}
@@ -65,4 +73,3 @@ export function OutboundBulkSelectionControls({ formId }: { formId: string }) {
     </div>
   );
 }
-

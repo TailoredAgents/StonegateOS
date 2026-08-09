@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { getDb, calendarSyncState } from "@/db";
 import { getCalendarConfig, isGoogleCalendarEnabled } from "@/lib/calendar";
-import { isAdminRequest } from "../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 
 interface CalendarStatusPayload {
   ok: boolean;
@@ -24,17 +24,25 @@ interface CalendarStatusPayload {
   error?: string;
 }
 
-export async function GET(request: NextRequest): Promise<NextResponse<CalendarStatusPayload>> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({
-      ok: false,
-      config: {
-        calendarId: null,
-        webhookConfigured: Boolean(process.env["GOOGLE_CALENDAR_WEBHOOK_URL"])
+export async function GET(
+  request: NextRequest,
+): Promise<NextResponse<CalendarStatusPayload>> {
+  const denied = await requirePermission(request, "appointments.read");
+  if (denied) {
+    return NextResponse.json(
+      {
+        ok: false,
+        config: {
+          calendarId: null,
+          webhookConfigured: Boolean(
+            process.env["GOOGLE_CALENDAR_WEBHOOK_URL"],
+          ),
+        },
+        status: null,
+        error: denied.status === 401 ? "unauthorized" : "forbidden",
       },
-      status: null,
-      error: "unauthorized"
-    }, { status: 401 });
+      { status: denied.status },
+    );
   }
 
   try {
@@ -43,24 +51,27 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarSt
         ok: true,
         config: {
           calendarId: null,
-          webhookConfigured: false
+          webhookConfigured: false,
         },
-        status: null
+        status: null,
       });
     }
 
     const config = getCalendarConfig();
     const db = getDb();
-    const calendarId = config?.calendarId ?? process.env["GOOGLE_CALENDAR_ID"] ?? null;
+    const calendarId =
+      config?.calendarId ?? process.env["GOOGLE_CALENDAR_ID"] ?? null;
 
     if (!calendarId) {
       return NextResponse.json({
         ok: true,
         config: {
           calendarId: null,
-          webhookConfigured: Boolean(process.env["GOOGLE_CALENDAR_WEBHOOK_URL"])
+          webhookConfigured: Boolean(
+            process.env["GOOGLE_CALENDAR_WEBHOOK_URL"],
+          ),
         },
-        status: null
+        status: null,
       });
     }
 
@@ -73,7 +84,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarSt
         channelExpiresAt: calendarSyncState.channelExpiresAt,
         lastSyncedAt: calendarSyncState.lastSyncedAt,
         lastNotificationAt: calendarSyncState.lastNotificationAt,
-        updatedAt: calendarSyncState.updatedAt
+        updatedAt: calendarSyncState.updatedAt,
       })
       .from(calendarSyncState)
       .where(eq(calendarSyncState.calendarId, calendarId))
@@ -83,7 +94,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarSt
       ok: true,
       config: {
         calendarId,
-        webhookConfigured: Boolean(process.env["GOOGLE_CALENDAR_WEBHOOK_URL"])
+        webhookConfigured: Boolean(process.env["GOOGLE_CALENDAR_WEBHOOK_URL"]),
       },
       status: state
         ? {
@@ -91,23 +102,34 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarSt
             syncTokenPresent: Boolean(state.syncToken),
             channelId: state.channelId,
             resourceId: state.resourceId,
-            channelExpiresAt: state.channelExpiresAt ? state.channelExpiresAt.toISOString() : null,
-            lastSyncedAt: state.lastSyncedAt ? state.lastSyncedAt.toISOString() : null,
-            lastNotificationAt: state.lastNotificationAt ? state.lastNotificationAt.toISOString() : null,
-            updatedAt: state.updatedAt ? state.updatedAt.toISOString() : null
+            channelExpiresAt: state.channelExpiresAt
+              ? state.channelExpiresAt.toISOString()
+              : null,
+            lastSyncedAt: state.lastSyncedAt
+              ? state.lastSyncedAt.toISOString()
+              : null,
+            lastNotificationAt: state.lastNotificationAt
+              ? state.lastNotificationAt.toISOString()
+              : null,
+            updatedAt: state.updatedAt ? state.updatedAt.toISOString() : null,
           }
-        : null
+        : null,
     });
   } catch (error) {
     console.error("[calendar-status] failed", { error: String(error) });
-    return NextResponse.json({
-      ok: false,
-      config: {
-        calendarId: null,
-        webhookConfigured: Boolean(process.env["GOOGLE_CALENDAR_WEBHOOK_URL"])
+    return NextResponse.json(
+      {
+        ok: false,
+        config: {
+          calendarId: null,
+          webhookConfigured: Boolean(
+            process.env["GOOGLE_CALENDAR_WEBHOOK_URL"],
+          ),
+        },
+        status: null,
+        error: "internal_error",
       },
-      status: null,
-      error: "internal_error"
-    }, { status: 500 });
+      { status: 500 },
+    );
   }
 }

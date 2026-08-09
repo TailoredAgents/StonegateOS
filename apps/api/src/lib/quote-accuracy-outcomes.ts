@@ -1,4 +1,4 @@
-import { getDb } from "@/db";
+import type { getDb } from "@/db";
 import { sql } from "drizzle-orm";
 
 type DbExecutor = ReturnType<typeof getDb>;

@@ -9,6 +9,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { isControlledProviderTestRuntime } from "@myst-os/sdk";
 import {
   recordProviderFailure,
   recordProviderSuccess,
@@ -108,6 +109,35 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
+function isLocalStorageEndpoint(endpoint: string | undefined): boolean {
+  if (!endpoint) return false;
+  try {
+    const hostname = new URL(endpoint).hostname
+      .trim()
+      .toLowerCase()
+      .replace(/^\[|\]$/gu, "");
+    if (
+      hostname === "localhost" ||
+      hostname === "::1" ||
+      hostname === "localstack" ||
+      hostname.endsWith(".localhost") ||
+      hostname.endsWith(".localstack")
+    ) {
+      return true;
+    }
+    const parts = hostname.split(".");
+    return (
+      parts.length === 4 &&
+      parts[0] === "127" &&
+      parts.every(
+        (part) => /^\d{1,3}$/u.test(part) && Number.parseInt(part, 10) <= 255,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function readMediaStorageConfig(): MediaStorageConfig {
   const accountId = firstNonEmpty(process.env["R2_ACCOUNT_ID"]);
   const endpoint = firstNonEmpty(
@@ -116,9 +146,24 @@ export function readMediaStorageConfig(): MediaStorageConfig {
     process.env["LOCALSTACK_ENDPOINT"],
     accountId ? `https://${accountId}.r2.cloudflarestorage.com` : undefined,
   );
-  const isLocalEndpoint = Boolean(
-    endpoint && /(?:localhost|127\.0\.0\.1|localstack)/i.test(endpoint),
+  const isLocalEndpoint = isLocalStorageEndpoint(endpoint);
+  const production =
+    process.env["NODE_ENV"]?.trim().toLowerCase() === "production";
+  const controlledProviderTest = isControlledProviderTestRuntime(process.env);
+  const autoCreateBucket = parseBoolean(
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"],
+    !production && isLocalEndpoint,
   );
+
+  if (production && isLocalEndpoint && !controlledProviderTest) {
+    throw new Error("media_storage_local_endpoint_forbidden_in_production");
+  }
+  if (production && autoCreateBucket && !controlledProviderTest) {
+    throw new Error("media_storage_auto_create_forbidden_in_production");
+  }
+  if (controlledProviderTest && !isLocalEndpoint) {
+    throw new Error("media_storage_test_runtime_requires_local_endpoint");
+  }
 
   return {
     bucket:
@@ -136,10 +181,7 @@ export function readMediaStorageConfig(): MediaStorageConfig {
       process.env["MEDIA_OBJECT_FORCE_PATH_STYLE"],
       Boolean(endpoint),
     ),
-    autoCreateBucket: parseBoolean(
-      process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"],
-      process.env["NODE_ENV"] !== "production" && isLocalEndpoint,
-    ),
+    autoCreateBucket,
   };
 }
 
@@ -149,10 +191,7 @@ function buildClient(): {
   bucketReady: Promise<void> | null;
 } {
   const config = readMediaStorageConfig();
-  const isLocalEndpoint = Boolean(
-    config.endpoint &&
-      /(?:localhost|127\.0\.0\.1|localstack)/i.test(config.endpoint),
-  );
+  const isLocalEndpoint = isLocalStorageEndpoint(config.endpoint);
   const accessKeyId = firstNonEmpty(
     process.env["MEDIA_OBJECT_ACCESS_KEY_ID"],
     process.env["R2_ACCESS_KEY_ID"],
@@ -195,9 +234,13 @@ function getStorage(): {
     process.env["MEDIA_OBJECT_BUCKET"],
     process.env["R2_BUCKET_NAME"],
     process.env["MEDIA_OBJECT_REGION"],
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"],
     process.env["MEDIA_OBJECT_ACCESS_KEY_ID"],
     process.env["R2_ACCESS_KEY_ID"],
     process.env["AWS_ACCESS_KEY_ID"],
+    process.env["NODE_ENV"],
+    process.env["E2E_RUN_ID"],
+    process.env["TEAM_CRM_AUDIT_MODE"],
   ].join("|");
   if (!cached || cached.signature !== signature) {
     cached = { signature, ...buildClient() };

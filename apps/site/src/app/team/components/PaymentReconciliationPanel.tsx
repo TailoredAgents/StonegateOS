@@ -1,6 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { SubmitButton } from "@/components/SubmitButton";
 import { paymentReconciliationAction } from "../actions";
-import { TEAM_CARD_PADDED, teamButtonClass } from "./team-ui";
+import {
+  TEAM_CARD_PADDED,
+  TEAM_INPUT_COMPACT,
+  teamButtonClass,
+} from "./team-ui";
 
 export type PaymentReconciliationPayload = {
   generatedAt: string;
@@ -16,6 +21,7 @@ export type PaymentReconciliationPayload = {
     expiresAt: string;
     createdAt: string;
     updatedAt: string;
+    version: string;
   }>;
   unmatchedPayments: Array<{
     id: string;
@@ -35,6 +41,8 @@ export type PaymentReconciliationPayload = {
     receiptUrl: string | null;
     metadata: Record<string, unknown> | null;
     createdAt: string;
+    updatedAt: string;
+    version: string;
   }>;
   events: Array<{
     id: string;
@@ -47,6 +55,7 @@ export type PaymentReconciliationPayload = {
     error: string | null;
     receivedAt: string;
     processedAt: string | null;
+    version: string;
   }>;
   refunds: Array<{
     id: string;
@@ -60,6 +69,8 @@ export type PaymentReconciliationPayload = {
     reason: string | null;
     metadata: Record<string, unknown> | null;
     createdAt: string;
+    updatedAt: string;
+    version: string;
   }>;
 };
 
@@ -150,6 +161,30 @@ function EmptyState({ children }: { children: React.ReactNode }) {
   );
 }
 
+function MutationSafetyFields({
+  expectedVersion,
+  confirmation,
+}: {
+  expectedVersion?: string;
+  confirmation?: string;
+}) {
+  return (
+    <>
+      <input
+        type="hidden"
+        name="idempotencyKey"
+        value={`payment-reconciliation:${randomUUID()}`}
+      />
+      {expectedVersion ? (
+        <input type="hidden" name="expectedVersion" value={expectedVersion} />
+      ) : null}
+      {confirmation ? (
+        <input type="hidden" name="confirmation" value={confirmation} />
+      ) : null}
+    </>
+  );
+}
+
 export function PaymentReconciliationPanel({
   data,
   error,
@@ -198,9 +233,14 @@ export function PaymentReconciliationPanel({
             </p>
           </div>
           <form action={paymentReconciliationAction}>
-            <input type="hidden" name="operation" value="sweep" />
+            <input
+              type="hidden"
+              name="operation"
+              value="run_square_reconciliation_sweep"
+            />
+            <MutationSafetyFields confirmation="RUN SQUARE CHECK" />
             <SubmitButton
-              className={teamButtonClass("primary", "sm")}
+              className={`${teamButtonClass("primary", "sm")} min-h-11`}
               pendingLabel="Checking Square..."
             >
               Run Square sweep
@@ -267,10 +307,18 @@ export function PaymentReconciliationPanel({
                   </div>
                 </div>
                 <form action={paymentReconciliationAction}>
-                  <input type="hidden" name="operation" value="attempt_retry" />
+                  <input
+                    type="hidden"
+                    name="operation"
+                    value="retry_square_attempt"
+                  />
                   <input type="hidden" name="attemptId" value={attempt.id} />
+                  <MutationSafetyFields
+                    expectedVersion={attempt.version}
+                    confirmation="RETRY SQUARE ATTEMPT"
+                  />
                   <SubmitButton
-                    className={teamButtonClass("secondary", "sm")}
+                    className={`${teamButtonClass("secondary", "sm")} min-h-11`}
                     pendingLabel="Checking..."
                   >
                     Retry verification
@@ -305,19 +353,30 @@ export function PaymentReconciliationPanel({
                     <input
                       type="hidden"
                       name="operation"
-                      value="attempt_dismiss"
+                      value="dismiss_square_attempt"
                     />
                     <input type="hidden" name="attemptId" value={attempt.id} />
+                    <MutationSafetyFields expectedVersion={attempt.version} />
                     <textarea
                       name="reviewNote"
                       required
                       minLength={3}
                       maxLength={500}
                       placeholder="What you checked in Square and why it is safe to dismiss"
-                      className="min-h-20 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                      className={`${TEAM_INPUT_COMPACT} min-h-20 w-full`}
                     />
+                    <label className="block space-y-1 text-xs font-semibold text-slate-700">
+                      Type NO SQUARE CHARGE to confirm
+                      <input
+                        name="confirmation"
+                        required
+                        pattern="NO SQUARE CHARGE"
+                        autoComplete="off"
+                        className={`${TEAM_INPUT_COMPACT} mt-1 min-h-11 w-full font-normal`}
+                      />
+                    </label>
                     <SubmitButton
-                      className={teamButtonClass("danger", "sm")}
+                      className={`${teamButtonClass("danger", "sm")} min-h-11`}
                       pendingLabel="Dismissing..."
                     >
                       Confirm no charge and dismiss
@@ -412,15 +471,20 @@ export function PaymentReconciliationPanel({
                     <input
                       type="hidden"
                       name="operation"
-                      value="square_payment_retry"
+                      value="retry_square_payment"
                     />
+                    <input type="hidden" name="paymentId" value={payment.id} />
                     <input
                       type="hidden"
                       name="providerPaymentId"
                       value={payment.providerPaymentId}
                     />
+                    <MutationSafetyFields
+                      expectedVersion={payment.version}
+                      confirmation="RETRY SQUARE PAYMENT"
+                    />
                     <SubmitButton
-                      className={teamButtonClass("secondary", "sm")}
+                      className={`${teamButtonClass("secondary", "sm")} min-h-11`}
                       pendingLabel="Checking..."
                     >
                       Retry Square payment
@@ -446,13 +510,14 @@ export function PaymentReconciliationPanel({
                       <input
                         type="hidden"
                         name="operation"
-                        value="stripe_resolve"
+                        value="resolve_stripe_payment"
                       />
                       <input
                         type="hidden"
                         name="paymentId"
                         value={payment.id}
                       />
+                      <MutationSafetyFields expectedVersion={payment.version} />
                       <label className="space-y-1 text-xs font-semibold text-slate-700 md:col-span-2">
                         Appointment
                         <input
@@ -461,7 +526,17 @@ export function PaymentReconciliationPanel({
                           required
                           defaultValue={payment.appointmentId ?? ""}
                           placeholder="Choose or paste an appointment ID"
-                          className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal"
+                          className={`${TEAM_INPUT_COMPACT} mt-1 min-h-11 w-full font-normal`}
+                        />
+                      </label>
+                      <label className="space-y-1 text-xs font-semibold text-slate-700 md:col-span-2">
+                        Type ATTACH STRIPE PAYMENT to confirm
+                        <input
+                          name="confirmation"
+                          required
+                          pattern="ATTACH STRIPE PAYMENT"
+                          autoComplete="off"
+                          className={`${TEAM_INPUT_COMPACT} mt-1 min-h-11 w-full font-normal`}
                         />
                       </label>
                       <label className="space-y-1 text-xs font-semibold text-slate-700">
@@ -471,7 +546,7 @@ export function PaymentReconciliationPanel({
                           inputMode="decimal"
                           required
                           defaultValue={(jobAmountCents / 100).toFixed(2)}
-                          className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal"
+                          className={`${TEAM_INPUT_COMPACT} mt-1 min-h-11 w-full font-normal`}
                         />
                       </label>
                       <label className="space-y-1 text-xs font-semibold text-slate-700">
@@ -481,7 +556,7 @@ export function PaymentReconciliationPanel({
                           inputMode="decimal"
                           required
                           defaultValue={(payment.tipCents / 100).toFixed(2)}
-                          className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal"
+                          className={`${TEAM_INPUT_COMPACT} mt-1 min-h-11 w-full font-normal`}
                         />
                       </label>
                       <label className="space-y-1 text-xs font-semibold text-slate-700 md:col-span-2">
@@ -492,12 +567,12 @@ export function PaymentReconciliationPanel({
                           minLength={3}
                           maxLength={500}
                           placeholder="What provider record and job details you compared"
-                          className="mt-1 min-h-20 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal"
+                          className={`${TEAM_INPUT_COMPACT} mt-1 min-h-20 w-full font-normal`}
                         />
                       </label>
                       <div className="md:col-span-2">
                         <SubmitButton
-                          className={teamButtonClass("primary", "sm")}
+                          className={`${teamButtonClass("primary", "sm")} min-h-11`}
                           pendingLabel="Resolving..."
                         >
                           Confirm allocation and resolve
@@ -576,10 +651,18 @@ export function PaymentReconciliationPanel({
                     ) : null}
                   </div>
                   <form action={paymentReconciliationAction}>
-                    <input type="hidden" name="operation" value="event_retry" />
+                    <input
+                      type="hidden"
+                      name="operation"
+                      value="retry_square_event"
+                    />
                     <input type="hidden" name="eventId" value={event.id} />
+                    <MutationSafetyFields
+                      expectedVersion={event.version}
+                      confirmation="RETRY SQUARE EVENT"
+                    />
                     <SubmitButton
-                      className={teamButtonClass("secondary", "sm")}
+                      className={`${teamButtonClass("secondary", "sm")} min-h-11`}
                       pendingLabel="Retrying..."
                       disabled={!event.providerObjectId || !retrySupported}
                     >
@@ -649,15 +732,20 @@ export function PaymentReconciliationPanel({
                       <input
                         type="hidden"
                         name="operation"
-                        value="square_refund_retry"
+                        value="retry_square_refund"
                       />
+                      <input type="hidden" name="refundId" value={refund.id} />
                       <input
                         type="hidden"
                         name="providerRefundId"
                         value={refund.providerRefundId}
                       />
+                      <MutationSafetyFields
+                        expectedVersion={refund.version}
+                        confirmation="RETRY SQUARE REFUND"
+                      />
                       <SubmitButton
-                        className={teamButtonClass("secondary", "sm")}
+                        className={`${teamButtonClass("secondary", "sm")} min-h-11`}
                         pendingLabel="Checking..."
                       >
                         Retry Square refund
@@ -678,19 +766,30 @@ export function PaymentReconciliationPanel({
                       <input
                         type="hidden"
                         name="operation"
-                        value="refund_acknowledge"
+                        value="acknowledge_refund_impact"
                       />
                       <input type="hidden" name="refundId" value={refund.id} />
+                      <MutationSafetyFields expectedVersion={refund.version} />
                       <textarea
                         name="reviewNote"
                         required
                         minLength={3}
                         maxLength={500}
                         placeholder="What you reviewed and any commission or payout follow-up required"
-                        className="min-h-20 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                        className={`${TEAM_INPUT_COMPACT} min-h-20 w-full`}
                       />
+                      <label className="block space-y-1 text-xs font-semibold text-slate-700">
+                        Type ACKNOWLEDGE REFUND IMPACT to confirm
+                        <input
+                          name="confirmation"
+                          required
+                          pattern="ACKNOWLEDGE REFUND IMPACT"
+                          autoComplete="off"
+                          className={`${TEAM_INPUT_COMPACT} mt-1 min-h-11 w-full font-normal`}
+                        />
+                      </label>
                       <SubmitButton
-                        className={teamButtonClass("primary", "sm")}
+                        className={`${teamButtonClass("primary", "sm")} min-h-11`}
                         pendingLabel="Acknowledging..."
                       >
                         Record owner acknowledgement

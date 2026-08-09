@@ -61,6 +61,30 @@ describe("Square POS state", () => {
       }),
     ).toThrow("square_state_secret_too_short");
   });
+
+  it("round trips and authenticates an exact launch-binding digest", () => {
+    const bindingHash = "a".repeat(64);
+    const state = createSquarePosState({
+      attemptId: ATTEMPT_ID,
+      secret: STATE_SECRET,
+      nonce: "abcdefghijklmnop",
+      bindingHash,
+      now: NOW,
+      ttlSeconds: 60,
+    });
+
+    expect(
+      verifySquarePosState({ state, secret: STATE_SECRET, now: NOW }),
+    ).toMatchObject({ attemptId: ATTEMPT_ID, bindingHash });
+    expect(() =>
+      createSquarePosState({
+        attemptId: ATTEMPT_ID,
+        secret: STATE_SECRET,
+        bindingHash: "not-a-digest",
+        now: NOW,
+      }),
+    ).toThrow("invalid_state_binding_hash");
+  });
 });
 
 describe("Square POS URLs and callbacks", () => {
@@ -177,7 +201,9 @@ describe("Square reconciliation helpers", () => {
         ],
       }),
     ).toBe(ATTEMPT_ID);
-    expect(extractSquareAttemptIdFromOrder({ note: "similar amount" })).toBeNull();
+    expect(
+      extractSquareAttemptIdFromOrder({ note: "similar amount" }),
+    ).toBeNull();
   });
 
   it("validates webhook signatures with a constant-time compatible digest", () => {

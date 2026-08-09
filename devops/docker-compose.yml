@@ -1,10 +1,9 @@
-version: "3.9"
 services:
   postgres:
     image: postgres:16
     restart: unless-stopped
     ports:
-      - "${PG_PORT:-5432}:5432"
+      - "127.0.0.1:${PG_PORT:-5432}:5432"
     environment:
       POSTGRES_DB: mystos
       POSTGRES_USER: myst
@@ -15,8 +14,22 @@ services:
     image: mailhog/mailhog:v1.0.1
     restart: unless-stopped
     ports:
-      - "${MAILHOG_SMTP_PORT:-1025}:1025"
-      - "${MAILHOG_HTTP_PORT:-8025}:8025"
+      - "127.0.0.1:${MAILHOG_HTTP_PORT:-8025}:8025"
+  email-fake:
+    build:
+      context: ./email-fake
+    restart: unless-stopped
+    depends_on:
+      - mailhog
+    environment:
+      - HOST=0.0.0.0
+      - HTTP_PORT=4016
+      - SMTP_PORT=1025
+      - EMAIL_FAKE_FORWARD_SMTP_HOST=mailhog
+      - EMAIL_FAKE_FORWARD_SMTP_PORT=1025
+    ports:
+      - "127.0.0.1:${MAILHOG_SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${EMAIL_FAKE_HTTP_PORT:-4016}:4016"
   localstack:
     image: localstack/localstack:3.8
     restart: unless-stopped
@@ -24,7 +37,7 @@ services:
       - SERVICES=s3,sqs,events
       - DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
     ports:
-      - "${LOCALSTACK_PORT:-4566}:4566"
+      - "127.0.0.1:${LOCALSTACK_PORT:-4566}:4566"
     volumes:
       - localstack-data:/var/lib/localstack
   twilio-mock:
@@ -33,8 +46,54 @@ services:
     restart: unless-stopped
     environment:
       - PORT=${TWILIO_HTTP_PORT:-4010}
+      - HOST=0.0.0.0
     ports:
-      - "${TWILIO_HTTP_PORT:-4010}:4010"
+      - "127.0.0.1:${TWILIO_HTTP_PORT:-4010}:4010"
+  openai-fake:
+    build:
+      context: ./openai-fake
+    restart: unless-stopped
+    environment:
+      - PORT=4011
+      - HOST=0.0.0.0
+    ports:
+      - "127.0.0.1:${OPENAI_HTTP_PORT:-4011}:4011"
+  google-calendar-fake:
+    build:
+      context: ./google-calendar-fake
+    restart: unless-stopped
+    environment:
+      - PORT=4012
+      - HOST=0.0.0.0
+    ports:
+      - "127.0.0.1:${GOOGLE_CALENDAR_HTTP_PORT:-4012}:4012"
+  google-ads-fake:
+    build:
+      context: ./google-ads-fake
+    restart: unless-stopped
+    environment:
+      - PORT=4014
+      - HOST=0.0.0.0
+    ports:
+      - "127.0.0.1:${GOOGLE_ADS_HTTP_PORT:-4014}:4014"
+  square-fake:
+    build:
+      context: ./square-fake
+    restart: unless-stopped
+    environment:
+      - PORT=4015
+      - HOST=0.0.0.0
+    ports:
+      - "127.0.0.1:${SQUARE_HTTP_PORT:-4015}:4015"
+  meta-fake:
+    build:
+      context: ./meta-fake
+    restart: unless-stopped
+    environment:
+      - PORT=4013
+      - HOST=0.0.0.0
+    ports:
+      - "127.0.0.1:${META_HTTP_PORT:-4013}:4013"
 volumes:
   pgdata:
   localstack-data:

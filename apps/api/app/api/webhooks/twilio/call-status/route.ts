@@ -1,10 +1,31 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, desc, eq, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
-import { auditLogs, callRecords, contacts, crmTasks, getDb, outboxEvents, conversationThreads, leads, properties } from "@/db";
+import {
+  auditLogs,
+  callRecords,
+  contacts,
+  crmTasks,
+  getDb,
+  outboxEvents,
+  conversationThreads,
+  leads,
+  teamCallOperations,
+} from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
 import { recordInboundMessage } from "@/lib/inbox";
+import {
+  handleManualCallStatusCallback,
+  ManualCallCallbackError,
+} from "@/lib/manual-call-callbacks";
+import {
+  adoptLegacySalesEscalationCallback,
+  handleSalesEscalationStatusCallback,
+  SalesEscalationCallbackError,
+} from "@/lib/sales-escalation-call-operations";
+import { resolveOrCreateContactProperty } from "@/lib/property-write";
 import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
+import { verifyTwilioWebhookRequest } from "@/lib/twilio-webhook-auth";
 import { normalizePhone } from "../../../web/utils";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +36,9 @@ const DEFAULT_SERVICES = ["junk_removal_primary"];
 const OUTBOUND_CONNECTED_MIN_DURATION_SEC = 60;
 
 function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
 function parseNoteField(notes: string, key: string): string | null {
@@ -34,7 +57,9 @@ function upsertNoteField(notes: string, key: string, value: string): string {
 }
 
 function readString(value: FormDataEntryValue | null): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
 }
 
 function readNumber(value: FormDataEntryValue | null): number | null {
@@ -70,7 +95,7 @@ async function ensureLeadForThread(input: {
         id: conversationThreads.id,
         leadId: conversationThreads.leadId,
         contactId: conversationThreads.contactId,
-        propertyId: conversationThreads.propertyId
+        propertyId: conversationThreads.propertyId,
       })
       .from(conversationThreads)
       .where(eq(conversationThreads.id, input.threadId))
@@ -81,23 +106,17 @@ async function ensureLeadForThread(input: {
     }
 
     const shortId = input.threadId.split("-")[0] ?? input.threadId.slice(0, 8);
-    const [property] = await tx
-      .insert(properties)
-      .values({
-        contactId: thread.contactId,
-        addressLine1: `[Missed Call ${shortId}] Address pending`,
-        city: "Unknown",
-        state: "NA",
-        postalCode: "00000",
-        gated: false,
-        createdAt: now,
-        updatedAt: now
-      })
-      .returning({ id: properties.id });
-
-    if (!property?.id) {
-      throw new Error("missed_call_property_failed");
-    }
+    const { property } = await resolveOrCreateContactProperty(tx, {
+      contactId: thread.contactId,
+      // The thread-derived token intentionally keeps each unknown location
+      // distinct until staff replace it with a real physical address.
+      addressLine1: `[Missed Call ${shortId}] Address pending`,
+      city: "Unknown",
+      state: "NA",
+      postalCode: "00000",
+      gated: false,
+      now,
+    });
 
     const [lead] = await tx
       .insert(leads)
@@ -111,10 +130,10 @@ async function ensureLeadForThread(input: {
         formPayload: {
           source: "missed_call",
           callSid: input.callSid,
-          from: input.from
+          from: input.from,
         },
         createdAt: now,
-        updatedAt: now
+        updatedAt: now,
       })
       .returning({ id: leads.id });
 
@@ -126,9 +145,9 @@ async function ensureLeadForThread(input: {
       type: "lead.alert",
       payload: {
         leadId: lead.id,
-        source: "missed_call"
+        source: "missed_call",
       },
-      createdAt: now
+      createdAt: now,
     });
 
     await tx
@@ -136,19 +155,23 @@ async function ensureLeadForThread(input: {
       .set({
         leadId: lead.id,
         propertyId: property.id,
-        updatedAt: now
+        updatedAt: now,
       })
       .where(eq(conversationThreads.id, input.threadId));
   });
 }
 
-function resolveCallDirection(direction: string | null): "inbound" | "outbound" {
+function resolveCallDirection(
+  direction: string | null,
+): "inbound" | "outbound" {
   const normalized = (direction ?? "").toLowerCase();
   return normalized.startsWith("inbound") ? "inbound" : "outbound";
 }
 
 function parseRecordMeta(meta: unknown): Record<string, unknown> | null {
-  return typeof meta === "object" && meta !== null ? (meta as Record<string, unknown>) : null;
+  return typeof meta === "object" && meta !== null
+    ? (meta as Record<string, unknown>)
+    : null;
 }
 
 async function ensureInboundContact(input: {
@@ -166,11 +189,15 @@ async function ensureInboundContact(input: {
   const [existing] = await input.db
     .select({ id: contacts.id })
     .from(contacts)
-    .where(or(eq(contacts.phoneE164, phoneE164), eq(contacts.phone, input.from)))
+    .where(
+      or(eq(contacts.phoneE164, phoneE164), eq(contacts.phone, input.from)),
+    )
     .limit(1);
   if (existing?.id) return existing.id;
 
-  const salespersonMemberId = await getDefaultSalesAssigneeMemberId(input.db).catch(() => null);
+  const salespersonMemberId = await getDefaultSalesAssigneeMemberId(
+    input.db,
+  ).catch(() => null);
 
   const [created] = await input.db
     .insert(contacts)
@@ -179,10 +206,13 @@ async function ensureInboundContact(input: {
       lastName: "Caller",
       phone: input.from,
       phoneE164,
-      salespersonMemberId: salespersonMemberId && salespersonMemberId.length > 0 ? salespersonMemberId : null,
+      salespersonMemberId:
+        salespersonMemberId && salespersonMemberId.length > 0
+          ? salespersonMemberId
+          : null,
       source: "inbound_call",
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
     })
     .returning({ id: contacts.id });
 
@@ -190,17 +220,22 @@ async function ensureInboundContact(input: {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  let formData: FormData;
-  try {
-    formData = await request.formData();
-  } catch {
-    return NextResponse.json({ error: "invalid_form" }, { status: 400 });
-  }
+  const verified = await verifyTwilioWebhookRequest(request);
+  if (!verified.ok) return verified.response;
+  const { formData } = verified;
 
   const leg = request.nextUrl.searchParams.get("leg")?.trim() || "unknown";
   const mode = request.nextUrl.searchParams.get("mode")?.trim() || null;
   const taskIdRaw = request.nextUrl.searchParams.get("taskId")?.trim() || "";
   const taskId = taskIdRaw && isUuid(taskIdRaw) ? taskIdRaw : null;
+  const requestKeyRaw =
+    request.nextUrl.searchParams.get("requestKey")?.trim() || "";
+  const requestKey =
+    requestKeyRaw && isUuid(requestKeyRaw) ? requestKeyRaw : null;
+  const eventKeyRaw =
+    request.nextUrl.searchParams.get("eventKey")?.trim() || "";
+  const operationKeyRaw =
+    request.nextUrl.searchParams.get("operationKey")?.trim() || "";
   const inboundMode = mode === "inbound" || leg === "inbound";
 
   const payload = {
@@ -218,10 +253,89 @@ export async function POST(request: NextRequest): Promise<Response> {
     dialCallSid: readString(formData.get("DialCallSid")),
     dialCallStatus: readString(formData.get("DialCallStatus")),
     dialCallDuration: readNumber(formData.get("DialCallDuration")),
-    callDuration: readNumber(formData.get("CallDuration"))
+    callDuration: readNumber(formData.get("CallDuration")),
   };
 
-  console.info("[twilio.call_status]", payload);
+  console.info("[twilio.call_status]", {
+    leg: payload.leg,
+    hasCallSid: Boolean(payload.callSid),
+    hasParentCallSid: Boolean(payload.parentCallSid),
+    callStatus: payload.callStatus,
+    direction: payload.direction,
+    errorCode: payload.errorCode,
+    hasDialCallSid: Boolean(payload.dialCallSid),
+    dialCallStatus: payload.dialCallStatus,
+    dialCallDuration: payload.dialCallDuration,
+    callDuration: payload.callDuration,
+    hasFrom: Boolean(payload.from),
+    hasTo: Boolean(payload.to),
+  });
+
+  // New Team calls are bound exclusively by their opaque provider request key
+  // and signed parent/customer leg identities. They never fall through to the
+  // legacy taskId or audit-log lookup mutations below.
+  if (requestKeyRaw) {
+    if (!requestKey || (leg !== "agent" && leg !== "customer")) {
+      return new NextResponse("invalid_manual_call_callback", { status: 400 });
+    }
+    try {
+      await handleManualCallStatusCallback({
+        db: getDb(),
+        requestKey,
+        leg,
+        callSid: payload.callSid,
+        parentCallSid: payload.parentCallSid,
+        callStatus: payload.callStatus,
+        callDuration: payload.callDuration ?? payload.dialCallDuration,
+      });
+      return new NextResponse("ok", { status: 200 });
+    } catch (error) {
+      return new NextResponse("manual_call_callback_rejected", {
+        status: error instanceof ManualCallCallbackError ? error.status : 500,
+      });
+    }
+  }
+
+  if (mode === "sales_escalation") {
+    if (leg !== "agent" && leg !== "customer") {
+      return new NextResponse("invalid_sales_escalation_callback", {
+        status: 400,
+      });
+    }
+    try {
+      let eventKey = eventKeyRaw;
+      let operationKey = operationKeyRaw;
+      if (!eventKey && !operationKey) {
+        const adopted = await adoptLegacySalesEscalationCallback({
+          db: getDb(),
+          parentCallSid:
+            leg === "agent" ? payload.callSid : payload.parentCallSid,
+        });
+        eventKey = adopted.eventKey;
+        operationKey = adopted.operationKey;
+      } else if (!isUuid(eventKey) || !isUuid(operationKey)) {
+        return new NextResponse("invalid_sales_escalation_callback", {
+          status: 400,
+        });
+      }
+      await handleSalesEscalationStatusCallback({
+        db: getDb(),
+        eventKey,
+        operationKey,
+        leg,
+        callSid: payload.callSid,
+        parentCallSid: payload.parentCallSid,
+        status: payload.callStatus,
+        durationSec: payload.callDuration ?? payload.dialCallDuration,
+      });
+      return new NextResponse("ok", { status: 200 });
+    } catch (error) {
+      return new NextResponse("sales_escalation_callback_rejected", {
+        status:
+          error instanceof SalesEscalationCallbackError ? error.status : 500,
+      });
+    }
+  }
 
   if (inboundMode && payload.from) {
     const missed = isMissedCall(payload.callStatus, payload.callDuration);
@@ -237,8 +351,8 @@ export async function POST(request: NextRequest): Promise<Response> {
           providerMessageId: payload.callSid ?? null,
           metadata: {
             callStatus: payload.callStatus ?? null,
-            callDuration: payload.callDuration
-          }
+            callDuration: payload.callDuration,
+          },
         });
 
         if (!result.leadId && result.threadId) {
@@ -246,14 +360,18 @@ export async function POST(request: NextRequest): Promise<Response> {
             await ensureLeadForThread({
               threadId: result.threadId,
               callSid: payload.callSid,
-              from: payload.from
+              from: payload.from,
             });
           } catch (error) {
-            console.warn("[twilio] missed_call_lead_failed", { error: String(error) });
+            console.warn("[twilio] missed_call_lead_failed", {
+              errorName: error instanceof Error ? error.name : "UnknownError",
+            });
           }
         }
       } catch (error) {
-        console.warn("[twilio] inbound_call_record_failed", { error: String(error) });
+        console.warn("[twilio] inbound_call_record_failed", {
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        });
       }
     }
   }
@@ -273,18 +391,33 @@ export async function POST(request: NextRequest): Promise<Response> {
         const [match] = await db
           .select({ id: contacts.id })
           .from(contacts)
-          .where(or(eq(contacts.phoneE164, normalized), eq(contacts.phone, payload.from)))
+          .where(
+            or(
+              eq(contacts.phoneE164, normalized),
+              eq(contacts.phone, payload.from),
+            ),
+          )
           .limit(1);
         resolvedContactId = match?.id ?? null;
       } catch {
         // ignore invalid inbound caller id
       }
 
-      if (!resolvedContactId && payload.callStatus === "completed" && (payload.callDuration ?? 0) > 0) {
+      if (
+        !resolvedContactId &&
+        payload.callStatus === "completed" &&
+        (payload.callDuration ?? 0) > 0
+      ) {
         try {
-          resolvedContactId = await ensureInboundContact({ db, from: payload.from });
+          resolvedContactId = await ensureInboundContact({
+            db,
+            from: payload.from,
+          });
         } catch (error) {
-          console.warn("[twilio.call_status] inbound_contact_create_failed", { callSid, error: String(error) });
+          console.warn("[twilio.call_status] inbound_contact_create_failed", {
+            hasCallSid: true,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          });
         }
       }
 
@@ -302,17 +435,44 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
     } else {
       const callSidCandidates = [payload.callSid, payload.parentCallSid].filter(
-        (value): value is string => typeof value === "string" && value.trim().length > 0
+        (value): value is string =>
+          typeof value === "string" && value.trim().length > 0,
       );
 
-      if (callSidCandidates.length > 0) {
+      if (requestKey) {
+        const [operation] = await db
+          .select({
+            contactId: teamCallOperations.contactId,
+            agentMemberId: teamCallOperations.agentMemberId,
+            providerOperationId: teamCallOperations.providerOperationId,
+          })
+          .from(teamCallOperations)
+          .where(eq(teamCallOperations.providerRequestKey, requestKey))
+          .limit(1);
+        const providerIdentityMatches =
+          !operation?.providerOperationId ||
+          callSidCandidates.includes(operation.providerOperationId);
+        if (operation && providerIdentityMatches) {
+          resolvedContactId = operation.contactId;
+          resolvedAssignedTo = operation.agentMemberId;
+        }
+      }
+
+      if (!resolvedContactId && callSidCandidates.length > 0) {
         const callSidFilter =
           callSidCandidates.length === 1
-            ? sql`${auditLogs.meta} ->> 'callSid' = ${callSidCandidates[0]!}`
+            ? or(
+                eq(auditLogs.providerOperationId, callSidCandidates[0]!),
+                sql`${auditLogs.meta} ->> 'callSid' = ${callSidCandidates[0]!}`,
+              )
             : or(
                 ...callSidCandidates.map(
-                  (candidate) => sql`${auditLogs.meta} ->> 'callSid' = ${candidate}`
-                )
+                  (candidate) =>
+                    or(
+                      eq(auditLogs.providerOperationId, candidate),
+                      sql`${auditLogs.meta} ->> 'callSid' = ${candidate}`,
+                    )!,
+                ),
               );
 
         const [audit] = await db
@@ -321,33 +481,31 @@ export async function POST(request: NextRequest): Promise<Response> {
             entityType: auditLogs.entityType,
             entityId: auditLogs.entityId,
             actorId: auditLogs.actorId,
-            meta: auditLogs.meta
+            meta: auditLogs.meta,
           })
           .from(auditLogs)
           .where(
             and(
               isNotNull(auditLogs.meta),
-              or(
-                eq(auditLogs.action, "call.started"),
-                eq(auditLogs.action, "sales.escalation.call.started")
-              ),
-              callSidFilter
-            )
+              eq(auditLogs.action, "call.started"),
+              callSidFilter,
+            ),
           )
           .orderBy(desc(auditLogs.createdAt))
           .limit(1);
 
-        if (audit?.action === "call.started" && audit.entityType === "contact" && audit.entityId) {
+        if (
+          audit?.action === "call.started" &&
+          audit.entityType === "contact" &&
+          audit.entityId
+        ) {
           resolvedContactId = audit.entityId;
-          resolvedAssignedTo = audit.actorId ?? null;
-        }
-
-        if (audit?.action === "sales.escalation.call.started") {
           const meta = parseRecordMeta(audit.meta);
-          const contactId = typeof meta?.["contactId"] === "string" ? meta["contactId"].trim() : "";
-          const assignedTo = typeof meta?.["assignedTo"] === "string" ? meta["assignedTo"].trim() : "";
-          if (contactId) resolvedContactId = contactId;
-          if (assignedTo) resolvedAssignedTo = assignedTo;
+          const agentMemberId =
+            typeof meta?.["agentMemberId"] === "string"
+              ? meta["agentMemberId"].trim()
+              : "";
+          resolvedAssignedTo = agentMemberId || audit.actorId || null;
         }
       }
     }
@@ -367,7 +525,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           callStatus: payload.callStatus ?? null,
           callDurationSec: payload.callDuration ?? null,
           createdAt: now,
-          updatedAt: now
+          updatedAt: now,
         })
         .onConflictDoUpdate({
           target: callRecords.callSid,
@@ -381,11 +539,14 @@ export async function POST(request: NextRequest): Promise<Response> {
             assignedTo: resolvedAssignedTo,
             callStatus: payload.callStatus ?? null,
             callDurationSec: payload.callDuration ?? null,
-            updatedAt: now
-          }
+            updatedAt: now,
+          },
         });
     } catch (error) {
-      console.warn("[twilio.call_status] call_record_upsert_failed", { callSid, error: String(error) });
+      console.warn("[twilio.call_status] call_record_upsert_failed", {
+        hasCallSid: true,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
     }
 
     const isInboundAnsweredCall =
@@ -413,9 +574,15 @@ export async function POST(request: NextRequest): Promise<Response> {
               eq(crmTasks.assignedTo, assignedTo),
               eq(crmTasks.status, "open"),
               isNotNull(crmTasks.notes),
-              or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%")),
-              or(ilike(crmTasks.notes, "%kind=speed_to_lead%"), ilike(crmTasks.notes, "%kind=follow_up%"))
-            )
+              or(
+                ilike(crmTasks.notes, "%[auto] leadId=%"),
+                ilike(crmTasks.notes, "%[auto] contactId=%"),
+              ),
+              or(
+                ilike(crmTasks.notes, "%kind=speed_to_lead%"),
+                ilike(crmTasks.notes, "%kind=follow_up%"),
+              ),
+            ),
           );
 
         await recordAuditEvent({
@@ -427,22 +594,24 @@ export async function POST(request: NextRequest): Promise<Response> {
             via: "twilio",
             mode: "inbound",
             callSid,
-            callDurationSec: payload.callDuration ?? null
-          }
+            callDurationSec: payload.callDuration ?? null,
+          },
         });
       } catch (error) {
         console.warn("[twilio.call_status] inbound_touch_failed", {
-          callSid,
-          contactId: resolvedContactId,
-          assignedTo: resolvedAssignedTo,
-          error: String(error)
+          hasCallSid: true,
+          hasContact: Boolean(resolvedContactId),
+          hasAssignee: Boolean(resolvedAssignedTo),
+          errorName: error instanceof Error ? error.name : "UnknownError",
         });
       }
     }
 
-    const effectiveDurationSec = payload.dialCallDuration ?? payload.callDuration ?? 0;
+    const effectiveDurationSec =
+      payload.dialCallDuration ?? payload.callDuration ?? 0;
     const shouldAutoStopOutboundOnAnswered =
       Boolean(taskId) &&
+      mode !== "sales_escalation" &&
       leg === "customer" &&
       payload.callStatus === "completed" &&
       effectiveDurationSec >= OUTBOUND_CONNECTED_MIN_DURATION_SEC;
@@ -455,14 +624,17 @@ export async function POST(request: NextRequest): Promise<Response> {
             contactId: crmTasks.contactId,
             assignedTo: crmTasks.assignedTo,
             status: crmTasks.status,
-            notes: crmTasks.notes
+            notes: crmTasks.notes,
           })
           .from(crmTasks)
           .where(eq(crmTasks.id, taskId))
           .limit(1);
 
         const notes = typeof task?.notes === "string" ? task.notes : "";
-        const isOutboundTask = typeof task?.id === "string" && task.status === "open" && notes.toLowerCase().includes("kind=outbound");
+        const isOutboundTask =
+          typeof task?.id === "string" &&
+          task.status === "open" &&
+          notes.toLowerCase().includes("kind=outbound");
         if (isOutboundTask && task?.contactId) {
           const campaign = parseNoteField(notes, "campaign");
           const nowIso = now.toISOString();
@@ -476,8 +648,10 @@ export async function POST(request: NextRequest): Promise<Response> {
                 eq(crmTasks.status, "open"),
                 isNotNull(crmTasks.notes),
                 ilike(crmTasks.notes, "%kind=outbound%"),
-                campaign ? ilike(crmTasks.notes, `%campaign=${campaign}%`) : sql`true`
-              )
+                campaign
+                  ? ilike(crmTasks.notes, `%campaign=${campaign}%`)
+                  : sql`true`,
+              ),
             );
 
           for (const row of openOutboundTasks) {
@@ -486,8 +660,15 @@ export async function POST(request: NextRequest): Promise<Response> {
             if (!parseNoteField(nextNotes, "startedAt")) {
               nextNotes = upsertNoteField(nextNotes, "startedAt", nowIso);
             }
-            nextNotes = upsertNoteField(upsertNoteField(nextNotes, "lastDisposition", "connected"), "completedAt", nowIso);
-            await db.update(crmTasks).set({ status: "completed", notes: nextNotes, updatedAt: now }).where(eq(crmTasks.id, row.id));
+            nextNotes = upsertNoteField(
+              upsertNoteField(nextNotes, "lastDisposition", "connected"),
+              "completedAt",
+              nowIso,
+            );
+            await db
+              .update(crmTasks)
+              .set({ status: "completed", notes: nextNotes, updatedAt: now })
+              .where(eq(crmTasks.id, row.id));
           }
 
           await db.insert(crmTasks).values({
@@ -496,11 +677,15 @@ export async function POST(request: NextRequest): Promise<Response> {
             status: "completed",
             dueAt: null,
             assignedTo: null,
-            notes: "Outbound connected via call (cadence stopped)"
+            notes: "Outbound connected via call (cadence stopped)",
           });
 
           await recordAuditEvent({
-            actor: { type: "system", id: task.assignedTo ?? undefined, label: "twilio_outbound" },
+            actor: {
+              type: "system",
+              id: task.assignedTo ?? undefined,
+              label: "twilio_outbound",
+            },
             action: "outbound.connected_auto",
             entityType: "crm_task",
             entityId: taskId,
@@ -508,19 +693,25 @@ export async function POST(request: NextRequest): Promise<Response> {
               contactId: task.contactId,
               campaign: campaign ?? null,
               callSid,
-              callDurationSec: effectiveDurationSec
-            }
+              callDurationSec: effectiveDurationSec,
+            },
           });
         }
       } catch (error) {
-        console.warn("[twilio.call_status] outbound_auto_stop_failed", { taskId, callSid, error: String(error) });
+        console.warn("[twilio.call_status] outbound_auto_stop_failed", {
+          hasTaskId: Boolean(taskId),
+          hasCallSid: true,
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        });
       }
     }
 
     const shouldQueueRecording =
       payload.callStatus === "completed" &&
       (payload.callDuration ?? 0) > 0 &&
-      (direction === "inbound" || inboundMode ? leg === "inbound" : leg === "customer");
+      (direction === "inbound" || inboundMode
+        ? leg === "inbound"
+        : leg === "customer");
 
     if (shouldQueueRecording) {
       try {
@@ -531,94 +722,25 @@ export async function POST(request: NextRequest): Promise<Response> {
             and(
               eq(outboxEvents.type, "call.recording.process"),
               isNull(outboxEvents.processedAt),
-              sql`(payload->>'callSid') = ${callSid}`
-            )
+              isNull(outboxEvents.quarantinedAt),
+              sql`(payload->>'callSid') = ${callSid}`,
+            ),
           )
           .limit(1);
 
         if (!existing?.id) {
           await db.insert(outboxEvents).values({
             type: "call.recording.process",
-            payload: { callSid },
-            createdAt: now
+            payload: { callSid, recordingEmptyPolls: 0 },
+            createdAt: now,
           });
         }
       } catch (error) {
-        console.warn("[twilio.call_status] recording_queue_failed", { callSid, error: String(error) });
-      }
-    }
-  }
-
-  if (
-    mode === "sales_escalation" &&
-    leg === "agent" &&
-    payload.callSid &&
-    (payload.callStatus === "in-progress" || payload.callStatus === "answered")
-  ) {
-    try {
-      const db = getDb();
-
-      const [escalation] = await db
-        .select({
-          taskId: auditLogs.entityId,
-          meta: auditLogs.meta
-        })
-        .from(auditLogs)
-        .where(
-          and(
-            eq(auditLogs.action, "sales.escalation.call.started"),
-            eq(auditLogs.entityType, "crm_task"),
-            isNotNull(auditLogs.meta),
-            sql`${auditLogs.meta} ->> 'callSid' = ${payload.callSid}`
-          )
-        )
-        .orderBy(desc(auditLogs.createdAt))
-        .limit(1);
-
-      const taskId = typeof escalation?.taskId === "string" && escalation.taskId.trim().length > 0 ? escalation.taskId.trim() : null;
-      const meta = typeof escalation?.meta === "object" && escalation.meta !== null ? (escalation.meta as Record<string, unknown>) : null;
-      let contactId = meta && typeof meta["contactId"] === "string" ? meta["contactId"].trim() : "";
-      let assignedTo = meta && typeof meta["assignedTo"] === "string" ? meta["assignedTo"].trim() : "";
-
-      if (taskId && (!contactId || !assignedTo)) {
-        const [task] = await db
-          .select({ contactId: crmTasks.contactId, assignedTo: crmTasks.assignedTo })
-          .from(crmTasks)
-          .where(eq(crmTasks.id, taskId))
-          .limit(1);
-        if (!contactId && typeof task?.contactId === "string") contactId = task.contactId;
-        if (!assignedTo && typeof task?.assignedTo === "string") assignedTo = task.assignedTo;
-      }
-
-      if (taskId && contactId && assignedTo) {
-        const now = new Date();
-        await db
-          .update(crmTasks)
-          .set({ status: "completed", updatedAt: now })
-          .where(
-            and(
-              eq(crmTasks.id, taskId),
-              eq(crmTasks.status, "open"),
-              isNotNull(crmTasks.notes),
-              ilike(crmTasks.notes, "%kind=speed_to_lead%")
-            )
-          );
-
-        await recordAuditEvent({
-          actor: { type: "system", id: assignedTo, label: "sales_escalation" },
-          action: "call.started",
-          entityType: "contact",
-          entityId: contactId,
-          meta: {
-            via: "sales_escalation",
-            stage: "agent_answered",
-            taskId,
-            callSid: payload.callSid
-          }
+        console.warn("[twilio.call_status] recording_queue_failed", {
+          hasCallSid: true,
+          errorName: error instanceof Error ? error.name : "UnknownError",
         });
       }
-    } catch (error) {
-      console.warn("[twilio.call_status] sales_escalation_touch_failed", { callSid: payload.callSid, error: String(error) });
     }
   }
 

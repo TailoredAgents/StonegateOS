@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, crmTasks } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { eq } from "drizzle-orm";
 
@@ -11,10 +12,15 @@ type RouteContext = {
 
 const VALID_STATUSES = new Set(["open", "completed"]);
 
-export async function PATCH(request: NextRequest, context: RouteContext): Promise<Response> {
+export async function PATCH(
+  request: NextRequest,
+  context: RouteContext,
+): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.write");
+  if (permissionError) return permissionError;
 
   const { taskId } = await context.params;
   if (!taskId) {
@@ -26,7 +32,10 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
 
-  const { title, dueAt, assignedTo, status, notes } = payload as Record<string, unknown>;
+  const { title, dueAt, assignedTo, status, notes } = payload as Record<
+    string,
+    unknown
+  >;
 
   const updates: Record<string, unknown> = { updatedAt: new Date() };
 
@@ -39,12 +48,18 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   }
 
   if (dueAt !== undefined) {
-    if (dueAt === null || (typeof dueAt === "string" && dueAt.trim().length === 0)) {
+    if (
+      dueAt === null ||
+      (typeof dueAt === "string" && dueAt.trim().length === 0)
+    ) {
       updates["dueAt"] = null;
     } else if (typeof dueAt === "string") {
       const parsed = new Date(dueAt);
       if (Number.isNaN(parsed.getTime())) {
-        return NextResponse.json({ error: "invalid_due_date" }, { status: 400 });
+        return NextResponse.json(
+          { error: "invalid_due_date" },
+          { status: 400 },
+        );
       }
       updates["dueAt"] = parsed;
     } else {
@@ -55,7 +70,10 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   if (assignedTo !== undefined) {
     if (typeof assignedTo === "string" && assignedTo.trim().length > 0) {
       updates["assignedTo"] = assignedTo.trim();
-    } else if (assignedTo === null || (typeof assignedTo === "string" && assignedTo.trim().length === 0)) {
+    } else if (
+      assignedTo === null ||
+      (typeof assignedTo === "string" && assignedTo.trim().length === 0)
+    ) {
       updates["assignedTo"] = null;
     } else {
       return NextResponse.json({ error: "invalid_assignee" }, { status: 400 });
@@ -63,7 +81,10 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   }
 
   if (status !== undefined) {
-    if (typeof status === "string" && VALID_STATUSES.has(status.trim().toLowerCase())) {
+    if (
+      typeof status === "string" &&
+      VALID_STATUSES.has(status.trim().toLowerCase())
+    ) {
       updates["status"] = status.trim().toLowerCase();
     } else {
       return NextResponse.json({ error: "invalid_status" }, { status: 400 });
@@ -73,7 +94,10 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   if (notes !== undefined) {
     if (typeof notes === "string" && notes.trim().length > 0) {
       updates["notes"] = notes.trim();
-    } else if (notes === null || (typeof notes === "string" && notes.trim().length === 0)) {
+    } else if (
+      notes === null ||
+      (typeof notes === "string" && notes.trim().length === 0)
+    ) {
       updates["notes"] = null;
     } else {
       return NextResponse.json({ error: "invalid_notes" }, { status: 400 });
@@ -100,14 +124,16 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
       status: crmTasks.status,
       notes: crmTasks.notes,
       createdAt: crmTasks.createdAt,
-      updatedAt: crmTasks.updatedAt
+      updatedAt: crmTasks.updatedAt,
     });
 
   if (!updated) {
     return NextResponse.json({ error: "task_not_found" }, { status: 404 });
   }
 
-  const changedFields = Object.keys(updates).filter((key) => key !== "updatedAt");
+  const changedFields = Object.keys(updates).filter(
+    (key) => key !== "updatedAt",
+  );
 
   await recordAuditEvent({
     actor,
@@ -116,8 +142,8 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     entityId: updated.id,
     meta: {
       contactId: updated.contactId,
-      fields: changedFields
-    }
+      fields: changedFields,
+    },
   });
 
   return NextResponse.json({
@@ -130,15 +156,20 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
       status: updated.status,
       notes: updated.notes,
       createdAt: updated.createdAt.toISOString(),
-      updatedAt: updated.updatedAt.toISOString()
-    }
+      updatedAt: updated.updatedAt.toISOString(),
+    },
   });
 }
 
-export async function DELETE(request: NextRequest, context: RouteContext): Promise<Response> {
+export async function DELETE(
+  request: NextRequest,
+  context: RouteContext,
+): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.write");
+  if (permissionError) return permissionError;
 
   const { taskId } = await context.params;
   if (!taskId) {
@@ -160,7 +191,7 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
     actor,
     action: "crm.task.deleted",
     entityType: "crm_task",
-    entityId: deleted.id
+    entityId: deleted.id,
   });
 
   return NextResponse.json({ deleted: true });

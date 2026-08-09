@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { asc, eq } from "drizzle-orm";
-import { getDb, properties } from "@/db";
+import { and, asc, eq, or } from "drizzle-orm";
+import { contactProperties, getDb, properties } from "@/db";
 import { requirePartnerSession } from "@/lib/partner-portal-auth";
+import { resolveOrCreateContactProperty } from "@/lib/property-write";
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -28,7 +29,19 @@ export async function GET(request: NextRequest): Promise<Response> {
       updatedAt: properties.updatedAt
     })
     .from(properties)
-    .where(eq(properties.contactId, auth.partnerUser.orgContactId))
+    .leftJoin(
+      contactProperties,
+      and(
+        eq(contactProperties.propertyId, properties.id),
+        eq(contactProperties.contactId, auth.partnerUser.orgContactId),
+      ),
+    )
+    .where(
+      or(
+        eq(properties.contactId, auth.partnerUser.orgContactId),
+        eq(contactProperties.contactId, auth.partnerUser.orgContactId),
+      ),
+    )
     .orderBy(asc(properties.addressLine1));
 
   return NextResponse.json({
@@ -64,42 +77,33 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const db = getDb();
-  const [created] = await db
-    .insert(properties)
-    .values({
-      contactId: auth.partnerUser.orgContactId,
-      addressLine1,
-      addressLine2,
-      city,
-      state,
-      postalCode,
-      gated,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    })
-    .returning({
-      id: properties.id,
-      addressLine1: properties.addressLine1,
-      addressLine2: properties.addressLine2,
-      city: properties.city,
-      state: properties.state,
-      postalCode: properties.postalCode,
-      gated: properties.gated,
-      createdAt: properties.createdAt,
-      updatedAt: properties.updatedAt
-    });
-
-  if (!created) {
-    return NextResponse.json({ ok: false, error: "create_failed" }, { status: 500 });
-  }
+  const { property, propertyCreated, associationCreated } =
+    await db.transaction((tx) =>
+      resolveOrCreateContactProperty(tx, {
+        contactId: auth.partnerUser.orgContactId,
+        addressLine1,
+        addressLine2,
+        city,
+        state,
+        postalCode,
+        gated,
+      }),
+    );
 
   return NextResponse.json({
     ok: true,
     property: {
-      ...created,
-      createdAt: created.createdAt.toISOString(),
-      updatedAt: created.updatedAt.toISOString()
-    }
+      id: property.id,
+      addressLine1: property.addressLine1,
+      addressLine2: property.addressLine2,
+      city: property.city,
+      state: property.state,
+      postalCode: property.postalCode,
+      gated: property.gated,
+      createdAt: property.createdAt.toISOString(),
+      updatedAt: property.updatedAt.toISOString(),
+    },
+    propertyCreated,
+    associationCreated,
   });
 }
-

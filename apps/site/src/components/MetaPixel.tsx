@@ -4,11 +4,13 @@ import { MetaPixelPageView } from "./MetaPixelPageView";
 export function MetaPixel({ pixelId }: { pixelId: string | null }) {
   if (!pixelId) return null;
   const sanitized = pixelId.trim();
-  if (!sanitized) return null;
+  // Meta pixel IDs are numeric. Reject malformed configuration and the
+  // documented E2E sentinel before a browser can contact Meta.
+  if (!/^\d{5,32}$/u.test(sanitized)) return null;
 
   return (
     <>
-      <Script id="meta-pixel-stub" strategy="beforeInteractive">
+      <Script id="meta-pixel-stub" strategy="afterInteractive">
         {`!function(f,b,e,v,n,t,s)
 {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
 n.callMethod.apply(n,arguments):n.queue.push(arguments)};
@@ -18,7 +20,10 @@ n.queue=[]}(window, document,'script',
 fbq('init', '${sanitized}');
 fbq('track', 'PageView');`}
       </Script>
-      <Script src="https://connect.facebook.net/en_US/fbevents.js" strategy="lazyOnload" />
+      <Script
+        src="https://connect.facebook.net/en_US/fbevents.js"
+        strategy="lazyOnload"
+      />
       <noscript>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img

@@ -5,9 +5,16 @@ import { runE2ESeed } from "./support/seed";
 import { waitForHealthcheck } from "./support/health";
 import { ensureContentlayerGenerated } from "./support/contentlayer";
 import { bootstrapTeamStorage } from "./support/team-auth";
+import { resetGoogleCalendarFake } from "./support/google-calendar";
+import { resetGoogleAdsFake } from "./support/google-ads";
+import { resetMetaFake } from "./support/meta";
+import { resetSquareFake } from "./support/square";
+import { resetEmailFake } from "./support/email";
+import { assertSafeAuditRuntimeEnvironment } from "./audit/runtime-safety";
 
 export default async function globalSetup(_config: FullConfig): Promise<void> {
-  ensureE2EEnv();
+  const environment = ensureE2EEnv();
+  assertSafeAuditRuntimeEnvironment(environment);
   await ensureContentlayerGenerated();
 
   await runE2ESeed();
@@ -22,6 +29,13 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     waitForHealthcheck(new URL("/api/healthz", apiBase).toString(), {
       service: "api",
     }),
+  ]);
+  await Promise.all([
+    resetGoogleCalendarFake(),
+    resetGoogleAdsFake(),
+    resetMetaFake(),
+    resetSquareFake(),
+    resetEmailFake(),
   ]);
 
   await Promise.all([

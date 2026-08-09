@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import {
   contacts,
@@ -1087,6 +1087,7 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         .where(
           and(
             eq(outboxEvents.type, "followup.send"),
+            isNull(outboxEvents.quarantinedAt),
             sql`(payload->>'leadId') = ${leadId}`
           )
         );

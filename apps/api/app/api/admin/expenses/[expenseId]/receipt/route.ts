@@ -7,7 +7,7 @@ import { isAdminRequest } from "../../../../web/admin";
 
 export async function GET(
   request: NextRequest,
-  context: { params: Promise<{ expenseId: string }> }
+  context: { params: Promise<{ expenseId: string }> },
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -25,7 +25,7 @@ export async function GET(
     .select({
       receiptUrl: expenses.receiptUrl,
       receiptFilename: expenses.receiptFilename,
-      receiptContentType: expenses.receiptContentType
+      receiptContentType: expenses.receiptContentType,
     })
     .from(expenses)
     .where(eq(expenses.id, expenseId))
@@ -38,11 +38,13 @@ export async function GET(
     return NextResponse.json({ error: "no_receipt" }, { status: 404 });
   }
 
-  return NextResponse.json({
-    ok: true,
-    filename: row.receiptFilename ?? "receipt",
-    contentType: row.receiptContentType ?? "application/octet-stream",
-    dataUrl: row.receiptUrl
-  });
+  return NextResponse.json(
+    {
+      ok: true,
+      filename: row.receiptFilename ?? "receipt",
+      contentType: row.receiptContentType ?? "application/octet-stream",
+      dataUrl: row.receiptUrl,
+    },
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
 }
-

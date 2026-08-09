@@ -45,9 +45,11 @@ import {
   putMediaObject,
 } from "@/lib/media-storage";
 import { recordAuditEvent } from "@/lib/audit";
+import { fetchTwilioProviderMedia } from "@/lib/twilio-provider";
 
 export const MAX_APPOINTMENT_MEDIA_BATCH = 10;
 export const MAX_APPOINTMENT_MEDIA_COUNT = 50;
+export const MAX_VISIBLE_LEGACY_APPOINTMENT_ATTACHMENTS = 50;
 export const MAX_QUOTED_SCOPE_LENGTH = 4_000;
 export const MAX_MEDIA_CAPTION_LENGTH = 500;
 export const AUTOMATIC_BOOKING_MEDIA_STATUSES = [
@@ -1154,12 +1156,15 @@ export async function listAppointmentMedia(appointmentId: string) {
       id: appointmentAttachments.id,
       filename: appointmentAttachments.filename,
       contentType: appointmentAttachments.contentType,
-      url: appointmentAttachments.url,
       createdAt: appointmentAttachments.createdAt,
     })
     .from(appointmentAttachments)
     .where(eq(appointmentAttachments.appointmentId, appointmentId))
-    .orderBy(asc(appointmentAttachments.createdAt));
+    .orderBy(
+      asc(appointmentAttachments.createdAt),
+      asc(appointmentAttachments.id),
+    )
+    .limit(MAX_VISIBLE_LEGACY_APPOINTMENT_ATTACHMENTS + 1);
   const summary = summarizeRows(
     rows.map((row) => ({
       mediaId: row.id,
@@ -1174,10 +1179,24 @@ export async function listAppointmentMedia(appointmentId: string) {
     quotedScopeText: appointment.quotedScopeText,
     mediaSummary: summary,
     items: await Promise.all(rows.map(toMediaItem)),
-    legacyAttachments: legacyAttachments.map((attachment) => ({
-      ...attachment,
-      createdAt: attachment.createdAt.toISOString(),
-    })),
+    legacyAttachments: legacyAttachments
+      .slice(0, MAX_VISIBLE_LEGACY_APPOINTMENT_ATTACHMENTS)
+      .map((attachment) => ({
+        id: attachment.id,
+        filename: attachment.filename?.slice(0, 255) ?? null,
+        contentType: attachment.contentType?.slice(0, 128) ?? null,
+        createdAt: attachment.createdAt.toISOString(),
+        migrationRequired: true as const,
+      })),
+    legacyAttachmentSummary: {
+      visibleCount: Math.min(
+        legacyAttachments.length,
+        MAX_VISIBLE_LEGACY_APPOINTMENT_ATTACHMENTS,
+      ),
+      truncated:
+        legacyAttachments.length > MAX_VISIBLE_LEGACY_APPOINTMENT_ATTACHMENTS,
+      rawContentWithheld: true as const,
+    },
   };
 }
 
@@ -2127,6 +2146,34 @@ export async function fetchRemoteImage(input: {
   url: string;
   provider?: string | null;
 }): Promise<{ bytes: Buffer; contentType: string }> {
+  if (normalizeRemoteMediaProvider(input.provider) === "twilio") {
+    const result = await fetchTwilioProviderMedia(input.url, {
+      timeoutMs: REMOTE_MEDIA_FETCH_TIMEOUT_MS,
+    });
+    if (result.ok) {
+      return {
+        bytes: result.buffer,
+        contentType: result.declaredContentType ?? "application/octet-stream",
+      };
+    }
+    if (result.code === "response_too_large") {
+      throw new AppointmentMediaError("remote_media_too_large", 413);
+    }
+    if (result.code === "timeout") {
+      throw new AppointmentMediaError("remote_media_fetch_timeout", 504);
+    }
+    if (
+      result.code === "invalid_input" ||
+      result.detail === "twilio_media_redirect_forbidden"
+    ) {
+      throw new AppointmentMediaError(
+        "remote_media_provider_host_forbidden",
+        400,
+      );
+    }
+    throw new AppointmentMediaError("remote_media_fetch_failed", 502);
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
@@ -2136,15 +2183,6 @@ export async function fetchRemoteImage(input: {
     let target = await resolveSafeRemoteMediaTarget(input.url, input.provider);
     for (let redirects = 0; redirects <= 3; redirects += 1) {
       const current = target.url;
-      const hostname = current.hostname.toLowerCase();
-      const auth =
-        hostname === "api.twilio.com" &&
-        process.env["TWILIO_ACCOUNT_SID"] &&
-        process.env["TWILIO_AUTH_TOKEN"]
-          ? `Basic ${Buffer.from(
-              `${process.env["TWILIO_ACCOUNT_SID"]}:${process.env["TWILIO_AUTH_TOKEN"]}`,
-            ).toString("base64")}`
-          : null;
       const pinnedAddress = target.pinnedAddress;
       const dispatcher = pinnedAddress
         ? createPinnedRemoteMediaAgent(pinnedAddress)
@@ -2152,7 +2190,6 @@ export async function fetchRemoteImage(input: {
       try {
         const response = await fetch(current, {
           redirect: "manual",
-          headers: auth ? { Authorization: auth } : {},
           signal: controller.signal,
           ...(dispatcher ? { dispatcher } : {}),
         } as RequestInit & { dispatcher?: Agent });

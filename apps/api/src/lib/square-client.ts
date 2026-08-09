@@ -1,4 +1,9 @@
 import { extractSquareAttemptIdFromOrder } from "@/lib/square-pos";
+import {
+  resolveSquareApiEndpoint,
+  type SquareApiEndpoint,
+  type SquareProviderEnvironment,
+} from "@myst-os/sdk";
 
 export const SQUARE_API_VERSION = "2026-07-15";
 
@@ -69,6 +74,15 @@ type SquareListOptions = {
   accessToken?: string;
   fetchImpl?: typeof fetch;
   maxPages?: number;
+  timeoutMs?: number;
+  environment?: SquareProviderEnvironment;
+};
+
+type SquareRequestOptions = {
+  accessToken?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  environment?: SquareProviderEnvironment;
 };
 
 export type VerifiedSquarePayment = {
@@ -93,13 +107,17 @@ export type VerifiedSquarePayment = {
 };
 
 export class SquareApiError extends Error {
+  readonly failureCode: string;
+
   constructor(
     message: string,
     readonly status: number,
-    readonly details: unknown,
+    _legacyDetails?: unknown,
+    failureCode = `square_provider_http_${status}`,
   ) {
     super(message);
     this.name = "SquareApiError";
+    this.failureCode = failureCode;
   }
 }
 
@@ -123,86 +141,408 @@ function parseDate(value: string | undefined): Date | null {
   return Number.isFinite(date.getTime()) ? date : null;
 }
 
-function squareApiBaseUrl(): string {
-  return process.env["SQUARE_ENVIRONMENT"]?.trim().toLowerCase() === "sandbox"
-    ? "https://connect.squareupsandbox.com"
-    : "https://connect.squareup.com";
+const MAX_SQUARE_RESPONSE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_SQUARE_TIMEOUT_MS = 15_000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function providerString(
+  value: unknown,
+  maximumLength = 4_096,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error("square_invalid_response");
+  const normalized = value.trim();
+  const hasControlCharacter = Array.from(normalized).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || codePoint === 127;
+  });
+  if (!normalized || normalized.length > maximumLength || hasControlCharacter) {
+    throw new Error("square_invalid_response");
+  }
+  return normalized;
+}
+
+function parseSquareMoney(value: unknown): SquareMoney | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error("square_invalid_response");
+  const amount = value["amount"];
+  const parsedStringAmount =
+    typeof amount === "string" && /^-?\d+$/u.test(amount)
+      ? Number(amount)
+      : Number.NaN;
+  if (
+    amount !== undefined &&
+    !(
+      (typeof amount === "number" && Number.isSafeInteger(amount)) ||
+      (typeof amount === "string" && Number.isSafeInteger(parsedStringAmount))
+    )
+  ) {
+    throw new Error("square_invalid_response");
+  }
+  const currency = providerString(value["currency"], 16);
+  return {
+    ...(amount !== undefined ? { amount } : {}),
+    ...(currency ? { currency } : {}),
+  };
+}
+
+function providerDate(value: unknown): string | undefined {
+  const supplied = providerString(value, 64);
+  if (!supplied) return undefined;
+  if (!Number.isFinite(new Date(supplied).getTime())) {
+    throw new Error("square_invalid_response");
+  }
+  return supplied;
+}
+
+function parseSquareTender(value: unknown): SquareTender {
+  if (!isRecord(value)) throw new Error("square_invalid_response");
+  return {
+    ...(providerString(value["id"], 255)
+      ? { id: providerString(value["id"], 255) }
+      : {}),
+    ...(providerString(value["payment_id"], 255)
+      ? { payment_id: providerString(value["payment_id"], 255) }
+      : {}),
+    ...(providerString(value["type"], 64)
+      ? { type: providerString(value["type"], 64) }
+      : {}),
+    ...(providerString(value["location_id"], 255)
+      ? { location_id: providerString(value["location_id"], 255) }
+      : {}),
+    ...(parseSquareMoney(value["amount_money"])
+      ? { amount_money: parseSquareMoney(value["amount_money"]) }
+      : {}),
+    ...(parseSquareMoney(value["tip_money"])
+      ? { tip_money: parseSquareMoney(value["tip_money"]) }
+      : {}),
+    ...(providerString(value["note"])
+      ? { note: providerString(value["note"]) }
+      : {}),
+  };
+}
+
+function parseSquareOrder(value: unknown): SquareOrder {
+  if (!isRecord(value)) throw new Error("square_order_invalid_response");
+  const id = providerString(value["id"], 255);
+  if (!id) throw new Error("square_order_invalid_response");
+  const tenders = value["tenders"];
+  const lineItems = value["line_items"];
+  if (tenders !== undefined && !Array.isArray(tenders)) {
+    throw new Error("square_order_invalid_response");
+  }
+  if (lineItems !== undefined && !Array.isArray(lineItems)) {
+    throw new Error("square_order_invalid_response");
+  }
+  return {
+    id,
+    ...(providerString(value["location_id"], 255)
+      ? { location_id: providerString(value["location_id"], 255) }
+      : {}),
+    ...(providerString(value["state"], 64)
+      ? { state: providerString(value["state"], 64) }
+      : {}),
+    ...(parseSquareMoney(value["total_money"])
+      ? { total_money: parseSquareMoney(value["total_money"]) }
+      : {}),
+    ...(parseSquareMoney(value["total_tip_money"])
+      ? { total_tip_money: parseSquareMoney(value["total_tip_money"]) }
+      : {}),
+    ...(Array.isArray(tenders)
+      ? { tenders: tenders.map(parseSquareTender) }
+      : {}),
+    ...(Array.isArray(lineItems)
+      ? {
+          line_items: lineItems.map((item) => {
+            if (!isRecord(item)) throw new Error("square_invalid_response");
+            return {
+              ...(providerString(item["name"])
+                ? { name: providerString(item["name"]) }
+                : {}),
+              ...(providerString(item["note"])
+                ? { note: providerString(item["note"]) }
+                : {}),
+            };
+          }),
+        }
+      : {}),
+  };
+}
+
+function parseReceiptUrl(value: unknown): string | undefined {
+  const receiptUrl = providerString(value);
+  if (!receiptUrl) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(receiptUrl);
+  } catch {
+    throw new Error("square_payment_invalid_response");
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash
+  ) {
+    throw new Error("square_payment_invalid_response");
+  }
+  return parsed.toString();
+}
+
+function parseSquarePayment(value: unknown): SquarePayment {
+  if (!isRecord(value)) throw new Error("square_payment_invalid_response");
+  const id = providerString(value["id"], 255);
+  if (!id) throw new Error("square_payment_invalid_response");
+  const rawCardDetails = value["card_details"];
+  if (rawCardDetails !== undefined && !isRecord(rawCardDetails)) {
+    throw new Error("square_payment_invalid_response");
+  }
+  const rawCard = isRecord(rawCardDetails) ? rawCardDetails["card"] : undefined;
+  if (rawCard !== undefined && !isRecord(rawCard)) {
+    throw new Error("square_payment_invalid_response");
+  }
+  const last4 = isRecord(rawCard)
+    ? providerString(rawCard["last_4"], 4)
+    : undefined;
+  if (last4 && !/^\d{4}$/u.test(last4)) {
+    throw new Error("square_payment_invalid_response");
+  }
+  return {
+    id,
+    ...(providerString(value["order_id"], 255)
+      ? { order_id: providerString(value["order_id"], 255) }
+      : {}),
+    ...(providerString(value["location_id"], 255)
+      ? { location_id: providerString(value["location_id"], 255) }
+      : {}),
+    ...(providerString(value["status"], 64)
+      ? { status: providerString(value["status"], 64) }
+      : {}),
+    ...(providerString(value["source_type"], 64)
+      ? { source_type: providerString(value["source_type"], 64) }
+      : {}),
+    ...(parseSquareMoney(value["amount_money"])
+      ? { amount_money: parseSquareMoney(value["amount_money"]) }
+      : {}),
+    ...(parseSquareMoney(value["tip_money"])
+      ? { tip_money: parseSquareMoney(value["tip_money"]) }
+      : {}),
+    ...(parseSquareMoney(value["total_money"])
+      ? { total_money: parseSquareMoney(value["total_money"]) }
+      : {}),
+    ...(parseSquareMoney(value["refunded_money"])
+      ? { refunded_money: parseSquareMoney(value["refunded_money"]) }
+      : {}),
+    ...(parseReceiptUrl(value["receipt_url"])
+      ? { receipt_url: parseReceiptUrl(value["receipt_url"]) }
+      : {}),
+    ...(providerString(value["note"])
+      ? { note: providerString(value["note"]) }
+      : {}),
+    ...(providerDate(value["created_at"])
+      ? { created_at: providerDate(value["created_at"]) }
+      : {}),
+    ...(providerDate(value["updated_at"])
+      ? { updated_at: providerDate(value["updated_at"]) }
+      : {}),
+    ...(isRecord(rawCardDetails)
+      ? {
+          card_details: {
+            ...(providerString(rawCardDetails["entry_method"], 64)
+              ? {
+                  entry_method: providerString(
+                    rawCardDetails["entry_method"],
+                    64,
+                  ),
+                }
+              : {}),
+            ...(isRecord(rawCard)
+              ? {
+                  card: {
+                    ...(providerString(rawCard["card_brand"], 64)
+                      ? {
+                          card_brand: providerString(rawCard["card_brand"], 64),
+                        }
+                      : {}),
+                    ...(last4 ? { last_4: last4 } : {}),
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function parseSquareRefund(value: unknown): SquareRefund {
+  if (!isRecord(value)) throw new Error("square_refund_invalid_response");
+  const id = providerString(value["id"], 255);
+  if (!id) throw new Error("square_refund_invalid_response");
+  return {
+    id,
+    ...(providerString(value["payment_id"], 255)
+      ? { payment_id: providerString(value["payment_id"], 255) }
+      : {}),
+    ...(providerString(value["order_id"], 255)
+      ? { order_id: providerString(value["order_id"], 255) }
+      : {}),
+    ...(providerString(value["location_id"], 255)
+      ? { location_id: providerString(value["location_id"], 255) }
+      : {}),
+    ...(providerString(value["status"], 64)
+      ? { status: providerString(value["status"], 64) }
+      : {}),
+    ...(parseSquareMoney(value["amount_money"])
+      ? { amount_money: parseSquareMoney(value["amount_money"]) }
+      : {}),
+    ...(providerString(value["reason"])
+      ? { reason: providerString(value["reason"]) }
+      : {}),
+    ...(providerDate(value["created_at"])
+      ? { created_at: providerDate(value["created_at"]) }
+      : {}),
+    ...(providerDate(value["updated_at"])
+      ? { updated_at: providerDate(value["updated_at"]) }
+      : {}),
+  };
+}
+
+async function readBoundedSquareBody(response: Response): Promise<unknown> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (
+    Number.isFinite(declaredLength) &&
+    declaredLength > MAX_SQUARE_RESPONSE_BYTES
+  ) {
+    await response.body?.cancel();
+    throw new Error("square_response_too_large");
+  }
+  if (!response.body) throw new Error("square_empty_response");
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_SQUARE_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error("square_response_too_large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (total === 0) throw new Error("square_empty_response");
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    throw new Error("square_malformed_response");
+  }
 }
 
 async function squareRequest<T>(
-  path: string,
-  options?: { accessToken?: string; fetchImpl?: typeof fetch },
+  endpoint: SquareApiEndpoint,
+  parse: (value: unknown) => T,
+  options?: SquareRequestOptions & { searchParams?: URLSearchParams },
 ): Promise<T> {
   const accessToken =
     options?.accessToken?.trim() ?? process.env["SQUARE_ACCESS_TOKEN"]?.trim();
   if (!accessToken) throw new Error("SQUARE_ACCESS_TOKEN is not set");
   const fetchImpl = options?.fetchImpl ?? fetch;
-  const response = await fetchImpl(`${squareApiBaseUrl()}${path}`, {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_SQUARE_TIMEOUT_MS;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
+    throw new Error("square_timeout_invalid");
+  }
+  const url = new URL(
+    resolveSquareApiEndpoint(endpoint, options?.environment ?? process.env),
+  );
+  if (options?.searchParams) url.search = options.searchParams.toString();
+  const response = await fetchImpl(url, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Square-Version": SQUARE_API_VERSION,
       "Content-Type": "application/json",
     },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(timeoutMs),
     cache: "no-store",
   });
-  const text = await response.text();
-  let body: unknown = null;
-  try {
-    body = text ? (JSON.parse(text) as unknown) : null;
-  } catch {
-    body = text;
-  }
   if (!response.ok) {
+    await response.body?.cancel();
     throw new SquareApiError(
       `Square request failed (${response.status})`,
       response.status,
-      body,
     );
   }
-  return body as T;
+  return parse(await readBoundedSquareBody(response));
 }
 
 export async function getSquareOrder(
   orderId: string,
-  options?: { accessToken?: string; fetchImpl?: typeof fetch },
+  options?: SquareRequestOptions,
 ): Promise<SquareOrder> {
-  const payload = await squareRequest<{ order?: SquareOrder }>(
-    `/v2/orders/${encodeURIComponent(orderId)}`,
+  return squareRequest(
+    { kind: "order", orderId },
+    (value) => {
+      if (!isRecord(value)) throw new Error("square_order_invalid_response");
+      const order = parseSquareOrder(value["order"]);
+      if (order.id !== orderId) throw new Error("square_order_id_mismatch");
+      return order;
+    },
     options,
   );
-  if (!payload.order?.id) throw new Error("square_order_missing");
-  return payload.order;
 }
 
 export async function getSquarePayment(
   paymentId: string,
-  options?: { accessToken?: string; fetchImpl?: typeof fetch },
+  options?: SquareRequestOptions,
 ): Promise<SquarePayment> {
-  const payload = await squareRequest<{ payment?: SquarePayment }>(
-    `/v2/payments/${encodeURIComponent(paymentId)}`,
+  return squareRequest(
+    { kind: "payment", paymentId },
+    (value) => {
+      if (!isRecord(value)) throw new Error("square_payment_invalid_response");
+      const payment = parseSquarePayment(value["payment"]);
+      if (payment.id !== paymentId) {
+        throw new Error("square_payment_id_mismatch");
+      }
+      return payment;
+    },
     options,
   );
-  if (!payload.payment?.id) throw new Error("square_payment_missing");
-  return payload.payment;
 }
 
 export async function getSquareRefund(
   refundId: string,
-  options?: { accessToken?: string; fetchImpl?: typeof fetch },
+  options?: SquareRequestOptions,
 ): Promise<SquareRefund> {
-  const payload = await squareRequest<{ refund?: SquareRefund }>(
-    `/v2/refunds/${encodeURIComponent(refundId)}`,
+  return squareRequest(
+    { kind: "refund", refundId },
+    (value) => {
+      if (!isRecord(value)) throw new Error("square_refund_invalid_response");
+      const refund = parseSquareRefund(value["refund"]);
+      if (refund.id !== refundId) throw new Error("square_refund_id_mismatch");
+      return refund;
+    },
     options,
   );
-  if (!payload.refund?.id) throw new Error("square_refund_missing");
-  return payload.refund;
 }
 
 async function listSquarePages<T>(input: {
-  path: "/v2/payments" | "/v2/refunds";
+  endpoint: { kind: "payments" } | { kind: "refunds" };
   collectionKey: "payments" | "refunds";
+  parseRow: (value: unknown) => T;
   options: SquareListOptions;
 }): Promise<T[]> {
   const results: T[] = [];
@@ -211,7 +551,17 @@ async function listSquarePages<T>(input: {
   if (!Number.isInteger(maxPages) || maxPages <= 0 || maxPages > 1_000) {
     throw new Error("square_pagination_limit_invalid");
   }
+  if (!input.options.locationId.trim()) {
+    throw new Error("square_location_id_invalid");
+  }
   const endTime = input.options.endTime ?? new Date();
+  if (
+    !Number.isFinite(input.options.beginTime.getTime()) ||
+    !Number.isFinite(endTime.getTime()) ||
+    endTime.getTime() < input.options.beginTime.getTime()
+  ) {
+    throw new Error("square_list_window_invalid");
+  }
   let cursor: string | null = null;
 
   for (let page = 0; page < maxPages; page += 1) {
@@ -223,15 +573,31 @@ async function listSquarePages<T>(input: {
       limit: "100",
     });
     if (cursor) params.set("cursor", cursor);
-    const payload = await squareRequest<
-      Partial<Record<"payments" | "refunds", T[]>> & {
-        cursor?: string;
-      }
-    >(`${input.path}?${params.toString()}`, input.options);
-    const pageRows = payload[input.collectionKey];
-    if (Array.isArray(pageRows)) results.push(...pageRows);
+    const payload = await squareRequest(
+      input.endpoint,
+      (value) => {
+        if (!isRecord(value)) {
+          throw new Error(`square_${input.collectionKey}_invalid_response`);
+        }
+        const rawRows = value[input.collectionKey];
+        if (!Array.isArray(rawRows)) {
+          throw new Error(`square_${input.collectionKey}_invalid_response`);
+        }
+        const rawCursor = value["cursor"];
+        if (rawCursor !== undefined && !providerString(rawCursor, 2_048)) {
+          throw new Error(`square_${input.collectionKey}_invalid_response`);
+        }
+        return {
+          rows: rawRows.map(input.parseRow),
+          cursor:
+            typeof rawCursor === "string" ? rawCursor.trim() || null : null,
+        };
+      },
+      { ...input.options, searchParams: params },
+    );
+    results.push(...payload.rows);
 
-    const nextCursor = payload.cursor?.trim() || null;
+    const nextCursor = payload.cursor;
     if (!nextCursor) return results;
     if (seenCursors.has(nextCursor)) {
       throw new Error("square_pagination_cursor_repeated");
@@ -247,8 +613,9 @@ export async function listSquarePayments(
   input: SquareListOptions,
 ): Promise<SquarePayment[]> {
   return listSquarePages<SquarePayment>({
-    path: "/v2/payments",
+    endpoint: { kind: "payments" },
     collectionKey: "payments",
+    parseRow: parseSquarePayment,
     options: input,
   });
 }
@@ -257,8 +624,9 @@ export async function listSquareRefunds(
   input: SquareListOptions,
 ): Promise<SquareRefund[]> {
   return listSquarePages<SquareRefund>({
-    path: "/v2/refunds",
+    endpoint: { kind: "refunds" },
     collectionKey: "refunds",
+    parseRow: parseSquareRefund,
     options: input,
   });
 }

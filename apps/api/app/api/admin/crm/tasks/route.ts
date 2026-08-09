@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, crmTasks, contacts } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { and, eq, sql, asc, desc } from "drizzle-orm";
 
@@ -19,6 +20,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.read");
+  if (permissionError) return permissionError;
 
   const { searchParams } = request.nextUrl;
   const contactId = searchParams.get("contactId");
@@ -30,7 +33,10 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (contactId && statusParam === "all") {
     whereClause = eq(crmTasks.contactId, contactId);
   } else if (contactId && statusParam !== "all") {
-    whereClause = and(eq(crmTasks.contactId, contactId), eq(crmTasks.status, statusParam));
+    whereClause = and(
+      eq(crmTasks.contactId, contactId),
+      eq(crmTasks.status, statusParam),
+    );
   } else if (!contactId && statusParam !== "all") {
     whereClause = eq(crmTasks.status, statusParam);
   }
@@ -45,7 +51,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       status: crmTasks.status,
       notes: crmTasks.notes,
       createdAt: crmTasks.createdAt,
-      updatedAt: crmTasks.updatedAt
+      updatedAt: crmTasks.updatedAt,
     })
     .from(crmTasks);
 
@@ -55,12 +61,12 @@ export async function GET(request: NextRequest): Promise<Response> {
         .orderBy(
           sql`case when ${crmTasks.status} = 'open' then 0 else 1 end`,
           asc(crmTasks.dueAt),
-          desc(crmTasks.createdAt)
+          desc(crmTasks.createdAt),
         )
     : baseQuery.orderBy(
         sql`case when ${crmTasks.status} = 'open' then 0 else 1 end`,
         asc(crmTasks.dueAt),
-        desc(crmTasks.createdAt)
+        desc(crmTasks.createdAt),
       ));
 
   return NextResponse.json({
@@ -73,8 +79,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       status: task.status,
       notes: task.notes,
       createdAt: task.createdAt.toISOString(),
-      updatedAt: task.updatedAt.toISOString()
-    }))
+      updatedAt: task.updatedAt.toISOString(),
+    })),
   });
 }
 
@@ -82,20 +88,16 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.write");
+  if (permissionError) return permissionError;
 
   const payload = (await request.json().catch(() => null)) as unknown;
   if (!payload || typeof payload !== "object") {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
 
-  const {
-    contactId,
-    title,
-    dueAt,
-    assignedTo,
-    notes,
-    status
-  } = payload as Record<string, unknown>;
+  const { contactId, title, dueAt, assignedTo, notes, status } =
+    payload as Record<string, unknown>;
 
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
     return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
@@ -146,9 +148,14 @@ export async function POST(request: NextRequest): Promise<Response> {
       title: title.trim(),
       dueAt: dueDate,
       assignedTo:
-        typeof assignedTo === "string" && assignedTo.trim().length > 0 ? assignedTo.trim() : null,
-      notes: typeof notes === "string" && notes.trim().length > 0 ? notes.trim() : null,
-      status: taskStatus
+        typeof assignedTo === "string" && assignedTo.trim().length > 0
+          ? assignedTo.trim()
+          : null,
+      notes:
+        typeof notes === "string" && notes.trim().length > 0
+          ? notes.trim()
+          : null,
+      status: taskStatus,
     })
     .returning({
       id: crmTasks.id,
@@ -159,7 +166,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       status: crmTasks.status,
       notes: crmTasks.notes,
       createdAt: crmTasks.createdAt,
-      updatedAt: crmTasks.updatedAt
+      updatedAt: crmTasks.updatedAt,
     });
 
   if (!task) {
@@ -174,8 +181,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     meta: {
       contactId: task.contactId,
       status: task.status,
-      assignedTo: task.assignedTo ?? null
-    }
+      assignedTo: task.assignedTo ?? null,
+    },
   });
 
   return NextResponse.json({
@@ -188,7 +195,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       status: task.status,
       notes: task.notes,
       createdAt: task.createdAt.toISOString(),
-      updatedAt: task.updatedAt.toISOString()
-    }
+      updatedAt: task.updatedAt.toISOString(),
+    },
   });
 }

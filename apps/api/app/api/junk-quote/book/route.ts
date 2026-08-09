@@ -3,9 +3,13 @@ import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import { appointmentHolds, getDb, appointments, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
+import { appointmentHolds, getDb, appointments, crmPipeline, instantQuotes, leads, outboxEvents } from "@/db";
 import { and, eq, gt, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
-import { upsertContact, upsertProperty } from "../../web/persistence";
+import {
+  PublicContactPersistenceError,
+  upsertContact,
+} from "../../web/persistence";
+import { resolveOrCreateContactProperty } from "@/lib/property-write";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { resolveAutomaticAppointmentStatusForMedia } from "@/lib/appointment-media";
 import { JUNK_VOLUME_UNIT_PRICE } from "@/lib/junk-volume-pricing";
@@ -66,19 +70,6 @@ class BookingError extends Error {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function extractPgMeta(error: unknown): { code?: string; constraint?: string } {
-  const direct = isRecord(error) ? error : null;
-  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : undefined;
-  const directConstraint =
-    direct && typeof direct["constraint_name"] === "string" ? direct["constraint_name"] : undefined;
-  if (directCode || directConstraint) return { code: directCode, constraint: directConstraint };
-
-  const cause = direct && isRecord(direct["cause"]) ? direct["cause"] : null;
-  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : undefined;
-  const causeConstraint = cause && typeof cause["constraint_name"] === "string" ? cause["constraint_name"] : undefined;
-  return { code: causeCode, constraint: causeConstraint };
 }
 
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
@@ -336,85 +327,8 @@ export async function POST(request: NextRequest) {
         postalCode: string;
         gated: boolean;
       }): Promise<{ id: string }> => {
-        const trimmedAddress = input.addressLine1.trim();
-        const trimmedCity = input.city.trim();
-        const normalizedState = input.state.trim().toUpperCase();
-        const trimmedPostalCode = input.postalCode.trim();
-        const gated = Boolean(input.gated);
-
-        const [existingByAddress] = await tx
-          .select({ id: properties.id })
-          .from(properties)
-          .where(
-            and(
-              eq(properties.addressLine1, trimmedAddress),
-              eq(properties.postalCode, trimmedPostalCode),
-              eq(properties.state, normalizedState)
-            )
-          )
-          .limit(1);
-
-        if (existingByAddress?.id) {
-          await tx
-            .update(properties)
-            .set({
-              contactId: input.contactId,
-              city: trimmedCity,
-              gated,
-              updatedAt: new Date()
-            })
-            .where(eq(properties.id, existingByAddress.id));
-
-          return { id: existingByAddress.id };
-        }
-
-        await tx.execute(sql`savepoint junk_quote_book_property_upsert`);
-        try {
-          const property = await upsertProperty(tx, {
-            contactId: input.contactId,
-            addressLine1: trimmedAddress,
-            city: trimmedCity,
-            state: normalizedState,
-            postalCode: trimmedPostalCode,
-            gated
-          });
-          await tx.execute(sql`release savepoint junk_quote_book_property_upsert`);
-          return { id: property.id };
-        } catch (error) {
-          const meta = extractPgMeta(error);
-          await tx.execute(sql`rollback to savepoint junk_quote_book_property_upsert`);
-          await tx.execute(sql`release savepoint junk_quote_book_property_upsert`);
-
-          if (meta.code !== "23505" || (meta.constraint && meta.constraint !== "properties_address_key")) {
-            throw error;
-          }
-
-          const [existing] = await tx
-            .select({ id: properties.id })
-            .from(properties)
-            .where(
-              and(
-                eq(properties.addressLine1, trimmedAddress),
-                eq(properties.postalCode, trimmedPostalCode),
-                eq(properties.state, normalizedState)
-              )
-            )
-            .limit(1);
-
-          if (!existing?.id) throw error;
-
-          await tx
-            .update(properties)
-            .set({
-              contactId: input.contactId,
-              city: trimmedCity,
-              gated,
-              updatedAt: new Date()
-            })
-            .where(eq(properties.id, existing.id));
-
-          return { id: existing.id };
-        }
+        const { property } = await resolveOrCreateContactProperty(tx, input);
+        return { id: property.id };
       };
 
       const [existingLead] = await tx
@@ -438,74 +352,17 @@ export async function POST(request: NextRequest) {
       let propertyId: string;
 
       if (existingLead?.id) {
-        propertyId = existingLead.propertyId;
-        let nextPropertyId = propertyId;
-
-        const [currentProperty] = await tx
-          .select({ id: properties.id, addressLine1: properties.addressLine1 })
-          .from(properties)
-          .where(eq(properties.id, propertyId))
-          .limit(1);
-
-        const isPlaceholder =
-          typeof currentProperty?.addressLine1 === "string" &&
-          currentProperty.addressLine1.trim().startsWith("[Instant Quote");
-
-        if (isPlaceholder) {
-          // If the placeholder property is updated to a real address that already exists, Postgres will raise a
-          // constraint error and the whole transaction becomes "aborted" unless we roll back to a savepoint.
-          await tx.execute(sql`savepoint junk_quote_book_property_update`);
-          try {
-            const [updatedProperty] = await tx
-              .update(properties)
-              .set({
-                contactId: contact.id,
-                addressLine1,
-                city,
-                state,
-                postalCode,
-                gated: false,
-                updatedAt: new Date()
-              })
-              .where(eq(properties.id, propertyId))
-              .returning({ id: properties.id });
-
-            if (!updatedProperty?.id) {
-              throw new Error("property_update_failed");
-            }
-            await tx.execute(sql`release savepoint junk_quote_book_property_update`);
-          } catch (error) {
-            await tx.execute(sql`rollback to savepoint junk_quote_book_property_update`);
-            await tx.execute(sql`release savepoint junk_quote_book_property_update`);
-            const meta = extractPgMeta(error);
-            console.warn("[junk-quote-book] placeholder_property_conflict", {
-              quoteId: quote.id,
-              propertyId,
-              code: meta.code,
-              constraint: meta.constraint,
-              error: String(error)
-            });
-            const upserted = await safeUpsertPropertyId({
-              contactId: contact.id,
-              addressLine1,
-              city,
-              state,
-              postalCode,
-              gated: false
-            });
-            nextPropertyId = upserted.id;
-          }
-        } else {
-          const upserted = await safeUpsertPropertyId({
-            contactId: contact.id,
-            addressLine1,
-            city,
-            state,
-            postalCode,
-            gated: false
-          });
-          nextPropertyId = upserted.id;
-        }
+        // Never mutate a quote placeholder into a physical address. Resolve
+        // the canonical address, link it, and move dependent records instead.
+        const upserted = await safeUpsertPropertyId({
+          contactId: contact.id,
+          addressLine1,
+          city,
+          state,
+          postalCode,
+          gated: false
+        });
+        const nextPropertyId = upserted.id;
 
         const previousPayload =
           existingLead.formPayload && typeof existingLead.formPayload === "object"
@@ -599,6 +456,18 @@ export async function POST(request: NextRequest) {
 
         leadId = lead.id;
         propertyId = property.id;
+      }
+
+      const [linkedQuote] = await tx
+        .update(instantQuotes)
+        .set({
+          contactId: contact.id,
+          propertyId,
+        })
+        .where(eq(instantQuotes.id, quote.id))
+        .returning({ id: instantQuotes.id });
+      if (!linkedQuote?.id) {
+        throw new Error("instant_quote_relationship_failed");
       }
 
       const [existingAppt] = await tx
@@ -807,6 +676,13 @@ export async function POST(request: NextRequest) {
       requestOrigin
     );
   } catch (error) {
+    if (error instanceof PublicContactPersistenceError) {
+      return corsJson(
+        { error: error.publicCode, message: error.publicMessage },
+        request.headers.get("origin"),
+        { status: error.status },
+      );
+    }
     if (error instanceof BookingError) {
       return corsJson({ error: error.code }, request.headers.get("origin"), { status: error.status });
     }

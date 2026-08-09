@@ -1,14 +1,15 @@
 import mystNext from "@myst-os/config/eslint/next";
+import typescriptEslint from "@typescript-eslint/eslint-plugin";
 
 export default [
   ...mystNext,
   {
-    files: ["**/*.mjs"],
-    languageOptions: {
-      parserOptions: {
-        project: undefined
-      }
-    }
+    ...typescriptEslint.configs["flat/disable-type-checked"],
+    files: ["**/*.js", "**/*.mjs"],
+    rules: {
+      ...typescriptEslint.configs["flat/disable-type-checked"].rules,
+      "@typescript-eslint/no-require-imports": "off",
+    },
   },
   {
     ignores: [
@@ -18,7 +19,7 @@ export default [
       "build/**",
       "next-env.d.ts",
       "**/*.mjs",
-      "**/*.cjs"
-    ]
-  }
+      "**/*.cjs",
+    ],
+  },
 ];

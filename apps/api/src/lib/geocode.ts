@@ -1,5 +1,6 @@
 type GeocodeInput = {
   addressLine1: string;
+  addressLine2?: string | null;
   city?: string;
   state?: string;
   postalCode?: string;
@@ -14,7 +15,13 @@ export async function forwardGeocode(input: GeocodeInput): Promise<GeocodeResult
   const apiKey = process.env["MAPBOX_ACCESS_TOKEN"];
   if (!apiKey) return null;
 
-  const parts = [input.addressLine1, input.city, input.state, input.postalCode]
+  const parts = [
+    input.addressLine1,
+    input.addressLine2,
+    input.city,
+    input.state,
+    input.postalCode,
+  ]
     .filter((part) => typeof part === "string" && part.trim().length > 0)
     .join(", ");
   if (!parts.length) return null;

@@ -10,6 +10,7 @@ import {
   PRICE_INPUT_MODE_OPTIONS,
   resolveAppointmentServiceType,
   type AppointmentBookingDetails,
+  type AppointmentBookingDetailsPrefill,
   type AppointmentLeadSource,
   type AppointmentServiceType,
   type DemolitionType,
@@ -28,6 +29,7 @@ type TeamMember = {
 type Props = {
   teamMembers: TeamMember[];
   bookingDetails?: AppointmentBookingDetails | null;
+  bookingPrefill?: AppointmentBookingDetailsPrefill | null;
   quotedTotalCents?: number | null;
   labelClassName: string;
   fieldClassName: string;
@@ -70,6 +72,7 @@ function yesNoValue(value: boolean | null | undefined): string {
 export function AppointmentBookingDetailsFields({
   teamMembers,
   bookingDetails = null,
+  bookingPrefill = null,
   quotedTotalCents = null,
   labelClassName,
   fieldClassName,
@@ -81,15 +84,18 @@ export function AppointmentBookingDetailsFields({
   allowServiceTypeSelection = false,
 }: Props): React.ReactElement {
   const initialServiceType =
-    serviceType ?? resolveAppointmentServiceType(bookingDetails) ?? null;
+    serviceType ??
+    resolveAppointmentServiceType(bookingDetails) ??
+    bookingPrefill?.serviceType ??
+    null;
   const [selectedServiceType, setSelectedServiceType] = React.useState<
     AppointmentServiceType | ""
   >(initialServiceType ?? "");
   const [priceMode, setPriceMode] = React.useState<PriceInputMode | "">(
-    bookingDetails?.pricing.mode ?? "",
+    bookingDetails?.pricing.mode ?? bookingPrefill?.pricing?.mode ?? "",
   );
   const [loadSize, setLoadSize] = React.useState<LoadSizeKind | "">(
-    bookingDetails?.loadSize?.kind ?? "",
+    bookingDetails?.loadSize?.kind ?? bookingPrefill?.loadSize?.kind ?? "",
   );
   const [landClearingAccess, setLandClearingAccess] = React.useState<
     LandClearingAccessDifficulty | ""
@@ -100,19 +106,24 @@ export function AppointmentBookingDetailsFields({
   const [dumpsterSize, setDumpsterSize] = React.useState<DumpsterSizeKind | "">(
     bookingDetails?.rentalDumpster?.dumpsterSize ?? "",
   );
-  const resolvedSource = fixedSource ?? bookingDetails?.source ?? null;
+  const resolvedSource =
+    fixedSource ?? bookingDetails?.source ?? bookingPrefill?.source ?? null;
 
   React.useEffect(() => {
     setSelectedServiceType(initialServiceType ?? "");
   }, [initialServiceType]);
 
   React.useEffect(() => {
-    setPriceMode(bookingDetails?.pricing.mode ?? "");
-    setLoadSize(bookingDetails?.loadSize?.kind ?? "");
+    setPriceMode(
+      bookingDetails?.pricing.mode ?? bookingPrefill?.pricing?.mode ?? "",
+    );
+    setLoadSize(
+      bookingDetails?.loadSize?.kind ?? bookingPrefill?.loadSize?.kind ?? "",
+    );
     setLandClearingAccess(bookingDetails?.landClearing?.accessDifficulty ?? "");
     setDemolitionType(bookingDetails?.demolition?.demoType ?? "");
     setDumpsterSize(bookingDetails?.rentalDumpster?.dumpsterSize ?? "");
-  }, [bookingDetails]);
+  }, [bookingDetails, bookingPrefill]);
 
   const effectiveServiceType = allowServiceTypeSelection
     ? selectedServiceType
@@ -234,6 +245,7 @@ export function AppointmentBookingDetailsFields({
             name="quotedTotal"
             type="number"
             min={0}
+            max={21_474_836.47}
             step="0.01"
             required
             defaultValue={centsToInputValue(quotedTotalCents)}
@@ -251,10 +263,12 @@ export function AppointmentBookingDetailsFields({
               name="priceRangeMin"
               type="number"
               min={0}
+              max={21_474_836.47}
               step="0.01"
               required
               defaultValue={centsToInputValue(
-                bookingDetails?.pricing.rangeMinCents,
+                bookingDetails?.pricing.rangeMinCents ??
+                  bookingPrefill?.pricing?.rangeMinCents,
               )}
               placeholder="e.g. 300"
               className={fieldClassName}
@@ -266,10 +280,12 @@ export function AppointmentBookingDetailsFields({
               name="priceRangeMax"
               type="number"
               min={0}
+              max={21_474_836.47}
               step="0.01"
               required
               defaultValue={centsToInputValue(
-                bookingDetails?.pricing.rangeMaxCents,
+                bookingDetails?.pricing.rangeMaxCents ??
+                  bookingPrefill?.pricing?.rangeMaxCents,
               )}
               placeholder="e.g. 450"
               className={fieldClassName}
@@ -307,10 +323,12 @@ export function AppointmentBookingDetailsFields({
                 name="customLoads"
                 type="number"
                 min={0.25}
+                max={100}
                 step={0.25}
                 required
                 defaultValue={customLoadsToInputValue(
-                  bookingDetails?.loadSize?.customLoads,
+                  bookingDetails?.loadSize?.customLoads ??
+                    bookingPrefill?.loadSize?.customLoads,
                 )}
                 placeholder="e.g. 1.5"
                 className={fieldClassName}

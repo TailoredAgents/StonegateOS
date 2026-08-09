@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, gte, lt, sql } from "drizzle-orm";
+import { and, gte, lt, ne, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { expenses, getDb } from "@/db";
 import { requirePermission } from "@/lib/permissions";
@@ -33,13 +33,22 @@ async function computeWindow(
 ): Promise<WindowSummary> {
   const [row] = await db
     .select({
-      totalCents: sql<number>`coalesce(sum(${expenses.amount}), 0)::int`.as(
-        "total_cents",
-      ),
-      count: sql<number>`count(*)::int`.as("count"),
+      totalCents: sql<number>`coalesce(sum(${expenses.amount}), 0)`
+        .mapWith(Number)
+        .as("total_cents"),
+      count:
+        sql<number>`count(*) filter (where ${expenses.lifecycleStatus} = 'posted' and ${expenses.reversalOfExpenseId} is null)::int`.as(
+          "count",
+        ),
     })
     .from(expenses)
-    .where(and(gte(expenses.paidAt, start), lt(expenses.paidAt, end)));
+    .where(
+      and(
+        ne(expenses.lifecycleStatus, "draft"),
+        gte(expenses.paidAt, start),
+        lt(expenses.paidAt, end),
+      ),
+    );
 
   return {
     totalCents: row?.totalCents ?? 0,
@@ -83,12 +92,18 @@ export async function GET(request: NextRequest): Promise<Response> {
       db
         .select({
           day: dayBucket,
-          totalCents: sql<number>`coalesce(sum(${expenses.amount}), 0)::int`.as(
-            "total_cents",
-          ),
+          totalCents: sql<number>`coalesce(sum(${expenses.amount}), 0)`
+            .mapWith(Number)
+            .as("total_cents"),
         })
         .from(expenses)
-        .where(and(gte(expenses.paidAt, last7Start), lt(expenses.paidAt, now)))
+        .where(
+          and(
+            ne(expenses.lifecycleStatus, "draft"),
+            gte(expenses.paidAt, last7Start),
+            lt(expenses.paidAt, now),
+          ),
+        )
         .groupBy(dayBucket)
         .orderBy(sql`day asc`),
     ]);

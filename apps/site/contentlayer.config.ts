@@ -9,26 +9,29 @@ export const Page = defineDocumentType(() => ({
     description: { type: "string" },
     heroImage: { type: "string" },
     draft: { type: "boolean", default: false },
-    order: { type: "number", default: 0 }
+    order: { type: "number", default: 0 },
   },
   computedFields: {
     slug: {
       type: "string",
-      resolve: (doc) => doc._raw.flattenedPath.replace(/^pages\//, "")
+      resolve: (doc) => doc._raw.flattenedPath.replace(/^pages\//, ""),
     },
     sortOrder: {
       type: "number",
       resolve: (doc) => {
-        const rawOrder: unknown = (doc as any).order;
+        const rawOrder: unknown =
+          typeof doc === "object" && doc !== null && "order" in doc
+            ? doc.order
+            : undefined;
         if (typeof rawOrder === "number" && Number.isFinite(rawOrder)) {
           return rawOrder;
         }
-        const raw = String(rawOrder ?? "").trim();
+        const raw = typeof rawOrder === "string" ? rawOrder.trim() : "";
         const parsed = Number.parseFloat(raw);
         return Number.isFinite(parsed) ? parsed : 0;
-      }
-    }
-  }
+      },
+    },
+  },
 }));
 
 export const Service = defineDocumentType(() => ({
@@ -39,14 +42,14 @@ export const Service = defineDocumentType(() => ({
     title: { type: "string", required: true },
     short: { type: "string" },
     heroImage: { type: "string" },
-    faq: { type: "list", of: { type: "string" } }
+    faq: { type: "list", of: { type: "string" } },
   },
   computedFields: {
     slug: {
       type: "string",
-      resolve: (doc) => doc._raw.flattenedPath.replace(/^services\//, "")
-    }
-  }
+      resolve: (doc) => doc._raw.flattenedPath.replace(/^services\//, ""),
+    },
+  },
 }));
 
 export const Area = defineDocumentType(() => ({
@@ -57,7 +60,7 @@ export const Area = defineDocumentType(() => ({
     title: { type: "string", required: true },
     city: { type: "string" },
     county: { type: "string" },
-    description: { type: "string" }
+    description: { type: "string" },
   },
   computedFields: {
     slug: {
@@ -68,12 +71,12 @@ export const Area = defineDocumentType(() => ({
           return "index";
         }
         return flattened.replace(/^areas\//, "");
-      }
-    }
-  }
+      },
+    },
+  },
 }));
 
 export default makeSource({
   contentDirPath: "content",
-  documentTypes: [Page, Service, Area]
+  documentTypes: [Page, Service, Area],
 });

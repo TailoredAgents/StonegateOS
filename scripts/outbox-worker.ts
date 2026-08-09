@@ -1,14 +1,30 @@
 import "dotenv/config";
 import Module from "node:module";
 import path from "node:path";
+import {
+  formatOutboxWorkerLog,
+  outboxWorkerErrorDetail,
+  parseOutboxWorkerConfiguration,
+  shouldLogOutboxBatch,
+} from "../apps/api/src/lib/outbox-worker-runtime";
+
+type ModuleResolver = (
+  request: string,
+  parent: unknown,
+  isMain: boolean,
+  options: unknown,
+) => string;
 
 function registerAliases() {
-  const originalResolve = (Module as unknown as { _resolveFilename: Module["_resolveFilename"] })._resolveFilename;
-  (Module as unknown as { _resolveFilename: Module["_resolveFilename"] })._resolveFilename = function (
+  const moduleInternals = Module as unknown as {
+    _resolveFilename: ModuleResolver;
+  };
+  const originalResolve = moduleInternals._resolveFilename;
+  moduleInternals._resolveFilename = function (
     request: string,
-    parent: any,
+    parent: unknown,
     isMain: boolean,
-    options: any
+    options: unknown,
   ) {
     if (request.startsWith("@/")) {
       const absolute = path.resolve("apps/api/src", request.slice(2));
@@ -22,58 +38,134 @@ async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runOnce(limit: number) {
-  const { processOutboxBatch } = await import("../apps/api/src/lib/outbox-processor");
+async function recordWorkerHeartbeat(
+  ok: boolean,
+  detail?: string | null,
+): Promise<void> {
+  const { recordOutboxWorkerHeartbeat } = await import(
+    "../apps/api/src/lib/readiness"
+  );
+  await recordOutboxWorkerHeartbeat({ ok, detail });
+}
+
+function logWorkerEvent(
+  level: "info" | "warn" | "error",
+  event: string,
+  fields: Readonly<Record<string, unknown>> = {},
+): void {
+  const entry = formatOutboxWorkerLog(event, fields);
+  if (level === "error") {
+    console.error(entry);
+  } else if (level === "warn") {
+    console.warn(entry);
+  } else {
+    console.log(entry);
+  }
+}
+
+async function runOnce(limit: number, options: { logIdle?: boolean } = {}) {
+  const { processOutboxBatch } = await import(
+    "../apps/api/src/lib/outbox-processor"
+  );
   const stats = await processOutboxBatch({ limit });
-  console.log(JSON.stringify({ ok: true, ...stats }, null, 2));
+  if (options.logIdle || shouldLogOutboxBatch(stats)) {
+    logWorkerEvent(
+      stats.errors > 0 ? "error" : "info",
+      "outbox.batch.completed",
+      { ok: stats.errors === 0, ...stats },
+    );
+  }
   return stats;
 }
 
+async function recordAndLogWorkerHeartbeat(
+  ok: boolean,
+  detail?: string | null,
+): Promise<void> {
+  await recordWorkerHeartbeat(ok, detail);
+  logWorkerEvent(ok ? "info" : "error", "outbox.worker.heartbeat", {
+    ok,
+    ...(detail ? { detail } : {}),
+  });
+}
+
 async function runSeoOnce() {
-  const { maybeAutopublishBlogPost } = await import("../apps/api/src/lib/seo/agent");
-  const result = await maybeAutopublishBlogPost({ invokedBy: "worker" });
-  console.log(JSON.stringify({ ok: true, seo: result }, null, 2));
+  const { maybeGenerateSeoDraft } = await import(
+    "../apps/api/src/lib/seo/agent"
+  );
+  const result = await maybeGenerateSeoDraft({ invokedBy: "worker" });
+  logWorkerEvent("info", "seo.draft.checked", { ok: true, result });
 }
 
 async function runGoogleAdsQueueOnce() {
-  const { queueGoogleAdsSyncIfNeeded } = await import("../apps/api/src/lib/google-ads-scheduler");
+  const { queueGoogleAdsSyncIfNeeded } = await import(
+    "../apps/api/src/lib/google-ads-scheduler"
+  );
   const result = await queueGoogleAdsSyncIfNeeded({ invokedBy: "worker" });
   if (result.queued) {
-    console.log(JSON.stringify({ ok: true, googleAds: result }, null, 2));
+    logWorkerEvent("info", "google_ads.sync.queued", { ok: true, result });
   }
 }
 
 async function runGoogleAdsAnalystQueueOnce() {
-  const { queueGoogleAdsAnalystIfNeeded } = await import("../apps/api/src/lib/google-ads-analyst-scheduler");
+  const { queueGoogleAdsAnalystIfNeeded } = await import(
+    "../apps/api/src/lib/google-ads-analyst-scheduler"
+  );
   const result = await queueGoogleAdsAnalystIfNeeded({ invokedBy: "worker" });
   if (result.queued) {
-    console.log(JSON.stringify({ ok: true, googleAdsAnalyst: result }, null, 2));
+    logWorkerEvent("info", "google_ads.analyst.queued", { ok: true, result });
   }
 }
 
 async function runSalesDraftPrepOnce() {
-  const { prepareDueSalesQueueDrafts } = await import("../apps/api/src/lib/sales-draft-prep-scheduler");
+  const { prepareDueSalesQueueDrafts } = await import(
+    "../apps/api/src/lib/sales-draft-prep-scheduler"
+  );
   const result = await prepareDueSalesQueueDrafts();
-  if (result.prepared > 0 || result.reused > 0 || result.autosent > 0 || result.error) {
-    console.log(JSON.stringify({ ok: !result.error, salesDraftPrep: result }, null, 2));
+  if (
+    result.prepared > 0 ||
+    result.reused > 0 ||
+    result.autosent > 0 ||
+    result.error
+  ) {
+    logWorkerEvent(
+      result.error ? "error" : "info",
+      "sales_draft_prep.completed",
+      { ok: !result.error, result },
+    );
   }
 }
 
 async function runFacebookDmNameBackfillOnce() {
-  const { backfillFacebookDmContactNames } = await import("../apps/api/src/lib/facebook-dm-name-backfill");
+  const { backfillFacebookDmContactNames } = await import(
+    "../apps/api/src/lib/facebook-dm-name-backfill"
+  );
   const result = await backfillFacebookDmContactNames({
-    limit: Number(process.env["FACEBOOK_DM_NAME_BACKFILL_LIMIT"] ?? 25)
+    limit: Number(process.env["FACEBOOK_DM_NAME_BACKFILL_LIMIT"] ?? 25),
   });
-  if (result.candidates > 0 || result.updated > 0 || result.unresolved > 0 || result.missingMessage > 0) {
-    console.log(JSON.stringify({ ok: true, facebookDmNameBackfill: result }, null, 2));
+  if (
+    result.candidates > 0 ||
+    result.updated > 0 ||
+    result.unresolved > 0 ||
+    result.missingMessage > 0
+  ) {
+    logWorkerEvent("info", "facebook_dm_name_backfill.completed", {
+      ok: true,
+      result,
+    });
   }
 }
 
 async function runTraccarSyncOnce() {
-  const { syncTraccarPositions } = await import("../apps/api/src/lib/eta-agent");
+  const { syncTraccarPositions } = await import(
+    "../apps/api/src/lib/eta-agent"
+  );
   const result = await syncTraccarPositions();
   if (result.configured && (result.stored > 0 || !result.ok)) {
-    console.log(JSON.stringify({ ok: result.ok, traccar: result }, null, 2));
+    logWorkerEvent(result.ok ? "info" : "error", "traccar.sync.completed", {
+      ok: result.ok,
+      result,
+    });
   }
 }
 
@@ -87,12 +179,10 @@ async function runAppointmentMediaCleanupOnce() {
     result.purgedAssets > 0 ||
     result.failures > 0
   ) {
-    console.log(
-      JSON.stringify(
-        { ok: result.failures === 0, appointmentMediaCleanup: result },
-        null,
-        2,
-      ),
+    logWorkerEvent(
+      result.failures === 0 ? "info" : "error",
+      "appointment_media.cleanup.completed",
+      { ok: result.failures === 0, result },
     );
   }
 }
@@ -118,34 +208,66 @@ async function runSquareReconciliationOnce() {
     result.unmatched > 0 ||
     result.refundsReconciled > 0
   ) {
-    console.log(
-      JSON.stringify({ ok: true, squareReconciliation: result }, null, 2),
+    logWorkerEvent("info", "square.reconciliation.completed", {
+      ok: true,
+      result,
+    });
+  }
+}
+
+async function runPartnerInviteRecoveryOnce() {
+  const { recoverStalePartnerInviteOperations } = await import(
+    "../apps/api/src/lib/partner-invite-recovery"
+  );
+  const result = await recoverStalePartnerInviteOperations({
+    limit: Number(process.env["PARTNER_INVITE_RECOVERY_BATCH_SIZE"] ?? 50),
+    requestedStaleMs: Number(
+      process.env["PARTNER_INVITE_REQUESTED_STALE_MS"] ?? 2 * 60 * 1000,
+    ),
+    dispatchedStaleMs: Number(
+      process.env["PARTNER_INVITE_DISPATCHED_STALE_MS"] ?? 10 * 60 * 1000,
+    ),
+  });
+  if (
+    result.requestedQuarantined > 0 ||
+    result.dispatchedReconciled > 0 ||
+    result.errors > 0
+  ) {
+    logWorkerEvent(
+      result.errors === 0 ? "info" : "error",
+      "partners.invite_recovery.completed",
+      { ok: result.errors === 0, result },
     );
   }
 }
 
 async function main() {
   registerAliases();
-  const limit = Number(process.env["OUTBOX_BATCH_SIZE"] ?? 10);
-  const pollIntervalMs = Number(process.env["OUTBOX_POLL_INTERVAL_MS"] ?? 0);
-  const seoIntervalMs = Number(process.env["SEO_AUTOPUBLISH_INTERVAL_MS"] ?? 6 * 60 * 60 * 1000);
+  const { batchSize, pollIntervalMs, heartbeatIntervalMs } =
+    parseOutboxWorkerConfiguration();
+  const seoIntervalMs = Number(
+    process.env["SEO_AUTOPUBLISH_INTERVAL_MS"] ?? 6 * 60 * 60 * 1000,
+  );
   const googleAdsIntervalMs = Number(
-    process.env["GOOGLE_ADS_SYNC_INTERVAL_MS"] ?? 24 * 60 * 60 * 1000
+    process.env["GOOGLE_ADS_SYNC_INTERVAL_MS"] ?? 24 * 60 * 60 * 1000,
   );
   const salesDraftPrepIntervalMs = Number(
-    process.env["SALES_DRAFT_PREP_INTERVAL_MS"] ?? 3 * 60 * 1000
+    process.env["SALES_DRAFT_PREP_INTERVAL_MS"] ?? 3 * 60 * 1000,
   );
   const facebookDmNameBackfillIntervalMs = Number(
-    process.env["FACEBOOK_DM_NAME_BACKFILL_INTERVAL_MS"] ?? 2 * 60 * 60 * 1000
+    process.env["FACEBOOK_DM_NAME_BACKFILL_INTERVAL_MS"] ?? 2 * 60 * 60 * 1000,
   );
   const traccarSyncIntervalMs = Number(
-    process.env["TRACCAR_SYNC_INTERVAL_MS"] ?? 60 * 1000
+    process.env["TRACCAR_SYNC_INTERVAL_MS"] ?? 60 * 1000,
   );
   const appointmentMediaCleanupIntervalMs = Number(
-    process.env["APPOINTMENT_MEDIA_CLEANUP_INTERVAL_MS"] ?? 60 * 60 * 1000
+    process.env["APPOINTMENT_MEDIA_CLEANUP_INTERVAL_MS"] ?? 60 * 60 * 1000,
   );
   const squareReconciliationIntervalMs = Number(
-    process.env["SQUARE_RECONCILIATION_INTERVAL_MS"] ?? 2 * 60 * 1000
+    process.env["SQUARE_RECONCILIATION_INTERVAL_MS"] ?? 2 * 60 * 1000,
+  );
+  const partnerInviteRecoveryIntervalMs = Number(
+    process.env["PARTNER_INVITE_RECOVERY_INTERVAL_MS"] ?? 60 * 1000,
   );
   let nextSeoAt = Date.now();
   let nextGoogleAdsAt = Date.now();
@@ -154,25 +276,52 @@ async function main() {
   let nextTraccarSyncAt = Date.now();
   let nextAppointmentMediaCleanupAt = Date.now();
   let nextSquareReconciliationAt = Date.now();
+  let nextPartnerInviteRecoveryAt = Date.now();
+  let nextHeartbeatAt = Date.now();
+
+  const recordHeartbeatIfDue = async (): Promise<void> => {
+    if (Date.now() < nextHeartbeatAt) return;
+    await recordAndLogWorkerHeartbeat(true);
+    nextHeartbeatAt = Date.now() + heartbeatIntervalMs;
+  };
+
+  logWorkerEvent("info", "outbox.worker.started", {
+    ok: true,
+    mode: pollIntervalMs > 0 ? "continuous" : "once",
+    batchSize,
+    pollIntervalMs,
+    heartbeatIntervalMs,
+  });
 
   if (pollIntervalMs > 0) {
     // Continuous polling loop
     while (true) {
-      const stats = await runOnce(limit);
+      const stats = await runOnce(batchSize);
+      await recordHeartbeatIfDue();
       if (Date.now() >= nextSeoAt) {
         try {
           await runSeoOnce();
         } catch (error) {
-          console.warn("[seo] autopublish.loop_failed", String(error));
+          logWorkerEvent("warn", "seo.draft.loop_failed", {
+            ok: false,
+            detail: outboxWorkerErrorDetail(error),
+          });
         }
-        nextSeoAt = Date.now() + (Number.isFinite(seoIntervalMs) && seoIntervalMs > 60_000 ? seoIntervalMs : 6 * 60 * 60 * 1000);
+        nextSeoAt =
+          Date.now() +
+          (Number.isFinite(seoIntervalMs) && seoIntervalMs > 60_000
+            ? seoIntervalMs
+            : 6 * 60 * 60 * 1000);
       }
       if (Date.now() >= nextGoogleAdsAt) {
         try {
           await runGoogleAdsQueueOnce();
           await runGoogleAdsAnalystQueueOnce();
         } catch (error) {
-          console.warn("[google_ads] sync.loop_failed", String(error));
+          logWorkerEvent("warn", "google_ads.loop_failed", {
+            ok: false,
+            detail: outboxWorkerErrorDetail(error),
+          });
         }
         nextGoogleAdsAt =
           Date.now() +
@@ -184,11 +333,15 @@ async function main() {
         try {
           await runSalesDraftPrepOnce();
         } catch (error) {
-          console.warn("[sales_draft_prep] loop_failed", String(error));
+          logWorkerEvent("warn", "sales_draft_prep.loop_failed", {
+            ok: false,
+            detail: outboxWorkerErrorDetail(error),
+          });
         }
         nextSalesDraftPrepAt =
           Date.now() +
-          (Number.isFinite(salesDraftPrepIntervalMs) && salesDraftPrepIntervalMs > 30_000
+          (Number.isFinite(salesDraftPrepIntervalMs) &&
+          salesDraftPrepIntervalMs > 30_000
             ? salesDraftPrepIntervalMs
             : 3 * 60 * 1000);
       }
@@ -196,11 +349,15 @@ async function main() {
         try {
           await runFacebookDmNameBackfillOnce();
         } catch (error) {
-          console.warn("[facebook_dm_name_backfill] loop_failed", String(error));
+          logWorkerEvent("warn", "facebook_dm_name_backfill.loop_failed", {
+            ok: false,
+            detail: outboxWorkerErrorDetail(error),
+          });
         }
         nextFacebookDmNameBackfillAt =
           Date.now() +
-          (Number.isFinite(facebookDmNameBackfillIntervalMs) && facebookDmNameBackfillIntervalMs > 60_000
+          (Number.isFinite(facebookDmNameBackfillIntervalMs) &&
+          facebookDmNameBackfillIntervalMs > 60_000
             ? facebookDmNameBackfillIntervalMs
             : 2 * 60 * 60 * 1000);
       }
@@ -208,11 +365,15 @@ async function main() {
         try {
           await runTraccarSyncOnce();
         } catch (error) {
-          console.warn("[traccar] sync.loop_failed", String(error));
+          logWorkerEvent("warn", "traccar.sync.loop_failed", {
+            ok: false,
+            detail: outboxWorkerErrorDetail(error),
+          });
         }
         nextTraccarSyncAt =
           Date.now() +
-          (Number.isFinite(traccarSyncIntervalMs) && traccarSyncIntervalMs > 15_000
+          (Number.isFinite(traccarSyncIntervalMs) &&
+          traccarSyncIntervalMs > 15_000
             ? traccarSyncIntervalMs
             : 60 * 1000);
       }
@@ -220,10 +381,10 @@ async function main() {
         try {
           await runAppointmentMediaCleanupOnce();
         } catch (error) {
-          console.warn(
-            "[appointment_media] cleanup.loop_failed",
-            String(error),
-          );
+          logWorkerEvent("warn", "appointment_media.cleanup.loop_failed", {
+            ok: false,
+            detail: outboxWorkerErrorDetail(error),
+          });
         }
         nextAppointmentMediaCleanupAt =
           Date.now() +
@@ -236,7 +397,10 @@ async function main() {
         try {
           await runSquareReconciliationOnce();
         } catch (error) {
-          console.warn("[square] reconciliation.loop_failed", String(error));
+          logWorkerEvent("warn", "square.reconciliation.loop_failed", {
+            ok: false,
+            detail: outboxWorkerErrorDetail(error),
+          });
         }
         nextSquareReconciliationAt =
           Date.now() +
@@ -245,12 +409,29 @@ async function main() {
             ? squareReconciliationIntervalMs
             : 2 * 60 * 1000);
       }
+      if (Date.now() >= nextPartnerInviteRecoveryAt) {
+        try {
+          await runPartnerInviteRecoveryOnce();
+        } catch (error) {
+          logWorkerEvent("warn", "partners.invite_recovery.loop_failed", {
+            ok: false,
+            detail: outboxWorkerErrorDetail(error),
+          });
+        }
+        nextPartnerInviteRecoveryAt =
+          Date.now() +
+          (Number.isFinite(partnerInviteRecoveryIntervalMs) &&
+          partnerInviteRecoveryIntervalMs >= 30_000
+            ? partnerInviteRecoveryIntervalMs
+            : 60 * 1000);
+      }
+      await recordHeartbeatIfDue();
       if (stats.total === 0) {
         await sleep(pollIntervalMs);
       }
     }
   } else {
-    await runOnce(limit);
+    await runOnce(batchSize, { logIdle: true });
     await runSeoOnce();
     await runGoogleAdsQueueOnce();
     await runSalesDraftPrepOnce();
@@ -258,10 +439,22 @@ async function main() {
     await runTraccarSyncOnce();
     await runAppointmentMediaCleanupOnce();
     await runSquareReconciliationOnce();
+    await runPartnerInviteRecoveryOnce();
+    await recordAndLogWorkerHeartbeat(true);
+    logWorkerEvent("info", "outbox.worker.completed", { ok: true });
   }
 }
 
-main().catch((error) => {
-  console.error(error);
+main().catch(async (error) => {
+  const detail = outboxWorkerErrorDetail(error);
+  try {
+    await recordAndLogWorkerHeartbeat(false, detail);
+  } catch (heartbeatError) {
+    logWorkerEvent("error", "outbox.worker.heartbeat_failed", {
+      ok: false,
+      detail: outboxWorkerErrorDetail(heartbeatError),
+    });
+  }
+  logWorkerEvent("error", "outbox.worker.failed", { ok: false, detail });
   process.exitCode = 1;
 });

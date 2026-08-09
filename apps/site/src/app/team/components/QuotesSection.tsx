@@ -1,7 +1,16 @@
 import React, { type ReactElement } from "react";
+import { randomUUID } from "node:crypto";
+import { requireCurrentTeamPrincipal } from "@/lib/team-principal";
+import { hasTeamPermissionValue } from "@/lib/team-permissions";
 import { QuotesList } from "../QuotesList";
-import { callAdminApi } from "../lib/api";
-import { deleteQuoteAction, quoteDecisionAction, sendQuoteAction } from "../actions";
+import { callAdminApiAs } from "../lib/api";
+import { quoteWorkspaceHref } from "../quotes-workspace";
+import { teamButtonClass } from "./team-ui";
+import {
+  deleteQuoteAction,
+  quoteDecisionAction,
+  sendQuoteAction,
+} from "../actions";
 
 interface QuoteDto {
   id: string;
@@ -34,21 +43,141 @@ interface QuoteDto {
     message: string | null;
     createdAt: string;
   } | null;
-  contact: { name: string; email: string | null };
-  property: { addressLine1: string; city: string; state: string; postalCode: string };
+  deliveryState: string | null;
+  deliveryAttemptId: string | null;
+  contact: { name: string; email: string | null; phone: string | null };
+  property: {
+    addressLine1: string;
+    city: string;
+    state: string;
+    postalCode: string;
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isQuoteDto(value: unknown): value is QuoteDto {
+  if (!isRecord(value)) return false;
+  const contact = value["contact"];
+  const property = value["property"];
+  const latestChangeRequest = value["latestChangeRequest"];
+  return (
+    typeof value["id"] === "string" &&
+    typeof value["status"] === "string" &&
+    Array.isArray(value["services"]) &&
+    value["services"].every((entry) => typeof entry === "string") &&
+    (value["addOns"] === null ||
+      (Array.isArray(value["addOns"]) &&
+        value["addOns"].every((entry) => typeof entry === "string"))) &&
+    typeof value["total"] === "number" &&
+    Number.isFinite(value["total"]) &&
+    isNullableString(value["quoteNumber"]) &&
+    typeof value["displayStatus"] === "string" &&
+    typeof value["jobDurationMinutes"] === "number" &&
+    isNullableString(value["clientScope"]) &&
+    typeof value["revision"] === "number" &&
+    typeof value["createdAt"] === "string" &&
+    typeof value["updatedAt"] === "string" &&
+    isNullableString(value["sentAt"]) &&
+    isNullableString(value["expiresAt"]) &&
+    isNullableString(value["viewedAt"]) &&
+    isNullableString(value["lastViewedAt"]) &&
+    typeof value["viewCount"] === "number" &&
+    isNullableString(value["decisionAt"]) &&
+    isNullableString(value["decisionNotes"]) &&
+    isNullableString(value["refreshRequestedAt"]) &&
+    isNullableString(value["acceptedAppointmentId"]) &&
+    isNullableString(value["shareToken"]) &&
+    typeof value["pdfDownloadCount"] === "number" &&
+    isNullableString(value["lastPdfDownloadedAt"]) &&
+    typeof value["changeRequestCount"] === "number" &&
+    isNullableString(value["deliveryState"]) &&
+    isNullableString(value["deliveryAttemptId"]) &&
+    (latestChangeRequest === null ||
+      (isRecord(latestChangeRequest) &&
+        isNullableString(latestChangeRequest["reason"]) &&
+        isNullableString(latestChangeRequest["message"]) &&
+        typeof latestChangeRequest["createdAt"] === "string")) &&
+    isRecord(contact) &&
+    typeof contact["name"] === "string" &&
+    isNullableString(contact["email"]) &&
+    isNullableString(contact["phone"]) &&
+    isRecord(property) &&
+    typeof property["addressLine1"] === "string" &&
+    typeof property["city"] === "string" &&
+    typeof property["state"] === "string" &&
+    typeof property["postalCode"] === "string"
+  );
+}
+
+function QuotesUnavailable({ detail }: { detail: string }): ReactElement {
+  return (
+    <section
+      className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900"
+      role="alert"
+      aria-labelledby="quotes-unavailable-title"
+    >
+      <h3 id="quotes-unavailable-title" className="font-semibold">
+        Quote management is unavailable
+      </h3>
+      <p className="mt-1">{detail} This is not an empty quote list.</p>
+      <a
+        className={`mt-3 ${teamButtonClass("secondary", "sm")}`}
+        href={quoteWorkspaceHref("manage", {
+          query: { retry: "1" },
+        })}
+      >
+        Retry quote management
+      </a>
+    </section>
+  );
 }
 
 export async function QuotesSection(): Promise<ReactElement> {
-  const res = await callAdminApi("/api/quotes");
-  if (!res.ok) throw new Error("Failed to load quotes");
+  const principal = await requireCurrentTeamPrincipal();
+  let res: Response;
+  try {
+    res = await callAdminApiAs(principal, "/api/quotes");
+  } catch {
+    return <QuotesUnavailable detail="The CRM service could not be reached." />;
+  }
+  if (!res.ok) {
+    return (
+      <QuotesUnavailable detail={`The CRM returned HTTP ${res.status}.`} />
+    );
+  }
 
-  const payload = (await res.json()) as { quotes: QuoteDto[] };
+  const payload = (await res.json().catch(() => null)) as {
+    quotes?: unknown;
+  } | null;
+  if (
+    !payload ||
+    !Array.isArray(payload.quotes) ||
+    !payload.quotes.every(isQuoteDto)
+  ) {
+    return (
+      <QuotesUnavailable detail="The CRM returned an unreadable quote response." />
+    );
+  }
+
   return (
     <QuotesList
-      initial={payload.quotes}
+      initial={payload.quotes.map((quote) => ({
+        ...quote,
+        mutationKey: randomUUID(),
+      }))}
       sendAction={sendQuoteAction}
       decisionAction={quoteDecisionAction}
       deleteAction={deleteQuoteAction}
+      canSend={hasTeamPermissionValue(principal.permissions, "quotes.send")}
+      canUpdate={hasTeamPermissionValue(principal.permissions, "quotes.update")}
+      canDelete={hasTeamPermissionValue(principal.permissions, "quotes.delete")}
     />
   );
 }

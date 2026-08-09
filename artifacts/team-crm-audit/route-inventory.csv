@@ -1,0 +1,36 @@
+surface_id,label,route_or_query,nav_requirement,render_gate,group,status
+calendar,Calendar,/team?tab=calendar,bookings.manage OR appointments.read,crew OR office OR owner,Core,canonical
+inbox,Inbox,/team?tab=inbox,messages.send,office OR owner,Core,canonical
+contacts,Contacts,/team?tab=contacts,bookings.manage,office OR owner,Core,canonical
+quotes,Quotes,/team?tab=quotes,appointments.read,crew OR office OR owner,Core,canonical
+expenses,Expenses,/team?tab=expenses,expenses.read,crew OR office OR owner,Core,canonical
+pipeline,Pipeline,/team?tab=pipeline,bookings.manage,office OR owner,Sales,canonical
+sales-hq,Sales HQ,/team?tab=sales-hq,messages.send,office OR owner,Sales,canonical
+simulated-chat,Simulated Chat,/team?tab=simulated-chat,messages.send,office OR owner,Sales,canonical
+outbound,Outbound,/team?tab=outbound,messages.send,office OR owner,Sales,canonical
+partners,Partners,/team?tab=partners,owner,owner,Sales,canonical
+google-ads,Google Ads,/team?tab=google-ads,policy.read,owner,Marketing,canonical
+web-analytics,Website Analytics,/team?tab=web-analytics,policy.read,owner,Marketing,canonical
+seo,SEO Agent,/team?tab=seo,policy.read,owner,Marketing,canonical
+owner,Owner HQ,/team?tab=owner,owner,owner,Owner,canonical
+commissions,Commissions,/team?tab=commissions,access.manage,owner,Admin,canonical
+policy,Policy Center,/team?tab=policy,policy.read,owner,Admin,canonical
+automation,Messaging Automation,/team?tab=automation,automation.read,owner,Admin,canonical
+access,Access,/team?tab=access,access.manage,owner,Admin,canonical
+sales-log,Sales Log,/team?tab=sales-log,audit.read,owner,Admin,canonical
+audit,Audit Log,/team?tab=audit,audit.read,owner,Admin,canonical
+merge,Merge Queue,/team?tab=merge,contacts.merge,owner,Admin,canonical
+chat,Agent,/team?tab=chat,messages.send,office OR owner,Tools,canonical
+settings,Settings,/team?tab=settings,none,owner OR office OR crew via team session or presence-accepted legacy owner/crew cookie,Tools,canonical
+modern-shell,Modern Team Shell,/team,authenticated principal intended; current gate accepts only owner office crew plus legacy cookies,owner and office default Inbox; crew defaults Calendar,Shell,canonical shell
+unknown-tab,Unknown Tab Handling,/team?tab=<unknown>,none beyond authentication,shell active item falls back but content remains unknown and blank,Shell,invalid parameter state
+login,Login,/team/login,public route; no credential required to render,any team-session cookie presence hides the form without validation; legacy cookies do not,Auth,canonical with stale-cookie defect
+auth,Magic-link callback,/team/auth,public route; token required only for successful exchange,anonymous route handler creates session then redirects,Auth,canonical
+password-setup,Password Setup Handoff,/team?setup=1,valid session with needsPasswordSetup,actual callback defaults to Inbox/Calendar; intended /team?tab=settings&setup=1 renders the optional form,Auth,broken callback handoff
+instant-quote,Instant Quote Detail + Latest 25,/team/instant-quotes/[id],none enforced,outside modern shell with no auth guard,Auxiliary,orphaned auxiliary (no canonical ingress)
+quote-builder,Quote Builder Alias,/team?tab=quote-builder,appointments.read inherited from Quotes,crew OR office OR owner,Alias,legacy alias; maps generic Quotes and quoteMode is ignored
+canvass,Canvass Alias,/team?tab=canvass,appointments.read inherited from Quotes,crew OR office OR owner,Alias,legacy alias; maps generic Quotes and never mounts CanvassSection
+marketing,Marketing Alias,/team?tab=marketing,policy.read inherited from Google Ads,owner,Alias,legacy alias
+myday,My Day Alias,/team?tab=myday,bookings.manage OR appointments.read inherited from Calendar,crew OR office OR owner,Alias,legacy alias
+estimates,Estimates Alias,/team?tab=estimates,role-dependent: owner maps Inbox requiring messages.send; non-owner maps Calendar requiring bookings.manage OR appointments.read,owner renders Inbox; office/crew render Calendar; sales/custom are rejected before mapping,Alias,legacy alias
+classic,Classic Layout,/team?tab=[id]&layout=classic,same as canonical,same as canonical,Compatibility,deprecation candidate

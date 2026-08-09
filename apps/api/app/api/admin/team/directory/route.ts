@@ -11,10 +11,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function extractPgCode(error: unknown): string | null {
   const direct = isRecord(error) ? error : null;
-  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
+  const directCode =
+    direct && typeof direct["code"] === "string" ? direct["code"] : null;
   if (directCode) return directCode;
-  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
-  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
+  const cause = direct && isRecord(direct["cause"]) ? direct["cause"] : null;
+  const causeCode =
+    cause && typeof cause["code"] === "string" ? cause["code"] : null;
   return causeCode;
 }
 
@@ -22,18 +24,23 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "appointments.update");
+  const permissionError = await requirePermission(request, "appointments.read");
   if (permissionError) return permissionError;
 
   const db = getDb();
-  let members: Array<{ id: string; name: string; active: boolean | null; defaultCrewSplitBps: number | null }> = [];
+  let members: Array<{
+    id: string;
+    name: string;
+    active: boolean | null;
+    defaultCrewSplitBps: number | null;
+  }> = [];
   try {
     members = await db
       .select({
         id: teamMembers.id,
         name: teamMembers.name,
         active: teamMembers.active,
-        defaultCrewSplitBps: teamMembers.defaultCrewSplitBps
+        defaultCrewSplitBps: teamMembers.defaultCrewSplitBps,
       })
       .from(teamMembers)
       .where(eq(teamMembers.active, true))
@@ -47,7 +54,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       .select({
         id: teamMembers.id,
         name: teamMembers.name,
-        active: teamMembers.active
+        active: teamMembers.active,
       })
       .from(teamMembers)
       .where(eq(teamMembers.active, true))
@@ -60,7 +67,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     members: members.map((m) => ({
       id: m.id,
       name: m.name,
-      defaultCrewSplitBps: m.defaultCrewSplitBps ?? null
-    }))
+      defaultCrewSplitBps: m.defaultCrewSplitBps ?? null,
+    })),
   });
 }

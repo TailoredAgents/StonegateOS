@@ -63,11 +63,19 @@ Quote/booking behavior:
 
 Providers:
 
-- Twilio: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`
-- SMTP: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
-- Meta: `FB_*`, `META_*`
+- Controlled provider tests: nonproduction uses `E2E_RUN_ID` or
+  `TEAM_CRM_AUDIT_MODE`; a production-build E2E run requires both a nonempty
+  `E2E_RUN_ID` and exact `TEAM_CRM_AUDIT_MODE=1`. This permits only local
+  provider fakes and LocalStack; either sentinel alone remains fail-closed.
+
+- Twilio: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `TWILIO_WEBHOOK_PUBLIC_BASE_URL` (required exact public API origin for signed callbacks; HTTPS in production)
+- SMTP: `SMTP_HOST`, `SMTP_PORT`, optional paired `SMTP_USER` / `SMTP_PASS`,
+  `SMTP_FROM`, `SMTP_SECURE`, `SMTP_TIMEOUT_MS`; deterministic local/CI
+  control plane: `EMAIL_FAKE_CONTROL_URL`
+- Meta: `FB_*`, `META_*`; deterministic local/CI provider boundary: `FACEBOOK_GRAPH_API_BASE_URL`, `META_FAKE_CONTROL_URL`
 - Google Ads: `GOOGLE_ADS_*`
-- Google Calendar: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`, `GOOGLE_CALENDAR_WEBHOOK_URL`
+- Google Calendar: `GOOGLE_CALENDAR_ENABLED`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`, `GOOGLE_CALENDAR_WEBHOOK_URL`; deterministic local/CI provider boundary: `GOOGLE_CALENDAR_API_BASE_URL`, `GOOGLE_CALENDAR_TOKEN_URL`, `GOOGLE_CALENDAR_FAKE_CONTROL_URL`
+- Square: `SQUARE_ENVIRONMENT`, `SQUARE_ACCESS_TOKEN`, `SQUARE_LOCATION_ID`; deterministic local/CI read boundary: `SQUARE_API_BASE_URL`, `SQUARE_FAKE_CONTROL_URL`
 - OpenAI: `OPENAI_API_KEY` (+ optional model overrides)
 
 ---
@@ -86,6 +94,7 @@ Worker tuning:
 
 - `OUTBOX_BATCH_SIZE`
 - `OUTBOX_POLL_INTERVAL_MS`
+- `OUTBOX_HEARTBEAT_INTERVAL_MS`
 - `SEO_AUTOPUBLISH_INTERVAL_MS`, `SEO_AUTOPUBLISH_DISABLED`
 - `GOOGLE_ADS_SYNC_INTERVAL_MS`, `GOOGLE_ADS_SYNC_DISABLED`
 

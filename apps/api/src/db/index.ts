@@ -26,7 +26,7 @@ export function getDb() {
       prepare: false,
       max: 5,
       idle_timeout: 20,
-      ...(shouldUseSsl ? { ssl: { rejectUnauthorized: false } } : {})
+      ...(shouldUseSsl ? { ssl: { rejectUnauthorized: false } } : {}),
     });
 
   if (process.env["NODE_ENV"] !== "production") {
@@ -44,7 +44,30 @@ export function getDb() {
   return cachedDb;
 }
 
+/**
+ * Close the process-wide database client owned by a test environment.
+ *
+ * Application code deliberately keeps this pool alive for reuse. Integration
+ * suites that import route handlers directly do not have an application
+ * lifecycle to close it, so they must explicitly release the client after
+ * their final query. Clearing both caches lets a later suite create a fresh
+ * connection instead of reusing an ended client.
+ */
+export async function closeDbForTests(): Promise<void> {
+  if (process.env["NODE_ENV"] !== "test") {
+    throw new Error("closeDbForTests is only available in test environments");
+  }
+
+  const client = globalThis.__mystDbClient;
+  cachedDb = undefined;
+  globalThis.__mystDrizzle = undefined;
+  globalThis.__mystDbClient = undefined;
+
+  if (client) {
+    await client.end({ timeout: 5 });
+  }
+}
+
 export type DatabaseClient = ReturnType<typeof getDb>;
 
 export * from "./schema";
-

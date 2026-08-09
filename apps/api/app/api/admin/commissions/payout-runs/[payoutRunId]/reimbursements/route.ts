@@ -1,20 +1,34 @@
+import { createHash } from "node:crypto";
+import type { MutationResult } from "@myst-os/sdk";
 import type { NextRequest } from "next/server";
-import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
+import { expenses, getDb, payoutRunAdjustments, payoutRuns } from "@/db";
 import {
-  expenses,
-  getDb,
-  payoutRunAdjustments,
-  payoutRuns,
-} from "@/db";
-import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
-import { savePayoutRunReportHtml } from "@/lib/payout-run-report";
-import { requirePermission } from "@/lib/permissions";
-import { isAdminRequest } from "../../../../../web/admin";
+  nextPayoutRunVersionDate,
+  payoutRunVersion,
+  requirePayoutRunExpectedVersion,
+} from "@/lib/commissions";
+import { normalizePayoutRunMutationError } from "@/lib/payout-run-mutation-http";
+import {
+  claimTeamMutationIdempotency,
+  completeTeamMutationIdempotency,
+  settleTeamMutationIdempotencyFailure,
+  type TeamMutationIdempotencyClaim,
+  teamMutationIdempotencyReplayResponse,
+} from "@/lib/team-mutation-idempotency";
+import {
+  assertTeamMutationExpectedVersion,
+  beginTeamMutation,
+  TeamMutationFailure,
+  type TeamMutationContext,
+  type TeamMutationTransaction,
+  teamMutationExceptionResponse,
+  teamMutationResultResponse,
+  teamMutationSuccessResult,
+} from "@/lib/team-mutation";
 
-const MAX_BYTES = 10 * 1024 * 1024; // 10MB
-type SelectDb = Pick<ReturnType<typeof getDb>, "select">;
+const MAX_BYTES = 10 * 1024 * 1024;
 
 const CreateReimbursementSchema = z.object({
   memberId: z.string().uuid(),
@@ -31,77 +45,37 @@ const DeleteReimbursementSchema = z.object({
   adjustmentId: z.string().uuid(),
 });
 
-function parseDataUrlToBytes(dataUrl: string): number | null {
+type ParsedReimbursement = z.infer<typeof CreateReimbursementSchema> & {
+  receiptSha256: string | null;
+};
+
+type ReimbursementMutationData = {
+  payoutRunId: string;
+  adjustmentId: string;
+  expenseId: string | null;
+  version: string;
+};
+
+type ReimbursementMutationSuccess = Extract<
+  MutationResult<ReimbursementMutationData>,
+  { ok: true }
+> &
+  ReimbursementMutationData;
+
+function dataUrlBytes(dataUrl: string): number | null {
   if (!dataUrl.startsWith("data:")) return null;
   const base64Part = dataUrl.split(",")[1] ?? "";
   return Math.ceil((base64Part.length * 3) / 4);
 }
 
-function readString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function readFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-async function ensureDraftPayoutRun(
-  db: SelectDb,
-  payoutRunId: string,
-): Promise<void> {
-  const [run] = await db
-    .select({
-      id: payoutRuns.id,
-      status: payoutRuns.status,
-    })
-    .from(payoutRuns)
-    .where(eq(payoutRuns.id, payoutRunId))
-    .limit(1);
-
-  if (!run?.id) {
-    throw new Error("payout_run_not_found");
-  }
-  if (run.status !== "draft") {
-    throw new Error("payout_run_not_editable");
-  }
-}
-
-async function saveDraftRunReport(
-  db: ReturnType<typeof getDb>,
-  payoutRunId: string,
-): Promise<void> {
-  await savePayoutRunReportHtml(db, payoutRunId);
-}
-
-function responseForEditError(error: unknown): Response | null {
-  const message = (error as Error).message;
-  if (message === "payout_run_not_found") {
-    return NextResponse.json({ error: "payout_run_not_found" }, { status: 404 });
-  }
-  if (message === "payout_run_not_editable") {
-    return NextResponse.json(
-      {
-        error: "payout_run_not_editable",
-        message: "Only draft payout runs can be edited.",
-      },
-      { status: 409 },
-    );
-  }
-  if (message === "adjustment_not_found") {
-    return NextResponse.json({ error: "adjustment_not_found" }, { status: 404 });
-  }
-  if (message === "adjustment_not_reimbursement") {
-    return NextResponse.json(
-      { error: "adjustment_not_reimbursement" },
-      { status: 400 },
-    );
-  }
-  return null;
+function dataUrlSha256(dataUrl: string | null | undefined): string | null {
+  if (!dataUrl) return null;
+  return createHash("sha256").update(dataUrl, "utf8").digest("hex");
 }
 
 async function parseCreatePayload(
   request: NextRequest,
-): Promise<z.infer<typeof CreateReimbursementSchema> | null> {
+): Promise<ParsedReimbursement> {
   const contentType = request.headers.get("content-type") ?? "";
 
   if (contentType.includes("multipart/form-data")) {
@@ -109,107 +83,235 @@ async function parseCreatePayload(
     const amountCentsRaw = form.get("amountCents");
     const amountCents =
       typeof amountCentsRaw === "string" ? Number(amountCentsRaw) : NaN;
-    if (!Number.isFinite(amountCents)) {
-      return null;
-    }
-
     const file = form.get("receiptFile");
     const filenameField = form.get("receiptFilename");
-    const note = form.get("note");
-    const memberId = form.get("memberId");
-    const vendor = form.get("vendor");
-    const paidAt = form.get("paidAt");
+    const vendorField = form.get("vendor");
 
     let receiptUrl: string | null = null;
     let receiptFilename: string | null = null;
     let receiptContentType: string | null = null;
-
-    if (file instanceof File) {
-      const buf = Buffer.from(await file.arrayBuffer());
-      if (buf.byteLength > MAX_BYTES) {
-        throw new Error("file_too_large");
+    let receiptSha256: string | null = null;
+    if (file instanceof File && file.size > 0) {
+      const buffer = Buffer.from(await file.arrayBuffer());
+      if (buffer.byteLength > MAX_BYTES) {
+        throw new TeamMutationFailure(
+          "invalid",
+          "Receipt files must be 10MB or smaller.",
+          {
+            status: 413,
+            fieldErrors: { receiptFile: "Maximum size is 10MB." },
+          },
+        );
       }
       receiptContentType = file.type || "application/octet-stream";
-      receiptUrl = `data:${receiptContentType};base64,${buf.toString("base64")}`;
+      receiptUrl = `data:${receiptContentType};base64,${buffer.toString("base64")}`;
       receiptFilename =
         typeof filenameField === "string" && filenameField.trim().length > 0
           ? filenameField.trim()
           : file.name || "receipt";
+      receiptSha256 = createHash("sha256").update(buffer).digest("hex");
     }
 
     const parsed = CreateReimbursementSchema.safeParse({
-      memberId,
+      memberId: form.get("memberId"),
       amountCents: Math.round(amountCents),
-      note,
+      note: form.get("note"),
       vendor:
-        typeof vendor === "string" && vendor.trim().length > 0
-          ? vendor.trim()
+        typeof vendorField === "string" && vendorField.trim().length > 0
+          ? vendorField.trim()
           : null,
-      paidAt,
+      paidAt: form.get("paidAt"),
       receiptFilename,
       receiptUrl,
       receiptContentType,
     });
-
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) {
+      throw new TeamMutationFailure(
+        "invalid",
+        "The reimbursement details are invalid.",
+        { fieldErrors: { reimbursement: "Review the submitted fields." } },
+      );
+    }
+    return { ...parsed.data, receiptSha256 };
   }
 
-  const json = (await request.json().catch(() => null)) as unknown;
-  const parsed = CreateReimbursementSchema.safeParse(json);
-  return parsed.success ? parsed.data : null;
+  const parsed = CreateReimbursementSchema.safeParse(
+    (await request.json().catch(() => null)) as unknown,
+  );
+  if (!parsed.success) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "The reimbursement details are invalid.",
+      { fieldErrors: { reimbursement: "Review the submitted fields." } },
+    );
+  }
+  const bytes = parsed.data.receiptUrl
+    ? dataUrlBytes(parsed.data.receiptUrl)
+    : null;
+  if (bytes !== null && bytes > MAX_BYTES) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "Receipt files must be 10MB or smaller.",
+      { status: 413, fieldErrors: { receiptFile: "Maximum size is 10MB." } },
+    );
+  }
+  return {
+    ...parsed.data,
+    receiptSha256: dataUrlSha256(parsed.data.receiptUrl),
+  };
+}
+
+async function lockEditableRun(
+  tx: TeamMutationTransaction,
+  payoutRunId: string,
+  mutation: TeamMutationContext,
+) {
+  const [run] = await tx
+    .select({
+      id: payoutRuns.id,
+      status: payoutRuns.status,
+      updatedAt: payoutRuns.updatedAt,
+    })
+    .from(payoutRuns)
+    .where(eq(payoutRuns.id, payoutRunId))
+    .limit(1)
+    .for("update");
+  if (!run) throw new Error("payout_run_not_found");
+  if (run.status !== "draft") throw new Error("payout_run_not_editable");
+  assertTeamMutationExpectedVersion(mutation, payoutRunVersion(run.updatedAt));
+  return run;
+}
+
+async function completeReimbursementMutation(
+  tx: TeamMutationTransaction,
+  mutation: TeamMutationContext,
+  claim: TeamMutationIdempotencyClaim,
+  data: ReimbursementMutationData,
+  input: {
+    action: "created" | "deleted";
+    memberId: string | null;
+    amountCents: number | null;
+    receiptSha256?: string | null;
+  },
+  status: number,
+): Promise<ReimbursementMutationSuccess> {
+  const audit = await mutation.audit.insertSuccess(tx, {
+    entityType: "payout_run_adjustment",
+    entityId: data.adjustmentId,
+    after:
+      input.action === "created"
+        ? {
+            payoutRunId: data.payoutRunId,
+            memberId: input.memberId,
+            amountCents: input.amountCents,
+            version: data.version,
+          }
+        : null,
+    before:
+      input.action === "deleted"
+        ? {
+            payoutRunId: data.payoutRunId,
+            memberId: input.memberId,
+            amountCents: input.amountCents,
+          }
+        : null,
+    metadata: {
+      payoutRunId: data.payoutRunId,
+      expenseId: data.expenseId,
+      receiptSha256: input.receiptSha256 ?? null,
+      resultingPayoutRunVersion: data.version,
+    },
+  });
+  const baseResult = teamMutationSuccessResult(mutation, data, {
+    auditEventId: audit.auditEventId,
+    committedAt: audit.committedAt,
+    entityType: "payout_run_adjustment",
+    entityId: data.adjustmentId,
+    version: data.version,
+  });
+  const result = Object.assign(
+    baseResult,
+    data,
+  ) as ReimbursementMutationSuccess;
+  await completeTeamMutationIdempotency(tx, mutation, claim, result, status);
+  return result;
+}
+
+async function settleFailure(
+  db: ReturnType<typeof getDb> | null,
+  mutation: TeamMutationContext,
+  claim: TeamMutationIdempotencyClaim | null,
+  error: TeamMutationFailure,
+  action: "create" | "delete",
+): Promise<void> {
+  if (!db || !claim) return;
+  try {
+    await settleTeamMutationIdempotencyFailure(db, mutation, claim, error);
+  } catch (settlementError) {
+    console.error(
+      `[commissions] reimbursement_${action}_idempotency_settlement_failed`,
+      {
+        operationId: mutation.operationId,
+        correlationId: mutation.correlationId,
+        errorName:
+          settlementError instanceof Error
+            ? settlementError.name
+            : "UnknownError",
+      },
+    );
+  }
 }
 
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ payoutRunId: string }> },
 ): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-  const permissionError = await requirePermission(request, "access.manage");
-  if (permissionError) return permissionError;
+  const boundary = await beginTeamMutation(request, {
+    principalTypes: ["human"],
+    requiredPermissions: ["commissions.manage"],
+    risk: "financial",
+    requiresIdempotency: true,
+    auditAction: "commission.payout_run.reimbursement.created",
+  });
+  if (!boundary.ok) return boundary.response;
+  const { mutation } = boundary;
+  let db: ReturnType<typeof getDb> | null = null;
+  let claim: TeamMutationIdempotencyClaim | null = null;
 
-  const { payoutRunId } = await context.params;
-  if (!payoutRunId) {
-    return NextResponse.json({ error: "missing_payout_run_id" }, { status: 400 });
-  }
-
-  let payload: z.infer<typeof CreateReimbursementSchema> | null;
   try {
-    payload = await parseCreatePayload(request);
-  } catch (error) {
-    if ((error as Error).message === "file_too_large") {
-      return NextResponse.json({ error: "file_too_large" }, { status: 413 });
+    requirePayoutRunExpectedVersion(mutation);
+    const { payoutRunId } = await context.params;
+    if (!payoutRunId) {
+      throw new TeamMutationFailure("invalid", "Payout run ID is required.");
     }
-    throw error;
-  }
-
-  if (!payload) {
-    return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
-  }
-
-  if (payload.receiptUrl) {
-    const bytes = parseDataUrlToBytes(payload.receiptUrl);
-    if (bytes !== null && bytes > MAX_BYTES) {
-      return NextResponse.json({ error: "file_too_large" }, { status: 413 });
+    const payload = await parseCreatePayload(request);
+    db = getDb();
+    const claimed = await claimTeamMutationIdempotency(db, mutation, {
+      route: "POST /api/admin/commissions/payout-runs/:id/reimbursements",
+      entityType: "payout_run",
+      entityId: payoutRunId,
+      payload: {
+        memberId: payload.memberId,
+        amountCents: payload.amountCents,
+        note: payload.note,
+        vendor: payload.vendor ?? null,
+        paidAt: payload.paidAt,
+        receiptFilename: payload.receiptFilename ?? null,
+        receiptContentType: payload.receiptContentType ?? null,
+        receiptSha256: payload.receiptSha256,
+      },
+    });
+    if (claimed.kind === "replay") {
+      return teamMutationIdempotencyReplayResponse(claimed.replay);
     }
-  }
+    const executionClaim = claimed.claim;
+    claim = executionClaim;
 
-  const paidAt = new Date(payload.paidAt);
-  if (Number.isNaN(paidAt.getTime())) {
-    return NextResponse.json({ error: "invalid_paid_at" }, { status: 400 });
-  }
-
-  const db = getDb();
-  const actor = getAuditActorFromRequest(request);
-
-  let adjustmentId: string | null = null;
-  let expenseId: string | null = null;
-  try {
-    await db.transaction(async (tx) => {
-      await ensureDraftPayoutRun(tx, payoutRunId);
-
+    const paidAt = new Date(payload.paidAt);
+    const result = await db.transaction(async (tx) => {
+      const run = await lockEditableRun(tx, payoutRunId, mutation);
       const now = new Date();
+      const nextVersion = nextPayoutRunVersionDate(run.updatedAt, now);
       const [createdExpense] = await tx
         .insert(expenses)
         .values({
@@ -228,6 +330,13 @@ export async function POST(
           updatedAt: now,
         })
         .returning({ id: expenses.id });
+      if (!createdExpense) {
+        throw new TeamMutationFailure(
+          "internal",
+          "The reimbursement expense could not be created.",
+          { retryable: true },
+        );
+      }
 
       const [createdAdjustment] = await tx
         .insert(payoutRunAdjustments)
@@ -237,89 +346,111 @@ export async function POST(
           kind: "reimbursement",
           amountCents: payload.amountCents,
           note: payload.note,
-          expenseId: createdExpense?.id ?? null,
-          createdBy: actor.id ?? null,
+          expenseId: createdExpense.id,
+          createdBy: mutation.actor.id,
           createdAt: now,
         })
         .returning({ id: payoutRunAdjustments.id });
+      if (!createdAdjustment) {
+        throw new TeamMutationFailure(
+          "internal",
+          "The reimbursement adjustment could not be created.",
+          { retryable: true },
+        );
+      }
 
-      adjustmentId = createdAdjustment?.id ?? null;
-      expenseId = createdExpense?.id ?? null;
+      const [updatedRun] = await tx
+        .update(payoutRuns)
+        .set({
+          updatedAt: nextVersion,
+          reportHtml: null,
+          reportGeneratedAt: null,
+        })
+        .where(
+          and(eq(payoutRuns.id, payoutRunId), eq(payoutRuns.status, "draft")),
+        )
+        .returning({ updatedAt: payoutRuns.updatedAt });
+      if (!updatedRun) throw new Error("payout_run_state_conflict");
+
+      return completeReimbursementMutation(
+        tx,
+        mutation,
+        executionClaim,
+        {
+          payoutRunId,
+          adjustmentId: createdAdjustment.id,
+          expenseId: createdExpense.id,
+          version: payoutRunVersion(updatedRun.updatedAt),
+        },
+        {
+          action: "created",
+          memberId: payload.memberId,
+          amountCents: payload.amountCents,
+          receiptSha256: payload.receiptSha256,
+        },
+        201,
+      );
     });
-  } catch (error) {
-    const response = responseForEditError(error);
-    if (response) return response;
-    throw error;
+
+    return teamMutationResultResponse(result, 201, mutation.correlationId);
+  } catch (rawError) {
+    const error = normalizePayoutRunMutationError(rawError);
+    await settleFailure(db, mutation, claim, error, "create");
+    return teamMutationExceptionResponse(error, mutation);
   }
-
-  await saveDraftRunReport(db, payoutRunId);
-
-  await recordAuditEvent({
-    actor,
-    action: "commission.payout_run.reimbursement.created",
-    entityType: "payout_run_adjustment",
-    entityId: adjustmentId,
-    meta: {
-      payoutRunId,
-      expenseId,
-      memberId: payload.memberId,
-      amountCents: payload.amountCents,
-      note: payload.note,
-      vendor: payload.vendor ?? null,
-      paidAt: payload.paidAt,
-    },
-  });
-
-  return NextResponse.json({
-    ok: true,
-    payoutRunId,
-    adjustmentId,
-    expenseId,
-  });
 }
 
 export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ payoutRunId: string }> },
 ): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-  const permissionError = await requirePermission(request, "access.manage");
-  if (permissionError) return permissionError;
+  const boundary = await beginTeamMutation(request, {
+    principalTypes: ["human"],
+    requiredPermissions: ["commissions.manage"],
+    risk: "financial",
+    requiresIdempotency: true,
+    auditAction: "commission.payout_run.reimbursement.deleted",
+  });
+  if (!boundary.ok) return boundary.response;
+  const { mutation } = boundary;
+  let db: ReturnType<typeof getDb> | null = null;
+  let claim: TeamMutationIdempotencyClaim | null = null;
 
-  const { payoutRunId } = await context.params;
-  if (!payoutRunId) {
-    return NextResponse.json({ error: "missing_payout_run_id" }, { status: 400 });
-  }
-
-  const payload = DeleteReimbursementSchema.safeParse(
-    (await request.json().catch(() => null)) as unknown,
-  );
-  if (!payload.success) {
-    return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
-  }
-  const adjustmentId = readString(payload.data.adjustmentId);
-  if (!adjustmentId) {
-    return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
-  }
-
-  const db = getDb();
-  const actor = getAuditActorFromRequest(request);
-  let deletedExpenseId: string | null = null;
-  let deletedAdjustmentId: string | null = null;
-  let deletedMemberId: string | null = null;
-  let deletedAmountCents: number | null = null;
-  let deletedNote: string | null = null;
   try {
-    await db.transaction(async (tx) => {
-      await ensureDraftPayoutRun(tx, payoutRunId);
+    requirePayoutRunExpectedVersion(mutation);
+    const { payoutRunId } = await context.params;
+    if (!payoutRunId) {
+      throw new TeamMutationFailure("invalid", "Payout run ID is required.");
+    }
+    const payload = DeleteReimbursementSchema.safeParse(
+      (await request.json().catch(() => null)) as unknown,
+    );
+    if (!payload.success) {
+      throw new TeamMutationFailure(
+        "invalid",
+        "A valid reimbursement ID is required.",
+      );
+    }
 
+    db = getDb();
+    const claimed = await claimTeamMutationIdempotency(db, mutation, {
+      route: "DELETE /api/admin/commissions/payout-runs/:id/reimbursements",
+      entityType: "payout_run_adjustment",
+      entityId: payload.data.adjustmentId,
+      payload: { payoutRunId },
+    });
+    if (claimed.kind === "replay") {
+      return teamMutationIdempotencyReplayResponse(claimed.replay);
+    }
+    const executionClaim = claimed.claim;
+    claim = executionClaim;
+
+    const result = await db.transaction(async (tx) => {
+      const run = await lockEditableRun(tx, payoutRunId, mutation);
       const [adjustment] = await tx
         .select({
           id: payoutRunAdjustments.id,
           kind: payoutRunAdjustments.kind,
-          note: payoutRunAdjustments.note,
           amountCents: payoutRunAdjustments.amountCents,
           memberId: payoutRunAdjustments.memberId,
           expenseId: payoutRunAdjustments.expenseId,
@@ -327,15 +458,12 @@ export async function DELETE(
         .from(payoutRunAdjustments)
         .where(
           and(
-            eq(payoutRunAdjustments.id, adjustmentId),
+            eq(payoutRunAdjustments.id, payload.data.adjustmentId),
             eq(payoutRunAdjustments.payoutRunId, payoutRunId),
           ),
         )
         .limit(1);
-
-      if (!adjustment?.id) {
-        throw new Error("adjustment_not_found");
-      }
+      if (!adjustment) throw new Error("adjustment_not_found");
       if (adjustment.kind !== "reimbursement") {
         throw new Error("adjustment_not_reimbursement");
       }
@@ -343,7 +471,6 @@ export async function DELETE(
       await tx
         .delete(payoutRunAdjustments)
         .where(eq(payoutRunAdjustments.id, adjustment.id));
-
       if (adjustment.expenseId) {
         await tx
           .delete(expenses)
@@ -353,40 +480,45 @@ export async function DELETE(
               eq(expenses.source, "payout_reimbursement"),
             ),
           );
-        deletedExpenseId = adjustment.expenseId;
       }
 
-      deletedAdjustmentId = readString(adjustment.id);
-      deletedMemberId = readString(adjustment.memberId);
-      deletedAmountCents = readFiniteNumber(adjustment.amountCents);
-      deletedNote = readString(adjustment.note);
+      const nextVersion = nextPayoutRunVersionDate(run.updatedAt);
+      const [updatedRun] = await tx
+        .update(payoutRuns)
+        .set({
+          updatedAt: nextVersion,
+          reportHtml: null,
+          reportGeneratedAt: null,
+        })
+        .where(
+          and(eq(payoutRuns.id, payoutRunId), eq(payoutRuns.status, "draft")),
+        )
+        .returning({ updatedAt: payoutRuns.updatedAt });
+      if (!updatedRun) throw new Error("payout_run_state_conflict");
+
+      return completeReimbursementMutation(
+        tx,
+        mutation,
+        executionClaim,
+        {
+          payoutRunId,
+          adjustmentId: adjustment.id,
+          expenseId: adjustment.expenseId,
+          version: payoutRunVersion(updatedRun.updatedAt),
+        },
+        {
+          action: "deleted",
+          memberId: adjustment.memberId,
+          amountCents: adjustment.amountCents,
+        },
+        200,
+      );
     });
-  } catch (error) {
-    const response = responseForEditError(error);
-    if (response) return response;
-    throw error;
+
+    return teamMutationResultResponse(result, 200, mutation.correlationId);
+  } catch (rawError) {
+    const error = normalizePayoutRunMutationError(rawError);
+    await settleFailure(db, mutation, claim, error, "delete");
+    return teamMutationExceptionResponse(error, mutation);
   }
-
-  await saveDraftRunReport(db, payoutRunId);
-
-  await recordAuditEvent({
-    actor,
-    action: "commission.payout_run.reimbursement.deleted",
-    entityType: "payout_run_adjustment",
-    entityId: deletedAdjustmentId ?? adjustmentId,
-    meta: {
-      payoutRunId,
-      expenseId: deletedExpenseId,
-      memberId: deletedMemberId,
-      amountCents: deletedAmountCents,
-      note: deletedNote,
-    },
-  });
-
-  return NextResponse.json({
-    ok: true,
-    payoutRunId,
-    adjustmentId,
-    expenseId: deletedExpenseId,
-  });
 }

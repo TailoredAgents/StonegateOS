@@ -1,98 +1,199 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi } from "@/app/team/lib/api";
+import { isAssignableTeamPermission } from "@myst-os/sdk";
+import { requireTeamPrincipal } from "@/app/api/team/auth";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
-import { ADMIN_SESSION_COOKIE } from "@/lib/admin-session";
-import { TEAM_SESSION_COOKIE } from "@/lib/team-session";
+import {
+  isAccessIdempotencyKey,
+  isSameOriginAccessFormRequest,
+  readBoundedAccessForm,
+  singleAccessFormValue,
+} from "@/app/team/access-form-boundary";
+import { callAdminMutationWithSafeReplay } from "@/app/team/lib/team-mutation-transport";
+import {
+  readTeamMutationError,
+  readTeamMutationSuccess,
+} from "@/app/team/lib/mutation-feedback";
 
 export const dynamic = "force-dynamic";
 
+const ROLE_CREATE_FORM_KEYS = new Set([
+  "idempotencyKey",
+  "name",
+  "permissions",
+  "slug",
+]);
+const ROLE_SLUG_PATTERN = /^[a-z][a-z0-9_-]{1,63}$/u;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
 function buildRedirect(request: NextRequest): URL {
-  return getSafeRedirectUrl(request, "/team?tab=access");
+  return getSafeRedirectUrl(request, "/team/admin/access#roles");
 }
 
-async function isOwnerRequest(request: NextRequest): Promise<boolean> {
-  if (request.cookies.get(ADMIN_SESSION_COOKIE)?.value) return true;
-
-  const token = request.cookies.get(TEAM_SESSION_COOKIE)?.value ?? "";
-  if (!token) return false;
-
-  const base = (process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"] ?? "").replace(/\/$/, "");
-  if (!base) return false;
-
-  const res = await fetch(`${base}/api/public/team/session`, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store"
-  });
-  if (!res.ok) return false;
-
-  const payload = (await res.json().catch(() => null)) as {
-    ok?: boolean;
-    teamMember?: { roleSlug?: string | null };
-  } | null;
-  return Boolean(payload?.ok && payload?.teamMember?.roleSlug === "owner");
-}
-
-function setFlash(response: NextResponse, kind: "ok" | "error", message: string) {
+function setFlash(
+  response: NextResponse,
+  kind: "ok" | "error",
+  message: string,
+) {
   response.cookies.set({
     name: kind === "ok" ? "myst-flash" : "myst-flash-error",
     value: message,
-    path: "/"
+    path: "/",
   });
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const redirectTo = buildRedirect(request);
-  if (!(await isOwnerRequest(request))) {
-    const response = NextResponse.redirect(redirectTo, 303);
-    setFlash(response, "error", "Please sign in again and retry.");
-    return response;
+  if (!isSameOriginAccessFormRequest(request)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "forbidden",
+        message: "The role creation origin could not be verified.",
+        retryable: false,
+      },
+      { status: 403 },
+    );
   }
-
-  const formData = await request.formData();
-  const name = typeof formData.get("name") === "string" ? String(formData.get("name")).trim() : "";
-  const slug = typeof formData.get("slug") === "string" ? String(formData.get("slug")).trim() : "";
-  const permissionsRaw = typeof formData.get("permissions") === "string" ? String(formData.get("permissions")).trim() : "";
-
-  if (!name) {
-    const response = NextResponse.redirect(redirectTo, 303);
-    setFlash(response, "error", "Role name required");
-    return response;
-  }
-  if (!slug) {
-    const response = NextResponse.redirect(redirectTo, 303);
-    setFlash(response, "error", "Role slug required");
-    return response;
-  }
-
-  const permissions =
-    permissionsRaw.length > 0
-      ? permissionsRaw
-          .split(",")
-          .map((entry) => entry.trim())
-          .filter((entry) => entry.length > 0)
-      : [];
-
-  const apiResponse = await callAdminApi("/api/admin/roles", {
-    method: "POST",
-    body: JSON.stringify({ name, slug, permissions })
+  const auth = await requireTeamPrincipal(request, {
+    permissions: "access.manage",
+    redirectTo: new URL("/team/admin/access#roles", request.url),
   });
+  if (!auth.ok) return auth.response;
+
+  const redirectTo = buildRedirect(request);
+  const form = await readBoundedAccessForm(request, ROLE_CREATE_FORM_KEYS);
+  if (!form) {
+    const response = NextResponse.redirect(redirectTo, 303);
+    setFlash(
+      response,
+      "error",
+      "The role form was invalid, too large, or timed out. Review it and try again.",
+    );
+    return response;
+  }
+  const name =
+    singleAccessFormValue(form, "name")?.normalize("NFKC").trim() ?? "";
+  const slug =
+    singleAccessFormValue(form, "slug")
+      ?.normalize("NFKC")
+      .trim()
+      .toLowerCase() ?? "";
+  const idempotencyKey =
+    singleAccessFormValue(form, "idempotencyKey")?.normalize("NFKC").trim() ??
+    "";
+  const permissionInputs = form.getAll("permissions");
+
+  if (!name || name.length > 120) {
+    const response = NextResponse.redirect(redirectTo, 303);
+    setFlash(response, "error", "Enter a valid role name");
+    return response;
+  }
+  if (!ROLE_SLUG_PATTERN.test(slug)) {
+    const response = NextResponse.redirect(redirectTo, 303);
+    setFlash(response, "error", "Enter a valid unique role slug");
+    return response;
+  }
+  if (!isAccessIdempotencyKey(idempotencyKey)) {
+    const response = NextResponse.redirect(redirectTo, 303);
+    setFlash(
+      response,
+      "error",
+      "This role creation cannot be retried safely. Refresh before saving.",
+    );
+    return response;
+  }
+
+  const permissions = permissionInputs.map((entry) => entry.trim());
+  if (
+    permissions.length > 100 ||
+    new Set(permissions).size !== permissions.length ||
+    permissions.some(
+      (permission, index) =>
+        permission !== permissionInputs[index] ||
+        !isAssignableTeamPermission(permission),
+    )
+  ) {
+    const response = NextResponse.redirect(redirectTo, 303);
+    setFlash(response, "error", "One or more permissions are not supported");
+    return response;
+  }
+
+  let apiResponse: Response;
+  try {
+    apiResponse = await callAdminMutationWithSafeReplay(
+      auth.principal,
+      "/api/admin/roles",
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({ name, slug, permissions }),
+      },
+    );
+  } catch {
+    const response = NextResponse.redirect(redirectTo, 303);
+    setFlash(
+      response,
+      "error",
+      "Role creation could not be confirmed. Your input was not reported as saved; refresh before retrying.",
+    );
+    return response;
+  }
 
   if (!apiResponse.ok) {
-    let message = "Unable to create role";
-    try {
-      const data = (await apiResponse.json()) as { message?: string; error?: string };
-      const extracted = data.message ?? data.error;
-      if (typeof extracted === "string" && extracted.trim().length > 0) {
-        message = extracted.replace(/_/g, " ");
-      }
-    } catch {
-      // ignore
-    }
-
     const response = NextResponse.redirect(redirectTo, 303);
-    setFlash(response, "error", message);
+    setFlash(
+      response,
+      "error",
+      await readTeamMutationError(apiResponse, "Unable to create role"),
+    );
+    return response;
+  }
+
+  const result = await readTeamMutationSuccess<{
+    role?: {
+      id?: unknown;
+      name?: unknown;
+      slug?: unknown;
+      permissions?: unknown;
+      updatedAt?: unknown;
+    };
+  }>(apiResponse);
+  const role = result?.data.role;
+  const returnedPermissions = Array.isArray(role?.permissions)
+    ? role.permissions.filter(
+        (permission): permission is string => typeof permission === "string",
+      )
+    : null;
+  const returnedPermissionCount = Array.isArray(role?.permissions)
+    ? role.permissions.length
+    : null;
+  const expectedPermissions = [...permissions].sort();
+  if (
+    !result ||
+    !role ||
+    typeof role.id !== "string" ||
+    !UUID_PATTERN.test(role.id) ||
+    role.name !== name ||
+    role.slug !== slug ||
+    !returnedPermissions ||
+    returnedPermissions.length !== returnedPermissionCount ||
+    returnedPermissions.length !== expectedPermissions.length ||
+    [...returnedPermissions]
+      .sort()
+      .some((permission, index) => permission !== expectedPermissions[index]) ||
+    typeof role.updatedAt !== "string" ||
+    result.receipt.actorId !== auth.principal.memberId ||
+    result.receipt.entityType !== "team_role" ||
+    result.receipt.entityId !== role.id ||
+    result.receipt.version !== role.updatedAt
+  ) {
+    const response = NextResponse.redirect(redirectTo, 303);
+    setFlash(
+      response,
+      "error",
+      "The Access service returned an unreadable role receipt, so no success is being claimed. Refresh before retrying.",
+    );
     return response;
   }
 
@@ -100,4 +201,3 @@ export async function POST(request: NextRequest): Promise<Response> {
   setFlash(response, "ok", "Role created");
   return response;
 }
-

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Route } from "next";
 
 export type BreadcrumbItem = { label: string; href: string };
 
@@ -14,9 +15,11 @@ export function Breadcrumbs({ items }: { items: BreadcrumbItem[] }) {
             <li key={`${item.href}-${idx}`} className="flex items-center gap-2">
               {idx > 0 ? <span className="text-neutral-400">/</span> : null}
               {isLast ? (
-                <span className="font-medium text-neutral-800">{item.label}</span>
+                <span className="font-medium text-neutral-800">
+                  {item.label}
+                </span>
               ) : (
-                <Link href={item.href as any} className="hover:underline">
+                <Link href={item.href as Route} className="hover:underline">
                   {item.label}
                 </Link>
               )}

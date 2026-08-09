@@ -3,24 +3,36 @@
 import React from "react";
 import { Button, cn } from "@myst-os/ui";
 import { formatServiceLabel } from "@/lib/service-labels";
+import { agentActionTemporaryBlocker } from "../lib/agent-action-availability";
+import {
+  type AgentActionApprovalProof,
+  type AgentActionType,
+  isExactAgentRecordVersion,
+  parseAgentActionApprovalProof,
+  parseAgentActionMutationSuccess,
+} from "../lib/agent-action-mutation";
+import {
+  readTeamMutationError,
+  readTeamMutationException,
+} from "../lib/mutation-feedback";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 
-type BookingSuggestion = { startAt: string; endAt: string; reason: string; services?: string[] };
-type BookingOption = BookingSuggestion & { services?: string[]; selectedService?: string };
+type BookingSuggestion = {
+  startAt: string;
+  endAt: string;
+  reason: string;
+  services?: string[];
+};
+type BookingOption = BookingSuggestion & {
+  services?: string[];
+  selectedService?: string;
+};
 
 type ActionSuggestion = {
   id: string;
-  type:
-    | "create_contact"
-    | "create_quote"
-    | "create_task"
-    | "book_appointment"
-    | "reschedule_appointment"
-    | "send_text"
-    | "create_reminder"
-    | "add_contact_note";
+  type: AgentActionType;
   summary: string;
-  payload: Record<string, any>;
+  payload: Record<string, unknown>;
   context?: {
     appointmentStartAt?: string | null;
     propertyLabel?: string;
@@ -73,10 +85,211 @@ type ContactCandidate = {
   postalCode?: string | null;
 };
 
+type AppointmentCandidate = {
+  id: string;
+  status: string | null;
+  startAt: string | null;
+  updatedAt: string;
+  addressLine1: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+};
+
+const ACTION_REVIEW_DETAILS: Record<
+  ActionSuggestion["type"],
+  { permission: string; effect: string }
+> = {
+  create_contact: {
+    permission: "Contacts, properties, and pipeline write access",
+    effect: "Creates internal CRM records; no customer message is sent",
+  },
+  create_quote: {
+    permission: "Quote write plus contact/property read access",
+    effect: "Creates an internal quote draft; it is not sent automatically",
+  },
+  create_task: {
+    permission: "Appointment update access",
+    effect: "Adds an internal appointment task",
+  },
+  book_appointment: {
+    permission: "Booking management access",
+    effect: "Creates an appointment and may queue configured calendar updates",
+  },
+  cancel_appointment: {
+    permission: "Appointment update and external-send access",
+    effect:
+      "Cancels the selected appointment and may queue a customer cancellation notice",
+  },
+  reschedule_appointment: {
+    permission: "Appointment update access",
+    effect: "Changes the selected appointment time",
+  },
+  send_text: {
+    permission: "Message write and external-send access",
+    effect: "Queues the displayed SMS for the selected customer",
+  },
+  create_reminder: {
+    permission: "Contact write access",
+    effect: "Creates an internal follow-up reminder",
+  },
+  add_contact_note: {
+    permission: "Contact write access",
+    effect: "Adds an internal CRM note",
+  },
+  google_ads_recommendations_bulk_update: {
+    permission: "Marketing write access",
+    effect: "Changes internal recommendation review state only",
+  },
+  google_ads_recommendations_bulk_apply: {
+    permission: "Marketing apply access",
+    effect: "Requests the displayed changes from Google Ads",
+  },
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      )
+    : [];
+}
+
+function readContactCandidates(value: unknown): ContactCandidate[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    if (!isRecord(candidate) || typeof candidate["id"] !== "string") {
+      return [];
+    }
+    const readOptionalString = (key: string): string | null | undefined => {
+      const field = candidate[key];
+      return typeof field === "string" || field === null ? field : undefined;
+    };
+    return [
+      {
+        id: candidate["id"],
+        name: readOptionalString("name"),
+        phone: readOptionalString("phone"),
+        phoneE164: readOptionalString("phoneE164"),
+        email: readOptionalString("email"),
+        lastActivityAt: readOptionalString("lastActivityAt"),
+        addressLine1: readOptionalString("addressLine1"),
+        city: readOptionalString("city"),
+        state: readOptionalString("state"),
+        postalCode: readOptionalString("postalCode"),
+      },
+    ];
+  });
+}
+
+function readAppointmentCandidates(value: unknown): AppointmentCandidate[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    if (
+      !isRecord(candidate) ||
+      typeof candidate["id"] !== "string" ||
+      !isExactAgentRecordVersion(candidate["updatedAt"])
+    ) {
+      return [];
+    }
+    const optionalString = (key: string): string | null => {
+      const field = candidate[key];
+      return typeof field === "string" ? field : null;
+    };
+    return [
+      {
+        id: candidate["id"],
+        status: optionalString("status"),
+        startAt: optionalString("startAt"),
+        updatedAt: candidate["updatedAt"],
+        addressLine1: optionalString("addressLine1"),
+        city: optionalString("city"),
+        state: optionalString("state"),
+        postalCode: optionalString("postalCode"),
+      },
+    ];
+  });
+}
+
+function readActionResult(value: unknown): {
+  summary: string;
+  appointmentId: string | null;
+} {
+  if (!isRecord(value)) {
+    return { summary: "Action completed", appointmentId: null };
+  }
+  return {
+    summary:
+      typeof value["summary"] === "string" && value["summary"].trim()
+        ? value["summary"].trim()
+        : "Action completed",
+    appointmentId:
+      typeof value["appointmentId"] === "string" &&
+      value["appointmentId"].trim()
+        ? value["appointmentId"].trim()
+        : null,
+  };
+}
+
+function readApprovalProof(
+  value: unknown,
+  actorId: string,
+): AgentActionApprovalProof | null {
+  if (!isRecord(value) || value["ok"] !== true) return null;
+  const data = isRecord(value["data"]) ? value["data"] : null;
+  const receipt = isRecord(value["receipt"]) ? value["receipt"] : null;
+  if (!data || receipt?.["actorId"] !== actorId) return null;
+  return parseAgentActionApprovalProof(data["proof"]);
+}
+
+function actionTargetEntityId(
+  actionType: AgentActionType,
+  payload: Record<string, unknown>,
+): string | null {
+  if (
+    actionType === "cancel_appointment" ||
+    actionType === "reschedule_appointment"
+  ) {
+    return typeof payload["appointmentId"] === "string"
+      ? payload["appointmentId"].trim() || null
+      : null;
+  }
+  return null;
+}
+
+function actionExpectedVersion(
+  actionType: AgentActionType,
+  payload: Record<string, unknown>,
+): string | null {
+  if (
+    actionType !== "cancel_appointment" &&
+    actionType !== "reschedule_appointment"
+  ) {
+    return null;
+  }
+  const version = payload["expectedVersion"];
+  return isExactAgentRecordVersion(version) ? version : null;
+}
+
+class AgentActionRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentActionRequestError";
+  }
+}
+
 function pickBestAudioMimeType(): string | undefined {
   if (typeof window === "undefined") return undefined;
   if (typeof MediaRecorder === "undefined") return undefined;
-  const isTypeSupported = typeof MediaRecorder.isTypeSupported === "function" ? MediaRecorder.isTypeSupported.bind(MediaRecorder) : null;
+  const isTypeSupported =
+    typeof MediaRecorder.isTypeSupported === "function"
+      ? MediaRecorder.isTypeSupported.bind(MediaRecorder)
+      : null;
   if (!isTypeSupported) return undefined;
 
   const candidates = [
@@ -85,7 +298,7 @@ function pickBestAudioMimeType(): string | undefined {
     "audio/mp4",
     "audio/ogg;codecs=opus",
     "audio/ogg",
-    "audio/mpeg"
+    "audio/mpeg",
   ];
 
   for (const mime of candidates) {
@@ -108,7 +321,7 @@ const TEAM_SUGGESTIONS: string[] = [
   "Send a good reply text to this contact.",
   "Send a text that says “On my way — see you soon.”",
   "Summarize recent notes for a lead.",
-  "Share tips for handling a tough stain."
+  "Share tips for handling a tough stain.",
 ];
 
 function fallbackResponse(message: string): string {
@@ -145,13 +358,19 @@ async function callAssistant(
     city?: string;
     state?: string;
     postalCode?: string;
-  }
+  },
 ): Promise<AssistantPayload | null> {
   try {
-    const response = await fetch("/api/chat", {
+    const response = await fetch("/api/team/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, contactId, propertyId, property: propertyMeta, mode: "team" })
+      body: JSON.stringify({
+        message,
+        contactId,
+        propertyId,
+        property: propertyMeta,
+        mode: "team",
+      }),
     });
     if (!response.ok) return null;
     const data = (await response.json()) as AssistantPayload;
@@ -161,13 +380,19 @@ async function callAssistant(
   }
 }
 
-export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
+export function TeamChatClient({
+  contacts,
+  actorId,
+}: {
+  contacts: ContactOption[];
+  actorId: string;
+}) {
   const [messages, setMessages] = React.useState<Message[]>([
     {
       id: "intro",
       sender: "bot",
-      text: "Hi! I'm Stonegate Assist. I can draft replies and suggest actions (send a text, book/reschedule, add notes, create contacts). Nothing happens until you confirm."
-    }
+      text: "Hi! I'm Stonegate Assist. I can draft replies and suggest actions (send a text, book/reschedule, add notes, create contacts). Nothing happens until you confirm.",
+    },
   ]);
   const [input, setInput] = React.useState("");
   const [isSending, setIsSending] = React.useState(false);
@@ -176,7 +401,10 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   const [talkError, setTalkError] = React.useState<string | null>(null);
   const [supportsRecording, setSupportsRecording] = React.useState(false);
   const defaultContextContact = contacts.length === 1 ? contacts[0] : null;
-  const defaultContextProperty = defaultContextContact?.properties?.length === 1 ? defaultContextContact.properties[0] : null;
+  const defaultContextProperty =
+    defaultContextContact?.properties?.length === 1
+      ? defaultContextContact.properties[0]
+      : null;
   const [bookingInFlight, setBookingInFlight] = React.useState(false);
   const [bookingStatus, setBookingStatus] = React.useState<
     | { state: "idle" }
@@ -184,26 +412,77 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
     | { state: "success"; message: string }
     | { state: "error"; message: string }
   >({ state: "idle" });
-  const [actionStatuses, setActionStatuses] = React.useState<Record<string, ActionStatus>>({});
-  const [actionServices, setActionServices] = React.useState<Record<string, string>>({});
-  const [actionNotes, setActionNotes] = React.useState<Record<string, string>>({});
-  const [actionDurations, setActionDurations] = React.useState<Record<string, number>>({});
-  const [actionTravel, setActionTravel] = React.useState<Record<string, number>>({});
-  const [actionStartDate, setActionStartDate] = React.useState<Record<string, string>>({});
-  const [actionStartTime, setActionStartTime] = React.useState<Record<string, string>>({});
-  const [actionReminderDate, setActionReminderDate] = React.useState<Record<string, string>>({});
-  const [actionReminderTime, setActionReminderTime] = React.useState<Record<string, string>>({});
-  const [actionReminderTitle, setActionReminderTitle] = React.useState<Record<string, string>>({});
+  const [actionStatuses, setActionStatuses] = React.useState<
+    Record<string, ActionStatus>
+  >({});
+  const [actionServices, setActionServices] = React.useState<
+    Record<string, string>
+  >({});
+  const [actionNotes, setActionNotes] = React.useState<Record<string, string>>(
+    {},
+  );
+  const [actionDurations, setActionDurations] = React.useState<
+    Record<string, number>
+  >({});
+  const [actionTravel, setActionTravel] = React.useState<
+    Record<string, number>
+  >({});
+  const [actionStartDate, setActionStartDate] = React.useState<
+    Record<string, string>
+  >({});
+  const [actionStartTime, setActionStartTime] = React.useState<
+    Record<string, string>
+  >({});
+  const [actionReminderDate, setActionReminderDate] = React.useState<
+    Record<string, string>
+  >({});
+  const [actionReminderTime, setActionReminderTime] = React.useState<
+    Record<string, string>
+  >({});
+  const [actionReminderTitle, setActionReminderTitle] = React.useState<
+    Record<string, string>
+  >({});
   const [actionHistory, setActionHistory] = React.useState<
-    Array<{ id: string; summary: string; status: ActionStatus["state"]; message?: string }>
+    Array<{
+      id: string;
+      summary: string;
+      status: ActionStatus["state"];
+      message?: string;
+    }>
   >([]);
-  const [lastBooked, setLastBooked] = React.useState<{ appointmentId: string; message: string } | null>(null);
-  const [undoStatus, setUndoStatus] = React.useState<ActionStatus>({ state: "idle" });
-  const [actionPickedContacts, setActionPickedContacts] = React.useState<Record<string, ContactCandidate | null>>({});
+  const [lastBooked, setLastBooked] = React.useState<{
+    appointmentId: string;
+    message: string;
+    version: string;
+  } | null>(null);
+  const [undoStatus, setUndoStatus] = React.useState<ActionStatus>({
+    state: "idle",
+  });
+  const [actionPickedContacts, setActionPickedContacts] = React.useState<
+    Record<string, ContactCandidate | null>
+  >({});
+  const [actionPickedAppointments, setActionPickedAppointments] =
+    React.useState<Record<string, AppointmentCandidate | null>>({});
   const endRef = React.useRef<HTMLDivElement>(null);
-  const mediaRecorderRef = React.useRef<any>(null);
-  const chunksRef = React.useRef<BlobPart[]>([]);
+  const mediaRecorderRef = React.useRef<MediaRecorder | null>(null);
+  const chunksRef = React.useRef<Blob[]>([]);
   const lastBotMessageRef = React.useRef<string>("");
+  const activeActionExecutionsRef = React.useRef<Set<string>>(new Set());
+  const completedActionExecutionsRef = React.useRef<Set<string>>(new Set());
+  const actionMutationKeysRef = React.useRef<
+    Map<string, { fingerprint: string; key: string }>
+  >(new Map());
+  const actionApprovalProofsRef = React.useRef<
+    Map<
+      string,
+      {
+        fingerprint: string;
+        key: string;
+        proof: AgentActionApprovalProof;
+      }
+    >
+  >(new Map());
+  const bookingApprovalIdsRef = React.useRef<Map<string, string>>(new Map());
 
   React.useEffect(() => {
     const t = setTimeout(() => {
@@ -214,8 +493,10 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    const hasGetUserMedia = "mediaDevices" in navigator && typeof (navigator as any).mediaDevices?.getUserMedia === "function";
-    const hasMediaRecorder = typeof (window as any).MediaRecorder === "function";
+    const hasGetUserMedia =
+      "mediaDevices" in navigator &&
+      typeof navigator.mediaDevices.getUserMedia === "function";
+    const hasMediaRecorder = typeof MediaRecorder === "function";
     setSupportsRecording(hasGetUserMedia && hasMediaRecorder);
   }, []);
 
@@ -226,32 +507,66 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
     return null;
   }, [messages]);
 
-  const pickBestCandidate = React.useCallback((candidates: ContactCandidate[]): ContactCandidate | null => {
-    if (!Array.isArray(candidates) || candidates.length === 0) return null;
-    const sorted = [...candidates].sort((a, b) => {
-      const at = typeof a?.lastActivityAt === "string" ? Date.parse(a.lastActivityAt) : NaN;
-      const bt = typeof b?.lastActivityAt === "string" ? Date.parse(b.lastActivityAt) : NaN;
-      const aTime = Number.isFinite(at) ? at : 0;
-      const bTime = Number.isFinite(bt) ? bt : 0;
-      return bTime - aTime;
-    });
-    return sorted[0] ?? null;
-  }, []);
+  const pickBestCandidate = React.useCallback(
+    (candidates: ContactCandidate[]): ContactCandidate | null => {
+      if (!Array.isArray(candidates) || candidates.length === 0) return null;
+      const sorted = [...candidates].sort((a, b) => {
+        const at =
+          typeof a?.lastActivityAt === "string"
+            ? Date.parse(a.lastActivityAt)
+            : NaN;
+        const bt =
+          typeof b?.lastActivityAt === "string"
+            ? Date.parse(b.lastActivityAt)
+            : NaN;
+        const aTime = Number.isFinite(at) ? at : 0;
+        const bTime = Number.isFinite(bt) ? bt : 0;
+        return bTime - aTime;
+      });
+      return sorted[0] ?? null;
+    },
+    [],
+  );
 
-  const formatCandidateLabel = React.useCallback((candidate: ContactCandidate | null | undefined): string => {
-    if (!candidate) return "";
-    const name = (candidate.name ?? "").toString().trim();
-    const phone = (candidate.phoneE164 ?? candidate.phone ?? "").toString().trim();
-    const zip = (candidate.postalCode ?? "").toString().trim();
-    return [name || null, phone || null, zip ? `(${zip})` : null].filter(Boolean).join(" ");
-  }, []);
+  const formatCandidateLabel = React.useCallback(
+    (candidate: ContactCandidate | null | undefined): string => {
+      if (!candidate) return "";
+      const name = (candidate.name ?? "").toString().trim();
+      const phone = (candidate.phoneE164 ?? candidate.phone ?? "")
+        .toString()
+        .trim();
+      const zip = (candidate.postalCode ?? "").toString().trim();
+      return [name || null, phone || null, zip ? `(${zip})` : null]
+        .filter(Boolean)
+        .join(" ");
+    },
+    [],
+  );
+
+  const formatAppointmentCandidate = React.useCallback(
+    (candidate: AppointmentCandidate): string => {
+      const when = candidate.startAt
+        ? new Date(candidate.startAt).toLocaleString(undefined, {
+            timeZone: TEAM_TIME_ZONE,
+          })
+        : "Time not set";
+      const address = [candidate.addressLine1, candidate.city, candidate.state]
+        .filter(Boolean)
+        .join(", ");
+      return address ? `${when} — ${address}` : when;
+    },
+    [],
+  );
 
   const handleSend = React.useCallback(
     async (raw: string) => {
       const text = raw.trim();
       if (!text || isSending) return;
       setIsSending(true);
-      setMessages((prev) => [...prev, { id: crypto.randomUUID(), sender: "user", text }]);
+      setMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), sender: "user", text },
+      ]);
       setInput("");
 
       const payload = await callAssistant(
@@ -263,9 +578,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
               addressLine1: defaultContextProperty.addressLine1,
               city: defaultContextProperty.city,
               state: defaultContextProperty.state,
-              postalCode: defaultContextProperty.postalCode
+              postalCode: defaultContextProperty.postalCode,
             }
-          : undefined
+          : undefined,
       );
       const reply = payload?.reply?.trim() || fallbackResponse(text);
       const actionNote = payload?.actionNote?.trim();
@@ -276,10 +591,13 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
               contactId: payload.booking.contactId,
               propertyId: payload.booking.propertyId,
               suggestions: payload.booking.suggestions,
-              propertyLabel: payload.booking.propertyLabel
+              propertyLabel: payload.booking.propertyLabel,
             }
           : undefined;
-      const actions = payload?.actions && payload.actions.length ? payload.actions : undefined;
+      const actions =
+        payload?.actions && payload.actions.length
+          ? payload.actions
+          : undefined;
 
       if (actions && actions.length) {
         setActionStatuses((prev) => {
@@ -296,9 +614,8 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           for (const action of actions) {
             if (!next[action.id]) {
               const svc =
-                Array.isArray(action.payload?.["services"]) && action.payload["services"].length
-                  ? action.payload["services"][0]
-                  : "junk_removal_primary";
+                readStringList(action.payload["services"])[0] ??
+                "junk_removal_primary";
               next[action.id] = svc;
             }
           }
@@ -328,7 +645,8 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           for (const action of actions) {
             if (action.type !== "create_reminder" || next[action.id]) continue;
             const title =
-              typeof action.payload?.["title"] === "string" && action.payload["title"].trim().length
+              typeof action.payload?.["title"] === "string" &&
+              action.payload["title"].trim().length
                 ? action.payload["title"].trim()
                 : "Call back";
             next[action.id] = title;
@@ -339,7 +657,10 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           const next = { ...prev };
           for (const action of actions) {
             if (action.type !== "create_reminder" || next[action.id]) continue;
-            const dueAt = typeof action.payload?.["dueAt"] === "string" ? action.payload["dueAt"] : "";
+            const dueAt =
+              typeof action.payload?.["dueAt"] === "string"
+                ? action.payload["dueAt"]
+                : "";
             const date = dueAt ? new Date(dueAt) : null;
             next[action.id] =
               date && !Number.isNaN(date.getTime())
@@ -352,7 +673,10 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           const next = { ...prev };
           for (const action of actions) {
             if (action.type !== "create_reminder" || next[action.id]) continue;
-            const dueAt = typeof action.payload?.["dueAt"] === "string" ? action.payload["dueAt"] : "";
+            const dueAt =
+              typeof action.payload?.["dueAt"] === "string"
+                ? action.payload["dueAt"]
+                : "";
             const date = dueAt ? new Date(dueAt) : null;
             next[action.id] =
               date && !Number.isNaN(date.getTime())
@@ -360,7 +684,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                     hour: "2-digit",
                     minute: "2-digit",
                     hour12: false,
-                    timeZone: TEAM_TIME_ZONE
+                    timeZone: TEAM_TIME_ZONE,
                   })
                 : "";
           }
@@ -369,9 +693,14 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         setActionDurations((prev) => {
           const next = { ...prev };
           for (const action of actions) {
-            if ((action.type === "book_appointment" || action.type === "reschedule_appointment") && !next[action.id]) {
+            if (
+              (action.type === "book_appointment" ||
+                action.type === "reschedule_appointment") &&
+              !next[action.id]
+            ) {
               next[action.id] =
-                typeof action.payload?.["durationMinutes"] === "number" && action.payload["durationMinutes"] > 0
+                typeof action.payload?.["durationMinutes"] === "number" &&
+                action.payload["durationMinutes"] > 0
                   ? action.payload["durationMinutes"]
                   : 60;
             }
@@ -381,9 +710,14 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         setActionTravel((prev) => {
           const next = { ...prev };
           for (const action of actions) {
-            if ((action.type === "book_appointment" || action.type === "reschedule_appointment") && !next[action.id]) {
+            if (
+              (action.type === "book_appointment" ||
+                action.type === "reschedule_appointment") &&
+              !next[action.id]
+            ) {
               next[action.id] =
-                typeof action.payload?.["travelBufferMinutes"] === "number" && action.payload["travelBufferMinutes"] >= 0
+                typeof action.payload?.["travelBufferMinutes"] === "number" &&
+                action.payload["travelBufferMinutes"] >= 0
                   ? action.payload["travelBufferMinutes"]
                   : 30;
             }
@@ -393,8 +727,16 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         setActionStartDate((prev) => {
           const next = { ...prev };
           for (const action of actions) {
-            if ((action.type === "book_appointment" || action.type === "reschedule_appointment") && !next[action.id]) {
-              const start = action.payload?.["startAt"] ? new Date(action.payload["startAt"]) : null;
+            if (
+              (action.type === "book_appointment" ||
+                action.type === "reschedule_appointment") &&
+              !next[action.id]
+            ) {
+              const startAt = action.payload["startAt"];
+              const start =
+                typeof startAt === "string" && startAt
+                  ? new Date(startAt)
+                  : null;
               next[action.id] = start ? start.toISOString().slice(0, 10) : "";
             }
           }
@@ -403,14 +745,22 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         setActionStartTime((prev) => {
           const next = { ...prev };
           for (const action of actions) {
-            if ((action.type === "book_appointment" || action.type === "reschedule_appointment") && !next[action.id]) {
-              const start = action.payload?.["startAt"] ? new Date(action.payload["startAt"]) : null;
+            if (
+              (action.type === "book_appointment" ||
+                action.type === "reschedule_appointment") &&
+              !next[action.id]
+            ) {
+              const startAt = action.payload["startAt"];
+              const start =
+                typeof startAt === "string" && startAt
+                  ? new Date(startAt)
+                  : null;
               next[action.id] = start
                 ? start.toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit",
                     hour12: false,
-                    timeZone: TEAM_TIME_ZONE
+                    timeZone: TEAM_TIME_ZONE,
                   })
                 : "";
             }
@@ -422,12 +772,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           const next = { ...prev };
           for (const action of actions) {
             if (next[action.id]) continue;
-            const requiresContact = action.type === "send_text" || action.type === "book_appointment";
-            const hasContactId = typeof action.payload?.["contactId"] === "string" && action.payload["contactId"].trim().length > 0;
+            const requiresContact =
+              action.type === "send_text" || action.type === "book_appointment";
+            const hasContactId =
+              typeof action.payload?.["contactId"] === "string" &&
+              action.payload["contactId"].trim().length > 0;
             if (!requiresContact || hasContactId) continue;
-            const candidates = Array.isArray(action.payload?.["contactCandidates"])
-              ? (action.payload["contactCandidates"] as ContactCandidate[])
-              : [];
+            const candidates = readContactCandidates(
+              action.payload["contactCandidates"],
+            );
             const best = pickBestCandidate(candidates);
             if (best) next[action.id] = best;
           }
@@ -441,42 +794,54 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           sender: "bot",
           text: combinedReply,
           ...(booking ? { booking } : {}),
-          ...(actions ? { actions } : {})
-        }
+          ...(actions ? { actions } : {}),
+        },
       ]);
       lastBotMessageRef.current = combinedReply;
       setIsSending(false);
     },
-    [defaultContextContact, defaultContextProperty, isSending, pickBestCandidate]
+    [
+      defaultContextContact,
+      defaultContextProperty,
+      isSending,
+      pickBestCandidate,
+    ],
   );
 
   const handleSubmit = React.useCallback(
-    async (e: React.FormEvent) => {
+    (e: React.FormEvent) => {
       e.preventDefault();
-      await handleSend(input);
+      void handleSend(input);
     },
-    [handleSend, input]
+    [handleSend, input],
   );
 
-  const uploadAudio = React.useCallback(async (blob: Blob, filename: string) => {
-    const form = new FormData();
-    form.append("audio", blob, filename);
-    const res = await fetch("/api/chat/stt", { method: "POST", body: form });
-    if (!res.ok) {
-      const bodyText = await res.text().catch(() => "");
-      throw new Error(`stt_failed_http_${res.status}:${bodyText.slice(0, 140)}`);
-    }
-    const data = (await res.json().catch(() => null)) as { transcript?: string } | null;
-    const transcript = data?.transcript?.trim() ?? "";
-    if (!transcript.length) throw new Error("empty_transcript");
-    setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
-  }, []);
+  const uploadAudio = React.useCallback(
+    async (blob: Blob, filename: string) => {
+      const form = new FormData();
+      form.append("audio", blob, filename);
+      const res = await fetch("/api/chat/stt", { method: "POST", body: form });
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => "");
+        throw new Error(
+          `stt_failed_http_${res.status}:${bodyText.slice(0, 140)}`,
+        );
+      }
+      const data = (await res.json().catch(() => null)) as {
+        transcript?: string;
+      } | null;
+      const transcript = data?.transcript?.trim() ?? "";
+      if (!transcript.length) throw new Error("empty_transcript");
+      setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+    },
+    [],
+  );
 
   const handleMicToggle = React.useCallback(async () => {
     if (!supportsRecording) return;
     if (isTranscribing) return;
     if (isRecording) {
-      const mr = mediaRecorderRef.current as MediaRecorder | null;
+      const mr = mediaRecorderRef.current;
       setIsRecording(false);
       setIsTranscribing(true);
       if (!mr) {
@@ -485,8 +850,8 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         return;
       }
       try {
-        if (typeof (mr as any).requestData === "function") {
-          (mr as any).requestData();
+        if (typeof mr.requestData === "function") {
+          mr.requestData();
         }
         if (mr.state !== "inactive") {
           mr.stop();
@@ -495,7 +860,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           setIsTranscribing(false);
         }
       } catch (error) {
-        setTalkError((error as Error).message || "Failed to stop recording. Try again.");
+        setTalkError(
+          (error as Error).message || "Failed to stop recording. Try again.",
+        );
         setIsTranscribing(false);
       }
       return;
@@ -504,7 +871,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setTalkError(null);
       const preferredMimeType = pickBestAudioMimeType();
-      const mr = preferredMimeType ? new MediaRecorder(stream, { mimeType: preferredMimeType }) : new MediaRecorder(stream);
+      const mr = preferredMimeType
+        ? new MediaRecorder(stream, { mimeType: preferredMimeType })
+        : new MediaRecorder(stream);
       chunksRef.current = [];
       mr.ondataavailable = (e: BlobEvent) => {
         if (e.data.size > 0) {
@@ -513,17 +882,21 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
       };
       mr.onstop = async () => {
         try {
-          const firstChunk = chunksRef.current[0] as Blob | undefined;
-          const mimeType = (firstChunk && "type" in firstChunk ? (firstChunk as Blob).type : "") || mr.mimeType || "audio/webm";
+          const firstChunk = chunksRef.current[0];
+          const mimeType = firstChunk?.type || mr.mimeType || "audio/webm";
           const blob = new Blob(chunksRef.current, { type: mimeType });
           if (!blob.size) {
-            setTalkError("No audio captured. Check mic permissions and try again.");
+            setTalkError(
+              "No audio captured. Check mic permissions and try again.",
+            );
             return;
           }
           const filename = filenameForMimeType(mimeType);
           await uploadAudio(blob, filename);
         } catch (error) {
-          setTalkError((error as Error).message || "Transcription failed. Try again.");
+          setTalkError(
+            (error as Error).message || "Transcription failed. Try again.",
+          );
         } finally {
           mediaRecorderRef.current = null;
           stream.getTracks().forEach((t) => t.stop());
@@ -541,7 +914,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
       setIsTranscribing(false);
       mr.start(250);
     } catch {
-      setTalkError("Mic permission blocked or unavailable on this device/browser.");
+      setTalkError(
+        "Mic permission blocked or unavailable on this device/browser.",
+      );
       setIsRecording(false);
       setIsTranscribing(false);
     }
@@ -554,47 +929,213 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
       const res = await fetch("/api/chat/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text })
+        body: JSON.stringify({ text }),
       });
       if (!res.ok) return;
       const arrayBuffer = await res.arrayBuffer();
       const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
-        audio.play().catch(() => undefined);
-      } catch {
-        // ignore
-      }
+      audio.play().catch(() => undefined);
+    } catch {
+      // ignore
+    }
   }, []);
 
-  const formatSlot = React.useCallback((suggestion: BookingSuggestion): string => {
-    const start = new Date(suggestion.startAt);
-    const end = new Date(suggestion.endAt);
-    return `${start.toLocaleString(undefined, {
-      weekday: "short",
-      hour: "numeric",
-      minute: "2-digit",
-      timeZone: TEAM_TIME_ZONE
-    })} - ${end.toLocaleTimeString(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-      timeZone: TEAM_TIME_ZONE
-    })}`;
-  }, []);
+  const formatSlot = React.useCallback(
+    (suggestion: BookingSuggestion): string => {
+      const start = new Date(suggestion.startAt);
+      const end = new Date(suggestion.endAt);
+      return `${start.toLocaleString(undefined, {
+        weekday: "short",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: TEAM_TIME_ZONE,
+      })} - ${end.toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: TEAM_TIME_ZONE,
+      })}`;
+    },
+    [],
+  );
+
+  const executeApprovedAction = React.useCallback(
+    async (
+      action: Pick<ActionSuggestion, "id" | "type">,
+      payload: Record<string, unknown>,
+    ) => {
+      const temporaryBlocker = agentActionTemporaryBlocker(action.type);
+      if (temporaryBlocker) {
+        throw new AgentActionRequestError(temporaryBlocker);
+      }
+      if (
+        activeActionExecutionsRef.current.has(action.id) ||
+        completedActionExecutionsRef.current.has(action.id)
+      ) {
+        throw new AgentActionRequestError(
+          "This approved action is already running or completed.",
+        );
+      }
+
+      const expectedVersion = actionExpectedVersion(action.type, payload);
+      if (
+        (action.type === "cancel_appointment" ||
+          action.type === "reschedule_appointment") &&
+        !expectedVersion
+      ) {
+        throw new AgentActionRequestError(
+          "The appointment version is missing. Ask the Agent to refresh the appointment before approving this change.",
+        );
+      }
+
+      const fingerprint = JSON.stringify({ type: action.type, payload });
+      const previousKey = actionMutationKeysRef.current.get(action.id);
+      const idempotencyKey =
+        previousKey?.fingerprint === fingerprint
+          ? previousKey.key
+          : `agent:${action.id}:${crypto.randomUUID()}`;
+      actionMutationKeysRef.current.set(action.id, {
+        fingerprint,
+        key: idempotencyKey,
+      });
+      activeActionExecutionsRef.current.add(action.id);
+
+      try {
+        const previousApproval = actionApprovalProofsRef.current.get(action.id);
+        let approvalProof =
+          previousApproval?.fingerprint === fingerprint
+            ? previousApproval.proof
+            : null;
+        if (!approvalProof) {
+          const approvalKey = `agent-approval:${action.id}:${crypto.randomUUID()}`;
+          const approvalResponse = await fetch("/api/chat/action-approvals", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": approvalKey,
+              ...(expectedVersion
+                ? { "If-Match": `"${expectedVersion}"` }
+                : {}),
+            },
+            body: JSON.stringify({
+              actionType: action.type,
+              actionId: action.id,
+              payload,
+            }),
+          });
+          if (!approvalResponse.ok) {
+            throw new AgentActionRequestError(
+              await readTeamMutationError(
+                approvalResponse,
+                "The Agent approval could not be issued",
+              ),
+            );
+          }
+          const approvalCandidate: unknown = await approvalResponse
+            .json()
+            .catch(() => null);
+          approvalProof = readApprovalProof(approvalCandidate, actorId);
+          if (!approvalProof) {
+            throw new AgentActionRequestError(
+              "The approval service returned an unreadable proof, so no action was executed.",
+            );
+          }
+          actionApprovalProofsRef.current.set(action.id, {
+            fingerprint,
+            key: approvalKey,
+            proof: approvalProof,
+          });
+        }
+        const response = await fetch("/api/chat/actions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": idempotencyKey,
+            "X-Agent-Approval-Id": approvalProof.approvalId,
+            ...(expectedVersion ? { "If-Match": `"${expectedVersion}"` } : {}),
+          },
+          body: JSON.stringify({
+            type: action.type,
+            actionId: action.id,
+            payload,
+            approval: approvalProof,
+          }),
+        });
+        if (!response.ok) {
+          const errorPayload: unknown = await response
+            .clone()
+            .json()
+            .catch(() => null);
+          if (
+            response.status === 409 &&
+            isRecord(errorPayload) &&
+            typeof errorPayload["message"] === "string" &&
+            errorPayload["message"].toLowerCase().includes("approval expired")
+          ) {
+            actionApprovalProofsRef.current.delete(action.id);
+            actionMutationKeysRef.current.delete(action.id);
+          }
+          throw new AgentActionRequestError(
+            await readTeamMutationError(
+              response,
+              "The Agent action could not be completed",
+            ),
+          );
+        }
+
+        const candidate: unknown = await response.json().catch(() => null);
+        const success = parseAgentActionMutationSuccess(candidate, {
+          actionType: action.type,
+          actorId,
+          targetEntityId: actionTargetEntityId(action.type, payload),
+          expectedVersion,
+        });
+        if (!success) {
+          throw new AgentActionRequestError(
+            "The service returned an unreadable success receipt, so no success is being claimed. Keep these inputs and refresh before retrying to avoid a duplicate.",
+          );
+        }
+        completedActionExecutionsRef.current.add(action.id);
+        return success;
+      } catch (error) {
+        if (error instanceof AgentActionRequestError) throw error;
+        throw new AgentActionRequestError(
+          readTeamMutationException(
+            error,
+            "The Agent action could not be completed",
+          ),
+        );
+      } finally {
+        activeActionExecutionsRef.current.delete(action.id);
+      }
+    },
+    [actorId],
+  );
 
   const handleBook = React.useCallback(
-    async (booking: NonNullable<Message["booking"]>, suggestion: BookingOption) => {
+    async (
+      booking: NonNullable<Message["booking"]>,
+      suggestion: BookingOption,
+    ) => {
       if (bookingInFlight) return;
       const contact = contacts.find((c) => c.id === booking.contactId);
-      const property = contact?.properties.find((p) => p.id === booking.propertyId);
+      const property = contact?.properties.find(
+        (p) => p.id === booking.propertyId,
+      );
       const confirmLabel = `${formatSlot(suggestion)}${property ? ` at ${property.label}` : ""}`;
+      const approvalFingerprint = `${booking.contactId}:${booking.propertyId}:${suggestion.startAt}`;
+      let approvalId = bookingApprovalIdsRef.current.get(approvalFingerprint);
+      if (!approvalId) {
+        approvalId = crypto.randomUUID();
+        bookingApprovalIdsRef.current.set(approvalFingerprint, approvalId);
+      }
       setBookingStatus({ state: "confirming", label: confirmLabel });
       setBookingInFlight(true);
       try {
-        const res = await fetch("/api/chat/book", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        const success = await executeApprovedAction(
+          { id: approvalId, type: "book_appointment" },
+          {
             contactId: booking.contactId,
             propertyId: booking.propertyId,
             startAt: suggestion.startAt,
@@ -605,69 +1146,108 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                 ? [suggestion.selectedService]
                 : suggestion.services && suggestion.services.length
                   ? suggestion.services
-                  : ["junk_removal_primary"]
-          })
-        });
-        if (!res.ok) {
-          const errText = await res.text();
-          setBookingStatus({
-            state: "error",
-            message: `Booking failed (HTTP ${res.status}): ${errText.slice(0, 160)}`
-          });
-        } else {
-          const data = (await res.json()) as { appointmentId?: string; startAt?: string };
-          const when = data.startAt
-            ? new Date(data.startAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })
+                  : ["junk_removal_primary"],
+          },
+        );
+        const data = success.data.result;
+        const when =
+          typeof data["startAt"] === "string"
+            ? new Date(data["startAt"]).toLocaleString(undefined, {
+                timeZone: TEAM_TIME_ZONE,
+              })
             : formatSlot(suggestion);
-          setBookingStatus({
-            state: "success",
-            message: `Booked ${when}${contact ? ` for ${contact.name}` : ""}${property ? ` at ${property.label}` : ""}.`
+        setBookingStatus({
+          state: "success",
+          message: `Booked ${when}${contact ? ` for ${contact.name}` : ""}${property ? ` at ${property.label}` : ""}.`,
+        });
+        if (
+          typeof data["appointmentId"] === "string" &&
+          isExactAgentRecordVersion(success.receipt.version)
+        ) {
+          setLastBooked({
+            appointmentId: data["appointmentId"],
+            message: `Booked ${when}`,
+            version: success.receipt.version,
           });
         }
       } catch (error) {
         setBookingStatus({
           state: "error",
-          message: `Booking request failed: ${(error as Error).message}`
+          message:
+            error instanceof Error
+              ? error.message
+              : "The booking result could not be confirmed.",
         });
       } finally {
         setBookingInFlight(false);
       }
     },
-    [bookingInFlight, contacts, formatSlot]
+    [bookingInFlight, contacts, executeApprovedAction, formatSlot],
   );
 
-  const handleActionDismiss = React.useCallback((messageId: string, actionId: string) => {
-    setMessages((prev) =>
-      prev.map((msg) =>
-        msg.id === messageId
-          ? { ...msg, actions: msg.actions?.filter((action) => action.id !== actionId) ?? [] }
-          : msg
-      )
-    );
-    setActionStatuses((prev) => {
-      const next = { ...prev };
-      delete next[actionId];
-      return next;
-    });
-  }, []);
+  const handleActionDismiss = React.useCallback(
+    (messageId: string, actionId: string) => {
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === messageId
+            ? {
+                ...msg,
+                actions:
+                  msg.actions?.filter((action) => action.id !== actionId) ?? [],
+              }
+            : msg,
+        ),
+      );
+      setActionStatuses((prev) => {
+        const next = { ...prev };
+        delete next[actionId];
+        return next;
+      });
+    },
+    [],
+  );
 
   const handleActionConfirm = React.useCallback(
     async (action: ActionSuggestion) => {
-      setActionStatuses((prev) => ({ ...prev, [action.id]: { state: "running" } }));
+      if (
+        activeActionExecutionsRef.current.has(action.id) ||
+        completedActionExecutionsRef.current.has(action.id)
+      ) {
+        return;
+      }
+      setActionStatuses((prev) => ({
+        ...prev,
+        [action.id]: { state: "running" },
+      }));
       try {
         const payload = { ...action.payload };
         const picked = actionPickedContacts[action.id];
-        if (picked && typeof picked.id === "string" && picked.id.trim().length > 0) {
+        if (
+          picked &&
+          typeof picked.id === "string" &&
+          picked.id.trim().length > 0
+        ) {
           payload["contactId"] = picked.id.trim();
-          const label = formatCandidateLabel(picked);
-          if (label) payload["contactLabel"] = label;
-          if ("contactCandidates" in payload) delete payload["contactCandidates"];
         }
+        const pickedAppointment = actionPickedAppointments[action.id];
+        if (pickedAppointment) {
+          payload["appointmentId"] = pickedAppointment.id;
+          payload["expectedVersion"] = pickedAppointment.updatedAt;
+        }
+        delete payload["contactLabel"];
+        delete payload["contactCandidates"];
+        delete payload["appointmentCandidates"];
         if (action.type === "send_text" || action.type === "book_appointment") {
-          if (typeof payload["contactId"] !== "string" || !payload["contactId"].trim().length) {
+          if (
+            typeof payload["contactId"] !== "string" ||
+            !payload["contactId"].trim().length
+          ) {
             setActionStatuses((prev) => ({
               ...prev,
-              [action.id]: { state: "error", message: "Pick the correct contact first." }
+              [action.id]: {
+                state: "error",
+                message: "Pick the correct contact first.",
+              },
             }));
             return;
           }
@@ -680,11 +1260,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
             payload["body"] = note;
           } else if (action.type === "create_reminder") {
             payload["notes"] = note;
-          } else {
+          } else if (
+            action.type === "create_task" ||
+            action.type === "book_appointment"
+          ) {
             payload["note"] = note;
-            if (action.type === "create_quote") {
-              payload["notes"] = note;
-            }
+          } else if (action.type === "create_quote") {
+            payload["notes"] = note;
+          } else if (action.type === "google_ads_recommendations_bulk_update") {
+            payload["note"] = note;
           }
         }
         if (action.type === "create_reminder") {
@@ -695,95 +1279,108 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           const datePart = actionReminderDate[action.id];
           const timePart = actionReminderTime[action.id];
           if (datePart) {
-            const iso = timePart ? `${datePart}T${timePart}:00` : `${datePart}T09:00:00`;
+            const iso = timePart
+              ? `${datePart}T${timePart}:00`
+              : `${datePart}T09:00:00`;
             payload["dueAt"] = new Date(iso).toISOString();
           }
         }
         if (action.type === "book_appointment") {
           const selected = actionServices[action.id];
-          payload["services"] =
-            selected && selected.length
-              ? [selected]
-              : Array.isArray(action.payload?.["services"]) && action.payload["services"].length
-                ? action.payload["services"]
-                : ["junk_removal_primary"];
+          const proposedServices = readStringList(action.payload["services"]);
+          payload["services"] = selected?.length
+            ? [selected]
+            : proposedServices.length
+              ? proposedServices
+              : ["junk_removal_primary"];
           const chosenDuration = actionDurations[action.id];
+          const proposedDuration = action.payload["durationMinutes"];
           payload["durationMinutes"] =
             typeof chosenDuration === "number" && chosenDuration > 0
               ? chosenDuration
-              : action.payload?.["durationMinutes"] ?? 60;
+              : typeof proposedDuration === "number" && proposedDuration > 0
+                ? proposedDuration
+                : 60;
           const chosenTravel = actionTravel[action.id];
+          const proposedTravel = action.payload["travelBufferMinutes"];
           payload["travelBufferMinutes"] =
             typeof chosenTravel === "number" && chosenTravel >= 0
               ? chosenTravel
-              : action.payload?.["travelBufferMinutes"] ?? 30;
+              : typeof proposedTravel === "number" && proposedTravel >= 0
+                ? proposedTravel
+                : 30;
           const datePart = actionStartDate[action.id];
           const timePart = actionStartTime[action.id];
           if (datePart) {
-            const iso = timePart ? `${datePart}T${timePart}:00` : `${datePart}T09:00:00`;
+            const iso = timePart
+              ? `${datePart}T${timePart}:00`
+              : `${datePart}T09:00:00`;
             payload["startAt"] = new Date(iso).toISOString();
           }
         }
         if (action.type === "reschedule_appointment") {
           const chosenDuration = actionDurations[action.id];
+          const proposedDuration = action.payload["durationMinutes"];
           payload["durationMinutes"] =
             typeof chosenDuration === "number" && chosenDuration > 0
               ? chosenDuration
-              : action.payload?.["durationMinutes"] ?? 60;
+              : typeof proposedDuration === "number" && proposedDuration > 0
+                ? proposedDuration
+                : 60;
           const chosenTravel = actionTravel[action.id];
+          const proposedTravel = action.payload["travelBufferMinutes"];
           payload["travelBufferMinutes"] =
             typeof chosenTravel === "number" && chosenTravel >= 0
               ? chosenTravel
-              : action.payload?.["travelBufferMinutes"] ?? 30;
+              : typeof proposedTravel === "number" && proposedTravel >= 0
+                ? proposedTravel
+                : 30;
           const datePart = actionStartDate[action.id];
           const timePart = actionStartTime[action.id];
           if (datePart) {
-            const iso = timePart ? `${datePart}T${timePart}:00` : `${datePart}T09:00:00`;
+            const iso = timePart
+              ? `${datePart}T${timePart}:00`
+              : `${datePart}T09:00:00`;
             payload["startAt"] = new Date(iso).toISOString();
           }
         }
-        const res = await fetch("/api/chat/actions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: action.type, payload })
-        });
-        if (!res.ok) {
-          const detail = await res.text();
-          setActionStatuses((prev) => ({
-            ...prev,
-            [action.id]: { state: "error", message: `Action failed (HTTP ${res.status}): ${detail.slice(0, 140)}` }
-          }));
-          setActionHistory((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              summary: `Action error: ${action.summary}`,
-              status: "error",
-              message: `Action failed (HTTP ${res.status})`
-            }
-          ]);
-          return;
-        }
-        const data = (await res.json().catch(() => ({}))) as { result?: { summary?: string; appointmentId?: string } };
-        const summary =
-          data?.result && typeof data.result === "object"
-            ? (data.result as any).summary ?? "Action completed"
-            : "Action completed";
+        const success = await executeApprovedAction(action, payload);
+        const result = readActionResult(success.data.result);
+        const { summary } = result;
         setActionStatuses((prev) => ({
           ...prev,
-          [action.id]: { state: "success", message: summary }
+          [action.id]: { state: "success", message: summary },
         }));
-        setActionHistory((prev) => [...prev.slice(-6), { id: action.id, summary: action.summary, status: "success", message: summary }]);
+        setActionHistory((prev) => [
+          ...prev.slice(-6),
+          {
+            id: action.id,
+            summary: action.summary,
+            status: "success",
+            message: summary,
+          },
+        ]);
         if (action.type === "book_appointment") {
-          const appointmentId = (data?.result as any)?.appointmentId;
-          if (appointmentId) {
-            setLastBooked({ appointmentId, message: summary });
+          const { appointmentId } = result;
+          if (
+            appointmentId &&
+            isExactAgentRecordVersion(success.receipt.version)
+          ) {
+            setLastBooked({
+              appointmentId,
+              message: summary,
+              version: success.receipt.version,
+            });
           }
         }
       } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "The Agent action result could not be confirmed.";
         setActionStatuses((prev) => ({
           ...prev,
-          [action.id]: { state: "error", message: `Action request failed: ${(error as Error).message}` }
+          [action.id]: { state: "error", message },
         }));
         setActionHistory((prev) => [
           ...prev,
@@ -791,14 +1388,14 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
             id: crypto.randomUUID(),
             summary: `Action error: ${action.summary}`,
             status: "error",
-            message: `Action failed: ${(error as Error).message}`
-          }
+            message,
+          },
         ]);
       }
     },
     [
       actionPickedContacts,
-      formatCandidateLabel,
+      actionPickedAppointments,
       actionNotes,
       actionDurations,
       actionServices,
@@ -807,58 +1404,96 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
       actionStartTime,
       actionReminderDate,
       actionReminderTime,
-      actionReminderTitle
-    ]
+      actionReminderTitle,
+      executeApprovedAction,
+    ],
   );
 
   const handleUndoBooking = React.useCallback(async () => {
     if (!lastBooked) return;
     setUndoStatus({ state: "running" });
     try {
-      const res = await fetch("/api/chat/actions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "cancel_appointment", payload: { appointmentId: lastBooked.appointmentId } })
+      const success = await executeApprovedAction(
+        {
+          id: `undo:${lastBooked.appointmentId}`,
+          type: "cancel_appointment",
+        },
+        {
+          appointmentId: lastBooked.appointmentId,
+          expectedVersion: lastBooked.version,
+        },
+      );
+      setUndoStatus({
+        state: "success",
+        message: readActionResult(success.data.result).summary,
       });
-      if (!res.ok) {
-        const detail = await res.text();
-        setUndoStatus({ state: "error", message: `Cancel failed (HTTP ${res.status}): ${detail.slice(0, 140)}` });
-        return;
-      }
-      setUndoStatus({ state: "success", message: "Appointment canceled" });
       setActionHistory((prev) => [
         ...prev,
-        { id: crypto.randomUUID(), summary: "Undo booking", status: "success", message: "Appointment canceled" }
+        {
+          id: crypto.randomUUID(),
+          summary: "Undo booking",
+          status: "success",
+          message: "Appointment canceled",
+        },
       ]);
       setLastBooked(null);
     } catch (error) {
-      setUndoStatus({ state: "error", message: `Cancel failed: ${(error as Error).message}` });
+      setUndoStatus({
+        state: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "The cancellation result could not be confirmed.",
+      });
     }
-  }, [lastBooked]);
+  }, [executeApprovedAction, lastBooked]);
 
   return (
     <div className="space-y-4">
       <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <header className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Stonegate Agent</h2>
+            <h2 className="text-lg font-semibold text-slate-900">
+              Stonegate Agent
+            </h2>
             <p className="text-sm text-slate-500">
-              Ask questions or request actions. The agent proposes changes and waits for your confirmation before executing.
+              Ask questions or request actions. The agent proposes changes and
+              waits for your confirmation before executing.
             </p>
           </div>
         </header>
+
+        <div
+          className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs text-sky-900"
+          role="note"
+          aria-label="Current agent context and approval boundary"
+        >
+          <p className="font-semibold">
+            Context: {defaultContextContact?.name ?? "No contact fixed"}
+            {defaultContextProperty ? ` · ${defaultContextProperty.label}` : ""}
+          </p>
+          <p className="mt-1 text-sky-800">
+            Answers are read-only. Any write appears below with its exact
+            parameters and will run only after you confirm it.
+          </p>
+        </div>
 
         <div className="mt-5 flex h-[420px] flex-col rounded-2xl border border-slate-200 bg-white/95">
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4 text-sm">
             {messages.map((message) => (
               <div key={message.id} className="space-y-2">
-                <div className={cn("flex", message.sender === "bot" ? "justify-start" : "justify-end")}>
+                <div
+                  className={cn(
+                    "flex",
+                    message.sender === "bot" ? "justify-start" : "justify-end",
+                  )}
+                >
                   <div
                     className={cn(
                       "max-w-[92%] rounded-xl px-3 py-2 leading-relaxed sm:max-w-[75%]",
                       message.sender === "bot"
                         ? "bg-slate-100 text-slate-700"
-                        : "bg-primary-100 text-slate-900 shadow-md shadow-primary-900/20"
+                        : "bg-primary-100 text-slate-900 shadow-md shadow-primary-900/20",
                     )}
                   >
                     {message.text}
@@ -866,7 +1501,12 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                 </div>
                 {message.sender === "bot" && message.id === lastBotMessageId ? (
                   <div className="flex items-center">
-                    <Button type="button" size="sm" variant="ghost" onClick={() => void handleSpeak(message.text)}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void handleSpeak(message.text)}
+                    >
                       Listen
                     </Button>
                   </div>
@@ -875,11 +1515,16 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                 {message.booking ? (
                   <div className="space-y-2 rounded-xl border border-primary-50 bg-primary-50/60 px-3 py-2">
                     {message.booking.propertyLabel ? (
-                      <div className="text-[11px] font-semibold text-primary-800">Property: {message.booking.propertyLabel}</div>
+                      <div className="text-[11px] font-semibold text-primary-800">
+                        Property: {message.booking.propertyLabel}
+                      </div>
                     ) : null}
                     <div className="flex flex-wrap gap-3 text-xs text-slate-700">
                       {message.booking.suggestions.map((suggestion, idx) => {
-                        const selected = suggestion.selectedService ?? (suggestion.services?.[0] ?? "junk_removal_primary");
+                        const selected =
+                          suggestion.selectedService ??
+                          suggestion.services?.[0] ??
+                          "junk_removal_primary";
                         return (
                           <div
                             key={`${message.id}-sugg-${idx}`}
@@ -887,7 +1532,12 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                           >
                             <button
                               type="button"
-                              onClick={() => void handleBook(message.booking!, { ...suggestion, selectedService: selected })}
+                              onClick={() =>
+                                void handleBook(message.booking!, {
+                                  ...suggestion,
+                                  selectedService: selected,
+                                })
+                              }
                               disabled={bookingInFlight}
                               className="rounded-full border border-primary-200 bg-primary-50 px-3 py-1 font-semibold text-primary-800 transition hover:border-primary-300 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-60"
                               title={suggestion.reason}
@@ -899,12 +1549,16 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                               value={selected}
                               onChange={(e) => {
                                 const next = e.target.value;
-                                message.booking!.suggestions = message.booking!.suggestions.map((s, i) =>
-                                  i === idx ? { ...s, selectedService: next } : s
-                                );
+                                message.booking!.suggestions =
+                                  message.booking!.suggestions.map((s, i) =>
+                                    i === idx
+                                      ? { ...s, selectedService: next }
+                                      : s,
+                                  );
                               }}
                             >
-                              {(suggestion.services && suggestion.services.length
+                              {(suggestion.services &&
+                              suggestion.services.length
                                 ? suggestion.services
                                 : ["junk_removal_primary"]
                               ).map((svc) => (
@@ -942,35 +1596,78 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
 
                 {message.actions && message.actions.length ? (
                   <div className="space-y-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Actions</div>
-                      {message.actions.map((action) => {
-                        const status = actionStatuses[action.id]?.state ?? "idle";
-                        const statusMessage = (actionStatuses[action.id] as any)?.message as string | undefined;
-                        const requiresContact = action.type === "send_text" || action.type === "book_appointment";
-                        const hasContactId =
-                          typeof action.payload?.["contactId"] === "string" && action.payload["contactId"].trim().length > 0;
-                        const pickedId = actionPickedContacts[action.id]?.id?.trim?.() ?? "";
-                        const hasPicked = typeof pickedId === "string" && pickedId.trim().length > 0;
-                        const needsContactPick = requiresContact && !hasContactId && !hasPicked;
-                        return (
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      Actions
+                    </div>
+                    {message.actions.map((action) => {
+                      const reviewDetails = ACTION_REVIEW_DETAILS[action.type];
+                      const temporaryBlocker = agentActionTemporaryBlocker(
+                        action.type,
+                      );
+                      const status = actionStatuses[action.id]?.state ?? "idle";
+                      const actionStatus = actionStatuses[action.id];
+                      const statusMessage =
+                        actionStatus && "message" in actionStatus
+                          ? actionStatus.message
+                          : undefined;
+                      const requiresContact =
+                        action.type === "send_text" ||
+                        action.type === "book_appointment";
+                      const hasContactId =
+                        typeof action.payload?.["contactId"] === "string" &&
+                        action.payload["contactId"].trim().length > 0;
+                      const pickedId =
+                        actionPickedContacts[action.id]?.id.trim() ?? "";
+                      const hasPicked = pickedId.length > 0;
+                      const needsContactPick =
+                        requiresContact && !hasContactId && !hasPicked;
+                      const requiresAppointment =
+                        action.type === "cancel_appointment" ||
+                        action.type === "reschedule_appointment";
+                      const hasAppointmentId =
+                        typeof action.payload["appointmentId"] === "string" &&
+                        action.payload["appointmentId"].trim().length > 0;
+                      const needsAppointmentPick =
+                        requiresAppointment &&
+                        !hasAppointmentId &&
+                        !actionPickedAppointments[action.id];
+                      return (
                         <div
                           key={action.id}
                           className="flex flex-col gap-2 rounded-lg border border-slate-100 bg-slate-50/80 px-2 py-2 text-xs text-slate-700"
                         >
                           <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
-                            <div className="font-semibold text-slate-800">{action.summary}</div>
+                            <div className="font-semibold text-slate-800">
+                              {action.summary}
+                            </div>
                             <div className="flex flex-wrap gap-2">
                               <button
                                 type="button"
                                 onClick={() => void handleActionConfirm(action)}
-                                disabled={status === "running" || status === "success" || needsContactPick}
+                                disabled={
+                                  status === "running" ||
+                                  status === "success" ||
+                                  Boolean(temporaryBlocker) ||
+                                  needsContactPick ||
+                                  needsAppointmentPick
+                                }
                                 className="rounded-full border border-primary-200 bg-primary-50 px-3 py-1 text-[11px] font-semibold text-primary-800 transition hover:border-primary-300 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-60"
                               >
-                                {status === "running" ? "Working..." : status === "success" ? "Done" : "Confirm"}
+                                {status === "running"
+                                  ? "Working..."
+                                  : status === "success"
+                                    ? "Done"
+                                    : status === "error"
+                                      ? "Retry safely"
+                                      : temporaryBlocker
+                                        ? "Temporarily unavailable"
+                                        : "Approve and execute"}
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleActionDismiss(message.id, action.id)}
+                                onClick={() =>
+                                  handleActionDismiss(message.id, action.id)
+                                }
                                 disabled={status === "running"}
                                 className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                               >
@@ -978,35 +1675,101 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                               </button>
                             </div>
                           </div>
+                          <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] leading-relaxed text-slate-600">
+                            <span className="font-semibold text-slate-700">
+                              Permission:
+                            </span>{" "}
+                            {reviewDetails.permission}
+                            <span aria-hidden="true"> · </span>
+                            <span className="font-semibold text-slate-700">
+                              Effect:
+                            </span>{" "}
+                            {reviewDetails.effect}
+                          </div>
+                          {temporaryBlocker ? (
+                            <div
+                              role="status"
+                              className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900"
+                            >
+                              {temporaryBlocker}
+                            </div>
+                          ) : null}
+                          {requiresAppointment && !hasAppointmentId ? (
+                            <div className="space-y-2 rounded-md border border-slate-200 bg-white px-2 py-2">
+                              <div className="text-[11px] font-semibold text-slate-700">
+                                Pick the exact appointment
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {readAppointmentCandidates(
+                                  action.payload["appointmentCandidates"],
+                                ).map((candidate) => {
+                                  const selected =
+                                    actionPickedAppointments[action.id]?.id ===
+                                    candidate.id;
+                                  return (
+                                    <button
+                                      key={candidate.id}
+                                      type="button"
+                                      className={cn(
+                                        "rounded-lg border px-3 py-2 text-left text-[11px] font-semibold transition",
+                                        selected
+                                          ? "border-primary-300 bg-primary-100 text-primary-900"
+                                          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300",
+                                      )}
+                                      onClick={() =>
+                                        setActionPickedAppointments(
+                                          (previous) => ({
+                                            ...previous,
+                                            [action.id]: candidate,
+                                          }),
+                                        )
+                                      }
+                                    >
+                                      {formatAppointmentCandidate(candidate)}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
                           {action.type === "book_appointment" ? (
                             <div className="grid gap-2 text-[11px] text-slate-600 sm:grid-cols-3">
                               {(() => {
-                                const candidates = Array.isArray(action.payload?.["contactCandidates"])
-                                  ? (action.payload["contactCandidates"] as ContactCandidate[])
-                                  : [];
+                                const candidates = readContactCandidates(
+                                  action.payload["contactCandidates"],
+                                );
                                 const hasContactId =
-                                  typeof action.payload?.["contactId"] === "string" && action.payload["contactId"].trim().length > 0;
-                                if (hasContactId || candidates.length === 0) return null;
+                                  typeof action.payload?.["contactId"] ===
+                                    "string" &&
+                                  action.payload["contactId"].trim().length > 0;
+                                if (hasContactId || candidates.length === 0)
+                                  return null;
                                 const picked = actionPickedContacts[action.id];
                                 if (!picked) {
                                   return (
                                     <div className="space-y-2 sm:col-span-3">
-                                      <div className="text-[11px] font-semibold text-slate-700">Pick contact</div>
+                                      <div className="text-[11px] font-semibold text-slate-700">
+                                        Pick contact
+                                      </div>
                                       <div className="flex flex-wrap gap-2">
                                         {candidates.map((candidate) => {
-                                          const label = formatCandidateLabel(candidate) || candidate.id;
+                                          const label =
+                                            formatCandidateLabel(candidate) ||
+                                            candidate.id;
                                           return (
                                             <button
                                               key={candidate.id ?? label}
                                               type="button"
                                               className={cn(
-                                                "rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-slate-300"
+                                                "rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-slate-300",
                                               )}
                                               onClick={() =>
-                                                setActionPickedContacts((prev) => ({
-                                                  ...prev,
-                                                  [action.id]: candidate
-                                                }))
+                                                setActionPickedContacts(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [action.id]: candidate,
+                                                  }),
+                                                )
                                               }
                                             >
                                               {label}
@@ -1019,15 +1782,22 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                 }
                                 return (
                                   <div className="space-y-2 sm:col-span-3">
-                                    <div className="text-[11px] text-slate-500">For: {formatCandidateLabel(picked)}</div>
+                                    <div className="text-[11px] text-slate-500">
+                                      For: {formatCandidateLabel(picked)}
+                                    </div>
                                     <details className="rounded-md border border-slate-200 bg-white px-2 py-2">
                                       <summary className="cursor-pointer select-none text-[11px] font-semibold text-slate-600">
                                         Change contact
                                       </summary>
                                       <div className="mt-2 flex flex-wrap gap-2">
                                         {candidates.map((candidate) => {
-                                          const label = formatCandidateLabel(candidate) || candidate.id;
-                                          const isPicked = picked?.id && candidate.id && picked.id === candidate.id;
+                                          const label =
+                                            formatCandidateLabel(candidate) ||
+                                            candidate.id;
+                                          const isPicked =
+                                            picked?.id &&
+                                            candidate.id &&
+                                            picked.id === candidate.id;
                                           return (
                                             <button
                                               key={candidate.id ?? label}
@@ -1036,13 +1806,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                                 "rounded-full border px-3 py-1 text-[11px] font-semibold transition",
                                                 isPicked
                                                   ? "border-primary-300 bg-primary-100 text-primary-900"
-                                                  : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                                                  : "border-slate-200 bg-white text-slate-700 hover:border-slate-300",
                                               )}
                                               onClick={() =>
-                                                setActionPickedContacts((prev) => ({
-                                                  ...prev,
-                                                  [action.id]: candidate
-                                                }))
+                                                setActionPickedContacts(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [action.id]: candidate,
+                                                  }),
+                                                )
                                               }
                                             >
                                               {label}
@@ -1055,16 +1827,25 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                 );
                               })()}
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Service</span>
+                                <span className="font-semibold text-slate-700">
+                                  Service
+                                </span>
                                 <select
                                   className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
-                                  value={actionServices[action.id] ?? "junk_removal_primary"}
+                                  value={
+                                    actionServices[action.id] ??
+                                    "junk_removal_primary"
+                                  }
                                   onChange={(e) =>
-                                    setActionServices((prev) => ({ ...prev, [action.id]: e.target.value }))
+                                    setActionServices((prev) => ({
+                                      ...prev,
+                                      [action.id]: e.target.value,
+                                    }))
                                   }
                                 >
-                                  {(Array.isArray(action.payload?.["services"]) && action.payload["services"].length
-                                    ? action.payload["services"]
+                                  {(readStringList(action.payload["services"])
+                                    .length
+                                    ? readStringList(action.payload["services"])
                                     : ["junk_removal_primary"]
                                   ).map((svc) => (
                                     <option key={svc} value={svc}>
@@ -1074,7 +1855,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                 </select>
                               </label>
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Duration (min)</span>
+                                <span className="font-semibold text-slate-700">
+                                  Duration (min)
+                                </span>
                                 <input
                                   type="number"
                                   min={15}
@@ -1085,13 +1868,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionDurations((prev) => ({
                                       ...prev,
-                                      [action.id]: Number(e.target.value)
+                                      [action.id]: Number(e.target.value),
                                     }))
                                   }
                                 />
                               </label>
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Travel buffer (min)</span>
+                                <span className="font-semibold text-slate-700">
+                                  Travel buffer (min)
+                                </span>
                                 <input
                                   type="number"
                                   min={0}
@@ -1102,13 +1887,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionTravel((prev) => ({
                                       ...prev,
-                                      [action.id]: Number(e.target.value)
+                                      [action.id]: Number(e.target.value),
                                     }))
                                   }
                                 />
                               </label>
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Start date</span>
+                                <span className="font-semibold text-slate-700">
+                                  Start date
+                                </span>
                                 <input
                                   type="date"
                                   className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
@@ -1116,13 +1903,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionStartDate((prev) => ({
                                       ...prev,
-                                      [action.id]: e.target.value
+                                      [action.id]: e.target.value,
                                     }))
                                   }
                                 />
                               </label>
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Start time</span>
+                                <span className="font-semibold text-slate-700">
+                                  Start time
+                                </span>
                                 <input
                                   type="time"
                                   className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
@@ -1130,13 +1919,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionStartTime((prev) => ({
                                       ...prev,
-                                      [action.id]: e.target.value
+                                      [action.id]: e.target.value,
                                     }))
                                   }
                                 />
                               </label>
                               <label className="flex flex-col gap-1 sm:col-span-3">
-                                <span className="font-semibold text-slate-700">Booking note (optional)</span>
+                                <span className="font-semibold text-slate-700">
+                                  Booking note (optional)
+                                </span>
                                 <textarea
                                   rows={2}
                                   className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px]"
@@ -1144,7 +1935,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionNotes((prev) => ({
                                       ...prev,
-                                      [action.id]: e.target.value
+                                      [action.id]: e.target.value,
                                     }))
                                   }
                                   placeholder="Add a short note for this booking"
@@ -1155,29 +1946,41 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                           {action.type === "reschedule_appointment" ? (
                             <div className="grid gap-2 text-[11px] text-slate-600 sm:grid-cols-3">
                               <label className="flex flex-col gap-1 sm:col-span-2">
-                                <span className="font-semibold text-slate-700">New date</span>
+                                <span className="font-semibold text-slate-700">
+                                  New date
+                                </span>
                                 <input
                                   type="date"
                                   className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
                                   value={actionStartDate[action.id] ?? ""}
                                   onChange={(e) =>
-                                    setActionStartDate((prev) => ({ ...prev, [action.id]: e.target.value }))
+                                    setActionStartDate((prev) => ({
+                                      ...prev,
+                                      [action.id]: e.target.value,
+                                    }))
                                   }
                                 />
                               </label>
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Time</span>
+                                <span className="font-semibold text-slate-700">
+                                  Time
+                                </span>
                                 <input
                                   type="time"
                                   className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
                                   value={actionStartTime[action.id] ?? ""}
                                   onChange={(e) =>
-                                    setActionStartTime((prev) => ({ ...prev, [action.id]: e.target.value }))
+                                    setActionStartTime((prev) => ({
+                                      ...prev,
+                                      [action.id]: e.target.value,
+                                    }))
                                   }
                                 />
                               </label>
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Duration (min)</span>
+                                <span className="font-semibold text-slate-700">
+                                  Duration (min)
+                                </span>
                                 <input
                                   type="number"
                                   min={15}
@@ -1188,13 +1991,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionDurations((prev) => ({
                                       ...prev,
-                                      [action.id]: Number(e.target.value)
+                                      [action.id]: Number(e.target.value),
                                     }))
                                   }
                                 />
                               </label>
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Travel buffer (min)</span>
+                                <span className="font-semibold text-slate-700">
+                                  Travel buffer (min)
+                                </span>
                                 <input
                                   type="number"
                                   min={0}
@@ -1205,7 +2010,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionTravel((prev) => ({
                                       ...prev,
-                                      [action.id]: Number(e.target.value)
+                                      [action.id]: Number(e.target.value),
                                     }))
                                   }
                                 />
@@ -1215,32 +2020,41 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                           {action.type === "send_text" ? (
                             <div className="grid gap-2 text-[11px] text-slate-600">
                               {(() => {
-                                const candidates = Array.isArray(action.payload?.["contactCandidates"])
-                                  ? (action.payload["contactCandidates"] as ContactCandidate[])
-                                  : [];
+                                const candidates = readContactCandidates(
+                                  action.payload["contactCandidates"],
+                                );
                                 const hasContactId =
-                                  typeof action.payload?.["contactId"] === "string" && action.payload["contactId"].trim().length > 0;
-                                if (hasContactId || candidates.length === 0) return null;
+                                  typeof action.payload?.["contactId"] ===
+                                    "string" &&
+                                  action.payload["contactId"].trim().length > 0;
+                                if (hasContactId || candidates.length === 0)
+                                  return null;
                                 const picked = actionPickedContacts[action.id];
                                 if (!picked) {
                                   return (
                                     <div className="space-y-2">
-                                      <div className="text-[11px] font-semibold text-slate-700">Pick contact</div>
+                                      <div className="text-[11px] font-semibold text-slate-700">
+                                        Pick contact
+                                      </div>
                                       <div className="flex flex-wrap gap-2">
                                         {candidates.map((candidate) => {
-                                          const label = formatCandidateLabel(candidate) || candidate.id;
+                                          const label =
+                                            formatCandidateLabel(candidate) ||
+                                            candidate.id;
                                           return (
                                             <button
                                               key={candidate.id ?? label}
                                               type="button"
                                               className={cn(
-                                                "rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-slate-300"
+                                                "rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-slate-300",
                                               )}
                                               onClick={() =>
-                                                setActionPickedContacts((prev) => ({
-                                                  ...prev,
-                                                  [action.id]: candidate
-                                                }))
+                                                setActionPickedContacts(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [action.id]: candidate,
+                                                  }),
+                                                )
                                               }
                                             >
                                               {label}
@@ -1258,8 +2072,13 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                     </summary>
                                     <div className="mt-2 flex flex-wrap gap-2">
                                       {candidates.map((candidate) => {
-                                        const label = formatCandidateLabel(candidate) || candidate.id;
-                                        const isPicked = picked?.id && candidate.id && picked.id === candidate.id;
+                                        const label =
+                                          formatCandidateLabel(candidate) ||
+                                          candidate.id;
+                                        const isPicked =
+                                          picked?.id &&
+                                          candidate.id &&
+                                          picked.id === candidate.id;
                                         return (
                                           <button
                                             key={candidate.id ?? label}
@@ -1268,13 +2087,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                               "rounded-full border px-3 py-1 text-[11px] font-semibold transition",
                                               isPicked
                                                 ? "border-primary-300 bg-primary-100 text-primary-900"
-                                                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                                                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300",
                                             )}
                                             onClick={() =>
-                                              setActionPickedContacts((prev) => ({
-                                                ...prev,
-                                                [action.id]: candidate
-                                              }))
+                                              setActionPickedContacts(
+                                                (prev) => ({
+                                                  ...prev,
+                                                  [action.id]: candidate,
+                                                }),
+                                              )
                                             }
                                           >
                                             {label}
@@ -1287,13 +2108,26 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                               })()}
                               {(() => {
                                 const payloadLabel =
-                                  typeof action.payload?.["contactLabel"] === "string" ? action.payload["contactLabel"].trim() : "";
-                                const pickedLabel = formatCandidateLabel(actionPickedContacts[action.id]);
-                                const label = payloadLabel.length ? payloadLabel : pickedLabel;
-                                return label ? <div className="text-[11px] text-slate-500">To: {label}</div> : null;
+                                  typeof action.payload?.["contactLabel"] ===
+                                  "string"
+                                    ? action.payload["contactLabel"].trim()
+                                    : "";
+                                const pickedLabel = formatCandidateLabel(
+                                  actionPickedContacts[action.id],
+                                );
+                                const label = payloadLabel.length
+                                  ? payloadLabel
+                                  : pickedLabel;
+                                return label ? (
+                                  <div className="text-[11px] text-slate-500">
+                                    To: {label}
+                                  </div>
+                                ) : null;
                               })()}
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Text message (SMS)</span>
+                                <span className="font-semibold text-slate-700">
+                                  Text message (SMS)
+                                </span>
                                 <textarea
                                   rows={3}
                                   className="w-full resize-y rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px]"
@@ -1301,7 +2135,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionNotes((prev) => ({
                                       ...prev,
-                                      [action.id]: e.target.value
+                                      [action.id]: e.target.value,
                                     }))
                                   }
                                   placeholder="Type the SMS you want to send"
@@ -1312,7 +2146,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                           {action.type === "create_reminder" ? (
                             <div className="grid gap-2 text-[11px] text-slate-600 sm:grid-cols-3">
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Due date</span>
+                                <span className="font-semibold text-slate-700">
+                                  Due date
+                                </span>
                                 <input
                                   type="date"
                                   className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
@@ -1320,13 +2156,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionReminderDate((prev) => ({
                                       ...prev,
-                                      [action.id]: e.target.value
+                                      [action.id]: e.target.value,
                                     }))
                                   }
                                 />
                               </label>
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Due time</span>
+                                <span className="font-semibold text-slate-700">
+                                  Due time
+                                </span>
                                 <input
                                   type="time"
                                   className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
@@ -1334,13 +2172,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionReminderTime((prev) => ({
                                       ...prev,
-                                      [action.id]: e.target.value
+                                      [action.id]: e.target.value,
                                     }))
                                   }
                                 />
                               </label>
                               <label className="flex flex-col gap-1">
-                                <span className="font-semibold text-slate-700">Title</span>
+                                <span className="font-semibold text-slate-700">
+                                  Title
+                                </span>
                                 <input
                                   type="text"
                                   className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
@@ -1348,14 +2188,16 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionReminderTitle((prev) => ({
                                       ...prev,
-                                      [action.id]: e.target.value
+                                      [action.id]: e.target.value,
                                     }))
                                   }
                                   placeholder="Call back"
                                 />
                               </label>
                               <label className="flex flex-col gap-1 sm:col-span-3">
-                                <span className="font-semibold text-slate-700">Notes (optional)</span>
+                                <span className="font-semibold text-slate-700">
+                                  Notes (optional)
+                                </span>
                                 <textarea
                                   rows={2}
                                   className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px]"
@@ -1363,7 +2205,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   onChange={(e) =>
                                     setActionNotes((prev) => ({
                                       ...prev,
-                                      [action.id]: e.target.value
+                                      [action.id]: e.target.value,
                                     }))
                                   }
                                   placeholder="Add context for the reminder"
@@ -1373,7 +2215,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                           ) : null}
                           {action.type === "add_contact_note" ? (
                             <div className="flex flex-col gap-1 text-[11px] text-slate-600">
-                              <span className="font-semibold text-slate-700">Note (required)</span>
+                              <span className="font-semibold text-slate-700">
+                                Note (required)
+                              </span>
                               <textarea
                                 rows={3}
                                 className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px]"
@@ -1381,16 +2225,19 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                 onChange={(e) =>
                                   setActionNotes((prev) => ({
                                     ...prev,
-                                    [action.id]: e.target.value
+                                    [action.id]: e.target.value,
                                   }))
                                 }
                                 placeholder="Add a note to this contact"
                               />
                             </div>
                           ) : null}
-                          {action.type === "create_quote" || action.type === "create_task" ? (
+                          {action.type === "create_quote" ||
+                          action.type === "create_task" ? (
                             <div className="flex flex-col gap-1 text-[11px] text-slate-600">
-                              <span className="font-semibold text-slate-700">Add note (optional)</span>
+                              <span className="font-semibold text-slate-700">
+                                Add note (optional)
+                              </span>
                               <textarea
                                 rows={2}
                                 className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px]"
@@ -1398,7 +2245,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                 onChange={(e) =>
                                   setActionNotes((prev) => ({
                                     ...prev,
-                                    [action.id]: e.target.value
+                                    [action.id]: e.target.value,
                                   }))
                                 }
                                 placeholder="Short note for this action"
@@ -1409,8 +2256,10 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                             <div className="text-[11px] text-slate-500">
                               Appointment:{" "}
                               {action.context.appointmentStartAt
-                                ? new Date(action.context.appointmentStartAt).toLocaleString(undefined, {
-                                    timeZone: TEAM_TIME_ZONE
+                                ? new Date(
+                                    action.context.appointmentStartAt,
+                                  ).toLocaleString(undefined, {
+                                    timeZone: TEAM_TIME_ZONE,
                                   })
                                 : "Timing TBD"}
                             </div>
@@ -1418,10 +2267,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                           {status === "error" || status === "success" ? (
                             <div
                               className={`text-[11px] ${
-                                status === "success" ? "text-emerald-700" : "text-rose-700"
+                                status === "success"
+                                  ? "text-emerald-700"
+                                  : "text-rose-700"
                               }`}
                             >
-                              {statusMessage ?? (status === "success" ? "Completed" : "Action failed")}
+                              {statusMessage ??
+                                (status === "success"
+                                  ? "Completed"
+                                  : "Action failed")}
                             </div>
                           ) : null}
                         </div>
@@ -1434,19 +2288,26 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
             {lastBooked ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-semibold">Booked: {lastBooked.message}</span>
+                  <span className="font-semibold">
+                    Booked: {lastBooked.message}
+                  </span>
                   <button
                     type="button"
                     onClick={() => void handleUndoBooking()}
                     disabled={undoStatus.state === "running"}
                     className="rounded-full border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-amber-800 hover:border-amber-400 disabled:opacity-60"
                   >
-                    {undoStatus.state === "running" ? "Canceling..." : "Undo booking"}
+                    {undoStatus.state === "running"
+                      ? "Canceling..."
+                      : "Undo booking"}
                   </button>
                 </div>
-                {undoStatus.state === "error" || undoStatus.state === "success" ? (
+                {undoStatus.state === "error" ||
+                undoStatus.state === "success" ? (
                   <div className="mt-1 text-[10px]">
-                    {undoStatus.state === "success" ? "Canceled." : undoStatus.message ?? "Undo failed"}
+                    {undoStatus.state === "success"
+                      ? "Canceled."
+                      : (undoStatus.message ?? "Undo failed")}
                   </div>
                 ) : null}
               </div>
@@ -1454,10 +2315,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
 
             {actionHistory.length ? (
               <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-700">
-                <div className="font-semibold text-slate-800">Recent actions</div>
+                <div className="font-semibold text-slate-800">
+                  Recent actions
+                </div>
                 <ul className="mt-1 space-y-1">
                   {actionHistory.slice(-5).map((entry) => (
-                    <li key={entry.id} className="flex items-start justify-between gap-2">
+                    <li
+                      key={entry.id}
+                      className="flex items-start justify-between gap-2"
+                    >
                       <span>{entry.summary}</span>
                       <span
                         className={cn(
@@ -1466,7 +2332,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                             ? "bg-emerald-100 text-emerald-700"
                             : entry.status === "error"
                               ? "bg-rose-100 text-rose-700"
-                              : "bg-slate-100 text-slate-600"
+                              : "bg-slate-100 text-slate-600",
                         )}
                       >
                         {entry.status}
@@ -1501,14 +2367,33 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                 placeholder="Type or talk..."
                 className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
-              <Button type="button" size="sm" disabled={!supportsRecording} onClick={handleMicToggle}>
-                {supportsRecording ? (isRecording ? "Stop" : isTranscribing ? "Working..." : "Talk") : "No mic"}
+              <Button
+                type="button"
+                size="sm"
+                disabled={!supportsRecording}
+                onClick={() => {
+                  void handleMicToggle();
+                }}
+              >
+                {supportsRecording
+                  ? isRecording
+                    ? "Stop"
+                    : isTranscribing
+                      ? "Working..."
+                      : "Talk"
+                  : "No mic"}
               </Button>
-              <Button type="submit" size="sm" disabled={isSending || isRecording || isTranscribing}>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={isSending || isRecording || isTranscribing}
+              >
                 {isSending ? "Sending..." : "Send"}
               </Button>
             </form>
-            {talkError ? <p className="mt-2 text-xs text-rose-700">{talkError}</p> : null}
+            {talkError ? (
+              <p className="mt-2 text-xs text-rose-700">{talkError}</p>
+            ) : null}
           </div>
         </div>
       </div>

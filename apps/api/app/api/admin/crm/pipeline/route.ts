@@ -4,107 +4,165 @@ import {
   getDb,
   crmPipeline,
   contacts,
-  properties,
   appointments,
   quotes,
-  crmTasks
+  crmTasks,
 } from "@/db";
-import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import {
+  getServiceAreaPolicy,
+  isPostalCodeAllowed,
+  normalizePostalCode,
+} from "@/lib/policy";
+import { requirePermission } from "@/lib/permissions";
+import { loadContactPropertiesForContacts } from "@/lib/property-write";
 import { isAdminRequest } from "../../../web/admin";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  ilike,
+  inArray,
+  isNull,
+  notIlike,
+  or,
+  sql,
+} from "drizzle-orm";
+import { parsePipelineQuery, pipelinePageWindow } from "./query";
 import { PIPELINE_STAGES } from "./stages";
 
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "pipeline.read");
+  if (permissionError) return permissionError;
 
   const db = getDb();
+  const query = parsePipelineQuery(request.url);
+  const searchPattern = query.q ? `%${query.q}%` : null;
+  const visibilityWhere = and(
+    isNull(contacts.deletedAt),
+    query.excludeOutbound
+      ? or(isNull(contacts.source), notIlike(contacts.source, "outbound:%"))
+      : undefined,
+    searchPattern
+      ? or(
+          ilike(contacts.firstName, searchPattern),
+          ilike(contacts.lastName, searchPattern),
+          ilike(contacts.email, searchPattern),
+          ilike(contacts.phone, searchPattern),
+          ilike(
+            sql<string>`concat_ws(' ', ${contacts.firstName}, ${contacts.lastName})`,
+            searchPattern,
+          ),
+        )
+      : undefined,
+  );
+  const pageWhere = and(
+    visibilityWhere,
+    query.stage ? eq(crmPipeline.stage, query.stage) : undefined,
+  );
 
-  const pipelineRows = await db
-    .select({
-      contactId: crmPipeline.contactId,
-      stage: crmPipeline.stage,
-      notes: crmPipeline.notes,
-      pipelineUpdatedAt: crmPipeline.updatedAt,
-      firstName: contacts.firstName,
-      lastName: contacts.lastName,
-      email: contacts.email,
-      phone: contacts.phone,
-      source: contacts.source,
-      updatedAt: contacts.updatedAt,
-      createdAt: contacts.createdAt
-    })
-    .from(crmPipeline)
-    .innerJoin(contacts, eq(crmPipeline.contactId, contacts.id));
+  const [pipelineRows, totalRows, stageCountRows, serviceArea] =
+    await Promise.all([
+      db
+        .select({
+          contactId: crmPipeline.contactId,
+          stage: crmPipeline.stage,
+          notes: crmPipeline.notes,
+          pipelineUpdatedAt: crmPipeline.updatedAt,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+          email: contacts.email,
+          phone: contacts.phone,
+          source: contacts.source,
+          updatedAt: contacts.updatedAt,
+          createdAt: contacts.createdAt,
+        })
+        .from(crmPipeline)
+        .innerJoin(contacts, eq(crmPipeline.contactId, contacts.id))
+        .where(pageWhere)
+        .orderBy(
+          desc(crmPipeline.updatedAt),
+          desc(contacts.updatedAt),
+          asc(crmPipeline.contactId),
+        )
+        .limit(query.limit)
+        .offset(query.offset),
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(crmPipeline)
+        .innerJoin(contacts, eq(crmPipeline.contactId, contacts.id))
+        .where(pageWhere),
+      db
+        .select({
+          stage: crmPipeline.stage,
+          count: sql<number>`count(*)`,
+        })
+        .from(crmPipeline)
+        .innerJoin(contacts, eq(crmPipeline.contactId, contacts.id))
+        .where(visibilityWhere)
+        .groupBy(crmPipeline.stage),
+      getServiceAreaPolicy(db),
+    ]);
 
-  if (pipelineRows.length === 0) {
-    return NextResponse.json({
-      stages: PIPELINE_STAGES,
-      lanes: PIPELINE_STAGES.map((stage) => ({ stage, contacts: [] }))
-    });
+  const total = Number(totalRows[0]?.count ?? 0);
+  const stageCounts = Object.fromEntries(
+    PIPELINE_STAGES.map((stage) => [stage, 0]),
+  ) as Record<(typeof PIPELINE_STAGES)[number], number>;
+  for (const row of stageCountRows) {
+    stageCounts[row.stage] = Number(row.count);
   }
 
-  const serviceArea = await getServiceAreaPolicy(db);
+  const contactIds = pipelineRows
+    .map((row) => row.contactId)
+    .filter((id): id is string => Boolean(id));
 
-  const contactIds = pipelineRows.map((row) => row.contactId).filter((id): id is string => Boolean(id));
-
-  const propertyRows =
+  const [propertyLinks, appointmentStats, quoteStats, noteStats] =
     contactIds.length > 0
-      ? await db
-          .select({
-            id: properties.id,
-            contactId: properties.contactId,
-            addressLine1: properties.addressLine1,
-            city: properties.city,
-            state: properties.state,
-            postalCode: properties.postalCode,
-            createdAt: properties.createdAt
-          })
-          .from(properties)
-          .where(inArray(properties.contactId, contactIds))
-      : [];
+      ? await Promise.all([
+          loadContactPropertiesForContacts(db, contactIds, {
+            limit: Math.min(contactIds.length * 10, 1_000),
+          }),
+          db
+            .select({
+              contactId: appointments.contactId,
+              count: sql<number>`count(*)`,
+              latest: sql<Date | null>`max(coalesce(${appointments.updatedAt}, ${appointments.startAt}))`,
+            })
+            .from(appointments)
+            .where(inArray(appointments.contactId, contactIds))
+            .groupBy(appointments.contactId),
+          db
+            .select({
+              contactId: quotes.contactId,
+              count: sql<number>`count(*)`,
+              latest: sql<Date | null>`max(${quotes.updatedAt})`,
+            })
+            .from(quotes)
+            .where(inArray(quotes.contactId, contactIds))
+            .groupBy(quotes.contactId),
+          db
+            .select({
+              contactId: crmTasks.contactId,
+              count: sql<number>`count(*)`,
+              latest: sql<Date | null>`max(${crmTasks.updatedAt})`,
+            })
+            .from(crmTasks)
+            .where(inArray(crmTasks.contactId, contactIds))
+            .groupBy(crmTasks.contactId),
+        ])
+      : [[], [], [], []];
+  const propertyRows = propertyLinks.map((row) => ({
+    ...row.property,
+    contactId: row.contactId,
+  }));
 
-  const appointmentStats =
-    contactIds.length > 0
-      ? await db
-          .select({
-            contactId: appointments.contactId,
-            count: sql<number>`count(*)`,
-            latest: sql<Date | null>`max(coalesce(${appointments.updatedAt}, ${appointments.startAt}))`
-          })
-          .from(appointments)
-          .where(inArray(appointments.contactId, contactIds))
-          .groupBy(appointments.contactId)
-      : [];
-
-  const quoteStats =
-    contactIds.length > 0
-      ? await db
-          .select({
-            contactId: quotes.contactId,
-            count: sql<number>`count(*)`,
-            latest: sql<Date | null>`max(${quotes.updatedAt})`
-          })
-          .from(quotes)
-          .where(inArray(quotes.contactId, contactIds))
-          .groupBy(quotes.contactId)
-      : [];
-
-  const noteStats =
-    contactIds.length > 0
-      ? await db
-          .select({
-            contactId: crmTasks.contactId,
-            count: sql<number>`count(*)`,
-            latest: sql<Date | null>`max(${crmTasks.updatedAt})`
-          })
-          .from(crmTasks)
-          .where(inArray(crmTasks.contactId, contactIds))
-          .groupBy(crmTasks.contactId)
-      : [];
-
-  const primaryPropertyByContact = new Map<string, (typeof propertyRows)[number]>();
+  const primaryPropertyByContact = new Map<
+    string,
+    (typeof propertyRows)[number]
+  >();
   for (const property of propertyRows) {
     if (!property.contactId) continue;
     const current = primaryPropertyByContact.get(property.contactId);
@@ -117,25 +175,40 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
   }
 
-  const appointmentMap = new Map<string, { count: number; latest: Date | null }>();
+  const appointmentMap = new Map<
+    string,
+    { count: number; latest: Date | null }
+  >();
   for (const stat of appointmentStats) {
     if (!stat.contactId) continue;
-    appointmentMap.set(stat.contactId, { count: Number(stat.count), latest: stat.latest });
+    appointmentMap.set(stat.contactId, {
+      count: Number(stat.count),
+      latest: stat.latest,
+    });
   }
 
   const quoteMap = new Map<string, { count: number; latest: Date | null }>();
   for (const stat of quoteStats) {
     if (!stat.contactId) continue;
-    quoteMap.set(stat.contactId, { count: Number(stat.count), latest: stat.latest });
+    quoteMap.set(stat.contactId, {
+      count: Number(stat.count),
+      latest: stat.latest,
+    });
   }
 
   const noteMap = new Map<string, { count: number; latest: Date | null }>();
   for (const stat of noteStats) {
     if (!stat.contactId) continue;
-    noteMap.set(stat.contactId, { count: Number(stat.count), latest: stat.latest });
+    noteMap.set(stat.contactId, {
+      count: Number(stat.count),
+      latest: stat.latest,
+    });
   }
 
-  const lanes = PIPELINE_STAGES.map((stage) => ({ stage, contacts: [] as Array<Record<string, unknown>> }));
+  const lanes = PIPELINE_STAGES.map((stage) => ({
+    stage,
+    contacts: [] as Array<Record<string, unknown>>,
+  }));
   const laneLookup = new Map<string, (typeof lanes)[number]>();
   for (const lane of lanes) {
     laneLookup.set(lane.stage, lane);
@@ -149,9 +222,13 @@ export async function GET(request: NextRequest): Promise<Response> {
     if (!lane) continue;
 
     const property = primaryPropertyByContact.get(contactId);
-    const normalizedPostalCode = property?.postalCode ? normalizePostalCode(property.postalCode) : null;
+    const normalizedPostalCode = property?.postalCode
+      ? normalizePostalCode(property.postalCode)
+      : null;
     const outOfArea =
-      normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
+      normalizedPostalCode !== null
+        ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea)
+        : null;
     const appointmentStat = appointmentMap.get(contactId);
     const quoteStat = quoteMap.get(contactId);
     const notes = noteMap.get(contactId) ?? { count: 0, latest: null };
@@ -161,7 +238,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       toDate(row.pipelineUpdatedAt ?? null),
       toDate(appointmentStat?.latest ?? null),
       toDate(quoteStat?.latest ?? null),
-      toDate(notes.latest ?? null)
+      toDate(notes.latest ?? null),
     ];
 
     const lastActivity =
@@ -179,7 +256,9 @@ export async function GET(request: NextRequest): Promise<Response> {
       pipeline: {
         stage,
         notes: row.notes ?? null,
-        updatedAt: row.pipelineUpdatedAt ? row.pipelineUpdatedAt.toISOString() : null
+        updatedAt: row.pipelineUpdatedAt
+          ? row.pipelineUpdatedAt.toISOString()
+          : null,
       },
       property: property
         ? {
@@ -188,29 +267,45 @@ export async function GET(request: NextRequest): Promise<Response> {
             city: property.city,
             state: property.state,
             postalCode: property.postalCode,
-            outOfArea
+            outOfArea,
           }
         : null,
       stats: {
         appointments: appointmentStat?.count ?? 0,
-        quotes: quoteStat?.count ?? 0
+        quotes: quoteStat?.count ?? 0,
       },
       notesCount: notes.count,
       lastActivityAt: lastActivity ? lastActivity.toISOString() : null,
       updatedAt: row.updatedAt.toISOString(),
-      createdAt: row.createdAt.toISOString()
+      createdAt: row.createdAt.toISOString(),
     });
   }
 
   for (const lane of lanes) {
     lane.contacts.sort((a, b) => {
-      const aTime = typeof a["lastActivityAt"] === "string" ? Date.parse(a["lastActivityAt"]) : 0;
-      const bTime = typeof b["lastActivityAt"] === "string" ? Date.parse(b["lastActivityAt"]) : 0;
+      const aTime =
+        typeof a["lastActivityAt"] === "string"
+          ? Date.parse(a["lastActivityAt"])
+          : 0;
+      const bTime =
+        typeof b["lastActivityAt"] === "string"
+          ? Date.parse(b["lastActivityAt"])
+          : 0;
       return bTime - aTime;
     });
   }
 
-  return NextResponse.json({ stages: PIPELINE_STAGES, lanes });
+  return NextResponse.json({
+    stages: PIPELINE_STAGES,
+    lanes,
+    stageCounts,
+    pagination: pipelinePageWindow(total, query.offset, query.limit),
+    filters: {
+      q: query.q,
+      stage: query.stage,
+      excludeOutbound: query.excludeOutbound,
+    },
+  });
 }
 function toDate(value: unknown): Date | null {
   if (!value) return null;

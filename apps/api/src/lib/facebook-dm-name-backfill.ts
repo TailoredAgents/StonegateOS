@@ -76,7 +76,7 @@ async function findLatestInboundFacebookMessage(contactId: string): Promise<{
   if (!row) return null;
   const metadata =
     row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
-      ? (row.metadata as Record<string, unknown>)
+      ? (row.metadata)
       : null;
 
   return {

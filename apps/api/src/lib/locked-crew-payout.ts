@@ -3,6 +3,11 @@ export type LockedCrewPayoutSplit = {
   splitBps: number;
 };
 
+export type ConfiguredCrewPayoutRule = {
+  ruleKey: string;
+  splits: LockedCrewPayoutSplit[];
+};
+
 export type LockedCrewPayoutResolution =
   | {
       ok: true;
@@ -33,28 +38,35 @@ function buildEqualSplits(memberIds: string[]): LockedCrewPayoutSplit[] {
   }));
 }
 
-const TEAM_MEMBER_IDS = {
-  austin: "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
-  devon: "b45988bb-7417-48c5-af6d-fcdf71088282",
-  jeffrey: "5ac5217e-3905-4ea3-bdeb-65456982f5e3",
-} as const;
+function normalizeConfiguredRule(
+  rule: ConfiguredCrewPayoutRule,
+): ConfiguredCrewPayoutRule | null {
+  const ruleKey = rule.ruleKey.normalize("NFKC").trim();
+  if (!ruleKey || ruleKey.length > 120 || rule.splits.length < 2) return null;
 
-const ADJUSTED_CREW_RULE_KEY = [
-  TEAM_MEMBER_IDS.austin,
-  TEAM_MEMBER_IDS.devon,
-  TEAM_MEMBER_IDS.jeffrey,
-]
-  .sort()
-  .join("|");
-
-const ADJUSTED_CREW_SPLITS = new Map<string, number>([
-  [TEAM_MEMBER_IDS.jeffrey, 300],
-  [TEAM_MEMBER_IDS.austin, 1000],
-  [TEAM_MEMBER_IDS.devon, 700],
-]);
+  const memberIds = new Set<string>();
+  const splits: LockedCrewPayoutSplit[] = [];
+  for (const split of rule.splits) {
+    const memberId = split.memberId.trim();
+    if (
+      !memberId ||
+      memberIds.has(memberId) ||
+      !Number.isInteger(split.splitBps) ||
+      split.splitBps <= 0 ||
+      split.splitBps > 1_000_000
+    ) {
+      return null;
+    }
+    memberIds.add(memberId);
+    splits.push({ memberId, splitBps: split.splitBps });
+  }
+  splits.sort((left, right) => left.memberId.localeCompare(right.memberId));
+  return { ruleKey, splits };
+}
 
 export function resolveLockedCrewPayout(
   memberIds: string[],
+  configuredRules: readonly ConfiguredCrewPayoutRule[] = [],
 ): LockedCrewPayoutResolution {
   const normalizedMemberIds = normalizeMemberIds(memberIds);
 
@@ -76,14 +88,41 @@ export function resolveLockedCrewPayout(
     };
   }
 
-  if (normalizedMemberIds.join("|") === ADJUSTED_CREW_RULE_KEY) {
+  const targetKey = normalizedMemberIds.join("|");
+  const matchingRules: ConfiguredCrewPayoutRule[] = [];
+  for (const configuredRule of configuredRules) {
+    const rule = normalizeConfiguredRule(configuredRule);
+    if (!rule) {
+      const rawMemberIds = normalizeMemberIds(
+        configuredRule.splits.map((split) => split.memberId),
+      );
+      if (rawMemberIds.join("|") === targetKey) {
+        return {
+          ok: false,
+          normalizedMemberIds,
+          reason: "invalid_rule",
+        };
+      }
+      continue;
+    }
+    if (rule.splits.map((split) => split.memberId).join("|") === targetKey) {
+      matchingRules.push(rule);
+    }
+  }
+
+  if (matchingRules.length > 1) {
+    return {
+      ok: false,
+      normalizedMemberIds,
+      reason: "invalid_rule",
+    };
+  }
+  const matchingRule = matchingRules[0];
+  if (matchingRule) {
     return {
       ok: true,
-      splits: normalizedMemberIds.map((memberId) => ({
-        memberId,
-        splitBps: ADJUSTED_CREW_SPLITS.get(memberId) ?? 0,
-      })),
-      ruleKey: "austin-devon-jeffrey-adjusted",
+      splits: matchingRule.splits,
+      ruleKey: matchingRule.ruleKey,
       isFallback: false,
     };
   }

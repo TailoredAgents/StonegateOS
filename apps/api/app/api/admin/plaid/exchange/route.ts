@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getPlaidClient, plaidConfigured } from "@/lib/plaid";
-import { isAdminRequest } from "../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 import { getDb, plaidItems, plaidAccounts } from "@/db";
 import { eq, type InferInsertModel } from "drizzle-orm";
 
@@ -11,9 +11,8 @@ type ExchangeRequest = {
 };
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const permissionError = await requirePermission(request, "payments.manage");
+  if (permissionError) return permissionError as NextResponse;
   if (!plaidConfigured()) {
     return NextResponse.json({ error: "plaid_not_configured" }, { status: 503 });
   }

@@ -2,7 +2,6 @@ import "dotenv/config";
 import Module from "node:module";
 import path from "node:path";
 import { nanoid } from "nanoid";
-import { eq } from "drizzle-orm";
 
 type ResolveFilename = Module["_resolveFilename"];
 
@@ -26,7 +25,10 @@ function registerAliases() {
 async function main() {
   registerAliases();
 
-  const { getDb, contacts, properties, quotes, outboxEvents } = await import("../apps/api/src/db");
+  const { getDb, contacts, quotes, outboxEvents } = await import("../apps/api/src/db");
+  const { loadContactPropertiesForContacts } = await import(
+    "../apps/api/src/lib/property-write"
+  );
   const { calculateQuoteBreakdown } = await import("../packages/pricing/src/engine/calculate");
   const { defaultPricingContext } = await import("../packages/pricing/src/config/defaults");
   const { processOutboxBatch } = await import("../apps/api/src/lib/outbox-processor");
@@ -48,18 +50,12 @@ async function main() {
     throw new Error("No contacts found. Seed a contact before running the quote demo.");
   }
 
-  const [property] = await db
-    .select({
-      id: properties.id,
-      contactId: properties.contactId,
-      addressLine1: properties.addressLine1,
-      city: properties.city,
-      state: properties.state,
-      postalCode: properties.postalCode
-    })
-    .from(properties)
-    .where(eq(properties.contactId, contact.id))
-    .limit(1);
+  const [propertyLink] = await loadContactPropertiesForContacts(
+    db,
+    [contact.id],
+    { limit: 100 },
+  );
+  const property = propertyLink?.property ?? null;
 
   if (!property) {
     throw new Error(`No properties found for contact ${contact.id}.`);

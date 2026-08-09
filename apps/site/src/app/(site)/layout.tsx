@@ -6,11 +6,13 @@ import { ChatBot } from "@/components/ChatBot";
 import { MetaPixel } from "@/components/MetaPixel";
 import { SiteStructuredData } from "@/components/StructuredData";
 import { WebAnalyticsClient } from "@/components/WebAnalyticsClient";
+import { PublicMarketingTags } from "@/components/PublicMarketingTags";
 
 export default function SiteLayout({ children }: { children: ReactNode }) {
   const metaPixelId = process.env["NEXT_PUBLIC_META_PIXEL_ID"] ?? null;
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-white via-neutral-100 to-white">
+      <PublicMarketingTags />
       <MetaPixel pixelId={metaPixelId} />
       <WebAnalyticsClient />
       <SiteStructuredData />
@@ -24,6 +26,5 @@ export default function SiteLayout({ children }: { children: ReactNode }) {
     </div>
   );
 }
-
 
 

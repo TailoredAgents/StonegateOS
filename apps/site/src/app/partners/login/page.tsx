@@ -1,10 +1,13 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { PARTNER_SESSION_COOKIE } from "@/lib/partner-session";
-import { requestPartnerMagicLinkAction, partnerPasswordLoginAction } from "../actions";
+import {
+  requestPartnerMagicLinkAction,
+  partnerPasswordLoginAction,
+} from "../actions";
 
 export default async function PartnerLoginPage({
-  searchParams
+  searchParams,
 }: {
   searchParams?: Promise<{ sent?: string; error?: string }>;
 }) {
@@ -14,25 +17,36 @@ export default async function PartnerLoginPage({
   if (hasSession) {
     return (
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
-        <h1 className="text-xl font-semibold text-slate-900">You're already signed in.</h1>
+        <h1 className="text-xl font-semibold text-slate-900">
+          You’re already signed in.
+        </h1>
         <p className="mt-2 text-sm text-slate-600">
-          Go to the <Link className="text-primary-700 underline" href="/partners">Partner Portal</Link>.
+          Go to the{" "}
+          <Link className="text-primary-700 underline" href="/partners">
+            Partner Portal
+          </Link>
+          .
         </p>
       </div>
     );
   }
 
   const sent = params.sent === "1";
-  const error = typeof params.error === "string" && params.error.trim().length ? params.error.trim() : null;
+  const error =
+    typeof params.error === "string" && params.error.trim().length
+      ? params.error.trim()
+      : null;
 
   return (
     <div className="grid gap-5 lg:grid-cols-2">
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
         <h1 className="text-xl font-semibold text-slate-900">Sign in</h1>
-        <p className="mt-1 text-sm text-slate-600">Get a secure login link by text or email.</p>
+        <p className="mt-1 text-sm text-slate-600">
+          Get a secure login link by text or email.
+        </p>
         {sent ? (
           <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-            If you're invited, we'll text and/or email you a secure link.
+            If you’re invited, we’ll text and/or email you a secure link.
           </div>
         ) : null}
         {error ? (
@@ -43,7 +57,9 @@ export default async function PartnerLoginPage({
 
         <form action={requestPartnerMagicLinkAction} className="mt-4 space-y-3">
           <label className="block">
-            <div className="text-xs font-semibold text-slate-700">Email or phone</div>
+            <div className="text-xs font-semibold text-slate-700">
+              Email or phone
+            </div>
             <input
               name="identifier"
               type="text"
@@ -62,8 +78,12 @@ export default async function PartnerLoginPage({
       </section>
 
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
-        <h2 className="text-lg font-semibold text-slate-900">Password sign-in</h2>
-        <p className="mt-1 text-sm text-slate-600">If you've set a password, you can sign in here.</p>
+        <h2 className="text-lg font-semibold text-slate-900">
+          Password sign-in
+        </h2>
+        <p className="mt-1 text-sm text-slate-600">
+          If you’ve set a password, you can sign in here.
+        </p>
         <form action={partnerPasswordLoginAction} className="mt-4 space-y-3">
           <label className="block">
             <div className="text-xs font-semibold text-slate-700">Email</div>
@@ -95,4 +115,3 @@ export default async function PartnerLoginPage({
     </div>
   );
 }
-

@@ -1,11 +1,14 @@
 import { and, eq, ilike, isNotNull, isNull, sql } from "drizzle-orm";
 import { crmTasks, outboxEvents } from "@/db";
+import type { getDb } from "@/db";
 
-type DatabaseClient = {
-  select: any;
-  insert: any;
-  update: any;
-};
+type DatabaseClient = ReturnType<typeof getDb>;
+type TransactionExecutor = Parameters<
+  DatabaseClient["transaction"]
+>[0] extends (tx: infer Tx) => Promise<unknown>
+  ? Tx
+  : never;
+type DbExecutor = DatabaseClient | TransactionExecutor;
 
 export type PartnerCheckinUpsertArgs = {
   contactId: string;
@@ -22,7 +25,11 @@ function upsertField(notes: string, key: string, value: string): string {
   return notes.length ? `${notes}\n${line}` : line;
 }
 
-async function ensureReminderOutbox(db: any, taskId: string, dueAt: Date): Promise<void> {
+async function ensureReminderOutbox(
+  db: DbExecutor,
+  taskId: string,
+  dueAt: Date,
+): Promise<void> {
   const [existing] = await db
     .select({ id: outboxEvents.id })
     .from(outboxEvents)
@@ -30,24 +37,30 @@ async function ensureReminderOutbox(db: any, taskId: string, dueAt: Date): Promi
       and(
         eq(outboxEvents.type, "crm.reminder.sms"),
         isNull(outboxEvents.processedAt),
-        sql`(${outboxEvents.payload} ->> 'taskId') = ${taskId}`
-      )
+        sql`(${outboxEvents.payload} ->> 'taskId') = ${taskId}`,
+      ),
     )
     .limit(1);
 
   if (existing?.id) {
-    await db.update(outboxEvents).set({ nextAttemptAt: dueAt }).where(eq(outboxEvents.id, existing.id));
+    await db
+      .update(outboxEvents)
+      .set({ nextAttemptAt: dueAt })
+      .where(eq(outboxEvents.id, existing.id));
     return;
   }
 
   await db.insert(outboxEvents).values({
     type: "crm.reminder.sms",
     payload: { taskId },
-    nextAttemptAt: dueAt
+    nextAttemptAt: dueAt,
   });
 }
 
-export async function upsertPartnerCheckinTask(db: any, args: PartnerCheckinUpsertArgs): Promise<{ taskId: string }> {
+export async function upsertPartnerCheckinTask(
+  db: DbExecutor,
+  args: PartnerCheckinUpsertArgs,
+): Promise<{ taskId: string }> {
   const now = new Date();
   const [existing] = await db
     .select({ id: crmTasks.id, notes: crmTasks.notes })
@@ -57,13 +70,14 @@ export async function upsertPartnerCheckinTask(db: any, args: PartnerCheckinUpse
         eq(crmTasks.contactId, args.contactId),
         eq(crmTasks.status, "open"),
         isNotNull(crmTasks.notes),
-        ilike(crmTasks.notes, "%kind=partner_checkin%")
-      )
+        ilike(crmTasks.notes, "%kind=partner_checkin%"),
+      ),
     )
     .limit(1);
 
   if (existing?.id) {
-    const existingNotes = typeof existing.notes === "string" ? existing.notes : "";
+    const existingNotes =
+      typeof existing.notes === "string" ? existing.notes : "";
     const nextNotes = upsertField(existingNotes, "kind", "partner_checkin");
     await db
       .update(crmTasks)
@@ -72,7 +86,7 @@ export async function upsertPartnerCheckinTask(db: any, args: PartnerCheckinUpse
         dueAt: args.dueAt,
         assignedTo: args.assignedTo,
         notes: nextNotes,
-        updatedAt: now
+        updatedAt: now,
       })
       .where(eq(crmTasks.id, existing.id));
     await ensureReminderOutbox(db, existing.id, args.dueAt);
@@ -88,7 +102,7 @@ export async function upsertPartnerCheckinTask(db: any, args: PartnerCheckinUpse
       dueAt: args.dueAt,
       assignedTo: args.assignedTo,
       status: "open",
-      notes
+      notes,
     })
     .returning({ id: crmTasks.id });
 
@@ -100,7 +114,10 @@ export async function upsertPartnerCheckinTask(db: any, args: PartnerCheckinUpse
   return { taskId: created.id };
 }
 
-export async function completePartnerCheckinTasks(db: any, args: { contactId: string }): Promise<void> {
+export async function completePartnerCheckinTasks(
+  db: DbExecutor,
+  args: { contactId: string },
+): Promise<void> {
   const now = new Date();
   const openTasks = await db
     .select({ id: crmTasks.id, notes: crmTasks.notes })
@@ -110,14 +127,20 @@ export async function completePartnerCheckinTasks(db: any, args: { contactId: st
         eq(crmTasks.contactId, args.contactId),
         eq(crmTasks.status, "open"),
         isNotNull(crmTasks.notes),
-        ilike(crmTasks.notes, "%kind=partner_checkin%")
-      )
+        ilike(crmTasks.notes, "%kind=partner_checkin%"),
+      ),
     );
 
   for (const task of openTasks) {
     const taskNotes = typeof task.notes === "string" ? task.notes : "";
-    const nextNotes = upsertField(upsertField(taskNotes, "kind", "partner_checkin"), "completedAt", now.toISOString());
-    await db.update(crmTasks).set({ status: "completed", notes: nextNotes, updatedAt: now }).where(eq(crmTasks.id, task.id));
+    const nextNotes = upsertField(
+      upsertField(taskNotes, "kind", "partner_checkin"),
+      "completedAt",
+      now.toISOString(),
+    );
+    await db
+      .update(crmTasks)
+      .set({ status: "completed", notes: nextNotes, updatedAt: now })
+      .where(eq(crmTasks.id, task.id));
   }
 }
-

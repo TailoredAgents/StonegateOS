@@ -5,6 +5,15 @@ import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Route } from "next";
 import { cn } from "@myst-os/ui";
+import {
+  parseTeamMotionPreference,
+  parseTeamThemePreference,
+  TEAM_MOTION_STORAGE_KEY,
+  TEAM_PREFERENCES_EVENT,
+  TEAM_THEME_STORAGE_KEY,
+  type TeamMotionPreference,
+  type TeamPreferencesEventDetail,
+} from "../team-preferences";
 
 export type TeamNavItem = {
   id: string;
@@ -163,7 +172,13 @@ function IconDocument(props: React.SVGProps<SVGSVGElement>) {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <path d="M8.75 11h6.5M8.75 14h6.5M8.75 17h4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path
+        d="M8.75 11h6.5M8.75 14h6.5M8.75 17h4.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
@@ -193,7 +208,13 @@ function IconMegaphone(props: React.SVGProps<SVGSVGElement>) {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <path d="M18.5 10.25v3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path
+        d="M18.5 10.25v3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
@@ -515,26 +536,78 @@ function iconForTab(id: string): React.ReactElement {
   }
 }
 
-function AccessPill({ label, enabled, tone }: { label: string; enabled: boolean; tone: "emerald" | "sky" | "primary" }) {
-  const base = "inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold";
+function AccessPill({
+  label,
+  enabled,
+  tone,
+}: {
+  label: string;
+  enabled: boolean;
+  tone: "emerald" | "sky" | "primary";
+}) {
+  const base =
+    "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold";
   const classes =
     tone === "emerald"
       ? enabled
         ? "bg-emerald-100 text-emerald-800"
-        : "bg-slate-100 text-slate-500"
+        : "bg-slate-100 text-slate-600"
       : tone === "sky"
         ? enabled
           ? "bg-sky-100 text-sky-800"
-          : "bg-slate-100 text-slate-500"
+          : "bg-slate-100 text-slate-600"
         : enabled
           ? "bg-primary-100 text-primary-800"
-          : "bg-slate-100 text-slate-500";
-  return <span className={cn(base, classes)}>{label}</span>;
+          : "bg-slate-100 text-slate-600";
+  return (
+    <span className={cn(base, classes)}>
+      <span>{label}</span>
+      <span>{enabled ? "Access" : "Restricted"}</span>
+    </span>
+  );
 }
 
 const SIDEBAR_STORAGE_KEY = "team.sidebar.collapsed.v1";
 const GROUPS_STORAGE_KEY = "team.sidebar.groups.collapsed.v1";
-const THEME_STORAGE_KEY = "team.theme.v1";
+const MOBILE_DRAWER_ID = "team-mobile-navigation";
+const TEAM_MAIN_ID = "team-main-content";
+const DESKTOP_MEDIA_QUERY = "(min-width: 1024px)";
+const MAX_MOBILE_DAILY_ANCHORS = 5;
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(",");
+
+function readTeamStorage(key: string): string | null {
+  try {
+    return globalThis.localStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeTeamStorage(key: string, value: string): void {
+  try {
+    globalThis.localStorage?.setItem(key, value);
+  } catch {
+    // The current visit remains usable when browser storage is unavailable.
+  }
+}
+
+function getDrawerFocusableElements(drawer: HTMLElement): HTMLElement[] {
+  return Array.from(
+    drawer.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+  ).filter(
+    (element) =>
+      !element.closest('[hidden], [inert], [aria-hidden="true"]') &&
+      element.getAttribute("aria-disabled") !== "true" &&
+      element.getClientRects().length > 0,
+  );
+}
 
 export function TeamAppShell(props: {
   activeId: string;
@@ -553,21 +626,34 @@ export function TeamAppShell(props: {
   const [isPending, startTransition] = React.useTransition();
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
-  const [collapsedGroups, setCollapsedGroups] = React.useState<Record<string, boolean>>({});
+  const [collapsedGroups, setCollapsedGroups] = React.useState<
+    Record<string, boolean>
+  >({});
   const [theme, setTheme] = React.useState<"light" | "dark">("light");
-  const mobileNavItems = React.useMemo(() => props.quickItems.slice(0, 5), [props.quickItems]);
+  const [motion, setMotion] = React.useState<TeamMotionPreference>("system");
+  const mobileMenuButtonRef = React.useRef<HTMLButtonElement>(null);
+  const mobileDrawerRef = React.useRef<HTMLDivElement>(null);
+  const mobileCloseButtonRef = React.useRef<HTMLButtonElement>(null);
+  const mobileFocusDestinationRef = React.useRef<"trigger" | "main">("trigger");
+  const mobileNavItems = React.useMemo(
+    () => props.quickItems.slice(0, MAX_MOBILE_DAILY_ANCHORS),
+    [props.quickItems],
+  );
   const utilityItems = props.utilityItems ?? [];
 
   React.useEffect(() => {
-    const stored = globalThis.localStorage?.getItem(SIDEBAR_STORAGE_KEY);
+    const stored = readTeamStorage(SIDEBAR_STORAGE_KEY);
     if (stored === "1") setCollapsed(true);
 
-    const storedTheme = globalThis.localStorage?.getItem(THEME_STORAGE_KEY);
-    if (storedTheme === "dark" || storedTheme === "light") {
-      setTheme(storedTheme);
-    }
+    const storedTheme = parseTeamThemePreference(
+      readTeamStorage(TEAM_THEME_STORAGE_KEY),
+    );
+    if (storedTheme) setTheme(storedTheme);
+    setMotion(
+      parseTeamMotionPreference(readTeamStorage(TEAM_MOTION_STORAGE_KEY)),
+    );
 
-    const groupsStored = globalThis.localStorage?.getItem(GROUPS_STORAGE_KEY);
+    const groupsStored = readTeamStorage(GROUPS_STORAGE_KEY);
     if (!groupsStored) return;
     try {
       const parsed = JSON.parse(groupsStored) as unknown;
@@ -576,25 +662,48 @@ export function TeamAppShell(props: {
         parsed.reduce<Record<string, boolean>>((acc, groupId) => {
           if (typeof groupId === "string") acc[groupId] = true;
           return acc;
-        }, {})
+        }, {}),
       );
     } catch {
       // ignore invalid JSON
     }
   }, []);
 
-  const handleToggleTheme = React.useCallback(() => {
-    setTheme((prev) => {
-      const next = prev === "dark" ? "light" : "dark";
-      globalThis.localStorage?.setItem(THEME_STORAGE_KEY, next);
-      return next;
-    });
+  React.useEffect(() => {
+    function handlePreferenceChange(event: Event): void {
+      if (!(event instanceof CustomEvent)) return;
+      const detail = event.detail as TeamPreferencesEventDetail | undefined;
+      const nextTheme = parseTeamThemePreference(detail?.theme);
+      if (nextTheme) setTheme(nextTheme);
+      if (detail?.motion) {
+        setMotion(parseTeamMotionPreference(detail.motion));
+      }
+    }
+
+    globalThis.addEventListener(TEAM_PREFERENCES_EVENT, handlePreferenceChange);
+    return () => {
+      globalThis.removeEventListener(
+        TEAM_PREFERENCES_EVENT,
+        handlePreferenceChange,
+      );
+    };
   }, []);
+
+  const handleToggleTheme = React.useCallback(() => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    writeTeamStorage(TEAM_THEME_STORAGE_KEY, next);
+    globalThis.dispatchEvent(
+      new CustomEvent<TeamPreferencesEventDetail>(TEAM_PREFERENCES_EVENT, {
+        detail: { theme: next },
+      }),
+    );
+  }, [theme]);
 
   const handleToggleCollapse = React.useCallback(() => {
     setCollapsed((prev) => {
       const next = !prev;
-      globalThis.localStorage?.setItem(SIDEBAR_STORAGE_KEY, next ? "1" : "0");
+      writeTeamStorage(SIDEBAR_STORAGE_KEY, next ? "1" : "0");
       return next;
     });
   }, []);
@@ -602,29 +711,115 @@ export function TeamAppShell(props: {
   const toggleGroupCollapsed = React.useCallback((groupId: string) => {
     setCollapsedGroups((prev) => {
       const next = { ...prev, [groupId]: !prev[groupId] };
-      try {
-        const collapsedIds = Object.entries(next)
-          .filter(([, isCollapsed]) => isCollapsed)
-          .map(([id]) => id);
-        globalThis.localStorage?.setItem(GROUPS_STORAGE_KEY, JSON.stringify(collapsedIds));
-      } catch {
-        // ignore persistence issues
-      }
+      const collapsedIds = Object.entries(next)
+        .filter(([, isCollapsed]) => isCollapsed)
+        .map(([id]) => id);
+      writeTeamStorage(GROUPS_STORAGE_KEY, JSON.stringify(collapsedIds));
       return next;
     });
   }, []);
 
   const handleNavigate = React.useCallback(
     (href: string) => {
+      mobileFocusDestinationRef.current = "main";
       setMobileOpen(false);
       startTransition(() => {
         router.push(href as Route);
       });
     },
-    [router]
+    [router],
   );
 
+  const closeMobileNavigation = React.useCallback(() => {
+    mobileFocusDestinationRef.current = "trigger";
+    setMobileOpen(false);
+  }, []);
+
+  const openMobileNavigation = React.useCallback(() => {
+    mobileFocusDestinationRef.current = "trigger";
+    setMobileOpen(true);
+  }, []);
+
+  React.useEffect(() => {
+    const desktopMedia = globalThis.matchMedia?.(DESKTOP_MEDIA_QUERY);
+    if (!desktopMedia) return;
+
+    function closeDrawerAtDesktop(event: MediaQueryListEvent): void {
+      if (event.matches) closeMobileNavigation();
+    }
+
+    if (desktopMedia.matches) closeMobileNavigation();
+    desktopMedia.addEventListener("change", closeDrawerAtDesktop);
+    return () => {
+      desktopMedia.removeEventListener("change", closeDrawerAtDesktop);
+    };
+  }, [closeMobileNavigation]);
+
+  React.useEffect(() => {
+    if (!mobileOpen) return;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const mobileMenuButton = mobileMenuButtonRef.current;
+    document.body.style.overflow = "hidden";
+    mobileCloseButtonRef.current?.focus();
+
+    function handleDrawerKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeMobileNavigation();
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+      const drawer = mobileDrawerRef.current;
+      if (!drawer) return;
+      const focusable = getDrawerFocusableElements(drawer);
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) {
+        event.preventDefault();
+        drawer.focus();
+        return;
+      }
+
+      const activeElement = document.activeElement;
+      if (
+        !(activeElement instanceof HTMLElement) ||
+        !drawer.contains(activeElement) ||
+        !focusable.includes(activeElement)
+      ) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleDrawerKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleDrawerKeyDown);
+      document.body.style.overflow = previousBodyOverflow;
+      const preferredFocusTarget =
+        mobileFocusDestinationRef.current === "main"
+          ? document.getElementById(TEAM_MAIN_ID)
+          : mobileMenuButton;
+      const fallbackFocusTarget = document.getElementById(TEAM_MAIN_ID);
+      const focusTarget = preferredFocusTarget?.getClientRects().length
+        ? preferredFocusTarget
+        : fallbackFocusTarget;
+      focusTarget?.focus();
+      mobileFocusDestinationRef.current = "trigger";
+    };
+  }, [closeMobileNavigation, mobileOpen]);
+
   const switchToClassic = React.useCallback(() => {
+    mobileFocusDestinationRef.current = "main";
+    setMobileOpen(false);
     startTransition(() => {
       router.push(props.classicHref as Route);
     });
@@ -635,90 +830,139 @@ export function TeamAppShell(props: {
   const isClassic = hasLayoutParam === "classic";
 
   const sidebarWidth = collapsed ? "w-[72px]" : "w-[280px]";
-  const themeClass = theme === "dark" ? "team-theme-dark" : "team-theme-light";
+  const themeClass = cn(
+    theme === "dark" ? "team-theme-dark" : "team-theme-light",
+    motion === "reduce" ? "team-reduce-motion" : null,
+  );
 
-  const SidebarContent = (
-    <div className={cn("flex h-full flex-col gap-5 px-3 py-4", collapsed ? "px-2" : "px-3")}>
-      <div className={cn("flex items-center justify-between", collapsed ? "px-1" : "px-2")}>
+  const renderSidebarContent = ({
+    isCollapsed,
+    isMobile,
+  }: {
+    isCollapsed: boolean;
+    isMobile: boolean;
+  }) => (
+    <div
+      className={cn(
+        "flex h-full flex-col gap-5 px-3 py-4",
+        isCollapsed ? "px-2" : "px-3",
+      )}
+    >
+      <div
+        className={cn(
+          "flex items-center justify-between",
+          isCollapsed ? "px-1" : "px-2",
+        )}
+      >
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] shadow-sm">
             {props.brand?.logoPath ? (
-              <Image src={props.brand.logoPath} alt="" aria-hidden="true" width={32} height={32} className="h-8 w-8 object-contain" />
+              <Image
+                src={props.brand.logoPath}
+                alt=""
+                aria-hidden="true"
+                width={32}
+                height={32}
+                className="h-8 w-8 object-contain"
+              />
             ) : (
               <IconGrid className="h-5 w-5 text-[color:var(--team-text)]" />
             )}
           </div>
-          {collapsed ? null : (
+          {isCollapsed ? null : (
             <div>
               <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--team-text-soft)]">
                 {props.brand?.shortName ?? "Team"}
               </div>
-              <div className="text-sm font-semibold text-[color:var(--team-text)]">Team Console</div>
+              <div className="text-sm font-semibold text-[color:var(--team-text)]">
+                Team Console
+              </div>
             </div>
           )}
         </div>
       </div>
 
-      <div className="space-y-2">
-        {collapsed ? null : <div className="px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">Quick</div>}
-        <div className="space-y-1">
-          {props.quickItems.map((item) => {
-            const active = item.id === props.activeId;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => handleNavigate(item.href)}
-                title={collapsed ? item.label : undefined}
-                className={cn(
-                  "group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-primary-200",
-                  active
-                    ? "bg-primary-50 text-primary-800 shadow-sm shadow-primary-100/60"
-                    : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text)]"
-                )}
-                aria-current={active ? "page" : undefined}
-              >
-                <span
+      <nav
+        className="flex min-h-0 flex-1 flex-col gap-5"
+        aria-label={
+          isMobile ? "Mobile team navigation" : "Primary team navigation"
+        }
+      >
+        <div className="space-y-2">
+          {isCollapsed ? null : (
+            <div className="px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">
+              Quick
+            </div>
+          )}
+          <div className="space-y-1">
+            {props.quickItems.map((item) => {
+              const active = item.id === props.activeId;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleNavigate(item.href)}
+                  title={isCollapsed ? item.label : undefined}
+                  aria-label={isCollapsed ? item.label : undefined}
                   className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-2xl border",
-                    active ? "border-primary-100 bg-[color:var(--team-surface)] text-primary-700" : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] group-hover:text-[color:var(--team-text)]"
+                    "group flex min-h-[44px] w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-primary-200",
+                    active
+                      ? "bg-primary-50 text-primary-800 shadow-sm shadow-primary-100/60"
+                      : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text)]",
                   )}
+                  aria-current={active ? "page" : undefined}
                 >
-                  {iconForTab(item.id)}
-                </span>
-                {collapsed ? null : <span className="truncate">{item.label}</span>}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto pr-1">
-        <div className="space-y-4">
-          {props.groups.map((group) => {
-            const isGroupCollapsed = collapsed ? false : Boolean(collapsedGroups[group.id]);
-            return (
-              <div key={group.id} className="space-y-2">
-                {collapsed ? null : (
-                  <button
-                    type="button"
-                    onClick={() => toggleGroupCollapsed(group.id)}
-                    className="flex w-full items-center justify-between rounded-2xl px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)] transition hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text-muted)] focus:outline-none focus:ring-2 focus:ring-primary-200"
-                    aria-expanded={!isGroupCollapsed}
+                  <span
+                    className={cn(
+                      "flex h-9 w-9 items-center justify-center rounded-2xl border",
+                      active
+                        ? "border-primary-100 bg-[color:var(--team-surface)] text-primary-700"
+                        : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] group-hover:text-[color:var(--team-text)]",
+                    )}
                   >
-                    <span>{group.label}</span>
-                    <span
-                      className={cn(
-                        "inline-flex h-6 w-6 items-center justify-center rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] transition",
-                        isGroupCollapsed ? "rotate-[-90deg]" : "rotate-0"
-                      )}
+                    {iconForTab(item.id)}
+                  </span>
+                  {isCollapsed ? null : (
+                    <span className="truncate">{item.label}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto pr-1">
+          <div className="space-y-4">
+            {props.groups.map((group) => {
+              const isGroupCollapsed = isCollapsed
+                ? false
+                : Boolean(collapsedGroups[group.id]);
+              return (
+                <div key={group.id} className="space-y-2">
+                  {isCollapsed ? null : (
+                    <button
+                      type="button"
+                      onClick={() => toggleGroupCollapsed(group.id)}
+                      className="flex min-h-[44px] w-full items-center justify-between rounded-2xl px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)] transition hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text-muted)] focus:outline-none focus:ring-2 focus:ring-primary-200"
+                      aria-expanded={!isGroupCollapsed}
+                      aria-controls={`${isMobile ? "mobile" : "desktop"}-team-sidebar-group-${group.id}`}
                     >
-                      <IconChevronDown className="h-4 w-4" />
-                    </span>
-                  </button>
-                )}
-                {isGroupCollapsed ? null : (
-                  <div className="space-y-1">
+                      <span>{group.label}</span>
+                      <span
+                        className={cn(
+                          "inline-flex h-6 w-6 items-center justify-center rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] transition",
+                          isGroupCollapsed ? "rotate-[-90deg]" : "rotate-0",
+                        )}
+                      >
+                        <IconChevronDown className="h-4 w-4" />
+                      </span>
+                    </button>
+                  )}
+                  <div
+                    id={`${isMobile ? "mobile" : "desktop"}-team-sidebar-group-${group.id}`}
+                    className="space-y-1"
+                    hidden={isGroupCollapsed}
+                  >
                     {group.items.map((item) => {
                       const active = item.id === props.activeId;
                       return (
@@ -726,12 +970,13 @@ export function TeamAppShell(props: {
                           key={item.id}
                           type="button"
                           onClick={() => handleNavigate(item.href)}
-                          title={collapsed ? item.label : undefined}
+                          title={isCollapsed ? item.label : undefined}
+                          aria-label={isCollapsed ? item.label : undefined}
                           className={cn(
-                            "group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-primary-200",
+                            "group flex min-h-[44px] w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-primary-200",
                             active
                               ? "bg-primary-50 text-primary-800 shadow-sm shadow-primary-100/60"
-                              : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text)]"
+                              : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text)]",
                           )}
                           aria-current={active ? "page" : undefined}
                         >
@@ -740,55 +985,105 @@ export function TeamAppShell(props: {
                               "flex h-9 w-9 items-center justify-center rounded-2xl border",
                               active
                                 ? "border-primary-100 bg-[color:var(--team-surface)] text-primary-700"
-                                : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] group-hover:text-[color:var(--team-text)]"
+                                : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] group-hover:text-[color:var(--team-text)]",
                             )}
                           >
                             {iconForTab(item.id)}
                           </span>
-                          {collapsed ? null : <span className="truncate">{item.label}</span>}
+                          {isCollapsed ? null : (
+                            <span className="truncate">{item.label}</span>
+                          )}
                         </button>
                       );
                     })}
                   </div>
-                )}
-              </div>
-            );
-          })}
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </div>
 
-      <div className={cn("mt-auto space-y-2", collapsed ? "px-1" : "px-2")}>
-        <button
-          type="button"
-          onClick={handleToggleCollapse}
-          className={cn(
-            "flex w-full items-center justify-center gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
-          )}
-        >
-          {collapsed ? <IconChevronRight className="h-4 w-4" /> : <IconChevronLeft className="h-4 w-4" />}
-          {collapsed ? null : <span>Collapse</span>}
-        </button>
-        <button
-          type="button"
-          onClick={handleToggleTheme}
-          className={cn(
-            "flex w-full items-center justify-center gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
-          )}
-        >
-          {theme === "dark" ? <IconSun className="h-4 w-4" /> : <IconMoon className="h-4 w-4" />}
-          {collapsed ? null : <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>}
-        </button>
+        {isMobile && utilityItems.length > 0 ? (
+          <div className="space-y-2 border-t border-[color:var(--team-border)] pt-4">
+            <div className="px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">
+              Account and tools
+            </div>
+            <div className="space-y-1">
+              {utilityItems.map((item) => {
+                const active = item.id === props.activeId;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleNavigate(item.href)}
+                    className={cn(
+                      "group flex min-h-[44px] w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-primary-200",
+                      active
+                        ? "bg-primary-50 text-primary-800 shadow-sm shadow-primary-100/60"
+                        : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text)]",
+                    )}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    <span
+                      className={cn(
+                        "flex h-9 w-9 items-center justify-center rounded-2xl border",
+                        active
+                          ? "border-primary-100 bg-[color:var(--team-surface)] text-primary-700"
+                          : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] group-hover:text-[color:var(--team-text)]",
+                      )}
+                    >
+                      {iconForTab(item.id)}
+                    </span>
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+      </nav>
+
+      <div className={cn("mt-auto space-y-2", isCollapsed ? "px-1" : "px-2")}>
+        {isMobile ? (
+          <button
+            type="button"
+            onClick={handleToggleTheme}
+            aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
+            className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
+          >
+            {theme === "dark" ? (
+              <IconSun className="h-4 w-4" />
+            ) : (
+              <IconMoon className="h-4 w-4" />
+            )}
+            <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleToggleCollapse}
+            aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
+          >
+            {isCollapsed ? (
+              <IconChevronRight className="h-4 w-4" />
+            ) : (
+              <IconChevronLeft className="h-4 w-4" />
+            )}
+            {isCollapsed ? null : <span>Collapse</span>}
+          </button>
+        )}
         {hasClassic ? (
           <button
             type="button"
             onClick={switchToClassic}
             className={cn(
-              "flex w-full items-center justify-center rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-[color:var(--team-border-strong)] hover:text-[color:var(--team-text)] focus:outline-none focus:ring-2 focus:ring-slate-200",
-              isClassic ? "opacity-60" : ""
+              "flex min-h-[44px] w-full items-center justify-center rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-[color:var(--team-border-strong)] hover:text-[color:var(--team-text)] focus:outline-none focus:ring-2 focus:ring-slate-200",
+              isClassic ? "opacity-60" : "",
             )}
             disabled={isClassic}
           >
-            {collapsed ? "Classic" : "Classic layout"}
+            {isCollapsed ? "Classic" : "Classic layout"}
           </button>
         ) : null}
       </div>
@@ -796,145 +1091,251 @@ export function TeamAppShell(props: {
   );
 
   return (
-    <div className={cn("min-h-screen bg-[color:var(--team-app-bg)] text-[color:var(--team-text)] transition-colors", themeClass)}>
-      <div className="flex min-h-screen w-full">
-        <aside
-          className={cn(
-            "hidden shrink-0 border-r border-[color:var(--team-border)] bg-[color:var(--team-sidebar-bg)] backdrop-blur lg:block",
-            sidebarWidth
-          )}
+    <div
+      className={cn(
+        "min-h-screen bg-[color:var(--team-app-bg)] text-[color:var(--team-text)] transition-colors",
+        themeClass,
+      )}
+    >
+      <div inert={mobileOpen ? true : undefined} className="min-h-screen">
+        <a
+          href={`#${TEAM_MAIN_ID}`}
+          className="sr-only fixed left-4 top-4 z-[100] rounded-xl bg-primary-700 px-4 py-3 font-semibold text-white shadow-xl focus:not-sr-only focus:outline-none focus:ring-2 focus:ring-primary-300"
         >
-          {SidebarContent}
-        </aside>
+          Skip to main content
+        </a>
+        <div className="flex min-h-screen w-full">
+          <aside
+            aria-label="Team sidebar"
+            className={cn(
+              "hidden shrink-0 border-r border-[color:var(--team-border)] bg-[color:var(--team-sidebar-bg)] backdrop-blur lg:block",
+              sidebarWidth,
+            )}
+          >
+            {renderSidebarContent({ isCollapsed: collapsed, isMobile: false })}
+          </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-40 border-b border-[color:var(--team-border)] bg-[color:var(--team-header-bg)] backdrop-blur">
-            <div className="flex w-full items-center justify-between gap-3 px-4 py-2.5 sm:gap-4 sm:px-6 sm:py-3">
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setMobileOpen(true)}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200 lg:hidden"
-                  aria-label="Open navigation"
-                >
-                  <IconMenu className="h-5 w-5" />
-                </button>
-                <div className="min-w-0">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[color:var(--team-text-soft)]">Team</div>
-                  <div className="truncate text-base font-semibold text-[color:var(--team-text)] sm:text-lg">{props.title}</div>
-                </div>
-                {isPending ? <span className="hidden text-xs font-semibold text-[color:var(--team-text-soft)] sm:inline">Loading...</span> : null}
-              </div>
-              <div className="flex items-center gap-2 sm:gap-3">
-                {utilityItems.map((item) => {
-                  const active = item.id === props.activeId;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => handleNavigate(item.href)}
-                      className={cn(
-                        "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border px-3 text-xs font-semibold shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary-200",
-                        active
-                          ? "border-primary-200 bg-primary-50 text-primary-800"
-                          : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text)] hover:border-primary-200 hover:text-primary-800"
-                      )}
-                      aria-current={active ? "page" : undefined}
+          <div className="flex min-w-0 flex-1 flex-col">
+            <header className="sticky top-0 z-40 border-b border-[color:var(--team-border)] bg-[color:var(--team-header-bg)] backdrop-blur">
+              <div className="flex w-full items-center justify-between gap-3 px-4 py-2.5 sm:gap-4 sm:px-6 sm:py-3">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <button
+                    ref={mobileMenuButtonRef}
+                    type="button"
+                    onClick={openMobileNavigation}
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200 lg:hidden"
+                    aria-label={
+                      mobileOpen ? "Close navigation" : "Open navigation"
+                    }
+                    aria-expanded={mobileOpen}
+                    aria-controls={MOBILE_DRAWER_ID}
+                    aria-haspopup="dialog"
+                  >
+                    <IconMenu className="h-5 w-5" />
+                  </button>
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[color:var(--team-text-soft)]">
+                      Team
+                    </div>
+                    <h1
+                      id="team-page-title"
+                      className="truncate text-base font-semibold text-[color:var(--team-text)] sm:text-lg"
                     >
-                      <span className="[&>svg]:h-4 [&>svg]:w-4">{iconForTab(item.id)}</span>
-                      <span className="hidden sm:inline">{item.label}</span>
-                    </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={handleToggleTheme}
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
-                >
-                  {theme === "dark" ? <IconSun className="h-4 w-4" /> : <IconMoon className="h-4 w-4" />}
-                  <span className="hidden sm:inline">{theme === "dark" ? "Light" : "Dark"}</span>
-                </button>
-                <div className="hidden items-center gap-2 md:flex">
-                  <AccessPill label="Crew" enabled={props.access.hasCrew || props.access.hasOwner} tone="emerald" />
-                  <AccessPill label="Office" enabled={props.access.hasOffice || props.access.hasOwner} tone="sky" />
-                  <AccessPill label="Owner" enabled={props.access.hasOwner} tone="primary" />
-                </div>
-                {props.user ? (
-                  <div className="hidden text-right text-xs text-[color:var(--team-text-muted)] sm:block">
-                    <div className="font-semibold text-[color:var(--team-text)]">{props.user.name}</div>
-                    {props.user.email ? <div className="truncate">{props.user.email}</div> : null}
+                      {props.title}
+                    </h1>
                   </div>
-                ) : null}
+                  {isPending ? (
+                    <span
+                      aria-hidden="true"
+                      className="hidden text-xs font-semibold text-[color:var(--team-text-soft)] sm:inline"
+                    >
+                      Loading...
+                    </span>
+                  ) : null}
+                  <span
+                    className="sr-only"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                  >
+                    {isPending ? `Loading ${props.title}` : ""}
+                  </span>
+                </div>
+                <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+                  {utilityItems.map((item) => {
+                    const active = item.id === props.activeId;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => handleNavigate(item.href)}
+                        aria-label={item.label}
+                        className={cn(
+                          "hidden min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-2xl border px-3 text-xs font-semibold shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary-200 sm:inline-flex",
+                          active
+                            ? "border-primary-200 bg-primary-50 text-primary-800"
+                            : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text)] hover:border-primary-200 hover:text-primary-800",
+                        )}
+                        aria-current={active ? "page" : undefined}
+                      >
+                        <span className="[&>svg]:h-4 [&>svg]:w-4">
+                          {iconForTab(item.id)}
+                        </span>
+                        <span className="hidden sm:inline">{item.label}</span>
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={handleToggleTheme}
+                    className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
+                    aria-label={
+                      theme === "dark" ? "Use light theme" : "Use dark theme"
+                    }
+                  >
+                    {theme === "dark" ? (
+                      <IconSun className="h-4 w-4" />
+                    ) : (
+                      <IconMoon className="h-4 w-4" />
+                    )}
+                    <span className="hidden sm:inline">
+                      {theme === "dark" ? "Light" : "Dark"}
+                    </span>
+                  </button>
+                  <div className="hidden items-center gap-2 xl:flex">
+                    <AccessPill
+                      label="Crew"
+                      enabled={props.access.hasCrew || props.access.hasOwner}
+                      tone="emerald"
+                    />
+                    <AccessPill
+                      label="Office"
+                      enabled={props.access.hasOffice || props.access.hasOwner}
+                      tone="sky"
+                    />
+                    <AccessPill
+                      label="Owner"
+                      enabled={props.access.hasOwner}
+                      tone="primary"
+                    />
+                  </div>
+                  {props.user ? (
+                    <div className="hidden text-right text-xs text-[color:var(--team-text-muted)] lg:block">
+                      <div className="font-semibold text-[color:var(--team-text)]">
+                        {props.user.name}
+                      </div>
+                      {props.user.email ? (
+                        <div className="truncate">{props.user.email}</div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               </div>
-            </div>
-          </header>
+            </header>
 
-          <div className="flex-1">
-            <main className="w-full space-y-5 px-4 py-5 pb-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] sm:space-y-6 sm:px-6 sm:py-8 sm:pb-8">
-              {props.children}
-            </main>
+            <div className="flex-1">
+              <main
+                id={TEAM_MAIN_ID}
+                tabIndex={-1}
+                aria-labelledby="team-page-title"
+                aria-busy={isPending}
+                className={cn(
+                  "w-full space-y-5 px-4 py-5 focus:outline-none sm:space-y-6 sm:px-6 sm:py-8 sm:pb-8",
+                  mobileNavItems.length > 0
+                    ? "pb-[calc(env(safe-area-inset-bottom,0px)+5.75rem)]"
+                    : "pb-5",
+                )}
+              >
+                {props.children}
+              </main>
+            </div>
           </div>
         </div>
+
+        {mobileNavItems.length > 0 ? (
+          <nav
+            aria-label="Quick team navigation"
+            className="fixed inset-x-0 bottom-0 z-40 border-t border-[color:var(--team-border)] bg-[color:var(--team-header-bg)]/95 px-2 pb-[calc(env(safe-area-inset-bottom,0px)+0.5rem)] pt-2 backdrop-blur lg:hidden"
+          >
+            <div
+              className="grid gap-1"
+              style={{
+                gridTemplateColumns: `repeat(${mobileNavItems.length}, minmax(0, 1fr))`,
+              }}
+            >
+              {mobileNavItems.map((item) => {
+                const active = item.id === props.activeId;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleNavigate(item.href)}
+                    className={cn(
+                      "flex min-h-[60px] flex-col items-center justify-center gap-1 rounded-2xl px-2 py-2 text-center text-[10px] font-semibold transition focus:outline-none focus:ring-2 focus:ring-primary-200",
+                      active
+                        ? "bg-primary-50 text-primary-800 shadow-sm shadow-primary-100/70"
+                        : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text)]",
+                    )}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    <span
+                      className={cn(
+                        "flex h-8 w-8 items-center justify-center rounded-2xl border",
+                        active
+                          ? "border-primary-100 bg-[color:var(--team-surface)] text-primary-700"
+                          : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)]",
+                      )}
+                    >
+                      {iconForTab(item.id)}
+                    </span>
+                    <span className="line-clamp-1 max-w-full">
+                      {item.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
+        ) : null}
       </div>
 
-      {mobileNavItems.length > 0 ? (
-        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[color:var(--team-border)] bg-[color:var(--team-header-bg)]/95 px-2 pb-[calc(env(safe-area-inset-bottom,0px)+0.5rem)] pt-2 backdrop-blur lg:hidden">
-          <div className="grid grid-cols-5 gap-1">
-            {mobileNavItems.map((item) => {
-              const active = item.id === props.activeId;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => handleNavigate(item.href)}
-                  className={cn(
-                    "flex min-h-[60px] flex-col items-center justify-center gap-1 rounded-2xl px-2 py-2 text-center text-[10px] font-semibold transition focus:outline-none focus:ring-2 focus:ring-primary-200",
-                    active
-                      ? "bg-primary-50 text-primary-800 shadow-sm shadow-primary-100/70"
-                      : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text)]"
-                  )}
-                  aria-current={active ? "page" : undefined}
-                >
-                  <span
-                    className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-2xl border",
-                      active
-                        ? "border-primary-100 bg-[color:var(--team-surface)] text-primary-700"
-                        : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)]"
-                    )}
-                  >
-                    {iconForTab(item.id)}
-                  </span>
-                  <span className="line-clamp-1 max-w-full">{item.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </nav>
-      ) : null}
-
       {mobileOpen ? (
-        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true">
-          <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
-          <div className="absolute inset-y-0 left-0 w-[300px] max-w-[85vw] border-r border-[color:var(--team-border)] bg-[color:var(--team-sidebar-bg)] shadow-2xl">
+        <div
+          id={MOBILE_DRAWER_ID}
+          className="fixed inset-0 z-50 lg:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="team-mobile-navigation-title"
+        >
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm"
+            onClick={closeMobileNavigation}
+          />
+          <div
+            ref={mobileDrawerRef}
+            tabIndex={-1}
+            className="absolute inset-y-0 left-0 w-[300px] max-w-[85vw] border-r border-[color:var(--team-border)] bg-[color:var(--team-sidebar-bg)] shadow-2xl focus:outline-none"
+          >
             <div className="flex items-center justify-between px-3 py-3">
-              <div className="text-sm font-semibold text-[color:var(--team-text)]">Navigation</div>
+              <h2
+                id="team-mobile-navigation-title"
+                className="text-sm font-semibold text-[color:var(--team-text)]"
+              >
+                Team navigation
+              </h2>
               <button
+                ref={mobileCloseButtonRef}
                 type="button"
-                onClick={() => setMobileOpen(false)}
-                className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm"
+                onClick={closeMobileNavigation}
+                className="min-h-[44px] rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200"
+                aria-label="Close navigation"
               >
                 Close
               </button>
             </div>
-            <div
-              className="h-[calc(100vh-52px)] overflow-y-auto"
-              onClick={(event) => {
-                const target = event.target as HTMLElement;
-                if (target.closest("button")) setMobileOpen(false);
-              }}
-            >
-              {SidebarContent}
+            <div className="h-[calc(100dvh-68px)] overscroll-contain overflow-y-auto">
+              {renderSidebarContent({ isCollapsed: false, isMobile: true })}
             </div>
           </div>
         </div>

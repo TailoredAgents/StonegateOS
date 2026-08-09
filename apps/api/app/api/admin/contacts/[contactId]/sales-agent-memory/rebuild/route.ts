@@ -2,7 +2,11 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
-import { buildSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
+import {
+  buildSalesAgentMemory,
+  upsertSalesAgentMemory,
+} from "@/lib/sales-agent-memory";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../../web/admin";
 
 type RouteContext = {
@@ -10,21 +14,37 @@ type RouteContext = {
 };
 
 function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
-export async function POST(_request: NextRequest, context: RouteContext): Promise<Response> {
+export async function POST(
+  _request: NextRequest,
+  context: RouteContext,
+): Promise<Response> {
   if (!isAdminRequest(_request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(_request, "contacts.write");
+  if (permissionError) return permissionError;
+  const includeQuotePrice =
+    _request.nextUrl.searchParams.get("includeQuotePrice") === "1";
+  if (includeQuotePrice) {
+    const quotePermissionError = await requirePermission(
+      _request,
+      "quotes.read",
+    );
+    if (quotePermissionError) return quotePermissionError;
+  }
 
   const { contactId } = await context.params;
-  const contactIdTrimmed = typeof contactId === "string" ? contactId.trim() : "";
+  const contactIdTrimmed =
+    typeof contactId === "string" ? contactId.trim() : "";
   if (!contactIdTrimmed || !isUuid(contactIdTrimmed)) {
     return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
   }
 
-  const includeQuotePrice = _request.nextUrl.searchParams.get("includeQuotePrice") === "1";
   const db = getDb();
   const liveContext = await loadOmniLeadContext(db, {
     contactId: contactIdTrimmed,

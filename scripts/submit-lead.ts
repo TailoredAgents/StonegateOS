@@ -1,25 +1,46 @@
 import "dotenv/config";
 import Module from "node:module";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { NextRequest } from "next/server";
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 type ResolvedModules = {
-  POST: typeof import("../apps/api/app/api/web/lead-intake/route") extends { POST: infer T } ? T : never;
-  getDb: typeof import("../apps/api/src/db") extends { getDb: infer T } ? T : never;
-  contacts: typeof import("../apps/api/src/db/schema") extends { contacts: infer T } ? T : never;
-  properties: typeof import("../apps/api/src/db/schema") extends { properties: infer T } ? T : never;
-  leads: typeof import("../apps/api/src/db/schema") extends { leads: infer T } ? T : never;
-  outboxEvents: typeof import("../apps/api/src/db/schema") extends { outboxEvents: infer T } ? T : never;
+  POST: typeof import("../apps/api/app/api/web/lead-intake/route") extends {
+    POST: infer T;
+  }
+    ? T
+    : never;
+  getDb: typeof import("../apps/api/src/db") extends { getDb: infer T }
+    ? T
+    : never;
+  contacts: typeof import("../apps/api/src/db/schema") extends {
+    contacts: infer T;
+  }
+    ? T
+    : never;
+  leads: typeof import("../apps/api/src/db/schema") extends { leads: infer T }
+    ? T
+    : never;
+  outboxEvents: typeof import("../apps/api/src/db/schema") extends {
+    outboxEvents: infer T;
+  }
+    ? T
+    : never;
+  propertyWrite: typeof import("../apps/api/src/lib/property-write");
 };
 
 function registerAliases() {
-  const originalResolve = (Module as unknown as { _resolveFilename: Module['_resolveFilename'] })._resolveFilename;
-  (Module as unknown as { _resolveFilename: Module['_resolveFilename'] })._resolveFilename = function (
+  const originalResolve = (
+    Module as unknown as { _resolveFilename: Module["_resolveFilename"] }
+  )._resolveFilename;
+  (
+    Module as unknown as { _resolveFilename: Module["_resolveFilename"] }
+  )._resolveFilename = function (
     request: string,
     parent: any,
     isMain: boolean,
-    options: any
+    options: any,
   ) {
     if (request.startsWith("@/")) {
       const absolute = path.resolve("apps/api/src", request.slice(2));
@@ -39,18 +60,20 @@ async function loadModules(): Promise<ResolvedModules> {
   const routeModule = await import("../apps/api/app/api/web/lead-intake/route");
   const dbModule = await import("../apps/api/src/db");
   const schemaModule = await import("../apps/api/src/db/schema");
+  const propertyWrite = await import("../apps/api/src/lib/property-write");
   return {
     POST: routeModule.POST,
     getDb: dbModule.getDb,
     contacts: schemaModule.contacts,
-    properties: schemaModule.properties,
     leads: schemaModule.leads,
-    outboxEvents: schemaModule.outboxEvents
+    outboxEvents: schemaModule.outboxEvents,
+    propertyWrite,
   };
 }
 
 async function main() {
-  const { POST, getDb, contacts, properties, leads, outboxEvents } = await loadModules();
+  const { POST, getDb, contacts, leads, outboxEvents, propertyWrite } =
+    await loadModules();
 
   const payload = {
     service: "furniture",
@@ -66,21 +89,22 @@ async function main() {
     utm: {
       source: "cli",
       medium: "automation",
-      campaign: "publish-and-capture"
+      campaign: "publish-and-capture",
     },
     gclid: "test-gclid",
     fbclid: "test-fbclid",
-    hp_company: ""
+    hp_company: "",
   };
 
   const request = new NextRequest("http://localhost:3001/api/web/lead-intake", {
     method: "POST",
     headers: new Headers({
       "content-type": "application/json",
+      "idempotency-key": `submit-lead:${randomUUID()}`,
       "x-forwarded-for": "203.0.113.10",
-      referer: "http://localhost:3000/"
+      referer: "http://localhost:3000/",
     }),
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   const response = await POST(request);
@@ -99,17 +123,23 @@ async function main() {
     throw new Error("Contact not found after submission");
   }
 
-  const [property] = await db
-    .select()
-    .from(properties)
-    .where(
-      and(
-        eq(properties.contactId, contact.id),
-        eq(properties.addressLine1, payload.addressLine1),
-        eq(properties.postalCode, payload.postalCode)
-      )
-    )
-    .limit(1);
+  const expectedAddress = propertyWrite.normalizePropertyAddress({
+    addressLine1: payload.addressLine1,
+    city: payload.city,
+    state: payload.state,
+    postalCode: payload.postalCode,
+  });
+  const propertyLinks = await propertyWrite.loadContactPropertiesForContacts(
+    db,
+    [contact.id],
+    { limit: 100 },
+  );
+  const property =
+    propertyLinks.find(
+      (link) =>
+        propertyWrite.normalizePropertyAddress(link.property).addressKey ===
+        expectedAddress.addressKey,
+    )?.property ?? null;
 
   const [lead] = await db
     .select()
@@ -130,7 +160,7 @@ async function main() {
     firstName: contact.firstName,
     lastName: contact.lastName,
     email: contact.email,
-    phoneE164: contact.phoneE164
+    phoneE164: contact.phoneE164,
   });
   console.log("property", property);
   console.log("lead", lead);

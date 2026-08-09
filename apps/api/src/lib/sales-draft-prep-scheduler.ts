@@ -1,6 +1,9 @@
 import { getDb } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
-import { evaluateSalesPlannerAutosendPolicy, getSalesAutopilotPolicy } from "@/lib/policy";
+import {
+  evaluateSalesPlannerAutosendPolicy,
+  getSalesAutopilotPolicy,
+} from "@/lib/policy";
 import { getDmLiveAutopilotState } from "@/lib/dm-autopilot";
 
 type TeamDirectoryPayload = {
@@ -56,12 +59,12 @@ function buildAdminHeaders(): HeadersInit | null {
     "x-api-key": apiKey,
     "x-actor-type": "worker",
     "x-actor-label": "sales-draft-prep",
-    "x-actor-role": "owner",
   };
 }
 
 function buildApiUrl(path: string): string | null {
-  const base = readEnvString("API_BASE_URL") ?? readEnvString("NEXT_PUBLIC_API_BASE_URL");
+  const base =
+    readEnvString("API_BASE_URL") ?? readEnvString("NEXT_PUBLIC_API_BASE_URL");
   if (!base) return null;
   return `${base.replace(/\/$/, "")}${path}`;
 }
@@ -72,7 +75,10 @@ function parseIsoDate(value: string | null | undefined): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function isPlannerActionDue(value: { dueAt?: string | null; status?: string | null } | null | undefined, now: Date): boolean {
+function isPlannerActionDue(
+  value: { dueAt?: string | null; status?: string | null } | null | undefined,
+  now: Date,
+): boolean {
   if (!value) return false;
   if (value.status === "dismissed" || value.status === "blocked") return false;
   const dueAt = parseIsoDate(value.dueAt ?? null);
@@ -80,7 +86,12 @@ function isPlannerActionDue(value: { dueAt?: string | null; status?: string | nu
   return dueAt.getTime() <= now.getTime();
 }
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<{ ok: true; data: T } | { ok: false; status?: number; error: string }> {
+async function fetchJson<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<
+  { ok: true; data: T } | { ok: false; status?: number; error: string }
+> {
   const url = buildApiUrl(path);
   const headers = buildAdminHeaders();
   if (!url || !headers) {
@@ -141,27 +152,45 @@ export async function prepareDueSalesQueueDrafts(input?: {
   membersScanned: number;
   error?: string | null;
 }> {
-  const maxMembers = Number.isFinite(input?.maxMembers) ? Math.max(1, Math.floor(input!.maxMembers!)) : 5;
+  const maxMembers = Number.isFinite(input?.maxMembers)
+    ? Math.max(1, Math.floor(input!.maxMembers!))
+    : 5;
   const maxDraftsPerMember = Number.isFinite(input?.maxDraftsPerMember)
     ? Math.max(1, Math.floor(input!.maxDraftsPerMember!))
     : 3;
   const autopilotPolicy = await getSalesAutopilotPolicy(getDb());
   const autoSendOverride = readEnvString("SALES_AGENT_AUTOSEND_ENABLED");
-  const overrideAutoSendEnabled = autoSendOverride === "1" ? true : autoSendOverride === "0" ? false : null;
+  const overrideAutoSendEnabled =
+    autoSendOverride === "1" ? true : autoSendOverride === "0" ? false : null;
   const autoSendMinDraftAgeMs = Math.max(
     60_000,
-    Number.parseInt(readEnvString("SALES_AGENT_AUTOSEND_MIN_DRAFT_AGE_MS") ?? "", 10) ||
-      autopilotPolicy.plannerAutoSendMinDraftAgeMinutes * 60_000,
+    Number.parseInt(
+      readEnvString("SALES_AGENT_AUTOSEND_MIN_DRAFT_AGE_MS") ?? "",
+      10,
+    ) || autopilotPolicy.plannerAutoSendMinDraftAgeMinutes * 60_000,
   );
 
-  const directoryResult = await fetchJson<TeamDirectoryPayload>("/api/admin/team/directory");
+  const directoryResult = await fetchJson<TeamDirectoryPayload>(
+    "/api/admin/team/directory",
+  );
   if (!directoryResult.ok) {
-    return { prepared: 0, reused: 0, autosent: 0, skipped: 0, membersScanned: 0, error: directoryResult.error };
+    return {
+      prepared: 0,
+      reused: 0,
+      autosent: 0,
+      skipped: 0,
+      membersScanned: 0,
+      error: directoryResult.error,
+    };
   }
 
   const members = Array.isArray(directoryResult.data.members)
     ? directoryResult.data.members
-        .map((member) => (typeof member?.id === "string" && member.id.trim().length > 0 ? member.id.trim() : null))
+        .map((member) =>
+          typeof member?.id === "string" && member.id.trim().length > 0
+            ? member.id.trim()
+            : null,
+        )
         .filter((value): value is string => Boolean(value))
         .slice(0, maxMembers)
     : [];
@@ -178,21 +207,33 @@ export async function prepareDueSalesQueueDrafts(input?: {
     );
     if (!queueResult.ok) continue;
 
-    const candidates = (Array.isArray(queueResult.data.items) ? queueResult.data.items : [])
+    const candidates = (
+      Array.isArray(queueResult.data.items) ? queueResult.data.items : []
+    )
       .filter((item) => {
-        const threadId = typeof item?.draftTarget?.threadId === "string" ? item.draftTarget.threadId.trim() : "";
-        const channel = typeof item?.draftTarget?.channel === "string" ? item.draftTarget.channel.trim() : "";
+        const threadId =
+          typeof item?.draftTarget?.threadId === "string"
+            ? item.draftTarget.threadId.trim()
+            : "";
+        const channel =
+          typeof item?.draftTarget?.channel === "string"
+            ? item.draftTarget.channel.trim()
+            : "";
         if (!threadId || !channel) return false;
 
         const draftCreatedAt = parseIsoDate(item?.draft?.createdAt ?? null);
         const draftIsOldEnough =
           draftCreatedAt instanceof Date &&
           now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
-        const autosendPolicy = evaluateSalesPlannerAutosendPolicy(autopilotPolicy, {
-          channel,
-          actionType: item?.nextAction?.actionType ?? null,
-          humanReviewRequired: item?.nextAction?.actionType === "human_follow_up",
-        });
+        const autosendPolicy = evaluateSalesPlannerAutosendPolicy(
+          autopilotPolicy,
+          {
+            channel,
+            actionType: item?.nextAction?.actionType ?? null,
+            humanReviewRequired:
+              item?.nextAction?.actionType === "human_follow_up",
+          },
+        );
         const autoSendEligible =
           (overrideAutoSendEnabled ?? autosendPolicy.allowed) &&
           item?.draft?.ready === true &&
@@ -200,8 +241,7 @@ export async function prepareDueSalesQueueDrafts(input?: {
           isPlannerActionDue(item?.nextAction ?? null, now);
 
         const prepEligible =
-          item?.draftPreparationEligible === true &&
-          item.draft?.ready !== true;
+          item?.draftPreparationEligible === true && item.draft?.ready !== true;
 
         return prepEligible || autoSendEligible;
       })
@@ -209,16 +249,24 @@ export async function prepareDueSalesQueueDrafts(input?: {
 
     for (const candidate of candidates) {
       const contactId =
-        typeof candidate.contact?.id === "string" && candidate.contact.id.trim().length > 0
+        typeof candidate.contact?.id === "string" &&
+        candidate.contact.id.trim().length > 0
           ? candidate.contact.id.trim()
           : null;
       const actionType =
-        typeof candidate.nextAction?.actionType === "string" && candidate.nextAction.actionType.trim().length > 0
+        typeof candidate.nextAction?.actionType === "string" &&
+        candidate.nextAction.actionType.trim().length > 0
           ? candidate.nextAction.actionType.trim()
           : null;
       const draftTarget = candidate.draftTarget;
-      const threadId = typeof draftTarget?.threadId === "string" ? draftTarget.threadId.trim() : "";
-      const channel = typeof draftTarget?.channel === "string" ? draftTarget.channel.trim() : "";
+      const threadId =
+        typeof draftTarget?.threadId === "string"
+          ? draftTarget.threadId.trim()
+          : "";
+      const channel =
+        typeof draftTarget?.channel === "string"
+          ? draftTarget.channel.trim()
+          : "";
       if (!threadId || !channel) {
         skipped += 1;
         await recordAuditEvent({
@@ -226,7 +274,12 @@ export async function prepareDueSalesQueueDrafts(input?: {
           action: "sales.agent.autosend.skipped",
           entityType: "conversation_thread",
           entityId: threadId || candidate.id || "unknown",
-          meta: { contactId, channel: channel || null, actionType, reason: "missing_draft_target" },
+          meta: {
+            contactId,
+            channel: channel || null,
+            actionType,
+            reason: "missing_draft_target",
+          },
         });
         continue;
       }
@@ -276,7 +329,10 @@ export async function prepareDueSalesQueueDrafts(input?: {
             contactId,
             channel,
             actionType,
-            messageId: suggestResult.data.messageId ?? candidate.draft?.messageId ?? null,
+            messageId:
+              suggestResult.data.messageId ??
+              candidate.draft?.messageId ??
+              null,
             queueItemId: candidate.id ?? null,
           },
         });
@@ -287,26 +343,40 @@ export async function prepareDueSalesQueueDrafts(input?: {
           action: "sales.agent.draft.skipped",
           entityType: "conversation_thread",
           entityId: threadId,
-          meta: { contactId, channel, actionType, reason: suggestResult.data.skipped ?? "no_draft_change" },
+          meta: {
+            contactId,
+            channel,
+            actionType,
+            reason: suggestResult.data.skipped ?? "no_draft_change",
+          },
         });
         continue;
       }
 
       const messageId =
-        typeof suggestResult.data.messageId === "string" && suggestResult.data.messageId.trim().length > 0
+        typeof suggestResult.data.messageId === "string" &&
+        suggestResult.data.messageId.trim().length > 0
           ? suggestResult.data.messageId.trim()
           : "";
       const draftCreatedAt = parseIsoDate(candidate.draft?.createdAt ?? null);
       const draftIsOldEnough =
-        draftCreatedAt instanceof Date && now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
-      const autosendPolicy = evaluateSalesPlannerAutosendPolicy(autopilotPolicy, {
-        channel,
-        actionType: candidate.nextAction?.actionType ?? null,
-        humanReviewRequired: candidate.nextAction?.actionType === "human_follow_up",
-      });
+        draftCreatedAt instanceof Date &&
+        now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
+      const autosendPolicy = evaluateSalesPlannerAutosendPolicy(
+        autopilotPolicy,
+        {
+          channel,
+          actionType: candidate.nextAction?.actionType ?? null,
+          humanReviewRequired:
+            candidate.nextAction?.actionType === "human_follow_up",
+        },
+      );
       const dmLiveAutopilotState =
         channel === "dm" && candidate.draftTarget?.threadId
-          ? await getDmLiveAutopilotState(getDb(), candidate.draftTarget.threadId)
+          ? await getDmLiveAutopilotState(
+              getDb(),
+              candidate.draftTarget.threadId,
+            )
           : null;
       const dmLiveAutopilotBlocked = Boolean(
         channel === "dm" &&
@@ -322,12 +392,15 @@ export async function prepareDueSalesQueueDrafts(input?: {
         isPlannerActionDue(candidate.nextAction ?? null, now);
 
       if (!canAutoSend) {
-        if ((overrideAutoSendEnabled ?? true) && candidate?.draft?.ready === true) {
+        if (
+          (overrideAutoSendEnabled ?? true) &&
+          candidate?.draft?.ready === true
+        ) {
           const reason = dmLiveAutopilotBlocked
             ? `dm_warmup_${dmLiveAutopilotState?.meaningfulInboundCount ?? 0}`
             : !autosendPolicy.allowed && overrideAutoSendEnabled !== true
-            ? mapAutosendPolicyReason(autosendPolicy.reason)
-                : !draftIsOldEnough
+              ? mapAutosendPolicyReason(autosendPolicy.reason)
+              : !draftIsOldEnough
                 ? "draft_too_fresh"
                 : !isPlannerActionDue(candidate.nextAction ?? null, now)
                   ? "not_due"
@@ -337,7 +410,13 @@ export async function prepareDueSalesQueueDrafts(input?: {
             action: "sales.agent.autosend.skipped",
             entityType: "conversation_thread",
             entityId: threadId,
-            meta: { contactId, channel, actionType, messageId: messageId || null, reason },
+            meta: {
+              contactId,
+              channel,
+              actionType,
+              messageId: messageId || null,
+              reason,
+            },
           });
         }
         continue;
@@ -345,7 +424,15 @@ export async function prepareDueSalesQueueDrafts(input?: {
 
       const retryResult = await fetchJson<RetryPayload>(
         `/api/admin/inbox/messages/${encodeURIComponent(messageId)}/retry`,
-        { method: "POST" },
+        {
+          method: "POST",
+          headers: {
+            // A draft message is a single semantic autosend operation. Reuse
+            // this key across scheduler retries so a lost response replays the
+            // committed receipt instead of creating another provider request.
+            "Idempotency-Key": `sales-autosend:${messageId}`,
+          },
+        },
       );
       if (retryResult.ok && retryResult.data.ok === true) {
         autosent += 1;
@@ -358,13 +445,21 @@ export async function prepareDueSalesQueueDrafts(input?: {
         });
       } else {
         skipped += 1;
-        const retryError = retryResult.ok ? "retry_not_acknowledged" : retryResult.error;
+        const retryError = retryResult.ok
+          ? "retry_not_acknowledged"
+          : retryResult.error;
         await recordAuditEvent({
           actor: { type: "worker", label: "sales-draft-prep" },
           action: "sales.agent.autosend.skipped",
           entityType: "conversation_message",
           entityId: messageId || threadId,
-          meta: { contactId, threadId, channel, actionType, reason: retryError },
+          meta: {
+            contactId,
+            threadId,
+            channel,
+            actionType,
+            reason: retryError,
+          },
         });
       }
     }

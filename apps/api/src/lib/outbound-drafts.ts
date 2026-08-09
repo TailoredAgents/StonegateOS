@@ -1,3 +1,5 @@
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
+
 type OutboundDraftChannel = "sms" | "email";
 
 export type OutboundDraftContextMessage = {
@@ -41,18 +43,24 @@ function clampText(value: string, maxLen: number): string {
   return trimmed.slice(0, maxLen - 1).trimEnd() + "…";
 }
 
-function formatRecentContactHistory(messages: OutboundDraftContextMessage[] | null | undefined): string | null {
+function formatRecentContactHistory(
+  messages: OutboundDraftContextMessage[] | null | undefined,
+): string | null {
   if (!messages?.length) return null;
 
   const lines = messages.slice(-10).map((message) => {
-    const subject = message.subject?.trim().length ? ` subject="${clampText(message.subject, 80)}"` : "";
+    const subject = message.subject?.trim().length
+      ? ` subject="${clampText(message.subject, 80)}"`
+      : "";
     return [
       `${message.createdAt} ${message.channel} ${message.direction}${subject}:`,
       clampText(message.body.replace(/\s+/g, " "), 220),
     ].join(" ");
   });
 
-  return ["Recent actual contact history (oldest to newest):", ...lines].join("\n");
+  return ["Recent actual contact history (oldest to newest):", ...lines].join(
+    "\n",
+  );
 }
 
 function fallbackFirstTouchDraft(input: {
@@ -60,8 +68,12 @@ function fallbackFirstTouchDraft(input: {
   recipientName: string | null;
   company: string | null;
 }): OutboundDraft {
-  const who = input.recipientName?.trim().length ? input.recipientName.trim() : "there";
-  const companyLine = input.company?.trim().length ? ` at ${input.company.trim()}` : "";
+  const who = input.recipientName?.trim().length
+    ? input.recipientName.trim()
+    : "there";
+  const companyLine = input.company?.trim().length
+    ? ` at ${input.company.trim()}`
+    : "";
   if (input.channel === "email") {
     return {
       provider: "fallback",
@@ -80,7 +92,7 @@ function fallbackFirstTouchDraft(input: {
     subject: null,
     body: clampText(
       `Hi ${who}${companyLine} — this is Stonegate Junk Removal. Do you handle any properties that need unit cleanouts or haul-off this month? Reply STOP to opt out.`,
-      320
+      320,
     ),
   };
 }
@@ -92,8 +104,12 @@ function fallbackFollowupDraft(input: {
   disposition?: string | null;
   recap?: string | null;
 }): OutboundDraft {
-  const who = input.recipientName?.trim().length ? input.recipientName.trim() : "there";
-  const companyLine = input.company?.trim().length ? ` at ${input.company.trim()}` : "";
+  const who = input.recipientName?.trim().length
+    ? input.recipientName.trim()
+    : "there";
+  const companyLine = input.company?.trim().length
+    ? ` at ${input.company.trim()}`
+    : "";
   const disposition = input.disposition?.trim().toLowerCase() ?? "";
 
   if (input.channel === "email") {
@@ -170,14 +186,17 @@ async function generateOpenAiDraft(input: {
     payload["reasoning"] = { effort: "low" };
   }
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${input.apiKey}`,
+  const response = await fetch(
+    resolveOpenAiApiEndpoint("responses", process.env),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${input.apiKey}`,
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  });
+  );
 
   const bodyText = await response.text().catch(() => "");
   if (!response.ok) {
@@ -202,8 +221,7 @@ async function generateOpenAiDraft(input: {
   const raw =
     data?.output
       ?.flatMap((item) => item.content ?? [])
-      .find((item) => typeof item.text === "string")
-      ?.text ?? null;
+      .find((item) => typeof item.text === "string")?.text ?? null;
 
   if (!raw) return null;
 
@@ -215,8 +233,10 @@ async function generateOpenAiDraft(input: {
     }
   })();
 
-  const subjectRaw = parsed && typeof parsed.subject === "string" ? parsed.subject : null;
-  const bodyRaw = parsed && typeof parsed.body === "string" ? parsed.body : null;
+  const subjectRaw =
+    parsed && typeof parsed.subject === "string" ? parsed.subject : null;
+  const bodyRaw =
+    parsed && typeof parsed.body === "string" ? parsed.body : null;
   if (!bodyRaw) return null;
 
   return { subject: subjectRaw, body: bodyRaw };
@@ -298,7 +318,10 @@ export async function generateOutboundFirstTouchDraft(input: {
       body: clampText(generated.body, maxBody),
     };
   } catch (error) {
-    console.warn("[outbound.drafts] openai_error", { model, error: String(error) });
+    console.warn("[outbound.drafts] openai_error", {
+      model,
+      error: String(error),
+    });
     return fallbackFirstTouchDraft(input);
   }
 }
@@ -385,7 +408,10 @@ export async function generateOutboundFollowupDraft(input: {
       body: clampText(generated.body, maxBody),
     };
   } catch (error) {
-    console.warn("[outbound.drafts] openai_error", { model, error: String(error) });
+    console.warn("[outbound.drafts] openai_error", {
+      model,
+      error: String(error),
+    });
     return fallbackFollowupDraft(input);
   }
 }

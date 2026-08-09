@@ -5,6 +5,7 @@ import { LRUCache } from "lru-cache";
 import { z } from "zod";
 import { lt, sql } from "drizzle-orm";
 import { getDb, webEventCountsDaily, webEvents, webVitals } from "@/db";
+import { sanitizeFirstPartyAnalyticsMeta } from "@/lib/analytics-privacy";
 import {
   getServiceAreaPolicy,
   isGeorgiaPostalCode,
@@ -136,28 +137,6 @@ function normalizeUtmField(value: unknown): string | null {
   return trimmed.slice(0, 120);
 }
 
-function normalizeMeta(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  const entries = Object.entries(value as Record<string, unknown>);
-  const result: Record<string, unknown> = {};
-  for (const [key, raw] of entries.slice(0, MAX_META_KEYS)) {
-    const k = key.trim().slice(0, 64);
-    if (!k) continue;
-    if (typeof raw === "string") {
-      result[k] = raw.slice(0, 220);
-    } else if (typeof raw === "number" && Number.isFinite(raw)) {
-      result[k] = raw;
-    } else if (typeof raw === "boolean") {
-      result[k] = raw;
-    } else if (raw === null) {
-      result[k] = null;
-    }
-  }
-  return result;
-}
-
 let lastPruneAtMs = 0;
 async function maybePruneOldRows(db = getDb()): Promise<void> {
   const now = Date.now();
@@ -266,7 +245,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   for (const evt of events) {
     const path = normalizePath(evt.path);
     const referrerDomain = normalizeReferrerDomain(evt.referrer) ?? null;
-    const meta = normalizeMeta(evt.meta);
+    const meta = sanitizeFirstPartyAnalyticsMeta(evt.meta, MAX_META_KEYS);
     const utm = evt.utm ?? {};
 
     const normalizedZip = evt.zip ? normalizePostalCode(evt.zip) : null;

@@ -1,4 +1,5 @@
-import { appointments, getDb, instantQuotes, leads, mediaJobAnalyses } from "@/db";
+import type { getDb} from "@/db";
+import { appointments, instantQuotes, leads, mediaJobAnalyses } from "@/db";
 import { eq, gte, inArray, sql } from "drizzle-orm";
 
 type DbExecutor = ReturnType<typeof getDb>;

@@ -2,7 +2,6 @@ import "@/lib/react-internals-polyfill";
 import type { Metadata } from "next";
 import { absoluteUrl, siteUrl } from "@/lib/metadata";
 import { getPublicCompanyProfile } from "@/lib/company";
-import { GoogleTag } from "@/components/GoogleTag";
 import "./globals.css";
 
 const company = getPublicCompanyProfile();
@@ -50,25 +49,11 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const ga4Id = process.env["NEXT_PUBLIC_GA4_ID"] ?? null;
-  const googleAdsTagId = process.env["NEXT_PUBLIC_GOOGLE_ADS_TAG_ID"] ?? null;
-
   return (
     <html lang="en">
-      <head>
-        <link rel="dns-prefetch" href="https://connect.facebook.net" />
-        <link rel="preconnect" href="https://connect.facebook.net" />
-        <link rel="dns-prefetch" href="https://www.facebook.com" />
-        <link rel="preconnect" href="https://www.facebook.com" />
-        <link rel="dns-prefetch" href="https://mpc-prod-27-s6uit34pua-uk.a.run.app" />
-        <link rel="preconnect" href="https://mpc-prod-27-s6uit34pua-uk.a.run.app" />
-      </head>
       <body className="antialiased bg-neutral-100 text-neutral-900 font-sans">
-        <GoogleTag ga4Id={ga4Id} googleAdsTagId={googleAdsTagId} />
         {children}
       </body>
     </html>
   );
 }
-
-

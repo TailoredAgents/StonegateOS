@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import {
   auditLogs,
   callCoaching,
@@ -391,6 +391,7 @@ export async function computeSpeedToLeadForMember(input: {
       .where(
         and(
           eq(auditLogs.action, "call.started"),
+          eq(auditLogs.outcome, "succeeded"),
           eq(auditLogs.entityType, "contact"),
           eq(auditLogs.actorId, input.memberId),
           isNotNull(auditLogs.meta),
@@ -422,6 +423,7 @@ export async function computeSpeedToLeadForMember(input: {
       .where(
         and(
           eq(auditLogs.action, "call.started"),
+          eq(auditLogs.outcome, "succeeded"),
           eq(auditLogs.entityType, "contact"),
           eq(auditLogs.actorId, input.memberId),
           isNotNull(auditLogs.entityId),
@@ -502,7 +504,7 @@ export async function computeSpeedToLeadForMember(input: {
   return speedTaskRows
     .filter((row) => typeof row.contactId === "string" && row.contactId.length > 0 && !disqualified.has(row.contactId))
     .map((row) => {
-      const contactId = row.contactId as string;
+      const contactId = row.contactId;
       const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
       const dueAt = row.taskDueAt instanceof Date ? row.taskDueAt : null;
       if (!dueAt) {

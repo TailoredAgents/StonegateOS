@@ -1,7 +1,17 @@
 import React from "react";
-import { callAdminApi } from "../lib/api";
+import {
+  hasTeamPermission,
+  requireCurrentTeamPrincipal,
+} from "@/lib/team-principal";
+import { callAdminApiAs } from "../lib/api";
 import { CalendarViewer } from "./CalendarViewer";
-import { TEAM_TIME_ZONE } from "../lib/timezone";
+import {
+  formatCalendarDayKey,
+  getCalendarUtcRange,
+  normalizeCalendarDayKey,
+  resolveCalendarDefaultView,
+  type CalendarView,
+} from "../lib/calendar-time";
 
 type CalendarEvent = {
   id: string;
@@ -17,7 +27,10 @@ type CalendarEvent = {
   status?: string | null;
   quotedTotalCents?: number | null;
   finalTotalCents?: number | null;
+  version?: string | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
+  crewMemberIds?: string[];
+  crewNames?: string[];
 };
 
 type CalendarFeedResponse = {
@@ -25,6 +38,7 @@ type CalendarFeedResponse = {
   appointments: CalendarEvent[];
   externalEvents: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
+  googleCalendarState?: "disabled" | "loaded" | "unavailable";
 };
 
 type TeamMember = {
@@ -33,10 +47,8 @@ type TeamMember = {
   active?: boolean;
 };
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 export async function CalendarSection({
-  searchParams
+  searchParams,
 }: {
   searchParams?: {
     addr?: string;
@@ -47,15 +59,42 @@ export async function CalendarSection({
     cal?: string;
     contactId?: string;
     propertyId?: string;
+    calStatus?: string;
+    calCrew?: string;
+    calSource?: string;
+    calConflict?: string;
   };
 }): Promise<React.ReactElement> {
-  const view = searchParams?.calView === "month" ? "month" : searchParams?.calView === "day" ? "day" : "week";
-  const anchor = parseAnchorDate(searchParams?.cal ?? null) ?? new Date();
-  const range = computeRange(anchor, view);
+  const principal = await requireCurrentTeamPrincipal();
+  const defaultView = resolveCalendarDefaultView(principal.roleSlug);
+  const view: CalendarView =
+    searchParams?.calView === "month" ||
+    searchParams?.calView === "day" ||
+    searchParams?.calView === "week"
+      ? searchParams.calView
+      : defaultView;
+  const anchorDay =
+    normalizeCalendarDayKey(searchParams?.cal) ??
+    formatCalendarDayKey(new Date());
+  const range = getCalendarUtcRange(anchorDay, view);
+  if (!range) throw new Error("Unable to resolve the calendar date range");
+  const canUpdateAppointments = hasTeamPermission(
+    principal,
+    "appointments.update",
+  );
+  const canCollectPayments = hasTeamPermission(principal, "payments.collect");
+  const canSendCustomerMessages = hasTeamPermission(principal, "messages.send");
+  const canOverrideScheduleConflicts = hasTeamPermission(
+    principal,
+    "appointments.override_conflicts",
+  );
 
   const [feedRes, membersRes] = await Promise.all([
-    callAdminApi(`/api/admin/calendar/feed?start=${encodeURIComponent(range.start.toISOString())}&end=${encodeURIComponent(range.end.toISOString())}`),
-    callAdminApi("/api/admin/team/directory")
+    callAdminApiAs(
+      principal,
+      `/api/admin/calendar/feed?start=${encodeURIComponent(range.start.toISOString())}&end=${encodeURIComponent(range.end.toISOString())}`,
+    ),
+    callAdminApiAs(principal, "/api/admin/team/directory"),
   ]);
 
   if (!feedRes.ok) {
@@ -63,104 +102,41 @@ export async function CalendarSection({
   }
 
   const feed = (await feedRes.json()) as CalendarFeedResponse;
-  const allEvents = [...feed.appointments, ...feed.externalEvents];
-  const memberPayload = membersRes.ok
+  const memberPayload = membersRes?.ok
     ? ((await membersRes.json()) as { members?: TeamMember[] })
     : null;
   const teamMembers = (memberPayload?.members ?? []).filter(
     (member) => member.active !== false,
+  );
+  const allEvents = [...feed.appointments, ...feed.externalEvents].map(
+    (event) => {
+      const existingIds = new Set(event.crewMemberIds ?? []);
+      const normalizedCrewNames = new Set(
+        (event.crewNames ?? []).map((name) => name.trim().toLowerCase()),
+      );
+      for (const member of teamMembers) {
+        if (normalizedCrewNames.has(member.name.trim().toLowerCase())) {
+          existingIds.add(member.id);
+        }
+      }
+      return { ...event, crewMemberIds: Array.from(existingIds) };
+    },
   );
 
   return (
     <section className="space-y-4">
       <CalendarViewer
         initialView={view}
-        initialAnchor={formatDayKeyFromDate(anchor)}
+        initialAnchor={anchorDay}
         events={allEvents}
         conflicts={feed.conflicts}
         teamMembers={teamMembers}
+        canUpdateAppointments={canUpdateAppointments}
+        canCollectPayments={canCollectPayments}
+        canSendCustomerMessages={canSendCustomerMessages}
+        canOverrideScheduleConflicts={canOverrideScheduleConflicts}
+        googleCalendarState={feed.googleCalendarState ?? "disabled"}
       />
     </section>
   );
-}
-
-function parseAnchorDate(value: string | null): Date | null {
-  if (!value) return null;
-  const raw = value.trim();
-  if (!raw) return null;
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
-  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
-}
-
-function formatDayKeyFromDate(date: Date): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: TEAM_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(date);
-  const year = parts.find((p) => p.type === "year")?.value ?? "";
-  const month = parts.find((p) => p.type === "month")?.value ?? "";
-  const day = parts.find((p) => p.type === "day")?.value ?? "";
-  if (year && month && day) return `${year}-${month}-${day}`;
-  return date.toISOString().slice(0, 10);
-}
-
-function getWeekdayIndex(date: Date): number {
-  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: TEAM_TIME_ZONE, weekday: "short" }).format(date);
-  switch (weekday.toLowerCase().slice(0, 3)) {
-    case "sun":
-      return 0;
-    case "mon":
-      return 1;
-    case "tue":
-      return 2;
-    case "wed":
-      return 3;
-    case "thu":
-      return 4;
-    case "fri":
-      return 5;
-    case "sat":
-      return 6;
-    default:
-      return 0;
-  }
-}
-
-function getMonthStart(date: Date): Date {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: TEAM_TIME_ZONE, year: "numeric", month: "2-digit" }).formatToParts(
-    date
-  );
-  const year = Number(parts.find((p) => p.type === "year")?.value ?? "");
-  const month = Number(parts.find((p) => p.type === "month")?.value ?? "");
-  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1, 12, 0, 0, 0));
-  return new Date(Date.UTC(year, month - 1, 1, 12, 0, 0, 0));
-}
-
-function computeRange(anchor: Date, view: "week" | "month" | "day"): { start: Date; end: Date } {
-  const safeAnchor = Number.isNaN(anchor.getTime()) ? new Date() : anchor;
-  if (view === "day") {
-    const start = new Date(safeAnchor.getTime());
-    const end = new Date(start.getTime() + DAY_MS);
-    return { start, end };
-  }
-
-  if (view === "week") {
-    const weekday = getWeekdayIndex(safeAnchor);
-    const start = new Date(safeAnchor.getTime() - weekday * DAY_MS);
-    const end = new Date(start.getTime() + 7 * DAY_MS);
-    return { start, end };
-  }
-
-  const monthStart = getMonthStart(safeAnchor);
-  const monthStartWeekday = getWeekdayIndex(monthStart);
-  const gridStart = new Date(monthStart.getTime() - monthStartWeekday * DAY_MS);
-  const gridEnd = new Date(gridStart.getTime() + 42 * DAY_MS);
-  return { start: gridStart, end: gridEnd };
 }

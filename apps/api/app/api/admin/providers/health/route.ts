@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { inArray } from "drizzle-orm";
 import { getDb, providerHealth } from "@/db";
-import { isAdminRequest } from "../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 
 const PROVIDERS = [
   "sms",
@@ -30,9 +30,8 @@ function resolveStatus(row?: {
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const permissionError = await requirePermission(request, "access.manage");
+  if (permissionError) return permissionError;
 
   const db = getDb();
   const rows = await db

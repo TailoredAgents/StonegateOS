@@ -1,59 +1,150 @@
+import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   bookAcceptedQuote,
   loadPublicQuoteForScheduling,
-  quoteIsExpired,
+  PublicQuoteSchedulingError,
 } from "@/lib/quote-scheduling";
+import {
+  BoundedJsonRequestError,
+  readBoundedJsonRequest,
+} from "@/lib/bounded-json-request";
+import { normalizePublicQuoteIdempotencyKey } from "@/lib/public-quote-mutation";
 
-const BookSchema = z.object({
-  startAt: z.string().datetime(),
-  holdId: z.string().uuid(),
-  customerNote: z.string().max(1000).optional(),
-});
+const BookSchema = z
+  .object({
+    quoteId: z.string().uuid(),
+    expectedRevision: z.number().int().positive(),
+    startAt: z.string().datetime(),
+    holdId: z.string().uuid(),
+    customerNote: z.string().trim().max(1000).optional(),
+  })
+  .strict();
 
-function errorStatus(code: string): number {
-  if (code === "hold_invalid") return 409;
-  if (code === "invalid_start_at") return 400;
-  if (code === "appointment_create_failed") return 500;
-  return 500;
+function errorResponse(error: unknown, correlationId: string): NextResponse {
+  const failure =
+    error instanceof PublicQuoteSchedulingError
+      ? error
+      : new PublicQuoteSchedulingError(
+          "internal",
+          "The booking could not be confirmed. Retry with the same request.",
+        );
+  return NextResponse.json(
+    {
+      ok: false,
+      error: failure.code,
+      message: failure.message,
+      retryable: failure.retryable,
+    },
+    {
+      status: failure.status,
+      headers: { "x-correlation-id": correlationId },
+    },
+  );
 }
 
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ token: string }> },
 ): Promise<Response> {
+  const correlationId = randomUUID();
   const { token } = await context.params;
   if (!token) {
-    return NextResponse.json({ error: "missing_token" }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, error: "missing_token", retryable: false },
+      { status: 400, headers: { "x-correlation-id": correlationId } },
+    );
   }
-  const parsed = BookSchema.safeParse(await request.json().catch(() => ({})));
+  const idempotencyKey = normalizePublicQuoteIdempotencyKey(
+    request.headers.get("idempotency-key"),
+  );
+  if (!idempotencyKey) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "idempotency_key_required",
+        message: "Refresh the quote page before booking again.",
+        retryable: false,
+      },
+      { status: 422, headers: { "x-correlation-id": correlationId } },
+    );
+  }
+  let body: unknown;
+  try {
+    body = await readBoundedJsonRequest(request, {
+      maximumBytes: 4 * 1024,
+      rejectDuplicateObjectKeys: true,
+    });
+  } catch (error) {
+    const failure =
+      error instanceof BoundedJsonRequestError
+        ? error
+        : new BoundedJsonRequestError(
+            "invalid_body",
+            "The request could not be read.",
+            400,
+          );
+    return NextResponse.json(
+      {
+        ok: false,
+        error: failure.code,
+        message: failure.message,
+        retryable: false,
+      },
+      {
+        status: failure.status,
+        headers: { "x-correlation-id": correlationId },
+      },
+    );
+  }
+  const parsed = BookSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "invalid_payload", details: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "invalid_payload",
+        message: "The quote, hold, or selected time is invalid.",
+        retryable: false,
+        details: parsed.error.flatten(),
+      },
+      { status: 422, headers: { "x-correlation-id": correlationId } },
+    );
   }
 
   const quote = await loadPublicQuoteForScheduling(token);
   if (!quote) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+    return NextResponse.json(
+      { ok: false, error: "not_found", retryable: false },
+      { status: 404, headers: { "x-correlation-id": correlationId } },
+    );
   }
-  if (quoteIsExpired(quote)) {
-    return NextResponse.json({ error: "expired" }, { status: 410 });
+  if (quote.id !== parsed.data.quoteId) {
+    return NextResponse.json(
+      { ok: false, error: "not_found", retryable: false },
+      { status: 404, headers: { "x-correlation-id": correlationId } },
+    );
   }
-  if (quote.status !== "accepted" && quote.status !== "sent") {
-    return NextResponse.json({ error: "quote_not_accepted" }, { status: 409 });
-  }
-
   try {
-    const booking = await bookAcceptedQuote({
+    const result = await bookAcceptedQuote({
       quote,
+      capabilityToken: token,
+      expectedRevision: parsed.data.expectedRevision,
       holdId: parsed.data.holdId,
       startAtIso: parsed.data.startAt,
       customerNote: parsed.data.customerNote,
+      idempotencyKey,
+      correlationId,
     });
-    return NextResponse.json({ ok: true, ...booking });
+    return NextResponse.json(result.data, {
+      status: result.responseStatus,
+      headers: {
+        "x-correlation-id": correlationId,
+        ...(result.replayed ? { "idempotency-replayed": "true" } : {}),
+      },
+    });
   } catch (error) {
-    const code = error instanceof Error ? error.message : "booking_failed";
-    return NextResponse.json({ error: code }, { status: errorStatus(code) });
+    return errorResponse(error, correlationId);
   }
 }

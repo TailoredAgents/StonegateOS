@@ -13,6 +13,12 @@ import { fetch as undiciFetch } from "undici";
 describe("remote appointment media URL policy", () => {
   const originalNodeEnv = process.env["NODE_ENV"];
   const originalFetch = globalThis.fetch;
+  const originalTwilioEnvironment = {
+    E2E_RUN_ID: process.env["E2E_RUN_ID"],
+    TWILIO_ACCOUNT_SID: process.env["TWILIO_ACCOUNT_SID"],
+    TWILIO_AUTH_TOKEN: process.env["TWILIO_AUTH_TOKEN"],
+    TWILIO_API_BASE_URL: process.env["TWILIO_API_BASE_URL"],
+  };
 
   beforeEach(() => {
     Object.defineProperty(process.env, "NODE_ENV", {
@@ -20,6 +26,10 @@ describe("remote appointment media URL policy", () => {
       value: "production",
       writable: true,
     });
+    process.env["E2E_RUN_ID"] = "appointment-media-security";
+    process.env["TWILIO_ACCOUNT_SID"] = `AC${"0".repeat(32)}`;
+    process.env["TWILIO_AUTH_TOKEN"] = "synthetic-token";
+    process.env["TWILIO_API_BASE_URL"] = "http://127.0.0.1";
   });
 
   afterEach(() => {
@@ -30,6 +40,10 @@ describe("remote appointment media URL policy", () => {
       value: originalNodeEnv,
       writable: true,
     });
+    for (const [key, value] of Object.entries(originalTwilioEnvironment)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   it("allows provider-owned media hosts without accepting deceptive suffixes", () => {

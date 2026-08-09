@@ -4,22 +4,28 @@ import { discordAgentMemory, getDb } from "../db";
 export type DiscordAgentMemoryType = "note" | "preference" | "project" | "fact";
 export type DiscordAgentMemoryScope = "channel" | "guild";
 
-export type DiscordAgentMemoryRecord = typeof discordAgentMemory.$inferSelect & {
-  scope: DiscordAgentMemoryScope;
-  memoryType: DiscordAgentMemoryType;
-};
+export type DiscordAgentMemoryRecord =
+  typeof discordAgentMemory.$inferSelect & {
+    scope: DiscordAgentMemoryScope;
+    memoryType: DiscordAgentMemoryType;
+  };
 
 function now() {
   return new Date();
 }
 
-function normalizeType(value: string | null | undefined): DiscordAgentMemoryType {
+function normalizeType(
+  value: string | null | undefined,
+): DiscordAgentMemoryType {
   const trimmed = (value ?? "").trim().toLowerCase();
-  if (trimmed === "preference" || trimmed === "project" || trimmed === "fact") return trimmed;
+  if (trimmed === "preference" || trimmed === "project" || trimmed === "fact")
+    return trimmed;
   return "note";
 }
 
-function normalizeScope(value: string | null | undefined): DiscordAgentMemoryScope {
+function normalizeScope(
+  value: string | null | undefined,
+): DiscordAgentMemoryScope {
   const trimmed = (value ?? "").trim().toLowerCase();
   if (trimmed === "guild") return "guild";
   return "channel";
@@ -33,8 +39,8 @@ function trimMax(value: string, max: number): string {
 export async function createDiscordAgentMemory(input: {
   discordGuildId?: string | null;
   discordChannelId: string;
-  scope?: DiscordAgentMemoryScope | string | null;
-  memoryType?: DiscordAgentMemoryType | string | null;
+  scope?: string | null;
+  memoryType?: string | null;
   title: string;
   content: string;
   tags?: string | null;
@@ -46,7 +52,8 @@ export async function createDiscordAgentMemory(input: {
 
   const title = trimMax(input.title, 120);
   const content = trimMax(input.content, 4000);
-  if (!title.length || !content.length) throw new Error("memory_title_content_required");
+  if (!title.length || !content.length)
+    throw new Error("memory_title_content_required");
 
   const record = await db
     .insert(discordAgentMemory)
@@ -62,13 +69,23 @@ export async function createDiscordAgentMemory(input: {
       archived: false,
       createdByDiscordUserId: input.createdByDiscordUserId ?? null,
       createdAt: ts,
-      updatedAt: ts
+      updatedAt: ts,
     })
     .returning()
     .then((rows) => rows[0] ?? null);
 
   if (!record) throw new Error("memory_insert_failed");
-  return record as unknown as DiscordAgentMemoryRecord;
+  return toDiscordAgentMemoryRecord(record);
+}
+
+function toDiscordAgentMemoryRecord(
+  row: typeof discordAgentMemory.$inferSelect,
+): DiscordAgentMemoryRecord {
+  return {
+    ...row,
+    scope: normalizeScope(row.scope),
+    memoryType: normalizeType(row.memoryType),
+  };
 }
 
 export async function archiveDiscordAgentMemory(input: { id: string }) {
@@ -80,7 +97,7 @@ export async function archiveDiscordAgentMemory(input: { id: string }) {
     .where(eq(discordAgentMemory.id, input.id))
     .returning()
     .then((rows) => rows[0] ?? null);
-  return (row as unknown as DiscordAgentMemoryRecord | null) ?? null;
+  return row ? toDiscordAgentMemoryRecord(row) : null;
 }
 
 export async function listDiscordAgentMemoryForContext(input: {
@@ -96,17 +113,25 @@ export async function listDiscordAgentMemoryForContext(input: {
   const channelRows = await db
     .select()
     .from(discordAgentMemory)
-    .where(and(eq(discordAgentMemory.discordChannelId, input.discordChannelId), eq(discordAgentMemory.archived, false)))
-    .orderBy(desc(discordAgentMemory.pinned), desc(discordAgentMemory.updatedAt))
+    .where(
+      and(
+        eq(discordAgentMemory.discordChannelId, input.discordChannelId),
+        eq(discordAgentMemory.archived, false),
+      ),
+    )
+    .orderBy(
+      desc(discordAgentMemory.pinned),
+      desc(discordAgentMemory.updatedAt),
+    )
     .limit(maxItems);
 
   const guildId = (input.discordGuildId ?? "").trim();
   if (!guildId) {
-    return channelRows as unknown as DiscordAgentMemoryRecord[];
+    return channelRows.map(toDiscordAgentMemoryRecord);
   }
 
   const remaining = Math.max(0, maxItems - channelRows.length);
-  if (remaining <= 0) return channelRows as unknown as DiscordAgentMemoryRecord[];
+  if (remaining <= 0) return channelRows.map(toDiscordAgentMemoryRecord);
 
   const guildRows = await db
     .select()
@@ -115,13 +140,16 @@ export async function listDiscordAgentMemoryForContext(input: {
       and(
         eq(discordAgentMemory.discordGuildId, guildId),
         eq(discordAgentMemory.scope, "guild"),
-        eq(discordAgentMemory.archived, false)
-      )
+        eq(discordAgentMemory.archived, false),
+      ),
     )
-    .orderBy(desc(discordAgentMemory.pinned), desc(discordAgentMemory.updatedAt))
+    .orderBy(
+      desc(discordAgentMemory.pinned),
+      desc(discordAgentMemory.updatedAt),
+    )
     .limit(remaining);
 
-  return [...(channelRows as any[]), ...(guildRows as any[])] as unknown as DiscordAgentMemoryRecord[];
+  return [...channelRows, ...guildRows].map(toDiscordAgentMemoryRecord);
 }
 
 export async function searchDiscordAgentMemory(input: {
@@ -146,14 +174,22 @@ export async function searchDiscordAgentMemory(input: {
         eq(discordAgentMemory.archived, false),
         or(
           eq(discordAgentMemory.discordChannelId, input.discordChannelId),
-          and(eq(discordAgentMemory.discordGuildId, input.discordGuildId ?? ""), eq(discordAgentMemory.scope, "guild"))
+          and(
+            eq(discordAgentMemory.discordGuildId, input.discordGuildId ?? ""),
+            eq(discordAgentMemory.scope, "guild"),
+          ),
         ),
-        or(ilike(discordAgentMemory.title, like), ilike(discordAgentMemory.content, like))
-      )
+        or(
+          ilike(discordAgentMemory.title, like),
+          ilike(discordAgentMemory.content, like),
+        ),
+      ),
     )
-    .orderBy(desc(discordAgentMemory.pinned), desc(discordAgentMemory.updatedAt))
+    .orderBy(
+      desc(discordAgentMemory.pinned),
+      desc(discordAgentMemory.updatedAt),
+    )
     .limit(maxItems);
 
-  return rows as unknown as DiscordAgentMemoryRecord[];
+  return rows.map(toDiscordAgentMemoryRecord);
 }
-

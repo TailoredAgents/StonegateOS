@@ -1,11 +1,15 @@
 import React from "react";
-import { OwnerAssistClient } from "./OwnerAssistClient";
+import Link from "next/link";
 import {
-  PaymentReconciliationPanel,
-  type PaymentReconciliationAppointment,
-  type PaymentReconciliationPayload,
+  requireCurrentTeamPrincipal,
+  type TeamRequestPrincipal,
+} from "@/lib/team-principal";
+import type {
+  PaymentReconciliationAppointment,
+  PaymentReconciliationPayload,
 } from "./PaymentReconciliationPanel";
-import { callAdminApi } from "../lib/api";
+import { callAdminApiAs } from "../lib/api";
+import { teamSurfaceHref } from "../surface-registry";
 import {
   formatAppointmentPricing,
   formatUsdCents,
@@ -17,6 +21,14 @@ import {
   TEAM_SECTION_TITLE,
   teamButtonClass,
 } from "./team-ui";
+import {
+  OWNER_VIEWS,
+  normalizeOwnerView,
+  ownerReviewLevel,
+  ownerViewNeeds,
+  type OwnerDataSource,
+  type OwnerReviewLevel,
+} from "./owner-view";
 
 type RevenueWindow = {
   totalCents: number;
@@ -218,61 +230,6 @@ type BookingSourceSummaryPayload = {
   recentJobs: BookingSourceSummaryJob[];
 };
 
-type OwnerView =
-  | "overview"
-  | "revenue"
-  | "payments"
-  | "expenses"
-  | "payroll"
-  | "pl"
-  | "assistant";
-
-const OWNER_VIEWS: Array<{
-  id: OwnerView;
-  label: string;
-  description: string;
-}> = [
-  {
-    id: "overview",
-    label: "Overview",
-    description: "Cash flow, alerts, and next actions",
-  },
-  {
-    id: "revenue",
-    label: "Job revenue",
-    description: "Completed jobs and final job totals",
-  },
-  {
-    id: "payments",
-    label: "Payments",
-    description: "Provider reconciliation and refunds",
-  },
-  {
-    id: "expenses",
-    label: "Expenses",
-    description: "Spend totals and recent receipts",
-  },
-  {
-    id: "payroll",
-    label: "Payroll",
-    description: "Commissions, tips, and payout timing",
-  },
-  { id: "pl", label: "P&L", description: "Profit and margin snapshots" },
-  {
-    id: "assistant",
-    label: "Assistant",
-    description: "Ask live owner questions",
-  },
-];
-
-function isOwnerView(value: string | null | undefined): value is OwnerView {
-  return OWNER_VIEWS.some((view) => view.id === value);
-}
-
-function normalizeOwnerView(value: string | null | undefined): OwnerView {
-  return isOwnerView(value) ? value : "overview";
-}
-
 function fmtMoney(cents: number, currency: string) {
   try {
     return new Intl.NumberFormat("en-US", {
@@ -427,134 +384,304 @@ function analyzeWeekJobs(jobs: RevenueWeekJob[]) {
   };
 }
 
+type OwnerResourceResult<T> = {
+  data: T | null;
+  error: string | null;
+  fetchedAt: string | null;
+};
+
+type OwnerSourceState = {
+  source: OwnerDataSource;
+  available: boolean;
+  detail: string;
+};
+
+const OWNER_SOURCE_LABELS: Readonly<Record<OwnerDataSource, string>> = {
+  revenue: "Completed appointments and final job totals",
+  expense_summary: "Posted expense ledger summary",
+  expense_list: "Recent expense ledger entries",
+  commission_summary: "Current commission projection",
+  payroll_history: "Locked and paid payroll history",
+  booking_sources: "Appointment booking attribution",
+  payment_reconciliation: "Payment, refund, and provider-event ledger",
+  appointment_directory: "Appointment reconciliation directory",
+};
+
+function notRequested<T>(): OwnerResourceResult<T> {
+  return { data: null, error: null, fetchedAt: null };
+}
+
+async function loadOwnerResource<T>(
+  principal: TeamRequestPrincipal,
+  path: string,
+  label: string,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<OwnerResourceResult<T>> {
+  try {
+    const response = await callAdminApiAs(principal, path, init);
+    const fetchedAt = new Date().toISOString();
+    if (!response.ok) {
+      return {
+        data: null,
+        error: `${label} unavailable (HTTP ${response.status}).`,
+        fetchedAt,
+      };
+    }
+    return {
+      data: (await response.json()) as T,
+      error: null,
+      fetchedAt,
+    };
+  } catch {
+    return {
+      data: null,
+      error: `${label} is temporarily unavailable.`,
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+}
+
+function latestFetchedAt(
+  results: ReadonlyArray<OwnerResourceResult<unknown>>,
+): string | null {
+  return (
+    results
+      .map((result) => result.fetchedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null
+  );
+}
+
+function reviewToneClasses(level: OwnerReviewLevel): string {
+  if (level === "critical") {
+    return "border-rose-300 bg-rose-50 text-rose-950 ring-1 ring-rose-200";
+  }
+  if (level === "attention") {
+    return "border-amber-300 bg-amber-50 text-amber-950 ring-1 ring-amber-200";
+  }
+  return "border-emerald-200 bg-emerald-50 text-emerald-950";
+}
+
+function OwnerSourceStatus({
+  fetchedAt,
+  sources,
+  onDemand = false,
+}: {
+  fetchedAt: string | null;
+  sources: OwnerSourceState[];
+  onDemand?: boolean;
+}): React.ReactElement {
+  const unavailable = sources.filter((source) => !source.available);
+  return (
+    <aside
+      className={`rounded-2xl border px-4 py-3 text-sm ${
+        unavailable.length > 0
+          ? "border-amber-300 bg-amber-50 text-amber-950"
+          : "border-slate-200 bg-slate-50 text-slate-700"
+      }`}
+      aria-label="Owner data sources and freshness"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="font-semibold">
+          {onDemand ? "Data loads on request" : "Current data snapshot"}
+        </div>
+        <div className="text-xs">
+          {fetchedAt
+            ? `Checked ${fmtCompactDateTime(fetchedAt)}`
+            : "No dashboard sources fetched"}
+        </div>
+      </div>
+      {onDemand ? (
+        <p className="mt-1 text-xs">
+          Opening Assistant does not preload financial data. Sources are
+          requested only after an owner submits a question.
+        </p>
+      ) : (
+        <>
+          <ul className="mt-2 flex flex-wrap gap-2 text-xs">
+            {sources.map((source) => (
+              <li
+                key={source.source}
+                className={`rounded-full border px-2.5 py-1 font-semibold ${
+                  source.available
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : "border-rose-200 bg-rose-50 text-rose-800"
+                }`}
+                title={source.detail}
+              >
+                {OWNER_SOURCE_LABELS[source.source]} ·{" "}
+                {source.available ? "Available" : "Unavailable"}
+                <span className="sr-only">. {source.detail}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs">
+            Snapshot time is when Owner HQ fetched the local system of record;
+            upstream-provider freshness is shown separately when available.
+          </p>
+          {unavailable.length > 0 ? (
+            <div className="mt-2" role="alert">
+              <p className="font-semibold">
+                Review required: unavailable sources are not treated as $0.
+              </p>
+              <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
+                {unavailable.map((source) => (
+                  <li key={source.source}>{source.detail}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </>
+      )}
+    </aside>
+  );
+}
+
 export async function OwnerSection({
   ownerView,
 }: {
   ownerView?: string;
 }): Promise<React.ReactElement> {
+  const principal = await requireCurrentTeamPrincipal();
   const activeOwnerView = normalizeOwnerView(ownerView);
-  let revenue: RevenuePayload | null = null;
-  let revenueError: string | null = null;
-  try {
-    const res = await callAdminApi("/api/revenue/summary");
-    if (res.ok) {
-      revenue = (await res.json()) as RevenuePayload;
-    } else {
-      revenueError = `Revenue unavailable (HTTP ${res.status})`;
-    }
-  } catch {
-    revenueError = "Revenue unavailable.";
-  }
+  type AppointmentDirectoryPayload = {
+    data?: PaymentReconciliationAppointment[];
+  };
 
-  let expensesSummary: ExpensesSummaryPayload | null = null;
-  let expensesSummaryError: string | null = null;
-  let recentExpenses: ExpenseListItem[] = [];
-  let expensesError: string | null = null;
+  const [
+    revenueResult,
+    expensesSummaryResult,
+    expensesListResult,
+    commissionResult,
+    payrollResult,
+    bookingSourceResult,
+    paymentResult,
+    appointmentDirectoryResult,
+  ] = await Promise.all([
+    ownerViewNeeds(activeOwnerView, "revenue")
+      ? loadOwnerResource<RevenuePayload>(
+          principal,
+          "/api/revenue/summary",
+          "Revenue",
+        )
+      : Promise.resolve(notRequested<RevenuePayload>()),
+    ownerViewNeeds(activeOwnerView, "expense_summary")
+      ? loadOwnerResource<ExpensesSummaryPayload>(
+          principal,
+          "/api/admin/expenses/summary",
+          "Expense summary",
+        )
+      : Promise.resolve(notRequested<ExpensesSummaryPayload>()),
+    ownerViewNeeds(activeOwnerView, "expense_list")
+      ? loadOwnerResource<ExpensesListPayload>(
+          principal,
+          "/api/admin/expenses?limit=8",
+          "Recent expenses",
+        )
+      : Promise.resolve(notRequested<ExpensesListPayload>()),
+    ownerViewNeeds(activeOwnerView, "commission_summary")
+      ? loadOwnerResource<CommissionSummaryPayload>(
+          principal,
+          "/api/admin/commissions/summary",
+          "Commission summary",
+        )
+      : Promise.resolve(notRequested<CommissionSummaryPayload>()),
+    ownerViewNeeds(activeOwnerView, "payroll_history")
+      ? loadOwnerResource<PayrollSummaryPayload>(
+          principal,
+          "/api/admin/commissions/payroll-summary",
+          "Payroll history",
+        )
+      : Promise.resolve(notRequested<PayrollSummaryPayload>()),
+    ownerViewNeeds(activeOwnerView, "booking_sources")
+      ? loadOwnerResource<BookingSourceSummaryPayload>(
+          principal,
+          "/api/admin/appointments/source-summary?rangeDays=7",
+          "Booking source summary",
+        )
+      : Promise.resolve(notRequested<BookingSourceSummaryPayload>()),
+    ownerViewNeeds(activeOwnerView, "payment_reconciliation")
+      ? loadOwnerResource<PaymentReconciliationPayload>(
+          principal,
+          "/api/admin/payments/reconciliation",
+          "Payment reconciliation",
+          { timeoutMs: 30_000 },
+        )
+      : Promise.resolve(notRequested<PaymentReconciliationPayload>()),
+    ownerViewNeeds(activeOwnerView, "appointment_directory")
+      ? loadOwnerResource<AppointmentDirectoryPayload>(
+          principal,
+          "/api/appointments?status=all&limit=200",
+          "Appointment directory",
+          { timeoutMs: 20_000 },
+        )
+      : Promise.resolve(notRequested<AppointmentDirectoryPayload>()),
+  ]);
 
-  try {
-    const [summaryRes, listRes] = await Promise.all([
-      callAdminApi("/api/admin/expenses/summary"),
-      callAdminApi("/api/admin/expenses?limit=8"),
-    ]);
+  const revenue = revenueResult.data;
+  const revenueError = revenueResult.error;
+  const expensesSummary = expensesSummaryResult.data;
+  const expensesSummaryError = expensesSummaryResult.error;
+  const recentExpenses = expensesListResult.data?.expenses ?? [];
+  const expensesError = expensesListResult.error;
+  const commissionSummary = commissionResult.data;
+  const commissionError = commissionResult.error;
+  const payrollSummary = payrollResult.data;
+  const payrollError = payrollResult.error;
+  const bookingSourceSummary = bookingSourceResult.data;
+  const bookingSourceError = bookingSourceResult.error;
+  const paymentReconciliation = paymentResult.data;
+  const paymentReconciliationError = paymentResult.error;
+  const paymentReconciliationAppointments =
+    appointmentDirectoryResult.data?.data ?? [];
 
-    if (summaryRes.ok) {
-      expensesSummary = (await summaryRes.json()) as ExpensesSummaryPayload;
-    } else {
-      expensesSummaryError = `Expenses unavailable (HTTP ${summaryRes.status})`;
-    }
-
-    if (listRes.ok) {
-      const payload = (await listRes.json()) as ExpensesListPayload;
-      recentExpenses = payload.expenses ?? [];
-    } else {
-      expensesError = `Expenses unavailable (HTTP ${listRes.status})`;
-    }
-  } catch {
-    expensesSummaryError = expensesSummaryError ?? "Expenses unavailable.";
-    expensesError = expensesError ?? "Expenses unavailable.";
-  }
-
-  let commissionSummary: CommissionSummaryPayload | null = null;
-  let commissionError: string | null = null;
-  let payrollSummary: PayrollSummaryPayload | null = null;
-  let payrollError: string | null = null;
-  try {
-    const [summaryRes, payrollRes] = await Promise.all([
-      callAdminApi("/api/admin/commissions/summary"),
-      callAdminApi("/api/admin/commissions/payroll-summary"),
-    ]);
-
-    if (summaryRes.ok) {
-      commissionSummary = (await summaryRes.json()) as CommissionSummaryPayload;
-    } else if (summaryRes.status === 503) {
-      commissionError =
-        "Commissions are still initializing. Try again in a minute.";
-    } else {
-      commissionError = `Commissions unavailable (HTTP ${summaryRes.status})`;
-    }
-
-    if (payrollRes.ok) {
-      payrollSummary = (await payrollRes.json()) as PayrollSummaryPayload;
-    } else {
-      payrollError = `Payroll history unavailable (HTTP ${payrollRes.status})`;
-    }
-  } catch {
-    commissionError = "Commissions unavailable.";
-    payrollError = "Payroll history unavailable.";
-  }
-
-  let bookingSourceSummary: BookingSourceSummaryPayload | null = null;
-  let bookingSourceError: string | null = null;
-  try {
-    const res = await callAdminApi(
-      "/api/admin/appointments/source-summary?rangeDays=7",
-    );
-    if (res.ok) {
-      bookingSourceSummary = (await res.json()) as BookingSourceSummaryPayload;
-    } else {
-      bookingSourceError = `Booking source summary unavailable (HTTP ${res.status})`;
-    }
-  } catch {
-    bookingSourceError = "Booking source summary unavailable.";
-  }
-
-  let paymentReconciliation: PaymentReconciliationPayload | null = null;
-  let paymentReconciliationError: string | null = null;
-  let paymentReconciliationAppointments: PaymentReconciliationAppointment[] =
-    [];
+  let activeSubview: React.ReactElement | null = null;
   if (activeOwnerView === "payments") {
-    try {
-      const [reconciliationRes, appointmentsRes] = await Promise.all([
-        callAdminApi("/api/admin/payments/reconciliation", {
-          timeoutMs: 30_000,
-        }),
-        callAdminApi("/api/appointments?status=all&limit=200", {
-          timeoutMs: 20_000,
-        }),
-      ]);
-      if (reconciliationRes.ok) {
-        paymentReconciliation =
-          (await reconciliationRes.json()) as PaymentReconciliationPayload;
-      } else {
-        const payload = (await reconciliationRes.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-        paymentReconciliationError = (
-          payload?.error ??
-          `Payment reconciliation unavailable (HTTP ${reconciliationRes.status})`
-        ).replace(/_/g, " ");
-      }
-      if (appointmentsRes.ok) {
-        const payload = (await appointmentsRes.json()) as {
-          data?: PaymentReconciliationAppointment[];
-        };
-        paymentReconciliationAppointments = payload.data ?? [];
-      }
-    } catch {
-      paymentReconciliationError =
-        "Payment reconciliation is temporarily unavailable.";
-    }
+    const { PaymentReconciliationPanel } = await import(
+      "./PaymentReconciliationPanel"
+    );
+    activeSubview = (
+      <PaymentReconciliationPanel
+        data={paymentReconciliation}
+        error={paymentReconciliationError}
+        appointments={paymentReconciliationAppointments}
+      />
+    );
+  } else if (activeOwnerView === "assistant") {
+    const { OwnerAssistClient } = await import("./OwnerAssistClient");
+    activeSubview = <OwnerAssistClient />;
   }
+
+  const sourceStates: OwnerSourceState[] = [];
+  const addSourceState = (
+    source: OwnerDataSource,
+    result: OwnerResourceResult<unknown>,
+  ) => {
+    if (!ownerViewNeeds(activeOwnerView, source)) return;
+    sourceStates.push({
+      source,
+      available: result.data !== null && result.error === null,
+      detail: result.error ?? "Available from the local system of record.",
+    });
+  };
+  addSourceState("revenue", revenueResult);
+  addSourceState("expense_summary", expensesSummaryResult);
+  addSourceState("expense_list", expensesListResult);
+  addSourceState("commission_summary", commissionResult);
+  addSourceState("payroll_history", payrollResult);
+  addSourceState("booking_sources", bookingSourceResult);
+  addSourceState("payment_reconciliation", paymentResult);
+  addSourceState("appointment_directory", appointmentDirectoryResult);
+  const snapshotFetchedAt = latestFetchedAt([
+    revenueResult,
+    expensesSummaryResult,
+    expensesListResult,
+    commissionResult,
+    payrollResult,
+    bookingSourceResult,
+    paymentResult,
+    appointmentDirectoryResult,
+  ]);
 
   const weekJobInsights = revenue?.ok
     ? analyzeWeekJobs(revenue.windows.weekToDate.jobs)
@@ -577,6 +704,26 @@ export async function OwnerSection({
     ? commissionSummary.totalsCents.total
     : 0;
   const weekNetAfterPayroll = weekRevenue - weekExpenses - weekPayroll;
+  const operatingSnapshotAvailable = Boolean(
+    revenue?.ok && expensesSummary?.ok && commissionSummary?.ok,
+  );
+  const missingPricingLevel = ownerReviewLevel(
+    weekJobInsights.missingPricingCount,
+  );
+  const pricingMismatchLevel = ownerReviewLevel(
+    weekJobInsights.pricingMismatchCount,
+    true,
+  );
+  const paymentLedgerReviewLevel = ownerReviewLevel(
+    Math.max(
+      revenue?.paymentLedger?.needsReviewCount ?? 0,
+      revenue?.paymentLedger?.needsReviewCents ? 1 : 0,
+    ),
+    true,
+  );
+  const outstandingBalanceLevel = ownerReviewLevel(
+    revenue?.paymentLedger?.outstandingBalanceCents ?? 0,
+  );
 
   return (
     <section className="space-y-4">
@@ -606,9 +753,12 @@ export async function OwnerSection({
           {OWNER_VIEWS.map((view) => {
             const isActive = view.id === activeOwnerView;
             return (
-              <a
+              <Link
                 key={view.id}
-                href={`/team?tab=owner&ownerView=${view.id}`}
+                href={teamSurfaceHref("owner", {
+                  query: { ownerView: view.id },
+                })}
+                aria-current={isActive ? "page" : undefined}
                 className={`rounded-2xl border px-4 py-3 text-left transition ${
                   isActive
                     ? "border-primary-200 bg-primary-50 text-primary-900 shadow-sm"
@@ -623,696 +773,747 @@ export async function OwnerSection({
                 >
                   {view.description}
                 </span>
-              </a>
+              </Link>
             );
           })}
         </nav>
       </header>
 
-      <div
-        className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 xl:grid-cols-[1.1fr,1.9fr]`}
-      >
-        <div className={TEAM_CARD_PADDED}>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h3 className="text-lg font-semibold text-slate-900">
-                Needs attention
-              </h3>
-              <p className="mt-1 text-sm text-slate-600">
-                Weekly issues and payout items that need a quick look.
-              </p>
-            </div>
-          </div>
+      <OwnerSourceStatus
+        fetchedAt={snapshotFetchedAt}
+        sources={sourceStates}
+        onDemand={activeOwnerView === "assistant"}
+      />
 
-          <div className="mt-4 space-y-2 text-sm">
-            {revenue?.ok ? (
-              <>
-                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-amber-900">
-                  <div className="font-semibold">
-                    {weekJobInsights.missingPricingCount} jobs missing recorded
-                    quote/range
-                  </div>
-                  <div className="mt-1 text-xs text-amber-700">
-                    These jobs were completed this week but do not have clean
-                    quote/range data for comparison.
-                  </div>
-                </div>
-                <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-3 text-sky-900">
-                  <div className="font-semibold">
-                    {weekJobInsights.pricingMismatchCount} completed jobs priced
-                    outside the recorded quote/range
-                  </div>
-                  <div className="mt-1 text-xs text-sky-700">
-                    Good for spotting discounting, upsells, or pricing drift.
-                  </div>
-                </div>
-              </>
-            ) : null}
-
-            {commissionSummary?.ok ? (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-slate-900">
-                <div className="font-semibold">
-                  Payroll currently owed:{" "}
-                  {fmtMoney(commissionSummary.totalsCents.total, "USD")}
-                </div>
-                <div className="mt-1 text-xs text-slate-600">
-                  Card tips waiting with payouts:{" "}
-                  {fmtMoney(commissionSummary.cardTipsCents, "USD")}
+      {activeOwnerView === "overview" ? (
+        <>
+          <div className="grid gap-4 xl:grid-cols-[1.1fr,1.9fr]">
+            <div className={TEAM_CARD_PADDED}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900">
+                    Needs attention
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Weekly issues and payout items that need a quick look.
+                  </p>
                 </div>
               </div>
-            ) : null}
-          </div>
-        </div>
 
-        <div className={TEAM_CARD_PADDED}>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h3 className="text-lg font-semibold text-slate-900">
-                Weekly operating snapshot
-              </h3>
-              <p className="mt-1 text-sm text-slate-600">
-                Completed job revenue, logged costs, and payroll for this week.
-              </p>
+              <div className="mt-4 space-y-2 text-sm">
+                {revenue?.ok ? (
+                  <>
+                    <div
+                      className={`rounded-xl border px-3 py-3 ${reviewToneClasses(missingPricingLevel)}`}
+                    >
+                      <div className="font-semibold">
+                        {weekJobInsights.missingPricingCount > 0
+                          ? `${weekJobInsights.missingPricingCount} completed jobs need a recorded quote or range`
+                          : "No completed jobs are missing a recorded quote or range"}
+                      </div>
+                      <div className="mt-1 text-xs opacity-80">
+                        These jobs were completed this week but do not have
+                        clean quote/range data for comparison.
+                      </div>
+                    </div>
+                    <div
+                      className={`rounded-xl border px-3 py-3 ${reviewToneClasses(pricingMismatchLevel)}`}
+                    >
+                      <div className="font-semibold">
+                        {weekJobInsights.pricingMismatchCount > 0
+                          ? `${weekJobInsights.pricingMismatchCount} completed jobs need pricing review`
+                          : "All comparable jobs finished within their recorded quote or range"}
+                      </div>
+                      <div className="mt-1 text-xs opacity-80">
+                        A flagged job finished outside its quote or range and
+                        may reflect a discount, upsell, or pricing drift.
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+
+                {commissionSummary?.ok ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-slate-900">
+                    <div className="font-semibold">
+                      Payroll currently owed:{" "}
+                      {fmtMoney(commissionSummary.totalsCents.total, "USD")}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-600">
+                      Card tips waiting with payouts:{" "}
+                      {fmtMoney(commissionSummary.cardTipsCents, "USD")}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                Completed job revenue
-              </div>
-              <div className="mt-2 text-xl font-semibold text-emerald-950">
-                {fmtMoney(weekRevenue, "USD")}
-              </div>
-              {revenue?.ok ? (
-                <div className="mt-1 text-xs text-emerald-800">
-                  {fmtSignedMoney(weekRevenueDelta, "USD")} vs same pace last
-                  week
-                  {weekRevenueDeltaPercent !== null
-                    ? ` (${fmtPercent(weekRevenueDeltaPercent)})`
-                    : ""}
+            <div className={TEAM_CARD_PADDED}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900">
+                    Weekly operating snapshot
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Completed job revenue, logged costs, and payroll for this
+                    week.
+                  </p>
                 </div>
-              ) : null}
-            </div>
+              </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Expenses logged
-              </div>
-              <div className="mt-2 text-xl font-semibold text-slate-900">
-                {fmtMoney(weekExpenses, "USD")}
-              </div>
-              <div className="mt-1 text-xs text-slate-600">
-                {expensesSummary?.ok
-                  ? `${expensesSummary.windows.weekToDate.count} expenses this week`
-                  : "Waiting on expense data"}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">
-                Payroll owed
-              </div>
-              <div className="mt-2 text-xl font-semibold text-amber-950">
-                {fmtMoney(weekPayroll, "USD")}
-              </div>
-              <div className="mt-1 text-xs text-amber-800">
-                Current week payout before tips
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Net after payout
-              </div>
-              <div
-                className={`mt-2 text-xl font-semibold ${weekNetAfterPayroll >= 0 ? "text-emerald-700" : "text-rose-700"}`}
-              >
-                {fmtMoney(weekNetAfterPayroll, "USD")}
-              </div>
-              <div className="mt-1 text-xs text-slate-600">
-                Completed job revenue minus logged expenses and payroll
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div
-        className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]`}
-      >
-        <div className={TEAM_CARD_PADDED}>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-slate-900">
-                Booked jobs by source
-              </h3>
-              <p className="mt-1 text-sm text-slate-600">
-                Last 7 days, counting confirmed and completed jobs. Quote-only
-                visits are excluded.
-              </p>
-            </div>
-            <a
-              href="/team?tab=owner&ownerView=revenue"
-              className={teamButtonClass("secondary", "sm")}
-            >
-              Revenue
-            </a>
-          </div>
-
-          {bookingSourceError ? (
-            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              {bookingSourceError}
-            </div>
-          ) : null}
-
-          {bookingSourceSummary?.ok ? (
-            <>
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">
-                    Facebook
-                  </div>
-                  <div className="mt-2 text-3xl font-semibold text-blue-950">
-                    {bookingSourceSummary.facebook.count}
-                  </div>
-                  <div className="mt-1 text-xs text-blue-800">
-                    {fmtMoney(
-                      bookingSourceSummary.facebook.estimatedRevenueCents,
-                      "USD",
-                    )}{" "}
-                    quoted/final totals
-                  </div>
-                </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
                   <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                    Google
+                    Completed job revenue
                   </div>
-                  <div className="mt-2 text-3xl font-semibold text-emerald-950">
-                    {bookingSourceSummary.google.count}
+                  <div className="mt-2 text-xl font-semibold text-emerald-950">
+                    {revenue?.ok ? fmtMoney(weekRevenue, "USD") : "Unavailable"}
                   </div>
-                  <div className="mt-1 text-xs text-emerald-800">
-                    {fmtMoney(
-                      bookingSourceSummary.google.estimatedRevenueCents,
-                      "USD",
-                    )}{" "}
-                    quoted/final totals
-                  </div>
+                  {revenue?.ok ? (
+                    <div className="mt-1 text-xs text-emerald-800">
+                      {fmtSignedMoney(weekRevenueDelta, "USD")} vs same pace
+                      last week
+                      {weekRevenueDeltaPercent !== null
+                        ? ` (${fmtPercent(weekRevenueDeltaPercent)})`
+                        : ""}
+                    </div>
+                  ) : null}
                 </div>
+
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    All booked
+                    Expenses logged
                   </div>
-                  <div className="mt-2 text-3xl font-semibold text-slate-900">
-                    {bookingSourceSummary.totalBookedJobs}
+                  <div className="mt-2 text-xl font-semibold text-slate-900">
+                    {expensesSummary?.ok
+                      ? fmtMoney(weekExpenses, "USD")
+                      : "Unavailable"}
                   </div>
                   <div className="mt-1 text-xs text-slate-600">
-                    Since {fmtCompactDateTime(bookingSourceSummary.since)}
+                    {expensesSummary?.ok
+                      ? `${expensesSummary.windows.weekToDate.count} expenses this week`
+                      : "Expense data could not be loaded"}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                    Payroll owed
+                  </div>
+                  <div className="mt-2 text-xl font-semibold text-amber-950">
+                    {commissionSummary?.ok
+                      ? fmtMoney(weekPayroll, "USD")
+                      : "Unavailable"}
+                  </div>
+                  <div className="mt-1 text-xs text-amber-800">
+                    {commissionSummary?.ok
+                      ? "Current week payout before tips"
+                      : "Commission projection could not be loaded"}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Net after payout
+                  </div>
+                  <div
+                    className={`mt-2 text-xl font-semibold ${operatingSnapshotAvailable && weekNetAfterPayroll >= 0 ? "text-emerald-700" : "text-rose-700"}`}
+                  >
+                    {operatingSnapshotAvailable
+                      ? fmtMoney(weekNetAfterPayroll, "USD")
+                      : "Unavailable"}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-600">
+                    Completed job revenue minus logged expenses and payroll
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
 
-              <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {bookingSourceSummary.sources
-                  .filter(
-                    (source) => !["facebook", "google"].includes(source.source),
-                  )
-                  .filter((source) => source.count > 0)
-                  .map((source) => (
-                    <div
-                      key={source.source}
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-semibold text-slate-800">
-                          {source.label}
-                        </span>
-                        <span className="text-slate-500">{source.count}</span>
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+            <div className={TEAM_CARD_PADDED}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900">
+                    Booked jobs by source
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Last 7 days, counting confirmed and completed jobs.
+                    Quote-only visits are excluded.
+                  </p>
+                </div>
+                <Link
+                  href={teamSurfaceHref("owner", {
+                    query: { ownerView: "revenue" },
+                  })}
+                  className={teamButtonClass("secondary", "sm")}
+                >
+                  Revenue
+                </Link>
+              </div>
+
+              {bookingSourceError ? (
+                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  {bookingSourceError}
+                </div>
+              ) : null}
+
+              {bookingSourceSummary?.ok ? (
+                <>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                        Facebook
+                      </div>
+                      <div className="mt-2 text-3xl font-semibold text-blue-950">
+                        {bookingSourceSummary.facebook.count}
+                      </div>
+                      <div className="mt-1 text-xs text-blue-800">
+                        {fmtMoney(
+                          bookingSourceSummary.facebook.estimatedRevenueCents,
+                          "USD",
+                        )}{" "}
+                        quoted/final totals
                       </div>
                     </div>
-                  ))}
-              </div>
-            </>
-          ) : bookingSourceError ? null : (
-            <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-              Booking source data is loading.
-            </div>
-          )}
-        </div>
-
-        <div className={TEAM_CARD_PADDED}>
-          <h3 className="text-lg font-semibold text-slate-900">
-            Recent source-attributed jobs
-          </h3>
-          <p className="mt-1 text-sm text-slate-600">
-            Facebook and Google bookings from the same 7-day window.
-          </p>
-          <div className="mt-4 space-y-2">
-            {bookingSourceError ? (
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                Source-attributed jobs are unavailable right now.
-              </div>
-            ) : bookingSourceSummary?.highlightedJobs.length ? (
-              bookingSourceSummary.highlightedJobs.slice(0, 6).map((job) => (
-                <a
-                  key={job.id}
-                  href={`/team?tab=calendar&contactId=${encodeURIComponent(job.contactId)}`}
-                  className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm transition hover:border-primary-200 hover:bg-white"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate font-semibold text-slate-900">
-                        {job.contactName}
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                        Google
+                      </div>
+                      <div className="mt-2 text-3xl font-semibold text-emerald-950">
+                        {bookingSourceSummary.google.count}
+                      </div>
+                      <div className="mt-1 text-xs text-emerald-800">
+                        {fmtMoney(
+                          bookingSourceSummary.google.estimatedRevenueCents,
+                          "USD",
+                        )}{" "}
+                        quoted/final totals
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        All booked
+                      </div>
+                      <div className="mt-2 text-3xl font-semibold text-slate-900">
+                        {bookingSourceSummary.totalBookedJobs}
                       </div>
                       <div className="mt-1 text-xs text-slate-600">
-                        Booked {fmtCompactDateTime(job.createdAt)}
+                        Since {fmtCompactDateTime(bookingSourceSummary.since)}
                       </div>
-                      {job.address ? (
-                        <div className="mt-1 truncate text-[11px] text-slate-500">
-                          {job.address}
-                        </div>
-                      ) : null}
                     </div>
-                    <span
-                      className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${
-                        job.source === "facebook"
-                          ? "bg-blue-100 text-blue-800"
-                          : "bg-emerald-100 text-emerald-800"
-                      }`}
-                    >
-                      {job.sourceLabel}
-                    </span>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                    <span>Via {job.attributionReason}</span>
-                    <span>{fmtMoney(job.estimatedRevenueCents, "USD")}</span>
+
+                  <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {bookingSourceSummary.sources
+                      .filter(
+                        (source) =>
+                          !["facebook", "google"].includes(source.source),
+                      )
+                      .filter((source) => source.count > 0)
+                      .map((source) => (
+                        <div
+                          key={source.source}
+                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-slate-800">
+                              {source.label}
+                            </span>
+                            <span className="text-slate-500">
+                              {source.count}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
                   </div>
-                </a>
-              ))
-            ) : (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                No Facebook or Google bookings in this window.
+                </>
+              ) : bookingSourceError ? null : (
+                <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                  Booking source data is loading.
+                </div>
+              )}
+            </div>
+
+            <div className={TEAM_CARD_PADDED}>
+              <h3 className="text-lg font-semibold text-slate-900">
+                Recent source-attributed jobs
+              </h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Facebook and Google bookings from the same 7-day window.
+              </p>
+              <div className="mt-4 space-y-2">
+                {bookingSourceError ? (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                    Source-attributed jobs are unavailable right now.
+                  </div>
+                ) : bookingSourceSummary?.highlightedJobs.length ? (
+                  bookingSourceSummary.highlightedJobs
+                    .slice(0, 6)
+                    .map((job) => (
+                      <Link
+                        key={job.id}
+                        href={teamSurfaceHref("calendar", {
+                          query: { contactId: job.contactId },
+                        })}
+                        className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm transition hover:border-primary-200 hover:bg-white"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold text-slate-900">
+                              {job.contactName}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-600">
+                              Booked {fmtCompactDateTime(job.createdAt)}
+                            </div>
+                            {job.address ? (
+                              <div className="mt-1 truncate text-[11px] text-slate-500">
+                                {job.address}
+                              </div>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${
+                              job.source === "facebook"
+                                ? "bg-blue-100 text-blue-800"
+                                : "bg-emerald-100 text-emerald-800"
+                            }`}
+                          >
+                            {job.sourceLabel}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                          <span>Via {job.attributionReason}</span>
+                          <span>
+                            {fmtMoney(job.estimatedRevenueCents, "USD")}
+                          </span>
+                        </div>
+                      </Link>
+                    ))
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                    No Facebook or Google bookings in this window.
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
-        </div>
-      </div>
 
-      <div
-        className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 lg:grid-cols-4`}
-      >
-        <a
-          href="/team?tab=owner&ownerView=revenue"
-          className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
-        >
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Completed job revenue
+          <div className="grid gap-4 lg:grid-cols-4">
+            <Link
+              href={teamSurfaceHref("owner", {
+                query: { ownerView: "revenue" },
+              })}
+              className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
+            >
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Completed job revenue
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">
+                {revenue?.ok ? fmtMoney(weekRevenue, "USD") : "Unavailable"}
+              </div>
+              <div className="mt-1 text-sm text-slate-600">
+                {revenue?.ok
+                  ? `${revenue.windows.weekToDate.count} completed jobs this week`
+                  : "Revenue data unavailable"}
+              </div>
+            </Link>
+            <Link
+              href={teamSurfaceHref("owner", {
+                query: { ownerView: "expenses" },
+              })}
+              className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
+            >
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Expense review
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">
+                {expensesSummary?.ok
+                  ? fmtMoney(weekExpenses, "USD")
+                  : "Unavailable"}
+              </div>
+              <div className="mt-1 text-sm text-slate-600">
+                {expensesSummary?.ok
+                  ? `${expensesSummary.windows.weekToDate.count} expenses this week`
+                  : "Expense data unavailable"}
+              </div>
+            </Link>
+            <Link
+              href={teamSurfaceHref("owner", {
+                query: { ownerView: "payroll" },
+              })}
+              className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
+            >
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Payroll review
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-amber-800">
+                {commissionSummary?.ok
+                  ? fmtMoney(weekPayroll, "USD")
+                  : "Unavailable"}
+              </div>
+              <div className="mt-1 text-sm text-slate-600">
+                {commissionSummary?.ok
+                  ? "Current payout before card tips"
+                  : "Commission data unavailable"}
+              </div>
+            </Link>
+            <Link
+              href={teamSurfaceHref("owner", {
+                query: { ownerView: "pl" },
+              })}
+              className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
+            >
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                P&amp;L snapshot
+              </div>
+              <div
+                className={`mt-2 text-2xl font-semibold ${operatingSnapshotAvailable && weekNetAfterPayroll >= 0 ? "text-emerald-700" : "text-rose-700"}`}
+              >
+                {operatingSnapshotAvailable
+                  ? fmtMoney(weekNetAfterPayroll, "USD")
+                  : "Unavailable"}
+              </div>
+              <div className="mt-1 text-sm text-slate-600">
+                Week net after expenses and payroll
+              </div>
+            </Link>
           </div>
-          <div className="mt-2 text-2xl font-semibold text-slate-900">
-            {fmtMoney(weekRevenue, "USD")}
-          </div>
-          <div className="mt-1 text-sm text-slate-600">
-            {revenue?.ok
-              ? `${revenue.windows.weekToDate.count} completed jobs this week`
-              : "Revenue data unavailable"}
-          </div>
-        </a>
-        <a
-          href="/team?tab=owner&ownerView=expenses"
-          className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
-        >
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Expense review
-          </div>
-          <div className="mt-2 text-2xl font-semibold text-slate-900">
-            {fmtMoney(weekExpenses, "USD")}
-          </div>
-          <div className="mt-1 text-sm text-slate-600">
-            {expensesSummary?.ok
-              ? `${expensesSummary.windows.weekToDate.count} expenses this week`
-              : "Expense data unavailable"}
-          </div>
-        </a>
-        <a
-          href="/team?tab=owner&ownerView=payroll"
-          className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
-        >
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Payroll review
-          </div>
-          <div className="mt-2 text-2xl font-semibold text-amber-800">
-            {fmtMoney(weekPayroll, "USD")}
-          </div>
-          <div className="mt-1 text-sm text-slate-600">
-            Current payout before card tips
-          </div>
-        </a>
-        <a
-          href="/team?tab=owner&ownerView=pl"
-          className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
-        >
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            P&amp;L snapshot
-          </div>
-          <div
-            className={`mt-2 text-2xl font-semibold ${weekNetAfterPayroll >= 0 ? "text-emerald-700" : "text-rose-700"}`}
-          >
-            {fmtMoney(weekNetAfterPayroll, "USD")}
-          </div>
-          <div className="mt-1 text-sm text-slate-600">
-            Week net after expenses and payroll
-          </div>
-        </a>
-      </div>
-
-      {activeOwnerView === "payments" ? (
-        <PaymentReconciliationPanel
-          data={paymentReconciliation}
-          error={paymentReconciliationError}
-          appointments={paymentReconciliationAppointments}
-        />
+        </>
       ) : null}
 
-      <div
-        className={`${TEAM_CARD_PADDED} ${activeOwnerView === "revenue" ? "" : "hidden"}`}
-      >
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-semibold text-slate-900">
-              Completed job revenue
-            </h3>
-            <p className="text-sm text-slate-600">
-              Completed appointments counted from final job totals on their
-              scheduled calendar date. Payment collection is reported
-              separately.
-            </p>
-          </div>
-        </div>
-        {revenue?.paymentLedger ? (
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      {activeOwnerView === "payments" ? activeSubview : null}
+
+      {activeOwnerView === "revenue" ? (
+        <div className={TEAM_CARD_PADDED}>
+          <div className="flex items-center justify-between">
             <div>
-              <div className="text-sm font-semibold text-slate-900">
-                Payment ledger · All time
-              </div>
-              <p className="mt-1 text-xs text-slate-600">
-                Verified money movement is shown separately from completed job
-                revenue. Tips are included in payments collected but never
-                reduce a job balance.
+              <h3 className="text-lg font-semibold text-slate-900">
+                Completed job revenue
+              </h3>
+              <p className="text-sm text-slate-600">
+                Completed appointments counted from final job totals on their
+                scheduled calendar date. Payment collection is reported
+                separately.
               </p>
             </div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
-                  Payments collected
-                </div>
-                <div className="mt-2 text-lg font-semibold text-emerald-950">
-                  {fmtMoney(
-                    revenue.paymentLedger.paymentsCollectedCents,
-                    revenue.currency,
-                  )}
-                </div>
-                <div className="mt-1 text-[11px] text-emerald-800">
-                  Includes{" "}
-                  {fmtMoney(
-                    revenue.paymentLedger.tipsCollectedCents,
-                    revenue.currency,
-                  )}{" "}
-                  in net tips
-                </div>
-              </div>
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-700">
-                  Outstanding balance
-                </div>
-                <div className="mt-2 text-lg font-semibold text-amber-950">
-                  {fmtMoney(
-                    revenue.paymentLedger.outstandingBalanceCents,
-                    revenue.currency,
-                  )}
-                </div>
-                <div className="mt-1 text-[11px] text-amber-800">
-                  Final job totals minus net job payments
-                </div>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  Refunded
-                </div>
-                <div className="mt-2 text-lg font-semibold text-slate-900">
-                  {fmtMoney(
-                    revenue.paymentLedger.refundedCents,
-                    revenue.currency,
-                  )}
-                </div>
-                <div className="mt-1 text-[11px] text-slate-600">
-                  Recorded provider and manual refunds
-                </div>
-              </div>
-              <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-3">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">
-                  Needs review
-                </div>
-                <div className="mt-2 text-lg font-semibold text-rose-950">
-                  {fmtMoney(
-                    revenue.paymentLedger.needsReviewCents,
-                    revenue.currency,
-                  )}
-                </div>
-                <div className="mt-1 text-[11px] text-rose-800">
-                  {revenue.paymentLedger.needsReviewCount} flagged ledger{" "}
-                  {revenue.paymentLedger.needsReviewCount === 1
-                    ? "item"
-                    : "items"}
-                </div>
-              </div>
-            </div>
           </div>
-        ) : null}
-        <div className="mt-4 space-y-2 text-sm text-slate-700">
-          {revenueError ? (
-            <p className="text-amber-700">{revenueError}</p>
-          ) : revenue?.ok ? (
-            <ul className="space-y-2">
-              <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-slate-900">
-                    Week to date
-                  </div>
-                  <div className="text-xs text-slate-600">
-                    {revenue.windows.weekToDate.count} jobs
-                  </div>
-                  <div className="text-[11px] text-slate-500">
-                    Counting from{" "}
-                    {fmtWindowStart(
-                      revenue.windows.weekToDate.startsAt,
-                      revenue.timezone,
-                    )}
-                  </div>
+          {revenue?.paymentLedger ? (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">
+                  Payment ledger · All time
                 </div>
-                <div className="text-right font-semibold text-slate-900">
-                  {fmtMoney(
-                    revenue.windows.weekToDate.totalCents,
-                    revenue.currency,
-                  )}
-                </div>
-              </li>
-              <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
-                <div>
-                  <div className="font-semibold text-slate-900">
-                    Same pace last week
+                <p className="mt-1 text-xs text-slate-600">
+                  Verified money movement is shown separately from completed job
+                  revenue. Tips are included in payments collected but never
+                  reduce a job balance.
+                </p>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                    Payments collected
                   </div>
-                  <div className="text-xs text-slate-600">
-                    {revenue.windows.samePaceLastWeek.count} jobs
-                  </div>
-                  <div className="text-[11px] text-slate-500">
-                    {fmtWindowStart(
-                      revenue.windows.samePaceLastWeek.startsAt,
-                      revenue.timezone,
-                    )}{" "}
-                    through the same point in the week
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="font-semibold text-slate-900">
+                  <div className="mt-2 text-lg font-semibold text-emerald-950">
                     {fmtMoney(
-                      revenue.windows.samePaceLastWeek.totalCents,
+                      revenue.paymentLedger.paymentsCollectedCents,
                       revenue.currency,
                     )}
                   </div>
-                  <div
-                    className={`text-xs ${weekRevenueDelta >= 0 ? "text-emerald-700" : "text-rose-700"}`}
-                  >
-                    {fmtSignedMoney(weekRevenueDelta, revenue.currency)}
+                  <div className="mt-1 text-[11px] text-emerald-800">
+                    Includes{" "}
+                    {fmtMoney(
+                      revenue.paymentLedger.tipsCollectedCents,
+                      revenue.currency,
+                    )}{" "}
+                    in net tips
                   </div>
                 </div>
-              </li>
-              <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <div>
-                  <div className="font-semibold text-slate-900">
-                    Full last week
+                <div
+                  className={`rounded-xl border px-3 py-3 ${reviewToneClasses(outstandingBalanceLevel)}`}
+                >
+                  <div className="text-[11px] font-semibold uppercase tracking-wide opacity-80">
+                    Outstanding balance
                   </div>
-                  <div className="text-xs text-slate-600">
-                    {revenue.windows.fullLastWeek.count} jobs
-                  </div>
-                  <div className="text-[11px] text-slate-500">
-                    {fmtWindowStart(
-                      revenue.windows.fullLastWeek.startsAt,
-                      revenue.timezone,
-                    )}{" "}
-                    through{" "}
-                    {fmtWindowEndExclusive(
-                      revenue.windows.fullLastWeek.endsAt,
-                      revenue.timezone,
+                  <div className="mt-2 text-lg font-semibold">
+                    {fmtMoney(
+                      revenue.paymentLedger.outstandingBalanceCents,
+                      revenue.currency,
                     )}
                   </div>
-                </div>
-                <div className="text-right">
-                  <div className="font-semibold text-slate-900">
-                    {fmtMoney(fullLastWeekRevenue, revenue.currency)}
+                  <div className="mt-1 text-[11px] opacity-80">
+                    {revenue.paymentLedger.outstandingBalanceCents > 0
+                      ? "Review unpaid final job balances"
+                      : "No unpaid final job balance"}
                   </div>
                 </div>
-              </li>
-              {revenue.windows.weekToDate.jobs.length ? (
-                <li className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    Completed jobs this week
+                    Refunded
                   </div>
-                  <div className="mt-3 space-y-2">
-                    {revenue.windows.weekToDate.jobs.map((job) => {
-                      const pricingSummary =
-                        formatAppointmentPricing(
-                          job.bookingDetails,
-                          job.quotedTotalCents,
-                        ) ?? "Not recorded";
-                      const addressSummary = formatJobAddress(job);
-                      return (
-                        <div
-                          key={job.appointmentId}
-                          className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3"
-                        >
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="font-semibold text-slate-900">
-                                {job.contactName}
-                              </div>
-                              <div className="text-xs text-slate-600">
-                                {fmtWhen(job.startAt, revenue.timezone)}
-                              </div>
-                              {addressSummary ? (
-                                <div className="truncate text-[11px] text-slate-500">
-                                  {addressSummary}
-                                </div>
-                              ) : null}
-                            </div>
-                            <div className="text-right text-sm font-semibold text-slate-900">
-                              {fmtMoney(job.finalTotalCents, revenue.currency)}
-                            </div>
-                          </div>
-                          <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-                            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                              <div className="font-semibold text-slate-500">
-                                Quote / Range
-                              </div>
-                              <div className="mt-1 text-slate-900">
-                                {pricingSummary}
-                              </div>
-                            </div>
-                            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                              <div className="font-semibold text-slate-500">
-                                Final job total
-                              </div>
-                              <div className="mt-1 text-slate-900">
-                                {formatUsdCents(job.finalTotalCents) ??
-                                  fmtMoney(
-                                    job.finalTotalCents,
-                                    revenue.currency,
-                                  )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                  <div className="mt-2 text-lg font-semibold text-slate-900">
+                    {fmtMoney(
+                      revenue.paymentLedger.refundedCents,
+                      revenue.currency,
+                    )}
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-600">
+                    Recorded provider and manual refunds
+                  </div>
+                </div>
+                <div
+                  className={`rounded-xl border px-3 py-3 ${reviewToneClasses(paymentLedgerReviewLevel)}`}
+                >
+                  <div className="text-[11px] font-semibold uppercase tracking-wide opacity-80">
+                    Needs review
+                  </div>
+                  <div className="mt-2 text-lg font-semibold">
+                    {fmtMoney(
+                      revenue.paymentLedger.needsReviewCents,
+                      revenue.currency,
+                    )}
+                  </div>
+                  <div className="mt-1 text-[11px] opacity-80">
+                    {revenue.paymentLedger.needsReviewCount > 0
+                      ? `${revenue.paymentLedger.needsReviewCount} flagged ledger ${revenue.paymentLedger.needsReviewCount === 1 ? "item" : "items"}`
+                      : "No flagged ledger items"}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          <div className="mt-4 space-y-2 text-sm text-slate-700">
+            {revenueError ? (
+              <div
+                className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-rose-900"
+                role="alert"
+              >
+                <div className="font-semibold">Revenue unavailable</div>
+                <div className="mt-1 text-xs">{revenueError}</div>
+              </div>
+            ) : revenue?.ok ? (
+              <ul className="space-y-2">
+                <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold text-slate-900">
+                      Week to date
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      {revenue.windows.weekToDate.count} jobs
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      Counting from{" "}
+                      {fmtWindowStart(
+                        revenue.windows.weekToDate.startsAt,
+                        revenue.timezone,
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right font-semibold text-slate-900">
+                    {fmtMoney(
+                      revenue.windows.weekToDate.totalCents,
+                      revenue.currency,
+                    )}
                   </div>
                 </li>
-              ) : null}
-              <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <div>
-                  <div className="font-semibold text-slate-900">
-                    Month to date
+                <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <div>
+                    <div className="font-semibold text-slate-900">
+                      Same pace last week
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      {revenue.windows.samePaceLastWeek.count} jobs
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {fmtWindowStart(
+                        revenue.windows.samePaceLastWeek.startsAt,
+                        revenue.timezone,
+                      )}{" "}
+                      through the same point in the week
+                    </div>
                   </div>
-                  <div className="text-xs text-slate-600">
-                    {revenue.windows.monthToDate.count} jobs
+                  <div className="text-right">
+                    <div className="font-semibold text-slate-900">
+                      {fmtMoney(
+                        revenue.windows.samePaceLastWeek.totalCents,
+                        revenue.currency,
+                      )}
+                    </div>
+                    <div
+                      className={`text-xs ${weekRevenueDelta >= 0 ? "text-emerald-700" : "text-rose-700"}`}
+                    >
+                      {fmtSignedMoney(weekRevenueDelta, revenue.currency)}
+                    </div>
                   </div>
-                </div>
-                <div className="text-right font-semibold text-slate-900">
-                  {fmtMoney(
-                    revenue.windows.monthToDate.totalCents,
-                    revenue.currency,
-                  )}
-                </div>
-              </li>
-              <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <div>
-                  <div className="font-semibold text-slate-900">
-                    Last 30 days
+                </li>
+                <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <div>
+                    <div className="font-semibold text-slate-900">
+                      Full last week
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      {revenue.windows.fullLastWeek.count} jobs
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {fmtWindowStart(
+                        revenue.windows.fullLastWeek.startsAt,
+                        revenue.timezone,
+                      )}{" "}
+                      through{" "}
+                      {fmtWindowEndExclusive(
+                        revenue.windows.fullLastWeek.endsAt,
+                        revenue.timezone,
+                      )}
+                    </div>
                   </div>
-                  <div className="text-xs text-slate-600">
-                    {revenue.windows.last30Days.count} jobs
+                  <div className="text-right">
+                    <div className="font-semibold text-slate-900">
+                      {fmtMoney(fullLastWeekRevenue, revenue.currency)}
+                    </div>
                   </div>
-                </div>
-                <div className="text-right font-semibold text-slate-900">
-                  {fmtMoney(
-                    revenue.windows.last30Days.totalCents,
-                    revenue.currency,
-                  )}
-                </div>
-              </li>
-              <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <div>
-                  <div className="font-semibold text-slate-900">
-                    Year to date
+                </li>
+                {revenue.windows.weekToDate.jobs.length ? (
+                  <li className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Completed jobs this week
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {revenue.windows.weekToDate.jobs.map((job) => {
+                        const pricingSummary =
+                          formatAppointmentPricing(
+                            job.bookingDetails,
+                            job.quotedTotalCents,
+                          ) ?? "Not recorded";
+                        const addressSummary = formatJobAddress(job);
+                        return (
+                          <div
+                            key={job.appointmentId}
+                            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="font-semibold text-slate-900">
+                                  {job.contactName}
+                                </div>
+                                <div className="text-xs text-slate-600">
+                                  {fmtWhen(job.startAt, revenue.timezone)}
+                                </div>
+                                {addressSummary ? (
+                                  <div className="truncate text-[11px] text-slate-500">
+                                    {addressSummary}
+                                  </div>
+                                ) : null}
+                              </div>
+                              <div className="text-right text-sm font-semibold text-slate-900">
+                                {fmtMoney(
+                                  job.finalTotalCents,
+                                  revenue.currency,
+                                )}
+                              </div>
+                            </div>
+                            <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <div className="font-semibold text-slate-500">
+                                  Quote / Range
+                                </div>
+                                <div className="mt-1 text-slate-900">
+                                  {pricingSummary}
+                                </div>
+                              </div>
+                              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <div className="font-semibold text-slate-500">
+                                  Final job total
+                                </div>
+                                <div className="mt-1 text-slate-900">
+                                  {formatUsdCents(job.finalTotalCents) ??
+                                    fmtMoney(
+                                      job.finalTotalCents,
+                                      revenue.currency,
+                                    )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </li>
+                ) : null}
+                <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <div>
+                    <div className="font-semibold text-slate-900">
+                      Month to date
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      {revenue.windows.monthToDate.count} jobs
+                    </div>
                   </div>
-                  <div className="text-xs text-slate-600">
-                    {revenue.windows.yearToDate.count} jobs
+                  <div className="text-right font-semibold text-slate-900">
+                    {fmtMoney(
+                      revenue.windows.monthToDate.totalCents,
+                      revenue.currency,
+                    )}
                   </div>
-                </div>
-                <div className="text-right font-semibold text-slate-900">
-                  {fmtMoney(
-                    revenue.windows.yearToDate.totalCents,
-                    revenue.currency,
-                  )}
-                </div>
-              </li>
-              <li className="flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
-                <div>
-                  <div className="font-semibold text-emerald-950">
-                    Lifetime revenue
+                </li>
+                <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <div>
+                    <div className="font-semibold text-slate-900">
+                      Last 30 days
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      {revenue.windows.last30Days.count} jobs
+                    </div>
                   </div>
-                  <div className="text-xs text-emerald-800">
-                    {revenue.windows.allTime.count} completed jobs
+                  <div className="text-right font-semibold text-slate-900">
+                    {fmtMoney(
+                      revenue.windows.last30Days.totalCents,
+                      revenue.currency,
+                    )}
                   </div>
-                </div>
-                <div className="text-right font-semibold text-emerald-950">
-                  {fmtMoney(
-                    revenue.windows.allTime.totalCents,
-                    revenue.currency,
-                  )}
-                </div>
-              </li>
-            </ul>
-          ) : (
-            <p className="text-slate-600">No completed appointments yet.</p>
-          )}
+                </li>
+                <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <div>
+                    <div className="font-semibold text-slate-900">
+                      Year to date
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      {revenue.windows.yearToDate.count} jobs
+                    </div>
+                  </div>
+                  <div className="text-right font-semibold text-slate-900">
+                    {fmtMoney(
+                      revenue.windows.yearToDate.totalCents,
+                      revenue.currency,
+                    )}
+                  </div>
+                </li>
+                <li className="flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                  <div>
+                    <div className="font-semibold text-emerald-950">
+                      Lifetime revenue
+                    </div>
+                    <div className="text-xs text-emerald-800">
+                      {revenue.windows.allTime.count} completed jobs
+                    </div>
+                  </div>
+                  <div className="text-right font-semibold text-emerald-950">
+                    {fmtMoney(
+                      revenue.windows.allTime.totalCents,
+                      revenue.currency,
+                    )}
+                  </div>
+                </li>
+              </ul>
+            ) : (
+              <p className="text-slate-600">No completed appointments yet.</p>
+            )}
+          </div>
         </div>
-      </div>
+      ) : null}
 
-      <div
-        className={`${activeOwnerView === "expenses" || activeOwnerView === "payroll" ? "grid" : "hidden"} gap-4`}
-      >
-        <div
-          className={`${TEAM_CARD_PADDED} ${activeOwnerView === "expenses" ? "" : "hidden"}`}
-        >
+      {activeOwnerView === "expenses" ? (
+        <div className={TEAM_CARD_PADDED}>
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="text-lg font-semibold text-slate-900">Expenses</h3>
@@ -1320,18 +1521,22 @@ export async function OwnerSection({
                 Ops logs daily totals in the Ops tab.
               </p>
             </div>
-            <a
-              href="/team?tab=expenses"
+            <Link
+              href={teamSurfaceHref("expenses")}
               className={teamButtonClass("primary", "sm")}
             >
               Open
-            </a>
+            </Link>
           </div>
 
           {expensesSummaryError ? (
-            <p className="mt-3 text-sm text-amber-700">
-              {expensesSummaryError}
-            </p>
+            <div
+              className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-900"
+              role="alert"
+            >
+              <div className="font-semibold">Expense summary unavailable</div>
+              <div className="mt-1 text-xs">{expensesSummaryError}</div>
+            </div>
           ) : null}
 
           {expensesSummary?.ok ? (
@@ -1371,7 +1576,13 @@ export async function OwnerSection({
           ) : null}
 
           {expensesError ? (
-            <p className="mt-3 text-sm text-amber-700">{expensesError}</p>
+            <div
+              className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-900"
+              role="alert"
+            >
+              <div className="font-semibold">Recent expenses unavailable</div>
+              <div className="mt-1 text-xs">{expensesError}</div>
+            </div>
           ) : null}
           {recentExpenses.length ? (
             <div className="mt-4 space-y-2">
@@ -1415,12 +1626,16 @@ export async function OwnerSection({
                 </div>
               ))}
             </div>
+          ) : expensesListResult.data?.ok && !expensesError ? (
+            <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+              No recent posted expenses were found.
+            </div>
           ) : null}
         </div>
+      ) : null}
 
-        <div
-          className={`${TEAM_CARD_PADDED} ${activeOwnerView === "payroll" ? "" : "hidden"}`}
-        >
+      {activeOwnerView === "payroll" ? (
+        <div className={TEAM_CARD_PADDED}>
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="text-lg font-semibold text-slate-900">Payroll</h3>
@@ -1429,19 +1644,33 @@ export async function OwnerSection({
                 separately from payroll.
               </p>
             </div>
-            <a
-              href="/team?tab=commissions"
+            <Link
+              href={teamSurfaceHref("commissions")}
               className={teamButtonClass("secondary", "sm")}
             >
               Open
-            </a>
+            </Link>
           </div>
 
           {commissionError ? (
-            <p className="mt-3 text-sm text-amber-700">{commissionError}</p>
+            <div
+              className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-900"
+              role="alert"
+            >
+              <div className="font-semibold">
+                Commission projection unavailable
+              </div>
+              <div className="mt-1 text-xs">{commissionError}</div>
+            </div>
           ) : null}
           {payrollError ? (
-            <p className="mt-3 text-sm text-amber-700">{payrollError}</p>
+            <div
+              className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-900"
+              role="alert"
+            >
+              <div className="font-semibold">Payroll history unavailable</div>
+              <div className="mt-1 text-xs">{payrollError}</div>
+            </div>
           ) : null}
 
           {payrollSummary?.ok ? (
@@ -1656,88 +1885,98 @@ export async function OwnerSection({
                 </div>
               </div>
             </div>
-          ) : (
+          ) : commissionError ? null : (
             <p className="mt-4 text-sm text-slate-600">
               Commissions are calculated from completed jobs in the current
               Monday-Sunday week using the final job total.
             </p>
           )}
         </div>
-      </div>
+      ) : null}
 
-      <div
-        className={`${TEAM_CARD_PADDED} ${activeOwnerView === "pl" ? "" : "hidden"}`}
-      >
-        <h3 className="text-lg font-semibold text-slate-900">P&amp;L</h3>
-        <p className="mt-1 text-sm text-slate-600">
-          Completed job revenue minus expenses (including commission payouts
-          once marked paid). This is not a cash-collection report.
-        </p>
-
-        {revenue?.ok && expensesSummary?.ok ? (
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            {(
-              [
-                { key: "last30Days", label: "Last 30 days" },
-                { key: "monthToDate", label: "Month to date" },
-                { key: "yearToDate", label: "Year to date" },
-              ] as const
-            ).map(({ key, label }) => {
-              const rev = revenue.windows[key].totalCents ?? 0;
-              const exp = expensesSummary.windows[key].totalCents ?? 0;
-              const profit = rev - exp;
-              const margin = rev > 0 ? (profit / rev) * 100 : 0;
-
-              return (
-                <div
-                  key={key}
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
-                >
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    {label}
-                  </div>
-                  <div className="mt-2 space-y-1 text-sm text-slate-700">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-600">
-                        Completed job revenue
-                      </span>
-                      <span className="font-semibold text-slate-900">
-                        {fmtMoney(rev, "USD")}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-600">Expenses</span>
-                      <span className="font-semibold text-slate-900">
-                        {fmtMoney(exp, "USD")}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2 border-t border-slate-200 pt-2">
-                      <span className="text-slate-600">Profit</span>
-                      <span
-                        className={`font-semibold ${profit >= 0 ? "text-emerald-700" : "text-rose-700"}`}
-                      >
-                        {fmtMoney(profit, "USD")}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
-                      <span>Margin</span>
-                      <span>{fmtPercent(margin)}</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="mt-4 text-sm text-slate-600">
-            {revenueError ||
-              expensesSummaryError ||
-              "P&L unavailable right now."}
+      {activeOwnerView === "pl" ? (
+        <div className={TEAM_CARD_PADDED}>
+          <h3 className="text-lg font-semibold text-slate-900">P&amp;L</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            Completed job revenue minus expenses (including commission payouts
+            once marked paid). This is not a cash-collection report.
           </p>
-        )}
-      </div>
 
-      {activeOwnerView === "assistant" ? <OwnerAssistClient /> : null}
+          {revenue?.ok && expensesSummary?.ok ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              {(
+                [
+                  { key: "last30Days", label: "Last 30 days" },
+                  { key: "monthToDate", label: "Month to date" },
+                  { key: "yearToDate", label: "Year to date" },
+                ] as const
+              ).map(({ key, label }) => {
+                const rev = revenue.windows[key].totalCents ?? 0;
+                const exp = expensesSummary.windows[key].totalCents ?? 0;
+                const profit = rev - exp;
+                const margin = rev > 0 ? (profit / rev) * 100 : 0;
+
+                return (
+                  <div
+                    key={key}
+                    data-owner-pl-window={key}
+                    data-owner-pl-revenue-cents={rev}
+                    data-owner-pl-expense-cents={exp}
+                    data-owner-pl-profit-cents={profit}
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
+                  >
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      {label}
+                    </div>
+                    <div className="mt-2 space-y-1 text-sm text-slate-700">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-600">
+                          Completed job revenue
+                        </span>
+                        <span className="font-semibold text-slate-900">
+                          {fmtMoney(rev, "USD")}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-600">Expenses</span>
+                        <span className="font-semibold text-slate-900">
+                          {fmtMoney(exp, "USD")}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 border-t border-slate-200 pt-2">
+                        <span className="text-slate-600">Profit</span>
+                        <span
+                          className={`font-semibold ${profit >= 0 ? "text-emerald-700" : "text-rose-700"}`}
+                        >
+                          {fmtMoney(profit, "USD")}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
+                        <span>Margin</span>
+                        <span>{fmtPercent(margin)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div
+              className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-900"
+              role="alert"
+            >
+              <div className="font-semibold">P&amp;L unavailable</div>
+              <div className="mt-1 text-xs">
+                {revenueError ||
+                  expensesSummaryError ||
+                  "Revenue or expense data could not be loaded. No profit value was calculated."}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {activeOwnerView === "assistant" ? activeSubview : null}
     </section>
   );
 }

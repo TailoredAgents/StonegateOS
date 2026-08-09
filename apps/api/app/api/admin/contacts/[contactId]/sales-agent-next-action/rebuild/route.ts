@@ -25,6 +25,7 @@ import { loadQuoteHotWindowOutcomeSummary } from "@/lib/quote-hot-window-outcome
 import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
 import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
 import { getSalesAutopilotPolicy } from "@/lib/policy";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../../web/admin";
 
 type RouteContext = {
@@ -32,7 +33,9 @@ type RouteContext = {
 };
 
 function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
 function toMemoryRecord(memory: {
@@ -65,22 +68,31 @@ function toMemoryRecord(memory: {
   };
 }
 
-export async function POST(request: NextRequest, context: RouteContext): Promise<Response> {
+export async function POST(
+  request: NextRequest,
+  context: RouteContext,
+): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.write");
+  if (permissionError) return permissionError;
 
   const { contactId } = await context.params;
-  const contactIdTrimmed = typeof contactId === "string" ? contactId.trim() : "";
+  const contactIdTrimmed =
+    typeof contactId === "string" ? contactId.trim() : "";
   if (!contactIdTrimmed || !isUuid(contactIdTrimmed)) {
     return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
   }
 
-  const includeQuotePrice = request.nextUrl.searchParams.get("includeQuotePrice") === "1";
+  const includeQuotePrice =
+    request.nextUrl.searchParams.get("includeQuotePrice") === "1";
   const db = getDb();
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
-  const appointmentPreservationOutcomeSummary = await loadAppointmentPreservationOutcomeSummary(db);
-  const channelHandoffOutcomeSummary = await loadChannelHandoffOutcomeSummary(db);
+  const appointmentPreservationOutcomeSummary =
+    await loadAppointmentPreservationOutcomeSummary(db);
+  const channelHandoffOutcomeSummary =
+    await loadChannelHandoffOutcomeSummary(db);
   const closeLoopOutcomeSummary = await loadCloseLoopOutcomeSummary(db);
   const firstResponseOutcomeSummary = await loadFirstResponseOutcomeSummary(db);
   const liveContext = await loadOmniLeadContext(db, {
@@ -97,11 +109,13 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     memory: buildSalesAgentMemory(liveContext),
   });
   const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
-  const appointmentReminderOutcomeSummary = await loadAppointmentReminderOutcomeSummary(db);
+  const appointmentReminderOutcomeSummary =
+    await loadAppointmentReminderOutcomeSummary(db);
   const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSaveOutcomeSummary = await loadObjectionSaveOutcomeSummary(db);
   const quoteAccuracyOutcomeSummary = await loadQuoteAccuracyOutcomeSummary(db);
-  const quoteHotWindowOutcomeSummary = await loadQuoteHotWindowOutcomeSummary(db);
+  const quoteHotWindowOutcomeSummary =
+    await loadQuoteHotWindowOutcomeSummary(db);
   const quoteCloseOutcomeSummary = await loadQuoteCloseOutcomeSummary(db);
   const quoteFollowupOutcomeSummary = await loadQuoteFollowupOutcomeSummary(db);
   const reactivationOutcomeSummary = await loadReactivationOutcomeSummary(db);

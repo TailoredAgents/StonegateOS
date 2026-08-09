@@ -1,0 +1,8 @@
+{
+  "extends": "../tsconfig.json",
+  "include": [
+    "../../../playwright.team-audit.config.ts",
+    "./**/*.ts",
+    "../support/team-auth.ts"
+  ]
+}

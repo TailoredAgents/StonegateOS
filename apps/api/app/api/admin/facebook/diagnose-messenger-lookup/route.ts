@@ -19,9 +19,14 @@ export async function POST(request: NextRequest): Promise<Response> {
     rawBody = {};
   }
 
-  const body = rawBody && typeof rawBody === "object" ? (rawBody as Record<string, unknown>) : {};
-  const senderId = typeof body["senderId"] === "string" ? body["senderId"].trim() : "";
-  const pageId = typeof body["pageId"] === "string" ? body["pageId"].trim() : null;
+  const body =
+    rawBody && typeof rawBody === "object"
+      ? (rawBody as Record<string, unknown>)
+      : {};
+  const senderId =
+    typeof body["senderId"] === "string" ? body["senderId"].trim() : "";
+  const pageId =
+    typeof body["pageId"] === "string" ? body["pageId"].trim() : null;
   const appId = typeof body["appId"] === "string" ? body["appId"].trim() : null;
 
   if (!senderId) {
@@ -29,12 +34,16 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   try {
-    const diagnostics = await diagnoseFacebookMessengerLookup({ senderId, pageId, appId });
+    const diagnostics = await diagnoseFacebookMessengerLookup({
+      senderId,
+      pageId,
+      appId,
+    });
     return NextResponse.json({ ok: true, diagnostics });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
-      { ok: false, error: "facebook_diagnostics_failed", details: String(error) },
-      { status: 500 }
+      { ok: false, error: "facebook_diagnostics_failed" },
+      { status: 500 },
     );
   }
 }

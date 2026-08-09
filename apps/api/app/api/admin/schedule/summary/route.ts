@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, gte, inArray, lt } from "drizzle-orm";
 import { getDb, appointments } from "@/db";
-import { isAdminRequest } from "../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 
 type RangeKey = "today" | "tomorrow" | "this_week" | "next_week";
 type AppointmentStatus = "requested" | "confirmed" | "completed" | "no_show" | "canceled";
@@ -80,12 +80,8 @@ function isoDate(date: Date): string {
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse<SummaryResponse>> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json(
-      { ok: false, range: "this_week", total: 0, byStatus: {}, byDay: [], error: "unauthorized" },
-      { status: 401 }
-    );
-  }
+  const permissionError = await requirePermission(request, "appointments.read");
+  if (permissionError) return permissionError as NextResponse<SummaryResponse>;
 
   const range = parseRange(request.nextUrl.searchParams.get("range"));
   const { start, end } = computeRange(range);

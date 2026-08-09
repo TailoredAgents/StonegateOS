@@ -1,23 +1,43 @@
+import { randomUUID } from "node:crypto";
 import React from "react";
-import { SubmitButton } from "@/components/SubmitButton";
-import { callAdminApi } from "../lib/api";
-import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
-  updateAutomationModeAction,
+  hasTeamPermission,
+  requireCurrentTeamPrincipal,
+} from "@/lib/team-principal";
+import { callAdminApiAs } from "../lib/api";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
+import { teamSurfaceHref } from "../surface-registry";
+import {
   updateLeadAutomationAction,
   updateSalesAutopilotPolicyAction,
 } from "../actions";
+import { AutomationReviewForm } from "./AutomationReviewForm";
+import { LeadAutomationControlClient } from "./LeadAutomationControlClient";
+
+type PublicAutomationMode = "off" | "assist" | "automatic";
 
 type AutomationChannel = {
   channel: string;
   mode: string;
+  publicMode?: PublicAutomationMode;
+  version: string;
   updatedAt: string | null;
 };
 
+type AutomationMetadata = {
+  version: string;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  concurrencyControl: "if-match";
+  idempotencyReceipts: "durable";
+};
+
 type SalesAutopilotPolicy = {
-  mode: "off" | "partial" | "full";
-  channelModes: Record<"sms" | "email" | "dm", "off" | "partial" | "full">;
+  mode: PublicAutomationMode;
+  channelModes: Record<"sms" | "email" | "dm", PublicAutomationMode>;
   enabled: boolean;
+  emergencyStop: boolean;
+  dailyAutomaticSendCap: number;
   autoSendAfterMinutes: number;
   activityWindowMinutes: number;
   retryDelayMinutes: number;
@@ -95,20 +115,25 @@ const SALES_AGENT_AUTOSEND_ACTIONS = [
 ];
 
 const SALES_AGENT_LIVE_REPLY_ACTIONS = [
-  { value: "handle_price_objection", label: "Price objection save (Full only)" },
-  { value: "reply_now", label: "Immediate reply (Full only)" },
+  {
+    value: "handle_price_objection",
+    label: "Price objection save (Automatic only)",
+  },
+  { value: "reply_now", label: "Immediate reply (Automatic only)" },
 ] as const;
 
 const CLOSE_LOOP_FOLLOWUP_ACTIONS = [
   {
     value: "appointment_checkin",
     label: "Pre-appointment check in",
-    detail: "Light reassurance touch before a booked appointment when the booking looks shaky.",
+    detail:
+      "Light reassurance touch before a booked appointment when the booking looks shaky.",
   },
   {
     value: "post_job_checkin",
     label: "Post-job check in",
-    detail: "Human-style satisfaction follow-up after the completed job, separate from review requests.",
+    detail:
+      "Human-style satisfaction follow-up after the completed job, separate from review requests.",
   },
 ] as const;
 
@@ -116,14 +141,15 @@ const CLOSE_LOOP_LIVE_REPLY_ACTIONS = [
   {
     value: "appointment_support",
     label: "Booked-job support or reschedule save",
-    detail: "Handles low-risk timing, logistics, and light reschedule-save conversations on booked jobs.",
+    detail:
+      "Handles low-risk timing, logistics, and light reschedule-save conversations on booked jobs.",
   },
 ] as const;
 
 const AUTOPILOT_MODE_OPTIONS = [
   { value: "off", label: "Off" },
-  { value: "partial", label: "Partial" },
-  { value: "full", label: "Full" },
+  { value: "assist", label: "Assist" },
+  { value: "automatic", label: "Automatic" },
 ] as const;
 
 const FACEBOOK_READINESS_LABELS: Record<keyof FacebookReadiness, string> = {
@@ -144,31 +170,71 @@ function keywordList(values: string[]): string {
   return values.join(", ");
 }
 
+function isCanonicalSettingsVersion(value: string | null): value is string {
+  if (value === "absent") return true;
+  if (!value) return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+}
+
 export async function AutomationSection(): Promise<React.ReactElement> {
-  const response = await callAdminApi("/api/admin/automation");
-  if (!response.ok) {
-    throw new Error("Failed to load automation settings");
-  }
+  const principal = await requireCurrentTeamPrincipal();
+  const hasWritePermission = hasTeamPermission(principal, "automation.write");
+  const response = await callAdminApiAs(principal, "/api/admin/automation");
+  const payload = response.ok
+    ? ((await response.json().catch(() => null)) as {
+        channels?: AutomationChannel[];
+      } | null)
+    : null;
+  const channels = payload?.channels ?? [];
+  const channelsError = response.ok
+    ? null
+    : `Channel compatibility settings could not be loaded (${response.status}).`;
 
-  const payload = (await response.json()) as { channels?: AutomationChannel[] };
-  const channels = payload.channels ?? [];
-
-  const autopilotResponse = await callAdminApi("/api/admin/sales/autopilot");
-  if (!autopilotResponse.ok) {
-    throw new Error("Failed to load Sales Autopilot settings");
-  }
-  const autopilotPayload = (await autopilotResponse.json()) as {
-    policy?: SalesAutopilotPolicy;
-    facebookReadiness?: FacebookReadiness;
-    recentFacebookActions?: FacebookAction[];
-  };
-  const autopilot = autopilotPayload.policy;
+  const autopilotResponse = await callAdminApiAs(
+    principal,
+    "/api/admin/sales/autopilot",
+  );
+  const autopilotPayload = autopilotResponse.ok
+    ? ((await autopilotResponse.json().catch(() => null)) as {
+        policy?: SalesAutopilotPolicy;
+        publicPolicy?: SalesAutopilotPolicy;
+        facebookReadiness?: FacebookReadiness;
+        recentFacebookActions?: FacebookAction[];
+        metadata?: AutomationMetadata;
+      } | null)
+    : null;
+  const autopilot =
+    autopilotPayload?.publicPolicy ?? autopilotPayload?.policy ?? null;
   if (!autopilot) {
-    throw new Error("Missing Sales Autopilot policy");
+    return (
+      <section className="space-y-4" aria-labelledby="automation-heading">
+        <header className="rounded-3xl border border-slate-200 bg-white p-6">
+          <h2
+            id="automation-heading"
+            className="text-xl font-semibold text-slate-900"
+          >
+            Messaging Automation
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Automation settings are temporarily unavailable. No settings were
+            changed.
+          </p>
+        </header>
+        <div
+          role="alert"
+          className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800"
+        >
+          Sales Autopilot could not be loaded ({autopilotResponse.status}).
+          Refresh to retry. If this continues, leave automation in its current
+          state and contact an administrator.
+        </div>
+      </section>
+    );
   }
   const selectedPlannerActions = new Set(autopilot.plannerAutoSendActions);
   const selectedLiveReplyActions = new Set(autopilot.liveReplyAutonomyActions);
-  const facebookReadiness = autopilotPayload.facebookReadiness ?? {
+  const facebookReadiness = autopilotPayload?.facebookReadiness ?? {
     facebookWebhookConfigured: false,
     messengerTokenConfigured: false,
     outboxWorkerConfigured: false,
@@ -177,32 +243,100 @@ export async function AutomationSection(): Promise<React.ReactElement> {
     calendarConfigured: false,
     serviceAreaPolicyConfigured: false,
   };
-  const recentFacebookActions = autopilotPayload.recentFacebookActions ?? [];
-  const readinessPassed = Object.values(facebookReadiness).filter(Boolean).length;
+  const recentFacebookActions = autopilotPayload?.recentFacebookActions ?? [];
+  const settingsVersion = autopilotPayload?.metadata?.version ?? null;
+  const hasMutationSafetyMetadata = Boolean(
+    isCanonicalSettingsVersion(settingsVersion) &&
+      autopilotPayload?.metadata?.concurrencyControl === "if-match" &&
+      autopilotPayload?.metadata?.idempotencyReceipts === "durable",
+  );
+  const canWrite = hasWritePermission && hasMutationSafetyMetadata;
+  const idempotencyKey = `automation-settings-${randomUUID()}`;
+  const readinessPassed =
+    Object.values(facebookReadiness).filter(Boolean).length;
   const readinessTotal = Object.values(facebookReadiness).length;
 
   return (
     <section className="space-y-6">
       <header className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
-        <h2 className="text-xl font-semibold text-slate-900">Messaging Automation</h2>
+        <h2
+          id="automation-heading"
+          className="text-xl font-semibold text-slate-900"
+        >
+          Messaging Automation
+        </h2>
         <p className="mt-1 text-sm text-slate-600">
-          Sales Autopilot controls drafts, follow-up automation, and eventually live-reply autonomy. Use Off, Partial, and Full to decide how much the system is allowed to do.
+          Use one clear model everywhere: Off, Assist, or Automatic. Safety
+          rules always take priority over the selected mode.
         </p>
         <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-700">
           <span className="font-semibold">Current mode:</span>{" "}
-          <span className={autopilot.mode === "off" ? "text-slate-700" : autopilot.mode === "partial" ? "text-amber-700" : "text-emerald-700"}>
-            {autopilot.mode === "off" ? "Off" : autopilot.mode === "partial" ? "Partial" : "Full"}
+          <span
+            className={
+              autopilot.mode === "off"
+                ? "text-slate-700"
+                : autopilot.mode === "assist"
+                  ? "text-amber-700"
+                  : "text-emerald-700"
+            }
+          >
+            {autopilot.mode === "off"
+              ? "Off"
+              : autopilot.mode === "assist"
+                ? "Assist"
+                : "Automatic"}
           </span>
+          {autopilot.emergencyStop ? (
+            <span className="ml-3 rounded-full bg-rose-100 px-2 py-1 font-semibold text-rose-800">
+              Emergency stop active
+            </span>
+          ) : null}
         </div>
       </header>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
-          <h3 className="text-base font-semibold text-slate-900">Sales Autopilot</h3>
+          <h3 className="text-base font-semibold text-slate-900">
+            Sales Autopilot
+          </h3>
           <p className="text-xs text-slate-500">
-            Off means drafts and planning only. Partial means safe follow-ups can send automatically, but live replies still wait on you. Full is the future fully autonomous mode for channels you trust.
+            Off prevents automatic work. Assist prepares work for a person to
+            approve. Automatic can perform only the specifically enabled,
+            eligible actions.
           </p>
-          <form action={updateSalesAutopilotPolicyAction} className="mt-4 space-y-4 text-xs text-slate-600">
+          {hasWritePermission && !hasMutationSafetyMetadata ? (
+            <p
+              role="alert"
+              className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-800"
+            >
+              Safe save metadata could not be verified. Editing is disabled;
+              refresh before making changes.
+            </p>
+          ) : null}
+          <AutomationReviewForm
+            action={updateSalesAutopilotPolicyAction}
+            canWrite={canWrite}
+            expectedVersion={settingsVersion ?? "unavailable"}
+            idempotencyKey={idempotencyKey}
+          >
+            <label className="flex min-h-11 items-start gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-rose-950">
+              <input
+                type="checkbox"
+                name="emergencyStop"
+                defaultChecked={autopilot.emergencyStop}
+                className="mt-0.5 h-5 w-5 rounded border-rose-300"
+              />
+              <span>
+                <span className="block text-sm font-semibold">
+                  Global emergency stop
+                </span>
+                <span className="block text-xs">
+                  Forces Sales Autopilot messaging and booking decisions off
+                  across channels. Drafts and human-approved work remain
+                  available.
+                </span>
+              </span>
+            </label>
             <label className="flex max-w-xs flex-col gap-1">
               <span>Global mode</span>
               <select
@@ -211,26 +345,35 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                 className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               >
                 <option value="off">Off</option>
-                <option value="partial">Partial</option>
-                <option value="full">Full</option>
+                <option value="assist">Assist</option>
+                <option value="automatic">Automatic</option>
               </select>
             </label>
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
               <div className="space-y-1">
-                <h4 className="text-sm font-semibold text-slate-900">Channel mode overrides</h4>
+                <h4 className="text-sm font-semibold text-slate-900">
+                  Channel mode overrides
+                </h4>
                 <p className="text-xs text-slate-500">
-                  Set SMS, Messenger, and email independently. Off means drafts only. Partial means safe follow-ups only. Full allows live autopilot behavior on that channel.
+                  Set SMS, Messenger, and email independently. Off blocks
+                  automatic work, Assist requires approval, and Automatic can
+                  perform eligible actions.
                 </p>
                 <p className="text-xs text-slate-500">
-                  Messenger has one extra guardrail: live DM autopilot stays approval-only until there has been a real back-and-forth, so the system does not treat the first Facebook lead card like a fully trusted conversation.
+                  Messenger has one extra guardrail: live DM autopilot stays
+                  approval-only until there has been a real back-and-forth, so
+                  the system does not treat the first Facebook lead card like a
+                  fully trusted conversation.
                 </p>
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
                 {(["sms", "dm", "email"] as const).map((channel) => (
                   <label key={channel} className="flex flex-col gap-1">
-                    <span>{channel === "dm" ? "Messenger" : channel.toUpperCase()}</span>
+                    <span>
+                      {channel === "dm" ? "Messenger" : channel.toUpperCase()}
+                    </span>
                     <select
                       name={`channelMode_${channel}`}
                       defaultValue={autopilot.channelModes[channel]}
@@ -248,6 +391,18 @@ export async function AutomationSection(): Promise<React.ReactElement> {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex flex-col gap-1">
+                <span>Daily automatic-send cap</span>
+                <input
+                  name="dailyAutomaticSendCap"
+                  type="number"
+                  min={1}
+                  max={1000}
+                  step={1}
+                  defaultValue={autopilot.dailyAutomaticSendCap}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                />
+              </label>
               <label className="flex flex-col gap-1">
                 <span>Auto-send after (minutes)</span>
                 <input
@@ -351,15 +506,27 @@ export async function AutomationSection(): Promise<React.ReactElement> {
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
               <div className="space-y-1">
-                <h4 className="text-sm font-semibold text-slate-900">Planner follow-up auto-send</h4>
+                <h4 className="text-sm font-semibold text-slate-900">
+                  Planner follow-up auto-send
+                </h4>
                 <p className="text-xs text-slate-500">
-                  Controls the newer Sales HQ and Inbox planner drafts for scheduled follow-up behavior. This matters in Partial and Full modes. Off mode still drafts, but nothing sends automatically.
+                  Controls the newer Sales HQ and Inbox planner drafts for
+                  scheduled follow-up behavior. Assist keeps drafts waiting for
+                  approval. Automatic may send eligible follow-ups. Off blocks
+                  automatic work.
                 </p>
                 <p className="text-xs text-slate-500">
-                  Appointment check-ins use the same planner path. They are separate from the core transactional confirmations and reminders, so you can keep those working while deciding whether the agent is allowed to send extra pre-appointment reassurance touches.
+                  Appointment check-ins use the same planner path. They are
+                  separate from the core transactional confirmations and
+                  reminders, so you can keep those working while deciding
+                  whether the agent is allowed to send extra pre-appointment
+                  reassurance touches.
                 </p>
                 <p className="text-xs text-slate-500">
-                  Post-job check-ins also stay separate from the existing review-request automation. Use them if you want the agent to send a human-style satisfaction follow-up without replacing the current Google review request flow.
+                  Post-job check-ins also stay separate from the existing
+                  review-request automation. Use them if you want the agent to
+                  send a human-style satisfaction follow-up without replacing
+                  the current Google review request flow.
                 </p>
               </div>
 
@@ -388,14 +555,21 @@ export async function AutomationSection(): Promise<React.ReactElement> {
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Allowed channels</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Allowed channels
+                    </span>
                     {SALES_AGENT_AUTOSEND_CHANNELS.map((option) => (
-                      <label key={option.value} className="flex items-center gap-2">
+                      <label
+                        key={option.value}
+                        className="flex items-center gap-2"
+                      >
                         <input
                           type="checkbox"
                           name="plannerAutoSendChannels"
                           value={option.value}
-                          defaultChecked={autopilot.plannerAutoSendChannels.includes(option.value)}
+                          defaultChecked={autopilot.plannerAutoSendChannels.includes(
+                            option.value,
+                          )}
                           className="h-4 w-4 rounded border-slate-300"
                         />
                         {option.label}
@@ -404,14 +578,21 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                   </div>
 
                   <div className="space-y-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Allowed actions</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Allowed actions
+                    </span>
                     {SALES_AGENT_AUTOSEND_ACTIONS.map((option) => (
-                      <label key={option.value} className="flex items-center gap-2">
+                      <label
+                        key={option.value}
+                        className="flex items-center gap-2"
+                      >
                         <input
                           type="checkbox"
                           name="plannerAutoSendActions"
                           value={option.value}
-                          defaultChecked={autopilot.plannerAutoSendActions.includes(option.value)}
+                          defaultChecked={autopilot.plannerAutoSendActions.includes(
+                            option.value,
+                          )}
                           className="h-4 w-4 rounded border-slate-300"
                         />
                         {option.label}
@@ -422,9 +603,14 @@ export async function AutomationSection(): Promise<React.ReactElement> {
 
                 <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
                   <div className="space-y-1">
-                    <h5 className="text-sm font-semibold text-slate-900">Close-loop follow-up actions</h5>
+                    <h5 className="text-sm font-semibold text-slate-900">
+                      Close-loop follow-up actions
+                    </h5>
                     <p className="text-xs text-slate-600">
-                      These are the post-booking and post-job planner touches. They still use the same autosend path above, but this grouping makes it easier to turn appointment and after-job behavior on intentionally.
+                      These are the post-booking and post-job planner touches.
+                      They still use the same autosend path above, but this
+                      grouping makes it easier to turn appointment and after-job
+                      behavior on intentionally.
                     </p>
                   </div>
 
@@ -438,12 +624,18 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                           type="checkbox"
                           name="plannerAutoSendActions"
                           value={option.value}
-                          defaultChecked={selectedPlannerActions.has(option.value)}
+                          defaultChecked={selectedPlannerActions.has(
+                            option.value,
+                          )}
                           className="mt-0.5 h-4 w-4 rounded border-slate-300"
                         />
                         <span className="space-y-1">
-                          <span className="block text-sm font-semibold text-slate-900">{option.label}</span>
-                          <span className="block text-xs text-slate-600">{option.detail}</span>
+                          <span className="block text-sm font-semibold text-slate-900">
+                            {option.label}
+                          </span>
+                          <span className="block text-xs text-slate-600">
+                            {option.detail}
+                          </span>
                         </span>
                       </label>
                     ))}
@@ -453,12 +645,19 @@ export async function AutomationSection(): Promise<React.ReactElement> {
 
               <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
                 <div className="space-y-1">
-                  <h4 className="text-sm font-semibold text-slate-900">Live reply autonomy</h4>
+                  <h4 className="text-sm font-semibold text-slate-900">
+                    Live reply autonomy
+                  </h4>
                   <p className="text-xs text-slate-600">
-                    This is the Phase 7 gate for true autonomous salesperson behavior. Keep this off while you tune the system in suggest mode. Even in Full mode, live inbound replies will stay approval-only until this block is enabled and scoped.
+                    This is the Phase 7 gate for true autonomous salesperson
+                    behavior. Keep this off while you tune the system in suggest
+                    mode. Even in Automatic, live inbound replies stay
+                    approval-only until this block is enabled and scoped.
                   </p>
                   <p className="text-xs text-slate-600">
-                    This still runs through the same planner autosend worker above, so if planner auto-send is off, live replies will not send even if this block is enabled.
+                    This still runs through the same planner autosend worker
+                    above, so if planner auto-send is off, live replies will not
+                    send even if this block is enabled.
                   </p>
                 </div>
 
@@ -475,14 +674,21 @@ export async function AutomationSection(): Promise<React.ReactElement> {
 
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
-                      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Allowed live-reply channels</span>
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        Allowed live-reply channels
+                      </span>
                       {SALES_AGENT_AUTOSEND_CHANNELS.map((option) => (
-                        <label key={`live-${option.value}`} className="flex items-center gap-2">
+                        <label
+                          key={`live-${option.value}`}
+                          className="flex items-center gap-2"
+                        >
                           <input
                             type="checkbox"
                             name="liveReplyAutonomyChannels"
                             value={option.value}
-                            defaultChecked={autopilot.liveReplyAutonomyChannels.includes(option.value)}
+                            defaultChecked={autopilot.liveReplyAutonomyChannels.includes(
+                              option.value,
+                            )}
                             className="h-4 w-4 rounded border-slate-300"
                           />
                           {option.label}
@@ -491,14 +697,21 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                     </div>
 
                     <div className="space-y-2">
-                      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Allowed live-reply actions</span>
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        Allowed live-reply actions
+                      </span>
                       {SALES_AGENT_LIVE_REPLY_ACTIONS.map((option) => (
-                        <label key={option.value} className="flex items-center gap-2">
+                        <label
+                          key={option.value}
+                          className="flex items-center gap-2"
+                        >
                           <input
                             type="checkbox"
                             name="liveReplyAutonomyActions"
                             value={option.value}
-                            defaultChecked={autopilot.liveReplyAutonomyActions.includes(option.value)}
+                            defaultChecked={autopilot.liveReplyAutonomyActions.includes(
+                              option.value,
+                            )}
                             className="h-4 w-4 rounded border-slate-300"
                           />
                           {option.label}
@@ -509,9 +722,13 @@ export async function AutomationSection(): Promise<React.ReactElement> {
 
                   <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
                     <div className="space-y-1">
-                      <h5 className="text-sm font-semibold text-slate-900">Close-loop live-reply actions</h5>
+                      <h5 className="text-sm font-semibold text-slate-900">
+                        Close-loop live-reply actions
+                      </h5>
                       <p className="text-xs text-slate-600">
-                        This is the booked-job side of autonomy. Keep it off until you trust the agent with real appointment timing and light reschedule-save conversations.
+                        This is the booked-job side of autonomy. Keep it off
+                        until you trust the agent with real appointment timing
+                        and light reschedule-save conversations.
                       </p>
                     </div>
 
@@ -525,12 +742,18 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                             type="checkbox"
                             name="liveReplyAutonomyActions"
                             value={option.value}
-                            defaultChecked={selectedLiveReplyActions.has(option.value)}
+                            defaultChecked={selectedLiveReplyActions.has(
+                              option.value,
+                            )}
                             className="mt-0.5 h-4 w-4 rounded border-slate-300"
                           />
                           <span className="space-y-1">
-                            <span className="block text-sm font-semibold text-slate-900">{option.label}</span>
-                            <span className="block text-xs text-slate-600">{option.detail}</span>
+                            <span className="block text-sm font-semibold text-slate-900">
+                              {option.label}
+                            </span>
+                            <span className="block text-xs text-slate-600">
+                              {option.detail}
+                            </span>
                           </span>
                         </label>
                       ))}
@@ -543,9 +766,12 @@ export async function AutomationSection(): Promise<React.ReactElement> {
             <div className="rounded-2xl border border-blue-200 bg-blue-50/70 p-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h4 className="text-sm font-semibold text-slate-900">Facebook Sales Autopilot</h4>
+                  <h4 className="text-sm font-semibold text-slate-900">
+                    Facebook Sales Autopilot
+                  </h4>
                   <p className="text-xs text-slate-600">
-                    Junk removal only. Auto-booking requires a shown price, an offered time, and a clear customer yes.
+                    Junk removal only. Auto-booking requires a shown price, an
+                    offered time, and a clear customer yes.
                   </p>
                 </div>
                 <span className="rounded-full border border-blue-200 bg-white px-3 py-1 text-[11px] font-semibold text-blue-800">
@@ -554,19 +780,20 @@ export async function AutomationSection(): Promise<React.ReactElement> {
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <label className="flex flex-col gap-1">
-                  <span>Closer mode</span>
-                  <select
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                  <input
+                    type="hidden"
                     name="facebookCloserMode"
-                    defaultValue={autopilot.facebookCloser.mode}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                  >
-                    <option value="off">Off</option>
-                    <option value="shadow">Shadow</option>
-                    <option value="assist">Assist</option>
-                    <option value="auto">Auto</option>
-                  </select>
-                </label>
+                    value={autopilot.facebookCloser.mode}
+                  />
+                  <span className="block font-semibold text-slate-800">
+                    Facebook compatibility behavior
+                  </span>
+                  <span className="block text-slate-500">
+                    Preserved internally and governed by the Off, Assist, or
+                    Automatic settings above.
+                  </span>
+                </div>
                 <label className="flex flex-col gap-1">
                   <span>Max auto-book price ($)</span>
                   <input
@@ -574,7 +801,9 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                     type="number"
                     min={150}
                     max={5000}
-                    defaultValue={centsToDollars(autopilot.facebookCloser.maxAutoBookTotalCents)}
+                    defaultValue={centsToDollars(
+                      autopilot.facebookCloser.maxAutoBookTotalCents,
+                    )}
                     className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                   />
                 </label>
@@ -596,7 +825,9 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                     type="number"
                     min={0}
                     max={5000}
-                    defaultValue={centsToDollars(autopilot.facebookCloser.requirePhotosAboveCents)}
+                    defaultValue={centsToDollars(
+                      autopilot.facebookCloser.requirePhotosAboveCents,
+                    )}
                     className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                   />
                 </label>
@@ -607,7 +838,9 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                     type="number"
                     min={1}
                     max={24}
-                    defaultValue={autopilot.facebookCloser.messengerResponseWindowHours}
+                    defaultValue={
+                      autopilot.facebookCloser.messengerResponseWindowHours
+                    }
                     className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                   />
                 </label>
@@ -616,7 +849,9 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                     <input
                       type="checkbox"
                       name="facebookCloserAllowDmSmsFallback"
-                      defaultChecked={autopilot.facebookCloser.allowDmSmsFallback}
+                      defaultChecked={
+                        autopilot.facebookCloser.allowDmSmsFallback
+                      }
                       className="h-4 w-4 rounded border-slate-300"
                     />
                     DM-to-SMS fallback
@@ -634,10 +869,23 @@ export async function AutomationSection(): Promise<React.ReactElement> {
               </div>
 
               <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                {(Object.entries(FACEBOOK_READINESS_LABELS) as Array<[keyof FacebookReadiness, string]>).map(([key, label]) => (
-                  <div key={key} className="flex items-center justify-between rounded-xl border border-blue-100 bg-white/80 px-3 py-2">
+                {(
+                  Object.entries(FACEBOOK_READINESS_LABELS) as Array<
+                    [keyof FacebookReadiness, string]
+                  >
+                ).map(([key, label]) => (
+                  <div
+                    key={key}
+                    className="flex items-center justify-between rounded-xl border border-blue-100 bg-white/80 px-3 py-2"
+                  >
                     <span>{label}</span>
-                    <span className={facebookReadiness[key] ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"}>
+                    <span
+                      className={
+                        facebookReadiness[key]
+                          ? "font-semibold text-emerald-700"
+                          : "font-semibold text-amber-700"
+                      }
+                    >
                       {facebookReadiness[key] ? "Ready" : "Check"}
                     </span>
                   </div>
@@ -647,9 +895,12 @@ export async function AutomationSection(): Promise<React.ReactElement> {
               <div className="mt-4 rounded-2xl border border-blue-100 bg-white/90 p-4">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <h5 className="text-sm font-semibold text-slate-900">Owner Coaching</h5>
+                    <h5 className="text-sm font-semibold text-slate-900">
+                      Owner Coaching
+                    </h5>
                     <p className="text-xs text-slate-600">
-                      Approved guidance for tone and flow. Keyword guardrails immediately route risky conversations to review.
+                      Approved guidance for tone and flow. Keyword guardrails
+                      immediately route risky conversations to review.
                     </p>
                   </div>
                   <label className="flex items-center gap-2 text-xs font-semibold text-blue-900">
@@ -693,24 +944,39 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                     <input
                       type="checkbox"
                       name="facebookCoachingRequirePhotosBeforeQuote"
-                      defaultChecked={autopilot.facebookCoaching.requirePhotosBeforeQuote}
+                      defaultChecked={
+                        autopilot.facebookCoaching.requirePhotosBeforeQuote
+                      }
                       className="mt-0.5 h-4 w-4 rounded border-slate-300"
                     />
                     <span>
-                      <span className="block font-semibold text-slate-800">Require photos before quote/time offers</span>
-                      <span className="block text-slate-500">If no photos are present, the agent asks for photos instead of quoting or offering times.</span>
+                      <span className="block font-semibold text-slate-800">
+                        Require photos before quote/time offers
+                      </span>
+                      <span className="block text-slate-500">
+                        If no photos are present, the agent asks for photos
+                        instead of quoting or offering times.
+                      </span>
                     </span>
                   </label>
                   <label className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                     <input
                       type="checkbox"
                       name="facebookCoachingRequireHumanReviewBeforeBooking"
-                      defaultChecked={autopilot.facebookCoaching.requireHumanReviewBeforeBooking}
+                      defaultChecked={
+                        autopilot.facebookCoaching
+                          .requireHumanReviewBeforeBooking
+                      }
                       className="mt-0.5 h-4 w-4 rounded border-slate-300"
                     />
                     <span>
-                      <span className="block font-semibold text-slate-800">Human review before auto-booking</span>
-                      <span className="block text-slate-500">The agent can still draft and offer times, but confirmed bookings wait for review.</span>
+                      <span className="block font-semibold text-slate-800">
+                        Human review before auto-booking
+                      </span>
+                      <span className="block text-slate-500">
+                        The agent can still draft and offer times, but confirmed
+                        bookings wait for review.
+                      </span>
                     </span>
                   </label>
                 </div>
@@ -720,7 +986,9 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                     <span>Always human-review keywords</span>
                     <input
                       name="facebookCoachingHumanReviewKeywords"
-                      defaultValue={keywordList(autopilot.facebookCoaching.humanReviewKeywords)}
+                      defaultValue={keywordList(
+                        autopilot.facebookCoaching.humanReviewKeywords,
+                      )}
                       placeholder="hot tub, hazmat, complaint"
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                     />
@@ -729,7 +997,9 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                     <span>Block auto-reply keywords</span>
                     <input
                       name="facebookCoachingBlockedAutoReplyKeywords"
-                      defaultValue={keywordList(autopilot.facebookCoaching.blockedAutoReplyKeywords)}
+                      defaultValue={keywordList(
+                        autopilot.facebookCoaching.blockedAutoReplyKeywords,
+                      )}
                       placeholder="refund, lawsuit, angry"
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                     />
@@ -737,35 +1007,55 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                 </div>
               </div>
             </div>
-
-            <SubmitButton
-              className="inline-flex items-center rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
-              pendingLabel="Saving..."
-            >
-              Save autopilot settings
-            </SubmitButton>
-          </form>
+          </AutomationReviewForm>
         </div>
 
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
           <h3 className="text-base font-semibold text-slate-900">Mode guide</h3>
           <p className="text-xs text-slate-500">
-            Use this to decide how much authority the system should have while you build trust.
+            Use this to decide how much authority the system should have while
+            you build trust.
           </p>
           <div className="mt-4 space-y-3 text-xs text-slate-600">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <span className="font-semibold text-slate-900">Off:</span> drafts, planning, and recommendations only. No automatic sending.
+              <span className="font-semibold text-slate-900">Off:</span> drafts,
+              planning, and recommendations only. No automatic sending.
             </div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <span className="font-semibold text-slate-900">Partial:</span> the system can send approved follow-up types automatically, but new live replies still wait on you.
+              <span className="font-semibold text-slate-900">Assist:</span>{" "}
+              drafts and recommendations are prepared, but a person approves the
+              action before it happens.
             </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <span className="font-semibold text-slate-900">Full:</span> the system is allowed to run live channel autopilot where supported and trusted, but live replies still stay approval-only until the live reply autonomy gate below is enabled.
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <span className="font-semibold text-slate-900">Automatic:</span>{" "}
+              eligible actions may run only when all safety gates and the
+              specific action allowlist pass.
+            </div>
           </div>
+
+          <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-950">
+            <h4 className="text-sm font-semibold">Effective safety order</h4>
+            <p className="mt-1">
+              The first matching rule wins. A later mode can never bypass an
+              earlier safety rule.
+            </p>
+            <ol className="mt-3 list-decimal space-y-2 pl-5">
+              <li>Do Not Contact</li>
+              <li>Human takeover or lead/channel pause</li>
+              <li>Quiet hours or sending cap</li>
+              <li>Channel mode override</li>
+              <li>Global mode</li>
+            </ol>
+            <p className="mt-3 font-semibold text-rose-800">
+              The global emergency stop forces Off before any automatic action
+              can execute.
+            </p>
           </div>
 
           <div className="mt-6">
-            <h4 className="text-sm font-semibold text-slate-900">Recent Facebook actions</h4>
+            <h4 className="text-sm font-semibold text-slate-900">
+              Recent Facebook actions
+            </h4>
             <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
               {recentFacebookActions.length === 0 ? (
                 <div className="bg-slate-50 px-4 py-3 text-xs text-slate-500">
@@ -776,20 +1066,38 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                   {recentFacebookActions.map((action) => (
                     <a
                       key={action.id}
-                      href={action.threadId ? `/team?tab=inbox&threadId=${action.threadId}` : "/team?tab=inbox"}
+                      href={
+                        action.threadId
+                          ? teamSurfaceHref("inbox", {
+                              query: { threadId: action.threadId },
+                            })
+                          : teamSurfaceHref("inbox")
+                      }
                       className="block bg-white px-4 py-3 transition hover:bg-slate-50"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-semibold text-slate-900">{action.proposedAction}</span>
+                        <span className="font-semibold text-slate-900">
+                          {action.proposedAction}
+                        </span>
                         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                           {action.autonomyMode}
                         </span>
                       </div>
                       <div className="mt-1 text-slate-500">
-                        {action.stage} · {action.executedAction ?? "not executed"}
+                        {action.stage} ·{" "}
+                        {action.executedAction ?? "not executed"}
                       </div>
-                      <div className={action.error ? "mt-1 text-rose-600" : "mt-1 text-slate-500"}>
-                        {action.error ?? action.humanReviewReason ?? action.decisionReason ?? "No reason saved"}
+                      <div
+                        className={
+                          action.error
+                            ? "mt-1 text-rose-600"
+                            : "mt-1 text-slate-500"
+                        }
+                      >
+                        {action.error ??
+                          action.humanReviewReason ??
+                          action.decisionReason ??
+                          "No reason saved"}
                       </div>
                     </a>
                   ))}
@@ -799,121 +1107,84 @@ export async function AutomationSection(): Promise<React.ReactElement> {
           </div>
         </div>
 
-        <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
-          <h3 className="text-base font-semibold text-slate-900">
-            Legacy channel autonomy <span className="text-xs font-medium text-slate-500">(older system)</span>
-          </h3>
-          <p className="text-xs text-slate-500">
-            These older channel settings still exist behind the scenes. Keep them for compatibility while the newer Sales Autopilot modes take over.
+        <details className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
+          <summary className="min-h-11 cursor-pointer text-base font-semibold text-slate-900">
+            Advanced compatibility status
+          </summary>
+          <p className="mt-2 text-xs text-slate-500">
+            Older channel records remain readable for compatibility. Saving the
+            public channel modes above keeps these records synchronized; they
+            are no longer a second control surface.
           </p>
-          <div className="mt-4 space-y-3">
-            {channels.map((channel) => (
-              <form key={channel.channel} action={updateAutomationModeAction} className="flex flex-wrap items-center gap-3 text-sm">
-                <input type="hidden" name="channel" value={channel.channel} />
-                <span className="w-20 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
-                  {channel.channel}
-                </span>
-                <select
-                  name="mode"
-                  defaultValue={channel.mode}
-                  className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-700"
-                >
-                  <option value="draft">Draft</option>
-                  <option value="assist">Assist</option>
-                  <option value="auto">Auto</option>
-                </select>
-                <SubmitButton
-                  className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                  pendingLabel="Saving..."
-                >
-                  Update
-                </SubmitButton>
-                <span className="text-[10px] text-slate-500">
-                  {channel.updatedAt
-                    ? new Date(channel.updatedAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })
-                    : "Just now"}
-                </span>
-              </form>
-            ))}
-          </div>
-        </div>
+          {channelsError ? (
+            <p
+              role="alert"
+              className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"
+            >
+              {channelsError} Refresh to retry.
+            </p>
+          ) : channels.length === 0 ? (
+            <p
+              role="status"
+              className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600"
+            >
+              No compatibility channels are configured.
+            </p>
+          ) : (
+            <dl className="mt-4 space-y-3">
+              {channels.map((channel) => {
+                const publicMode =
+                  channel.publicMode ??
+                  (channel.mode === "auto"
+                    ? "automatic"
+                    : channel.mode === "assist"
+                      ? "assist"
+                      : "off");
+                return (
+                  <div
+                    key={channel.channel}
+                    className="flex min-h-11 flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs"
+                  >
+                    <dt className="w-24 font-semibold uppercase tracking-wide text-slate-700">
+                      {channel.channel}
+                    </dt>
+                    <dd className="font-semibold text-slate-900">
+                      {publicMode === "automatic"
+                        ? "Automatic"
+                        : publicMode === "assist"
+                          ? "Assist"
+                          : "Off"}
+                    </dd>
+                    <dd className="ml-auto text-slate-500">
+                      {channel.updatedAt
+                        ? new Date(channel.updatedAt).toLocaleString(
+                            undefined,
+                            {
+                              timeZone: TEAM_TIME_ZONE,
+                            },
+                          )
+                        : "Default compatibility value"}
+                    </dd>
+                  </div>
+                );
+              })}
+            </dl>
+          )}
+        </details>
 
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
-          <h3 className="text-base font-semibold text-slate-900">Lead-level kill switches</h3>
+          <h3 className="text-base font-semibold text-slate-900">
+            Lead-level kill switches
+          </h3>
           <p className="text-xs text-slate-500">
-            Pause follow-ups, mark Do Not Contact, or force human takeover for a specific lead.
+            Pause follow-ups, mark Do Not Contact, or force human takeover for a
+            specific lead.
           </p>
-          <form action={updateLeadAutomationAction} className="mt-4 space-y-3 text-xs text-slate-600">
-            <label className="flex flex-col gap-1">
-              <span>Lead ID</span>
-              <input
-                name="leadId"
-                placeholder="Lead UUID"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span>Channel</span>
-              <select
-                name="channel"
-                defaultValue="sms"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              >
-                {channels.map((channel) => (
-                  <option key={channel.channel} value={channel.channel}>
-                    {channel.channel.toUpperCase()}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="grid gap-2 sm:grid-cols-3">
-              <label className="flex items-center gap-2">
-                <input type="checkbox" name="paused" className="h-4 w-4 rounded border-slate-300" />
-                Pause
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="checkbox" name="dnc" className="h-4 w-4 rounded border-slate-300" />
-                DNC
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="checkbox" name="humanTakeover" className="h-4 w-4 rounded border-slate-300" />
-                Human takeover
-              </label>
-            </div>
-            <label className="flex flex-col gap-1">
-              <span>Follow-up state</span>
-              <input
-                name="followupState"
-                placeholder="qualifying | booked | review"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              />
-            </label>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex flex-col gap-1">
-                <span>Follow-up step</span>
-                <input
-                  name="followupStep"
-                  type="number"
-                  min={0}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span>Next follow-up</span>
-                <input
-                  name="nextFollowupAt"
-                  type="datetime-local"
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                />
-              </label>
-            </div>
-            <SubmitButton
-              className="inline-flex items-center rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
-              pendingLabel="Saving..."
-            >
-              Save lead override
-            </SubmitButton>
-          </form>
+          <LeadAutomationControlClient
+            action={updateLeadAutomationAction}
+            channels={channels.map((channel) => channel.channel)}
+            canWrite={canWrite}
+          />
         </div>
       </div>
     </section>

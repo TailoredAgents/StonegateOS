@@ -1,107 +1,263 @@
 import type { NextRequest } from "next/server";
-import { NextResponse } from "next/server";
-import { inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
+import { z } from "zod";
 import {
   getDb,
   googleAdsAnalystRecommendationEvents,
-  googleAdsAnalystRecommendations
+  googleAdsAnalystRecommendations,
 } from "@/db";
-import { requirePermission } from "@/lib/permissions";
-import { isAdminRequest } from "../../../../../../web/admin";
-import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { assertGoogleAdsReviewTransition } from "@/lib/google-ads-recommendation-operations";
+import {
+  claimTeamMutationIdempotency,
+  completeTeamMutationIdempotency,
+  settleTeamMutationIdempotencyFailure,
+  type TeamMutationIdempotencyClaim,
+  teamMutationIdempotencyReplayResponse,
+} from "@/lib/team-mutation-idempotency";
+import {
+  beginTeamMutation,
+  TeamMutationFailure,
+  teamMutationErrorResponse,
+  teamMutationExceptionResponse,
+  teamMutationResultResponse,
+  teamMutationSuccessResult,
+} from "@/lib/team-mutation";
 
-function asString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length ? trimmed : null;
+const BulkUpdateSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        expectedVersion: z.string().datetime({ offset: true }),
+      }),
+    )
+    .min(1)
+    .max(200),
+  status: z.enum(["proposed", "approved", "ignored"]),
+  confirmation: z.enum(["reset", "approve", "ignore"]),
+  note: z.string().trim().max(800).optional(),
+});
+
+function nextTimestamp(previous: Date, candidate = new Date()): Date {
+  return new Date(Math.max(candidate.getTime(), previous.getTime() + 1));
 }
 
-function isAllowedStatus(status: string): status is "proposed" | "approved" | "ignored" {
-  return status === "proposed" || status === "approved" || status === "ignored";
+function expectedConfirmation(status: "proposed" | "approved" | "ignored") {
+  return status === "approved"
+    ? "approve"
+    : status === "ignored"
+      ? "ignore"
+      : "reset";
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-
-  const permissionError = await requirePermission(request, "policy.write");
-  if (permissionError) return permissionError;
-
-  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-  const status = asString(body["status"]);
-  const note = asString(body["note"]);
-  const idsRaw = Array.isArray(body["ids"]) ? body["ids"] : [];
-  const ids = idsRaw
-    .map((value) => asString(value))
-    .filter((value): value is string => typeof value === "string");
-
-  if (!status || !isAllowedStatus(status) || ids.length === 0) {
-    return NextResponse.json({ ok: false, error: "invalid_request" }, { status: 400 });
-  }
-
-  if (ids.length > 200) {
-    return NextResponse.json({ ok: false, error: "too_many_ids" }, { status: 400 });
-  }
-
-  const actor = getAuditActorFromRequest(request);
-  const now = new Date();
-  const db = getDb();
-
-  const existing = await db
-    .select({
-      id: googleAdsAnalystRecommendations.id,
-      reportId: googleAdsAnalystRecommendations.reportId,
-      kind: googleAdsAnalystRecommendations.kind,
-      status: googleAdsAnalystRecommendations.status
-    })
-    .from(googleAdsAnalystRecommendations)
-    .where(inArray(googleAdsAnalystRecommendations.id, ids))
-    .limit(200);
-
-  if (existing.length === 0) {
-    return NextResponse.json({ ok: true, updated: 0, skipped: ids.length });
-  }
-
-  const toUpdate = existing.filter((row) => row.status !== status);
-  if (toUpdate.length === 0) {
-    return NextResponse.json({ ok: true, updated: 0, skipped: existing.length });
-  }
-
-  const updateIds = toUpdate.map((row) => row.id);
-
-  await db
-    .update(googleAdsAnalystRecommendations)
-    .set({
-      status,
-      decidedBy: status === "proposed" ? null : actor.id ?? null,
-      decidedAt: status === "proposed" ? null : now,
-      appliedAt: null,
-      updatedAt: now
-    })
-    .where(inArray(googleAdsAnalystRecommendations.id, updateIds));
-
-  await db.insert(googleAdsAnalystRecommendationEvents).values(
-    toUpdate.map((row) => ({
-      recommendationId: row.id,
-      reportId: row.reportId,
-      kind: row.kind,
-      fromStatus: row.status,
-      toStatus: status,
-      note: note ? note.slice(0, 800) : null,
-      actorMemberId: actor.id ?? null,
-      actorSource: "ui"
-    }))
-  );
-
-  await recordAuditEvent({
-    actor,
-    action: "marketing.google_ads_recommendations.bulk_update",
-    entityType: "google_ads_analyst_recommendation",
-    entityId: toUpdate[0]?.id ?? "bulk",
-    meta: { status, updated: updateIds.length }
+  const boundary = await beginTeamMutation(request, {
+    principalTypes: ["human"],
+    requiredPermissions: ["marketing.write"],
+    risk: "normal",
+    requiresIdempotency: true,
+    auditAction: "marketing.google_ads_recommendations.bulk_update",
   });
+  if (!boundary.ok) return boundary.response;
+  const { mutation } = boundary;
 
-  return NextResponse.json({ ok: true, updated: updateIds.length, skipped: existing.length - updateIds.length });
+  const parsed = BulkUpdateSchema.safeParse(
+    await request.json().catch(() => ({})),
+  );
+  if (!parsed.success) {
+    return teamMutationErrorResponse(
+      "invalid",
+      "The selected recommendation decisions are invalid.",
+      {
+        correlationId: mutation.correlationId,
+        fieldErrors: { recommendations: "Refresh and select the items again." },
+      },
+    );
+  }
+  const uniqueIds = new Set(parsed.data.items.map((item) => item.id));
+  if (uniqueIds.size !== parsed.data.items.length) {
+    return teamMutationErrorResponse(
+      "invalid",
+      "Each recommendation may be selected only once.",
+      { correlationId: mutation.correlationId },
+    );
+  }
+  if (parsed.data.confirmation !== expectedConfirmation(parsed.data.status)) {
+    return teamMutationErrorResponse(
+      "invalid",
+      "Confirm the exact bulk decision before saving it.",
+      {
+        correlationId: mutation.correlationId,
+        fieldErrors: { confirmation: "Review and confirm the bulk decision." },
+      },
+    );
+  }
+
+  let db: ReturnType<typeof getDb> | null = null;
+  let claim: TeamMutationIdempotencyClaim | null = null;
+  try {
+    db = getDb();
+    const orderedItems = [...parsed.data.items].sort((a, b) =>
+      a.id.localeCompare(b.id),
+    );
+    const claimed = await claimTeamMutationIdempotency(db, mutation, {
+      route: "POST /api/admin/google/ads/analyst/recommendations/bulk",
+      entityType: "google_ads_analyst_recommendation_batch",
+      entityId: `count:${orderedItems.length}`,
+      payload: { ...parsed.data, items: orderedItems },
+    });
+    if (claimed.kind === "replay") {
+      return teamMutationIdempotencyReplayResponse(claimed.replay);
+    }
+    claim = claimed.claim;
+
+    const result = await db.transaction(async (tx) => {
+      const rows = await tx
+        .select({
+          id: googleAdsAnalystRecommendations.id,
+          reportId: googleAdsAnalystRecommendations.reportId,
+          kind: googleAdsAnalystRecommendations.kind,
+          status: googleAdsAnalystRecommendations.status,
+          updatedAt: googleAdsAnalystRecommendations.updatedAt,
+        })
+        .from(googleAdsAnalystRecommendations)
+        .where(
+          inArray(
+            googleAdsAnalystRecommendations.id,
+            orderedItems.map((item) => item.id),
+          ),
+        )
+        .orderBy(asc(googleAdsAnalystRecommendations.id))
+        .for("update");
+      if (rows.length !== orderedItems.length) {
+        throw new TeamMutationFailure(
+          "invalid",
+          "One or more selected recommendations no longer exist.",
+          { status: 404 },
+        );
+      }
+
+      const requestById = new Map(
+        orderedItems.map((item) => [item.id, item.expectedVersion]),
+      );
+      for (const row of rows) {
+        if (row.updatedAt.toISOString() !== requestById.get(row.id)) {
+          throw new TeamMutationFailure(
+            "conflict",
+            "A selected recommendation changed after it was loaded. No decisions were saved.",
+            { fieldErrors: { version: "Refresh the recommendation list." } },
+          );
+        }
+        assertGoogleAdsReviewTransition(row.status, parsed.data.status);
+      }
+
+      const now = new Date();
+      const updatedItems: Array<{ id: string; version: string }> = [];
+      for (const row of rows) {
+        const nextVersion = nextTimestamp(row.updatedAt, now);
+        const [updated] = await tx
+          .update(googleAdsAnalystRecommendations)
+          .set({
+            status: parsed.data.status,
+            decidedBy:
+              parsed.data.status === "proposed"
+                ? null
+                : (mutation.actor.id ?? null),
+            decidedAt: parsed.data.status === "proposed" ? null : now,
+            appliedAt: null,
+            updatedAt: nextVersion,
+          })
+          .where(
+            and(
+              eq(googleAdsAnalystRecommendations.id, row.id),
+              eq(googleAdsAnalystRecommendations.status, row.status),
+              eq(googleAdsAnalystRecommendations.updatedAt, row.updatedAt),
+            ),
+          )
+          .returning({ id: googleAdsAnalystRecommendations.id });
+        if (!updated) {
+          throw new TeamMutationFailure(
+            "conflict",
+            "A recommendation changed while the bulk decision was being saved. No decisions were saved.",
+            { retryable: true },
+          );
+        }
+        updatedItems.push({ id: row.id, version: nextVersion.toISOString() });
+      }
+
+      await tx.insert(googleAdsAnalystRecommendationEvents).values(
+        rows.map((row) => ({
+          recommendationId: row.id,
+          reportId: row.reportId,
+          kind: row.kind,
+          fromStatus: row.status,
+          toStatus: parsed.data.status,
+          note: parsed.data.note ?? null,
+          actorMemberId: mutation.actor.id ?? null,
+          actorSource: "ui",
+          createdAt: now,
+        })),
+      );
+      const audit = await mutation.audit.insertSuccess(tx, {
+        entityType: "google_ads_analyst_recommendation_batch",
+        entityId: claimed.claim.id,
+        before: {
+          items: rows.map((row) => ({
+            id: row.id,
+            status: row.status,
+            version: row.updatedAt.toISOString(),
+          })),
+        },
+        after: { status: parsed.data.status, items: updatedItems },
+        metadata: {
+          count: rows.length,
+          surface: "team.marketing.ads",
+        },
+        committedAt: now,
+      });
+      const response = teamMutationSuccessResult(
+        mutation,
+        {
+          status: parsed.data.status,
+          updated: updatedItems.length,
+          items: updatedItems,
+        },
+        {
+          auditEventId: audit.auditEventId,
+          committedAt: audit.committedAt,
+          entityType: "google_ads_analyst_recommendation_batch",
+          entityId: claimed.claim.id,
+          version: now.toISOString(),
+        },
+      );
+      await completeTeamMutationIdempotency(
+        tx,
+        mutation,
+        claimed.claim,
+        response,
+        200,
+      );
+      return response;
+    });
+    return teamMutationResultResponse(result, 200, mutation.correlationId);
+  } catch (error) {
+    if (db && claim) {
+      try {
+        await settleTeamMutationIdempotencyFailure(db, mutation, claim, error);
+      } catch (settlementError) {
+        console.error(
+          "[google-ads] bulk_review_idempotency_settlement_failed",
+          {
+            operationId: mutation.operationId,
+            correlationId: mutation.correlationId,
+            errorName:
+              settlementError instanceof Error
+                ? settlementError.name
+                : "UnknownError",
+          },
+        );
+      }
+    }
+    return teamMutationExceptionResponse(error, mutation);
+  }
 }
-

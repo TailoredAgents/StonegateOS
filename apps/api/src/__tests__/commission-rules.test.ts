@@ -8,9 +8,9 @@ import { resolveLockedCrewPayout } from "@/lib/locked-crew-payout";
 
 describe("commission rules", () => {
   it("treats booked demo services as demo crew jobs", () => {
-    expect(
-      isDemoServicesRequested(["junk_removal", "demo-hauloff"]),
-    ).toBe(true);
+    expect(isDemoServicesRequested(["junk_removal", "demo-hauloff"])).toBe(
+      true,
+    );
     expect(isDemoServicesRequested(["demo_kitchen"])).toBe(true);
     expect(isDemoServicesRequested(["demolition"])).toBe(false);
     expect(isDemoServicesRequested(["junk_removal"])).toBe(false);
@@ -68,18 +68,22 @@ describe("commission rules", () => {
   });
 
   it("adjusts Austin, Jeffrey, and Devon labor so Austin and Jeffrey total 15%", () => {
-    const resolved = resolveLockedCrewPayout([
-      "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
-      "b45988bb-7417-48c5-af6d-fcdf71088282",
-      "5ac5217e-3905-4ea3-bdeb-65456982f5e3",
-    ]);
+    const configuredSplits = [
+      { memberId: "239ca36d-e618-4c5c-a283-b6e5d4ccb704", splitBps: 1000 },
+      { memberId: "b45988bb-7417-48c5-af6d-fcdf71088282", splitBps: 700 },
+      { memberId: "5ac5217e-3905-4ea3-bdeb-65456982f5e3", splitBps: 300 },
+    ];
+    const resolved = resolveLockedCrewPayout(
+      configuredSplits.map((split) => split.memberId),
+      [{ ruleKey: "configured-adjusted-crew", splits: configuredSplits }],
+    );
 
     expect(resolved.ok).toBe(true);
     if (!resolved.ok) {
       throw new Error("Expected Austin + Devon + Jeffrey payout rule");
     }
 
-    expect(resolved.ruleKey).toBe("austin-devon-jeffrey-adjusted");
+    expect(resolved.ruleKey).toBe("configured-adjusted-crew");
     const allocations = allocateCrewPoolCents(20000, resolved.splits);
     const amountByMemberId = new Map(
       allocations.map((entry) => [entry.memberId, entry.cents]),
@@ -100,17 +104,42 @@ describe("commission rules", () => {
     );
     expect(
       (amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704") ?? 0) +
-        (managementByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704") ??
-          0),
+        (managementByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704") ?? 0),
     ).toBe(15000);
     expect(
       (amountByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3") ?? 0) +
-        (managementByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3") ??
-          0),
+        (managementByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3") ?? 0),
     ).toBe(15000);
+    expect(amountByMemberId.get("b45988bb-7417-48c5-af6d-fcdf71088282")).toBe(
+      7000,
+    );
+  });
+
+  it("fails closed when matching configured rules are invalid or ambiguous", () => {
+    const memberIds = ["member-a", "member-b"];
     expect(
-      amountByMemberId.get("b45988bb-7417-48c5-af6d-fcdf71088282"),
-    ).toBe(7000);
+      resolveLockedCrewPayout(memberIds, [
+        {
+          ruleKey: "invalid",
+          splits: [
+            { memberId: "member-a", splitBps: 1 },
+            { memberId: "member-b", splitBps: 0 },
+          ],
+        },
+      ]),
+    ).toMatchObject({ ok: false, reason: "invalid_rule" });
+    expect(
+      resolveLockedCrewPayout(memberIds, [
+        {
+          ruleKey: "first",
+          splits: memberIds.map((memberId) => ({ memberId, splitBps: 1 })),
+        },
+        {
+          ruleKey: "second",
+          splits: memberIds.map((memberId) => ({ memberId, splitBps: 1 })),
+        },
+      ]),
+    ).toMatchObject({ ok: false, reason: "invalid_rule" });
   });
 
   it("falls back to an even split for other crew combinations", () => {

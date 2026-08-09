@@ -1,24 +1,40 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
+import { requireTeamRequestPrincipal } from "@/app/api/team/auth";
 
 export const runtime = "nodejs";
 
+const MAX_TEXT_CHARACTERS = 5_000;
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const adminKey = getAdminKey();
-  if (!adminKey || req.cookies.get(ADMIN_SESSION_COOKIE)?.value !== adminKey) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const auth = await requireTeamRequestPrincipal(req, {
+    returnJson: true,
+    permissions: "messages.read",
+    flashError: "Please sign in again to use spoken responses.",
+  });
+  if (!auth.ok) return auth.response as NextResponse;
 
   const apiKey = process.env["OPENAI_API_KEY"];
   if (!apiKey) {
-    return NextResponse.json({ error: "openai_not_configured" }, { status: 503 });
+    return NextResponse.json(
+      { error: "openai_not_configured" },
+      { status: 503 },
+    );
   }
 
-  const body = (await req.json().catch(() => null)) as { text?: string } | null;
-  const text = body?.text?.trim();
+  const body: unknown = await req.json().catch(() => null);
+  const bodyRecord =
+    typeof body === "object" && body !== null && !Array.isArray(body)
+      ? (body as Record<string, unknown>)
+      : null;
+  const text =
+    typeof bodyRecord?.["text"] === "string" ? bodyRecord["text"].trim() : "";
   if (!text) {
     return NextResponse.json({ error: "missing_text" }, { status: 400 });
+  }
+  if (text.length > MAX_TEXT_CHARACTERS) {
+    return NextResponse.json({ error: "text_too_large" }, { status: 413 });
   }
 
   const payload = {
@@ -30,29 +46,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         content: [
           {
             type: "input_text",
-            text
-          }
-        ]
-      }
+            text,
+          },
+        ],
+      },
     ],
     audio: {
       voice: "alloy",
-      format: "mp3"
-    }
+      format: "mp3",
+    },
   };
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
+  const response = await fetch(
+    resolveOpenAiApiEndpoint("responses", process.env),
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload)
-  });
+  );
 
   if (!response.ok) {
     const err = await response.text().catch(() => "");
-    return NextResponse.json({ error: "tts_failed", detail: err.slice(0, 300) }, { status: 502 });
+    return NextResponse.json(
+      { error: "tts_failed", detail: err.slice(0, 300) },
+      { status: 502 },
+    );
   }
 
   const data = (await response.json()) as { output_audio?: { data?: string } };
@@ -65,7 +87,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   return new NextResponse(audioBuffer, {
     status: 200,
     headers: {
-      "Content-Type": "audio/mpeg"
-    }
+      "Content-Type": "audio/mpeg",
+    },
   });
 }

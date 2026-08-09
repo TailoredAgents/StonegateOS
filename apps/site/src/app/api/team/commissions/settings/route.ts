@@ -1,9 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi } from "@/app/team/lib/api";
+import { requireTeamPrincipal } from "@/app/api/team/auth";
+import { callAdminApiAs } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 
-const ADMIN_COOKIE = "myst-admin-session";
 const SALES_RATE_BPS = 0;
 const MANAGEMENT_RATE_BPS = 1700;
 const LABOR_RATE_BPS = 2000;
@@ -20,20 +20,13 @@ function parsePercentToBps(value: FormDataEntryValue | null): number | null {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const jar = request.cookies;
-  const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
+  const auth = await requireTeamPrincipal(request, {
+    permissions: "commissions.manage",
+    redirectTo: new URL("/team?tab=commissions", request.url),
+  });
+  if (!auth.ok) return auth.response;
+
   const redirectTo = getSafeRedirectUrl(request, "/team?tab=commissions");
-
-  if (!hasOwner) {
-    const response = NextResponse.redirect(redirectTo, 303);
-    response.cookies.set({
-      name: "myst-flash-error",
-      value: "Owner login required.",
-      path: "/"
-    });
-    return response;
-  }
-
   const formData = await request.formData();
   const crewPoolRateBps =
     parsePercentToBps(formData.get("crewPoolRatePercent")) ?? LABOR_RATE_BPS;
@@ -43,7 +36,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     response.cookies.set({
       name: "myst-flash-error",
       value: "Labor is fixed at 20%.",
-      path: "/"
+      path: "/",
     });
     return response;
   }
@@ -56,24 +49,32 @@ export async function POST(request: NextRequest): Promise<Response> {
     salesRateBps: SALES_RATE_BPS,
     marketingRateBps: MANAGEMENT_RATE_BPS,
     crewPoolRateBps,
-    marketingMemberId: null
+    marketingMemberId: null,
   };
 
-  const apiResponse = await callAdminApi("/api/admin/commissions/settings", {
-    method: "PUT",
-    body: JSON.stringify(payload)
-  });
+  const apiResponse = await callAdminApiAs(
+    auth.principal,
+    "/api/admin/commissions/settings",
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
 
   const response = NextResponse.redirect(redirectTo, 303);
   if (!apiResponse.ok) {
     response.cookies.set({
       name: "myst-flash-error",
       value: "Unable to save commission settings",
-      path: "/"
+      path: "/",
     });
     return response;
   }
 
-  response.cookies.set({ name: "myst-flash", value: "Commission settings saved", path: "/" });
+  response.cookies.set({
+    name: "myst-flash",
+    value: "Commission settings saved",
+    path: "/",
+  });
   return response;
 }

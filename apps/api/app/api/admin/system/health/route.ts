@@ -41,12 +41,13 @@ import {
   verifyMediaStorageBucketAccess,
 } from "@/lib/media-storage";
 import {
+  inspectEmailProviderConfiguration,
   inspectObjectStorageConfiguration,
   inspectSquareConfiguration,
   isProviderConfigurationBlocking,
   type ProviderConfigurationInspection,
 } from "@/lib/provider-configuration";
-import { isAdminRequest } from "../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 
 const PROVIDERS = [
   "sms",
@@ -191,18 +192,31 @@ function getObjectStorageBlocker(
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json(
-      { ok: false, error: "unauthorized" },
-      { status: 401 },
-    );
-  }
+  const permissionError = await requirePermission(request, "access.manage");
+  if (permissionError) return permissionError;
 
   const blockers: HealthFinding[] = [];
   const warnings: HealthFinding[] = [];
   const calendarEnabled = isGoogleCalendarEnabled();
   const squareConfiguration = inspectSquareConfiguration();
+  const emailConfiguration = inspectEmailProviderConfiguration();
   const objectStorageConfiguration = inspectObjectStorageConfiguration();
+
+  if (!emailConfiguration.configured) {
+    const issues = [
+      ...emailConfiguration.missing.map((key) => `missing ${key}`),
+      ...emailConfiguration.invalid,
+    ];
+    warnings.push({
+      id: "email_not_configured",
+      severity: "warning",
+      title: "Outbound email is unavailable",
+      detail: `Email delivery is disabled or unsafe: ${issues.join(", ")}.`,
+      fix: [
+        "Configure the bounded SMTP settings on both the API and outbox worker, then send a provider sandbox canary.",
+      ],
+    });
+  }
 
   const siteUrlBlocker = getPublicSiteUrlBlocker();
   if (siteUrlBlocker) blockers.push(siteUrlBlocker);
@@ -692,6 +706,11 @@ export async function GET(request: NextRequest): Promise<Response> {
     config: {
       publicSiteUrl: resolvePublicSiteBaseUrl(),
       twilioConfigured: !getTwilioBlocker(),
+      emailConfigured: emailConfiguration.configured,
+      emailConfigurationIssues: [
+        ...emailConfiguration.missing.map((key) => `missing ${key}`),
+        ...emailConfiguration.invalid,
+      ],
       squarePosEnabled: isSquarePosEnabled(),
       squareConfigured: squareConfiguration.configured,
       squareConfigurationIssues: [

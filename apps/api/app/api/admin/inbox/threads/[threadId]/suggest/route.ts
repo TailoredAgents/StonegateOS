@@ -1,13 +1,14 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import {
   contacts,
   conversationMessages,
   conversationParticipants,
   conversationThreads,
   getDb,
-  properties
+  properties,
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import {
@@ -24,8 +25,14 @@ import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
-import { buildSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
-import { buildSalesAgentNextAction, getSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
+import {
+  buildSalesAgentMemory,
+  upsertSalesAgentMemory,
+} from "@/lib/sales-agent-memory";
+import {
+  buildSalesAgentNextAction,
+  upsertSalesAgentNextAction,
+} from "@/lib/sales-agent-next-action";
 import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
 import { getDmOpeningStrategy } from "@/lib/dm-autopilot";
 import { loadChannelHandoffOutcomeSummary } from "@/lib/channel-handoff-outcomes";
@@ -46,7 +53,9 @@ import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
 type ReplyChannel = "sms" | "email" | "dm";
 
 type DatabaseClient = ReturnType<typeof getDb>;
-type Tx = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer T) => Promise<unknown>
+type Tx = Parameters<DatabaseClient["transaction"]>[0] extends (
+  tx: infer T,
+) => Promise<unknown>
   ? T
   : never;
 
@@ -83,11 +92,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isReplyChannel(value: string | null | undefined): value is ReplyChannel {
+function isReplyChannel(
+  value: string | null | undefined,
+): value is ReplyChannel {
   return value === "sms" || value === "email" || value === "dm";
 }
 
-function isAiSuggestedDraft(meta: Record<string, unknown> | null | undefined): boolean {
+function isAiSuggestedDraft(
+  meta: Record<string, unknown> | null | undefined,
+): boolean {
   return Boolean(meta?.["draft"] === true && meta?.["aiSuggested"] === true);
 }
 
@@ -99,16 +112,24 @@ function parseIsoDate(value: string | null | undefined): Date | null {
 
 function isMediaPlaceholderBody(body: string | null | undefined): boolean {
   const normalized = (body ?? "").trim().toLowerCase();
-  return normalized === "" || normalized === "media message" || normalized === "message received";
+  return (
+    normalized === "" ||
+    normalized === "media message" ||
+    normalized === "message received"
+  );
 }
 
-function isLikelyReactionLikeMediaMessage(message: MessageContext | null | undefined): boolean {
+function isLikelyReactionLikeMediaMessage(
+  message: MessageContext | null | undefined,
+): boolean {
   if (!message || message.direction !== "inbound") return false;
   if ((message.mediaUrls?.length ?? 0) !== 1) return false;
   return isMediaPlaceholderBody(message.body);
 }
 
-function isSafePlannerFollowupAction(actionType: string | null | undefined): boolean {
+function isSafePlannerFollowupAction(
+  actionType: string | null | undefined,
+): boolean {
   return (
     actionType === "missed_call_recovery" ||
     actionType === "appointment_checkin" ||
@@ -139,7 +160,10 @@ function didCustomerAskAboutPrice(messages: MessageContext[]): boolean {
     .map((m) => m.body)
     .join("\n")
     .toLowerCase();
-  return /\b(price|pricing|quote|cost|how much|estimate)\b/.test(text) || /\$\s*\d/.test(text);
+  return (
+    /\b(price|pricing|quote|cost|how much|estimate)\b/.test(text) ||
+    /\$\s*\d/.test(text)
+  );
 }
 
 function readEnvString(key: string): string | null {
@@ -149,7 +173,11 @@ function readEnvString(key: string): string | null {
   return trimmed.length ? trimmed : null;
 }
 
-function getOpenAIConfig(): { apiKey: string; thinkModel: string | null; writeModel: string } | null {
+function getOpenAIConfig(): {
+  apiKey: string;
+  thinkModel: string | null;
+  writeModel: string;
+} | null {
   const apiKey = process.env["OPENAI_API_KEY"];
   if (!apiKey) return null;
   const thinkModel = readEnvString("OPENAI_INBOX_SUGGEST_THINK_MODEL") ?? null;
@@ -168,11 +196,11 @@ function supportsReasoningEffort(model: string): boolean {
   return normalized.startsWith("gpt-5") || normalized.startsWith("o");
 }
 
-function tryParseJsonObject(raw: string): unknown | null {
+function tryParseJsonObject(raw: string): unknown {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   try {
-    return JSON.parse(trimmed) as unknown;
+    return JSON.parse(trimmed);
   } catch {
     // continue
   }
@@ -222,7 +250,7 @@ async function callOpenAIJsonSchema(input: {
       model: targetModel,
       input: [
         { role: "system", content: input.systemPrompt },
-        { role: "user", content: input.userPrompt }
+        { role: "user", content: input.userPrompt },
       ],
       max_output_tokens: input.maxOutputTokens,
       text: {
@@ -231,30 +259,33 @@ async function callOpenAIJsonSchema(input: {
           type: "json_schema",
           name: input.schemaName,
           strict: true,
-          schema: input.schema
-        }
-      }
+          schema: input.schema,
+        },
+      },
     };
 
     if (input.reasoningEffort && supportsReasoningEffort(targetModel)) {
       payload["reasoning"] = { effort: input.reasoningEffort };
     }
 
-    return fetch("https://api.openai.com/v1/responses", {
+    return fetch(resolveOpenAiApiEndpoint("responses", process.env), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${input.apiKey}`
+        Authorization: `Bearer ${input.apiKey}`,
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
   }
 
   const modelsToTry = [input.model, ...(input.fallbackModels ?? [])].filter(
-    (model, index, list) => model.trim().length > 0 && list.indexOf(model) === index
+    (model, index, list) =>
+      model.trim().length > 0 && list.indexOf(model) === index,
   );
 
-  let lastError: { error: string; detail?: string | null } = { error: "openai_request_failed" };
+  let lastError: { error: string; detail?: string | null } = {
+    error: "openai_request_failed",
+  };
 
   for (const model of modelsToTry) {
     let response = await request(model);
@@ -266,13 +297,25 @@ async function callOpenAIJsonSchema(input: {
         response = await request("gpt-5");
         if (!response.ok) {
           const fallbackText = await response.text().catch(() => "");
-          console.warn("[inbox.suggest] openai.fallback_failed", { status: response.status, bodyText: fallbackText });
-          lastError = { error: "openai_request_failed", detail: fallbackText.slice(0, 300) };
+          console.warn("[inbox.suggest] openai.fallback_failed", {
+            status: response.status,
+            bodyText: fallbackText,
+          });
+          lastError = {
+            error: "openai_request_failed",
+            detail: fallbackText.slice(0, 300),
+          };
           continue;
         }
       } else {
-        console.warn("[inbox.suggest] openai.request_failed", { status, bodyText });
-        lastError = { error: "openai_request_failed", detail: bodyText.slice(0, 300) };
+        console.warn("[inbox.suggest] openai.request_failed", {
+          status,
+          bodyText,
+        });
+        lastError = {
+          error: "openai_request_failed",
+          detail: bodyText.slice(0, 300),
+        };
         continue;
       }
     }
@@ -286,8 +329,7 @@ async function callOpenAIJsonSchema(input: {
         (typeof data.output_text === "string" ? data.output_text : null) ??
         data.output
           ?.flatMap((item) => item.content ?? [])
-          .find((chunk) => typeof chunk.text === "string")
-          ?.text ??
+          .find((chunk) => typeof chunk.text === "string")?.text ??
         null;
       if (!raw) {
         lastError = { error: "openai_empty_response" };
@@ -300,21 +342,30 @@ async function callOpenAIJsonSchema(input: {
       }
       return { ok: true, value: parsed, modelUsed: model };
     } catch (error) {
-      console.warn("[inbox.suggest] openai.response_error", { error: String(error) });
+      console.warn("[inbox.suggest] openai.response_error", {
+        error: String(error),
+      });
       lastError = { error: "openai_parse_failed" };
       continue;
     }
   }
 
   const modelUsed = modelsToTry[modelsToTry.length - 1] ?? input.model;
-  return { ok: false, modelUsed, error: lastError.error, detail: lastError.detail ?? null };
+  return {
+    ok: false,
+    modelUsed,
+    error: lastError.error,
+    detail: lastError.detail ?? null,
+  };
 }
 
 type ReplySuggestion = { body: string; subject: string };
 
 function isReplySuggestion(value: unknown): value is ReplySuggestion {
   if (!isRecord(value)) return false;
-  return typeof value["body"] === "string" && typeof value["subject"] === "string";
+  return (
+    typeof value["body"] === "string" && typeof value["subject"] === "string"
+  );
 }
 
 type ReplyPlan = {
@@ -330,10 +381,22 @@ function isReplyPlan(value: unknown): value is ReplyPlan {
   if (!isRecord(value)) return false;
   if (typeof value["intent"] !== "string") return false;
   if (typeof value["tone"] !== "string") return false;
-  if (!Array.isArray(value["facts"]) || !value["facts"].every((item) => typeof item === "string")) return false;
-  if (!Array.isArray(value["questions"]) || !value["questions"].every((item) => typeof item === "string")) return false;
+  if (
+    !Array.isArray(value["facts"]) ||
+    !value["facts"].every((item) => typeof item === "string")
+  )
+    return false;
+  if (
+    !Array.isArray(value["questions"]) ||
+    !value["questions"].every((item) => typeof item === "string")
+  )
+    return false;
   if (typeof value["next_action"] !== "string") return false;
-  if (!Array.isArray(value["constraints"]) || !value["constraints"].every((item) => typeof item === "string")) return false;
+  if (
+    !Array.isArray(value["constraints"]) ||
+    !value["constraints"].every((item) => typeof item === "string")
+  )
+    return false;
   return true;
 }
 
@@ -342,21 +405,31 @@ function summarizeReplyPlanForPrompt(plan: ReplyPlan): string {
   const intent = plan.intent.trim();
   const tone = plan.tone.trim();
   const nextAction = plan.next_action.trim();
-  const topFacts = plan.facts.map((item) => item.trim()).filter(Boolean).slice(0, 2);
-  const topQuestion = plan.questions.map((item) => item.trim()).filter(Boolean)[0];
-  const topConstraint = plan.constraints.map((item) => item.trim()).filter(Boolean)[0];
+  const topFacts = plan.facts
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 2);
+  const topQuestion = plan.questions
+    .map((item) => item.trim())
+    .filter(Boolean)[0];
+  const topConstraint = plan.constraints
+    .map((item) => item.trim())
+    .filter(Boolean)[0];
 
   if (intent) parts.push(`Intent: ${intent}.`);
   if (tone) parts.push(`Tone: ${tone}.`);
   if (nextAction) parts.push(`Next move: ${nextAction}.`);
   if (topFacts.length) parts.push(`Key facts: ${topFacts.join(" | ")}.`);
-  if (topQuestion) parts.push(`If a question is needed, prefer this one: ${topQuestion}.`);
+  if (topQuestion)
+    parts.push(`If a question is needed, prefer this one: ${topQuestion}.`);
   if (topConstraint) parts.push(`Watchout: ${topConstraint}.`);
 
   return parts.join(" ");
 }
 
-function getLatestInboundMessage(messages: MessageContext[]): MessageContext | null {
+function getLatestInboundMessage(
+  messages: MessageContext[],
+): MessageContext | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.direction === "inbound") return message;
@@ -380,83 +453,100 @@ function buildHumanReplyShapeInstruction(input: {
   const latestInbound = getLatestInboundMessage(input.messages);
   const latestInboundBody = latestInbound?.body?.trim() ?? "";
   const hasDirectQuestion = /\?/.test(latestInboundBody);
-  const inboundCount = input.messages.filter((message) => message.direction === "inbound").length;
-  const outboundCount = input.messages.filter((message) => message.direction === "outbound").length;
+  const inboundCount = input.messages.filter(
+    (message) => message.direction === "inbound",
+  ).length;
+  const outboundCount = input.messages.filter(
+    (message) => message.direction === "outbound",
+  ).length;
   const likelyFreshLead = inboundCount > 0 && outboundCount === 0;
 
   const instructions: string[] = [];
 
   if (hasDirectQuestion) {
-    instructions.push("Reply shape: answer the customer's direct question in the first sentence before asking for anything else.");
+    instructions.push(
+      "Reply shape: answer the customer's direct question in the first sentence before asking for anything else.",
+    );
   } else if (isBriefAcknowledgment(latestInboundBody)) {
-    instructions.push("Reply shape: the customer's last message is brief, so keep your reply equally short and natural.");
+    instructions.push(
+      "Reply shape: the customer's last message is brief, so keep your reply equally short and natural.",
+    );
   }
 
   switch (input.actionType) {
     case "reply_now":
       if (likelyFreshLead) {
         instructions.push(
-          "Reply shape: this feels like a fresh inbound lead. Open with a short acknowledgment, then ask one easy next question. Do not stack multiple intake questions."
+          "Reply shape: this feels like a fresh inbound lead. Open with a short acknowledgment, then ask one easy next question. Do not stack multiple intake questions.",
         );
       } else {
         instructions.push(
-          "Reply shape: respond to the current message first, then move the conversation forward with one clear next step if needed."
+          "Reply shape: respond to the current message first, then move the conversation forward with one clear next step if needed.",
         );
       }
       break;
     case "follow_up_quote":
       instructions.push(
-        "Reply shape: keep the quote nudge short. Do not recap the whole situation unless needed. Use one easy reopen line or one simple booking question."
+        "Reply shape: keep the quote nudge short. Do not recap the whole situation unless needed. Use one easy reopen line or one simple booking question.",
       );
       break;
     case "collect_missing_info":
       instructions.push(
-        "Reply shape: briefly acknowledge where things stand, ask for one very specific detail, and give only a short reason if needed."
+        "Reply shape: briefly acknowledge where things stand, ask for one very specific detail, and give only a short reason if needed.",
       );
       break;
     case "handle_price_objection":
       instructions.push(
-        "Reply shape: first acknowledge the concern, then give one calm reassuring point, then one soft reopen question if useful. Do not sound defensive."
+        "Reply shape: first acknowledge the concern, then give one calm reassuring point, then one soft reopen question if useful. Do not sound defensive.",
       );
       break;
     case "appointment_support":
       instructions.push(
-        "Reply shape: handle the logistics or timing question directly in the first sentence. Keep the rest practical and reassuring, not salesy."
+        "Reply shape: handle the logistics or timing question directly in the first sentence. Keep the rest practical and reassuring, not salesy.",
       );
       break;
     case "appointment_checkin":
       instructions.push(
-        "Reply shape: keep the pre-appointment check-in light and human. One short reassurance plus one easy prompt is enough."
+        "Reply shape: keep the pre-appointment check-in light and human. One short reassurance plus one easy prompt is enough.",
       );
       break;
     case "post_job_checkin":
       instructions.push(
-        "Reply shape: thank them briefly, check that everything went well, and make it easy to mention anything else they need. Do not turn it into a marketing blast."
+        "Reply shape: thank them briefly, check that everything went well, and make it easy to mention anything else they need. Do not turn it into a marketing blast.",
       );
       break;
     case "missed_call_recovery":
       instructions.push(
-        "Reply shape: keep the missed-call recovery short and casual. Reopen the conversation fast instead of explaining too much."
+        "Reply shape: keep the missed-call recovery short and casual. Reopen the conversation fast instead of explaining too much.",
       );
       break;
     case "dm_sms_handoff":
       instructions.push(
-        "Reply shape: make the handoff feel like a natural continuation of the conversation, not a channel-transfer script."
+        "Reply shape: make the handoff feel like a natural continuation of the conversation, not a channel-transfer script.",
       );
       break;
     default:
       break;
   }
 
-  if (input.replyChannel === "dm" && !instructions.some((line) => line.includes("short"))) {
-    instructions.push("Reply shape: keep Messenger replies tight and chat-like.");
+  if (
+    input.replyChannel === "dm" &&
+    !instructions.some((line) => line.includes("short"))
+  ) {
+    instructions.push(
+      "Reply shape: keep Messenger replies tight and chat-like.",
+    );
   }
 
   return instructions.length ? instructions.join(" ") : null;
 }
 
-function classifyCustomerEnergy(messages: MessageContext[]): "brief" | "normal" | "detailed" {
-  const inboundMessages = messages.filter((message) => message.direction === "inbound");
+function classifyCustomerEnergy(
+  messages: MessageContext[],
+): "brief" | "normal" | "detailed" {
+  const inboundMessages = messages.filter(
+    (message) => message.direction === "inbound",
+  );
   const latestInbound = getLatestInboundMessage(messages);
   const latestBody = latestInbound?.body?.trim() ?? "";
   const normalizedLatest = latestBody.replace(/\s+/g, " ").trim();
@@ -467,7 +557,8 @@ function classifyCustomerEnergy(messages: MessageContext[]): "brief" | "normal" 
       ? inboundMessages
           .map((message) => message.body.replace(/\s+/g, " ").trim())
           .filter(Boolean)
-          .reduce((sum, body) => sum + body.split(" ").length, 0) / inboundMessages.length
+          .reduce((sum, body) => sum + body.split(" ").length, 0) /
+        inboundMessages.length
       : 0;
 
   if (
@@ -520,11 +611,20 @@ function buildLeadIntentStyleInstruction(input: {
   const intent = (input.customerIntent ?? "").trim().toLowerCase();
   const readiness = (input.bookingReadiness ?? "").trim().toLowerCase();
 
-  if (input.actionType === "appointment_support" || intent === "booked_or_scheduling" || readiness === "booked") {
+  if (
+    input.actionType === "appointment_support" ||
+    intent === "booked_or_scheduling" ||
+    readiness === "booked"
+  ) {
     return "Lead intent style: this is a booked or scheduling conversation. Sound service-oriented, practical, and reassuring. Do not use a sales-closing tone.";
   }
 
-  if (objections.has("price") || objections.has("timing") || objections.has("decision_maker") || objections.has("comparison_shopping")) {
+  if (
+    objections.has("price") ||
+    objections.has("timing") ||
+    objections.has("decision_maker") ||
+    objections.has("comparison_shopping")
+  ) {
     return "Lead intent style: this lead has hesitation. Keep the tone softer and lower-pressure. Reopen the conversation without sounding pushy.";
   }
 
@@ -532,7 +632,12 @@ function buildLeadIntentStyleInstruction(input: {
     return "Lead intent style: this lead looks close to booking. Sound a little more decisive and action-oriented. Make the next step feel easy and concrete, without overexplaining.";
   }
 
-  if (intent === "quote_intent" || intent === "junk_removal_quote" || intent === "demolition_quote" || intent === "land_clearing_quote") {
+  if (
+    intent === "quote_intent" ||
+    intent === "junk_removal_quote" ||
+    intent === "demolition_quote" ||
+    intent === "land_clearing_quote"
+  ) {
     return "Lead intent style: this is still a quote-stage sales conversation. Be helpful and confident, but do not sound like you are forcing the close too early.";
   }
 
@@ -581,13 +686,18 @@ function buildSchedulingWindowInstruction(input: {
   messages: MessageContext[];
 }): string | null {
   const latestInbound = getLatestInboundMessage(input.messages);
-  const latestText = `${latestInbound?.body ?? ""} ${input.instantQuoteTimeframe ?? ""}`.toLowerCase();
+  const latestText =
+    `${latestInbound?.body ?? ""} ${input.instantQuoteTimeframe ?? ""}`.toLowerCase();
   const intent = (input.customerIntent ?? "").trim().toLowerCase();
   const readiness = (input.bookingReadiness ?? "").trim().toLowerCase();
 
-  const mentionsToday = /\b(today|asap|right away|right now|same day|as soon as possible)\b/.test(latestText);
+  const mentionsToday =
+    /\b(today|asap|right away|right now|same day|as soon as possible)\b/.test(
+      latestText,
+    );
   const mentionsTomorrow = /\btomorrow\b/.test(latestText);
-  const mentionsThisWeek = /\b(this week|later this week|this weekend|weekend)\b/.test(latestText);
+  const mentionsThisWeek =
+    /\b(this week|later this week|this weekend|weekend)\b/.test(latestText);
   const bookedScheduling =
     input.actionType === "appointment_support" ||
     input.actionType === "appointment_checkin" ||
@@ -635,11 +745,21 @@ function buildLocalWarmthInstruction(input: {
   const intent = (input.customerIntent ?? "").trim().toLowerCase();
   const readiness = (input.bookingReadiness ?? "").trim().toLowerCase();
 
-  if (input.actionType === "appointment_support" || input.actionType === "appointment_checkin" || intent === "booked_or_scheduling" || readiness === "booked") {
+  if (
+    input.actionType === "appointment_support" ||
+    input.actionType === "appointment_checkin" ||
+    intent === "booked_or_scheduling" ||
+    readiness === "booked"
+  ) {
     return "Local warmth: sound calm, neighborly, and reassuring. Think helpful local service rep, not corporate support. Do not use fake Southern slang or laid-on-thick regional phrasing.";
   }
 
-  if (input.actionType === "follow_up_quote" || input.actionType === "collect_missing_info" || readiness === "high" || intent === "booking_intent") {
+  if (
+    input.actionType === "follow_up_quote" ||
+    input.actionType === "collect_missing_info" ||
+    readiness === "high" ||
+    intent === "booking_intent"
+  ) {
     return "Local warmth: sound friendly and real, like a local owner-operator or salesperson texting naturally. Keep it warm without getting chatty, and avoid fake regional slang.";
   }
 
@@ -667,7 +787,8 @@ function buildInboundMediaIntentInstruction(input: {
   );
   const intent = (input.customerIntent ?? "").trim().toLowerCase();
   const readiness = (input.bookingReadiness ?? "").trim().toLowerCase();
-  const hasExistingQuoteMedia = input.hasVisionMediaEstimate || input.instantQuotePhotoCount > 0;
+  const hasExistingQuoteMedia =
+    input.hasVisionMediaEstimate || input.instantQuotePhotoCount > 0;
   const quoteStage =
     input.actionType === "collect_missing_info" ||
     input.actionType === "follow_up_quote" ||
@@ -737,7 +858,9 @@ function buildReplyVariationInstruction(input: {
     antiRepeatHints.push("Do not keep reusing the same 'hey' opener.");
   }
   if (recentOutboundBodies.some((body) => body.startsWith("sounds good"))) {
-    antiRepeatHints.push("Do not mirror your own earlier acknowledgment wording too closely.");
+    antiRepeatHints.push(
+      "Do not mirror your own earlier acknowledgment wording too closely.",
+    );
   }
 
   let variant: string | null = null;
@@ -874,10 +997,16 @@ function buildGlobalReplyVariationInstruction(input: {
   if (!overused.length) return null;
 
   const channelLabel =
-    input.replyChannel === "dm" ? "Messenger" : input.replyChannel === "sms" ? "text" : "email";
+    input.replyChannel === "dm"
+      ? "Messenger"
+      : input.replyChannel === "sms"
+        ? "text"
+        : "email";
   return `Across recent ${channelLabel} drafts, these opener patterns are getting overused: ${overused
     .map((item) => `"${item}"`)
-    .join(", ")}. Use a different natural opening unless one of those truly fits this thread.`;
+    .join(
+      ", ",
+    )}. Use a different natural opening unless one of those truly fits this thread.`;
 }
 
 function stripDashLikeChars(text: string): string {
@@ -916,9 +1045,9 @@ const REPLY_SUGGESTION_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
   properties: {
     body: { type: "string" },
-    subject: { type: "string" }
+    subject: { type: "string" },
   },
-  required: ["body", "subject"]
+  required: ["body", "subject"],
 };
 
 const REPLY_PLAN_SCHEMA: Record<string, unknown> = {
@@ -930,9 +1059,16 @@ const REPLY_PLAN_SCHEMA: Record<string, unknown> = {
     facts: { type: "array", items: { type: "string" } },
     questions: { type: "array", items: { type: "string" } },
     next_action: { type: "string" },
-    constraints: { type: "array", items: { type: "string" } }
+    constraints: { type: "array", items: { type: "string" } },
   },
-  required: ["intent", "tone", "facts", "questions", "next_action", "constraints"]
+  required: [
+    "intent",
+    "tone",
+    "facts",
+    "questions",
+    "next_action",
+    "constraints",
+  ],
 };
 
 async function ensureAiParticipant(tx: Tx, threadId: string, now: Date) {
@@ -944,8 +1080,8 @@ async function ensureAiParticipant(tx: Tx, threadId: string, now: Date) {
         eq(conversationParticipants.threadId, threadId),
         eq(conversationParticipants.participantType, "team"),
         eq(conversationParticipants.displayName, "Stonegate Assist"),
-        sql`${conversationParticipants.teamMemberId} is null`
-      )
+        sql`${conversationParticipants.teamMemberId} is null`,
+      ),
     )
     .limit(1);
 
@@ -958,7 +1094,7 @@ async function ensureAiParticipant(tx: Tx, threadId: string, now: Date) {
       participantType: "team",
       teamMemberId: null,
       displayName: "Stonegate Assist",
-      createdAt: now
+      createdAt: now,
     })
     .returning({ id: conversationParticipants.id });
 
@@ -967,7 +1103,9 @@ async function ensureAiParticipant(tx: Tx, threadId: string, now: Date) {
 
 function buildTranscript(messages: MessageContext[]): string {
   const lines = messages.map((message) => {
-    const who = message.participantName ?? (message.direction === "inbound" ? "Customer" : "Team");
+    const who =
+      message.participantName ??
+      (message.direction === "inbound" ? "Customer" : "Team");
     const subject = message.subject ? ` (subject: ${message.subject})` : "";
     return `[${message.createdAt.toISOString()}] ${who}${subject}: ${message.body}`;
   });
@@ -1099,7 +1237,8 @@ function buildDmOpeningInstruction(input: {
       "Messenger opening: this lead looks like a Facebook lead-card opener, not a normal typed first message.",
       "Acknowledge briefly, then move straight to the next useful step.",
       "Do not re-ask for basics that may already be in the lead card or CRM memory, like name, phone, ZIP, or timing, unless they are still truly missing.",
-      input.actionType === "collect_missing_info" && input.memoryMissingFields.length > 0
+      input.actionType === "collect_missing_info" &&
+      input.memoryMissingFields.length > 0
         ? `If you ask for more info, ask for just one thing from this list: ${input.memoryMissingFields.join(", ")}.`
         : "If more info is needed, ask for only one easy thing, like a photo or one missing job detail.",
       "Keep it short and friendly, like picking up a conversation that already started.",
@@ -1122,38 +1261,46 @@ function buildDmOpeningInstruction(input: {
 }
 
 function buildMediaReplyInstruction(input: {
-  mediaAnalysis:
-    | {
-        source?: string | null;
-        videoCount?: number | null;
-        visibleVolumeRange?: string | null;
-        mergedVolumeRange?: string | null;
-        confidence?: string | null;
-        visibleMattressCount?: number | null;
-        visiblePaintCanCount?: number | null;
-        visibleTireCount?: number | null;
-        missingViews?: string[] | null;
-        riskFlags?: string[] | null;
-        summary?: string | null;
-      }
-    | null;
+  mediaAnalysis: {
+    source?: string | null;
+    videoCount?: number | null;
+    visibleVolumeRange?: string | null;
+    mergedVolumeRange?: string | null;
+    confidence?: string | null;
+    visibleMattressCount?: number | null;
+    visiblePaintCanCount?: number | null;
+    visibleTireCount?: number | null;
+    missingViews?: string[] | null;
+    riskFlags?: string[] | null;
+    summary?: string | null;
+  } | null;
   actionType: string | null | undefined;
 }): string | null {
   const analysis = input.mediaAnalysis;
   if (!analysis) return null;
 
   const missingViews = Array.isArray(analysis.missingViews)
-    ? analysis.missingViews.filter((item) => typeof item === "string" && item.trim().length > 0)
+    ? analysis.missingViews.filter(
+        (item) => typeof item === "string" && item.trim().length > 0,
+      )
     : [];
   const riskFlags = Array.isArray(analysis.riskFlags)
-    ? analysis.riskFlags.filter((item) => typeof item === "string" && item.trim().length > 0)
+    ? analysis.riskFlags.filter(
+        (item) => typeof item === "string" && item.trim().length > 0,
+      )
     : [];
-  const hasVideo = typeof analysis.videoCount === "number" && analysis.videoCount > 0;
+  const hasVideo =
+    typeof analysis.videoCount === "number" && analysis.videoCount > 0;
   const hasMergedRange =
-    typeof analysis.mergedVolumeRange === "string" && analysis.mergedVolumeRange.trim().length > 0;
+    typeof analysis.mergedVolumeRange === "string" &&
+    analysis.mergedVolumeRange.trim().length > 0;
   const hasVisibleRange =
-    typeof analysis.visibleVolumeRange === "string" && analysis.visibleVolumeRange.trim().length > 0;
-  const confidence = typeof analysis.confidence === "string" ? analysis.confidence.trim().toLowerCase() : "";
+    typeof analysis.visibleVolumeRange === "string" &&
+    analysis.visibleVolumeRange.trim().length > 0;
+  const confidence =
+    typeof analysis.confidence === "string"
+      ? analysis.confidence.trim().toLowerCase()
+      : "";
 
   const baseRules = [
     hasVideo
@@ -1164,46 +1311,72 @@ function buildMediaReplyInstruction(input: {
     "Do not mention dollar amounts unless the customer explicitly asks about price, quote, cost, or estimate.",
   ];
 
-  if (hasMergedRange && hasVisibleRange && analysis.mergedVolumeRange !== analysis.visibleVolumeRange) {
+  if (
+    hasMergedRange &&
+    hasVisibleRange &&
+    analysis.mergedVolumeRange !== analysis.visibleVolumeRange
+  ) {
     baseRules.push(
-      "The merged estimate is wider than the visible estimate because the written scope suggests extra unpictured junk. If helpful, acknowledge that the current range accounts for items mentioned but not fully shown."
+      "The merged estimate is wider than the visible estimate because the written scope suggests extra unpictured junk. If helpful, acknowledge that the current range accounts for items mentioned but not fully shown.",
     );
   }
 
-  if ((input.actionType === "collect_missing_info" || confidence === "low") && missingViews.length > 0) {
+  if (
+    (input.actionType === "collect_missing_info" || confidence === "low") &&
+    missingViews.length > 0
+  ) {
     baseRules.push(
-      `If you truly need more media, ask for only one high-signal missing view: ${missingViews[0]}. Do not make another angle the default move if the conversation can keep momentum without it.`
+      `If you truly need more media, ask for only one high-signal missing view: ${missingViews[0]}. Do not make another angle the default move if the conversation can keep momentum without it.`,
     );
-    if (input.actionType === "follow_up_quote" || input.actionType === "reply_now") {
+    if (
+      input.actionType === "follow_up_quote" ||
+      input.actionType === "reply_now"
+    ) {
       baseRules.push(
-        "Because media confidence is low, do not act like the estimate is fully locked in. Keep the estimate a little provisional, but do not automatically turn the conversation into another photo chase."
+        "Because media confidence is low, do not act like the estimate is fully locked in. Keep the estimate a little provisional, but do not automatically turn the conversation into another photo chase.",
       );
     }
-  } else if (missingViews.length > 0 && (input.actionType === "follow_up_quote" || input.actionType === "reply_now")) {
+  } else if (
+    missingViews.length > 0 &&
+    (input.actionType === "follow_up_quote" || input.actionType === "reply_now")
+  ) {
     baseRules.push(
-      "Only bring up an extra photo/video angle if it clearly helps tighten the estimate or answer the customer's question. Otherwise keep momentum."
+      "Only bring up an extra photo/video angle if it clearly helps tighten the estimate or answer the customer's question. Otherwise keep momentum.",
     );
   }
 
-  if (riskFlags.some((flag) => flag.includes("stated_scope_exceeds_visible_media"))) {
+  if (
+    riskFlags.some((flag) =>
+      flag.includes("stated_scope_exceeds_visible_media"),
+    )
+  ) {
     baseRules.push(
-      "Be careful not to talk like the media shows the entire job if the notes/text imply more junk than is visible."
+      "Be careful not to talk like the media shows the entire job if the notes/text imply more junk than is visible.",
     );
   }
 
   const addOnNotes = [
-    (analysis.visibleMattressCount ?? 0) > 0 ? `mattresses=${analysis.visibleMattressCount}` : null,
-    (analysis.visiblePaintCanCount ?? 0) > 0 ? `paint=${analysis.visiblePaintCanCount}` : null,
-    (analysis.visibleTireCount ?? 0) > 0 ? `tires=${analysis.visibleTireCount}` : null,
+    (analysis.visibleMattressCount ?? 0) > 0
+      ? `mattresses=${analysis.visibleMattressCount}`
+      : null,
+    (analysis.visiblePaintCanCount ?? 0) > 0
+      ? `paint=${analysis.visiblePaintCanCount}`
+      : null,
+    (analysis.visibleTireCount ?? 0) > 0
+      ? `tires=${analysis.visibleTireCount}`
+      : null,
   ].filter((item): item is string => Boolean(item));
 
   if (addOnNotes.length > 0) {
     baseRules.push(
-      `Visible add-on items were detected (${addOnNotes.join(", ")}). Only mention them if the customer asks or if they matter to the current reply.`
+      `Visible add-on items were detected (${addOnNotes.join(", ")}). Only mention them if the customer asks or if they matter to the current reply.`,
     );
   }
 
-  if (typeof analysis.summary === "string" && analysis.summary.trim().length > 0) {
+  if (
+    typeof analysis.summary === "string" &&
+    analysis.summary.trim().length > 0
+  ) {
     baseRules.push(`Media summary: ${analysis.summary.trim()}`);
   }
 
@@ -1212,12 +1385,12 @@ function buildMediaReplyInstruction(input: {
 
 export async function POST(
   request: NextRequest,
-  context: { params: Promise<{ threadId: string }> }
+  context: { params: Promise<{ threadId: string }> },
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "messages.send");
+  const permissionError = await requirePermission(request, "messages.write");
   if (permissionError) return permissionError;
 
   const { threadId } = await context.params;
@@ -1227,7 +1400,10 @@ export async function POST(
 
   const config = getOpenAIConfig();
   if (!config) {
-    return NextResponse.json({ error: "openai_not_configured" }, { status: 400 });
+    return NextResponse.json(
+      { error: "openai_not_configured" },
+      { status: 400 },
+    );
   }
 
   const db = getDb();
@@ -1247,7 +1423,7 @@ export async function POST(
       propertyPostalCode: properties.postalCode,
       propertyAddressLine1: properties.addressLine1,
       propertyCity: properties.city,
-      propertyState: properties.state
+      propertyState: properties.state,
     })
     .from(conversationThreads)
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
@@ -1275,21 +1451,23 @@ export async function POST(
     const [latestInboundDm] = await db
       .select({
         fromAddress: conversationMessages.fromAddress,
-        metadata: conversationMessages.metadata
+        metadata: conversationMessages.metadata,
       })
       .from(conversationMessages)
       .where(
         and(
           eq(conversationMessages.threadId, threadId),
           eq(conversationMessages.direction, "inbound"),
-          eq(conversationMessages.channel, "dm")
-        )
+          eq(conversationMessages.channel, "dm"),
+        ),
       )
       .orderBy(desc(conversationMessages.createdAt))
       .limit(1);
 
     toAddress = latestInboundDm?.fromAddress ?? null;
-    dmMetadata = isRecord(latestInboundDm?.metadata) ? latestInboundDm!.metadata : null;
+    dmMetadata = isRecord(latestInboundDm?.metadata)
+      ? latestInboundDm.metadata
+      : null;
   }
 
   const messageRows = await db
@@ -1302,10 +1480,13 @@ export async function POST(
       mediaUrls: conversationMessages.mediaUrls,
       createdAt: conversationMessages.createdAt,
       participantName: conversationParticipants.displayName,
-      metadata: conversationMessages.metadata
+      metadata: conversationMessages.metadata,
     })
     .from(conversationMessages)
-    .leftJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
+    .leftJoin(
+      conversationParticipants,
+      eq(conversationMessages.participantId, conversationParticipants.id),
+    )
     .where(eq(conversationMessages.threadId, threadId))
     .orderBy(desc(conversationMessages.createdAt))
     .limit(12);
@@ -1317,10 +1498,15 @@ export async function POST(
       channel: row.channel,
       subject: row.subject ?? null,
       body: row.body,
-      mediaUrls: Array.isArray(row.mediaUrls) ? row.mediaUrls.filter((url): url is string => typeof url === "string" && url.trim().length > 0) : [],
+      mediaUrls: Array.isArray(row.mediaUrls)
+        ? row.mediaUrls.filter(
+            (url): url is string =>
+              typeof url === "string" && url.trim().length > 0,
+          )
+        : [],
       createdAt: row.createdAt,
       participantName: row.participantName ?? null,
-      metadata: isRecord(row.metadata) ? row.metadata : null
+      metadata: isRecord(row.metadata) ? row.metadata : null,
     }))
     .reverse();
 
@@ -1334,8 +1520,8 @@ export async function POST(
         eq(conversationMessages.direction, "outbound"),
         eq(conversationMessages.channel, replyChannel),
         ne(conversationMessages.threadId, threadId),
-        sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`
-      )
+        sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`,
+      ),
     )
     .orderBy(desc(conversationMessages.createdAt))
     .limit(40);
@@ -1351,13 +1537,21 @@ export async function POST(
     .reverse()
     .find(
       (message) =>
-        message.direction === "outbound" && !Boolean(message.metadata?.["draft"] === true),
+        message.direction === "outbound" &&
+        message.metadata?.["draft"] !== true,
     );
   const latestAiDraftMessage = [...messages]
     .reverse()
-    .find((message) => message.direction === "outbound" && isAiSuggestedDraft(message.metadata));
+    .find(
+      (message) =>
+        message.direction === "outbound" &&
+        isAiSuggestedDraft(message.metadata),
+    );
 
-  const contactName = [thread.contactFirstName, thread.contactLastName].filter(Boolean).join(" ").trim();
+  const contactName = [thread.contactFirstName, thread.contactLastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
   const threadContext: ThreadContext = {
     id: thread.id,
     channel: thread.channel,
@@ -1372,10 +1566,17 @@ export async function POST(
     propertyPostalCode: thread.propertyPostalCode ?? null,
     propertyAddressLine1: thread.propertyAddressLine1 ?? null,
     propertyCity: thread.propertyCity ?? null,
-    propertyState: thread.propertyState ?? null
+    propertyState: thread.propertyState ?? null,
   };
 
-  const [templates, serviceArea, businessHours, companyProfile, persona, autopilotPolicy] = await Promise.all([
+  const [
+    templates,
+    serviceArea,
+    businessHours,
+    companyProfile,
+    persona,
+    autopilotPolicy,
+  ] = await Promise.all([
     getTemplatesPolicy(db),
     getServiceAreaPolicy(db),
     getBusinessHoursPolicy(db),
@@ -1388,7 +1589,7 @@ export async function POST(
     threadId,
     contactId: threadContext.contactId,
     threadPostalCode: threadContext.propertyPostalCode ?? null,
-    includeQuotePrice: didCustomerAskAboutPrice(messages)
+    includeQuotePrice: didCustomerAskAboutPrice(messages),
   });
   const leadContext = threadContext.contactId
     ? await loadOmniLeadContext(db, {
@@ -1402,27 +1603,58 @@ export async function POST(
     threadContext.propertyCity ??
     null;
   const knownState =
-    typeof threadContext.propertyState === "string" && threadContext.propertyState.trim().length > 0
+    typeof threadContext.propertyState === "string" &&
+    threadContext.propertyState.trim().length > 0
       ? threadContext.propertyState.trim()
       : null;
-  const cityClearsServiceArea = knownCity ? isCityAllowed(knownCity, serviceArea) : false;
+  const cityClearsServiceArea = knownCity
+    ? isCityAllowed(knownCity, serviceArea)
+    : false;
   const stateLooksOutOfState =
     knownState !== null && !/^ga$|^georgia$/i.test(knownState);
   const outsideUsualArea = knownCity ? !cityClearsServiceArea : null;
-  const builtSalesAgentMemory = leadContext ? buildSalesAgentMemory(leadContext) : null;
-  const appointmentPreservationOutcomeSummary = leadContext ? await loadAppointmentPreservationOutcomeSummary(db) : null;
-  const appointmentReminderOutcomeSummary = leadContext ? await loadAppointmentReminderOutcomeSummary(db) : null;
-  const channelHandoffOutcomeSummary = leadContext ? await loadChannelHandoffOutcomeSummary(db) : null;
-  const closeLoopOutcomeSummary = leadContext ? await loadCloseLoopOutcomeSummary(db) : null;
-  const firstResponseOutcomeSummary = leadContext ? await loadFirstResponseOutcomeSummary(db) : null;
-  const mediaOutcomeSummary = leadContext ? await loadMediaQuoteOutcomeSummary(db) : null;
-  const missingInfoOutcomeSummary = leadContext ? await loadMissingInfoOutcomeSummary(db) : null;
-  const objectionSaveOutcomeSummary = leadContext ? await loadObjectionSaveOutcomeSummary(db) : null;
-  const quoteAccuracyOutcomeSummary = leadContext ? await loadQuoteAccuracyOutcomeSummary(db) : null;
-  const quoteHotWindowOutcomeSummary = leadContext ? await loadQuoteHotWindowOutcomeSummary(db) : null;
-  const quoteCloseOutcomeSummary = leadContext ? await loadQuoteCloseOutcomeSummary(db) : null;
-  const quoteFollowupOutcomeSummary = leadContext ? await loadQuoteFollowupOutcomeSummary(db) : null;
-  const reactivationOutcomeSummary = leadContext ? await loadReactivationOutcomeSummary(db) : null;
+  const builtSalesAgentMemory = leadContext
+    ? buildSalesAgentMemory(leadContext)
+    : null;
+  const appointmentPreservationOutcomeSummary = leadContext
+    ? await loadAppointmentPreservationOutcomeSummary(db)
+    : null;
+  const appointmentReminderOutcomeSummary = leadContext
+    ? await loadAppointmentReminderOutcomeSummary(db)
+    : null;
+  const channelHandoffOutcomeSummary = leadContext
+    ? await loadChannelHandoffOutcomeSummary(db)
+    : null;
+  const closeLoopOutcomeSummary = leadContext
+    ? await loadCloseLoopOutcomeSummary(db)
+    : null;
+  const firstResponseOutcomeSummary = leadContext
+    ? await loadFirstResponseOutcomeSummary(db)
+    : null;
+  const mediaOutcomeSummary = leadContext
+    ? await loadMediaQuoteOutcomeSummary(db)
+    : null;
+  const missingInfoOutcomeSummary = leadContext
+    ? await loadMissingInfoOutcomeSummary(db)
+    : null;
+  const objectionSaveOutcomeSummary = leadContext
+    ? await loadObjectionSaveOutcomeSummary(db)
+    : null;
+  const quoteAccuracyOutcomeSummary = leadContext
+    ? await loadQuoteAccuracyOutcomeSummary(db)
+    : null;
+  const quoteHotWindowOutcomeSummary = leadContext
+    ? await loadQuoteHotWindowOutcomeSummary(db)
+    : null;
+  const quoteCloseOutcomeSummary = leadContext
+    ? await loadQuoteCloseOutcomeSummary(db)
+    : null;
+  const quoteFollowupOutcomeSummary = leadContext
+    ? await loadQuoteFollowupOutcomeSummary(db)
+    : null;
+  const reactivationOutcomeSummary = leadContext
+    ? await loadReactivationOutcomeSummary(db)
+    : null;
   const salesAgentMemory =
     threadContext.contactId && leadContext && builtSalesAgentMemory
       ? await upsertSalesAgentMemory(db, {
@@ -1470,12 +1702,11 @@ export async function POST(
     ? salesAgentNextAction.channel
     : null;
   const targetReplyChannel: ReplyChannel =
-    proactivePlannerEligible && plannerTargetChannel ? plannerTargetChannel : replyChannel;
+    proactivePlannerEligible && plannerTargetChannel
+      ? plannerTargetChannel
+      : replyChannel;
   let draftThreadId = threadId;
-  if (
-    threadContext.contactId &&
-    targetReplyChannel !== replyChannel
-  ) {
+  if (threadContext.contactId && targetReplyChannel !== replyChannel) {
     draftThreadId =
       (await ensureInboxThreadForContactChannel(db, {
         contactId: threadContext.contactId,
@@ -1500,7 +1731,7 @@ export async function POST(
               eq(conversationMessages.threadId, draftThreadId),
               eq(conversationMessages.direction, "outbound"),
               sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') = 'true'`,
-              sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`
+              sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`,
             ),
           )
           .orderBy(desc(conversationMessages.createdAt))
@@ -1517,20 +1748,25 @@ export async function POST(
             body: targetDraftRows[0].body,
             createdAt: targetDraftRows[0].createdAt,
             participantName: null,
-            metadata: isRecord(targetDraftRows[0].metadata) ? targetDraftRows[0].metadata : null,
+            metadata: isRecord(targetDraftRows[0].metadata)
+              ? targetDraftRows[0].metadata
+              : null,
           }
         : null;
   const targetToAddress =
     targetReplyChannel === "sms"
-      ? thread.contactPhoneE164 ?? thread.contactPhone ?? null
+      ? (thread.contactPhoneE164 ?? thread.contactPhone ?? null)
       : targetReplyChannel === "email"
-        ? thread.contactEmail ?? null
+        ? (thread.contactEmail ?? null)
         : toAddress;
   const targetDmMetadata = targetReplyChannel === "dm" ? dmMetadata : null;
 
-  const latestInboundMs = latestInboundMessage?.createdAt.getTime() ?? Number.NaN;
-  const latestOutboundMs = latestSentOutboundMessage?.createdAt.getTime() ?? Number.NaN;
-  const latestAiDraftMs = targetAiDraftMessage?.createdAt.getTime() ?? Number.NaN;
+  const latestInboundMs =
+    latestInboundMessage?.createdAt.getTime() ?? Number.NaN;
+  const latestOutboundMs =
+    latestSentOutboundMessage?.createdAt.getTime() ?? Number.NaN;
+  const latestAiDraftMs =
+    targetAiDraftMessage?.createdAt.getTime() ?? Number.NaN;
   const referenceMs = Number.isFinite(latestInboundMs)
     ? latestInboundMs
     : Number.isFinite(latestOutboundMs)
@@ -1562,13 +1798,20 @@ export async function POST(
       channel: targetReplyChannel,
       threadId: draftThreadId,
       draft: {
-        subject: targetReplyChannel === "email" ? targetAiDraftMessage?.subject ?? null : null,
+        subject:
+          targetReplyChannel === "email"
+            ? (targetAiDraftMessage?.subject ?? null)
+            : null,
         body: targetAiDraftMessage!.body,
       },
     });
   }
 
-  if (Number.isFinite(latestInboundMs) && Number.isFinite(latestOutboundMs) && latestOutboundMs >= latestInboundMs) {
+  if (
+    Number.isFinite(latestInboundMs) &&
+    Number.isFinite(latestOutboundMs) &&
+    latestOutboundMs >= latestInboundMs
+  ) {
     if (!proactivePlannerEligible) {
       return NextResponse.json({
         ok: true,
@@ -1588,10 +1831,13 @@ export async function POST(
 
   const outOfAreaExample =
     targetReplyChannel === "email" || targetReplyChannel === "sms"
-      ? resolveTemplateForChannel(templates.out_of_area, { inboundChannel: replyChannel, replyChannel: targetReplyChannel })
+      ? resolveTemplateForChannel(templates.out_of_area, {
+          inboundChannel: replyChannel,
+          replyChannel: targetReplyChannel,
+        })
       : null;
 
- const systemPrompt = `
+  const systemPrompt = `
  ${persona.systemPrompt}
  Output ONLY JSON with keys: body (string), subject (string). Use an empty string for subject when not needed.
  Write like a strong human salesperson or coordinator, not a workflow engine.
@@ -1638,30 +1884,59 @@ export async function POST(
 
   const contextLines = [
     `Reply channel: ${targetReplyChannel}`,
-    targetReplyChannel !== replyChannel ? `Source thread channel: ${replyChannel}` : null,
+    targetReplyChannel !== replyChannel
+      ? `Source thread channel: ${replyChannel}`
+      : null,
     `Thread state: ${threadContext.state}`,
     `Customer name: ${threadContext.contactName ?? "Unknown"}`,
-    salesAgentMemory?.summary ? `Sales agent memory: ${salesAgentMemory.summary}` : null,
-    salesAgentMemory?.customerIntent ? `Memory intent: ${salesAgentMemory.customerIntent}` : null,
-    salesAgentMemory?.channelPreference ? `Preferred channel: ${salesAgentMemory.channelPreference}` : null,
-    leadContext?.derived.dmEntrySource ? `Messenger entry source: ${leadContext.derived.dmEntrySource.replace(/_/g, " ")}` : null,
-    salesAgentMemory?.bookingReadiness ? `Booking readiness: ${salesAgentMemory.bookingReadiness}` : null,
-    salesAgentMemory?.quoteConfidence ? `Quote confidence: ${salesAgentMemory.quoteConfidence}` : null,
+    salesAgentMemory?.summary
+      ? `Sales agent memory: ${salesAgentMemory.summary}`
+      : null,
+    salesAgentMemory?.customerIntent
+      ? `Memory intent: ${salesAgentMemory.customerIntent}`
+      : null,
+    salesAgentMemory?.channelPreference
+      ? `Preferred channel: ${salesAgentMemory.channelPreference}`
+      : null,
+    leadContext?.derived.dmEntrySource
+      ? `Messenger entry source: ${leadContext.derived.dmEntrySource.replace(/_/g, " ")}`
+      : null,
+    salesAgentMemory?.bookingReadiness
+      ? `Booking readiness: ${salesAgentMemory.bookingReadiness}`
+      : null,
+    salesAgentMemory?.quoteConfidence
+      ? `Quote confidence: ${salesAgentMemory.quoteConfidence}`
+      : null,
     mediaAnalysis
       ? `Media estimate: visible=${mediaAnalysis.visibleVolumeRange}, merged=${mediaAnalysis.mergedVolumeRange}, confidence=${mediaAnalysis.confidence}, mattresses=${mediaAnalysis.visibleMattressCount}, paint=${mediaAnalysis.visiblePaintCanCount}${Array.isArray(mediaAnalysis.missingViews) && mediaAnalysis.missingViews.length ? `, missing views=${mediaAnalysis.missingViews.join(" | ")}` : ""}`
       : null,
-    Array.isArray(salesAgentMemory?.objections) && salesAgentMemory.objections.length
+    Array.isArray(salesAgentMemory?.objections) &&
+    salesAgentMemory.objections.length
       ? `Known objections: ${salesAgentMemory.objections.join(", ")}`
       : null,
-    Array.isArray(salesAgentMemory?.missingFields) && salesAgentMemory.missingFields.length
+    Array.isArray(salesAgentMemory?.missingFields) &&
+    salesAgentMemory.missingFields.length
       ? `Only ask for one of these if you truly need it: ${salesAgentMemory.missingFields.join(", ")}`
       : null,
-    salesAgentMemory?.lastPromisedNextStep ? `Last promised next step: ${salesAgentMemory.lastPromisedNextStep}` : null,
-    salesAgentMemory?.lastHumanSummary ? `Last human summary: ${salesAgentMemory.lastHumanSummary}` : null,
-    salesAgentNextAction?.actionType ? `Planner action type: ${salesAgentNextAction.actionType}` : null,
-    salesAgentNextAction?.summary ? `Planner summary: ${salesAgentNextAction.summary}` : null,
-    salesAgentNextAction?.channel ? `Planner channel: ${salesAgentNextAction.channel}` : null,
-    buildPlannerInstruction(salesAgentNextAction?.actionType, targetReplyChannel),
+    salesAgentMemory?.lastPromisedNextStep
+      ? `Last promised next step: ${salesAgentMemory.lastPromisedNextStep}`
+      : null,
+    salesAgentMemory?.lastHumanSummary
+      ? `Last human summary: ${salesAgentMemory.lastHumanSummary}`
+      : null,
+    salesAgentNextAction?.actionType
+      ? `Planner action type: ${salesAgentNextAction.actionType}`
+      : null,
+    salesAgentNextAction?.summary
+      ? `Planner summary: ${salesAgentNextAction.summary}`
+      : null,
+    salesAgentNextAction?.channel
+      ? `Planner channel: ${salesAgentNextAction.channel}`
+      : null,
+    buildPlannerInstruction(
+      salesAgentNextAction?.actionType,
+      targetReplyChannel,
+    ),
     buildHumanReplyShapeInstruction({
       actionType: salesAgentNextAction?.actionType,
       replyChannel: targetReplyChannel,
@@ -1676,7 +1951,9 @@ export async function POST(
       actionType: salesAgentNextAction?.actionType,
       customerIntent: salesAgentMemory?.customerIntent,
       bookingReadiness: salesAgentMemory?.bookingReadiness,
-      objections: Array.isArray(salesAgentMemory?.objections) ? salesAgentMemory.objections : [],
+      objections: Array.isArray(salesAgentMemory?.objections)
+        ? salesAgentMemory.objections
+        : [],
     }),
     buildBusinessSpecificPhrasingInstruction({
       actionType: salesAgentNextAction?.actionType,
@@ -1699,7 +1976,9 @@ export async function POST(
     buildInboundMediaIntentInstruction({
       actionType: salesAgentNextAction?.actionType,
       messages,
-      memoryMissingFields: Array.isArray(salesAgentMemory?.missingFields) ? salesAgentMemory.missingFields : [],
+      memoryMissingFields: Array.isArray(salesAgentMemory?.missingFields)
+        ? salesAgentMemory.missingFields
+        : [],
       customerIntent: salesAgentMemory?.customerIntent,
       bookingReadiness: salesAgentMemory?.bookingReadiness,
       hasVisionMediaEstimate: Boolean(mediaAnalysis),
@@ -1715,17 +1994,24 @@ export async function POST(
       replyChannel: targetReplyChannel,
       recentBodies: recentAiBodies,
     }),
-    buildChannelStyleInstruction(targetReplyChannel, salesAgentNextAction?.actionType),
+    buildChannelStyleInstruction(
+      targetReplyChannel,
+      salesAgentNextAction?.actionType,
+    ),
     buildDmOpeningInstruction({
       replyChannel: targetReplyChannel,
       actionType: salesAgentNextAction?.actionType,
       messages,
-      memoryMissingFields: Array.isArray(salesAgentMemory?.missingFields) ? salesAgentMemory.missingFields : [],
+      memoryMissingFields: Array.isArray(salesAgentMemory?.missingFields)
+        ? salesAgentMemory.missingFields
+        : [],
     }),
     buildDmSalesAngleInstruction({
       replyChannel: targetReplyChannel,
       actionType: salesAgentNextAction?.actionType,
-      objections: Array.isArray(salesAgentMemory?.objections) ? salesAgentMemory.objections : [],
+      objections: Array.isArray(salesAgentMemory?.objections)
+        ? salesAgentMemory.objections
+        : [],
     }),
     buildMediaReplyInstruction({
       mediaAnalysis,
@@ -1743,12 +2029,21 @@ export async function POST(
       : null,
     omni.otherChannelThreads.length
       ? `Other channels:\n${omni.otherChannelThreads
-          .map((t) => `- ${t.channel} last=${t.lastMessageAt ? t.lastMessageAt.toISOString() : "unknown"}: ${t.lastMessagePreview ?? ""}`)
+          .map(
+            (t) =>
+              `- ${t.channel} last=${t.lastMessageAt ? t.lastMessageAt.toISOString() : "unknown"}: ${t.lastMessagePreview ?? ""}`,
+          )
           .join("\n")}`
       : null,
-    threadContext.contactPhoneE164 || threadContext.contactPhone ? `Customer phone: ${threadContext.contactPhoneE164 ?? threadContext.contactPhone}` : null,
-    threadContext.contactEmail ? `Customer email: ${threadContext.contactEmail}` : null,
-    threadContext.propertyAddressLine1 ? `Property: ${threadContext.propertyAddressLine1}, ${threadContext.propertyCity ?? ""}, ${threadContext.propertyState ?? ""} ${threadContext.propertyPostalCode ?? ""}` : null,
+    threadContext.contactPhoneE164 || threadContext.contactPhone
+      ? `Customer phone: ${threadContext.contactPhoneE164 ?? threadContext.contactPhone}`
+      : null,
+    threadContext.contactEmail
+      ? `Customer email: ${threadContext.contactEmail}`
+      : null,
+    threadContext.propertyAddressLine1
+      ? `Property: ${threadContext.propertyAddressLine1}, ${threadContext.propertyCity ?? ""}, ${threadContext.propertyState ?? ""} ${threadContext.propertyPostalCode ?? ""}`
+      : null,
     knownCity ? `Known city: ${knownCity}` : null,
     stateLooksOutOfState
       ? `Location: OUT OF STATE (Georgia only)`
@@ -1756,14 +2051,16 @@ export async function POST(
         ? `Location: outside usual area (confirm)`
         : cityClearsServiceArea
           ? `Location: core service city confirmed. Do not ask for ZIP before moving the sale forward.`
-        : outsideUsualArea === false
-          ? `Location: OK`
-          : knownCity
-            ? `Location: city noted. Keep moving and do not stop to ask for ZIP or exact address yet.`
-            : `Location: broad local area is fine for now. Do not stop the sale to ask for ZIP or exact address unless the job appears out of state.`,
+          : outsideUsualArea === false
+            ? `Location: OK`
+            : knownCity
+              ? `Location: city noted. Keep moving and do not stop to ask for ZIP or exact address yet.`
+              : `Location: broad local area is fine for now. Do not stop the sale to ask for ZIP or exact address unless the job appears out of state.`,
     outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,
-    crossChannelRecentSummary ? `Recent cross-channel context:\n${crossChannelRecentSummary}` : null,
-    `Transcript:\n${buildTranscript(messages)}`
+    crossChannelRecentSummary
+      ? `Recent cross-channel context:\n${crossChannelRecentSummary}`
+      : null,
+    `Transcript:\n${buildTranscript(messages)}`,
   ].filter((line): line is string => Boolean(line));
 
   const baseUserPrompt = `Write the best next reply for this conversation.\n${contextLines.join("\n")}`;
@@ -1783,20 +2080,22 @@ Do not write the customer message. Output ONLY JSON matching the schema.
       maxOutputTokens: 600,
       schemaName: "reply_plan",
       schema: REPLY_PLAN_SCHEMA,
-      reasoningEffort: "low"
+      reasoningEffort: "low",
     });
 
     if (planResult.ok && isReplyPlan(planResult.value)) {
       plan = planResult.value;
     } else if (!planResult.ok) {
-      console.warn("[inbox.suggest] openai.plan_failed", { error: planResult.error, detail: planResult.detail ?? null });
+      console.warn("[inbox.suggest] openai.plan_failed", {
+        error: planResult.error,
+        detail: planResult.detail ?? null,
+      });
     }
   }
 
-  const userPrompt =
-    plan
-      ? `${baseUserPrompt}\n\nInternal guidance:\n${summarizeReplyPlanForPrompt(plan)}`
-      : baseUserPrompt;
+  const userPrompt = plan
+    ? `${baseUserPrompt}\n\nInternal guidance:\n${summarizeReplyPlanForPrompt(plan)}`
+    : baseUserPrompt;
 
   const suggestionResult = await callOpenAIJsonSchema({
     apiKey: config.apiKey,
@@ -1806,26 +2105,31 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     userPrompt,
     maxOutputTokens: 800,
     schemaName: "reply_suggestion",
-    schema: REPLY_SUGGESTION_SCHEMA
+    schema: REPLY_SUGGESTION_SCHEMA,
   });
 
   if (!suggestionResult.ok) {
     return NextResponse.json(
       {
         error: suggestionResult.error,
-        detail: suggestionResult.detail ?? null
+        detail: suggestionResult.detail ?? null,
       },
-      { status: 502 }
+      { status: 502 },
     );
   }
 
   if (!isReplySuggestion(suggestionResult.value)) {
-    return NextResponse.json({ error: "openai_invalid_response" }, { status: 502 });
+    return NextResponse.json(
+      { error: "openai_invalid_response" },
+      { status: 502 },
+    );
   }
 
   const suggestion = {
     body: suggestionResult.value.body.trim(),
-    subject: suggestionResult.value.subject.trim().length ? suggestionResult.value.subject.trim() : null
+    subject: suggestionResult.value.subject.trim().length
+      ? suggestionResult.value.subject.trim()
+      : null,
   };
 
   if (
@@ -1834,12 +2138,17 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     containsGenericFillerPhrasing(suggestion.body)
   ) {
     const retryInstructions: string[] = [];
-    if (containsDashLikeChars(suggestion.body) || (suggestion.subject && containsDashLikeChars(suggestion.subject))) {
-      retryInstructions.push("Rewrite the reply with ZERO hyphen or dash characters of any kind. Do not use lists. Use only sentences.");
+    if (
+      containsDashLikeChars(suggestion.body) ||
+      (suggestion.subject && containsDashLikeChars(suggestion.subject))
+    ) {
+      retryInstructions.push(
+        "Rewrite the reply with ZERO hyphen or dash characters of any kind. Do not use lists. Use only sentences.",
+      );
     }
     if (containsGenericFillerPhrasing(suggestion.body)) {
       retryInstructions.push(
-        "Rewrite the reply without generic filler phrases like 'that helps a lot', 'let me know what works best', 'what day and time works best for you', or 'just checking in'. Make it sound more like a natural human closer."
+        "Rewrite the reply without generic filler phrases like 'that helps a lot', 'let me know what works best', 'what day and time works best for you', or 'just checking in'. Make it sound more like a natural human closer.",
       );
     }
     const retryPrompt = `${userPrompt}\n\nIMPORTANT: ${retryInstructions.join(" ")}`;
@@ -1851,12 +2160,14 @@ Do not write the customer message. Output ONLY JSON matching the schema.
       userPrompt: retryPrompt,
       maxOutputTokens: 800,
       schemaName: "reply_suggestion",
-      schema: REPLY_SUGGESTION_SCHEMA
+      schema: REPLY_SUGGESTION_SCHEMA,
     });
 
     if (retry.ok && isReplySuggestion(retry.value)) {
       suggestion.body = retry.value.body.trim();
-      suggestion.subject = retry.value.subject.trim().length ? retry.value.subject.trim() : null;
+      suggestion.subject = retry.value.subject.trim().length
+        ? retry.value.subject.trim()
+        : null;
     }
   }
 
@@ -1866,7 +2177,10 @@ Do not write the customer message. Output ONLY JSON matching the schema.
   }
 
   if (!suggestion.body) {
-    return NextResponse.json({ error: "openai_invalid_response" }, { status: 502 });
+    return NextResponse.json(
+      { error: "openai_invalid_response" },
+      { status: 502 },
+    );
   }
 
   const created = await db.transaction(async (tx) => {
@@ -1877,8 +2191,8 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           eq(conversationMessages.threadId, draftThreadId),
           eq(conversationMessages.direction, "outbound"),
           sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') = 'true'`,
-          sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`
-        )
+          sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`,
+        ),
       );
 
     const participantId = await ensureAiParticipant(tx, draftThreadId, now);
@@ -1889,7 +2203,10 @@ Do not write the customer message. Output ONLY JSON matching the schema.
         participantId,
         direction: "outbound",
         channel: targetReplyChannel,
-        subject: targetReplyChannel === "email" ? suggestion.subject ?? thread.subject ?? "Stonegate message" : null,
+        subject:
+          targetReplyChannel === "email"
+            ? (suggestion.subject ?? thread.subject ?? "Stonegate message")
+            : null,
         body: suggestion.body,
         toAddress: targetToAddress,
         deliveryStatus: "queued",
@@ -1913,9 +2230,12 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           aiPlannerReason: salesAgentNextAction?.reason ?? undefined,
           aiPlannerPriority: salesAgentNextAction?.priority ?? undefined,
           aiPlannerConfidence: salesAgentNextAction?.confidence ?? undefined,
-          outOfArea: stateLooksOutOfState || outsideUsualArea === true ? true : undefined
+          outOfArea:
+            stateLooksOutOfState || outsideUsualArea === true
+              ? true
+              : undefined,
         },
-        createdAt: now
+        createdAt: now,
       })
       .returning({ id: conversationMessages.id });
 
@@ -1935,8 +2255,11 @@ Do not write the customer message. Output ONLY JSON matching the schema.
       messageId: created.id,
       sourceThreadId: threadId,
       targetThreadId: draftThreadId,
-      handoff: targetReplyChannel !== replyChannel ? `${replyChannel}_to_${targetReplyChannel}` : undefined,
-    }
+      handoff:
+        targetReplyChannel !== replyChannel
+          ? `${replyChannel}_to_${targetReplyChannel}`
+          : undefined,
+    },
   });
 
   return NextResponse.json({
@@ -1946,8 +2269,9 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     channel: targetReplyChannel,
     threadId: draftThreadId,
     draft: {
-      subject: targetReplyChannel === "email" ? suggestion.subject ?? null : null,
-      body: suggestion.body
-    }
+      subject:
+        targetReplyChannel === "email" ? (suggestion.subject ?? null) : null,
+      body: suggestion.body,
+    },
   });
 }

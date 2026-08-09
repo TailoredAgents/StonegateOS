@@ -7,7 +7,7 @@ export function GoogleAdsTag({ tagId }: { tagId: string | null }) {
 
   return (
     <>
-      <Script id="google-ads-stub" strategy="beforeInteractive">
+      <Script id="google-ads-stub" strategy="afterInteractive">
         {`window.dataLayer = window.dataLayer || [];
 function gtag(){dataLayer.push(arguments);}
 gtag('js', new Date());
@@ -20,4 +20,3 @@ gtag('config', '${sanitized}');`}
     </>
   );
 }
-

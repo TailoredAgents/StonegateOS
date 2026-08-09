@@ -407,6 +407,279 @@
       "when": 1785067200000,
       "tag": "0060_eta_agent_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1786147200000,
+      "tag": "0061_team_auth_rate_limits",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1786233600000,
+      "tag": "0062_team_member_phone_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1786320000000,
+      "tag": "0063_team_member_email_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1786406400000,
+      "tag": "0064_team_session_auth_method",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1786492800000,
+      "tag": "0065_team_role_permission_baselines",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1786579200000,
+      "tag": "0066_team_mutation_idempotency",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1786665600000,
+      "tag": "0067_contact_property_associations",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1786752000000,
+      "tag": "0068_contact_soft_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1786838400000,
+      "tag": "0069_payout_run_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1786924800000,
+      "tag": "0070_instant_quote_relationships",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1787011200000,
+      "tag": "0071_audit_log_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1787097600000,
+      "tag": "0072_expense_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1787184000000,
+      "tag": "0073_external_message_dispatches",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1787270400000,
+      "tag": "0074_seo_editorial_workflow",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1787356800000,
+      "tag": "0075_google_ads_recommendation_operations",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1787443200000,
+      "tag": "0076_team_access_continuity_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1787529600000,
+      "tag": "0077_public_quote_mutation_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1787616000000,
+      "tag": "0078_team_call_operations",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1787702400000,
+      "tag": "0079_expense_ledger_query_export",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1787788800000,
+      "tag": "0080_team_call_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1787875200000,
+      "tag": "0081_team_call_outcomes",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1787961600000,
+      "tag": "0082_inbox_thread_message_pagination",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1788048000000,
+      "tag": "0083_sales_escalation_call_operations",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1788134400000,
+      "tag": "0084_partner_invite_operations",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1788220800000,
+      "tag": "0085_conversation_export_query_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1788307200000,
+      "tag": "0086_partner_invite_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1788393600000,
+      "tag": "0087_team_inbox_new_lead_acknowledgements",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1788480000000,
+      "tag": "0088_sales_escalation_call_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1788566400000,
+      "tag": "0089_team_pipeline_filter_presets",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1788652800000,
+      "tag": "0090_contact_purge_maintenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1788739200000,
+      "tag": "0091_contact_merge_recovery_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1788825600000,
+      "tag": "0092_outbound_queue_projection",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1788912000000,
+      "tag": "0093_audit_actor_fk_cleanup",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1788998400000,
+      "tag": "0094_commission_management_split_configuration",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1789084800000,
+      "tag": "0095_commission_crew_split_rule_configuration",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1789171200000,
+      "tag": "0096_partner_booking_staff_alert_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1789257600000,
+      "tag": "0097_public_lead_quote_booking_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1789344000000,
+      "tag": "0098_appointment_version_precision",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1789430400000,
+      "tag": "0099_team_version_precision",
+      "breakpoints": true
     }
   ]
 }

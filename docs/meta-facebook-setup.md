@@ -1,6 +1,7 @@
 # Meta (Facebook) CRM Integration Setup
 
 This repo already supports:
+
 - Facebook Lead Ads (Instant Forms) ingestion into CRM leads
 - Facebook Messenger inbound messages into the inbox
 - Facebook Messenger outbound replies from the CRM (Send API)
@@ -17,6 +18,7 @@ This repo already supports:
 ## Required env vars (Render)
 
 API service (`stonegate-api`):
+
 - `FB_VERIFY_TOKEN` (your verify token string)
 - `FB_APP_SECRET` (Meta App secret)
 - `FB_LEADGEN_ACCESS_TOKEN` (System User token with Lead Ads + Pages permissions)
@@ -25,19 +27,29 @@ API service (`stonegate-api`):
 - `FB_PAGE_ID` (optional fallback for outbound Messenger send)
 - `FB_PAGE_ACCESS_TOKEN` (recommended; used by webhook handlers for sender lookups and outbound send validation)
 
+Provider boundary:
+
+- Leave `FACEBOOK_GRAPH_API_BASE_URL` blank in normal production. The default is `https://graph.facebook.com`.
+- `FACEBOOK_GRAPH_API_BASE_URL` is only for a deterministic local/CI provider. E2E and CRM-audit runs require a credential-free loopback URL; production rejects loopback.
+- `META_FAKE_CONTROL_URL` is nonproduction-only and must share the provider origin. It controls failure scenarios and exposes bounded, content-free request evidence.
+- Local setup, operations and privacy limits are documented in `devops/meta-fake/README.md`.
+
 Note: outbound sends (`message.send`) are processed by the outbox worker in production; ensure the worker has the same `FB_*` env vars.
 
 Optional legacy DM webhook transport (if you already have a DM proxy service):
+
 - `DM_WEBHOOK_URL`
 - `DM_WEBHOOK_TOKEN` (optional)
 - `DM_WEBHOOK_FROM` (optional)
 
 Worker service (`stonegate-outbox-worker`) for Ads Insights sync:
+
 - `FB_AD_ACCOUNT_ID` (ad account id, with or without `act_` prefix)
 - `FB_MARKETING_ACCESS_TOKEN` (optional; if unset we reuse `FB_LEADGEN_ACCESS_TOKEN`)
 - `FB_LEADGEN_ACCESS_TOKEN` (fallback token for Ads Insights if `FB_MARKETING_ACCESS_TOKEN` is unset)
 
 Admin auth (needed for the `/api/admin/...` endpoints):
+
 - `ADMIN_API_KEY` (send as `x-admin-api-key` header; `x-api-key` is also accepted)
 
 ## Meta App / Business Manager checklist
@@ -68,6 +80,10 @@ Admin auth (needed for the `/api/admin/...` endpoints):
 ## Scheduling Ads Insights sync
 
 The sync is processed by the outbox worker (`meta.ads_insights.sync` event).
+
+Ads pagination is accepted only when `paging.next` remains on the configured,
+versioned Graph origin. Conversions requests include a stable outbox event ID so
+an ambiguous response can be retried without creating a second provider event.
 
 - Manually enqueue: `POST /api/admin/meta/ads/sync` with header `x-admin-api-key: <ADMIN_API_KEY>`
   - Body examples:

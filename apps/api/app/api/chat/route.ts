@@ -1,4 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
 
 type ChatHistoryEntry = {
   role: "user" | "assistant";
@@ -38,7 +40,7 @@ function readHistory(request: NextRequest): ChatHistoryEntry[] {
       (entry): entry is ChatHistoryEntry =>
         typeof entry === "object" &&
         (entry?.role === "user" || entry?.role === "assistant") &&
-        typeof entry?.content === "string"
+        typeof entry?.content === "string",
     );
   } catch {
     return [];
@@ -52,11 +54,14 @@ function persistHistory(history: ChatHistoryEntry[], response: NextResponse) {
     path: "/",
     httpOnly: true,
     sameSite: "lax",
-    maxAge: 60 * 60 * 24 * 3 // 3 days
+    maxAge: 60 * 60 * 24 * 3, // 3 days
   });
 }
 
-async function callAdminApi(path: string, init?: RequestInit): Promise<Response> {
+async function callAdminApiWithLegacyChatServiceKey(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
   if (!ADMIN_API_KEY) {
     throw new Error("ADMIN_API_KEY must be set");
   }
@@ -66,9 +71,9 @@ async function callAdminApi(path: string, init?: RequestInit): Promise<Response>
     headers: {
       "Content-Type": "application/json",
       "x-api-key": ADMIN_API_KEY,
-      ...(init?.headers ?? {})
+      ...(init?.headers ?? {}),
     },
-    cache: "no-store"
+    cache: "no-store",
   });
 }
 
@@ -77,7 +82,9 @@ async function fetchContactsSummary(): Promise<{
   contacts: ContactSummary[];
 }> {
   try {
-    const res = await callAdminApi("/api/admin/contacts?limit=6");
+    const res = await callAdminApiWithLegacyChatServiceKey(
+      "/api/admin/contacts?limit=6",
+    );
     if (!res.ok) throw new Error("contacts");
     const data = (await res.json()) as {
       contacts?: Array<{
@@ -91,7 +98,7 @@ async function fetchContactsSummary(): Promise<{
       id: contact.id,
       name: contact.name,
       pipelineStage: contact.pipeline?.stage,
-      stats: contact.stats
+      stats: contact.stats,
     }));
     if (!contacts.length) {
       return { text: "No saved contacts yet.", contacts: [] };
@@ -100,7 +107,7 @@ async function fetchContactsSummary(): Promise<{
       (contact) =>
         `- ${contact.name} (id: ${contact.id}, stage: ${contact.pipelineStage ?? "unknown"}, quotes: ${
           contact.stats?.quotes ?? 0
-        }, open tasks: ${contact.stats?.tasks ?? 0})`
+        }, open tasks: ${contact.stats?.tasks ?? 0})`,
     );
     return { text: lines.join("\n"), contacts };
   } catch {
@@ -110,16 +117,21 @@ async function fetchContactsSummary(): Promise<{
 
 async function fetchPipelineSummary(): Promise<string> {
   try {
-    const res = await callAdminApi("/api/admin/crm/pipeline");
+    const res = await callAdminApiWithLegacyChatServiceKey(
+      "/api/admin/crm/pipeline",
+    );
     if (!res.ok) throw new Error("pipeline");
     const data = (await res.json()) as {
       stages: string[];
       lanes: Array<{ stage: string; contacts: Array<{ id: string }> }>;
+      stageCounts?: Record<string, number>;
     };
     if (!data?.lanes?.length) return "Pipeline empty.";
-    const lines = data.lanes.map(
-      (lane) => `${lane.stage}: ${lane.contacts.length} contact(s)`
-    );
+    const lines = data.stages.map((stage) => {
+      const lane = data.lanes.find((candidate) => candidate.stage === stage);
+      const count = data.stageCounts?.[stage] ?? lane?.contacts.length ?? 0;
+      return `${stage}: ${count} contact(s)`;
+    });
     return lines.join("\n");
   } catch {
     return "Pipeline summary unavailable.";
@@ -128,7 +140,9 @@ async function fetchPipelineSummary(): Promise<string> {
 
 async function fetchScheduleSummary(): Promise<string> {
   try {
-    const res = await callAdminApi("/api/appointments?status=confirmed");
+    const res = await callAdminApiWithLegacyChatServiceKey(
+      "/api/appointments?status=confirmed",
+    );
     if (!res.ok) throw new Error("appointments");
     const data = (await res.json()) as {
       data?: Array<{
@@ -143,7 +157,9 @@ async function fetchScheduleSummary(): Promise<string> {
       return "No confirmed appointments scheduled.";
     }
     const lines = appointments.slice(0, 4).map((appt) => {
-      const when = appt.startAt ? new Date(appt.startAt).toLocaleString("en-US") : "Date TBD";
+      const when = appt.startAt
+        ? new Date(appt.startAt).toLocaleString("en-US")
+        : "Date TBD";
       return `- ${when}: ${appt.contact.name} (${appt.services.join(", ")})`;
     });
     return lines.join("\n");
@@ -154,7 +170,9 @@ async function fetchScheduleSummary(): Promise<string> {
 
 async function fetchTaskSummary(): Promise<string> {
   try {
-    const res = await callAdminApi("/api/admin/crm/tasks?limit=5");
+    const res = await callAdminApiWithLegacyChatServiceKey(
+      "/api/admin/crm/tasks?limit=5",
+    );
     if (!res.ok) throw new Error("tasks");
     const data = (await res.json()) as {
       tasks?: Array<{
@@ -191,7 +209,7 @@ async function buildContext(): Promise<{
     fetchContactsSummary(),
     fetchPipelineSummary(),
     fetchScheduleSummary(),
-    fetchTaskSummary()
+    fetchTaskSummary(),
   ]);
 
   const systemPrompt = `
@@ -222,82 +240,88 @@ Include ONLY one action block per response, and ensure the contactId is from the
     contacts: contactsResult.contacts,
     scheduleText: schedule,
     pipelineText: pipeline,
-    tasksText: tasks
+    tasksText: tasks,
   };
 }
 
 async function callOpenAI(
   history: ChatHistoryEntry[],
   userMessage: string,
-  systemPrompt: string
+  systemPrompt: string,
 ): Promise<string | null> {
   if (!OPENAI_API_KEY) return null;
   try {
-  const messages = [
-    { role: "system" as const, content: systemPrompt },
-    ...history.map((entry) => ({
-      role: entry.role,
-      content: entry.content
-    })),
-    { role: "user" as const, content: userMessage }
-  ];
+    const messages = [
+      { role: "system" as const, content: systemPrompt },
+      ...history.map((entry) => ({
+        role: entry.role,
+        content: entry.content,
+      })),
+      { role: "user" as const, content: userMessage },
+    ];
 
-  const payload = {
-    model: OPENAI_MODEL,
-    input: messages,
-    reasoning: {
-      effort: "low"
-    },
-    text: {
-      verbosity: "medium"
-    },
-    max_output_tokens: 600
-  } as const;
+    const payload = {
+      model: OPENAI_MODEL,
+      input: messages,
+      reasoning: {
+        effort: "low",
+      },
+      text: {
+        verbosity: "medium",
+      },
+      max_output_tokens: 600,
+    } as const;
 
-  console.debug("[chat] openai payload", {
-    model: payload.model,
-    reasoning: payload.reasoning,
-    text: payload.text,
-    max_output_tokens: payload.max_output_tokens
-  });
+    console.debug("[chat] openai payload", {
+      model: payload.model,
+      reasoning: payload.reasoning,
+      text: payload.text,
+      max_output_tokens: payload.max_output_tokens,
+    });
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-      "Content-Type": "application/json",
-      "OpenAI-Beta": "assistants=v2"
-    },
-    body: JSON.stringify(payload)
-  });
+    const response = await fetch(
+      resolveOpenAiApiEndpoint("responses", process.env),
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+          "OpenAI-Beta": "assistants=v2",
+        },
+        body: JSON.stringify(payload),
+      },
+    );
 
-  if (!response.ok) {
-    console.error("OpenAI error", await response.text());
-    return null;
-  }
-  const responseBody = (await response.json()) as {
-    output?: Array<{
-      content?: Array<{ text?: string }>;
-    }>;
-    output_text?: string;
-  };
-
-  if (Array.isArray(responseBody.output)) {
-    const combined = responseBody.output
-      .flatMap((item) => item?.content ?? [])
-      .map((chunk) => chunk?.text ?? "")
-      .filter((chunk) => chunk && chunk.trim().length > 0)
-      .join("\n")
-      .trim();
-    if (combined.length > 0) {
-      return combined;
+    if (!response.ok) {
+      console.error("OpenAI error", await response.text());
+      return null;
     }
-  }
-  if (typeof responseBody.output_text === "string" && responseBody.output_text.trim().length > 0) {
-    return responseBody.output_text.trim();
-  }
+    const responseBody = (await response.json()) as {
+      output?: Array<{
+        content?: Array<{ text?: string }>;
+      }>;
+      output_text?: string;
+    };
 
-  return null;
+    if (Array.isArray(responseBody.output)) {
+      const combined = responseBody.output
+        .flatMap((item) => item?.content ?? [])
+        .map((chunk) => chunk?.text ?? "")
+        .filter((chunk) => chunk && chunk.trim().length > 0)
+        .join("\n")
+        .trim();
+      if (combined.length > 0) {
+        return combined;
+      }
+    }
+    if (
+      typeof responseBody.output_text === "string" &&
+      responseBody.output_text.trim().length > 0
+    ) {
+      return responseBody.output_text.trim();
+    }
+
+    return null;
   } catch (error) {
     console.error("OpenAI request failed", error);
     return null;
@@ -332,34 +356,37 @@ async function handleActionBlock(text: string): Promise<{
     const title = paramMap.get("title");
     if (contactId && title) {
       try {
-        const res = await callAdminApi("/api/admin/crm/tasks", {
-          method: "POST",
-          body: JSON.stringify({
-            contactId,
-            title
-          })
-        });
+        const res = await callAdminApiWithLegacyChatServiceKey(
+          "/api/admin/crm/tasks",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              contactId,
+              title,
+            }),
+          },
+        );
         if (res.ok) {
           return {
             cleanedText: text.replace(actionRegex, "").trim(),
-            actionNote: `Task created for contact ${contactId}: "${title}".`
+            actionNote: `Task created for contact ${contactId}: "${title}".`,
           };
         }
         const errorText = await res.text();
         return {
           cleanedText: text.replace(actionRegex, "").trim(),
-          actionNote: `Unable to create task (API error): ${errorText}`
+          actionNote: `Unable to create task (API error): ${errorText}`,
         };
       } catch (error) {
         return {
           cleanedText: text.replace(actionRegex, "").trim(),
-          actionNote: `Task creation failed: ${(error as Error).message}`
+          actionNote: `Task creation failed: ${(error as Error).message}`,
         };
       }
     }
     return {
       cleanedText: text.replace(actionRegex, "").trim(),
-      actionNote: "Task action ignored: missing contactId or title."
+      actionNote: "Task action ignored: missing contactId or title.",
     };
   }
 
@@ -387,20 +414,24 @@ export async function POST(request: NextRequest): Promise<Response> {
   const { message } = (await request.json()) as { message?: string };
   const userMessage = typeof message === "string" ? message.trim() : "";
   if (!userMessage) {
-    return NextResponse.json({ reply: "Please share a message to get started." }, { status: 400 });
+    return NextResponse.json(
+      { reply: "Please share a message to get started." },
+      { status: 400 },
+    );
   }
 
   const history = readHistory(request);
   const context = await buildContext();
 
   const aiReply =
-    (await callOpenAI(history, userMessage, context.systemPrompt)) ?? fallbackReply(userMessage);
+    (await callOpenAI(history, userMessage, context.systemPrompt)) ??
+    fallbackReply(userMessage);
 
   const { cleanedText, actionNote } = await handleActionBlock(aiReply);
 
   const responseBody: AssistantResult = {
     reply: cleanedText.length ? cleanedText : fallbackReply(userMessage),
-    ...(actionNote ? { actionNote } : {})
+    ...(actionNote ? { actionNote } : {}),
   };
 
   const lowerMessage = userMessage.toLowerCase();
@@ -411,18 +442,24 @@ export async function POST(request: NextRequest): Promise<Response> {
     lowerMessage.includes("crew visit") ||
     lowerMessage.includes("run sheet");
   const scheduleAvailable =
-    context.scheduleText && !/unavailable/i.test(context.scheduleText) && context.scheduleText.trim().length > 0;
+    context.scheduleText &&
+    !/unavailable/i.test(context.scheduleText) &&
+    context.scheduleText.trim().length > 0;
 
   let finalReply = responseBody.reply;
   if (actionNote) {
     finalReply = `${finalReply}\n\n${actionNote}`.trim();
   }
   if (wantsSchedule && scheduleAvailable) {
-    finalReply = `${finalReply}\n\nToday's confirmed appointments:\n${context.scheduleText}`.trim();
+    finalReply =
+      `${finalReply}\n\nToday's confirmed appointments:\n${context.scheduleText}`.trim();
   }
   responseBody.reply = finalReply;
 
-  const updatedHistory: ChatHistoryEntry[] = [...history, { role: "user", content: userMessage }];
+  const updatedHistory: ChatHistoryEntry[] = [
+    ...history,
+    { role: "user", content: userMessage },
+  ];
   if (responseBody.reply) {
     updatedHistory.push({ role: "assistant", content: responseBody.reply });
   }

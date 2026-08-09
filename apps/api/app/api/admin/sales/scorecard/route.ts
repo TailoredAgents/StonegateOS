@@ -34,7 +34,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "appointments.read");
+  const permissionError = await requirePermission(request, "sales.read");
   if (permissionError) return permissionError;
 
   const db = getDb();

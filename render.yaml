@@ -19,7 +19,7 @@ services:
       mkdir -p "$PNPM_HOME"
       export PATH="$PNPM_HOME:$PATH"
       npx -y pnpm@9.15.9 --filter site start --hostname 0.0.0.0 --port $PORT
-    healthCheckPath: /api/healthz
+    healthCheckPath: /api/readyz
     envVars:
       - key: NODE_ENV
         value: production
@@ -64,6 +64,10 @@ services:
       - key: API_BASE_URL
         sync: false
       - key: ADMIN_API_KEY
+        sync: false
+      - key: ADMIN_SESSION_SECRET
+        sync: false
+      - key: CREW_SESSION_SECRET
         sync: false
       - key: OPENAI_API_KEY
         sync: false
@@ -130,7 +134,7 @@ services:
       else
         echo "[preDeploy] Skipping db:migrate because SKIP_DB_MIGRATE=1"
       fi
-    healthCheckPath: /api/healthz
+    healthCheckPath: /api/readyz
     envVars:
       - key: NODE_ENV
         value: production
@@ -148,6 +152,30 @@ services:
         sync: false
       - key: ADMIN_API_KEY
         sync: false
+      - key: TEAM_AUTH_RATE_LIMIT_SECRET
+        sync: false
+      - key: TEAM_BREAK_GLASS_OWNER_MEMBER_ID
+        sync: false
+      - key: TEAM_BREAK_GLASS_CREW_MEMBER_ID
+        sync: false
+      - key: TEAM_KILL_EXTERNAL_SENDS
+        sync: false
+      - key: TEAM_KILL_FINANCIAL_MUTATIONS
+        sync: false
+      - key: TEAM_KILL_DESTRUCTIVE_MUTATIONS
+        sync: false
+      - key: TEAM_KILL_ADVERTISING_CHANGES
+        sync: false
+      - key: TEAM_KILL_PUBLISHING
+        sync: false
+      - key: TEAM_KILL_OUTBOX_DISPATCH
+        sync: false
+      - key: READINESS_REQUIRE_OUTBOX_WORKER
+        value: "true"
+      - key: READINESS_WORKER_MAX_AGE_MS
+        value: "90000"
+      - key: READINESS_OUTBOX_MAX_AGE_MS
+        value: "600000"
       - key: NEXT_PUBLIC_SITE_URL
         sync: false
       - key: APPOINTMENT_TIMEZONE
@@ -180,6 +208,8 @@ services:
         sync: false
       - key: SQUARE_ENVIRONMENT
         sync: false
+      - key: SQUARE_API_BASE_URL
+        sync: false
       - key: SQUARE_APPLICATION_ID
         sync: false
       - key: SQUARE_ACCESS_TOKEN
@@ -208,6 +238,8 @@ services:
         sync: false
       - key: TWILIO_FROM
         sync: false
+      - key: TWILIO_WEBHOOK_PUBLIC_BASE_URL
+        sync: false
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT
@@ -217,6 +249,10 @@ services:
       - key: SMTP_PASS
         sync: false
       - key: SMTP_FROM
+        sync: false
+      - key: SMTP_SECURE
+        sync: false
+      - key: SMTP_TIMEOUT_MS
         sync: false
       - key: DM_WEBHOOK_URL
         sync: false
@@ -359,6 +395,8 @@ services:
         sync: false
       - key: SQUARE_ENVIRONMENT
         sync: false
+      - key: SQUARE_API_BASE_URL
+        sync: false
       - key: SQUARE_APPLICATION_ID
         sync: false
       - key: SQUARE_ACCESS_TOKEN
@@ -381,6 +419,8 @@ services:
         sync: false
       - key: TWILIO_FROM
         sync: false
+      - key: TWILIO_WEBHOOK_PUBLIC_BASE_URL
+        sync: false
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT
@@ -390,6 +430,10 @@ services:
       - key: SMTP_PASS
         sync: false
       - key: SMTP_FROM
+        sync: false
+      - key: SMTP_SECURE
+        sync: false
+      - key: SMTP_TIMEOUT_MS
         sync: false
       - key: DM_WEBHOOK_URL
         sync: false

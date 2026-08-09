@@ -1,6 +1,11 @@
 "use client";
 
 import React from "react";
+import {
+  classifyContactResourceResponse,
+  contactResourceFailureMessage,
+  type ContactResourceFailure,
+} from "../contact-resource-state";
 import { teamButtonClass } from "./team-ui";
 
 type SceneGroup = {
@@ -42,7 +47,32 @@ type MediaAnalysisPayload = {
 
 type Props = {
   contactId: string;
+  canRefresh?: boolean;
+  includeQuotePrice?: boolean;
 };
+
+type AnalysisStatus = "loading" | "ready" | "empty" | ContactResourceFailure;
+
+async function readAnalysisResponse(
+  response: Response,
+): Promise<
+  | { ok: true; data: MediaAnalysisPayload }
+  | { ok: false; failure: ContactResourceFailure }
+> {
+  let parsed = true;
+  const data = (await response.json().catch(() => {
+    parsed = false;
+    return null;
+  })) as MediaAnalysisPayload | null;
+  const failure = classifyContactResourceResponse({
+    status: response.status,
+    parsed,
+    okFlag: data?.ok,
+  });
+  return failure || !data
+    ? { ok: false, failure: failure ?? "malformed" }
+    : { ok: true, data };
+}
 
 function formatLabel(value: string | null | undefined): string {
   if (typeof value !== "string" || value.trim().length === 0) return "Unknown";
@@ -72,7 +102,9 @@ function formatTimestamp(value: string | null | undefined): string | null {
   }).format(parsed);
 }
 
-function confidenceClasses(confidence: "low" | "medium" | "high" | null | undefined): string {
+function confidenceClasses(
+  confidence: "low" | "medium" | "high" | null | undefined,
+): string {
   switch (confidence) {
     case "high":
       return "border-emerald-200 bg-emerald-50 text-emerald-700";
@@ -85,12 +117,18 @@ function confidenceClasses(confidence: "low" | "medium" | "high" | null | undefi
   }
 }
 
-export function ContactMediaAnalysisClient({ contactId }: Props): React.ReactElement {
-  const [payload, setPayload] = React.useState<MediaAnalysisPayload | null>(null);
-  const [status, setStatus] = React.useState<"idle" | "loading" | "error">("loading");
+export function ContactMediaAnalysisClient({
+  contactId,
+  canRefresh = false,
+  includeQuotePrice = false,
+}: Props): React.ReactElement {
+  const [payload, setPayload] = React.useState<MediaAnalysisPayload | null>(
+    null,
+  );
+  const [status, setStatus] = React.useState<AnalysisStatus>("loading");
   const [refreshing, setRefreshing] = React.useState(false);
 
-  const requestUrl = `/api/team/contacts/media-analysis?contactId=${encodeURIComponent(contactId)}&includeQuotePrice=1`;
+  const requestUrl = `/api/team/contacts/media-analysis?contactId=${encodeURIComponent(contactId)}${includeQuotePrice ? "&includeQuotePrice=1" : ""}`;
 
   const refreshAnalysis = React.useCallback(async () => {
     setRefreshing(true);
@@ -99,15 +137,40 @@ export function ContactMediaAnalysisClient({ contactId }: Props): React.ReactEle
         method: "POST",
         headers: { Accept: "application/json" },
       });
-      const data = (await response.json().catch(() => null)) as MediaAnalysisPayload | null;
-      if (!response.ok || !data?.ok) {
-        throw new Error(typeof data?.error === "string" ? data.error : "Unable to load media analysis.");
+      const result = await readAnalysisResponse(response);
+      if (!result.ok) {
+        setPayload(null);
+        setStatus(result.failure);
+        return;
       }
-      setPayload(data);
-      setStatus("idle");
+      setPayload(result.data);
+      setStatus(result.data.analysis ? "ready" : "empty");
     } catch {
       setPayload(null);
-      setStatus("error");
+      setStatus("unavailable");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [requestUrl]);
+
+  const retryAnalysis = React.useCallback(async () => {
+    setRefreshing(true);
+    setStatus("loading");
+    try {
+      const response = await fetch(requestUrl, {
+        headers: { Accept: "application/json" },
+      });
+      const result = await readAnalysisResponse(response);
+      if (!result.ok) {
+        setPayload(null);
+        setStatus(result.failure);
+        return;
+      }
+      setPayload(result.data);
+      setStatus(result.data.analysis ? "ready" : "empty");
+    } catch {
+      setPayload(null);
+      setStatus("unavailable");
     } finally {
       setRefreshing(false);
     }
@@ -123,16 +186,18 @@ export function ContactMediaAnalysisClient({ contactId }: Props): React.ReactEle
           headers: { Accept: "application/json" },
           signal: controller.signal,
         });
-        const data = (await response.json().catch(() => null)) as MediaAnalysisPayload | null;
-        if (!response.ok || !data?.ok) {
-          throw new Error(typeof data?.error === "string" ? data.error : "Unable to load media analysis.");
+        const result = await readAnalysisResponse(response);
+        if (!result.ok) {
+          setPayload(null);
+          setStatus(result.failure);
+          return;
         }
-        setPayload(data);
-        setStatus("idle");
+        setPayload(result.data);
+        setStatus(result.data.analysis ? "ready" : "empty");
       } catch (error) {
         if ((error as { name?: string }).name === "AbortError") return;
         setPayload(null);
-        setStatus("error");
+        setStatus("unavailable");
       }
     })();
 
@@ -141,32 +206,52 @@ export function ContactMediaAnalysisClient({ contactId }: Props): React.ReactEle
 
   const analysis = payload?.analysis ?? null;
   const updatedAt = formatTimestamp(analysis?.updatedAt);
-  const sceneGroups = Array.isArray(analysis?.sceneGroupsJson) ? analysis.sceneGroupsJson : [];
+  const sceneGroups = Array.isArray(analysis?.sceneGroupsJson)
+    ? analysis.sceneGroupsJson
+    : [];
   const statedScope = analysis?.statedScopeJson ?? null;
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Media Estimate</div>
-          <div className="text-sm font-semibold text-slate-900">Media analysis</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Media Estimate
+          </div>
+          <div className="text-sm font-semibold text-slate-900">
+            Media analysis
+          </div>
         </div>
-        <button
-          type="button"
-          className={teamButtonClass("secondary", "sm")}
-          onClick={() => void refreshAnalysis()}
-          disabled={refreshing}
-        >
-          {refreshing ? "Refreshing..." : "Refresh"}
-        </button>
+        {canRefresh ? (
+          <button
+            type="button"
+            className={teamButtonClass("secondary", "sm")}
+            onClick={() => void refreshAnalysis()}
+            disabled={refreshing}
+          >
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
+        ) : null}
       </div>
 
-      <div className="mt-3 space-y-3 text-xs text-slate-600">
+      <div className="mt-3 space-y-3 text-xs text-slate-600" aria-live="polite">
         {status === "loading" ? (
           <div>Loading media analysis...</div>
-        ) : status === "error" ? (
-          <div className="text-rose-600">Unable to load media analysis.</div>
-        ) : analysis ? (
+        ) : status !== "ready" && status !== "empty" ? (
+          <div className="space-y-2 text-rose-600" role="alert">
+            <p>{contactResourceFailureMessage("media analysis", status)}</p>
+            {status !== "forbidden" && status !== "not-found" ? (
+              <button
+                type="button"
+                className={teamButtonClass("secondary", "sm")}
+                onClick={() => void retryAnalysis()}
+                disabled={refreshing}
+              >
+                Retry media analysis
+              </button>
+            ) : null}
+          </div>
+        ) : status === "ready" && analysis ? (
           <>
             {analysis.summary ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
@@ -199,21 +284,38 @@ export function ContactMediaAnalysisClient({ contactId }: Props): React.ReactEle
 
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div>
-                <div className="font-semibold text-slate-700">Visible estimate</div>
-                <div>{formatLabel(analysis.visibleVolumeRange ?? analysis.visibleVolumeBucket)}</div>
+                <div className="font-semibold text-slate-700">
+                  Visible estimate
+                </div>
+                <div>
+                  {formatLabel(
+                    analysis.visibleVolumeRange ?? analysis.visibleVolumeBucket,
+                  )}
+                </div>
               </div>
               <div>
-                <div className="font-semibold text-slate-700">Merged estimate</div>
-                <div>{formatLabel(analysis.mergedVolumeRange ?? analysis.mergedVolumeBucket)}</div>
+                <div className="font-semibold text-slate-700">
+                  Merged estimate
+                </div>
+                <div>
+                  {formatLabel(
+                    analysis.mergedVolumeRange ?? analysis.mergedVolumeBucket,
+                  )}
+                </div>
               </div>
               <div>
-                <div className="font-semibold text-slate-700">Customer-selected size</div>
+                <div className="font-semibold text-slate-700">
+                  Customer-selected size
+                </div>
                 <div>{formatLabel(statedScope?.perceivedSize)}</div>
               </div>
               <div>
-                <div className="font-semibold text-slate-700">Add-ons found</div>
+                <div className="font-semibold text-slate-700">
+                  Add-ons found
+                </div>
                 <div>
-                  Mattress {analysis.visibleMattressCount ?? 0} • Paint {analysis.visiblePaintCanCount ?? 0} • Tires{" "}
+                  Mattress {analysis.visibleMattressCount ?? 0} • Paint{" "}
+                  {analysis.visiblePaintCanCount ?? 0} • Tires{" "}
                   {analysis.visibleTireCount ?? 0}
                 </div>
               </div>
@@ -224,12 +326,20 @@ export function ContactMediaAnalysisClient({ contactId }: Props): React.ReactEle
                 <div className="font-semibold text-slate-700">Scene groups</div>
                 <div className="mt-1 space-y-1">
                   {sceneGroups.slice(0, 4).map((group, index) => (
-                    <div key={group.id ?? `${group.label ?? "scene"}-${index}`} className="rounded-xl bg-slate-50 px-3 py-2">
+                    <div
+                      key={group.id ?? `${group.label ?? "scene"}-${index}`}
+                      className="rounded-xl bg-slate-50 px-3 py-2"
+                    >
                       <div className="font-medium text-slate-700">
-                        {group.label ?? `Scene ${index + 1}`} {typeof group.mediaCount === "number" ? `(${group.mediaCount} media)` : ""}
+                        {group.label ?? `Scene ${index + 1}`}{" "}
+                        {typeof group.mediaCount === "number"
+                          ? `(${group.mediaCount} media)`
+                          : ""}
                       </div>
                       {Array.isArray(group.notes) && group.notes.length > 0 ? (
-                        <div className="mt-1 text-[11px] text-slate-500">{group.notes.join(" ")}</div>
+                        <div className="mt-1 text-[11px] text-slate-500">
+                          {group.notes.join(" ")}
+                        </div>
                       ) : null}
                     </div>
                   ))}
@@ -239,7 +349,9 @@ export function ContactMediaAnalysisClient({ contactId }: Props): React.ReactEle
 
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div>
-                <div className="font-semibold text-slate-700">Missing views</div>
+                <div className="font-semibold text-slate-700">
+                  Missing views
+                </div>
                 <div>{formatList(analysis.missingViews)}</div>
               </div>
               <div>
@@ -248,17 +360,26 @@ export function ContactMediaAnalysisClient({ contactId }: Props): React.ReactEle
               </div>
             </div>
 
-            {Array.isArray(statedScope?.unpicturedScopeSignals) && statedScope.unpicturedScopeSignals.length > 0 ? (
+            {Array.isArray(statedScope?.unpicturedScopeSignals) &&
+            statedScope.unpicturedScopeSignals.length > 0 ? (
               <div>
-                <div className="font-semibold text-slate-700">Unpictured scope hints</div>
+                <div className="font-semibold text-slate-700">
+                  Unpictured scope hints
+                </div>
                 <div>{statedScope.unpicturedScopeSignals.join(", ")}</div>
               </div>
             ) : null}
 
-            {updatedAt ? <div className="text-[11px] text-slate-500">Updated {updatedAt}</div> : null}
+            {updatedAt ? (
+              <div className="text-[11px] text-slate-500">
+                Updated {updatedAt}
+              </div>
+            ) : null}
           </>
         ) : (
-          <div>No media analysis on file yet.</div>
+          <div role="status">
+            No media analysis has been created for this contact yet.
+          </div>
         )}
       </div>
     </div>

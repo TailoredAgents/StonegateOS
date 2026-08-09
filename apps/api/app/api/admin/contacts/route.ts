@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import {
   getDb,
   contacts,
+  contactProperties,
   properties,
   appointments,
   quotes,
@@ -10,16 +11,32 @@ import {
   crmTasks,
 } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../web/admin";
 import { normalizePhone } from "../../web/utils";
 import { forwardGeocode } from "@/lib/geocode";
+import {
+  isPropertyAddressConflict,
+  normalizePropertyAddress,
+} from "@/lib/property-write";
 import {
   getContactAssigneeMap,
   setContactAssignee,
 } from "@/lib/contact-assignees";
 import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 import type { SQL } from "drizzle-orm";
-import { and, asc, desc, eq, inArray, ilike, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  ilike,
+  isNull,
+  isNotNull,
+  or,
+  sql,
+} from "drizzle-orm";
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 200;
@@ -80,10 +97,7 @@ function extractPgMeta(error: unknown): { code?: string; constraint?: string } {
   if (directCode || directConstraint)
     return { code: directCode, constraint: directConstraint };
 
-  const cause =
-    direct && isRecord(direct["cause"])
-      ? (direct["cause"] as Record<string, unknown>)
-      : null;
+  const cause = direct && isRecord(direct["cause"]) ? direct["cause"] : null;
   const causeCode =
     cause && typeof cause["code"] === "string" ? cause["code"] : undefined;
   const causeConstraint =
@@ -97,9 +111,19 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.read");
+  if (permissionError) return permissionError;
 
   const db = getDb();
   const { searchParams } = request.nextUrl;
+  const deletedOnly = searchParams.get("deleted") === "only";
+  if (deletedOnly) {
+    const restorePermissionError = await requirePermission(
+      request,
+      "contacts.restore",
+    );
+    if (restorePermissionError) return restorePermissionError;
+  }
   const rawSearch = searchParams.get("q");
   const contactIdRaw = searchParams.get("contactId");
   const contactIdFilter =
@@ -117,7 +141,20 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   let propertyContactIds: string[] = [];
   if (likePattern) {
-    const propertyMatches = await db
+    const associationMatches = await db
+      .select({ contactId: contactProperties.contactId })
+      .from(contactProperties)
+      .innerJoin(properties, eq(contactProperties.propertyId, properties.id))
+      .where(
+        or(
+          ilike(properties.addressLine1, likePattern),
+          ilike(properties.addressLine2, likePattern),
+          ilike(properties.city, likePattern),
+          ilike(properties.state, likePattern),
+          ilike(properties.postalCode, likePattern),
+        ),
+      );
+    const compatibilityMatches = await db
       .select({ contactId: properties.contactId })
       .from(properties)
       .where(
@@ -129,13 +166,18 @@ export async function GET(request: NextRequest): Promise<Response> {
           ilike(properties.postalCode, likePattern),
         ),
       );
-    propertyContactIds = propertyMatches
+    propertyContactIds = [...associationMatches, ...compatibilityMatches]
       .map((row) => row.contactId)
       .filter((id): id is string => Boolean(id));
     propertyContactIds = Array.from(new Set(propertyContactIds));
   }
 
-  const filters: SQL<unknown>[] = [];
+  // Soft-deleted contacts stay linked for recovery and historical records.
+  // They are excluded by default and are exposed only through the explicit,
+  // separately permission-gated recovery query.
+  const filters: SQL<unknown>[] = [
+    deletedOnly ? isNotNull(contacts.deletedAt) : isNull(contacts.deletedAt),
+  ];
 
   if (contactIdFilter) {
     filters.push(eq(contacts.id, contactIdFilter));
@@ -187,6 +229,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     phoneE164: contacts.phoneE164,
     salespersonMemberId: contacts.salespersonMemberId,
     source: contacts.source,
+    deletedAt: contacts.deletedAt,
+    purgeEligibleAt: contacts.purgeEligibleAt,
     createdAt: contacts.createdAt,
     updatedAt: contacts.updatedAt,
   } as const;
@@ -199,6 +243,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     phone: contacts.phone,
     phoneE164: contacts.phoneE164,
     source: contacts.source,
+    deletedAt: contacts.deletedAt,
+    purgeEligibleAt: contacts.purgeEligibleAt,
     createdAt: contacts.createdAt,
     updatedAt: contacts.updatedAt,
   } as const;
@@ -212,6 +258,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     phoneE164: string | null;
     salespersonMemberId: string | null;
     source: string | null;
+    deletedAt: Date | null;
+    purgeEligibleAt: Date | null;
     createdAt: Date;
     updatedAt: Date;
   }> = [];
@@ -255,22 +303,44 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const contactIds = contactRows.map((row) => row.id);
 
-  const propertyRows =
+  const propertySelection = {
+    id: properties.id,
+    addressLine1: properties.addressLine1,
+    addressLine2: properties.addressLine2,
+    city: properties.city,
+    state: properties.state,
+    postalCode: properties.postalCode,
+    createdAt: properties.createdAt,
+  } as const;
+  const associatedPropertyRows =
     contactIds.length > 0
       ? await db
           .select({
-            id: properties.id,
-            contactId: properties.contactId,
-            addressLine1: properties.addressLine1,
-            addressLine2: properties.addressLine2,
-            city: properties.city,
-            state: properties.state,
-            postalCode: properties.postalCode,
-            createdAt: properties.createdAt,
+            ...propertySelection,
+            contactId: contactProperties.contactId,
           })
+          .from(contactProperties)
+          .innerJoin(
+            properties,
+            eq(contactProperties.propertyId, properties.id),
+          )
+          .where(inArray(contactProperties.contactId, contactIds))
+      : [];
+  const compatibilityPropertyRows =
+    contactIds.length > 0
+      ? await db
+          .select({ ...propertySelection, contactId: properties.contactId })
           .from(properties)
           .where(inArray(properties.contactId, contactIds))
       : [];
+  const propertyRows = Array.from(
+    new Map(
+      [...associatedPropertyRows, ...compatibilityPropertyRows].map((row) => [
+        `${row.contactId ?? "unlinked"}:${row.id}`,
+        row,
+      ]),
+    ).values(),
+  );
 
   const pipelineRows =
     contactIds.length > 0
@@ -453,6 +523,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       phoneE164: contact.phoneE164,
       salespersonMemberId: contact.salespersonMemberId ?? null,
       source: contact.source ?? null,
+      deletedAt: contact.deletedAt?.toISOString() ?? null,
+      recoverableUntil: contact.purgeEligibleAt?.toISOString() ?? null,
       createdAt: contact.createdAt.toISOString(),
       updatedAt: contact.updatedAt.toISOString(),
       lastActivityAt: lastActivity ? lastActivity.toISOString() : null,
@@ -500,6 +572,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.write");
+  if (permissionError) return permissionError;
 
   const payload = (await request.json().catch(() => null)) as unknown;
   if (!payload || typeof payload !== "object") {
@@ -601,9 +675,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   try {
     const result = await db.transaction(async (tx) => {
-      const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(
-        tx as any,
-      );
+      const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(tx);
       const baseValues: typeof contacts.$inferInsert = {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
@@ -691,52 +763,83 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
 
       if (normalizedSalespersonMemberId !== undefined) {
-        const shouldFallback =
-          !("salespersonMemberId" in contact) ||
-          (contact as { salespersonMemberId?: unknown }).salespersonMemberId ===
-            null;
+        const shouldFallback = contact.salespersonMemberId == null;
         if (shouldFallback) {
           await setContactAssignee(tx, {
             contactId: contact.id,
             memberId: normalizedSalespersonMemberId,
             actorId: actor.id ?? null,
           });
-          (contact as any).salespersonMemberId = normalizedSalespersonMemberId;
+          contact.salespersonMemberId = normalizedSalespersonMemberId;
         }
       }
 
       let property: typeof properties.$inferSelect | null = null;
+      let propertyCreated = false;
       if (hasProperty) {
-        const geo = await forwardGeocode({
-          addressLine1: (addressLine1 as string).trim(),
-          city: (city as string).trim(),
-          state: (state as string).trim().slice(0, 2).toUpperCase(),
-          postalCode: (postalCode as string).trim(),
+        const normalizedAddress = normalizePropertyAddress({
+          addressLine1: addressLine1 as string,
+          addressLine2: typeof addressLine2 === "string" ? addressLine2 : null,
+          city: city as string,
+          state: state as string,
+          postalCode: postalCode as string,
         });
+        const geo = await forwardGeocode(normalizedAddress);
 
-        const [createdProperty] = await tx
-          .insert(properties)
+        const [existingProperty] = await tx
+          .select()
+          .from(properties)
+          .where(eq(properties.addressKey, normalizedAddress.addressKey))
+          .limit(1);
+        property = existingProperty ?? null;
+
+        if (!property) {
+          const [createdProperty] = await tx
+            .insert(properties)
+            .values({
+              contactId: contact.id,
+              addressKey: normalizedAddress.addressKey,
+              addressLine1: normalizedAddress.addressLine1,
+              addressLine2: normalizedAddress.addressLine2,
+              city: normalizedAddress.city,
+              state: normalizedAddress.state,
+              postalCode: normalizedAddress.postalCode,
+              lat:
+                geo?.lat !== undefined && geo?.lat !== null
+                  ? geo.lat.toString()
+                  : null,
+              lng:
+                geo?.lng !== undefined && geo?.lng !== null
+                  ? geo.lng.toString()
+                  : null,
+            })
+            .onConflictDoNothing()
+            .returning();
+          property = createdProperty ?? null;
+          propertyCreated = Boolean(property);
+        }
+
+        if (!property) {
+          const [concurrentProperty] = await tx
+            .select()
+            .from(properties)
+            .where(eq(properties.addressKey, normalizedAddress.addressKey))
+            .limit(1);
+          property = concurrentProperty ?? null;
+        }
+
+        if (!property) {
+          throw new Error("property_resolve_failed");
+        }
+
+        await tx
+          .insert(contactProperties)
           .values({
             contactId: contact.id,
-            addressLine1: (addressLine1 as string).trim(),
-            addressLine2:
-              typeof addressLine2 === "string" && addressLine2.trim().length
-                ? addressLine2.trim()
-                : null,
-            city: (city as string).trim(),
-            state: (state as string).trim().slice(0, 2).toUpperCase(),
-            postalCode: (postalCode as string).trim(),
-            lat:
-              geo?.lat !== undefined && geo?.lat !== null
-                ? geo.lat.toString()
-                : null,
-            lng:
-              geo?.lng !== undefined && geo?.lng !== null
-                ? geo.lng.toString()
-                : null,
+            propertyId: property.id,
+            relationship: "customer",
           })
-          .returning();
-        property = createdProperty ?? null;
+          .onConflictDoNothing();
       }
 
       await tx
@@ -761,10 +864,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         });
       }
 
-      return { contact, property };
+      return { contact, property, propertyCreated };
     });
 
-    const { contact, property } = result;
+    const { contact, property, propertyCreated } = result;
 
     await recordAuditEvent({
       actor,
@@ -780,10 +883,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     if (property?.id) {
       await recordAuditEvent({
         actor,
-        action: "property.created",
+        action: propertyCreated ? "property.created" : "property.linked",
         entityType: "property",
         entityId: property.id,
-        meta: { contactId: contact.id },
+        meta: { contactId: contact.id, propertyCreated },
       });
     }
 
@@ -795,7 +898,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         email: contact.email,
         phone: contact.phone,
         phoneE164: contact.phoneE164,
-        salespersonMemberId: (contact as any).salespersonMemberId ?? null,
+        salespersonMemberId: contact.salespersonMemberId ?? null,
         createdAt: contact.createdAt.toISOString(),
         updatedAt: contact.updatedAt.toISOString(),
         pipeline: {
@@ -817,6 +920,17 @@ export async function POST(request: NextRequest): Promise<Response> {
     });
   } catch (error) {
     const meta = extractPgMeta(error);
+    if (isPropertyAddressConflict(error)) {
+      return NextResponse.json(
+        {
+          error: "property_already_exists",
+          message:
+            "A property with this street, state, and postal code already exists.",
+        },
+        { status: 409 },
+      );
+    }
+
     if (meta.code === "23505") {
       const normalizedEmail =
         typeof email === "string" && email.trim().length ? email.trim() : null;

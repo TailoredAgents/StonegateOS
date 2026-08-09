@@ -1,5 +1,7 @@
 import type { NextRequest } from "next/server";
 import { getDb, auditLogs } from "@/db";
+import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
+import { getVerifiedRequestActor } from "@/lib/verified-actor-context";
 
 export type AuditActorType = "human" | "ai" | "system" | "worker";
 
@@ -8,26 +10,36 @@ export type AuditActor = {
   id?: string | null;
   role?: string | null;
   label?: string | null;
+  sessionId?: string | null;
+  authMethod?:
+    | "team_session"
+    | "break_glass"
+    | "partner_session"
+    | "service"
+    | null;
 };
 
-const ACTOR_TYPE_SET = new Set<AuditActorType>(["human", "ai", "system", "worker"]);
+export type AuditOutcome = "attempted" | "succeeded" | "denied" | "failed";
 
 export function getAuditActorFromRequest(request: NextRequest): AuditActor {
-  const rawType = request.headers.get("x-actor-type") ?? undefined;
-  const type = rawType && ACTOR_TYPE_SET.has(rawType as AuditActorType)
-    ? (rawType as AuditActorType)
-    : undefined;
+  const verified = getVerifiedRequestActor(request);
+  if (verified) {
+    return {
+      type: verified.type,
+      id: verified.id,
+      role: verified.role,
+      label: verified.label,
+      sessionId: verified.sessionId,
+      authMethod: verified.authMethod,
+    };
+  }
 
-  const actorId = request.headers.get("x-actor-id");
-  const actorRole = request.headers.get("x-actor-role");
-  const actorLabel = request.headers.get("x-actor-label");
-
-  return {
-    type,
-    id: actorId && actorId.trim().length > 0 ? actorId : undefined,
-    role: actorRole && actorRole.trim().length > 0 ? actorRole : undefined,
-    label: actorLabel && actorLabel.trim().length > 0 ? actorLabel : undefined
-  };
+  // Actor headers are caller assertions, not an audit identity. Permission
+  // resolution binds verified human and named-service identities to the
+  // request before protected work runs. Anything else is deliberately
+  // recorded as an unattributed system event instead of trusting spoofable
+  // headers.
+  return {};
 }
 
 export async function recordAuditEvent(input: {
@@ -36,19 +48,39 @@ export async function recordAuditEvent(input: {
   entityType: string;
   entityId?: string | null;
   meta?: Record<string, unknown> | null;
+  correlationId?: string | null;
+  requiredPermissions?: string[] | null;
+  outcome?: AuditOutcome | null;
+  surface?: string | null;
+  providerOperationId?: string | null;
+  idempotencyKeyHash?: string | null;
 }): Promise<void> {
   const db = getDb();
   const actor = input.actor ?? {};
+  const meta = sanitizeAuditMetadata(input.meta);
+  const inferredOutcome: AuditOutcome = input.action.includes(".denied")
+    ? "denied"
+    : input.action.includes(".failed") || input.action.includes(".blocked")
+      ? "failed"
+      : "succeeded";
 
   await db.insert(auditLogs).values({
     actorType: actor.type ?? "system",
     actorId: actor.id ?? null,
     actorRole: actor.role ?? null,
     actorLabel: actor.label ?? null,
+    sessionId: actor.sessionId ?? null,
+    authMethod: actor.authMethod ?? null,
+    correlationId: input.correlationId ?? null,
+    requiredPermissions: input.requiredPermissions ?? null,
+    outcome: input.outcome ?? inferredOutcome,
+    surface: input.surface ?? null,
+    providerOperationId: input.providerOperationId ?? null,
+    idempotencyKeyHash: input.idempotencyKeyHash ?? null,
     action: input.action,
     entityType: input.entityType,
     entityId: input.entityId ?? null,
-    meta: input.meta ?? null,
-    createdAt: new Date()
+    meta,
+    createdAt: new Date(),
   });
 }

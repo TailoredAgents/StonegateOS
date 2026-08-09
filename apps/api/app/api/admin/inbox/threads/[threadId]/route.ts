@@ -1,6 +1,17 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { asc, eq, inArray, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  lt,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
 import {
   getDb,
   conversationThreads,
@@ -22,6 +33,12 @@ import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import {
+  buildInboxThreadMessagePageMetadata,
+  parseInboxThreadId,
+  parseInboxThreadMessageQuery,
+  type InboxThreadMessageKey,
+} from "@/lib/inbox-thread-message-pagination";
 
 const THREAD_STATUS = ["open", "pending", "closed"] as const;
 const CLOSE_REASONS = ["lost", "do_not_contact", "closed"] as const;
@@ -38,6 +55,37 @@ function isCloseReason(value: string | null): value is CloseReason {
   return value ? (CLOSE_REASONS as readonly string[]).includes(value) : false;
 }
 
+function invalidMessagePage(field: string, message: string): NextResponse {
+  return NextResponse.json(
+    { error: "invalid_message_pagination", field, message },
+    { status: 422, headers: { "Cache-Control": "no-store" } },
+  );
+}
+
+function staleMessagePage(): NextResponse {
+  return NextResponse.json(
+    {
+      error: "stale_message_cursor",
+      message:
+        "That conversation page changed while it was open. Return to the newest messages and try again.",
+      retryable: true,
+    },
+    { status: 409, headers: { "Cache-Control": "no-store" } },
+  );
+}
+
+function messageCreatedAtBefore(timestamp: string) {
+  return sql<boolean>`${conversationMessages.createdAt} < ${timestamp}::timestamptz`;
+}
+
+function messageCreatedAtAfter(timestamp: string) {
+  return sql<boolean>`${conversationMessages.createdAt} > ${timestamp}::timestamptz`;
+}
+
+function messageCreatedAtEquals(timestamp: string) {
+  return sql<boolean>`${conversationMessages.createdAt} = ${timestamp}::timestamptz`;
+}
+
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ threadId: string }> }
@@ -48,10 +96,35 @@ export async function GET(
   const permissionError = await requirePermission(request, "messages.read");
   if (permissionError) return permissionError;
 
-  const { threadId } = await context.params;
-  if (!threadId) {
-    return NextResponse.json({ error: "thread_id_required" }, { status: 400 });
+  const { threadId: rawThreadId } = await context.params;
+  const parsedThreadId = parseInboxThreadId(rawThreadId);
+  if (!parsedThreadId.ok) {
+    return NextResponse.json(
+      {
+        error: parsedThreadId.error,
+        field: "threadId",
+        message: parsedThreadId.message,
+      },
+      {
+        status: parsedThreadId.status,
+        headers: { "Cache-Control": "no-store" },
+      },
+    );
   }
+  const { threadId } = parsedThreadId;
+
+  const parsedMessageQuery = parseInboxThreadMessageQuery(
+    request.nextUrl.searchParams,
+    threadId,
+  );
+  if (!parsedMessageQuery.ok) {
+    return invalidMessagePage(
+      parsedMessageQuery.field,
+      parsedMessageQuery.message,
+    );
+  }
+  const { limit: messageLimit, cursor: messageCursor } =
+    parsedMessageQuery.query;
 
   const db = getDb();
   const [threadRow] = await db
@@ -150,7 +223,34 @@ export async function GET(
     createdAt: row.createdAt.toISOString()
   }));
 
-  const messageRows = await db
+  const snapshotCondition = messageCursor
+    ? or(
+        messageCreatedAtBefore(messageCursor.snapshotCreatedAt),
+        and(
+          messageCreatedAtEquals(messageCursor.snapshotCreatedAt),
+          lte(conversationMessages.id, messageCursor.snapshotId),
+        ),
+      )
+    : undefined;
+  const anchorCondition = messageCursor
+    ? messageCursor.direction === "older"
+      ? or(
+          messageCreatedAtBefore(messageCursor.anchorCreatedAt),
+          and(
+            messageCreatedAtEquals(messageCursor.anchorCreatedAt),
+            lt(conversationMessages.id, messageCursor.anchorId),
+          ),
+        )
+      : or(
+          messageCreatedAtAfter(messageCursor.anchorCreatedAt),
+          and(
+            messageCreatedAtEquals(messageCursor.anchorCreatedAt),
+            gt(conversationMessages.id, messageCursor.anchorId),
+          ),
+        )
+    : undefined;
+
+  const fetchedMessageRows = await db
     .select({
       id: conversationMessages.id,
       threadId: conversationMessages.threadId,
@@ -168,7 +268,10 @@ export async function GET(
       sentAt: conversationMessages.sentAt,
       receivedAt: conversationMessages.receivedAt,
       metadata: conversationMessages.metadata,
-      createdAt: conversationMessages.createdAt,
+      createdAtKey: sql<string>`to_char(
+        ${conversationMessages.createdAt} AT TIME ZONE 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+      )`.as("message_created_at_key"),
       participantType: conversationParticipants.participantType,
       participantName: conversationParticipants.displayName,
       participantTeamName: teamMembers.name,
@@ -179,10 +282,112 @@ export async function GET(
     .leftJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
     .leftJoin(teamMembers, eq(conversationParticipants.teamMemberId, teamMembers.id))
     .leftJoin(contacts, eq(conversationParticipants.contactId, contacts.id))
-    .where(eq(conversationMessages.threadId, threadId))
-    .orderBy(asc(conversationMessages.createdAt));
+    .where(
+      and(
+        eq(conversationMessages.threadId, threadId),
+        snapshotCondition,
+        anchorCondition,
+      ),
+    )
+    .orderBy(
+      ...(messageCursor?.direction === "newer"
+        ? [asc(conversationMessages.createdAt), asc(conversationMessages.id)]
+        : [desc(conversationMessages.createdAt), desc(conversationMessages.id)]),
+    )
+    .limit(messageLimit + 1);
 
-  const messageIds = messageRows.map((row) => row.id);
+  const hasExtraInRequestedDirection =
+    fetchedMessageRows.length > messageLimit;
+  const requestedMessageRows = hasExtraInRequestedDirection
+    ? fetchedMessageRows.slice(0, messageLimit)
+    : fetchedMessageRows;
+  const visibleMessageRows =
+    messageCursor?.direction === "newer"
+      ? requestedMessageRows
+      : [...requestedMessageRows].reverse();
+
+  if (messageCursor && visibleMessageRows.length === 0) {
+    return staleMessagePage();
+  }
+
+  const snapshot: InboxThreadMessageKey | null = messageCursor
+    ? {
+        createdAt: messageCursor.snapshotCreatedAt,
+        id: messageCursor.snapshotId,
+      }
+    : fetchedMessageRows[0]
+      ? {
+          createdAt: fetchedMessageRows[0].createdAtKey,
+          id: fetchedMessageRows[0].id,
+        }
+      : null;
+  let hasOlder =
+    messageCursor?.direction === "newer"
+      ? false
+      : hasExtraInRequestedDirection;
+  let hasNewer =
+    messageCursor?.direction === "newer"
+      ? hasExtraInRequestedDirection
+      : false;
+
+  if (messageCursor && snapshot && visibleMessageRows.length > 0) {
+    if (messageCursor.direction === "older") {
+      const newestVisible = visibleMessageRows.at(-1)!;
+      const [newerRow] = await db
+        .select({ id: conversationMessages.id })
+        .from(conversationMessages)
+        .where(
+          and(
+            eq(conversationMessages.threadId, threadId),
+            snapshotCondition,
+            or(
+              messageCreatedAtAfter(newestVisible.createdAtKey),
+              and(
+                messageCreatedAtEquals(newestVisible.createdAtKey),
+                gt(conversationMessages.id, newestVisible.id),
+              ),
+            ),
+          ),
+        )
+        .limit(1);
+      hasNewer = Boolean(newerRow);
+    } else {
+      const oldestVisible = visibleMessageRows[0]!;
+      const [olderRow] = await db
+        .select({ id: conversationMessages.id })
+        .from(conversationMessages)
+        .where(
+          and(
+            eq(conversationMessages.threadId, threadId),
+            snapshotCondition,
+            or(
+              messageCreatedAtBefore(oldestVisible.createdAtKey),
+              and(
+                messageCreatedAtEquals(oldestVisible.createdAtKey),
+                lt(conversationMessages.id, oldestVisible.id),
+              ),
+            ),
+          ),
+        )
+        .limit(1);
+      hasOlder = Boolean(olderRow);
+    }
+  }
+
+  const messagePage = buildInboxThreadMessagePageMetadata({
+    threadId,
+    limit: messageLimit,
+    visible: visibleMessageRows.map((row) => ({
+      createdAt: row.createdAtKey,
+      id: row.id,
+    })),
+    snapshot,
+    position: messageCursor ? "history" : "newest",
+    hasOlder,
+    hasNewer,
+  });
+
+  const messageIds = visibleMessageRows.map((row) => row.id);
   const deliveryRows =
     messageIds.length > 0
       ? await db
@@ -196,7 +401,10 @@ export async function GET(
           })
           .from(messageDeliveryEvents)
           .where(inArray(messageDeliveryEvents.messageId, messageIds))
-          .orderBy(asc(messageDeliveryEvents.occurredAt))
+          .orderBy(
+            asc(messageDeliveryEvents.occurredAt),
+            asc(messageDeliveryEvents.id),
+          )
       : [];
 
   const deliveryMap = new Map<string, typeof deliveryRows>();
@@ -207,7 +415,7 @@ export async function GET(
     deliveryMap.get(event.messageId)!.push(event);
   }
 
-  const messages = messageRows.map((row) => {
+  const messages = visibleMessageRows.map((row) => {
     const participantName =
       row.participantName ??
       row.participantTeamName ??
@@ -231,7 +439,7 @@ export async function GET(
       sentAt: row.sentAt ? row.sentAt.toISOString() : null,
       receivedAt: row.receivedAt ? row.receivedAt.toISOString() : null,
       metadata: row.metadata ?? null,
-      createdAt: row.createdAt.toISOString(),
+      createdAt: row.createdAtKey,
       deliveryEvents:
         deliveryMap.get(row.id)?.map((event) => ({
           id: event.id,
@@ -252,50 +460,71 @@ export async function GET(
         ? rawLastInbound
         : null;
 
-  return NextResponse.json({
-    thread: {
-      id: threadRow.id,
-      status: threadRow.status,
-      state: threadRow.state,
-      channel: threadRow.channel,
-      subject: threadRow.subject ?? null,
-      lastMessagePreview: threadRow.lastMessagePreview ?? null,
-      lastMessageAt: threadRow.lastMessageAt ? threadRow.lastMessageAt.toISOString() : null,
-      updatedAt: threadRow.updatedAt ? threadRow.updatedAt.toISOString() : null,
-      createdAt: threadRow.createdAt.toISOString(),
-      lastInboundAt: lastInboundIso,
-      stateUpdatedAt: threadRow.stateUpdatedAt ? threadRow.stateUpdatedAt.toISOString() : null,
-      attentionHandledAt: threadRow.attentionHandledAt ? threadRow.attentionHandledAt.toISOString() : null,
-      closedReason: threadRow.closedReason ?? null,
-      closedAt: threadRow.closedAt ? threadRow.closedAt.toISOString() : null,
-      doNotContact: threadRow.doNotContact === true,
-      doNotContactReason: threadRow.doNotContactReason ?? null,
-      contact: threadRow.contactId
-        ? {
-            id: threadRow.contactId,
-            name: contactName || "Contact",
-            email: threadRow.contactEmail ?? null,
-            phone: threadRow.contactPhoneE164 ?? threadRow.contactPhone ?? null
-          }
-        : null,
-      property: threadRow.propertyId
-        ? {
-            id: threadRow.propertyId,
-            addressLine1: threadRow.propertyAddressLine1 ?? "",
-            city: threadRow.propertyCity ?? "",
-            state: threadRow.propertyState ?? "",
-            postalCode: threadRow.propertyPostalCode ?? "",
-            outOfArea
-          }
-        : null,
-      leadId: threadRow.leadId ?? null,
-      assignedTo: threadRow.assignedTo
-        ? { id: threadRow.assignedTo, name: threadRow.assignedName ?? "Assigned" }
-        : null
+  return NextResponse.json(
+    {
+      ok: true,
+      thread: {
+        id: threadRow.id,
+        status: threadRow.status,
+        state: threadRow.state,
+        channel: threadRow.channel,
+        subject: threadRow.subject ?? null,
+        lastMessagePreview: threadRow.lastMessagePreview ?? null,
+        lastMessageAt: threadRow.lastMessageAt
+          ? threadRow.lastMessageAt.toISOString()
+          : null,
+        updatedAt: threadRow.updatedAt
+          ? threadRow.updatedAt.toISOString()
+          : null,
+        createdAt: threadRow.createdAt.toISOString(),
+        lastInboundAt: lastInboundIso,
+        stateUpdatedAt: threadRow.stateUpdatedAt
+          ? threadRow.stateUpdatedAt.toISOString()
+          : null,
+        attentionHandledAt: threadRow.attentionHandledAt
+          ? threadRow.attentionHandledAt.toISOString()
+          : null,
+        closedReason: threadRow.closedReason ?? null,
+        closedAt: threadRow.closedAt
+          ? threadRow.closedAt.toISOString()
+          : null,
+        doNotContact: threadRow.doNotContact === true,
+        doNotContactReason: threadRow.doNotContactReason ?? null,
+        contact: threadRow.contactId
+          ? {
+              id: threadRow.contactId,
+              name: contactName || "Contact",
+              email: threadRow.contactEmail ?? null,
+              phone:
+                threadRow.contactPhoneE164 ?? threadRow.contactPhone ?? null,
+            }
+          : null,
+        property: threadRow.propertyId
+          ? {
+              id: threadRow.propertyId,
+              addressLine1: threadRow.propertyAddressLine1 ?? "",
+              city: threadRow.propertyCity ?? "",
+              state: threadRow.propertyState ?? "",
+              postalCode: threadRow.propertyPostalCode ?? "",
+              outOfArea,
+            }
+          : null,
+        leadId: threadRow.leadId ?? null,
+        assignedTo: threadRow.assignedTo
+          ? {
+              id: threadRow.assignedTo,
+              name: threadRow.assignedName ?? "Assigned",
+            }
+          : null,
+      },
+      participants,
+      messages,
+      messagePage,
     },
-    participants,
-    messages
-  });
+    {
+      headers: { "Cache-Control": "private, no-store" },
+    },
+  );
 }
 
 export async function PATCH(
@@ -305,13 +534,25 @@ export async function PATCH(
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "messages.send");
+  const permissionError = await requirePermission(request, "messages.write");
   if (permissionError) return permissionError;
 
-  const { threadId } = await context.params;
-  if (!threadId) {
-    return NextResponse.json({ error: "thread_id_required" }, { status: 400 });
+  const { threadId: rawThreadId } = await context.params;
+  const parsedThreadId = parseInboxThreadId(rawThreadId);
+  if (!parsedThreadId.ok) {
+    return NextResponse.json(
+      {
+        error: parsedThreadId.error,
+        field: "threadId",
+        message: parsedThreadId.message,
+      },
+      {
+        status: parsedThreadId.status,
+        headers: { "Cache-Control": "no-store" },
+      },
+    );
   }
+  const { threadId } = parsedThreadId;
 
   const payload = (await request.json().catch(() => null)) as {
     action?: string;
@@ -408,6 +649,13 @@ export async function PATCH(
   updates["updatedAt"] = now;
 
   const thread = await db.transaction(async (tx) => {
+    if (requestedCloseReason === "do_not_contact" && existingThread.contactId) {
+      // Match the final provider-dispatch lock order so a DNC choice committed
+      // before dispatch begins is authoritative for every queued message.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${existingThread.contactId}, 0))`
+      );
+    }
     const [updatedThread] = await tx
       .update(conversationThreads)
       .set(updates)

@@ -1,11 +1,50 @@
+import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi } from "@/app/team/lib/api";
+import { requireTeamPrincipal } from "@/app/api/team/auth";
+import { callAdminApiAs } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 
-const ADMIN_COOKIE = "myst-admin-session";
-
 export const dynamic = "force-dynamic";
+
+type MutationPayload = {
+  ok?: boolean;
+  code?: string;
+  error?: string;
+  message?: string;
+};
+
+function formString(form: FormData, key: string): string {
+  const value = form.get(key);
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function mutationKey(form: FormData, action: string): string {
+  return (
+    formString(form, "idempotencyKey") ||
+    `commissions:reimbursement:${action}:${randomUUID()}`
+  );
+}
+
+async function readMutationFeedback(
+  response: Response,
+  fallback: string,
+): Promise<{ ok: boolean; message: string }> {
+  const payload = (await response
+    .json()
+    .catch(() => null)) as MutationPayload | null;
+  if (!response.ok || payload?.ok !== true) {
+    return {
+      ok: false,
+      message:
+        payload?.message?.trim() ||
+        payload?.error?.replace(/_/g, " ") ||
+        payload?.code?.replace(/_/g, " ") ||
+        fallback,
+    };
+  }
+  return { ok: true, message: "" };
+}
 
 function parseMoneyToCents(value: FormDataEntryValue | null): number | null {
   if (typeof value !== "string") return null;
@@ -29,20 +68,13 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ payoutRunId: string }> },
 ): Promise<Response> {
-  const jar = request.cookies;
-  const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
+  const auth = await requireTeamPrincipal(request, {
+    permissions: "commissions.manage",
+    redirectTo: new URL("/team?tab=commissions", request.url),
+  });
+  if (!auth.ok) return auth.response;
+
   const redirectTo = getSafeRedirectUrl(request, "/team?tab=commissions");
-
-  if (!hasOwner) {
-    const response = NextResponse.redirect(redirectTo, 303);
-    response.cookies.set({
-      name: "myst-flash-error",
-      value: "Owner login required.",
-      path: "/",
-    });
-    return response;
-  }
-
   const { payoutRunId } = await context.params;
   if (!payoutRunId) {
     const response = NextResponse.redirect(redirectTo, 303);
@@ -55,38 +87,35 @@ export async function POST(
   }
 
   const form = await request.formData();
-  const action = form.get("action");
+  const action = formString(form, "action");
+  const expectedVersion = formString(form, "expectedVersion");
 
   if (action === "delete") {
     const adjustmentId = form.get("adjustmentId");
-    const apiResponse = await callAdminApi(
+    const apiResponse = await callAdminApiAs(
+      auth.principal,
       `/api/admin/commissions/payout-runs/${payoutRunId}/reimbursements`,
       {
         method: "DELETE",
+        headers: {
+          "Idempotency-Key": mutationKey(form, "delete"),
+          ...(expectedVersion ? { "If-Match": `"${expectedVersion}"` } : {}),
+        },
         body: JSON.stringify({ adjustmentId }),
       },
     );
 
     const response = NextResponse.redirect(redirectTo, 303);
-    if (!apiResponse.ok) {
-      let message = "Unable to delete reimbursement";
-      try {
-        const data = (await apiResponse.json()) as {
-          error?: string;
-          message?: string;
-        };
-        if (typeof data.message === "string" && data.message.trim().length > 0) {
-          message = data.message;
-        } else if (
-          typeof data.error === "string" &&
-          data.error.trim().length > 0
-        ) {
-          message = data.error.replace(/_/g, " ");
-        }
-      } catch {
-        // ignore
-      }
-      response.cookies.set({ name: "myst-flash-error", value: message, path: "/" });
+    const feedback = await readMutationFeedback(
+      apiResponse,
+      "Unable to delete reimbursement",
+    );
+    if (!feedback.ok) {
+      response.cookies.set({
+        name: "myst-flash-error",
+        value: feedback.message,
+        path: "/",
+      });
       return response;
     }
 
@@ -171,39 +200,30 @@ export async function POST(
     requestBody.set("receiptFilename", receiptFile.name || "receipt");
   }
 
-  const apiResponse = await callAdminApi(
+  const apiResponse = await callAdminApiAs(
+    auth.principal,
     `/api/admin/commissions/payout-runs/${payoutRunId}/reimbursements`,
     {
       method: "POST",
+      headers: {
+        "Idempotency-Key": mutationKey(form, "create"),
+        ...(expectedVersion ? { "If-Match": `"${expectedVersion}"` } : {}),
+      },
       body: requestBody,
     },
   );
 
   const response = NextResponse.redirect(redirectTo, 303);
-  if (!apiResponse.ok) {
-    let message = "Unable to save reimbursement";
-    try {
-      const data = (await apiResponse.json()) as {
-        error?: string;
-        message?: string;
-      };
-      if (data.error === "file_too_large") {
-        message = "Receipt file is too large (max 10MB).";
-      } else if (
-        typeof data.message === "string" &&
-        data.message.trim().length > 0
-      ) {
-        message = data.message;
-      } else if (
-        typeof data.error === "string" &&
-        data.error.trim().length > 0
-      ) {
-        message = data.error.replace(/_/g, " ");
-      }
-    } catch {
-      // ignore
-    }
-    response.cookies.set({ name: "myst-flash-error", value: message, path: "/" });
+  const feedback = await readMutationFeedback(
+    apiResponse,
+    "Unable to save reimbursement",
+  );
+  if (!feedback.ok) {
+    response.cookies.set({
+      name: "myst-flash-error",
+      value: feedback.message,
+      path: "/",
+    });
     return response;
   }
 

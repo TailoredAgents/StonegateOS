@@ -9,17 +9,30 @@ import {
   payoutRuns,
   teamMembers,
 } from "@/db";
-import { getAuditActorFromRequest } from "@/lib/audit";
 import { calculatePayoutRunLiveTotalCents } from "@/lib/payout-run-report";
 import { requirePermission } from "@/lib/permissions";
 import { createOrGetCurrentPayoutRun } from "@/lib/commissions";
+import { normalizePayoutRunMutationError } from "@/lib/payout-run-mutation-http";
+import {
+  claimTeamMutationIdempotency,
+  settleTeamMutationIdempotencyFailure,
+  type TeamMutationIdempotencyClaim,
+  teamMutationIdempotencyReplayResponse,
+} from "@/lib/team-mutation-idempotency";
+import {
+  beginTeamMutation,
+  recordTeamMutationFailure,
+  TeamMutationFailure,
+  teamMutationExceptionResponse,
+  teamMutationResultResponse,
+} from "@/lib/team-mutation";
 import { isAdminRequest } from "../../../web/admin";
 
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "access.manage");
+  const permissionError = await requirePermission(request, "commissions.read");
   if (permissionError) return permissionError;
 
   const db = getDb();
@@ -40,6 +53,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       createdAt: payoutRuns.createdAt,
       lockedAt: payoutRuns.lockedAt,
       paidAt: payoutRuns.paidAt,
+      updatedAt: payoutRuns.updatedAt,
       reportGeneratedAt: payoutRuns.reportGeneratedAt,
     })
     .from(payoutRuns)
@@ -179,6 +193,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         createdAt: run.createdAt.toISOString(),
         lockedAt: run.lockedAt ? run.lockedAt.toISOString() : null,
         paidAt: run.paidAt ? run.paidAt.toISOString() : null,
+        version: run.updatedAt.toISOString(),
         reportGeneratedAt: run.reportGeneratedAt
           ? run.reportGeneratedAt.toISOString()
           : null,
@@ -197,25 +212,72 @@ export async function GET(request: NextRequest): Promise<Response> {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  if (!isAdminRequest(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-  const permissionError = await requirePermission(request, "access.manage");
-  if (permissionError) return permissionError;
+  const boundary = await beginTeamMutation(request, {
+    principalTypes: ["human"],
+    requiredPermissions: ["commissions.manage"],
+    risk: "financial",
+    requiresIdempotency: true,
+    auditAction: "commission.payout_run.created",
+  });
+  if (!boundary.ok) return boundary.response;
+  const { mutation } = boundary;
 
-  const db = getDb();
-  const actor = getAuditActorFromRequest(request);
-  const { payoutRunId } = await createOrGetCurrentPayoutRun(db, {
-    actorId: actor.id ?? null,
-  });
-  const [run] = await db
-    .select({ reportGeneratedAt: payoutRuns.reportGeneratedAt })
-    .from(payoutRuns)
-    .where(eq(payoutRuns.id, payoutRunId))
-    .limit(1);
-  return NextResponse.json({
-    ok: true,
-    payoutRunId,
-    reportGeneratedAt: run?.reportGeneratedAt?.toISOString() ?? null,
-  });
+  let db: ReturnType<typeof getDb> | null = null;
+  let claim: TeamMutationIdempotencyClaim | null = null;
+  try {
+    db = getDb();
+    const claimed = await claimTeamMutationIdempotency(db, mutation, {
+      route: "POST /api/admin/commissions/payout-runs",
+      entityType: "payout_run",
+      entityId: "current_period",
+      payload: { operation: "create_or_refresh_current" },
+    });
+    if (claimed.kind === "replay") {
+      return teamMutationIdempotencyReplayResponse(claimed.replay);
+    }
+    claim = claimed.claim;
+
+    const result = await createOrGetCurrentPayoutRun(db, {
+      actor: mutation.actor,
+      execution: { mutation, claim },
+    });
+    if (!result.mutationResult) {
+      throw new TeamMutationFailure(
+        "internal",
+        "The payout result could not be verified.",
+        { retryable: true },
+      );
+    }
+    return teamMutationResultResponse(
+      result.mutationResult,
+      200,
+      mutation.correlationId,
+    );
+  } catch (rawError) {
+    const error = normalizePayoutRunMutationError(rawError);
+    await recordTeamMutationFailure(mutation, {
+      entityType: "payout_run",
+      entityId: "current_period",
+      code: error.code,
+      metadata: {
+        route: "payout_run_create",
+        boundary: claim ? "execution" : "input",
+      },
+    });
+    if (db && claim) {
+      try {
+        await settleTeamMutationIdempotencyFailure(db, mutation, claim, error);
+      } catch (settlementError) {
+        console.error("[commissions] create_idempotency_settlement_failed", {
+          operationId: mutation.operationId,
+          correlationId: mutation.correlationId,
+          errorName:
+            settlementError instanceof Error
+              ? settlementError.name
+              : "UnknownError",
+        });
+      }
+    }
+    return teamMutationExceptionResponse(error, mutation);
+  }
 }

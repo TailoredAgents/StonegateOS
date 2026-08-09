@@ -4,10 +4,20 @@ import React from "react";
 import type { ContactReminderSummary } from "./contacts.types";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { teamButtonClass } from "./team-ui";
+import {
+  parseReminderMutationSuccess,
+  stableReminderMutationAttempt,
+  type ReminderMutationAttempt,
+} from "../lib/reminder-mutation";
+import {
+  readTeamMutationError,
+  readTeamMutationException,
+} from "../lib/mutation-feedback";
 
 type Props = {
   contactId: string;
   initialReminders: ContactReminderSummary[];
+  readOnly?: boolean;
 };
 
 function formatReminderTimestamp(value: string | null): string {
@@ -19,7 +29,7 @@ function formatReminderTimestamp(value: string | null): string {
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
   }).format(parsed);
 }
 
@@ -36,14 +46,21 @@ function toLocalDateTimeInputValue(iso: string | null): string {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
-export function InboxContactRemindersClient({ contactId, initialReminders }: Props): React.ReactElement {
-  const [reminders, setReminders] = React.useState<ContactReminderSummary[]>(() => initialReminders ?? []);
+export function InboxContactRemindersClient({
+  contactId,
+  initialReminders,
+  readOnly = false,
+}: Props): React.ReactElement {
+  const [reminders, setReminders] = React.useState<ContactReminderSummary[]>(
+    () => initialReminders ?? [],
+  );
   const [showForm, setShowForm] = React.useState(false);
   const [titleDraft, setTitleDraft] = React.useState("Call back");
   const [dueDraft, setDueDraft] = React.useState("");
   const [notesDraft, setNotesDraft] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
   const [completingId, setCompletingId] = React.useState<string | null>(null);
 
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -51,6 +68,11 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
   const [editDueDraft, setEditDueDraft] = React.useState("");
   const [editNotesDraft, setEditNotesDraft] = React.useState("");
   const [editSavingId, setEditSavingId] = React.useState<string | null>(null);
+  const createAttemptRef = React.useRef<ReminderMutationAttempt | null>(null);
+  const editAttemptRef = React.useRef<ReminderMutationAttempt | null>(null);
+  const completionAttemptsRef = React.useRef(
+    new Map<string, ReminderMutationAttempt>(),
+  );
 
   async function submitReminder() {
     if (saving) return;
@@ -73,58 +95,65 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
 
     setSaving(true);
     setError(null);
+    setNotice(null);
+    const fingerprint = JSON.stringify({ contactId, dueAt, notes, title });
+    const attempt = stableReminderMutationAttempt(
+      createAttemptRef.current,
+      fingerprint,
+      `crm-reminder-create:${contactId}`,
+    );
+    createAttemptRef.current = attempt;
 
     try {
       const response = await fetch("/api/team/contacts/reminders", {
         method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "Idempotency-Key": attempt.idempotencyKey,
+        },
         body: JSON.stringify({
           contactId,
           dueAt,
           title,
-          notes: notes.length ? notes : undefined
-        })
+          notes: notes.length ? notes : undefined,
+        }),
       });
 
       if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as unknown;
-        const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
-            ? String((data as Record<string, unknown>)["message"])
-            : "Unable to create reminder. Please try again.";
-        setError(message);
+        setError(
+          await readTeamMutationError(response, "Unable to create reminder"),
+        );
         return;
       }
 
       const data = (await response.json().catch(() => null)) as unknown;
-      const reminder = data && typeof data === "object" ? (data as Record<string, unknown>)["reminder"] : null;
-      const record = reminder && typeof reminder === "object" ? (reminder as Record<string, unknown>) : null;
-      if (
-        typeof record?.["id"] !== "string" ||
-        typeof record?.["title"] !== "string" ||
-        typeof record?.["createdAt"] !== "string" ||
-        typeof record?.["updatedAt"] !== "string"
-      ) {
-        setError("Unable to create reminder. Please try again.");
+      const success = parseReminderMutationSuccess(data, {
+        contactId,
+        status: "open",
+      });
+      if (!success) {
+        setError(
+          "The reminder service returned an unreadable receipt. No success is being claimed; your input is still here. Refresh before retrying.",
+        );
         return;
       }
-
-      const created: ContactReminderSummary = {
-        id: String(record["id"]),
-        title: String(record["title"]),
-        notes: typeof record["notes"] === "string" ? String(record["notes"]) : null,
-        dueAt: typeof record["dueAt"] === "string" ? String(record["dueAt"]) : dueAt,
-        assignedTo: typeof record["assignedTo"] === "string" ? String(record["assignedTo"]) : null,
-        status: record["status"] === "completed" ? "completed" : "open",
-        createdAt: String(record["createdAt"]),
-        updatedAt: String(record["updatedAt"])
-      };
+      const created: ContactReminderSummary = success.data.reminder;
 
       setReminders((prev) => [created, ...prev]);
+      createAttemptRef.current = null;
       setShowForm(false);
       setTitleDraft("Call back");
       setDueDraft("");
       setNotesDraft("");
+      setNotice("Reminder created and notification scheduled.");
+    } catch (caught) {
+      setError(
+        readTeamMutationException(
+          caught,
+          "The reminder service could not be reached. Your reminder was not confirmed; your input is still here so you can retry",
+        ),
+      );
     } finally {
       setSaving(false);
     }
@@ -132,26 +161,63 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
 
   async function completeReminder(taskId: string) {
     if (completingId) return;
+    const reminder = reminders.find((item) => item.id === taskId);
+    if (!reminder) {
+      setError("This reminder is no longer available. Refresh and try again.");
+      return;
+    }
     setCompletingId(taskId);
     setError(null);
+    setNotice(null);
+    const fingerprint = JSON.stringify({
+      status: "completed",
+      taskId,
+      version: reminder.updatedAt,
+    });
+    const attempt = stableReminderMutationAttempt(
+      completionAttemptsRef.current.get(taskId) ?? null,
+      fingerprint,
+      `crm-reminder-complete:${taskId}`,
+    );
+    completionAttemptsRef.current.set(taskId, attempt);
 
     try {
       const response = await fetch(`/api/team/contacts/reminders/${taskId}`, {
         method: "POST",
-        headers: { Accept: "application/json" }
+        headers: {
+          Accept: "application/json",
+          "Idempotency-Key": attempt.idempotencyKey,
+          "If-Match": `"${reminder.updatedAt}"`,
+        },
       });
 
       if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as unknown;
-        const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
-            ? String((data as Record<string, unknown>)["message"])
-            : "Unable to complete reminder. Please try again.";
-        setError(message);
+        setError(
+          await readTeamMutationError(response, "Unable to complete reminder"),
+        );
         return;
       }
-
+      const data = (await response.json().catch(() => null)) as unknown;
+      const success = parseReminderMutationSuccess(data, {
+        status: "completed",
+        taskId,
+      });
+      if (!success) {
+        setError(
+          "The reminder service returned an unreadable completion receipt. No success is being claimed; refresh before retrying.",
+        );
+        return;
+      }
       setReminders((prev) => prev.filter((reminder) => reminder.id !== taskId));
+      completionAttemptsRef.current.delete(taskId);
+      setNotice("Reminder completed.");
+    } catch (caught) {
+      setError(
+        readTeamMutationException(
+          caught,
+          "The reminder service could not be reached. Completion was not confirmed; refresh before retrying",
+        ),
+      );
     } finally {
       setCompletingId(null);
     }
@@ -163,6 +229,7 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
     setEditDueDraft(toLocalDateTimeInputValue(reminder.dueAt));
     setEditNotesDraft(reminder.notes ?? "");
     setError(null);
+    setNotice(null);
   }
 
   function cancelEdit() {
@@ -174,8 +241,15 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
 
   async function saveEdit(taskId: string) {
     if (editSavingId) return;
+    const current = reminders.find((item) => item.id === taskId);
+    if (!current) {
+      setError("This reminder is no longer available. Refresh and try again.");
+      return;
+    }
 
-    const title = editTitleDraft.trim().length ? editTitleDraft.trim() : "Call back";
+    const title = editTitleDraft.trim().length
+      ? editTitleDraft.trim()
+      : "Call back";
     const dueRaw = editDueDraft.trim();
     if (!dueRaw) {
       setError("Pick a date/time for the reminder.");
@@ -192,46 +266,67 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
 
     setEditSavingId(taskId);
     setError(null);
+    setNotice(null);
+    const fingerprint = JSON.stringify({
+      dueAt,
+      notes,
+      taskId,
+      title,
+      version: current.updatedAt,
+    });
+    const attempt = stableReminderMutationAttempt(
+      editAttemptRef.current,
+      fingerprint,
+      `crm-reminder-update:${taskId}`,
+    );
+    editAttemptRef.current = attempt;
 
     try {
       const response = await fetch(`/api/team/contacts/reminders/${taskId}`, {
         method: "PATCH",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ title, dueAt, notes })
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "Idempotency-Key": attempt.idempotencyKey,
+          "If-Match": `"${current.updatedAt}"`,
+        },
+        body: JSON.stringify({ title, dueAt, notes }),
       });
 
       if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as unknown;
-        const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
-            ? String((data as Record<string, unknown>)["message"])
-            : "Unable to update reminder. Please try again.";
-        setError(message);
+        setError(
+          await readTeamMutationError(response, "Unable to update reminder"),
+        );
         return;
       }
 
       const data = (await response.json().catch(() => null)) as unknown;
-      const reminder = data && typeof data === "object" ? (data as Record<string, unknown>)["reminder"] : null;
-      const record = reminder && typeof reminder === "object" ? (reminder as Record<string, unknown>) : null;
-      const updatedAt = typeof record?.["updatedAt"] === "string" ? String(record["updatedAt"]) : null;
-      const serverDueAt = typeof record?.["dueAt"] === "string" ? String(record["dueAt"]) : dueAt;
-      const serverNotes = typeof record?.["notes"] === "string" ? String(record["notes"]) : null;
+      const success = parseReminderMutationSuccess(data, {
+        status: "open",
+        taskId,
+      });
+      if (!success) {
+        setError(
+          "The reminder service returned an unreadable update receipt. No success is being claimed; your changes remain available. Refresh before retrying.",
+        );
+        return;
+      }
+      const updated = success.data.reminder;
 
       setReminders((prev) =>
-        prev.map((existing) =>
-          existing.id === taskId
-            ? {
-                ...existing,
-                title,
-                dueAt: serverDueAt,
-                notes: serverNotes ?? (notes.length ? notes : null),
-                updatedAt: updatedAt ?? existing.updatedAt
-              }
-            : existing
-        )
+        prev.map((existing) => (existing.id === taskId ? updated : existing)),
       );
 
+      editAttemptRef.current = null;
       cancelEdit();
+      setNotice("Reminder updated.");
+    } catch (caught) {
+      setError(
+        readTeamMutationException(
+          caught,
+          "The reminder service could not be reached. Your changes were not confirmed and remain available to retry",
+        ),
+      );
     } finally {
       setEditSavingId(null);
     }
@@ -245,22 +340,29 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
   });
 
   return (
-    <div className="space-y-3">
+    <section aria-label="Contact reminders" className="space-y-3">
       <div className="flex items-center justify-between">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Reminders</div>
-        <button
-          type="button"
-          onClick={() => {
-            setShowForm((prev) => !prev);
-            setError(null);
-          }}
-          className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-        >
-          {showForm ? "Close" : "Add"}
-        </button>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Reminders
+        </div>
+        {!readOnly ? (
+          <button
+            type="button"
+            onClick={() => {
+              setShowForm((prev) => !prev);
+              setError(null);
+              setNotice(null);
+            }}
+            className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+          >
+            {showForm ? "Close" : "Add"}
+          </button>
+        ) : (
+          <span className="text-[11px] text-slate-500">Read only</span>
+        )}
       </div>
 
-      {showForm ? (
+      {!readOnly && showForm ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-3">
           <div className="grid gap-3">
             <label className="text-xs font-semibold text-slate-700">
@@ -268,6 +370,7 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
               <input
                 value={titleDraft}
                 onChange={(event) => setTitleDraft(event.target.value)}
+                maxLength={160}
                 className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
             </label>
@@ -285,12 +388,20 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
               <textarea
                 value={notesDraft}
                 onChange={(event) => setNotesDraft(event.target.value)}
+                maxLength={4000}
                 rows={3}
                 className="mt-1 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
             </label>
           </div>
-          {error ? <div className="mt-2 text-xs font-semibold text-rose-600">{error}</div> : null}
+          {error ? (
+            <div
+              className="mt-2 text-xs font-semibold text-rose-600"
+              role="alert"
+            >
+              {error}
+            </div>
+          ) : null}
           <div className="mt-3 flex items-center justify-end gap-2">
             <button
               type="button"
@@ -303,14 +414,29 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
             >
               Cancel
             </button>
-            <button type="button" className={teamButtonClass("primary", "sm")} onClick={submitReminder} disabled={saving}>
+            <button
+              type="button"
+              className={teamButtonClass("primary", "sm")}
+              onClick={() => void submitReminder()}
+              disabled={saving}
+            >
               {saving ? "Saving…" : "Save"}
             </button>
           </div>
         </div>
       ) : null}
 
-      {!showForm && error ? <div className="text-xs font-semibold text-rose-600">{error}</div> : null}
+      {!showForm && error ? (
+        <div className="text-xs font-semibold text-rose-600" role="alert">
+          {error}
+        </div>
+      ) : null}
+
+      {notice ? (
+        <div className="text-xs font-semibold text-emerald-700" role="status">
+          {notice}
+        </div>
+      ) : null}
 
       {sorted.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 text-xs text-slate-500">
@@ -321,60 +447,90 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
           {sorted.slice(0, 10).map((reminder) => {
             const isEditing = editingId === reminder.id;
             return (
-              <div key={reminder.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+              <div
+                key={reminder.id}
+                className="rounded-2xl border border-slate-200 bg-white p-3"
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-900">{reminder.title}</div>
-                    <div className="mt-1 text-[11px] font-semibold text-slate-500">{formatReminderTimestamp(reminder.dueAt)}</div>
+                    <div className="text-sm font-semibold text-slate-900">
+                      {reminder.title}
+                    </div>
+                    <div className="mt-1 text-[11px] font-semibold text-slate-500">
+                      {formatReminderTimestamp(reminder.dueAt)}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {!isEditing ? (
+                  {!readOnly ? (
+                    <div className="flex items-center gap-2">
+                      {!isEditing ? (
+                        <button
+                          type="button"
+                          onClick={() => startEdit(reminder)}
+                          className="min-h-11 rounded-lg px-2 text-xs font-semibold text-slate-600 hover:text-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                        >
+                          Edit
+                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        onClick={() => startEdit(reminder)}
-                        className="text-xs font-semibold text-slate-600 hover:text-primary-700"
+                        onClick={() => void completeReminder(reminder.id)}
+                        disabled={completingId === reminder.id}
+                        className="min-h-11 rounded-lg px-2 text-xs font-semibold text-emerald-700 hover:text-emerald-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:opacity-60"
                       >
-                        Edit
+                        {completingId === reminder.id ? "Done…" : "Done"}
                       </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => completeReminder(reminder.id)}
-                      disabled={completingId === reminder.id}
-                      className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 disabled:opacity-60"
-                    >
-                      {completingId === reminder.id ? "Done…" : "Done"}
-                    </button>
-                  </div>
+                    </div>
+                  ) : null}
                 </div>
 
-                {isEditing ? (
+                {!readOnly && isEditing ? (
                   <div className="mt-2 space-y-2">
-                    <input
-                      value={editTitleDraft}
-                      onChange={(event) => setEditTitleDraft(event.target.value)}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                    />
-                    <input
-                      type="datetime-local"
-                      value={editDueDraft}
-                      onChange={(event) => setEditDueDraft(event.target.value)}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                    />
-                    <textarea
-                      value={editNotesDraft}
-                      onChange={(event) => setEditNotesDraft(event.target.value)}
-                      rows={3}
-                      className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                    />
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Title
+                      <input
+                        value={editTitleDraft}
+                        onChange={(event) =>
+                          setEditTitleDraft(event.target.value)
+                        }
+                        maxLength={160}
+                        className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                      />
+                    </label>
+                    <label className="block text-xs font-semibold text-slate-700">
+                      When
+                      <input
+                        type="datetime-local"
+                        value={editDueDraft}
+                        onChange={(event) =>
+                          setEditDueDraft(event.target.value)
+                        }
+                        className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                      />
+                    </label>
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Notes (optional)
+                      <textarea
+                        value={editNotesDraft}
+                        onChange={(event) =>
+                          setEditNotesDraft(event.target.value)
+                        }
+                        maxLength={4000}
+                        rows={3}
+                        className="mt-1 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                      />
+                    </label>
                     <div className="flex items-center justify-end gap-2">
-                      <button type="button" className={teamButtonClass("secondary", "sm")} onClick={cancelEdit}>
+                      <button
+                        type="button"
+                        className={teamButtonClass("secondary", "sm")}
+                        onClick={cancelEdit}
+                      >
                         Cancel
                       </button>
                       <button
                         type="button"
                         className={teamButtonClass("primary", "sm")}
-                        onClick={() => saveEdit(reminder.id)}
+                        onClick={() => void saveEdit(reminder.id)}
                         disabled={editSavingId === reminder.id}
                       >
                         {editSavingId === reminder.id ? "Saving…" : "Save"}
@@ -382,14 +538,15 @@ export function InboxContactRemindersClient({ contactId, initialReminders }: Pro
                     </div>
                   </div>
                 ) : reminder.notes ? (
-                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{reminder.notes}</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                    {reminder.notes}
+                  </p>
                 ) : null}
               </div>
             );
           })}
         </div>
       )}
-    </div>
+    </section>
   );
 }
-

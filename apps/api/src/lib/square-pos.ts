@@ -10,12 +10,14 @@ type SquarePosStatePayload = {
   attemptId: string;
   nonce: string;
   exp: number;
+  b?: string;
 };
 
 export type VerifiedSquarePosState = {
   attemptId: string;
   nonce: string;
   expiresAt: Date;
+  bindingHash?: string;
 };
 
 export type SquarePosPlatform = "ios" | "android";
@@ -58,16 +60,14 @@ function requiredString(value: string | undefined, name: string): string {
 }
 
 function sign(encodedPayload: string, secret: string): Buffer {
-  return crypto
-    .createHmac("sha256", secret)
-    .update(encodedPayload)
-    .digest();
+  return crypto.createHmac("sha256", secret).update(encodedPayload).digest();
 }
 
 export function createSquarePosState(input: {
   attemptId: string;
   secret: string;
   nonce?: string;
+  bindingHash?: string;
   now?: Date;
   ttlSeconds?: number;
 }): string {
@@ -92,7 +92,11 @@ export function createSquarePosState(input: {
     attemptId: input.attemptId,
     nonce,
     exp: Math.floor(now.getTime() / 1000) + ttlSeconds,
+    ...(input.bindingHash ? { b: input.bindingHash } : {}),
   };
+  if (input.bindingHash && !/^[0-9a-f]{64}$/u.test(input.bindingHash)) {
+    throw new Error("invalid_state_binding_hash");
+  }
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString(
     "base64url",
   );
@@ -140,7 +144,9 @@ export function verifySquarePosState(input: {
     typeof record["nonce"] !== "string" ||
     !/^[A-Za-z0-9_-]{16,128}$/.test(record["nonce"]) ||
     typeof record["exp"] !== "number" ||
-    !Number.isInteger(record["exp"])
+    !Number.isInteger(record["exp"]) ||
+    (record["b"] !== undefined &&
+      (typeof record["b"] !== "string" || !/^[0-9a-f]{64}$/u.test(record["b"])))
   ) {
     return null;
   }
@@ -151,6 +157,7 @@ export function verifySquarePosState(input: {
     attemptId: record["attemptId"],
     nonce: record["nonce"],
     expiresAt: new Date(record["exp"] * 1000),
+    ...(typeof record["b"] === "string" ? { bindingHash: record["b"] } : {}),
   };
 }
 
@@ -232,10 +239,7 @@ export function buildSquarePosLaunchUrl(input: {
   return `${values.join(";")}`;
 }
 
-function readParam(
-  params: URLSearchParams,
-  key: string,
-): string | null {
+function readParam(params: URLSearchParams, key: string): string | null {
   const value = params.get(key)?.trim();
   return value ? value : null;
 }
@@ -294,10 +298,7 @@ export function parseSquarePosCallback(
     ),
     status: errorCode ? "error" : transactionId ? "ok" : "unknown",
     errorCode,
-    errorDescription: readParam(
-      params,
-      `${androidPrefix}ERROR_DESCRIPTION`,
-    ),
+    errorDescription: readParam(params, `${androidPrefix}ERROR_DESCRIPTION`),
   };
 }
 

@@ -12,9 +12,13 @@ import {
   crmTasks,
   getDb,
   salesAgentNextActions,
-  properties
 } from "@/db";
-import { requirePermission } from "@/lib/permissions";
+import { loadContactPropertiesForContacts } from "@/lib/property-write";
+import {
+  permissionMatches,
+  requirePermission,
+  resolvePermissionContext,
+} from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getDisqualifiedContactIds, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
 import {
@@ -46,6 +50,11 @@ import { loadQuoteAccuracyOutcomeSummary } from "@/lib/quote-accuracy-outcomes";
 import { loadQuoteHotWindowOutcomeSummary } from "@/lib/quote-hot-window-outcomes";
 import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
 import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
+import {
+  buildSalesHqSlaContext,
+  salesHqAutomationModeLabel,
+  salesHqDraftAgeMinutes,
+} from "@/lib/sales-hq-operational-context";
 
 function parseLeadId(notes: string | null): string | null {
   if (!notes) return null;
@@ -206,8 +215,16 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "appointments.read");
+  const permissionError = await requirePermission(request, "sales.read");
   if (permissionError) return permissionError;
+  const permissionContext = await resolvePermissionContext(request);
+  const canPersistQueuePreparation = Boolean(
+    permissionContext.source === "service" &&
+      permissionContext.principalLabel === "sales-draft-prep" &&
+      permissionContext.permissions.some((permission) =>
+        permissionMatches(permission, "sales.write"),
+      ),
+  );
 
   const db = getDb();
   const config = await getSalesScorecardConfig(db);
@@ -306,21 +323,19 @@ export async function GET(request: NextRequest): Promise<Response> {
   );
 
   if (contactIdsForLookup.length) {
-    const propertyRows = await db
-      .select({
-        contactId: properties.contactId,
-        postalCode: properties.postalCode,
-        createdAt: properties.createdAt
-      })
-      .from(properties)
-      .where(inArray(properties.contactId, contactIdsForLookup.slice(0, 500)))
-      .orderBy(desc(properties.createdAt))
-      .limit(1000);
+    const propertyLinks = await loadContactPropertiesForContacts(
+      db,
+      contactIdsForLookup.slice(0, 500),
+      { limit: 1_000 },
+    );
 
-    for (const row of propertyRows) {
-      if (!row.contactId || !row.postalCode) continue;
-      if (postalCodeByContactId.has(row.contactId)) continue;
-      postalCodeByContactId.set(row.contactId, row.postalCode);
+    for (const link of propertyLinks) {
+      if (!link.property.postalCode) continue;
+      if (postalCodeByContactId.has(link.contactId)) continue;
+      postalCodeByContactId.set(
+        link.contactId,
+        link.property.postalCode,
+      );
     }
   }
 
@@ -340,7 +355,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   for (const row of dedupedRows) {
     const rawKind = parseTaskKind(row.notes ?? null, row.title);
-    let kind: "speed_to_lead" | "follow_up" = rawKind;
+    const kind: "speed_to_lead" | "follow_up" = rawKind;
     let title = row.title;
     let effectiveDueAt = row.dueAt instanceof Date ? row.dueAt : null;
     if (rawKind === "speed_to_lead" && row.contactCreatedAt instanceof Date) {
@@ -418,21 +433,19 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const missingPropertyLookup = missingContactIds.filter((contactId) => !postalCodeByContactId.has(contactId));
   if (missingPropertyLookup.length) {
-    const propertyRows = await db
-      .select({
-        contactId: properties.contactId,
-        postalCode: properties.postalCode,
-        createdAt: properties.createdAt
-      })
-      .from(properties)
-      .where(inArray(properties.contactId, missingPropertyLookup.slice(0, 500)))
-      .orderBy(desc(properties.createdAt))
-      .limit(1000);
+    const propertyLinks = await loadContactPropertiesForContacts(
+      db,
+      missingPropertyLookup.slice(0, 500),
+      { limit: 1_000 },
+    );
 
-    for (const row of propertyRows) {
-      if (!row.contactId || !row.postalCode) continue;
-      if (postalCodeByContactId.has(row.contactId)) continue;
-      postalCodeByContactId.set(row.contactId, row.postalCode);
+    for (const link of propertyLinks) {
+      if (!link.property.postalCode) continue;
+      if (postalCodeByContactId.has(link.contactId)) continue;
+      postalCodeByContactId.set(
+        link.contactId,
+        link.property.postalCode,
+      );
     }
   }
 
@@ -461,6 +474,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       .where(
         and(
           eq(auditLogs.action, "call.started"),
+          eq(auditLogs.outcome, "succeeded"),
           eq(auditLogs.entityType, "contact"),
           eq(auditLogs.actorId, memberId),
           isNotNull(auditLogs.entityId),
@@ -636,8 +650,11 @@ export async function GET(request: NextRequest): Promise<Response> {
   const threadByContactId = new Map<
     string,
     {
-      any: { threadId: string; channel: string } | null;
-      byChannel: Map<string, { threadId: string; channel: string }>;
+      any: { threadId: string; channel: string; lastTouchAt: string | null } | null;
+      byChannel: Map<
+        string,
+        { threadId: string; channel: string; lastTouchAt: string | null }
+      >;
     }
   >();
   const dmAutopilotByThreadId = new Map<string, { ready: boolean; meaningfulInboundCount: number }>();
@@ -668,54 +685,56 @@ export async function GET(request: NextRequest): Promise<Response> {
         return;
       }
 
+      const existingMemory = await getSalesAgentMemory(db, contactId);
+      const builtMemory = buildSalesAgentMemory(liveContext);
       const memory =
-        (await getSalesAgentMemory(db, contactId)) ??
-        (await upsertSalesAgentMemory(db, {
-          contactId,
-          leadId: liveContext.latestLead?.id ?? null,
-          memory: buildSalesAgentMemory(liveContext),
-        }));
+        existingMemory ??
+        (canPersistQueuePreparation
+          ? (await upsertSalesAgentMemory(db, {
+              contactId,
+              leadId: liveContext.latestLead?.id ?? null,
+              memory: builtMemory,
+            })) ?? builtMemory
+          : builtMemory);
 
-      if (!memory) {
-        rebuiltNextActionMap.set(contactId, null);
-        return;
-      }
-
-      const nextAction = await upsertSalesAgentNextAction(db, {
-        contactId,
-        leadId: liveContext.latestLead?.id ?? null,
-        action: buildSalesAgentNextAction({
-          context: liveContext,
-          memory: {
-            summary: memory.summary,
-            customerIntent: memory.customerIntent,
-            jobType: memory.jobType,
-            pricingContext: memory.pricingContext,
-            objections: memory.objections,
-            channelPreference: memory.channelPreference,
-            lastPromisedNextStep: memory.lastPromisedNextStep,
-            lastHumanSummary: memory.lastHumanSummary,
-            bookingReadiness: memory.bookingReadiness,
-            quoteConfidence: memory.quoteConfidence,
-            missingFields: memory.missingFields,
-            factsJson: (memory.factsJson as Record<string, unknown> | null) ?? {},
-          },
-          appointmentPreservationOutcomeSummary,
-          appointmentReminderOutcomeSummary,
-          channelHandoffOutcomeSummary,
-          closeLoopOutcomeSummary,
-          firstResponseOutcomeSummary,
-          missingInfoOutcomeSummary,
-          objectionSaveOutcomeSummary,
-          mediaOutcomeSummary,
-          quoteAccuracyOutcomeSummary,
-          quoteHotWindowOutcomeSummary,
-          quoteCloseOutcomeSummary,
-          reactivationOutcomeSummary,
-          quoteFollowupOutcomeSummary,
-          autopilotPolicy,
-        }),
+      const builtNextAction = buildSalesAgentNextAction({
+        context: liveContext,
+        memory: {
+          summary: memory.summary,
+          customerIntent: memory.customerIntent,
+          jobType: memory.jobType,
+          pricingContext: memory.pricingContext,
+          objections: memory.objections,
+          channelPreference: memory.channelPreference,
+          lastPromisedNextStep: memory.lastPromisedNextStep,
+          lastHumanSummary: memory.lastHumanSummary,
+          bookingReadiness: memory.bookingReadiness,
+          quoteConfidence: memory.quoteConfidence,
+          missingFields: memory.missingFields,
+          factsJson: memory.factsJson ?? {},
+        },
+        appointmentPreservationOutcomeSummary,
+        appointmentReminderOutcomeSummary,
+        channelHandoffOutcomeSummary,
+        closeLoopOutcomeSummary,
+        firstResponseOutcomeSummary,
+        missingInfoOutcomeSummary,
+        objectionSaveOutcomeSummary,
+        mediaOutcomeSummary,
+        quoteAccuracyOutcomeSummary,
+        quoteHotWindowOutcomeSummary,
+        quoteCloseOutcomeSummary,
+        reactivationOutcomeSummary,
+        quoteFollowupOutcomeSummary,
+        autopilotPolicy,
       });
+      const nextAction = canPersistQueuePreparation
+        ? await upsertSalesAgentNextAction(db, {
+            contactId,
+            leadId: liveContext.latestLead?.id ?? null,
+            action: builtNextAction,
+          })
+        : builtNextAction;
 
       rebuiltNextActionMap.set(
         contactId,
@@ -726,7 +745,10 @@ export async function GET(request: NextRequest): Promise<Response> {
               priority: nextAction.priority,
               confidence: nextAction.confidence,
               summary: nextAction.summary ?? null,
-              dueAt: nextAction.dueAt instanceof Date ? nextAction.dueAt.toISOString() : null,
+              dueAt:
+                nextAction.dueAt instanceof Date
+                  ? nextAction.dueAt.toISOString()
+                  : nextAction.dueAt ?? null,
             }
           : null,
       );
@@ -779,52 +801,73 @@ export async function GET(request: NextRequest): Promise<Response> {
       if (!row.contactId) continue;
       const current =
         threadByContactId.get(row.contactId) ??
-        { any: null, byChannel: new Map<string, { threadId: string; channel: string }>() };
+        {
+          any: null,
+          byChannel: new Map<
+            string,
+            { threadId: string; channel: string; lastTouchAt: string | null }
+          >(),
+        };
+      const lastTouchAt = row.lastMessageAt?.toISOString() ?? null;
       if (!current.any) {
         current.any = {
           threadId: row.threadId,
           channel: row.channel,
+          lastTouchAt,
         };
       }
       if (!current.byChannel.has(row.channel)) {
         current.byChannel.set(row.channel, {
           threadId: row.threadId,
           channel: row.channel,
+          lastTouchAt,
         });
       }
       threadByContactId.set(row.contactId, current);
     }
 
-    await Promise.all(
-      contactIds.map(async (contactId) => {
-        const nextAction = rebuiltNextActionMap.get(contactId) ?? null;
-        const targetChannel = nextAction?.channel ?? null;
-        if (
-          !targetChannel ||
-          !isSafeDraftPreparationAction(nextAction?.actionType ?? null) ||
-          (targetChannel !== "sms" && targetChannel !== "email" && targetChannel !== "dm")
-        ) {
-          return;
-        }
+    if (canPersistQueuePreparation) {
+      await Promise.all(
+        contactIds.map(async (contactId) => {
+          const nextAction = rebuiltNextActionMap.get(contactId) ?? null;
+          const targetChannel = nextAction?.channel ?? null;
+          if (
+            !targetChannel ||
+            !isSafeDraftPreparationAction(nextAction?.actionType ?? null) ||
+            (targetChannel !== "sms" && targetChannel !== "email" && targetChannel !== "dm")
+          ) {
+            return;
+          }
 
-        const current =
-          threadByContactId.get(contactId) ??
-          { any: null, byChannel: new Map<string, { threadId: string; channel: string }>() };
-        if (current.byChannel.has(targetChannel)) return;
+          const current =
+            threadByContactId.get(contactId) ??
+            {
+              any: null,
+              byChannel: new Map<
+                string,
+                { threadId: string; channel: string; lastTouchAt: string | null }
+              >(),
+            };
+          if (current.byChannel.has(targetChannel)) return;
 
-        const ensuredThreadId = await ensureInboxThreadForContactChannel(db, {
-          contactId,
-          channel: targetChannel,
-          now,
-        });
-        if (!ensuredThreadId) return;
+          const ensuredThreadId = await ensureInboxThreadForContactChannel(db, {
+            contactId,
+            channel: targetChannel,
+            now,
+          });
+          if (!ensuredThreadId) return;
 
-        const targetThread = { threadId: ensuredThreadId, channel: targetChannel };
-        if (!current.any) current.any = targetThread;
-        current.byChannel.set(targetChannel, targetThread);
-        threadByContactId.set(contactId, current);
-      }),
-    );
+          const targetThread = {
+            threadId: ensuredThreadId,
+            channel: targetChannel,
+            lastTouchAt: null,
+          };
+          if (!current.any) current.any = targetThread;
+          current.byChannel.set(targetChannel, targetThread);
+          threadByContactId.set(contactId, current);
+        }),
+      );
+    }
 
     const draftRows = await db
       .select({
@@ -880,7 +923,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
     const contactIdSet = new Set(contactIds);
     for (const row of auditRows) {
-      const meta = (row.meta as Record<string, unknown> | null) ?? null;
+      const meta = row.meta ?? null;
       const metaContactId = getMetaString(meta, "contactId");
       const contactId =
         metaContactId ??
@@ -978,8 +1021,9 @@ export async function GET(request: NextRequest): Promise<Response> {
             ? "Human review required"
           : dmLiveAutopilotBlocked
             ? `Messenger warm-up: ${dmLiveAutopilotState?.meaningfulInboundCount ?? 0} meaningful inbound message${(dmLiveAutopilotState?.meaningfulInboundCount ?? 0) === 1 ? "" : "s"}`
-          : autosendPolicy.reason === "action_requires_full_mode"
-            ? "Partial mode keeps this live reply approval-only"
+          : autosendPolicy.reason === "action_requires_automatic_mode" ||
+              autosendPolicy.reason === "action_requires_full_mode"
+            ? "Assist keeps this live reply approval-only"
             : !autosendPolicyAllowed
               ? "Mode or policy blocked"
           : !plannerDue
@@ -990,7 +1034,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       const agentState = channelMode === "off"
         ? {
             code: "mode_off",
-            label: "Off mode",
+            label: "Off",
             detail: "This channel is drafts only. No automatic sending.",
             tone: "neutral" as const,
           }
@@ -1067,6 +1111,14 @@ export async function GET(request: NextRequest): Promise<Response> {
           liveReplyAllowed,
         },
         closeLoopPolicySummary,
+        operationalContext: {
+          ownerMemberId: memberId,
+          sla: buildSalesHqSlaContext(item),
+          priorityReason: nextAction?.summary ?? item.title,
+          automationLabel: agentState?.label ?? salesHqAutomationModeLabel(channelMode),
+          lastTouchAt: threadInfo?.any?.lastTouchAt ?? null,
+          draftAgeMinutes: salesHqDraftAgeMinutes(draftCreatedAt, now),
+        },
       };
     })
     .sort((a, b) => {
@@ -1082,5 +1134,11 @@ export async function GET(request: NextRequest): Promise<Response> {
       return aDue - bDue;
     });
 
-  return NextResponse.json({ ok: true, memberId, now: now.toISOString(), items: enrichedItems });
+  return NextResponse.json({
+    ok: true,
+    memberId,
+    now: now.toISOString(),
+    nextTaskId: enrichedItems[0]?.id ?? null,
+    items: enrichedItems,
+  });
 }

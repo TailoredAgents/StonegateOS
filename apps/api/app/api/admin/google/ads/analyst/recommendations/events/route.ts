@@ -1,7 +1,12 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
-import { getDb, googleAdsAnalystRecommendationEvents, googleAdsAnalystReports, teamMembers } from "@/db";
+import {
+  getDb,
+  googleAdsAnalystRecommendationEvents,
+  googleAdsAnalystReports,
+  teamMembers,
+} from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../../../web/admin";
 
@@ -19,15 +24,20 @@ function parseLimit(value: string | null): number {
 
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { ok: false, error: "unauthorized" },
+      { status: 401 },
+    );
   }
 
-  const permissionError = await requirePermission(request, "policy.read");
+  const permissionError = await requirePermission(request, "marketing.read");
   if (permissionError) return permissionError;
 
   const url = new URL(request.url);
   const reportIdParam = asString(url.searchParams.get("reportId"));
-  const recommendationIdParam = asString(url.searchParams.get("recommendationId"));
+  const recommendationIdParam = asString(
+    url.searchParams.get("recommendationId"),
+  );
   const limit = parseLimit(url.searchParams.get("limit"));
 
   const db = getDb();
@@ -42,7 +52,12 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   if (!reportId && !recommendationIdParam) {
-    return NextResponse.json({ ok: true, reportId: null, recommendationId: null, items: [] });
+    return NextResponse.json({
+      ok: true,
+      reportId: null,
+      recommendationId: null,
+      items: [],
+    });
   }
 
   const baseQuery = db
@@ -57,16 +72,26 @@ export async function GET(request: NextRequest): Promise<Response> {
       actorMemberId: googleAdsAnalystRecommendationEvents.actorMemberId,
       actorName: teamMembers.name,
       actorSource: googleAdsAnalystRecommendationEvents.actorSource,
-      createdAt: googleAdsAnalystRecommendationEvents.createdAt
+      createdAt: googleAdsAnalystRecommendationEvents.createdAt,
     })
     .from(googleAdsAnalystRecommendationEvents)
-    .leftJoin(teamMembers, eq(teamMembers.id, googleAdsAnalystRecommendationEvents.actorMemberId))
+    .leftJoin(
+      teamMembers,
+      eq(teamMembers.id, googleAdsAnalystRecommendationEvents.actorMemberId),
+    )
     .orderBy(desc(googleAdsAnalystRecommendationEvents.createdAt))
     .limit(limit);
 
   const rows = recommendationIdParam
-    ? await baseQuery.where(eq(googleAdsAnalystRecommendationEvents.recommendationId, recommendationIdParam))
-    : await baseQuery.where(eq(googleAdsAnalystRecommendationEvents.reportId, reportId as string));
+    ? await baseQuery.where(
+        eq(
+          googleAdsAnalystRecommendationEvents.recommendationId,
+          recommendationIdParam,
+        ),
+      )
+    : await baseQuery.where(
+        eq(googleAdsAnalystRecommendationEvents.reportId, reportId as string),
+      );
 
   return NextResponse.json({
     ok: true,
@@ -83,7 +108,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       actorMemberId: row.actorMemberId ?? null,
       actorName: row.actorName ?? null,
       actorSource: row.actorSource,
-      createdAt: row.createdAt.toISOString()
-    }))
+      createdAt: row.createdAt.toISOString(),
+    })),
   });
 }

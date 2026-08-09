@@ -1,30 +1,49 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getDb, instantQuotes, leads } from "@/db";
+import { contacts, getDb, instantQuotes, leads } from "@/db";
 import { listInstantQuoteMediaReadUrls } from "@/lib/appointment-media";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
 
 type RouteContext = {
   params: Promise<{ contactId?: string }>;
 };
 
 function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
-export async function GET(request: NextRequest, context: RouteContext): Promise<Response> {
+export async function GET(
+  request: NextRequest,
+  context: RouteContext,
+): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.read");
+  if (permissionError) return permissionError;
+  const quotePermissionError = await requirePermission(request, "quotes.read");
+  if (quotePermissionError) return quotePermissionError;
 
   const { contactId } = await context.params;
-  const contactIdTrimmed = typeof contactId === "string" ? contactId.trim() : "";
+  const contactIdTrimmed =
+    typeof contactId === "string" ? contactId.trim() : "";
   if (!contactIdTrimmed || !isUuid(contactIdTrimmed)) {
     return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
   }
 
   const db = getDb();
+  const [activeContact] = await db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(and(eq(contacts.id, contactIdTrimmed), isNull(contacts.deletedAt)))
+    .limit(1);
+  if (!activeContact) {
+    return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
+  }
 
   const rows = await db
     .select({
@@ -32,11 +51,16 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       createdAt: instantQuotes.createdAt,
       photoUrls: instantQuotes.photoUrls,
       jobTypes: instantQuotes.jobTypes,
-      perceivedSize: instantQuotes.perceivedSize
+      perceivedSize: instantQuotes.perceivedSize,
     })
     .from(leads)
     .innerJoin(instantQuotes, eq(leads.instantQuoteId, instantQuotes.id))
-    .where(and(eq(leads.contactId, contactIdTrimmed), isNotNull(leads.instantQuoteId)))
+    .where(
+      and(
+        eq(leads.contactId, contactIdTrimmed),
+        isNotNull(leads.instantQuoteId),
+      ),
+    )
     .orderBy(desc(instantQuotes.createdAt))
     .limit(10);
 
@@ -67,13 +91,13 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       quotes
         .flatMap((quote) => quote.photoUrls)
         .map((url) => url.trim())
-        .filter((url) => url.length > 0)
-    )
+        .filter((url) => url.length > 0),
+    ),
   );
 
   return NextResponse.json({
     ok: true,
     quotes,
-    photoUrls: flattenedUrls
+    photoUrls: flattenedUrls,
   });
 }
