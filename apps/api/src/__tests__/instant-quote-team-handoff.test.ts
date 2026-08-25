@@ -5,6 +5,7 @@ import {
   mapInstantQuoteLeadSource,
   mapInstantQuoteLoadSize,
   mapInstantQuoteServices,
+  resolveInstantQuoteAppointmentBookingDetails,
   resolveInstantQuoteTeamHandoff,
   type InstantQuoteHandoffSnapshot,
 } from "@/lib/instant-quote-team-handoff";
@@ -115,7 +116,9 @@ describe("verified Team instant-quote handoff", () => {
     expect(mapInstantQuoteLeadSource("meta_messenger")).toEqual({
       type: "facebook",
     });
-    expect(mapInstantQuoteLeadSource("public_site")).toBeNull();
+    expect(mapInstantQuoteLeadSource("public_site")).toEqual({
+      type: "website",
+    });
     expect(mapInstantQuoteLeadSource("not_google")).toBeNull();
     expect(
       mapInstantQuoteServices([
@@ -125,6 +128,142 @@ describe("verified Team instant-quote handoff", () => {
         "single_item",
       ]),
     ).toEqual(["single-item", "construction-debris"]);
+  });
+
+  it("turns the customer-visible discounted range into CRM booking metadata", () => {
+    expect(
+      resolveInstantQuoteAppointmentBookingDetails({
+        aiResult: {
+          loadFractionEstimate: 0.7,
+          priceLow: 500,
+          priceHigh: 700,
+          priceLowDiscounted: 450,
+          priceHighDiscounted: 630,
+        },
+        perceivedSize: "medium_cleanout",
+        jobTypes: ["furniture"],
+        sourceValues: ["public_site"],
+      }),
+    ).toEqual({
+      serviceType: "junk_removal",
+      source: { type: "website" },
+      pricing: {
+        mode: "range",
+        rangeMinCents: 45_000,
+        rangeMaxCents: 63_000,
+      },
+      loadSize: {
+        kind: "half_to_three_quarters",
+        customLoads: null,
+      },
+    });
+  });
+
+  it("keeps demolition self-bookings valid while carrying their displayed range", () => {
+    expect(
+      resolveInstantQuoteAppointmentBookingDetails({
+        aiResult: {
+          loadFractionEstimate: 0.5,
+          priceLow: 750,
+          priceHigh: 1_400,
+          priceLowDiscounted: 700,
+          priceHighDiscounted: 1_350,
+          meta: {
+            demoType: "concrete",
+            demoSize: "concrete_0_100",
+            haulAway: true,
+          },
+        },
+        perceivedSize: "concrete_0_100",
+        jobTypes: ["demo-hauloff", "demo_concrete"],
+      }),
+    ).toEqual({
+      serviceType: "demolition",
+      source: { type: "website" },
+      pricing: {
+        mode: "range",
+        rangeMinCents: 70_000,
+        rangeMaxCents: 135_000,
+      },
+      demolition: {
+        demoType: "concrete",
+        scopeSize: "concrete_0_100",
+        haulAway: true,
+      },
+    });
+  });
+
+  it("persists server-derived booking details on online appointment inserts and updates", () => {
+    const bookingRoute = apiSource("app/api/junk-quote/book/route.ts");
+    const helperCall = bookingRoute.indexOf(
+      "resolveInstantQuoteAppointmentBookingDetails({",
+    );
+    const appointmentUpdate = bookingRoute.indexOf(
+      ".update(appointments)",
+      helperCall,
+    );
+    const appointmentInsert = bookingRoute.indexOf(
+      ".insert(appointments)",
+      appointmentUpdate,
+    );
+
+    expect(helperCall).toBeGreaterThan(-1);
+    expect(appointmentUpdate).toBeGreaterThan(helperCall);
+    expect(bookingRoute.slice(appointmentUpdate, appointmentInsert)).toContain(
+      "bookingDetails,",
+    );
+    expect(
+      bookingRoute.slice(appointmentInsert, appointmentInsert + 700),
+    ).toContain("bookingDetails,");
+    expect(bookingRoute).not.toContain("body.priceLow");
+    expect(bookingRoute).not.toContain("body.priceHigh");
+  });
+
+  it("stores the same demo discount range that the quote response displays", () => {
+    const demoRoute = apiSource("app/api/demo-quote/route.ts");
+    const discount = demoRoute.indexOf(
+      "const discountAmount = resolveDemoFixedDiscountDollars()",
+    );
+    const storedQuote = demoRoute.indexOf("const storedAiResult", discount);
+    const quoteInsert = demoRoute.indexOf(
+      ".insert(instantQuotes)",
+      storedQuote,
+    );
+
+    expect(discount).toBeGreaterThan(-1);
+    expect(storedQuote).toBeGreaterThan(discount);
+    expect(quoteInsert).toBeGreaterThan(storedQuote);
+    expect(demoRoute.slice(storedQuote, quoteInsert)).toContain(
+      "...quoteWithDisplayDiscount",
+    );
+    expect(demoRoute).toContain("quote: quoteWithDisplayDiscount");
+  });
+
+  it("backfills only active online bookings that still lack CRM quote metadata", () => {
+    const migration = apiSource(
+      "src/db/migrations/0101_online_booking_quote_range_backfill.sql",
+    );
+    const journal = apiSource("src/db/migrations/meta/_journal.json");
+
+    expect(migration).toContain(
+      'appointment."booking_details" IS NULL',
+    );
+    expect(migration).toContain("appointment.\"type\" = 'estimate'");
+    expect(migration).toContain(
+      "appointment.\"status\" IN ('requested', 'confirmed')",
+    );
+    expect(migration).toContain(
+      "quote.\"ai_result\" -> 'priceLowDiscounted'",
+    );
+    expect(migration).toContain(
+      "quote.\"ai_result\" -> 'priceHighDiscounted'",
+    );
+    expect(migration).toContain("'rangeMinCents'");
+    expect(migration).toContain("'rangeMaxCents'");
+    expect(migration).toContain(
+      'AND appointment."booking_details" IS NULL',
+    );
+    expect(journal).toContain("0101_online_booking_quote_range_backfill");
   });
 
   it.each([

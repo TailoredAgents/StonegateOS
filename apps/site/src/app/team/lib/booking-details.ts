@@ -1,4 +1,9 @@
-export type LeadSourceType = "google" | "facebook" | "team_member" | "referral";
+export type LeadSourceType =
+  | "website"
+  | "google"
+  | "facebook"
+  | "team_member"
+  | "referral";
 const MAXIMUM_CENTS = 2_147_483_647;
 const MAXIMUM_CUSTOM_LOADS = 100;
 export type PriceInputMode = "range" | "exact" | "both";
@@ -89,6 +94,7 @@ export const LEAD_SOURCE_OPTIONS: Array<{
   value: LeadSourceType;
   label: string;
 }> = [
+  { value: "website", label: "Website" },
   { value: "google", label: "Google" },
   { value: "facebook", label: "Facebook" },
   { value: "team_member", label: "Team member" },
@@ -162,6 +168,8 @@ export const DUMPSTER_SIZE_OPTIONS: Array<{
 
 export function buildStoredContactSource(input: LeadSourceInput): string {
   switch (input.type) {
+    case "website":
+      return "website";
     case "google":
       return "google";
     case "facebook":
@@ -427,6 +435,8 @@ export function formatStoredContactSource(
   if (!parsed) return null;
 
   switch (parsed.type) {
+    case "website":
+      return "Website";
     case "google":
       return "Google";
     case "facebook":
@@ -452,6 +462,8 @@ export function formatAppointmentLeadSource(
   if (!source) return null;
 
   switch (source.type) {
+    case "website":
+      return "Website";
     case "google":
       return "Google";
     case "facebook":
@@ -602,7 +614,11 @@ export function parseStoredContactSourceValue(
   const normalized = readText(value);
   if (!normalized) return null;
 
-  if (normalized === "google" || normalized === "facebook") {
+  if (
+    normalized === "website" ||
+    normalized === "google" ||
+    normalized === "facebook"
+  ) {
     return { type: normalized };
   }
 
@@ -674,6 +690,7 @@ function parseYesNoBoolean(value: FormDataEntryValue | null): boolean | null {
 
 function isLeadSourceType(value: string): value is LeadSourceType {
   return (
+    value === "website" ||
     value === "google" ||
     value === "facebook" ||
     value === "team_member" ||

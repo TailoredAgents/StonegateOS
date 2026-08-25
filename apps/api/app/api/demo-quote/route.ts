@@ -23,7 +23,10 @@ import {
 } from "@/lib/public-instant-quote-media";
 
 const RAW_ALLOWED_ORIGINS =
-  process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
+  process.env["CORS_ALLOW_ORIGINS"] ??
+  process.env["NEXT_PUBLIC_SITE_URL"] ??
+  process.env["SITE_URL"] ??
+  "*";
 
 function resolveOrigin(requestOrigin: string | null): string {
   if (RAW_ALLOWED_ORIGINS === "*") return "*";
@@ -36,7 +39,10 @@ function resolveOrigin(requestOrigin: string | null): string {
   return allowed[0] ?? "*";
 }
 
-function applyCors(response: NextResponse, requestOrigin: string | null): NextResponse {
+function applyCors(
+  response: NextResponse,
+  requestOrigin: string | null,
+): NextResponse {
   const origin = resolveOrigin(requestOrigin);
   response.headers.set("Access-Control-Allow-Origin", origin);
   response.headers.set("Vary", "Origin");
@@ -46,12 +52,19 @@ function applyCors(response: NextResponse, requestOrigin: string | null): NextRe
   return response;
 }
 
-function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseInit): NextResponse {
+function corsJson(
+  body: unknown,
+  requestOrigin: string | null,
+  init?: ResponseInit,
+): NextResponse {
   return applyCors(NextResponse.json(body, init), requestOrigin);
 }
 
 export function OPTIONS(request: NextRequest): NextResponse {
-  return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
+  return applyCors(
+    new NextResponse(null, { status: 204 }),
+    request.headers.get("origin"),
+  );
 }
 
 function resolveDemoFixedDiscountDollars(): number {
@@ -69,7 +82,7 @@ const DemoTypeSchema = z.enum([
   "drywall",
   "concrete",
   "hot_tub_playset",
-  "other"
+  "other",
 ]);
 
 const DemoSizeSchema = z.enum([
@@ -110,7 +123,7 @@ const DemoSizeSchema = z.enum([
   "other_small",
   "other_medium",
   "other_large",
-  "other_not_sure"
+  "other_not_sure",
 ]);
 
 const RequestSchema = z.object({
@@ -118,7 +131,10 @@ const RequestSchema = z.object({
   contact: z.object({
     name: z.string().min(2),
     phone: z.string().min(7),
-    timeframe: z.enum(["today", "tomorrow", "this_week", "flexible"]).optional().default("flexible")
+    timeframe: z
+      .enum(["today", "tomorrow", "this_week", "flexible"])
+      .optional()
+      .default("flexible"),
   }),
   job: z
     .object({
@@ -128,20 +144,25 @@ const RequestSchema = z.object({
       notes: z.string().optional().nullable(),
       zip: z.string().min(3),
       photoUrls: z
-        .preprocess((value) => (value == null ? undefined : value), z.array(z.string().url().max(2048)).max(10).default([]))
+        .preprocess(
+          (value) => (value == null ? undefined : value),
+          z.array(z.string().url().max(2048)).max(10).default([]),
+        )
         .refine(
           (urls) =>
             urls.every((url) => {
               try {
                 const parsed = new URL(url);
-                return parsed.protocol === "http:" || parsed.protocol === "https:";
+                return (
+                  parsed.protocol === "http:" || parsed.protocol === "https:"
+                );
               } catch {
                 return false;
               }
             }),
-          { message: "Photo URLs must be http(s) links." }
+          { message: "Photo URLs must be http(s) links." },
         ),
-      otherDetails: z.string().optional().nullable()
+      otherDetails: z.string().optional().nullable(),
     })
     .superRefine((value, ctx) => {
       const { type, size } = value;
@@ -157,10 +178,21 @@ const RequestSchema = z.object({
         return false;
       })();
       if (!ok) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["size"], message: "Invalid size option for this demo type." });
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["size"],
+          message: "Invalid size option for this demo type.",
+        });
       }
-      if (type === "other" && (!value.otherDetails || value.otherDetails.trim().length < 3)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["otherDetails"], message: "Please describe what you need demolished." });
+      if (
+        type === "other" &&
+        (!value.otherDetails || value.otherDetails.trim().length < 3)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["otherDetails"],
+          message: "Please describe what you need demolished.",
+        });
       }
     }),
   utm: z
@@ -171,9 +203,9 @@ const RequestSchema = z.object({
       term: z.string().optional(),
       content: z.string().optional(),
       gclid: z.string().optional(),
-      fbclid: z.string().optional()
+      fbclid: z.string().optional(),
     })
-    .optional()
+    .optional(),
 });
 
 const QuoteResultSchema = z
@@ -183,22 +215,23 @@ const QuoteResultSchema = z
     priceHigh: z.number(),
     displayTierLabel: z.string(),
     reasonSummary: z.string(),
-    needsInPersonEstimate: z.boolean()
+    needsInPersonEstimate: z.boolean(),
   })
   .superRefine((value, ctx) => {
-    if (!Number.isFinite(value.priceLow) || !Number.isFinite(value.priceHigh)) return;
+    if (!Number.isFinite(value.priceLow) || !Number.isFinite(value.priceHigh))
+      return;
     if (value.priceLow > value.priceHigh) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "priceLow must be <= priceHigh",
-        path: ["priceLow"]
+        path: ["priceLow"],
       });
     }
     if (value.priceLow < 100 || value.priceHigh < 100) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "prices must be >= 100",
-        path: ["priceLow"]
+        path: ["priceLow"],
       });
     }
   });
@@ -216,7 +249,10 @@ function roundToNearest(value: number, increment: number): number {
   return Math.round(value / increment) * increment;
 }
 
-function sizeLabel(type: z.infer<typeof DemoTypeSchema>, size: z.infer<typeof DemoSizeSchema>): string {
+function sizeLabel(
+  type: z.infer<typeof DemoTypeSchema>,
+  size: z.infer<typeof DemoSizeSchema>,
+): string {
   const labels: Record<string, string> = {
     deck_small: "Small deck",
     deck_medium: "Medium deck",
@@ -247,7 +283,7 @@ function sizeLabel(type: z.infer<typeof DemoTypeSchema>, size: z.infer<typeof De
     other_small: "Small demo",
     other_medium: "Medium demo",
     other_large: "Large demo",
-    other_not_sure: "Demo (not sure)"
+    other_not_sure: "Demo (not sure)",
   };
   const fallback = type === "kitchen_bath" ? "Interior demo" : "Demo";
   return labels[size] ?? fallback;
@@ -260,7 +296,11 @@ function computeBaseRange(input: {
 }): { low: number; high: number; needsEstimate: boolean; load: number } {
   const pile = !input.haulAway;
   const needsEstimate = true;
-  const lowHighBySize: { pile: [number, number]; haul: [number, number]; load: number } = (() => {
+  const lowHighBySize: {
+    pile: [number, number];
+    haul: [number, number];
+    load: number;
+  } = (() => {
     switch (input.size) {
       case "deck_small":
         return { pile: [350, 650], haul: [450, 850], load: 0.25 };
@@ -342,7 +382,15 @@ export async function POST(request: NextRequest): Promise<Response> {
   try {
     const parsed = RequestSchema.safeParse(await request.json());
     if (!parsed.success) {
-      return corsJson({ ok: false, error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, { status: 400 });
+      return corsJson(
+        {
+          ok: false,
+          error: "invalid_payload",
+          details: parsed.error.flatten(),
+        },
+        requestOrigin,
+        { status: 400 },
+      );
     }
 
     let preparedPhotoMedia: PreparedPublicQuoteMediaReference[] = [];
@@ -362,11 +410,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         );
       }
       try {
-        preparedPhotoMedia =
-          await resolvePublicInstantQuoteMediaReferences({
-            urls: parsed.data.job.photoUrls,
-            baseUrl: publicApiBaseUrl,
-          });
+        preparedPhotoMedia = await resolvePublicInstantQuoteMediaReferences({
+          urls: parsed.data.job.photoUrls,
+          baseUrl: publicApiBaseUrl,
+        });
       } catch (error) {
         if (error instanceof PublicQuoteMediaError) {
           return corsJson(
@@ -398,25 +445,31 @@ export async function POST(request: NextRequest): Promise<Response> {
         {
           ok: false,
           error: "out_of_area",
-          message: "Thanks for reaching out. We currently serve North Georgia only."
+          message:
+            "Thanks for reaching out. We currently serve North Georgia only.",
         },
         requestOrigin,
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     const base = computeBaseRange({
       type: body.job.type,
       size: body.job.size,
-      haulAway: body.job.haulAway
+      haulAway: body.job.haulAway,
     });
 
-    const isConcrete = body.job.type === "concrete" || body.job.size.startsWith("concrete_");
+    const isConcrete =
+      body.job.type === "concrete" || body.job.size.startsWith("concrete_");
     const minLowFloor = isConcrete ? 900 : body.job.haulAway ? 450 : 350;
     const minHighFloor = isConcrete ? 900 : body.job.haulAway ? 450 : 350;
 
     const boundedLow = clamp(roundToNearest(base.low, 25), minLowFloor, 25_000);
-    const boundedHigh = clamp(roundToNearest(base.high, 25), minHighFloor, 25_000);
+    const boundedHigh = clamp(
+      roundToNearest(base.high, 25),
+      minHighFloor,
+      25_000,
+    );
     const minLow = Math.min(boundedLow, boundedHigh);
     const maxHigh = Math.max(boundedLow, boundedHigh);
 
@@ -426,29 +479,49 @@ export async function POST(request: NextRequest): Promise<Response> {
       priceLow: minLow,
       priceHigh: maxHigh,
       displayTierLabel: `Demo (${label})`,
-      reasonSummary: "Estimate based on your selections. We’ll confirm details on-site before we start.",
-      needsInPersonEstimate: Boolean(base.needsEstimate)
+      reasonSummary:
+        "Estimate based on your selections. We’ll confirm details on-site before we start.",
+      needsInPersonEstimate: Boolean(base.needsEstimate),
     });
+    const discountAmount = resolveDemoFixedDiscountDollars();
+    const priceLowDiscounted =
+      discountAmount > 0
+        ? Math.max(0, quote.priceLow - discountAmount)
+        : undefined;
+    const priceHighDiscounted =
+      discountAmount > 0
+        ? Math.max(0, quote.priceHigh - discountAmount)
+        : undefined;
+    const quoteWithDisplayDiscount = {
+      ...quote,
+      discountAmount: discountAmount > 0 ? discountAmount : undefined,
+      priceLowDiscounted,
+      priceHighDiscounted,
+    };
 
     const db = getDb();
     const storedAiResult = {
-      ...quote,
+      ...quoteWithDisplayDiscount,
       meta: {
         demoType: body.job.type,
         demoSize: body.job.size,
-        haulAway: body.job.haulAway
-      }
+        haulAway: body.job.haulAway,
+      },
     };
 
     const serviceKeys: string[] = ["demo-hauloff", `demo_${body.job.type}`];
-    if (isConcrete && !serviceKeys.includes("concrete")) serviceKeys.push("concrete");
+    if (isConcrete && !serviceKeys.includes("concrete"))
+      serviceKeys.push("concrete");
 
     const { firstName, lastName } = normalizeName(body.contact.name);
     const normalizedPhone = normalizePhone(body.contact.phone);
     const utm = body.utm ?? {};
     const referrer = request.headers.get("referer") ?? undefined;
     const otherDetails =
-      typeof body.job.otherDetails === "string" && body.job.otherDetails.trim().length > 0 ? body.job.otherDetails.trim() : null;
+      typeof body.job.otherDetails === "string" &&
+      body.job.otherDetails.trim().length > 0
+        ? body.job.otherDetails.trim()
+        : null;
 
     const quoteId = await db.transaction(async (tx) => {
       const [quoteRow] = await tx
@@ -463,7 +536,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           perceivedSize: body.job.size,
           notes: body.job.notes ?? null,
           photoUrls: body.job.photoUrls ?? [],
-          aiResult: storedAiResult
+          aiResult: storedAiResult,
         })
         .returning({ id: instantQuotes.id });
       const quoteId = quoteRow?.id;
@@ -471,166 +544,156 @@ export async function POST(request: NextRequest): Promise<Response> {
         throw new Error("instant_quote_insert_failed");
       }
 
-          const contact = await upsertContact(tx, {
-            firstName,
-            lastName,
-            phoneRaw: normalizedPhone.raw,
-            phoneE164: normalizedPhone.e164,
-            source: "demo_quote",
-            email: null
+      const contact = await upsertContact(tx, {
+        firstName,
+        lastName,
+        phoneRaw: normalizedPhone.raw,
+        phoneE164: normalizedPhone.e164,
+        source: "demo_quote",
+        email: null,
+      });
+      await claimPublicInstantQuoteMediaReferences({
+        instantQuoteId: quoteId,
+        contactId: contact.id,
+        references: preparedPhotoMedia,
+        database: tx,
+      });
+
+      const existingProperty = await findLatestContactProperty(tx, contact.id);
+
+      const property = existingProperty?.id
+        ? { id: existingProperty.id }
+        : await upsertProperty(tx, {
+            contactId: contact.id,
+            addressLine1: `[Demo Quote ${quoteId.split("-")[0] ?? quoteId}] ZIP ${body.job.zip.trim()} (address pending)`,
+            city: "Unknown",
+            state: "GA",
+            postalCode: body.job.zip.trim(),
+            gated: false,
           });
-          await claimPublicInstantQuoteMediaReferences({
+
+      await ensureContactPropertyAssociation(tx, {
+        contactId: contact.id,
+        propertyId: property.id,
+      });
+      const [linkedQuote] = await tx
+        .update(instantQuotes)
+        .set({
+          contactId: contact.id,
+          propertyId: property.id,
+        })
+        .where(eq(instantQuotes.id, quoteId))
+        .returning({ id: instantQuotes.id });
+      if (!linkedQuote?.id) {
+        throw new Error("instant_quote_relationship_failed");
+      }
+
+      const notesParts = [
+        body.job.notes ?? null,
+        otherDetails ? `Other: ${otherDetails}` : null,
+        `Demo: ${body.job.type}`,
+        `Size: ${label}`,
+        `Haul away: ${body.job.haulAway ? "yes" : "no"}`,
+      ].filter(
+        (v): v is string => typeof v === "string" && v.trim().length > 0,
+      );
+
+      const [leadRow] = await tx
+        .insert(leads)
+        .values({
+          contactId: contact.id,
+          propertyId: property.id,
+          servicesRequested: serviceKeys,
+          notes: notesParts.length ? notesParts.join("\n") : null,
+          status: "new",
+          source: "demo_quote",
+          utmSource: utm.source,
+          utmMedium: utm.medium,
+          utmCampaign: utm.campaign,
+          utmTerm: utm.term,
+          utmContent: utm.content,
+          gclid: utm.gclid,
+          fbclid: utm.fbclid,
+          referrer,
+          formPayload: {
             instantQuoteId: quoteId,
+            timeframe: body.contact.timeframe,
+            zip: body.job.zip.trim(),
+            demoType: body.job.type,
+            demoSize: body.job.size,
+            haulAway: body.job.haulAway,
+            notes: body.job.notes ?? null,
+            otherDetails,
+            photoUrls: body.job.photoUrls ?? [],
+            aiResult: storedAiResult,
+            utm,
+          },
+          instantQuoteId: quoteId,
+        })
+        .returning({ id: leads.id });
+      if (!leadRow?.id) {
+        throw new Error("lead_insert_failed");
+      }
+
+      await tx.insert(outboxEvents).values({
+        type: "lead.alert",
+        payload: {
+          leadId: leadRow.id,
+          source: "demo_quote",
+        },
+      });
+
+      const [pipelineRow] = await tx
+        .select({ stage: crmPipeline.stage })
+        .from(crmPipeline)
+        .where(eq(crmPipeline.contactId, contact.id))
+        .limit(1);
+
+      const previousStage =
+        typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
+      if (previousStage !== "quoted") {
+        await tx
+          .insert(crmPipeline)
+          .values({ contactId: contact.id, stage: "quoted" })
+          .onConflictDoUpdate({
+            target: crmPipeline.contactId,
+            set: { stage: "quoted", updatedAt: new Date() },
+          });
+
+        await tx.insert(outboxEvents).values({
+          type: "pipeline.auto_stage_change",
+          payload: {
             contactId: contact.id,
-            references: preparedPhotoMedia,
-            database: tx,
-          });
+            fromStage: previousStage,
+            toStage: "quoted",
+            reason: "demo_quote.created",
+            meta: {
+              instantQuoteId: quoteId,
+              leadId: leadRow?.id ?? null,
+            },
+          },
+        });
+      }
 
-          const existingProperty = await findLatestContactProperty(
-            tx,
-            contact.id,
-          );
-
-          const property =
-            existingProperty?.id
-              ? { id: existingProperty.id }
-              : await upsertProperty(tx, {
-                  contactId: contact.id,
-                  addressLine1: `[Demo Quote ${quoteId.split("-")[0] ?? quoteId}] ZIP ${body.job.zip.trim()} (address pending)`,
-                  city: "Unknown",
-                  state: "GA",
-                  postalCode: body.job.zip.trim(),
-                  gated: false
-                });
-
-          await ensureContactPropertyAssociation(tx, {
-            contactId: contact.id,
-            propertyId: property.id,
-          });
-          const [linkedQuote] = await tx
-            .update(instantQuotes)
-            .set({
-              contactId: contact.id,
-              propertyId: property.id,
-            })
-            .where(eq(instantQuotes.id, quoteId))
-            .returning({ id: instantQuotes.id });
-          if (!linkedQuote?.id) {
-            throw new Error("instant_quote_relationship_failed");
-          }
-
-          const notesParts = [
-            body.job.notes ?? null,
-            otherDetails ? `Other: ${otherDetails}` : null,
-            `Demo: ${body.job.type}`,
-            `Size: ${label}`,
-            `Haul away: ${body.job.haulAway ? "yes" : "no"}`
-          ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
-
-          const [leadRow] = await tx
-            .insert(leads)
-            .values({
-              contactId: contact.id,
-              propertyId: property.id,
-              servicesRequested: serviceKeys,
-              notes: notesParts.length ? notesParts.join("\n") : null,
-              status: "new",
-              source: "demo_quote",
-              utmSource: utm.source,
-              utmMedium: utm.medium,
-              utmCampaign: utm.campaign,
-              utmTerm: utm.term,
-              utmContent: utm.content,
-              gclid: utm.gclid,
-              fbclid: utm.fbclid,
-              referrer,
-              formPayload: {
-                instantQuoteId: quoteId,
-                timeframe: body.contact.timeframe,
-                zip: body.job.zip.trim(),
-                demoType: body.job.type,
-                demoSize: body.job.size,
-                haulAway: body.job.haulAway,
-                notes: body.job.notes ?? null,
-                otherDetails,
-                photoUrls: body.job.photoUrls ?? [],
-                aiResult: storedAiResult,
-                utm
-              },
-              instantQuoteId: quoteId
-            })
-            .returning({ id: leads.id });
-          if (!leadRow?.id) {
-            throw new Error("lead_insert_failed");
-          }
-
-          await tx.insert(outboxEvents).values({
-            type: "lead.alert",
-            payload: {
-              leadId: leadRow.id,
-              source: "demo_quote"
-            }
-          });
-
-          const [pipelineRow] = await tx
-            .select({ stage: crmPipeline.stage })
-            .from(crmPipeline)
-            .where(eq(crmPipeline.contactId, contact.id))
-            .limit(1);
-
-          const previousStage = typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
-          if (previousStage !== "quoted") {
-            await tx
-              .insert(crmPipeline)
-              .values({ contactId: contact.id, stage: "quoted" })
-              .onConflictDoUpdate({
-                target: crmPipeline.contactId,
-                set: { stage: "quoted", updatedAt: new Date() }
-              });
-
-            await tx.insert(outboxEvents).values({
-              type: "pipeline.auto_stage_change",
-              payload: {
-                contactId: contact.id,
-                fromStage: previousStage,
-                toStage: "quoted",
-                reason: "demo_quote.created",
-                meta: {
-                  instantQuoteId: quoteId,
-                  leadId: leadRow?.id ?? null
-                }
-              }
-            });
-          }
-
-          await tx.insert(outboxEvents).values({
-            type: "followup.schedule",
-            payload: {
-              leadId: leadRow.id,
-              contactId: contact.id,
-              reason: "demo_quote.created"
-            }
-          });
+      await tx.insert(outboxEvents).values({
+        type: "followup.schedule",
+        payload: {
+          leadId: leadRow.id,
+          contactId: contact.id,
+          reason: "demo_quote.created",
+        },
+      });
 
       return quoteId;
     });
-
-    const discountAmount = resolveDemoFixedDiscountDollars();
-    const priceLowDiscounted = discountAmount > 0 ? Math.max(0, quote.priceLow - discountAmount) : undefined;
-    const priceHighDiscounted = discountAmount > 0 ? Math.max(0, quote.priceHigh - discountAmount) : undefined;
 
     return corsJson(
       {
         ok: true,
         quoteId,
-        quote: {
-          ...quote,
-          discountAmount: discountAmount > 0 ? discountAmount : undefined,
-          priceLowDiscounted: priceLowDiscounted ?? undefined,
-          priceHighDiscounted: priceHighDiscounted ?? undefined
-        }
+        quote: quoteWithDisplayDiscount,
       },
-      requestOrigin
+      requestOrigin,
     );
   } catch (error) {
     if (error instanceof PublicContactPersistenceError) {

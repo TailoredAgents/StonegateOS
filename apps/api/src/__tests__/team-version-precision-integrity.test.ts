@@ -138,9 +138,15 @@ describe("/team optimistic-concurrency timestamp precision", () => {
   });
 
   it("registers migration 0099 after the appointment precision migration", () => {
-    const previous = journal.entries.at(-3);
-    const current = journal.entries.at(-2);
-    const next = journal.entries.at(-1);
+    const previous = journal.entries.find(
+      (entry) => entry.tag === "0098_appointment_version_precision",
+    );
+    const current = journal.entries.find(
+      (entry) => entry.tag === "0099_team_version_precision",
+    );
+    const next = journal.entries.find(
+      (entry) => entry.tag === "0100_fixed_crew_job_rates",
+    );
 
     expect(previous).toMatchObject({
       idx: 95,

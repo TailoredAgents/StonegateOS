@@ -53,6 +53,7 @@ export const expenseLifecycleStatusEnum = pgEnum("expense_lifecycle_status", [
 ]);
 
 export type AppointmentLeadSourceType =
+  | "website"
   | "google"
   | "facebook"
   | "team_member"

@@ -687,6 +687,13 @@
       "when": 1789516800000,
       "tag": "0100_fixed_crew_job_rates",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1789603200000,
+      "tag": "0101_online_booking_quote_range_backfill",
+      "breakpoints": true
     }
   ]
 }

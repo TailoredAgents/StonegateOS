@@ -104,6 +104,20 @@ function sliceBetween(source: string, start: string, end: string): string {
 }
 
 describe("standalone appointment booking-details integrity", () => {
+  it("accepts website attribution for customer self-bookings", () => {
+    expect(
+      appointmentBookingDetailsSchema.safeParse({
+        ...bookingDetails,
+        source: { type: "website" },
+        pricing: {
+          mode: "range",
+          rangeMinCents: 32_500,
+          rangeMaxCents: 45_000,
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it("verifies a human and both financial capabilities before params, body, or DB", () => {
     const boundary = bookingRoute.indexOf(
       "const boundary = await beginTeamMutation(request, {",

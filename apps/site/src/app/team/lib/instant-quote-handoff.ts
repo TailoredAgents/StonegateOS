@@ -57,8 +57,7 @@ function isValidHandoff(value: unknown): value is InstantQuoteHandoff {
     Number.isInteger(booking?.priceRangeMinCents) &&
     Number.isInteger(booking?.priceRangeMaxCents) &&
     (booking?.priceRangeMinCents ?? -1) >= 0 &&
-    (booking?.priceRangeMaxCents ?? -1) >=
-      (booking?.priceRangeMinCents ?? 0);
+    (booking?.priceRangeMaxCents ?? -1) >= (booking?.priceRangeMinCents ?? 0);
   return (
     isNonEmptyString(handoff.instantQuoteId) &&
     isNonEmptyString(handoff.contactId) &&
@@ -72,7 +71,10 @@ function isValidHandoff(value: unknown): value is InstantQuoteHandoff {
       (typeof loadSize?.customLoads === "number" &&
         Number.isFinite(loadSize.customLoads) &&
         loadSize.customLoads > 0)) &&
-    (source === null || source?.type === "google" || source?.type === "facebook") &&
+    (source === null ||
+      source?.type === "website" ||
+      source?.type === "google" ||
+      source?.type === "facebook") &&
     typeof booking.notes === "string" &&
     fullQuote?.propertyId === handoff.propertyId &&
     Array.isArray(fullQuote.serviceIds) &&
@@ -108,7 +110,8 @@ export async function loadInstantQuoteHandoff(
     if (!isValidHandoff(payload?.handoff)) {
       return {
         ok: false,
-        error: "The instant-quote handoff returned incomplete relationship data.",
+        error:
+          "The instant-quote handoff returned incomplete relationship data.",
       };
     }
     return { ok: true, handoff: payload.handoff };

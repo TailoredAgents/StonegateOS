@@ -190,6 +190,7 @@ type BookingSourceKey =
   | "google"
   | "referral"
   | "team_member"
+  | "website"
   | "other"
   | "unknown";
 

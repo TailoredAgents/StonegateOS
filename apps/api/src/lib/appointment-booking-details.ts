@@ -5,6 +5,7 @@ const MAXIMUM_CENTS = 2_147_483_647;
 const MAXIMUM_CUSTOM_LOADS = 100;
 
 const sourceTypeSchema = z.enum([
+  "website",
   "google",
   "facebook",
   "team_member",

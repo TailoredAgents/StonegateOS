@@ -3,7 +3,15 @@ import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import { appointmentHolds, getDb, appointments, crmPipeline, instantQuotes, leads, outboxEvents } from "@/db";
+import {
+  appointmentHolds,
+  getDb,
+  appointments,
+  crmPipeline,
+  instantQuotes,
+  leads,
+  outboxEvents,
+} from "@/db";
 import { and, eq, gt, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
 import {
   PublicContactPersistenceError,
@@ -18,28 +26,49 @@ import {
   getBookingRulesPolicy,
   getItemPoliciesPolicy,
   getStandardJobPolicy,
-  normalizePostalCode
+  normalizePostalCode,
 } from "@/lib/policy";
-import { getAutonomousBookingDurationMinutes, validateAutonomousBookingStart } from "@/lib/after-hours-autonomy";
-import { buildStandardJobMessage, evaluateStandardJob } from "@/lib/standard-job";
-import { APPOINTMENT_TIME_ZONE, DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
+import {
+  getAutonomousBookingDurationMinutes,
+  validateAutonomousBookingStart,
+} from "@/lib/after-hours-autonomy";
+import {
+  buildStandardJobMessage,
+  evaluateStandardJob,
+} from "@/lib/standard-job";
+import {
+  InstantQuoteHandoffFailure,
+  resolveInstantQuoteAppointmentBookingDetails,
+} from "@/lib/instant-quote-team-handoff";
+import {
+  APPOINTMENT_TIME_ZONE,
+  DEFAULT_TRAVEL_BUFFER_MIN,
+} from "../../web/scheduling";
 import { normalizeName, normalizePhone } from "../../web/utils";
 
 const RAW_ALLOWED_ORIGINS =
-  process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
+  process.env["CORS_ALLOW_ORIGINS"] ??
+  process.env["NEXT_PUBLIC_SITE_URL"] ??
+  process.env["SITE_URL"] ??
+  "*";
 
 const WINDOW_DAYS = 14;
 
 function resolveOrigin(requestOrigin: string | null): string {
   if (RAW_ALLOWED_ORIGINS === "*") return "*";
-  const allowed = RAW_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/+$/u, "")).filter(Boolean);
+  const allowed = RAW_ALLOWED_ORIGINS.split(",")
+    .map((o) => o.trim().replace(/\/+$/u, ""))
+    .filter(Boolean);
   if (!allowed.length) return "*";
   const origin = requestOrigin?.trim().replace(/\/+$/u, "") ?? null;
   if (origin && allowed.includes(origin)) return origin;
   return allowed[0] ?? "*";
 }
 
-function applyCors(response: NextResponse, requestOrigin: string | null): NextResponse {
+function applyCors(
+  response: NextResponse,
+  requestOrigin: string | null,
+): NextResponse {
   const origin = resolveOrigin(requestOrigin);
   response.headers.set("Access-Control-Allow-Origin", origin);
   response.headers.set("Vary", "Origin");
@@ -49,12 +78,19 @@ function applyCors(response: NextResponse, requestOrigin: string | null): NextRe
   return response;
 }
 
-function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseInit): NextResponse {
+function corsJson(
+  body: unknown,
+  requestOrigin: string | null,
+  init?: ResponseInit,
+): NextResponse {
   return applyCors(NextResponse.json(body, init), requestOrigin);
 }
 
 export function OPTIONS(request: NextRequest): NextResponse {
-  return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
+  return applyCors(
+    new NextResponse(null, { status: 204 }),
+    request.headers.get("origin"),
+  );
 }
 
 class BookingError extends Error {
@@ -76,7 +112,11 @@ function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
   return aStart < bEnd && bStart < aEnd;
 }
 
-function overlapsCount(blocks: Array<{ start: Date; end: Date }>, start: Date, end: Date): number {
+function overlapsCount(
+  blocks: Array<{ start: Date; end: Date }>,
+  start: Date,
+  end: Date,
+): number {
   let count = 0;
   for (const block of blocks) {
     if (overlaps(start, end, block.start, block.end)) count += 1;
@@ -84,9 +124,15 @@ function overlapsCount(blocks: Array<{ start: Date; end: Date }>, start: Date, e
   return count;
 }
 
-function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string; jobTypes?: unknown }): number {
+function deriveDurationMinutes(quote: {
+  aiResult: unknown;
+  perceivedSize: string;
+  jobTypes?: unknown;
+}): number {
   const jobTypes = Array.isArray(quote.jobTypes) ? quote.jobTypes : [];
-  const isDemoEstimate = jobTypes.some((t) => typeof t === "string" && t.toLowerCase() === "demo-hauloff");
+  const isDemoEstimate = jobTypes.some(
+    (t) => typeof t === "string" && t.toLowerCase() === "demo-hauloff",
+  );
   if (isDemoEstimate) return 45;
 
   const ai = isRecord(quote.aiResult) ? quote.aiResult : null;
@@ -97,8 +143,11 @@ function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string
       ? ai["loadFractionEstimate"]
       : null;
   const maxUnitsFromLoad =
-    typeof loadFractionEstimate === "number" ? Math.max(1, Math.round(loadFractionEstimate * 4)) : null;
-  const priceHigh = typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
+    typeof loadFractionEstimate === "number"
+      ? Math.max(1, Math.round(loadFractionEstimate * 4))
+      : null;
+  const priceHigh =
+    typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
   const maxUnitsFromPrice =
     typeof priceHigh === "number" && Number.isFinite(priceHigh) && priceHigh > 0
       ? Math.round(priceHigh / JUNK_VOLUME_UNIT_PRICE)
@@ -139,7 +188,7 @@ const BookingSchema = z.object({
   state: z.string().min(2).max(2),
   postalCode: z.string().min(3),
   startAt: z.string().datetime(),
-  notes: z.string().optional().nullable()
+  notes: z.string().optional().nullable(),
 });
 
 export async function POST(request: NextRequest) {
@@ -147,19 +196,26 @@ export async function POST(request: NextRequest) {
     const requestOrigin = request.headers.get("origin");
     const parsed = BookingSchema.safeParse(await request.json());
     if (!parsed.success) {
-      return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, { status: 400 });
+      return corsJson(
+        { error: "invalid_payload", details: parsed.error.flatten() },
+        requestOrigin,
+        { status: 400 },
+      );
     }
     const body = parsed.data;
-    const holdId = typeof body.holdId === "string" && body.holdId.length ? body.holdId : null;
+    const holdId =
+      typeof body.holdId === "string" && body.holdId.length
+        ? body.holdId
+        : null;
     const normalizedState = body.state.trim().toUpperCase();
     if (normalizedState !== "GA") {
       return corsJson(
         {
           error: "out_of_area",
-          message: "Thanks for reaching out. We currently serve Georgia only."
+          message: "Thanks for reaching out. We currently serve Georgia only.",
         },
         requestOrigin,
-        { status: 400 }
+        { status: 400 },
       );
     }
     const normalizedPostalCode = normalizePostalCode(body.postalCode);
@@ -169,9 +225,15 @@ export async function POST(request: NextRequest) {
     const businessHours = await getBusinessHoursPolicy(db);
     const schedulingZone = businessHours.timezone || APPOINTMENT_TIME_ZONE;
 
-    const [quote] = await db.select().from(instantQuotes).where(eq(instantQuotes.id, body.instantQuoteId)).limit(1);
+    const [quote] = await db
+      .select()
+      .from(instantQuotes)
+      .where(eq(instantQuotes.id, body.instantQuoteId))
+      .limit(1);
     if (!quote) {
-      return corsJson({ error: "quote_not_found" }, requestOrigin, { status: 404 });
+      return corsJson({ error: "quote_not_found" }, requestOrigin, {
+        status: 404,
+      });
     }
 
     const standardPolicy = await getStandardJobPolicy(db);
@@ -181,10 +243,10 @@ export async function POST(request: NextRequest) {
         jobTypes: quote.jobTypes ?? [],
         perceivedSize: quote.perceivedSize,
         notes: body.notes ?? quote.notes ?? null,
-        aiResult: quote.aiResult
+        aiResult: quote.aiResult,
       },
       standardPolicy,
-      itemPolicy
+      itemPolicy,
     );
 
     const standardJobReview = evaluation.isStandard
@@ -192,34 +254,50 @@ export async function POST(request: NextRequest) {
       : {
           required: true,
           message: buildStandardJobMessage(evaluation),
-          evaluation
+          evaluation,
         };
 
     const travelBufferMinutes =
-      typeof bookingRules.bufferMinutes === "number" && Number.isFinite(bookingRules.bufferMinutes)
+      typeof bookingRules.bufferMinutes === "number" &&
+      Number.isFinite(bookingRules.bufferMinutes)
         ? bookingRules.bufferMinutes
         : DEFAULT_TRAVEL_BUFFER_MIN;
-    const durationMinutes = deriveDurationMinutes({ aiResult: quote.aiResult, perceivedSize: quote.perceivedSize, jobTypes: quote.jobTypes });
+    const durationMinutes = deriveDurationMinutes({
+      aiResult: quote.aiResult,
+      perceivedSize: quote.perceivedSize,
+      jobTypes: quote.jobTypes,
+    });
 
     const startAt = new Date(body.startAt);
     if (Number.isNaN(startAt.getTime())) {
-      return corsJson({ error: "invalid_startAt" }, requestOrigin, { status: 400 });
+      return corsJson({ error: "invalid_startAt" }, requestOrigin, {
+        status: 400,
+      });
     }
 
     const nowLocal = DateTime.now().setZone(schedulingZone);
-    const startLocal = DateTime.fromJSDate(startAt, { zone: "utc" }).setZone(schedulingZone);
+    const startLocal = DateTime.fromJSDate(startAt, { zone: "utc" }).setZone(
+      schedulingZone,
+    );
     if (!startLocal.isValid) {
-      return corsJson({ error: "invalid_startAt" }, requestOrigin, { status: 400 });
+      return corsJson({ error: "invalid_startAt" }, requestOrigin, {
+        status: 400,
+      });
     }
     if (startLocal < nowLocal) {
-      return corsJson({ error: "start_in_past" }, requestOrigin, { status: 400 });
+      return corsJson({ error: "start_in_past" }, requestOrigin, {
+        status: 400,
+      });
     }
     const bookingWindowDays =
-      typeof bookingRules.bookingWindowDays === "number" && bookingRules.bookingWindowDays > 0
+      typeof bookingRules.bookingWindowDays === "number" &&
+      bookingRules.bookingWindowDays > 0
         ? Math.min(Math.floor(bookingRules.bookingWindowDays), 90)
         : WINDOW_DAYS;
     if (startLocal > nowLocal.plus({ days: bookingWindowDays }).endOf("day")) {
-      return corsJson({ error: "outside_booking_window" }, requestOrigin, { status: 400 });
+      return corsJson({ error: "outside_booking_window" }, requestOrigin, {
+        status: 400,
+      });
     }
     const ruleResult = validateAutonomousBookingStart({
       startAt,
@@ -228,7 +306,11 @@ export async function POST(request: NextRequest) {
       durationMinutes,
     });
     if (!ruleResult.ok) {
-      return corsJson({ error: ruleResult.code, message: ruleResult.message }, requestOrigin, { status: 400 });
+      return corsJson(
+        { error: ruleResult.code, message: ruleResult.message },
+        requestOrigin,
+        { status: 400 },
+      );
     }
 
     let normalizedPhone: { raw: string; e164: string };
@@ -236,7 +318,9 @@ export async function POST(request: NextRequest) {
       const norm = normalizePhone(body.phone);
       normalizedPhone = { raw: norm.raw, e164: norm.e164 };
     } catch {
-      return corsJson({ error: "invalid_phone" }, requestOrigin, { status: 400 });
+      return corsJson({ error: "invalid_phone" }, requestOrigin, {
+        status: 400,
+      });
     }
 
     const { firstName, lastName } = normalizeName(body.name);
@@ -256,7 +340,7 @@ export async function POST(request: NextRequest) {
             startAt: appointmentHolds.startAt,
             expiresAt: appointmentHolds.expiresAt,
             status: appointmentHolds.status,
-            instantQuoteId: appointmentHolds.instantQuoteId
+            instantQuoteId: appointmentHolds.instantQuoteId,
           })
           .from(appointmentHolds)
           .where(eq(appointmentHolds.id, holdId))
@@ -287,14 +371,14 @@ export async function POST(request: NextRequest) {
               isNotNull(appointments.startAt),
               gte(appointments.startAt, dayStartUtc),
               lte(appointments.startAt, dayEndUtc),
-              ne(appointments.status, "canceled")
-            )
+              ne(appointments.status, "canceled"),
+            ),
           );
         const holdConditions = [
           gte(appointmentHolds.startAt, dayStartUtc),
           lte(appointmentHolds.startAt, dayEndUtc),
           eq(appointmentHolds.status, "active"),
-          gt(appointmentHolds.expiresAt, now)
+          gt(appointmentHolds.expiresAt, now),
         ];
         if (holdId) {
           holdConditions.push(ne(appointmentHolds.id, holdId));
@@ -304,7 +388,8 @@ export async function POST(request: NextRequest) {
           .from(appointmentHolds)
           .where(and(...holdConditions));
 
-        const totalCount = Number(dayCount?.count ?? 0) + Number(holdCount?.count ?? 0);
+        const totalCount =
+          Number(dayCount?.count ?? 0) + Number(holdCount?.count ?? 0);
         if (totalCount >= bookingRules.maxJobsPerDay) {
           throw new BookingError("day_full", 409);
         }
@@ -316,7 +401,7 @@ export async function POST(request: NextRequest) {
         phoneRaw: normalizedPhone.raw,
         phoneE164: normalizedPhone.e164,
         email: body.email ?? null,
-        source: "instant_quote"
+        source: "instant_quote",
       });
 
       const safeUpsertPropertyId = async (input: {
@@ -332,10 +417,31 @@ export async function POST(request: NextRequest) {
       };
 
       const [existingLead] = await tx
-        .select({ id: leads.id, propertyId: leads.propertyId, formPayload: leads.formPayload })
+        .select({
+          id: leads.id,
+          propertyId: leads.propertyId,
+          formPayload: leads.formPayload,
+          source: leads.source,
+          utmSource: leads.utmSource,
+          gclid: leads.gclid,
+          fbclid: leads.fbclid,
+        })
         .from(leads)
         .where(eq(leads.instantQuoteId, quote.id))
         .limit(1);
+
+      const bookingDetails = resolveInstantQuoteAppointmentBookingDetails({
+        aiResult: quote.aiResult,
+        perceivedSize: quote.perceivedSize,
+        jobTypes: quote.jobTypes ?? [],
+        sourceValues: [
+          existingLead?.gclid ? "google" : null,
+          existingLead?.fbclid ? "facebook" : null,
+          existingLead?.utmSource,
+          existingLead?.source,
+          quote.source,
+        ],
+      });
 
       const addressLine1 = body.addressLine1.trim();
       const city = body.city.trim();
@@ -360,12 +466,13 @@ export async function POST(request: NextRequest) {
           city,
           state,
           postalCode,
-          gated: false
+          gated: false,
         });
         const nextPropertyId = upserted.id;
 
         const previousPayload =
-          existingLead.formPayload && typeof existingLead.formPayload === "object"
+          existingLead.formPayload &&
+          typeof existingLead.formPayload === "object"
             ? existingLead.formPayload
             : {};
 
@@ -380,9 +487,9 @@ export async function POST(request: NextRequest) {
             durationMinutes,
             travelBufferMinutes,
             timezone: schedulingZone,
-            notes
+            notes,
           },
-          standardJobReview
+          standardJobReview,
         } satisfies Record<string, unknown>;
 
         const [updatedLead] = await tx
@@ -393,7 +500,7 @@ export async function POST(request: NextRequest) {
             notes,
             status: "scheduled",
             formPayload: nextPayload,
-            updatedAt: new Date()
+            updatedAt: new Date(),
           })
           .where(eq(leads.id, existingLead.id))
           .returning({ id: leads.id });
@@ -407,7 +514,7 @@ export async function POST(request: NextRequest) {
           city,
           state,
           postalCode,
-          gated: false
+          gated: false,
         });
 
         const [lead] = await tx
@@ -431,14 +538,14 @@ export async function POST(request: NextRequest) {
                 startAt: startAt.toISOString(),
                 durationMinutes,
                 travelBufferMinutes,
-                timezone: schedulingZone
+                timezone: schedulingZone,
               },
               notes,
               addressLine1,
               city,
               state,
-              postalCode
-            }
+              postalCode,
+            },
           })
           .returning({ id: leads.id });
 
@@ -450,8 +557,8 @@ export async function POST(request: NextRequest) {
           type: "lead.alert",
           payload: {
             leadId: lead.id,
-            source: "instant_quote"
-          }
+            source: "instant_quote",
+          },
         });
 
         leadId = lead.id;
@@ -473,17 +580,23 @@ export async function POST(request: NextRequest) {
       const [existingAppt] = await tx
         .select({ id: appointments.id, startAt: appointments.startAt })
         .from(appointments)
-        .where(and(eq(appointments.leadId, leadId), ne(appointments.status, "canceled")))
+        .where(
+          and(
+            eq(appointments.leadId, leadId),
+            ne(appointments.status, "canceled"),
+          ),
+        )
         .limit(1);
-      const appointmentStatus =
-        await resolveAutomaticAppointmentStatusForMedia({
+      const appointmentStatus = await resolveAutomaticAppointmentStatusForMedia(
+        {
           proposedStatus: baseAppointmentStatus,
           quotedScopeText,
           contactId: contact.id,
           appointmentId: existingAppt?.id,
           database: tx,
           now,
-        });
+        },
+      );
 
       const slotEnd = new Date(startAt.getTime() + durationMinutes * 60_000);
       const lookbackStart = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
@@ -495,7 +608,7 @@ export async function POST(request: NextRequest) {
           startAt: appointments.startAt,
           durationMinutes: appointments.durationMinutes,
           travelBufferMinutes: appointments.travelBufferMinutes,
-          status: appointments.status
+          status: appointments.status,
         })
         .from(appointments)
         .where(
@@ -503,15 +616,15 @@ export async function POST(request: NextRequest) {
             isNotNull(appointments.startAt),
             gte(appointments.startAt, lookbackStart),
             lte(appointments.startAt, lookaheadEnd),
-            ne(appointments.status, "canceled")
-          )
+            ne(appointments.status, "canceled"),
+          ),
         );
 
       const holdOverlapConditions = [
         gte(appointmentHolds.startAt, lookbackStart),
         lte(appointmentHolds.startAt, lookaheadEnd),
         eq(appointmentHolds.status, "active"),
-        gt(appointmentHolds.expiresAt, now)
+        gt(appointmentHolds.expiresAt, now),
       ];
       if (holdId) {
         holdOverlapConditions.push(ne(appointmentHolds.id, holdId));
@@ -521,7 +634,7 @@ export async function POST(request: NextRequest) {
           id: appointmentHolds.id,
           startAt: appointmentHolds.startAt,
           durationMinutes: appointmentHolds.durationMinutes,
-          travelBufferMinutes: appointmentHolds.travelBufferMinutes
+          travelBufferMinutes: appointmentHolds.travelBufferMinutes,
         })
         .from(appointmentHolds)
         .where(and(...holdOverlapConditions));
@@ -530,7 +643,9 @@ export async function POST(request: NextRequest) {
         .filter((row) => row.startAt && row.id !== existingAppt?.id)
         .map((row) => {
           const start = row.startAt as Date;
-          const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? travelBufferMinutes);
+          const dur =
+            (row.durationMinutes ?? durationMinutes) +
+            (row.travelBufferMinutes ?? travelBufferMinutes);
           return { start, end: new Date(start.getTime() + dur * 60_000) };
         });
 
@@ -538,7 +653,9 @@ export async function POST(request: NextRequest) {
         .filter((row) => row.startAt)
         .map((row) => {
           const start = row.startAt;
-          const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? travelBufferMinutes);
+          const dur =
+            (row.durationMinutes ?? durationMinutes) +
+            (row.travelBufferMinutes ?? travelBufferMinutes);
           return { start, end: new Date(start.getTime() + dur * 60_000) };
         });
 
@@ -550,11 +667,14 @@ export async function POST(request: NextRequest) {
       }
 
       let appointmentId: string;
-      let outboxType: "estimate.requested" | "estimate.rescheduled" | null = null;
+      let outboxType: "estimate.requested" | "estimate.rescheduled" | null =
+        null;
 
       if (existingAppt?.id) {
         const existingIso =
-          existingAppt.startAt instanceof Date ? existingAppt.startAt.toISOString() : null;
+          existingAppt.startAt instanceof Date
+            ? existingAppt.startAt.toISOString()
+            : null;
         const nextIso = startAt.toISOString();
         const startChanged = existingIso !== nextIso;
 
@@ -568,7 +688,8 @@ export async function POST(request: NextRequest) {
             travelBufferMinutes,
             status: appointmentStatus,
             quotedScopeText,
-            updatedAt: new Date()
+            bookingDetails,
+            updatedAt: new Date(),
           })
           .where(eq(appointments.id, existingAppt.id))
           .returning({ id: appointments.id });
@@ -588,8 +709,9 @@ export async function POST(request: NextRequest) {
             durationMinutes,
             status: appointmentStatus,
             quotedScopeText,
+            bookingDetails,
             rescheduleToken,
-            travelBufferMinutes
+            travelBufferMinutes,
           })
           .returning({ id: appointments.id });
 
@@ -612,8 +734,8 @@ export async function POST(request: NextRequest) {
             notes,
             customerPhone: normalizedPhone.e164,
             customerEmail: body.email ?? null,
-            customerName
-          }
+            customerName,
+          },
         });
       }
 
@@ -623,14 +745,19 @@ export async function POST(request: NextRequest) {
         .where(eq(crmPipeline.contactId, contact.id))
         .limit(1);
 
-      const previousStage = typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
-      if (previousStage !== "won" && previousStage !== "lost" && previousStage !== "qualified") {
+      const previousStage =
+        typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
+      if (
+        previousStage !== "won" &&
+        previousStage !== "lost" &&
+        previousStage !== "qualified"
+      ) {
         await tx
           .insert(crmPipeline)
           .values({ contactId: contact.id, stage: "qualified" })
           .onConflictDoUpdate({
             target: crmPipeline.contactId,
-            set: { stage: "qualified", updatedAt: new Date() }
+            set: { stage: "qualified", updatedAt: new Date() },
           });
 
         await tx.insert(outboxEvents).values({
@@ -642,9 +769,9 @@ export async function POST(request: NextRequest) {
             reason: "instant_quote.booked_online",
             meta: {
               instantQuoteId: quote.id ?? null,
-              leadId
-            }
-          }
+              leadId,
+            },
+          },
         });
       }
 
@@ -657,7 +784,7 @@ export async function POST(request: NextRequest) {
             contactId: contact.id,
             leadId,
             propertyId,
-            updatedAt: new Date()
+            updatedAt: new Date(),
           })
           .where(eq(appointmentHolds.id, holdId));
       }
@@ -671,9 +798,9 @@ export async function POST(request: NextRequest) {
         leadId: leadResult.leadId,
         appointmentId: leadResult.appointmentId,
         startAt: leadResult.startAt,
-        standardJobReview
+        standardJobReview,
       },
-      requestOrigin
+      requestOrigin,
     );
   } catch (error) {
     if (error instanceof PublicContactPersistenceError) {
@@ -684,10 +811,23 @@ export async function POST(request: NextRequest) {
       );
     }
     if (error instanceof BookingError) {
-      return corsJson({ error: error.code }, request.headers.get("origin"), { status: error.status });
+      return corsJson({ error: error.code }, request.headers.get("origin"), {
+        status: error.status,
+      });
+    }
+    if (error instanceof InstantQuoteHandoffFailure) {
+      return corsJson(
+        { error: error.code, message: error.message },
+        request.headers.get("origin"),
+        { status: error.status },
+      );
     }
     const errorId = nanoid(10);
     console.error("[junk-quote-book] server_error", { errorId, error });
-    return corsJson({ error: "server_error", errorId }, request.headers.get("origin"), { status: 500 });
+    return corsJson(
+      { error: "server_error", errorId },
+      request.headers.get("origin"),
+      { status: 500 },
+    );
   }
 }

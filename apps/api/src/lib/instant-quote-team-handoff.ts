@@ -8,10 +8,11 @@ import {
   properties,
   type DatabaseClient,
 } from "@/db";
+import type { AppointmentBookingDetails } from "@/db/schema";
 
-type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (
-  tx: infer Tx,
-) => Promise<unknown>
+type TransactionExecutor = Parameters<
+  DatabaseClient["transaction"]
+>[0] extends (tx: infer Tx) => Promise<unknown>
   ? Tx
   : never;
 
@@ -27,6 +28,7 @@ export type InstantQuoteLoadSize = {
 };
 
 export type InstantQuoteLeadSource =
+  | { type: "website" }
   | { type: "google" }
   | { type: "facebook" }
   | null;
@@ -112,6 +114,12 @@ type QuoteAiResult = {
   priceHigh: number | null;
   priceLowDiscounted: number | null;
   priceHighDiscounted: number | null;
+  displayTierLabel: string | null;
+  demoMeta: {
+    demoType: string | null;
+    demoSize: string | null;
+    haulAway: boolean | null;
+  } | null;
 };
 
 function finiteNumber(value: unknown): number | null {
@@ -126,15 +134,43 @@ function parseQuoteAiResult(value: unknown): QuoteAiResult {
       priceHigh: null,
       priceLowDiscounted: null,
       priceHighDiscounted: null,
+      displayTierLabel: null,
+      demoMeta: null,
     };
   }
   const record = value as Record<string, unknown>;
+  const rawMeta =
+    record["meta"] &&
+    typeof record["meta"] === "object" &&
+    !Array.isArray(record["meta"])
+      ? (record["meta"] as Record<string, unknown>)
+      : null;
   return {
     loadFractionEstimate: finiteNumber(record["loadFractionEstimate"]),
     priceLow: finiteNumber(record["priceLow"]),
     priceHigh: finiteNumber(record["priceHigh"]),
     priceLowDiscounted: finiteNumber(record["priceLowDiscounted"]),
     priceHighDiscounted: finiteNumber(record["priceHighDiscounted"]),
+    displayTierLabel:
+      typeof record["displayTierLabel"] === "string"
+        ? record["displayTierLabel"]
+        : null,
+    demoMeta: rawMeta
+      ? {
+          demoType:
+            typeof rawMeta["demoType"] === "string"
+              ? rawMeta["demoType"]
+              : null,
+          demoSize:
+            typeof rawMeta["demoSize"] === "string"
+              ? rawMeta["demoSize"]
+              : null,
+          haulAway:
+            typeof rawMeta["haulAway"] === "boolean"
+              ? rawMeta["haulAway"]
+              : null,
+        }
+      : null,
   };
 }
 
@@ -175,7 +211,11 @@ export function mapInstantQuoteLoadSize(input: {
   perceivedSize: string;
 }): InstantQuoteLoadSize {
   const fraction = input.loadFractionEstimate;
-  if (typeof fraction === "number" && Number.isFinite(fraction) && fraction > 0) {
+  if (
+    typeof fraction === "number" &&
+    Number.isFinite(fraction) &&
+    fraction > 0
+  ) {
     if (fraction <= 0.5) {
       return { kind: "quarter_to_half", customLoads: null };
     }
@@ -232,7 +272,95 @@ export function mapInstantQuoteLeadSource(
   if (normalized.some((source) => googleSources.has(source))) {
     return { type: "google" };
   }
+  const websiteSources = new Set([
+    "website",
+    "public_site",
+    "instant_quote",
+    "demo_quote",
+  ]);
+  if (normalized.some((source) => websiteSources.has(source))) {
+    return { type: "website" };
+  }
   return null;
+}
+
+function mapInstantQuoteDemolitionType(
+  value: string | null,
+): NonNullable<AppointmentBookingDetails["demolition"]>["demoType"] {
+  switch (normalizeToken(value ?? "")) {
+    case "shed":
+      return "shed";
+    case "deck":
+      return "deck";
+    case "fence":
+      return "fence";
+    case "kitchen_bath":
+    case "drywall":
+      return "interior";
+    case "concrete":
+      return "concrete";
+    default:
+      return "other";
+  }
+}
+
+/**
+ * Builds the CRM booking metadata from the quote snapshot saved before the
+ * customer opened scheduling. Price fields are never accepted from the
+ * public booking request, so the CRM range always matches the stored display
+ * range (including any displayed discount).
+ */
+export function resolveInstantQuoteAppointmentBookingDetails(input: {
+  aiResult: unknown;
+  perceivedSize: string;
+  jobTypes: readonly string[];
+  sourceValues?: Array<string | null | undefined>;
+}): AppointmentBookingDetails {
+  const ai = parseQuoteAiResult(input.aiResult);
+  const range = resolvePriceRange(ai);
+  const source =
+    mapInstantQuoteLeadSource(...(input.sourceValues ?? [])) ??
+    ({ type: "website" } as const);
+  const pricing = {
+    mode: "range" as const,
+    rangeMinCents: range.minCents,
+    rangeMaxCents: range.maxCents,
+  };
+  const isDemolitionQuote = input.jobTypes.some((value) =>
+    normalizeToken(value).startsWith("demo_"),
+  );
+
+  if (isDemolitionQuote) {
+    const scopeSize =
+      (
+        ai.demoMeta?.demoSize ??
+        ai.displayTierLabel ??
+        input.perceivedSize ??
+        "Demolition scope"
+      )
+        .trim()
+        .slice(0, 240) || "Demolition scope";
+    return {
+      serviceType: "demolition",
+      source,
+      pricing,
+      demolition: {
+        demoType: mapInstantQuoteDemolitionType(ai.demoMeta?.demoType ?? null),
+        scopeSize,
+        haulAway: ai.demoMeta?.haulAway ?? true,
+      },
+    };
+  }
+
+  return {
+    serviceType: "junk_removal",
+    source,
+    pricing,
+    loadSize: mapInstantQuoteLoadSize({
+      loadFractionEstimate: ai.loadFractionEstimate,
+      perceivedSize: input.perceivedSize,
+    }),
+  };
 }
 
 const FULL_QUOTE_SERVICE_MAP: Readonly<Record<string, string>> = {
@@ -259,7 +387,10 @@ export function mapInstantQuoteServices(jobTypes: readonly string[]): string[] {
   );
 }
 
-function compactText(value: string | null | undefined, maxLength: number): string {
+function compactText(
+  value: string | null | undefined,
+  maxLength: number,
+): string {
   return (value ?? "").replace(/\s+/gu, " ").trim().slice(0, maxLength);
 }
 

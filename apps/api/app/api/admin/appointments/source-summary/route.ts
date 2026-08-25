@@ -17,7 +17,14 @@ const DEFAULT_RANGE_DAYS = 7;
 const MAX_RANGE_DAYS = 90;
 const MAX_JOBS = 25;
 
-type SourceKey = "facebook" | "google" | "referral" | "team_member" | "other" | "unknown";
+type SourceKey =
+  | "facebook"
+  | "google"
+  | "referral"
+  | "team_member"
+  | "website"
+  | "other"
+  | "unknown";
 
 type SourceAttribution = {
   source: SourceKey;
@@ -42,6 +49,8 @@ function sourceLabel(source: SourceKey): string {
       return "Referral";
     case "team_member":
       return "Team member";
+    case "website":
+      return "Website";
     case "other":
       return "Other";
     default:
@@ -64,6 +73,13 @@ function inferSource(input: {
 }): SourceAttribution {
   const bookingDetails = parseAppointmentBookingDetails(input.bookingDetails);
   const bookingSource = bookingDetails?.source?.type ?? null;
+  if (bookingSource === "website") {
+    return {
+      source: "website",
+      label: sourceLabel("website"),
+      reason: "appointment booking source",
+    };
+  }
   if (bookingSource === "facebook" || bookingSource === "google") {
     return {
       source: bookingSource,
@@ -80,17 +96,32 @@ function inferSource(input: {
   }
 
   const contactSource = normalizeText(input.contactSource);
-  if (contactSource === "facebook" || contactSource.includes("facebook") || contactSource.includes("meta")) {
+  if (
+    contactSource === "facebook" ||
+    contactSource.includes("facebook") ||
+    contactSource.includes("meta")
+  ) {
     return { source: "facebook", label: "Facebook", reason: "contact source" };
   }
-  if (contactSource === "google" || contactSource.includes("google") || contactSource.includes("gclid")) {
+  if (
+    contactSource === "google" ||
+    contactSource.includes("google") ||
+    contactSource.includes("gclid")
+  ) {
     return { source: "google", label: "Google", reason: "contact source" };
   }
   if (contactSource.startsWith("referral:") || contactSource === "referral") {
     return { source: "referral", label: "Referral", reason: "contact source" };
   }
-  if (contactSource.startsWith("team_member:") || contactSource === "team_member") {
-    return { source: "team_member", label: "Team member", reason: "contact source" };
+  if (
+    contactSource.startsWith("team_member:") ||
+    contactSource === "team_member"
+  ) {
+    return {
+      source: "team_member",
+      label: "Team member",
+      reason: "contact source",
+    };
   }
   if (contactSource) {
     return { source: "other", label: "Other", reason: "contact source" };
@@ -98,8 +129,16 @@ function inferSource(input: {
 
   const leadSource = normalizeText(input.leadSource);
   const leadUtmSource = normalizeText(input.leadUtmSource);
-  if (input.leadGclid || leadSource.includes("google") || leadUtmSource.includes("google")) {
-    return { source: "google", label: "Google", reason: input.leadGclid ? "lead gclid" : "lead source" };
+  if (
+    input.leadGclid ||
+    leadSource.includes("google") ||
+    leadUtmSource.includes("google")
+  ) {
+    return {
+      source: "google",
+      label: "Google",
+      reason: input.leadGclid ? "lead gclid" : "lead source",
+    };
   }
   if (
     input.leadFbclid ||
@@ -108,11 +147,19 @@ function inferSource(input: {
     leadUtmSource.includes("facebook") ||
     leadUtmSource.includes("meta")
   ) {
-    return { source: "facebook", label: "Facebook", reason: input.leadFbclid ? "lead fbclid" : "lead source" };
+    return {
+      source: "facebook",
+      label: "Facebook",
+      reason: input.leadFbclid ? "lead fbclid" : "lead source",
+    };
   }
 
   if (input.hasDmThread) {
-    return { source: "facebook", label: "Facebook", reason: "Messenger conversation" };
+    return {
+      source: "facebook",
+      label: "Facebook",
+      reason: "Messenger conversation",
+    };
   }
 
   if (leadSource || leadUtmSource) {
@@ -129,7 +176,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   const permissionError = await requirePermission(request, "appointments.read");
   if (permissionError) return permissionError;
 
-  const rangeDays = parseRangeDays(request.nextUrl.searchParams.get("rangeDays"));
+  const rangeDays = parseRangeDays(
+    request.nextUrl.searchParams.get("rangeDays"),
+  );
   const now = new Date();
   const since = new Date(now.getTime() - rangeDays * 24 * 60 * 60 * 1000);
 
@@ -177,8 +226,24 @@ export async function GET(request: NextRequest): Promise<Response> {
     .orderBy(desc(appointments.createdAt))
     .limit(500);
 
-  const buckets = new Map<SourceKey, { source: SourceKey; label: string; count: number; estimatedRevenueCents: number }>();
-  for (const key of ["facebook", "google", "referral", "team_member", "other", "unknown"] as SourceKey[]) {
+  const buckets = new Map<
+    SourceKey,
+    {
+      source: SourceKey;
+      label: string;
+      count: number;
+      estimatedRevenueCents: number;
+    }
+  >();
+  for (const key of [
+    "facebook",
+    "google",
+    "referral",
+    "team_member",
+    "website",
+    "other",
+    "unknown",
+  ] as SourceKey[]) {
     buckets.set(key, {
       source: key,
       label: sourceLabel(key),
@@ -202,8 +267,16 @@ export async function GET(request: NextRequest): Promise<Response> {
     bucket.count += 1;
     bucket.estimatedRevenueCents += amountCents;
 
-    const contactName = [row.contactFirstName, row.contactLastName].filter(Boolean).join(" ").trim() || "Customer";
-    const address = [row.propertyAddressLine1, row.propertyCity, row.propertyState]
+    const contactName =
+      [row.contactFirstName, row.contactLastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim() || "Customer";
+    const address = [
+      row.propertyAddressLine1,
+      row.propertyCity,
+      row.propertyState,
+    ]
       .map((part) => (part ?? "").trim())
       .filter(Boolean)
       .join(", ");
@@ -238,7 +311,11 @@ export async function GET(request: NextRequest): Promise<Response> {
     sources: totals,
     facebook: buckets.get("facebook"),
     google: buckets.get("google"),
-    highlightedJobs: jobs.filter((job) => highlightedSources.includes(job.source as "facebook" | "google")).slice(0, MAX_JOBS),
+    highlightedJobs: jobs
+      .filter((job) =>
+        highlightedSources.includes(job.source as "facebook" | "google"),
+      )
+      .slice(0, MAX_JOBS),
     recentJobs: jobs.slice(0, MAX_JOBS),
   });
 }
