@@ -1,6 +1,8 @@
 export type LockedCrewPayoutSplit = {
   memberId: string;
   splitBps: number;
+  /** Guaranteed commission rate against the completed job total. */
+  fixedJobRateBps?: number;
 };
 
 export type ConfiguredCrewPayoutRule = {

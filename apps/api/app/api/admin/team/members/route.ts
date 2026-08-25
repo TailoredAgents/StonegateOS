@@ -263,6 +263,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     phoneE164: string | null;
     roleId: string | null;
     defaultCrewSplitBps: number | null;
+    fixedCrewJobRateBps: number | null;
     permissionsGrant?: string[] | null;
     permissionsDeny?: string[] | null;
     passwordHash?: string | null;
@@ -284,6 +285,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         phoneE164: teamMembers.phoneE164,
         roleId: teamMembers.roleId,
         defaultCrewSplitBps: teamMembers.defaultCrewSplitBps,
+        fixedCrewJobRateBps: teamMembers.fixedCrewJobRateBps,
         permissionsGrant: teamMembers.permissionsGrant,
         permissionsDeny: teamMembers.permissionsDeny,
         passwordHash: teamMembers.passwordHash,
@@ -324,6 +326,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       emailIdentityStatus: row.email ? "ready" : "none",
       phoneE164: null,
       defaultCrewSplitBps: null,
+      fixedCrewJobRateBps: null,
       permissionsGrant: [],
       permissionsDeny: [],
     }));
@@ -346,6 +349,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         ? "needs_review"
         : "none",
     defaultCrewSplitBps: row.defaultCrewSplitBps ?? null,
+    fixedCrewJobRateBps: row.fixedCrewJobRateBps ?? null,
     permissionsGrant: Array.isArray(row.permissionsGrant)
       ? row.permissionsGrant
       : [],

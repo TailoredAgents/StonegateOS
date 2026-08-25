@@ -25,6 +25,7 @@ type TeamMember = {
   phone: string | null;
   phoneMigrationStatus?: "ready" | "needs_review" | "none";
   defaultCrewSplitBps: number | null;
+  fixedCrewJobRateBps: number | null;
   permissionsGrant: string[];
   permissionsDeny: string[];
   active: boolean;
@@ -272,6 +273,10 @@ export async function AccessSection(): Promise<React.ReactElement> {
   if (membersResult.ok && Array.isArray(membersResult.data.members)) {
     members = membersResult.data.members.map((member) => ({
       ...member,
+      fixedCrewJobRateBps:
+        typeof member.fixedCrewJobRateBps === "number"
+          ? member.fixedCrewJobRateBps
+          : null,
       permissionsGrant: Array.isArray(member.permissionsGrant)
         ? member.permissionsGrant
         : [],
@@ -618,6 +623,17 @@ export async function AccessSection(): Promise<React.ReactElement> {
                       placeholder="Crew split % (e.g. 50)"
                       inputMode="decimal"
                       className="w-full rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 sm:w-[170px]"
+                    />
+                    <input
+                      name="fixedCrewJobRatePercent"
+                      defaultValue={
+                        member.fixedCrewJobRateBps !== null
+                          ? String(member.fixedCrewJobRateBps / 100)
+                          : ""
+                      }
+                      placeholder="Guaranteed job % (e.g. 10)"
+                      inputMode="decimal"
+                      className="w-full rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 sm:w-[200px]"
                     />
                     <SubmitButton
                       className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"

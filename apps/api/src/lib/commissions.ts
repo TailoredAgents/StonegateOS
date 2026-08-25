@@ -549,7 +549,54 @@ export async function resolveConfiguredCrewPayout(
         reason: "invalid_rule",
       };
     }
-    return resolveLockedCrewPayout(memberIds, status.rules);
+    const resolved = resolveLockedCrewPayout(memberIds, status.rules);
+    if (!resolved.ok || resolved.splits.length === 0) return resolved;
+
+    const members = await db
+      .select({
+        memberId: teamMembers.id,
+        fixedJobRateBps: teamMembers.fixedCrewJobRateBps,
+      })
+      .from(teamMembers)
+      .where(
+        inArray(
+          teamMembers.id,
+          resolved.splits.map((split) => split.memberId),
+        ),
+      );
+    const fixedRateByMemberId = new Map(
+      members.map((member) => [member.memberId, member.fixedJobRateBps]),
+    );
+    const fixedRateTotalBps = members.reduce(
+      (sum, member) => sum + (member.fixedJobRateBps ?? 0),
+      0,
+    );
+    if (
+      members.length !== resolved.splits.length ||
+      members.some(
+        (member) =>
+          member.fixedJobRateBps !== null &&
+          (!Number.isInteger(member.fixedJobRateBps) ||
+            member.fixedJobRateBps < 0),
+      ) ||
+      fixedRateTotalBps > DEFAULT_CREW_POOL_RATE_BPS
+    ) {
+      return {
+        ok: false,
+        normalizedMemberIds: resolved.splits.map((split) => split.memberId),
+        reason: "invalid_rule",
+      };
+    }
+
+    return {
+      ...resolved,
+      splits: resolved.splits.map((split) => {
+        const fixedJobRateBps = fixedRateByMemberId.get(split.memberId);
+        return fixedJobRateBps === null || fixedJobRateBps === undefined
+          ? split
+          : { ...split, fixedJobRateBps };
+      }),
+    };
   } catch (error) {
     const code = extractPgCode(error);
     if (code === "42P01" || code === "42703") {
@@ -975,6 +1022,56 @@ export function allocateCrewPoolCents(
   return allocations;
 }
 
+export function allocateCrewCompensationCents(
+  baseCents: number,
+  poolCents: number,
+  crew: Array<{
+    memberId: string;
+    splitBps: number;
+    fixedJobRateBps?: number | null;
+  }>,
+): Array<{
+  memberId: string;
+  splitBps: number;
+  fixedJobRateBps: number | null;
+  cents: number;
+  remainder: number;
+}> {
+  if (baseCents <= 0 || poolCents <= 0 || crew.length === 0) return [];
+
+  const fixed = crew
+    .filter(
+      (entry) =>
+        entry.fixedJobRateBps !== null && entry.fixedJobRateBps !== undefined,
+    )
+    .map((entry) => ({
+      memberId: entry.memberId,
+      splitBps: entry.splitBps,
+      fixedJobRateBps: entry.fixedJobRateBps!,
+      cents: computeBpsAmount(baseCents, entry.fixedJobRateBps!),
+      remainder: 0,
+    }));
+  const fixedCents = fixed.reduce((sum, entry) => sum + entry.cents, 0);
+  if (fixedCents > poolCents) {
+    throw commissionRecipientConfigurationFailure(
+      "Guaranteed crew labor rates exceed the configured crew pool.",
+    );
+  }
+
+  const flexible = crew.filter(
+    (entry) =>
+      entry.fixedJobRateBps === null || entry.fixedJobRateBps === undefined,
+  );
+  const flexibleAllocations = allocateCrewPoolCents(
+    poolCents - fixedCents,
+    flexible,
+  ).map((entry) => ({ ...entry, fixedJobRateBps: null }));
+
+  return [...fixed, ...flexibleAllocations].sort((left, right) =>
+    left.memberId.localeCompare(right.memberId),
+  );
+}
+
 function getEffectiveCrewPoolRateBps(
   _tx: Pick<DatabaseClient, "select">,
   input: {
@@ -1261,12 +1358,17 @@ export async function recalculateAppointmentCommissions(
         });
       }
 
-      let crew: Array<{ memberId: string; splitBps: number }> = [];
+      let crew: Array<{
+        memberId: string;
+        splitBps: number;
+        fixedJobRateBps: number | null;
+      }> = [];
       try {
         crew = await tx
           .select({
             memberId: appointmentCrewMembers.memberId,
             splitBps: appointmentCrewMembers.splitBps,
+            fixedJobRateBps: appointmentCrewMembers.fixedJobRateBps,
           })
           .from(appointmentCrewMembers)
           .where(eq(appointmentCrewMembers.appointmentId, appointmentId));
@@ -1293,7 +1395,11 @@ export async function recalculateAppointmentCommissions(
           baseCents,
           effectiveCrewPool.crewPoolRateBps,
         );
-        const allocations = allocateCrewPoolCents(poolCents, crew);
+        const allocations = allocateCrewCompensationCents(
+          baseCents,
+          poolCents,
+          crew,
+        );
 
         for (const entry of allocations) {
           commissionRows.push({
@@ -1305,6 +1411,7 @@ export async function recalculateAppointmentCommissions(
             meta: {
               poolRateBps: effectiveCrewPool.crewPoolRateBps,
               splitBps: entry.splitBps,
+              fixedJobRateBps: entry.fixedJobRateBps,
               totalSplitBps,
               poolSource: effectiveCrewPool.source,
               ...(effectiveCrewPool.overrideLocalDate

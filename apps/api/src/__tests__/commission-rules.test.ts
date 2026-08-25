@@ -1,4 +1,5 @@
 import {
+  allocateCrewCompensationCents,
   allocateCrewPoolCents,
   isDemoBookingDetails,
   isDemoCommissionJob,
@@ -157,5 +158,37 @@ describe("commission rules", () => {
       { memberId: "5ac5217e-3905-4ea3-bdeb-65456982f5e3", splitBps: 1 },
       { memberId: "b45988bb-7417-48c5-af6d-fcdf71088282", splitBps: 1 },
     ]);
+  });
+
+  it("keeps a guaranteed 10% job rate independent of crew size", () => {
+    const solo = allocateCrewCompensationCents(105_000, 21_000, [
+      {
+        memberId: "jed",
+        splitBps: 1,
+        fixedJobRateBps: 1_000,
+      },
+    ]);
+    expect(solo).toEqual([
+      {
+        memberId: "jed",
+        splitBps: 1,
+        fixedJobRateBps: 1_000,
+        cents: 10_500,
+        remainder: 0,
+      },
+    ]);
+
+    const trio = allocateCrewCompensationCents(105_000, 21_000, [
+      { memberId: "austin", splitBps: 1 },
+      { memberId: "jed", splitBps: 1, fixedJobRateBps: 1_000 },
+      { memberId: "jeffrey", splitBps: 1 },
+    ]);
+    expect(new Map(trio.map((entry) => [entry.memberId, entry.cents]))).toEqual(
+      new Map([
+        ["austin", 5_250],
+        ["jed", 10_500],
+        ["jeffrey", 5_250],
+      ]),
+    );
   });
 });

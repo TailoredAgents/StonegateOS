@@ -6483,6 +6483,26 @@ export async function updateTeamMemberAction(formData: FormData) {
     }
   }
 
+  const fixedCrewJobRatePercent = formData.get("fixedCrewJobRatePercent");
+  if (typeof fixedCrewJobRatePercent === "string") {
+    const trimmed = fixedCrewJobRatePercent.trim();
+    if (trimmed.length === 0) {
+      payload["fixedCrewJobRateBps"] = null;
+    } else {
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+        jar.set({
+          name: "myst-flash-error",
+          value: "Guaranteed job % must be between 0 and 100",
+          path: "/",
+        });
+        revalidatePath("/team");
+        return;
+      }
+      payload["fixedCrewJobRateBps"] = Math.round(parsed * 100);
+    }
+  }
+
   const response = await callAdminMutationWithSafeReplay(
     principal,
     `/api/admin/team/members/${memberId}`,

@@ -69,6 +69,7 @@ const MEMBER_UPDATE_DEADLINE_MS = 5_000;
 const MEMBER_UPDATE_ALLOWED_KEYS = new Set([
   "active",
   "defaultCrewSplitBps",
+  "fixedCrewJobRateBps",
   "email",
   "expectedUpdatedAt",
   "name",
@@ -228,6 +229,7 @@ export async function PATCH(
     active?: boolean;
     phone?: string | null;
     defaultCrewSplitBps?: number | null;
+    fixedCrewJobRateBps?: number | null;
     permissionsGrant?: unknown;
     permissionsDeny?: unknown;
   };
@@ -387,6 +389,26 @@ export async function PATCH(
         );
       }
     }
+    if (Object.prototype.hasOwnProperty.call(value, "fixedCrewJobRateBps")) {
+      const rate = value["fixedCrewJobRateBps"];
+      if (
+        rate !== null &&
+        (typeof rate !== "number" ||
+          !Number.isSafeInteger(rate) ||
+          rate < 0 ||
+          rate > 10_000)
+      ) {
+        throw new TeamMutationFailure(
+          "invalid",
+          "Fixed crew job rate must be a whole number from 0 to 10,000 basis points.",
+          {
+            fieldErrors: {
+              fixedCrewJobRateBps: "Use a value from 0 through 10,000.",
+            },
+          },
+        );
+      }
+    }
     for (const key of ["permissionsGrant", "permissionsDeny"] as const) {
       if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
       const raw = value[key];
@@ -479,6 +501,9 @@ export async function PATCH(
         { status: 400 },
       );
     }
+  }
+  if (payload.fixedCrewJobRateBps !== undefined) {
+    updates["fixedCrewJobRateBps"] = payload.fixedCrewJobRateBps;
   }
 
   if (payload.permissionsGrant !== undefined) {

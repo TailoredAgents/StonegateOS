@@ -20,6 +20,7 @@ export const dynamic = "force-dynamic";
 const MEMBER_UPDATE_FORM_KEYS = new Set([
   "active",
   "defaultCrewSplitPercent",
+  "fixedCrewJobRatePercent",
   "email",
   "expectedUpdatedAt",
   "idempotencyKey",
@@ -110,20 +111,23 @@ export async function POST(
     return response;
   }
   const submittedMemberId = singleAccessFormValue(form, "memberId")?.trim();
-  const name = singleAccessFormValue(form, "name")?.normalize("NFKC").trim() ?? "";
-  const email = singleAccessFormValue(form, "email")?.trim().toLowerCase() ?? "";
+  const name =
+    singleAccessFormValue(form, "name")?.normalize("NFKC").trim() ?? "";
+  const email =
+    singleAccessFormValue(form, "email")?.trim().toLowerCase() ?? "";
   const roleId = singleAccessFormValue(form, "roleId")?.trim() ?? "";
   const phone = singleAccessFormValue(form, "phone")?.trim() ?? "";
   const expectedUpdatedAt =
     singleAccessFormValue(form, "expectedUpdatedAt")?.trim() ?? "";
   const idempotencyKey =
-    singleAccessFormValue(form, "idempotencyKey")
-      ?.normalize("NFKC")
-      .trim() ?? "";
+    singleAccessFormValue(form, "idempotencyKey")?.normalize("NFKC").trim() ??
+    "";
   const activeValues = form.getAll("active");
   const active = activeValues[0] === "on";
   const defaultCrewSplitPercent =
     singleAccessFormValue(form, "defaultCrewSplitPercent")?.trim() ?? "";
+  const fixedCrewJobRatePercent =
+    singleAccessFormValue(form, "fixedCrewJobRatePercent")?.trim() ?? "";
 
   if (
     submittedMemberId !== memberId ||
@@ -165,7 +169,11 @@ export async function POST(
     parsedUpdatedAt.toISOString() !== expectedUpdatedAt
   ) {
     const response = NextResponse.redirect(redirectTo, 303);
-    setFlash(response, "error", "This member version is invalid. Refresh first.");
+    setFlash(
+      response,
+      "error",
+      "This member version is invalid. Refresh first.",
+    );
     return response;
   }
   if (!isAccessIdempotencyKey(idempotencyKey)) {
@@ -222,6 +230,18 @@ export async function POST(
       return response;
     }
     payload["defaultCrewSplitBps"] = Math.round(parsed * 100);
+  }
+
+  if (fixedCrewJobRatePercent.length === 0) {
+    payload["fixedCrewJobRateBps"] = null;
+  } else {
+    const parsed = Number(fixedCrewJobRatePercent);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+      const response = NextResponse.redirect(redirectTo, 303);
+      setFlash(response, "error", "Guaranteed job % must be between 0 and 100");
+      return response;
+    }
+    payload["fixedCrewJobRateBps"] = Math.round(parsed * 100);
   }
 
   let apiResponse: Response;

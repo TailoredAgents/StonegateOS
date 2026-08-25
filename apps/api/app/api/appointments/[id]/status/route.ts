@@ -694,7 +694,13 @@ export async function POST(
       }
     }
 
-    let crewMembers = parsed.data.crewMembers;
+    let crewMembers:
+      | Array<{
+          memberId: string;
+          splitBps: number;
+          fixedJobRateBps?: number;
+        }>
+      | undefined = parsed.data.crewMembers;
     if (crewMembers !== undefined) {
       const resolvedCrewPayout = await resolveConfiguredCrewPayout(
         database,
@@ -1303,6 +1309,7 @@ export async function POST(
               appointmentId,
               memberId: entry.memberId,
               splitBps: entry.splitBps,
+              fixedJobRateBps: entry.fixedJobRateBps ?? null,
               createdAt: committedAt,
             })),
           );

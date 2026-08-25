@@ -584,6 +584,7 @@ export const teamMembers = pgTable(
     permissionsDeny: text("permissions_deny").array().notNull().default([]),
     active: boolean("active").default(true).notNull(),
     defaultCrewSplitBps: integer("default_crew_split_bps"),
+    fixedCrewJobRateBps: integer("fixed_crew_job_rate_bps"),
     passwordHash: text("password_hash"),
     passwordSetAt: timestamp("password_set_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -4636,6 +4637,7 @@ export const appointmentCrewMembers = pgTable(
       .notNull()
       .references(() => teamMembers.id, { onDelete: "restrict" }),
     splitBps: integer("split_bps").default(0).notNull(),
+    fixedJobRateBps: integer("fixed_job_rate_bps"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
