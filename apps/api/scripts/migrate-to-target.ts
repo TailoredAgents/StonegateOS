@@ -52,15 +52,21 @@ function formatMigrationError(error: unknown): string {
   ) {
     seen.add(current);
     const record = current as ErrorRecord;
+    const rawMessage = record["message"];
+    const rawName = record["name"];
     const message =
       current instanceof Error
         ? current.message
-        : String(record["message"] ?? "");
+        : typeof rawMessage === "string"
+          ? rawMessage
+          : "";
     const detail: Record<string, unknown> = {
       name:
         current instanceof Error
           ? current.name
-          : String(record["name"] ?? "Error"),
+          : typeof rawName === "string"
+            ? rawName
+            : "Error",
       message: message.slice(0, 1_000),
     };
 

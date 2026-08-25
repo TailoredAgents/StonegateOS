@@ -4,6 +4,15 @@ import typescriptEslint from "@typescript-eslint/eslint-plugin";
 export default [
   ...mystNext,
   {
+    files: ["**/*.{ts,tsx}"],
+    languageOptions: {
+      parserOptions: {
+        project: "./tsconfig.eslint.json",
+        tsconfigRootDir: process.cwd(),
+      },
+    },
+  },
+  {
     ...typescriptEslint.configs["flat/disable-type-checked"],
     files: ["**/*.js", "**/*.mjs"],
     rules: {
