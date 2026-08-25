@@ -335,6 +335,10 @@ export async function calculatePayoutRunLiveTotalCents(
   return commissionTotal + adjustmentTotal;
 }
 
+export function serializePayoutRunVersionForSql(updatedAt: Date): string {
+  return updatedAt.toISOString();
+}
+
 export async function buildPayoutRunReportData(
   db: PayoutRunReportDb,
   payoutRunId: string,
@@ -851,6 +855,7 @@ export async function savePayoutRunReportHtml(
   const report = await buildPayoutRunReportData(db, payoutRunId);
   const html = renderPayoutRunReportHtml(report);
   const generatedAt = new Date();
+  const reportVersion = serializePayoutRunVersionForSql(report.run.updatedAt);
 
   const [saved] = await db
     .update(payoutRuns)
@@ -865,7 +870,7 @@ export async function savePayoutRunReportHtml(
     .where(
       and(
         eq(payoutRuns.id, payoutRunId),
-        sql`date_trunc('milliseconds', ${payoutRuns.updatedAt}) = ${report.run.updatedAt}`,
+        sql`date_trunc('milliseconds', ${payoutRuns.updatedAt}) = ${reportVersion}::timestamptz`,
       ),
     )
     .returning({ id: payoutRuns.id });

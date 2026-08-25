@@ -12,6 +12,7 @@ import {
   normalizePayoutRunMutationError,
   requirePayoutRunId,
 } from "@/lib/payout-run-mutation-http";
+import { serializePayoutRunVersionForSql } from "@/lib/payout-run-report";
 import { TeamMutationFailure } from "@/lib/team-mutation";
 
 const API_ROOT = path.resolve(__dirname, "../..");
@@ -175,6 +176,18 @@ describe("payout-run integrity", () => {
         nextPayoutRunVersionDate(current, new Date("2026-08-08T12:00:02.000Z")),
       ),
     ).toBe("2026-08-08T12:00:02.000Z");
+  });
+
+  it("serializes report lock versions before binding them to SQL", () => {
+    const version = new Date("2026-08-25T17:22:00.192Z");
+
+    expect(serializePayoutRunVersionForSql(version)).toBe(
+      "2026-08-25T17:22:00.192Z",
+    );
+    expect(typeof serializePayoutRunVersionForSql(version)).toBe("string");
+    expect(source("src/lib/payout-run-report.ts")).toContain(
+      "${reportVersion}::timestamptz",
+    );
   });
 
   it("requires canonical record identifiers and exact timestamp versions", () => {
