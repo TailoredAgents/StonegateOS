@@ -130,27 +130,28 @@ describe("/team optimistic-concurrency timestamp precision", () => {
 
   it("normalizes exactly the 13 additional timestamp-CAS tables", () => {
     const migratedTables = Array.from(
-      migration.matchAll(/ALTER TABLE "([^"]+)"/gu),
+      migration.matchAll(/^    '([^']+)'[,]?$/gmu),
       (match) => match[1],
-    );
-    const normalizedColumns = Array.from(
-      migration.matchAll(
-        /ALTER COLUMN "updated_at" TYPE timestamp\(3\) with time zone\s+USING date_trunc\('milliseconds', "updated_at"\);/gu,
-      ),
     );
 
     expect(migratedTables).toHaveLength(versionTables.length);
     expect(new Set(migratedTables)).toEqual(
       new Set(versionTables.map(({ sqlTable }) => sqlTable)),
     );
-    expect(normalizedColumns).toHaveLength(versionTables.length);
-    expect(migration).not.toContain('ALTER TABLE "appointments"');
-    expect(migration).not.toContain('ALTER COLUMN "created_at"');
+    expect(migration).toContain(
+      "ALTER COLUMN updated_at TYPE timestamp(3) with time zone",
+    );
+    expect(migration).toContain(
+      "WHEN feature_not_supported OR dependent_objects_still_exist",
+    );
+    expect(migration).not.toContain("'appointments'");
+    expect(migration).not.toContain("created_at");
   });
 
   it("registers migration 0099 after the appointment precision migration", () => {
-    const previous = journal.entries.at(-2);
-    const current = journal.entries.at(-1);
+    const previous = journal.entries.at(-3);
+    const current = journal.entries.at(-2);
+    const next = journal.entries.at(-1);
 
     expect(previous).toMatchObject({
       idx: 95,
@@ -165,5 +166,12 @@ describe("/team optimistic-concurrency timestamp precision", () => {
       breakpoints: true,
     });
     expect(current?.when).toBeGreaterThan(previous?.when ?? 0);
+    expect(next).toMatchObject({
+      idx: 97,
+      version: "7",
+      tag: "0100_fixed_crew_job_rates",
+      breakpoints: true,
+    });
+    expect(next?.when).toBeGreaterThan(current?.when ?? 0);
   });
 });
