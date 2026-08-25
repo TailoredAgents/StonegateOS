@@ -33,9 +33,61 @@ type AppliedMigration = {
   createdAt: string | number | null;
 };
 
+type ErrorRecord = Record<string, unknown> & { cause?: unknown };
+
 const MIGRATION_LOCK_NAMESPACE = "stonegateos";
 const MIGRATION_LOCK_NAME = "schema_migrations";
 const MIGRATION_TAG_PATTERN = /^\d{4}_[a-z0-9_]+$/;
+
+function formatMigrationError(error: unknown): string {
+  const chain: Array<Record<string, unknown>> = [];
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+
+  while (
+    typeof current === "object" &&
+    current !== null &&
+    !seen.has(current) &&
+    chain.length < 5
+  ) {
+    seen.add(current);
+    const record = current as ErrorRecord;
+    const message =
+      current instanceof Error
+        ? current.message
+        : String(record["message"] ?? "");
+    const detail: Record<string, unknown> = {
+      name:
+        current instanceof Error
+          ? current.name
+          : String(record["name"] ?? "Error"),
+      message: message.slice(0, 1_000),
+    };
+
+    for (const field of [
+      "code",
+      "detail",
+      "hint",
+      "schema_name",
+      "table_name",
+      "column_name",
+      "constraint_name",
+      "routine",
+    ]) {
+      const value = record[field];
+      if (typeof value === "string" && value.length > 0) {
+        detail[field] = value.slice(0, 1_000);
+      }
+    }
+    chain.push(detail);
+    current = record.cause;
+  }
+
+  if (chain.length === 0) {
+    return String(error).slice(0, 1_000);
+  }
+  return JSON.stringify(chain);
+}
 
 function shouldUseSsl(connectionString: string): boolean {
   return (
@@ -420,8 +472,7 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   console.error(
-    "[db:migrate] targeted migration failed:",
-    error instanceof Error ? error.message : error,
+    `[db:migrate] targeted migration failed: ${formatMigrationError(error)}`,
   );
   process.exitCode = 1;
 });
