@@ -103,7 +103,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   } | null;
   const password =
     typeof payload?.password === "string" ? payload.password : "";
-  if (payload?.confirm !== "replace-devon-with-jed" || password.length < 10) {
+  if (payload?.confirm !== "replace-devon-with-jed" || password.length < 9) {
     return NextResponse.json(
       { error: "invalid_transition_request" },
       { status: 400 },
