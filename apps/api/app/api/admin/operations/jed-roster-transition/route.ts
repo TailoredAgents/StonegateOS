@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, eq, isNull, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import {
   auditLogs,
   commissionCrewSplitRules,
@@ -271,11 +271,23 @@ export async function POST(request: NextRequest): Promise<Response> {
       await tx
         .delete(teamLoginTokens)
         .where(eq(teamLoginTokens.teamMemberId, DEVON_MEMBER_ID));
-      const disabledRules = await tx
-        .update(commissionCrewSplitRules)
-        .set({ enabled: false, updatedAt: now })
-        .where(eq(commissionCrewSplitRules.memberId, DEVON_MEMBER_ID))
-        .returning({ id: commissionCrewSplitRules.id });
+      const devonRuleKeys = await tx
+        .select({ ruleKey: commissionCrewSplitRules.ruleKey })
+        .from(commissionCrewSplitRules)
+        .where(eq(commissionCrewSplitRules.memberId, DEVON_MEMBER_ID));
+      const disabledRules =
+        devonRuleKeys.length > 0
+          ? await tx
+              .update(commissionCrewSplitRules)
+              .set({ enabled: false, updatedAt: now })
+              .where(
+                inArray(
+                  commissionCrewSplitRules.ruleKey,
+                  devonRuleKeys.map((rule) => rule.ruleKey),
+                ),
+              )
+              .returning({ id: commissionCrewSplitRules.id })
+          : [];
 
       await tx.insert(auditLogs).values({
         actorType: "worker",
