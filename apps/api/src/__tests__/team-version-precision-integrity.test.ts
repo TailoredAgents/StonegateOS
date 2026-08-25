@@ -128,24 +128,13 @@ describe("/team optimistic-concurrency timestamp precision", () => {
     },
   );
 
-  it("normalizes exactly the 13 additional timestamp-CAS tables", () => {
-    const migratedTables = Array.from(
-      migration.matchAll(/^    '([^']+)'[,]?$/gmu),
-      (match) => match[1],
-    );
-
-    expect(migratedTables).toHaveLength(versionTables.length);
-    expect(new Set(migratedTables)).toEqual(
-      new Set(versionTables.map(({ sqlTable }) => sqlTable)),
-    );
+  it("defers the physical precision rewrite while production views depend on the columns", () => {
+    expect(migration).toContain("explicit, safe checkpoint");
     expect(migration).toContain(
-      "ALTER COLUMN updated_at TYPE timestamp(3) with time zone",
+      "Deferred /team updated_at storage precision changes",
     );
-    expect(migration).toContain(
-      "WHEN feature_not_supported OR dependent_objects_still_exist",
-    );
-    expect(migration).not.toContain("'appointments'");
-    expect(migration).not.toContain("created_at");
+    expect(migration).not.toContain("ALTER TABLE");
+    expect(migration).not.toContain("DROP VIEW");
   });
 
   it("registers migration 0099 after the appointment precision migration", () => {
