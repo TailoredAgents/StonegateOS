@@ -86,11 +86,20 @@ jest.mock("drizzle-orm", () => ({
   isNotNull: jest.fn((value: unknown) => ({ kind: "isNotNull", value })),
   isNull: jest.fn((value: unknown) => ({ kind: "isNull", value })),
   or: jest.fn((...values: unknown[]) => ({ kind: "or", values })),
-  sql: jest.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
-    kind: "sql",
-    strings: Array.from(strings),
-    values,
-  })),
+  sql: Object.assign(
+    jest.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
+      kind: "sql",
+      strings: Array.from(strings),
+      values,
+    })),
+    {
+      param: jest.fn((value: unknown, encoder: unknown) => ({
+        kind: "param",
+        value,
+        encoder,
+      })),
+    },
+  ),
 }));
 
 type ContactState = {
