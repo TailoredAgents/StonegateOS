@@ -24,91 +24,91 @@ This document is the implementation checklist and production-readiness record fo
 
 ### Financial data and controls
 
-- [ ] Add stable expense category IDs, aliases for current labels, and seeded categories: Dump Fees, Fuel, Meals, Equipment, Vehicle, Insurance, Software, Advertising, Supplies, Tolls/Parking, Subcontractors, Office/Admin, Other, and legacy Reimbursements.
-  - Verification: Pending.
-- [ ] Add expense allocations so one receipt can optionally be split across categories; allocations must exactly equal the expense total.
-  - Verification: Pending.
-- [ ] Add submitter, payer type (`company` or `personal`), paid-by member, review status, reviewer, source, and receipt-capture references.
-  - Verification: Pending.
-- [ ] Add permissions for `expenses.submit`, `expenses.approve`, `financials.read`, and `ad_spend.write`. Crew see only their submissions; Overview and daily ad spend remain owner-only.
-  - Verification: Pending.
-- [ ] Keep existing expense lifecycle, idempotency, immutable corrections, audit history, and legacy receipt compatibility.
-  - Verification: Pending.
-- [ ] Migrate known category labels through aliases; preserve unknown historical labels and flag them rather than guessing.
-  - Verification: Pending.
-- [ ] Store new receipt originals and normalized derivatives in private R2 instead of PostgreSQL data URLs. Retain legacy receipt fallback while old files are migrated and verified in batches.
-  - Verification: Pending.
+- [x] Add stable expense category IDs, aliases for current labels, and seeded categories: Dump Fees, Fuel, Meals, Equipment, Vehicle, Insurance, Software, Advertising, Supplies, Tolls/Parking, Subcontractors, Office/Admin, Other, and legacy Reimbursements.
+  - Verification: Migrations `0102_expense_tracking_v2_foundation.sql` and `0107_expense_dump_alias_and_backfill.sql` applied on a clean PostgreSQL database; `expense-v2-foundation.test.ts` and `expense-v2-database-guards.integration.test.ts` passed.
+- [x] Add expense allocations so one receipt can optionally be split across categories; allocations must exactly equal the expense total.
+  - Verification: Database allocation guards and submission transactions passed in `expense-v2-database-guards.integration.test.ts` and `expense-submission-workflow.integration.test.ts`; client exact-cent validation passed in `mobile-spend-v2.test.ts`.
+- [x] Add submitter, payer type (`company` or `personal`), paid-by member, review status, reviewer, source, and receipt-capture references.
+  - Verification: Schema/migration contract passed in `expense-v2-foundation.test.ts`; owner, crew, and personal-payer persistence passed in `expense-submission-workflow.integration.test.ts`.
+- [x] Add permissions for `expenses.submit`, `expenses.approve`, `financials.read`, and `ad_spend.write`. Crew see only their submissions; Overview and daily ad spend remain owner-only.
+  - Verification: `permissions.test.ts`, `access-role-templates.test.ts`, `expense-submission-workflow.integration.test.ts`, and route access tests passed; legacy read/summary/export routes explicitly reject crew.
+- [x] Keep existing expense lifecycle, idempotency, immutable corrections, audit history, and legacy receipt compatibility.
+  - Verification: `expense-managed-mutation.test.ts`, `expense-managed-lifecycle.integration.test.ts`, `expense-integrity.test.ts`, and `legacy-expense-receipt-backfill.test.ts` passed, including correction/reversal and ambiguous-commit evidence retention.
+- [x] Migrate known category labels through aliases; preserve unknown historical labels and flag them rather than guessing.
+  - Verification: Alias/backfill migrations applied cleanly; unknown-label completeness behavior passed in `expense-overview-repository.test.ts` and database guard coverage.
+- [x] Store new receipt originals and normalized derivatives in private R2 instead of PostgreSQL data URLs. Retain legacy receipt fallback while old files are migrated and verified in batches.
+  - Verification: `media-storage.test.ts`, `expense-receipt-evidence.test.ts`, `expense-receipt-storage.test.ts`, `legacy-expense-receipt-backfill.test.ts`, and `legacy-expense-receipt.test.ts` passed. Originals use write-once conditional PUT plus R2/S3 re-read/hash/MIME verification. The bounded production backfill run remains a rollout task.
 
 ### Receipt scanning and approval
 
-- [ ] Add an expense-capture API for upload intent, upload finalization, analysis status, confirmation, and discard.
-  - Verification: Pending.
-- [ ] Reuse the current signed-upload, hashing, HEIC/orientation, IndexedDB, and background-sync foundations through generalized binary-upload utilities.
-  - Verification: Pending.
-- [ ] Process receipts asynchronously in the worker; API requests must not wait for AI.
-  - Verification: Pending.
-- [ ] Extract vendor, transaction date, total, tax, payment last four, suggested category, optional line items, warnings, and per-field confidence using image input and strict structured output. The Responses integration must support image input and structured JSON output.
-  - Verification: Pending.
-- [ ] Add `OPENAI_EXPENSE_MODEL`, falling back to the existing configured model, and send `store: false`.
-  - Verification: Pending.
-- [ ] Never invent missing values. Missing or low-confidence totals and dates remain blank and visibly marked **Check this**.
-  - Verification: Pending.
-- [ ] Require human confirmation before any expense posts. AI can only prefill the form.
-  - Verification: Pending.
-- [ ] Detect exact duplicates by SHA-256 and fuzzy duplicates by normalized vendor, total, and nearby date. Exact duplicates require owner override with a recorded reason.
-  - Verification: Pending.
-- [ ] Learn from approved corrections using vendor/category rules. Apply an owner-locked rule first, then a rule with at least three approved confirmations and 80% agreement, then the AI suggestion. Do not automatically retrain a model.
-  - Verification: Pending.
-- [ ] For company-paid submissions, owner approval posts the expense.
-  - Verification: Pending.
-- [ ] For personal submissions, owner approval posts the underlying categorized expense and creates one reimbursement claim referencing that same expense.
-  - Verification: Pending.
-- [ ] Attach approved claims to the next editable payout as adjustments. Never create a second reimbursement expense. Claims approved after a payout locks move to the next payout.
-  - Verification: Pending.
+- [x] Add an expense-capture API for upload intent, upload finalization, analysis status, confirmation, and discard.
+  - Verification: Route and pipeline contracts passed in `expense-receipt-capture-pipeline-contract.test.ts`, `expense-receipt-confirmation.integration.test.ts`, and the API production build/typecheck.
+- [x] Reuse the current signed-upload, hashing, HEIC/orientation, IndexedDB, and background-sync foundations through generalized binary-upload utilities.
+  - Verification: Appointment media and expense receipts share `binary-upload.ts` hashing/integrity utilities and the existing private `media-storage.ts`; the service worker shares its verified queued-binary materializer. `binary-upload.test.ts`, `expense-receipt-storage.test.ts`, and mobile queue contract tests passed, and the IndexedDB upgrade preserves all appointment stores.
+- [x] Process receipts asynchronously in the worker; API requests must not wait for AI.
+  - Verification: `expense-receipt-capture-pipeline-contract.test.ts` confirms finalization only enqueues `expense.receipt.analyze`; worker retry/terminal behavior passed in `expense-receipt-analysis-retry.integration.test.ts`.
+- [x] Extract vendor, transaction date, total, tax, payment last four, suggested category, optional line items, warnings, and per-field confidence using image input and strict structured output. The Responses integration must support image input and structured JSON output.
+  - Verification: Strict request/schema and image/PDF input coverage passed in `expense-receipt-openai.test.ts` and `expense-receipt-domain.test.ts`.
+- [x] Add `OPENAI_EXPENSE_MODEL`, falling back to the existing configured model, and send `store: false`.
+  - Verification: Configuration fallback and request-body assertions passed in `expense-receipt-openai.test.ts`; environment declarations are present in `.env.example`, `render.yaml`, and `ENV_CATALOG.md`.
+- [x] Never invent missing values. Missing or low-confidence totals and dates remain blank and visibly marked **Check this**.
+  - Verification: Null/confidence schema tests passed in `expense-receipt-domain.test.ts`; `mobile-spend-v2.test.ts` confirms visible review warnings and required user correction.
+- [x] Require human confirmation before any expense posts. AI can only prefill the form.
+  - Verification: `expense-receipt-capture-pipeline-contract.test.ts` proves analysis cannot insert/post expenses; `expense-receipt-confirmation.integration.test.ts` verifies posting occurs only through confirmation.
+- [x] Detect exact duplicates by SHA-256 and fuzzy duplicates by normalized vendor, total, and nearby date. Exact duplicates require owner override with a recorded reason.
+  - Verification: Domain/review tests and `expense-receipt-duplicate-concurrency.integration.test.ts` passed; two simultaneous identical receipts can produce only one posted expense, and overrides are audited with a reason.
+- [x] Learn from approved corrections using vendor/category rules. Apply an owner-locked rule first, then a rule with at least three approved confirmations and 80% agreement, then the AI suggestion. Do not automatically retrain a model.
+  - Verification: Rule priority, threshold, disagreement, and owner-lock behavior passed in `expense-receipt-domain.test.ts`; the owner-only vendor-rule endpoint persists explicit rules without model training.
+- [x] For company-paid submissions, owner approval posts the expense.
+  - Verification: Owner-immediate and crew-approval company-paid cases passed in `expense-submission-workflow.integration.test.ts`.
+- [x] For personal submissions, owner approval posts the underlying categorized expense and creates one reimbursement claim referencing that same expense.
+  - Verification: Single-expense/single-claim behavior passed in `expense-submission-workflow.integration.test.ts` and database uniqueness guards.
+- [x] Attach approved claims to the next editable payout as adjustments. Never create a second reimbursement expense. Claims approved after a payout locks move to the next payout.
+  - Verification: Draft, locked, paid, late-approval, retry, and no-double-expense transitions passed in `expense-reimbursement-payout-transitions.integration.test.ts` and `expense-managed-lifecycle.integration.test.ts`.
 
 ### Mobile experience
 
-- [ ] Keep one top-level **Spend** destination; do not add another bottom-navigation item.
-  - Verification: Pending.
-- [ ] Add a three-option segmented control: **Add**, **Overview**, **History**. Default to Add.
-  - Verification: Pending.
-- [ ] Add shows exactly three choices: **Scan receipt** as the primary action, **Daily ad spend**, and **Manual entry**.
-  - Verification: Pending.
-- [ ] Once a workflow opens, hide the other choices and use no more than one filled primary button per screen.
-  - Verification: Pending.
-- [ ] Receipt flow: rear camera -> preview -> extraction -> compact review -> submit. Review shows vendor, date, total, category, and who paid; notes, payment method, job link, and category splitting live under **More details**.
-  - Verification: Pending.
-- [ ] Manual flow shows date, amount, category, and who paid first; all optional fields stay collapsed.
-  - Verification: Pending.
-- [ ] History shows status, submitter, amount, category, receipt, and reimbursement state. Owners see pending reviews first; crew see only their entries. Use one filter control and no bulk-approval action.
-  - Verification: Pending.
-- [ ] Offline captures persist by employee, survive reloads, and retry after reconnection. Display **Waiting to sync**, never **Saved**, until acknowledged by the server.
-  - Verification: Pending.
-- [ ] Preserve existing appointment-photo queues when upgrading IndexedDB and the service worker.
-  - Verification: Pending.
+- [x] Keep one top-level **Spend** destination; do not add another bottom-navigation item.
+  - Verification: `mobile-spend-v2.test.ts` source contract passed and the production site build exposes Expense V2 only inside the existing `/mobile` Spend screen.
+- [x] Add a three-option segmented control: **Add**, **Overview**, **History**. Default to Add.
+  - Verification: `mobile-spend-v2.test.ts` passed default-state and accessible `aria-pressed` control assertions; the Playwright mobile layout spec covers all three controls.
+- [x] Add shows exactly three choices: **Scan receipt** as the primary action, **Daily ad spend**, and **Manual entry**.
+  - Verification: `mobile-spend-v2.test.ts` passed the three-choice/one-primary invariant across capability combinations, including disabled rollout states.
+- [x] Once a workflow opens, hide the other choices and use no more than one filled primary button per screen.
+  - Verification: Mobile source-contract tests passed workflow hiding and singular-primary assertions; `mobile-expense-v2.spec.ts` exercises the manual and daily-ad transitions.
+- [x] Receipt flow: rear camera -> preview -> extraction -> compact review -> submit. Review shows vendor, date, total, category, and who paid; notes, payment method, job link, and category splitting live under **More details**.
+  - Verification: `mobile-spend-v2.test.ts` passed rear-camera, preview, required review-field, and collapsed-detail contracts; API confirmation tests verify the submitted values.
+- [x] Manual flow shows date, amount, category, and who paid first; all optional fields stay collapsed.
+  - Verification: `mobile-spend-v2.test.ts` and typed `mobile-expense-v2.spec.ts` passed/compiled against the essential-field and collapsed-details contract.
+- [x] History shows status, submitter, amount, category, receipt, and reimbursement state. Owners see pending reviews first; crew see only their entries. Use one filter control and no bulk-approval action.
+  - Verification: `expense-submission-history.test.ts`, `expense-submission-workflow.integration.test.ts`, and `mobile-spend-v2.test.ts` passed ordering, isolation, display-field, one-filter, and no-bulk-action assertions.
+- [x] Offline captures persist by employee, survive reloads, and retry after reconnection. Display **Waiting to sync**, never **Saved**, until acknowledged by the server.
+  - Verification: `mobile-spend-v2.test.ts`, `binary-upload.test.ts`, service-worker syntax validation, and queue-health tests passed persisted employee scoping, terminal/retry state, checksum, and copy contracts.
+- [x] Preserve existing appointment-photo queues when upgrading IndexedDB and the service worker.
+  - Verification: `mobile-spend-v2.test.ts` verifies all pre-existing stores remain in every upgrade path; the service worker and foreground clients use the same schema version and passed syntax/type checks.
 - [ ] Meet mobile accessibility requirements: 44px targets, visible focus, proper labels, non-color status indicators, `aria-live` processing updates, and VoiceOver/TalkBack coverage.
-  - Verification: Pending.
+  - Verification: Partial—source-contract tests and the typed mobile Playwright spec verify 44px controls, labels, focus classes, text status, and live regions. Physical VoiceOver and TalkBack passes remain required before rollout.
 
 ### Daily advertising costs
 
-- [ ] Add a daily-ad registry uniquely keyed by platform and Eastern business date.
-  - Verification: Pending.
-- [ ] Absence means not entered; an explicit `$0.00` means confirmed zero spend.
-  - Verification: Pending.
-- [ ] Daily Ad Spend defaults to yesterday and presents one native date input, a Today shortcut, two fixed fields-Facebook and Google-and one **Save ad spend** button.
-  - Verification: Pending.
-- [ ] Reload and prefill existing values when the date changes.
-  - Verification: Pending.
-- [ ] Saving a positive value posts an owner-approved Advertising expense with vendor `Meta Ads` or `Google Ads`.
-  - Verification: Pending.
-- [ ] Changing a saved value uses the ledger's immutable correction/reversal path and updates the registry pointer; it never adds a second active expense.
-  - Verification: Pending.
-- [ ] Changing a value to zero reverses the prior expense but retains the confirmed-zero registry entry.
-  - Verification: Pending.
-- [ ] Imported Meta/Google data remains analytics-only and hidden from this v1 interface. It cannot fill, replace, or supplement manual financial totals.
-  - Verification: Pending.
-- [ ] Show a small missing-yesterday reminder and selected-week completeness warning; tapping it opens the first missing date.
-  - Verification: Pending.
+- [x] Add a daily-ad registry uniquely keyed by platform and Eastern business date.
+  - Verification: Clean migration and database uniqueness checks passed in `expense-v2-foundation.test.ts` and `expense-v2-database-guards.integration.test.ts`.
+- [x] Absence means not entered; an explicit `$0.00` means confirmed zero spend.
+  - Verification: Null-versus-zero and completeness cases passed in `daily-ad-spend.test.ts` and `expense-overview.test.ts`.
+- [x] Daily Ad Spend defaults to yesterday and presents one native date input, a Today shortcut, two fixed fields-Facebook and Google-and one **Save ad spend** button.
+  - Verification: `mobile-spend-v2.test.ts` passed the Eastern-yesterday/default-control contract; the typed mobile Playwright spec covers the rendered fields.
+- [x] Reload and prefill existing values when the date changes.
+  - Verification: Date-triggered GET/prefill behavior passed in `mobile-spend-v2.test.ts` and daily-ad route tests.
+- [x] Saving a positive value posts an owner-approved Advertising expense with vendor `Meta Ads` or `Google Ads`.
+  - Verification: Both platform cases and owner-only permission enforcement passed in `daily-ad-spend.test.ts` and route tests.
+- [x] Changing a saved value uses the ledger's immutable correction/reversal path and updates the registry pointer; it never adds a second active expense.
+  - Verification: Correction lineage, pointer replacement, idempotency, and active-expense uniqueness passed in `daily-ad-spend.test.ts` and `expense-v2-database-guards.integration.test.ts`.
+- [x] Changing a value to zero reverses the prior expense but retains the confirmed-zero registry entry.
+  - Verification: Positive-to-zero correction and confirmed-zero persistence passed in `daily-ad-spend.test.ts`.
+- [x] Imported Meta/Google data remains analytics-only and hidden from this v1 interface. It cannot fill, replace, or supplement manual financial totals.
+  - Verification: Daily-ad implementation accepts only manual Facebook/Google values; overview repository tests prove totals use only registry-linked ledger expenses.
+- [x] Show a small missing-yesterday reminder and selected-week completeness warning; tapping it opens the first missing date.
+  - Verification: Missing-date aggregation passed in `expense-overview.test.ts`; reminder/click-through source contracts passed in `mobile-spend-v2.test.ts`.
 
 ## Weekly Overview contract
 
@@ -140,45 +140,45 @@ The Overview UI uses previous/date/next week controls, four headline values-Reve
 
 ### Weekly Overview implementation
 
-- [ ] Implement the weekly Overview API contract and require `financials.read`.
-  - Verification: Pending.
-- [ ] Use Eastern Monday/Sunday boundaries and `completedAt` plus `finalTotalCents` for completed-job revenue.
-  - Verification: Pending.
-- [ ] Reconcile ordinary expenses, allocations, accrued labor, ads, corrections, and reimbursements without double counting.
-  - Verification: Pending.
-- [ ] Return labor and advertising subrows, completeness metadata, pending count, missing ad dates, and missing commission count.
-  - Verification: Pending.
-- [ ] Return null percentages for zero denominators and prior-week change with an explicit zero-baseline state.
-  - Verification: Pending.
-- [ ] Build the four-value mobile Overview with previous/date/next controls and ranked horizontal category bars.
-  - Verification: Pending.
+- [x] Implement the weekly Overview API contract and require `financials.read`.
+  - Verification: `expense-overview-route.test.ts`, `permissions.test.ts`, and API type/build checks passed for `GET /api/admin/expenses/overview?weekStart=YYYY-MM-DD`.
+- [x] Use Eastern Monday/Sunday boundaries and `completedAt` plus `finalTotalCents` for completed-job revenue.
+  - Verification: DST, boundary, completion-time, and final-total cases passed in `expense-overview.test.ts` and `expense-overview-repository.test.ts`.
+- [x] Reconcile ordinary expenses, allocations, accrued labor, ads, corrections, and reimbursements without double counting.
+  - Verification: Ledger fixture reconciliation passed in `expense-overview.test.ts` and repository tests, including payout-source exclusion, personal-purchase categorization, corrections, and reimbursement adjustment exclusion.
+- [x] Return labor and advertising subrows, completeness metadata, pending count, missing ad dates, and missing commission count.
+  - Verification: Response-shape and amount assertions passed in overview unit/repository/route tests; actual-versus-estimated labor transitions passed against payout fixtures.
+- [x] Return null percentages for zero denominators and prior-week change with an explicit zero-baseline state.
+  - Verification: Zero-revenue, zero-expense, unavailable, incomplete, zero-baseline, and undefined-ratio states passed in `expense-overview.test.ts` and `mobile-spend-v2.test.ts`.
+- [x] Build the four-value mobile Overview with previous/date/next controls and ranked horizontal category bars.
+  - Verification: `mobile-spend-v2.test.ts` passed headline, week-navigation, ranked-bar, completeness-copy, and no-pie-chart contracts; the site production build passed.
 
 ## Verification and production rollout
 
-- [ ] Unit-test receipt schemas, confidence handling, vendor learning, allocation totals, duplicate detection, daily-ad uniqueness, corrections, reimbursements, and all weekly calculations.
-  - Verification: Pending.
-- [ ] Test DST boundaries, zero revenue, zero expenses, corrected/voided entries, missing commission rows, late reimbursements, and paid-payroll double-count prevention.
-  - Verification: Pending.
-- [ ] Integration-test owner immediate posting, crew pending approval, rejection, permission isolation, reimbursement attachment, payout locking, ad correction to zero, and idempotent retries.
-  - Verification: Pending.
+- [x] Unit-test receipt schemas, confidence handling, vendor learning, allocation totals, duplicate detection, daily-ad uniqueness, corrections, reimbursements, and all weekly calculations.
+  - Verification: Focused Expense V2 unit suites passed and are part of the full API test command and CI workflow; mobile binary/receipt/Spend contract tests also passed.
+- [x] Test DST boundaries, zero revenue, zero expenses, corrected/voided entries, missing commission rows, late reimbursements, and paid-payroll double-count prevention.
+  - Verification: All named edge cases passed in `expense-overview.test.ts`, `expense-overview-repository.test.ts`, `daily-ad-spend.test.ts`, `expense-managed-lifecycle.integration.test.ts`, and `expense-reimbursement-payout-transitions.integration.test.ts`.
+- [x] Integration-test owner immediate posting, crew pending approval, rejection, permission isolation, reimbursement attachment, payout locking, ad correction to zero, and idempotent retries.
+  - Verification: Eight mandatory PostgreSQL Expense V2 suites are wired into CI; 14 integration cases passed against a clean locally migrated PostgreSQL 16 database.
 - [ ] E2E-test iOS Safari/PWA and Android Chrome/PWA for camera denial, HEIC, PDF, glare, rotation, offline capture, expired sessions, reload during analysis, and storage pressure.
-  - Verification: Pending.
+  - Verification: Partial—`mobile-expense-v2.spec.ts` is typed and registered for Chromium Pixel and WebKit iPhone projects, but the full service-worker/camera/file/error matrix and physical-device PWA passes remain outstanding.
 - [ ] Build a reviewed benchmark of at least 100 representative receipts. Require at least 98% exact total extraction and 95% date/vendor extraction before crew rollout.
-  - Verification: Pending.
-- [ ] Confirm an extracted receipt can never post without review and exact duplicate uploads cannot create duplicate expenses.
-  - Verification: Pending.
-- [ ] Confirm Overview reconciles exactly against fixture revenue, allocations, labor, ads, corrections, and reimbursements.
-  - Verification: Pending.
-- [ ] Release behind separate receipt, ad-spend, reimbursement, and Overview flags.
-  - Verification: Pending.
+  - Verification: Pending representative private corpus and live benchmark result. The repository includes a gated aggregate-only benchmark harness and runbook; no API calls or charges were made during implementation.
+- [x] Confirm an extracted receipt can never post without review and exact duplicate uploads cannot create duplicate expenses.
+  - Verification: Pipeline source contract, confirmation integration, dynamic SHA recheck, advisory-lock concurrency test, and database guard tests passed.
+- [x] Confirm Overview reconciles exactly against fixture revenue, allocations, labor, ads, corrections, and reimbursements.
+  - Verification: Exact-cent fixture assertions passed in `expense-overview.test.ts` and `expense-overview-repository.test.ts`, including zero denominators and finalized payroll replacement.
+- [x] Release behind separate receipt, ad-spend, reimbursement, and Overview flags.
+  - Verification: `expense-feature-flags.test.ts` passed independent default-off controls. Receipt API/worker flags must agree, and `EXPENSE_RECEIPT_CREW_ENABLED` keeps the first 30-50 scans owner-only.
 - [ ] Deploy in order: database expansion -> API -> worker -> site.
-  - Verification: Pending.
+  - Verification: Local clean-database migration, API tests, worker contracts, and site build passed. No production deployment or feature enablement was performed because rollout gates remain open.
 - [ ] Pilot owner-only scanning with 30-50 receipts, then enable owner ad entry and Overview, then crew submission.
-  - Verification: Pending.
+  - Verification: Owner/crew audience gates are implemented and default off; live owner pilot, benchmark, and staged enablement remain pending.
 - [ ] Monitor analysis latency/failures, correction rate, duplicate warnings, unsynced queue age, pending approvals, missing ad days, reimbursement backlog, and incomplete overview weeks.
-  - Verification: Pending.
-- [ ] Keep the existing manual expense path available as rollback; disabling flags must not hide or corrupt captured ledger data.
-  - Verification: Pending.
+  - Verification: Aggregate-only operations endpoint, fresh/stale client queue telemetry, permission checks, and monitor integration tests passed. Live production observations remain pending.
+- [x] Keep the existing manual expense path available as rollback; disabling flags must not hide or corrupt captured ledger data.
+  - Verification: Capability/source tests confirm manual entry remains available; captured status/content paths remain readable with intake flags off, and feature-flag tests confirm independent rollback.
 
 ## Explicit defaults
 
@@ -193,15 +193,15 @@ The Overview UI uses previous/date/next week controls, four headline values-Reve
 
 ## Rollout record
 
-| Stage | Status | Verification notes |
-| --- | --- | --- |
-| Database expansion | Pending | Pending. |
-| API | Pending | Pending. |
-| Receipt analysis worker | Pending | Pending. |
-| Mobile site | Pending | Pending. |
-| Owner receipt pilot | Pending | Pending. |
-| Owner ad spend and Overview | Pending | Pending. |
-| Crew submissions | Pending | Pending. |
+| Stage                       | Status                                    | Verification notes                                                                                                      |
+| --------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Database expansion          | Locally verified; production pending      | Migrations through 0107 applied cleanly to fresh PostgreSQL 16; database guard suites passed.                           |
+| API                         | Locally verified; production pending      | Full API run passed 273 suites/2,848 tests; typecheck, lint, build, and Expense V2 integration suites also passed.      |
+| Receipt analysis worker     | Locally verified; production pending      | Async outbox, retry, terminal failure, and flag-mismatch contracts passed; no live provider benchmark was run.          |
+| Mobile site                 | Build verified; device validation pending | Production build and 24 focused mobile tests passed; physical iOS/Android accessibility and offline matrix remain open. |
+| Owner receipt pilot         | Pending                                   | Enable receipt API + worker while keeping `EXPENSE_RECEIPT_CREW_ENABLED=0`; requires 30-50 reviewed receipts.           |
+| Owner ad spend and Overview | Pending                                   | Enable only after owner receipt pilot reconciliation.                                                                   |
+| Crew submissions            | Pending                                   | Requires benchmark thresholds, physical-device matrix, owner pilot, and explicit crew-flag enablement.                  |
 
 ## Deferred/out of scope
 

@@ -76,7 +76,19 @@ Providers:
 - Google Ads: `GOOGLE_ADS_*`
 - Google Calendar: `GOOGLE_CALENDAR_ENABLED`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`, `GOOGLE_CALENDAR_WEBHOOK_URL`; deterministic local/CI provider boundary: `GOOGLE_CALENDAR_API_BASE_URL`, `GOOGLE_CALENDAR_TOKEN_URL`, `GOOGLE_CALENDAR_FAKE_CONTROL_URL`
 - Square: `SQUARE_ENVIRONMENT`, `SQUARE_ACCESS_TOKEN`, `SQUARE_LOCATION_ID`; deterministic local/CI read boundary: `SQUARE_API_BASE_URL`, `SQUARE_FAKE_CONTROL_URL`
-- OpenAI: `OPENAI_API_KEY` (+ optional model overrides)
+- OpenAI: `OPENAI_API_KEY` (+ optional model overrides). Receipt extraction
+  uses optional `OPENAI_EXPENSE_MODEL` and `OPENAI_EXPENSE_TIMEOUT_MS`.
+
+Expense Tracking V2 rollout controls (all default off in production):
+
+- `EXPENSE_RECEIPT_CAPTURE_ENABLED`
+- `EXPENSE_RECEIPT_WORKER_ENABLED` (must match on API and outbox worker)
+- `EXPENSE_RECEIPT_CREW_ENABLED` (keep off during the owner-only pilot)
+- `EXPENSE_AD_SPEND_ENABLED`
+- `EXPENSE_REIMBURSEMENT_ENABLED`
+- `EXPENSE_OVERVIEW_ENABLED`
+
+Receipt capture also requires the existing private media-object/R2 credentials.
 
 ---
 
@@ -89,6 +101,11 @@ Entrypoint:
 Important:
 
 - Worker must have DB + provider credentials, because it sends messages and runs sync jobs.
+- Receipt analysis additionally uses `OPENAI_API_KEY`, optional
+  `OPENAI_EXPENSE_MODEL` / `OPENAI_EXPENSE_TIMEOUT_MS`, private R2 credentials,
+  `EXPENSE_RECEIPT_CAPTURE_ENABLED`, and `EXPENSE_RECEIPT_WORKER_ENABLED`.
+  `EXPENSE_RECEIPT_CREW_ENABLED` is API-only and remains off until the owner
+  receipt pilot passes.
 
 Worker tuning:
 
