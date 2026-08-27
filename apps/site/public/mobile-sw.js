@@ -870,6 +870,23 @@ async function materializeExpenseReceipt(row) {
   });
 }
 
+function expenseQueueStatusForServerCapture(capture) {
+  if (capture?.status === "ready") return "ready";
+  if (capture?.status === "confirmed") return "confirmed";
+  if (capture?.status === "discarded") return "discarded";
+  if (capture?.status === "failed") return "failed";
+  return "processing";
+}
+
+function expenseCaptureFailureMessage(capture) {
+  if (capture?.status !== "failed") return null;
+  return (
+    capture?.failure?.message ||
+    capture?.failure?.code ||
+    "Receipt analysis will be checked again."
+  );
+}
+
 async function uploadExpenseCapture(row) {
   const syncing = {
     ...row,
@@ -905,15 +922,22 @@ async function uploadExpenseCapture(row) {
       );
     }
     const capture = intentPayload?.capture;
-    if (capture?.status === "ready") {
-      const ready = {
+    const captureStatus = expenseQueueStatusForServerCapture(capture);
+    if (
+      captureStatus === "ready" ||
+      captureStatus === "confirmed" ||
+      captureStatus === "discarded" ||
+      captureStatus === "failed"
+    ) {
+      const reconciled = {
         ...syncing,
-        status: "ready",
+        status: captureStatus,
+        error: expenseCaptureFailureMessage(capture),
         serverCapture: capture,
         updatedAt: Date.now(),
       };
-      delete ready.bytes;
-      await putExpenseQueueRow(ready);
+      delete reconciled.bytes;
+      await putExpenseQueueRow(reconciled);
       return "success";
     }
     if (typeof intentPayload?.uploadUrl === "string") {
@@ -957,7 +981,8 @@ async function uploadExpenseCapture(row) {
     const finalizedCapture = finalizePayload?.capture || null;
     const acknowledged = {
       ...syncing,
-      status: finalizedCapture?.status === "ready" ? "ready" : "processing",
+      status: expenseQueueStatusForServerCapture(finalizedCapture),
+      error: expenseCaptureFailureMessage(finalizedCapture),
       serverCapture: finalizedCapture,
       updatedAt: Date.now(),
     };

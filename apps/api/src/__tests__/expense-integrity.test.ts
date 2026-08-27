@@ -330,6 +330,9 @@ describe("expense integrity", () => {
   it("routes mobile expense submissions through review-aware V2 posting", () => {
     const mobilePage = source("../site/src/app/mobile/page.tsx");
     const mobileSpend = source("../site/src/app/mobile/MobileSpendV2.tsx");
+    const mobileMutationKeys = source(
+      "../site/src/app/mobile/lib/expense-mutation-idempotency.ts",
+    );
     const mobileProxy = source(
       "../site/src/app/api/mobile/expenses/submissions/route.ts",
     );
@@ -340,7 +343,11 @@ describe("expense integrity", () => {
 
     expect(mobilePage).toContain("<MobileSpendV2");
     expect(mobileSpend).toContain('"/api/mobile/expenses/submissions"');
-    expect(mobileSpend).toContain('"Idempotency-Key": idempotencyKey');
+    expect(mobileSpend).toContain('"Idempotency-Key": attempt.idempotencyKey');
+    expect(mobileSpend).toContain("getExpenseMutationAttempt");
+    expect(mobileSpend).toContain("acknowledgeExpenseMutationAttempt");
+    expect(mobileMutationKeys).toContain("expense-mutation:v1:");
+    expect(mobileMutationKeys).toContain("advanceGeneration");
     expect(mobileSpend).toContain('"Submit for approval"');
     expect(mobileSpend).not.toContain(
       "/api/admin/expenses/${encodeURIComponent(expenseId)}/post",

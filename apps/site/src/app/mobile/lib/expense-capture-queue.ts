@@ -21,6 +21,8 @@ export type ExpenseCaptureQueueStatus =
   | "syncing"
   | "processing"
   | "ready"
+  | "confirmed"
+  | "discarded"
   | "failed";
 
 export type ExpenseCaptureQueueRow = {
@@ -255,12 +257,28 @@ async function responsePayload(
   return objectValue(await response.json().catch(() => null));
 }
 
-function captureStatus(
-  capture: Record<string, unknown> | null,
+export function expenseCaptureQueueStatus(
+  serverStatus: unknown,
 ): ExpenseCaptureQueueStatus {
-  if (capture?.["status"] === "ready") return "ready";
-  if (capture?.["status"] === "failed") return "failed";
+  if (serverStatus === "ready") return "ready";
+  if (serverStatus === "confirmed") return "confirmed";
+  if (serverStatus === "discarded") return "discarded";
+  if (serverStatus === "failed") return "failed";
   return "processing";
+}
+
+export function shouldPollExpenseCaptureStatus(
+  status: ExpenseCaptureQueueStatus,
+): boolean {
+  return status === "processing" || status === "failed";
+}
+
+function captureFailureMessage(
+  capture: Record<string, unknown> | null,
+): string | null {
+  return capture?.["status"] === "failed"
+    ? expenseErrorMessage(capture["failure"], "Receipt analysis failed.")
+    : null;
 }
 
 export async function syncExpenseCapture(
@@ -268,7 +286,21 @@ export async function syncExpenseCapture(
 ): Promise<ExpenseCaptureQueueRow> {
   const current = await getExpenseCaptureQueueRow(clientCaptureId);
   if (!current) throw new Error("The saved receipt is unavailable.");
-  if (current.status === "draft" || current.status === "ready") return current;
+  if (
+    current.status === "draft" ||
+    current.status === "confirmed" ||
+    current.status === "discarded"
+  ) {
+    return current;
+  }
+  if (
+    current.serverCapture &&
+    (current.status === "ready" ||
+      current.status === "processing" ||
+      current.status === "failed")
+  ) {
+    return refreshExpenseCapture(current.clientCaptureId);
+  }
   if (!current.bytes && current.status !== "processing") {
     const failed = {
       ...current,
@@ -315,16 +347,23 @@ export async function syncExpenseCapture(
       );
     }
     const intentCapture = objectValue(intentPayload?.["capture"]);
-    if (intentCapture?.["status"] === "ready") {
-      const ready = {
+    const intentStatus = expenseCaptureQueueStatus(intentCapture?.["status"]);
+    if (
+      intentStatus === "ready" ||
+      intentStatus === "confirmed" ||
+      intentStatus === "discarded" ||
+      intentStatus === "failed"
+    ) {
+      const reconciled = {
         ...syncing,
         bytes: undefined,
-        status: "ready" as const,
+        status: intentStatus,
+        error: captureFailureMessage(intentCapture),
         serverCapture: intentCapture,
         updatedAt: Date.now(),
       };
-      await writeRow(ready);
-      return ready;
+      await writeRow(reconciled);
+      return reconciled;
     }
     const uploadUrl =
       typeof intentPayload?.["uploadUrl"] === "string"
@@ -363,14 +402,8 @@ export async function syncExpenseCapture(
     const acknowledged: ExpenseCaptureQueueRow = {
       ...syncing,
       bytes: undefined,
-      status: captureStatus(serverCapture),
-      error:
-        serverCapture?.["status"] === "failed"
-          ? expenseErrorMessage(
-              serverCapture["failure"],
-              "Receipt analysis failed.",
-            )
-          : null,
+      status: expenseCaptureQueueStatus(serverCapture?.["status"]),
+      error: captureFailureMessage(serverCapture),
       serverCapture,
       updatedAt: Date.now(),
     };
@@ -407,14 +440,8 @@ export async function refreshExpenseCapture(
   const serverCapture = objectValue(payload?.["capture"]);
   const row: ExpenseCaptureQueueRow = {
     ...current,
-    status: captureStatus(serverCapture),
-    error:
-      serverCapture?.["status"] === "failed"
-        ? expenseErrorMessage(
-            serverCapture["failure"],
-            "Receipt analysis failed.",
-          )
-        : null,
+    status: expenseCaptureQueueStatus(serverCapture?.["status"]),
+    error: captureFailureMessage(serverCapture),
     serverCapture,
     updatedAt: Date.now(),
   };
@@ -427,9 +454,14 @@ export async function syncEmployeeExpenseCaptures(
 ): Promise<void> {
   const rows = await listExpenseCaptureQueue(employeeId);
   for (const row of rows) {
-    if (row.status === "queued" || row.status === "syncing") {
-      await syncExpenseCapture(row.clientCaptureId);
+    if (
+      row.status === "draft" ||
+      row.status === "confirmed" ||
+      row.status === "discarded"
+    ) {
+      continue;
     }
+    await syncExpenseCapture(row.clientCaptureId).catch(() => undefined);
   }
 }
 

@@ -22,10 +22,15 @@ import {
   queueExpenseCapture,
   refreshExpenseCapture,
   removeExpenseCapture,
+  shouldPollExpenseCaptureStatus,
   syncEmployeeExpenseCaptures,
   syncExpenseCapture,
   type ExpenseCaptureQueueRow,
 } from "./lib/expense-capture-queue";
+import {
+  acknowledgeExpenseMutationAttempt,
+  getExpenseMutationAttempt,
+} from "./lib/expense-mutation-idempotency";
 import {
   addDateKeyDays,
   centsToMoneyInput,
@@ -157,10 +162,6 @@ const controlClass = `${focusRing} min-h-11 w-full rounded-lg border border-whit
 const primaryButton = `${focusRing} min-h-11 w-full rounded-lg bg-cyan-300 px-4 py-3 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50`;
 const secondaryButton = `${focusRing} min-h-11 rounded-lg border border-white/15 bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50`;
 const cardClass = "rounded-xl border border-white/10 bg-white/[0.07] p-4";
-
-function mutationKeyForPayload(_fingerprint: string): string {
-  return crypto.randomUUID();
-}
 
 function objectValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object"
@@ -367,7 +368,6 @@ function ExpenseEditor({
   onSubmit: (
     body: SubmissionBody,
     duplicateOverrideReason: string | null,
-    idempotencyKey: string,
   ) => Promise<void>;
 }) {
   const [amount, setAmount] = React.useState(initial?.amount ?? "");
@@ -387,24 +387,6 @@ function ExpenseEditor({
   const [splits, setSplits] = React.useState<SplitRow[]>([]);
   const [overrideReason, setOverrideReason] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
-  const submissionFingerprint = JSON.stringify([
-    amount,
-    appointmentId,
-    categoryId,
-    method,
-    notes,
-    overrideReason,
-    paidByMemberId,
-    payerType,
-    purchaseDate,
-    splitEnabled,
-    splits,
-    vendor,
-  ]);
-  const idempotencyKey = React.useMemo(
-    () => mutationKeyForPayload(submissionFingerprint),
-    [submissionFingerprint],
-  );
   const vendorField = (
     <label className="block">
       <FieldLabel>
@@ -494,11 +476,11 @@ function ExpenseEditor({
     }
     if (
       duplicateRisk === "exact" &&
-      (!canApprove || overrideReason.trim().length < 3)
+      (!canApprove || overrideReason.trim().length < 10)
     ) {
       setError(
         canApprove
-          ? "Add a reason before overriding this exact duplicate warning."
+          ? "Add at least 10 characters explaining this exact duplicate override."
           : "Only an owner can override an exact duplicate receipt.",
       );
       return;
@@ -517,7 +499,6 @@ function ExpenseEditor({
         appointmentId: appointmentId || null,
       },
       duplicateRisk === "exact" ? overrideReason.trim() || null : null,
-      idempotencyKey,
     );
   };
 
@@ -802,7 +783,7 @@ function ExpenseEditor({
           <textarea
             value={overrideReason}
             onChange={(event) => setOverrideReason(event.target.value)}
-            minLength={3}
+            minLength={10}
             maxLength={500}
             rows={2}
             className={controlClass}
@@ -977,25 +958,114 @@ function ReceiptWorkflow({
   const discard = async () => {
     if (!row) return onBack();
     setBusy(true);
-    if (row.serverCapture && navigator.onLine) {
-      await fetch(
-        `/api/mobile/expenses/captures/${encodeURIComponent(row.clientCaptureId)}`,
-        {
-          method: "DELETE",
-          credentials: "include",
-        },
-      ).catch(() => null);
+    setMessage(null);
+    if (row.status !== "draft") {
+      if (!navigator.onLine) {
+        setMessage(
+          "Reconnect before discarding so the server can retain the receipt evidence safely.",
+        );
+        setBusy(false);
+        return;
+      }
+      try {
+        const response = await fetch(
+          `/api/mobile/expenses/captures/${encodeURIComponent(row.clientCaptureId)}`,
+          {
+            method: "DELETE",
+            credentials: "include",
+          },
+        );
+        const payload = await jsonPayload(response);
+        if (!response.ok) {
+          const refreshed = await refreshExpenseCapture(
+            row.clientCaptureId,
+          ).catch(() => null);
+          if (refreshed) onRow(refreshed);
+          setMessage(
+            expenseErrorMessage(
+              payload,
+              "The receipt was not discarded. It remains safely stored.",
+            ),
+          );
+          setBusy(false);
+          return;
+        }
+      } catch {
+        const refreshed = await refreshExpenseCapture(
+          row.clientCaptureId,
+        ).catch(() => null);
+        if (refreshed) onRow(refreshed);
+        setMessage(
+          "The discard response was interrupted. The receipt remains stored; retry when connected.",
+        );
+        setBusy(false);
+        return;
+      }
     }
+    try {
+      await removeExpenseCapture(row.clientCaptureId);
+      onRow(null);
+      setBusy(false);
+      onBack();
+    } catch {
+      const refreshed =
+        row.status === "draft"
+          ? null
+          : await refreshExpenseCapture(row.clientCaptureId).catch(() => null);
+      if (refreshed) onRow(refreshed);
+      setMessage(
+        row.status === "draft"
+          ? "This device could not clear the draft. Retry before leaving this receipt."
+          : "The server discarded the receipt, but this device could not clear its local copy. Retry the local cleanup.",
+      );
+      setBusy(false);
+    }
+  };
+
+  const checkAnalysis = async () => {
+    if (!row) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      onRow(await refreshExpenseCapture(row.clientCaptureId));
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Receipt status is temporarily unavailable.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const finishConfirmed = async () => {
+    if (!row) return;
+    setBusy(true);
     await removeExpenseCapture(row.clientCaptureId).catch(() => undefined);
     onRow(null);
     setBusy(false);
-    onBack();
+    onDone("Expense submission confirmed.");
+  };
+
+  const finishDiscarded = async () => {
+    if (!row) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await removeExpenseCapture(row.clientCaptureId);
+      onRow(null);
+      onBack();
+    } catch {
+      setMessage("This device could not clear the discarded receipt yet.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const confirm = async (
     body: SubmissionBody,
     overrideReason: string | null,
-    idempotencyKey: string,
   ) => {
     if (!row?.serverCapture) return;
     const version = row.serverCapture["version"];
@@ -1005,7 +1075,20 @@ function ReceiptWorkflow({
     }
     setBusy(true);
     setMessage(null);
+    const requestBody = {
+      ...body,
+      ...(overrideReason
+        ? { exactDuplicateOverrideReason: overrideReason }
+        : {}),
+    };
+    let attempt: Awaited<ReturnType<typeof getExpenseMutationAttempt>> | null =
+      null;
     try {
+      attempt = await getExpenseMutationAttempt({
+        employeeId,
+        operation: `receipt-confirm:${row.clientCaptureId}`,
+        payload: { version, body: requestBody },
+      });
       const response = await fetch(
         `/api/mobile/expenses/captures/${encodeURIComponent(row.clientCaptureId)}/confirm`,
         {
@@ -1013,33 +1096,36 @@ function ReceiptWorkflow({
           credentials: "include",
           headers: {
             "Content-Type": "application/json",
-            "Idempotency-Key": idempotencyKey,
+            "Idempotency-Key": attempt.idempotencyKey,
             "If-Match": String(version),
           },
-          body: JSON.stringify({
-            ...body,
-            ...(overrideReason
-              ? { exactDuplicateOverrideReason: overrideReason }
-              : {}),
-          }),
+          body: JSON.stringify(requestBody),
         },
       );
       const payload = await jsonPayload(response);
       if (!response.ok) {
+        if (response.status === 409 || response.status === 412) {
+          const refreshed = await refreshExpenseCapture(
+            row.clientCaptureId,
+          ).catch(() => null);
+          if (refreshed) {
+            onRow(refreshed);
+            if (refreshed.status === "confirmed") {
+              await acknowledgeExpenseMutationAttempt(attempt);
+              setMessage(null);
+              return;
+            }
+          }
+        }
         setMessage(
           expenseErrorMessage(
             payload,
             "The receipt expense was not submitted.",
           ),
         );
-        if (response.status === 409 || response.status === 412) {
-          const refreshed = await refreshExpenseCapture(
-            row.clientCaptureId,
-          ).catch(() => null);
-          if (refreshed) onRow(refreshed);
-        }
         return;
       }
+      await acknowledgeExpenseMutationAttempt(attempt);
       await removeExpenseCapture(row.clientCaptureId).catch(() => undefined);
       onRow(null);
       const data = objectValue(payload?.["data"]);
@@ -1048,9 +1134,27 @@ function ReceiptWorkflow({
           ? "Expense submitted for owner approval."
           : "Expense posted.",
       );
-    } catch {
+    } catch (error) {
+      if (attempt) {
+        const refreshed = await refreshExpenseCapture(
+          row.clientCaptureId,
+        ).catch(() => null);
+        if (refreshed) {
+          onRow(refreshed);
+          if (refreshed.status === "confirmed") {
+            await acknowledgeExpenseMutationAttempt(attempt).catch(
+              () => undefined,
+            );
+            setMessage(null);
+            return;
+          }
+        }
+      }
       setMessage(
-        "The connection was interrupted. Nothing was reported as posted; retry the same review.",
+        error instanceof Error &&
+          error.message.startsWith("Secure expense retry storage")
+          ? error.message
+          : "The connection was interrupted. Nothing was reported as posted; retry the same review.",
       );
     } finally {
       setBusy(false);
@@ -1119,6 +1223,7 @@ function ReceiptWorkflow({
             <X aria-hidden="true" className="size-5" />
           </button>
         </div>
+        {message ? <StatusNotice tone="error" message={message} /> : null}
         {previewUrl &&
         row.contentType.startsWith("image/") &&
         !row.contentType.includes("heic") &&
@@ -1182,6 +1287,7 @@ function ReceiptWorkflow({
             reconnect to continue.
           </p>
         </div>
+        {message ? <StatusNotice tone="error" message={message} /> : null}
         {row.error ? <StatusNotice tone="error" message={row.error} /> : null}
         <button
           type="button"
@@ -1228,27 +1334,80 @@ function ReceiptWorkflow({
     );
   }
 
+  if (row.status === "confirmed") {
+    return (
+      <div className={`${cardClass} space-y-4`}>
+        <StatusNotice
+          tone="success"
+          message="This receipt was already confirmed. It cannot be submitted twice."
+        />
+        <button
+          type="button"
+          onClick={() => void finishConfirmed()}
+          disabled={busy}
+          className={primaryButton}
+        >
+          {busy ? "Finishing…" : "Finish"}
+        </button>
+      </div>
+    );
+  }
+
+  if (row.status === "discarded") {
+    return (
+      <div className={`${cardClass} space-y-4`}>
+        {message ? <StatusNotice tone="error" message={message} /> : null}
+        <StatusNotice
+          tone="info"
+          message="The receipt was discarded on the server. Its original evidence remains protected there."
+        />
+        <button
+          type="button"
+          onClick={() => void finishDiscarded()}
+          disabled={busy}
+          className={primaryButton}
+        >
+          {busy ? "Clearing…" : "Clear from this device"}
+        </button>
+      </div>
+    );
+  }
+
   if (row.status === "failed") {
     return (
       <div className={`${cardClass} space-y-4`}>
+        {message ? <StatusNotice tone="error" message={message} /> : null}
         <StatusNotice
           tone="error"
           message={row.error ?? "The receipt could not be analyzed."}
         />
+        <p className="text-sm leading-6 text-slate-300" aria-live="polite">
+          The background worker may retry this receipt. We will keep checking,
+          or you can check again now.
+        </p>
+        <button
+          type="button"
+          onClick={() => void checkAnalysis()}
+          disabled={busy || !isOnline}
+          className={primaryButton}
+        >
+          <RotateCcw aria-hidden="true" className="mr-2 inline size-4" />
+          {busy ? "Checking…" : "Check analysis again"}
+        </button>
         <button
           type="button"
           onClick={() => void discard()}
           disabled={busy}
-          className={primaryButton}
+          className={`${secondaryButton} w-full`}
         >
-          Discard and scan again
+          Discard receipt
         </button>
         <button
           type="button"
           onClick={onBack}
           className={`${secondaryButton} w-full`}
         >
-          Back
+          Back to Spend
         </button>
       </div>
     );
@@ -1303,10 +1462,12 @@ function ReceiptWorkflow({
 }
 
 function DailyAdWorkflow({
+  employeeId,
   initialDate,
   onBack,
   onSaved,
 }: {
+  employeeId: string;
   initialDate: string;
   onBack: () => void;
   onSaved: (message: string) => void;
@@ -1318,17 +1479,6 @@ function DailyAdWorkflow({
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const saveFingerprint = JSON.stringify([
-    date,
-    facebook,
-    google,
-    day?.facebook?.version,
-    day?.google?.version,
-  ]);
-  const saveIdempotencyKey = React.useMemo(
-    () => mutationKeyForPayload(saveFingerprint),
-    [saveFingerprint],
-  );
 
   React.useEffect(() => {
     let active = true;
@@ -1399,40 +1549,50 @@ function DailyAdWorkflow({
     }
     setSaving(true);
     try {
+      const requestBody = {
+        businessDate: date,
+        facebook:
+          facebookCents === null
+            ? null
+            : {
+                amountCents: facebookCents,
+                version: day?.facebook?.version ?? null,
+              },
+        google:
+          googleCents === null
+            ? null
+            : {
+                amountCents: googleCents,
+                version: day?.google?.version ?? null,
+              },
+      };
+      const attempt = await getExpenseMutationAttempt({
+        employeeId,
+        operation: `daily-ad-spend:${date}`,
+        payload: requestBody,
+      });
       const response = await fetch("/api/mobile/expenses/daily-ad-spend", {
         method: "POST",
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          "Idempotency-Key": saveIdempotencyKey,
+          "Idempotency-Key": attempt.idempotencyKey,
         },
-        body: JSON.stringify({
-          businessDate: date,
-          facebook:
-            facebookCents === null
-              ? null
-              : {
-                  amountCents: facebookCents,
-                  version: day?.facebook?.version ?? null,
-                },
-          google:
-            googleCents === null
-              ? null
-              : {
-                  amountCents: googleCents,
-                  version: day?.google?.version ?? null,
-                },
-        }),
+        body: JSON.stringify(requestBody),
       });
       const payload = await jsonPayload(response);
       if (!response.ok) {
         setError(expenseErrorMessage(payload, "Ad spend was not saved."));
         return;
       }
+      await acknowledgeExpenseMutationAttempt(attempt);
       onSaved(`Ad spend confirmed for ${date}.`);
-    } catch {
+    } catch (reason) {
       setError(
-        "The connection was interrupted. Retry to confirm the same values safely.",
+        reason instanceof Error &&
+          reason.message.startsWith("Secure expense retry storage")
+          ? reason.message
+          : "The connection was interrupted. Retry to confirm the same values safely.",
       );
     } finally {
       setSaving(false);
@@ -1851,9 +2011,11 @@ const historyFilters = [
 ] as const;
 
 function HistoryView({
+  employeeId,
   canApprove,
   refreshToken,
 }: {
+  employeeId: string;
   canApprove: boolean;
   refreshToken: number;
 }) {
@@ -1867,19 +2029,6 @@ function HistoryView({
   const [reason, setReason] = React.useState("");
   const [reviewBusy, setReviewBusy] = React.useState(false);
   const [reload, setReload] = React.useState(0);
-  const reviewFingerprint = JSON.stringify([
-    reason,
-    reviewing?.id,
-    reviewing?.version,
-  ]);
-  const approveIdempotencyKey = React.useMemo(
-    () => mutationKeyForPayload(`approve:${reviewFingerprint}`),
-    [reviewFingerprint],
-  );
-  const rejectIdempotencyKey = React.useMemo(
-    () => mutationKeyForPayload(`reject:${reviewFingerprint}`),
-    [reviewFingerprint],
-  );
 
   React.useEffect(() => {
     let active = true;
@@ -1929,6 +2078,12 @@ function HistoryView({
     setReviewBusy(true);
     setError(null);
     try {
+      const requestBody = { decision, reason: reason.trim() || null };
+      const attempt = await getExpenseMutationAttempt({
+        employeeId,
+        operation: `expense-review:${reviewing.id}`,
+        payload: { version: reviewing.version, body: requestBody },
+      });
       const response = await fetch(
         `/api/mobile/expenses/submissions/${encodeURIComponent(reviewing.id)}/review`,
         {
@@ -1936,13 +2091,10 @@ function HistoryView({
           credentials: "include",
           headers: {
             "Content-Type": "application/json",
-            "Idempotency-Key":
-              decision === "approve"
-                ? approveIdempotencyKey
-                : rejectIdempotencyKey,
+            "Idempotency-Key": attempt.idempotencyKey,
             "If-Match": String(reviewing.version),
           },
-          body: JSON.stringify({ decision, reason: reason.trim() || null }),
+          body: JSON.stringify(requestBody),
         },
       );
       const payload = await jsonPayload(response);
@@ -1950,11 +2102,17 @@ function HistoryView({
         setError(expenseErrorMessage(payload, "The review was not saved."));
         return;
       }
+      await acknowledgeExpenseMutationAttempt(attempt);
       setReviewing(null);
       setReason("");
       setReload((value) => value + 1);
-    } catch {
-      setError("The connection was interrupted. Retry the same review safely.");
+    } catch (reasonValue) {
+      setError(
+        reasonValue instanceof Error &&
+          reasonValue.message.startsWith("Secure expense retry storage")
+          ? reasonValue.message
+          : "The connection was interrupted. Retry the same review safely.",
+      );
     } finally {
       setReviewBusy(false);
     }
@@ -2240,15 +2398,30 @@ export function MobileSpendV2({
   }, [employee.id, reloadQueue]);
 
   React.useEffect(() => {
-    if (!activeCapture || activeCapture.status !== "processing") return;
-    const poll = window.setInterval(() => {
+    const captureId = activeCapture?.clientCaptureId;
+    const captureStatus = activeCapture?.status;
+    if (
+      !captureId ||
+      !captureStatus ||
+      !shouldPollExpenseCaptureStatus(captureStatus)
+    ) {
+      return;
+    }
+    const refresh = () => {
       if (document.visibilityState !== "visible" || !navigator.onLine) return;
-      void refreshExpenseCapture(activeCapture.clientCaptureId)
+      void refreshExpenseCapture(captureId)
         .then(setActiveCapture)
         .catch(() => undefined);
-    }, 2500);
+    };
+    refresh();
+    const poll = window.setInterval(
+      () => {
+        refresh();
+      },
+      captureStatus === "failed" ? 10_000 : 2500,
+    );
     return () => window.clearInterval(poll);
-  }, [activeCapture]);
+  }, [activeCapture?.clientCaptureId, activeCapture?.status]);
 
   React.useEffect(() => {
     if (!canWriteAdSpend) return;
@@ -2271,16 +2444,21 @@ export function MobileSpendV2({
     setHistoryRefresh((value) => value + 1);
   };
 
-  const manualSubmit = async (body: SubmissionBody, idempotencyKey: string) => {
+  const manualSubmit = async (body: SubmissionBody) => {
     setSubmitting(true);
     setNotice(null);
     try {
+      const attempt = await getExpenseMutationAttempt({
+        employeeId: employee.id,
+        operation: "manual-expense-submit",
+        payload: body,
+      });
       const response = await fetch("/api/mobile/expenses/submissions", {
         method: "POST",
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          "Idempotency-Key": idempotencyKey,
+          "Idempotency-Key": attempt.idempotencyKey,
         },
         body: JSON.stringify(body),
       });
@@ -2295,17 +2473,21 @@ export function MobileSpendV2({
         });
         return;
       }
+      await acknowledgeExpenseMutationAttempt(attempt);
       const data = objectValue(payload?.["data"]);
       done(
         data?.["reviewStatus"] === "pending"
           ? "Expense submitted for owner approval."
           : "Expense posted.",
       );
-    } catch {
+    } catch (error) {
       setNotice({
         tone: "error",
         message:
-          "The connection was interrupted. Nothing was reported as posted; retry the same entry.",
+          error instanceof Error &&
+          error.message.startsWith("Secure expense retry storage")
+            ? error.message
+            : "The connection was interrupted. Nothing was reported as posted; retry the same entry.",
       });
     } finally {
       setSubmitting(false);
@@ -2391,13 +2573,12 @@ export function MobileSpendV2({
               submitting={submitting}
               submitLabel={canApprove ? "Post expense" : "Submit for approval"}
               onBack={() => setWorkflow(null)}
-              onSubmit={(body, _override, idempotencyKey) =>
-                manualSubmit(body, idempotencyKey)
-              }
+              onSubmit={(body) => manualSubmit(body)}
             />
           </div>
         ) : (
           <DailyAdWorkflow
+            employeeId={employee.id}
             initialDate={adDate}
             onBack={() => setWorkflow(null)}
             onSaved={done}
@@ -2410,7 +2591,11 @@ export function MobileSpendV2({
           onMissingAd={openMissingAd}
         />
       ) : view === "history" ? (
-        <HistoryView canApprove={canApprove} refreshToken={historyRefresh} />
+        <HistoryView
+          employeeId={employee.id}
+          canApprove={canApprove}
+          refreshToken={historyRefresh}
+        />
       ) : null}
     </div>
   );
