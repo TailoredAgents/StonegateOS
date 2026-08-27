@@ -40,12 +40,12 @@ describe("OpenAI provider source and E2E contracts", () => {
       .filter((file) =>
         readFileSync(file, "utf8").includes("resolveOpenAiApiEndpoint"),
       );
-    expect(callSiteFiles).toHaveLength(19);
+    expect(callSiteFiles).toHaveLength(20);
     expect(callSiteFiles).toContain(
-      join(
-        REPOSITORY_ROOT,
-        "apps/api/src/lib/expense-receipt-openai.ts",
-      ),
+      join(REPOSITORY_ROOT, "apps/api/src/lib/expense-receipt-openai.ts"),
+    );
+    expect(callSiteFiles).toContain(
+      join(REPOSITORY_ROOT, "apps/api/scripts/expense-receipt-benchmark.ts"),
     );
   });
 

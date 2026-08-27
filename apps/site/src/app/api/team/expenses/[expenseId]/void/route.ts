@@ -18,7 +18,7 @@ export async function POST(
 ): Promise<Response> {
   const fallback = new URL("/team/expenses", request.url);
   const auth = await requireTeamPrincipal(request, {
-    permissions: "expenses.write",
+    permissions: "expenses.approve",
     redirectTo: fallback,
   });
   if (!auth.ok) return auth.response;

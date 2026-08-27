@@ -2,6 +2,7 @@ import {
   closeDbForTests,
   expenseAllocations,
   expenseReimbursementClaims,
+  expenseVendorCategoryRules,
   expenses,
   getDb,
   payoutRunAdjustments,
@@ -51,21 +52,48 @@ describeOrSkip("Expense submission workflow integration", () => {
         expect(crew?.id).toBeTruthy();
         if (!owner || !crew) throw new Error("test_members_missing");
 
-        const [payout] = await tx
+        const [lockedPayout, stalePayout, payout] = await tx
           .insert(payoutRuns)
-          .values({
-            timezone: "America/New_York",
-            periodStart: new Date("2026-08-24T04:00:00.000Z"),
-            periodEnd: new Date("2026-08-31T04:00:00.000Z"),
-            scheduledPayoutAt: new Date("2026-08-31T16:00:00.000Z"),
-            periodCanonical: false,
-            status: "draft",
-            createdBy: owner.id,
-            createdAt: now,
-            updatedAt: now,
-          })
+          .values([
+            {
+              timezone: "America/New_York",
+              periodStart: new Date("2026-08-17T04:00:00.000Z"),
+              periodEnd: new Date("2026-08-24T04:00:00.000Z"),
+              scheduledPayoutAt: new Date("2026-08-24T16:00:00.000Z"),
+              periodCanonical: true,
+              status: "locked",
+              lockedAt: now,
+              createdBy: owner.id,
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              timezone: "America/New_York",
+              periodStart: new Date("2026-08-17T04:00:00.000Z"),
+              periodEnd: new Date("2026-08-24T04:00:00.000Z"),
+              scheduledPayoutAt: new Date("2026-08-24T16:00:00.000Z"),
+              periodCanonical: false,
+              status: "draft",
+              createdBy: owner.id,
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              timezone: "America/New_York",
+              periodStart: new Date("2026-08-24T04:00:00.000Z"),
+              periodEnd: new Date("2026-08-31T04:00:00.000Z"),
+              scheduledPayoutAt: new Date("2026-08-31T16:00:00.000Z"),
+              periodCanonical: true,
+              status: "draft",
+              createdBy: owner.id,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ])
           .returning({ id: payoutRuns.id });
-        if (!payout) throw new Error("test_payout_missing");
+        if (!lockedPayout || !stalePayout || !payout) {
+          throw new Error("test_payout_missing");
+        }
 
         const ownerExpense = await createExpenseSubmissionInTransaction(tx, {
           submission: parseExpenseSubmission({
@@ -161,6 +189,18 @@ describeOrSkip("Expense submission workflow integration", () => {
         );
         expect(
           await tx
+            .select({ id: payoutRunAdjustments.id })
+            .from(payoutRunAdjustments)
+            .where(eq(payoutRunAdjustments.payoutRunId, stalePayout.id)),
+        ).toHaveLength(0);
+        expect(
+          await tx
+            .select({ id: payoutRunAdjustments.id })
+            .from(payoutRunAdjustments)
+            .where(eq(payoutRunAdjustments.payoutRunId, lockedPayout.id)),
+        ).toHaveLength(0);
+        expect(
+          await tx
             .select({ id: expenses.id })
             .from(expenses)
             .where(eq(expenses.id, pendingPersonal.expenseId)),
@@ -174,6 +214,86 @@ describeOrSkip("Expense submission workflow integration", () => {
           expect.arrayContaining([
             { amountCents: 5_000 },
             { amountCents: 2_500 },
+          ]),
+        );
+
+        const pendingCorrected = await createExpenseSubmissionInTransaction(
+          tx,
+          {
+            submission: parseExpenseSubmission({
+              amountCents: 3_400,
+              purchaseDate: "2026-08-26",
+              categoryId: "equipment",
+              vendor: "Review Me Supply",
+              payerType: "company",
+              paidByMemberId: null,
+            }),
+            actorId: crew.id,
+            canApprove: false,
+            source: "receipt_scan",
+            now,
+          },
+        );
+        const corrected = await reviewExpenseSubmissionInTransaction(tx, {
+          expenseId: pendingCorrected.expenseId,
+          reviewerId: owner.id,
+          expectedVersion: 1,
+          decision: {
+            decision: "approve",
+            reason: "Corrected from receipt details",
+            categoryId: "supplies",
+            allocations: [
+              { categoryId: "supplies", amountCents: 2_000 },
+              { categoryId: "office_admin", amountCents: 1_400 },
+            ],
+            lockVendorRule: true,
+          },
+          now: new Date(now.getTime() + 1_500),
+        });
+        expect(corrected).toEqual(
+          expect.objectContaining({
+            categoryId: "supplies",
+            category: "Supplies",
+            lifecycleStatus: "posted",
+          }),
+        );
+        expect(
+          await tx
+            .select({
+              categoryId: expenseAllocations.categoryId,
+              amountCents: expenseAllocations.amountCents,
+            })
+            .from(expenseAllocations)
+            .where(
+              eq(expenseAllocations.expenseId, pendingCorrected.expenseId),
+            ),
+        ).toEqual(
+          expect.arrayContaining([
+            { categoryId: "supplies", amountCents: 2_000 },
+            { categoryId: "office_admin", amountCents: 1_400 },
+          ]),
+        );
+        expect(
+          await tx
+            .select({
+              categoryId: expenseVendorCategoryRules.categoryId,
+              ownerLocked: expenseVendorCategoryRules.ownerLocked,
+              lockedBy: expenseVendorCategoryRules.lockedBy,
+            })
+            .from(expenseVendorCategoryRules)
+            .where(
+              eq(
+                expenseVendorCategoryRules.normalizedVendor,
+                "review me supply",
+              ),
+            ),
+        ).toEqual(
+          expect.arrayContaining([
+            {
+              categoryId: "supplies",
+              ownerLocked: true,
+              lockedBy: owner.id,
+            },
           ]),
         );
 

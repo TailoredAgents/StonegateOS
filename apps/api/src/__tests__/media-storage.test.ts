@@ -1,7 +1,23 @@
-import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  GetObjectCommand,
+  HeadBucketCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
+
+const mockRecordProviderFailure = jest.fn(() => Promise.resolve());
+const mockRecordProviderSuccess = jest.fn(() => Promise.resolve());
+
+jest.mock("@/lib/provider-health", () => ({
+  recordProviderFailure: mockRecordProviderFailure,
+  recordProviderSuccess: mockRecordProviderSuccess,
+}));
+
 import {
   createMediaUploadUrl,
   getMediaStorageProvider,
+  putImmutableMediaObject,
   readMediaStorageConfig,
   resetMediaStorageForTests,
   verifyMediaStorageBucketAccess,
@@ -71,6 +87,142 @@ describe("appointment media object storage", () => {
     expect(
       new URL(intent.url).searchParams.get("X-Amz-SignedHeaders"),
     ).toContain("content-length");
+  });
+
+  it("signs write-once uploads with a mandatory create-only precondition", async () => {
+    process.env["MEDIA_OBJECT_ENDPOINT"] = "http://localhost:4566";
+    process.env["MEDIA_OBJECT_REGION"] = "us-east-1";
+    process.env["MEDIA_OBJECT_BUCKET"] = "media-test";
+    process.env["MEDIA_OBJECT_ACCESS_KEY_ID"] = "test";
+    process.env["MEDIA_OBJECT_SECRET_ACCESS_KEY"] = "test";
+    process.env["MEDIA_OBJECT_FORCE_PATH_STYLE"] = "1";
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"] = "0";
+
+    const intent = await createMediaUploadUrl({
+      key: "expenses/receipts/member/capture/original.jpg",
+      contentType: "image/jpeg",
+      byteLength: 123,
+      checksumSha256Hex: "ab".repeat(32),
+      expiresInSeconds: 600,
+      writeOnce: true,
+    });
+
+    expect(intent.headers["if-none-match"]).toBe("*");
+    expect(
+      new URL(intent.url).searchParams.get("X-Amz-SignedHeaders"),
+    ).toContain("if-none-match");
+  });
+
+  it("creates immutable objects with a conditional PUT and verifies the stored bytes", async () => {
+    process.env["MEDIA_OBJECT_ENDPOINT"] = "http://localhost:4566";
+    process.env["MEDIA_OBJECT_REGION"] = "us-east-1";
+    process.env["MEDIA_OBJECT_BUCKET"] = "media-test";
+    process.env["MEDIA_OBJECT_ACCESS_KEY_ID"] = "test";
+    process.env["MEDIA_OBJECT_SECRET_ACCESS_KEY"] = "test";
+    process.env["MEDIA_OBJECT_FORCE_PATH_STYLE"] = "1";
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"] = "0";
+    const body = Buffer.from("immutable receipt evidence");
+    const send = jest.spyOn(S3Client.prototype, "send").mockImplementation(((
+      command: unknown,
+    ) => {
+      if (command instanceof PutObjectCommand) {
+        return Promise.resolve({} as never);
+      }
+      if (command instanceof HeadObjectCommand) {
+        return Promise.resolve({
+          ContentLength: body.byteLength,
+          ContentType: "image/jpeg; charset=binary",
+        } as never);
+      }
+      if (command instanceof GetObjectCommand) {
+        return Promise.resolve({
+          ContentLength: body.byteLength,
+          Body: {
+            transformToByteArray: () => Promise.resolve(Uint8Array.from(body)),
+          },
+        } as never);
+      }
+      return Promise.reject(new Error("unexpected storage command"));
+    }) as never);
+
+    try {
+      await expect(
+        putImmutableMediaObject({
+          key: "expenses/receipts/member/capture/original.jpg",
+          body,
+          contentType: "image/jpeg",
+        }),
+      ).resolves.toBe("created");
+      const put = send.mock.calls
+        .map(([command]) => command)
+        .find(
+          (command): command is PutObjectCommand =>
+            command instanceof PutObjectCommand,
+        );
+      expect(put?.input.IfNoneMatch).toBe("*");
+    } finally {
+      send.mockRestore();
+    }
+  });
+
+  it("accepts an exact immutable retry but rejects different bytes without overwriting", async () => {
+    process.env["MEDIA_OBJECT_ENDPOINT"] = "http://localhost:4566";
+    process.env["MEDIA_OBJECT_REGION"] = "us-east-1";
+    process.env["MEDIA_OBJECT_BUCKET"] = "media-test";
+    process.env["MEDIA_OBJECT_ACCESS_KEY_ID"] = "test";
+    process.env["MEDIA_OBJECT_SECRET_ACCESS_KEY"] = "test";
+    process.env["MEDIA_OBJECT_FORCE_PATH_STYLE"] = "1";
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"] = "0";
+    const intended = Buffer.from("receipt-A");
+    let stored = Buffer.from(intended);
+    let putAttempts = 0;
+    const preconditionFailed = Object.assign(
+      new Error("object already exists"),
+      { $metadata: { httpStatusCode: 412 } },
+    );
+    const send = jest.spyOn(S3Client.prototype, "send").mockImplementation(((
+      command: unknown,
+    ) => {
+      if (command instanceof PutObjectCommand) {
+        putAttempts += 1;
+        return Promise.reject(preconditionFailed);
+      }
+      if (command instanceof HeadObjectCommand) {
+        return Promise.resolve({
+          ContentLength: stored.byteLength,
+          ContentType: "image/jpeg",
+        } as never);
+      }
+      if (command instanceof GetObjectCommand) {
+        return Promise.resolve({
+          ContentLength: stored.byteLength,
+          Body: {
+            transformToByteArray: () =>
+              Promise.resolve(Uint8Array.from(stored)),
+          },
+        } as never);
+      }
+      return Promise.reject(new Error("unexpected storage command"));
+    }) as never);
+
+    try {
+      const input = {
+        key: "expenses/receipts/member/capture/original.jpg",
+        body: intended,
+        contentType: "image/jpeg",
+      };
+      await expect(putImmutableMediaObject(input)).resolves.toBe(
+        "already_exists",
+      );
+
+      stored = Buffer.from("receipt-B");
+      await expect(putImmutableMediaObject(input)).rejects.toThrow(
+        "media_immutable_object_conflict",
+      );
+      expect(putAttempts).toBe(2);
+    } finally {
+      send.mockRestore();
+    }
   });
 
   it("recognizes a Cloudflare R2 endpoint", () => {

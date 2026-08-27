@@ -105,8 +105,9 @@ describe("expense overview repository mapping", () => {
           paidAt: new Date("2026-08-19T16:00:00.000Z"),
           lifecycleStatus: "posted",
           reviewStatus: "approved",
-          source: "daily_ad_spend",
+          source: "manual_correction",
           reversalOfExpenseId: null,
+          correctionOfExpenseId: "original-facebook-expense",
         },
         {
           id: "legacy-expense",
@@ -176,6 +177,20 @@ describe("expense overview repository mapping", () => {
           lifecycleStatus: "posted",
           reviewStatus: "approved",
           source: "payout_run",
+          reversalOfExpenseId: null,
+        },
+        {
+          id: "legacy-reimbursement-expense",
+          amountCents: 2_500,
+          currency: "USD",
+          legacyCategory: "Reimbursements",
+          categoryId: "reimbursements",
+          categoryName: "Reimbursements",
+          categoryNeedsReview: false,
+          paidAt: new Date("2026-08-21T16:00:00.000Z"),
+          lifecycleStatus: "posted",
+          reviewStatus: "approved",
+          source: "payout_reimbursement",
           reversalOfExpenseId: null,
         },
         {
@@ -286,12 +301,19 @@ describe("expense overview repository mapping", () => {
     const overview = buildExpenseOverview(mapped);
 
     expect(mapped.pendingExpenseCount).toBe(1);
-    expect(mapped.omittedUnverifiedHistoricalRecordCount).toBe(1);
+    expect(mapped.omittedUnverifiedHistoricalRecordCount).toBe(2);
     expect(mapped.expenses.map((expense) => expense.id)).not.toContain(
       "foreign-expense",
     );
     expect(mapped.expenses.map((expense) => expense.id)).not.toContain(
       "reversal",
+    );
+    expect(mapped.expenses.map((expense) => expense.id)).toEqual(
+      expect.not.arrayContaining([
+        "payout-expense",
+        "legacy-reimbursement-expense",
+        "legacy-expense",
+      ]),
     );
     expect(
       mapped.expenses.find((expense) => expense.id === "facebook-expense"),
@@ -312,11 +334,11 @@ describe("expense overview repository mapping", () => {
 
     expect(overview).toMatchObject({
       revenueCents: 100_000,
-      ordinaryExpensesCents: 12_500,
+      ordinaryExpensesCents: 12_000,
       laborCents: 2_000,
-      totalExpensesCents: 14_500,
+      totalExpensesCents: 14_000,
       pendingExpenseCount: 1,
-      omittedUnverifiedHistoricalRecordCount: 1,
+      omittedUnverifiedHistoricalRecordCount: 2,
       advertising: {
         amountCents: 2_000,
         subrows: { facebookCents: 2_000, googleCents: 0 },
@@ -334,13 +356,82 @@ describe("expense overview repository mapping", () => {
         expect.objectContaining({ id: "fuel", amountCents: 6_000 }),
         expect.objectContaining({ id: "supplies", amountCents: 4_000 }),
         expect.objectContaining({ id: "advertising", amountCents: 2_000 }),
-        expect.objectContaining({
-          label: "Mystery charge",
-          amountCents: 500,
-          verified: false,
-        }),
       ]),
     );
+    expect(overview.categories).toEqual(
+      expect.not.arrayContaining([
+        expect.objectContaining({ label: "Mystery charge" }),
+        expect.objectContaining({ id: "reimbursements" }),
+      ]),
+    );
+  });
+
+  it("shows a current-week unknown label for review but omits it after the week closes", () => {
+    const rows = baseRows({
+      expenses: [
+        {
+          id: "unknown-current-week-expense",
+          amountCents: 725,
+          currency: "USD",
+          legacyCategory: "Unmapped vendor charge",
+          categoryId: null,
+          categoryName: null,
+          categoryNeedsReview: true,
+          paidAt: new Date("2026-08-18T16:00:00.000Z"),
+          lifecycleStatus: "posted",
+          reviewStatus: "approved",
+          source: "legacy",
+          reversalOfExpenseId: null,
+        },
+      ],
+    });
+
+    const current = mapExpenseOverviewRows({
+      weekStart: WEEK_START,
+      rows,
+      asOf: "2026-08-19",
+    });
+    expect(current.expenses).toHaveLength(1);
+    expect(current.expenses[0]?.id).toBe("unknown-current-week-expense");
+    expect(current.expenses[0]?.category.verified).toBe(false);
+    expect(current.omittedUnverifiedHistoricalRecordCount).toBe(0);
+
+    const historical = mapExpenseOverviewRows({
+      weekStart: WEEK_START,
+      rows,
+      asOf: "2026-08-24",
+    });
+    expect(historical.expenses).toEqual([]);
+    expect(historical.omittedUnverifiedHistoricalRecordCount).toBe(1);
+  });
+
+  it("attributes omitted evidence to its own comparison week", () => {
+    const rows = baseRows({
+      expenses: [
+        {
+          id: "unknown-prior-week-expense",
+          amountCents: 725,
+          currency: "USD",
+          legacyCategory: "Unmapped prior charge",
+          categoryId: null,
+          categoryName: null,
+          categoryNeedsReview: true,
+          paidAt: new Date("2026-08-11T16:00:00.000Z"),
+          lifecycleStatus: "posted",
+          reviewStatus: "approved",
+          source: "legacy",
+          reversalOfExpenseId: null,
+        },
+      ],
+    });
+
+    const mapped = mapExpenseOverviewRows({
+      weekStart: WEEK_START,
+      rows,
+      asOf: "2026-08-24",
+    });
+    expect(mapped.omittedUnverifiedHistoricalRecordCount).toBe(0);
+    expect(mapped.priorWeekOmittedUnverifiedHistoricalRecordCount).toBe(1);
   });
 
   it("omits a daily-ad ledger row that does not reconcile to its authoritative registry value", () => {

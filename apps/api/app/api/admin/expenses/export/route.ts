@@ -27,7 +27,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "expenses.export");
+  const permissionError = await requirePermission(request, "expenses.export", {
+    disallowedRoles: ["crew"],
+  });
   if (permissionError) return permissionError;
 
   const parsed = parseExpenseQuery(request.nextUrl.searchParams, {

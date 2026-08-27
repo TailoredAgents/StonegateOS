@@ -379,6 +379,28 @@ describe("payout-run integrity", () => {
     );
   });
 
+  it("disables the parallel legacy reimbursement writer while Expense V2 owns reimbursements", () => {
+    const reimbursementRoute = source(
+      "app/api/admin/commissions/payout-runs/[payoutRunId]/reimbursements/route.ts",
+    );
+    const component = source(
+      "../site/src/app/team/components/CommissionsSection.tsx",
+    );
+
+    expect(reimbursementRoute).toContain("isExpenseReimbursementEnabled()");
+    expect(reimbursementRoute).toContain(
+      "Add employee-paid purchases in Spend",
+    );
+    expect(reimbursementRoute).toContain("stageExpenseReceiptEvidence(");
+    expect(reimbursementRoute).toContain("expenseReceiptCaptures");
+    expect(reimbursementRoute).toContain('lifecycleStatus: "voided"');
+    expect(reimbursementRoute).not.toContain('buffer.toString("base64")');
+    expect(reimbursementRoute).not.toContain(".delete(expenses)");
+    expect(component).toContain("expenseReimbursementV2Enabled");
+    expect(component).toContain('"/api/admin/expenses/capabilities"');
+    expect(component).toContain("attached to the next editable");
+  });
+
   it("keeps report and export reads side-effect free and versioned", () => {
     const reportLibrary = source("src/lib/payout-run-report.ts");
     const reportRoute = source(

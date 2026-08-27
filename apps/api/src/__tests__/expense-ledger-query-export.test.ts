@@ -197,7 +197,8 @@ describe("expense ledger query and export contracts", () => {
     const api = source("app/api/admin/expenses/export/route.ts");
     const site = source("../site/src/app/api/team/expenses/export/route.ts");
     const ui = source("../site/src/app/team/components/ExpensesSection.tsx");
-    expect(api).toContain('requirePermission(request, "expenses.export")');
+    expect(api).toContain('requirePermission(request, "expenses.export", {');
+    expect(api).toContain('disallowedRoles: ["crew"]');
     expect(api).toContain('requiredPermissions: ["expenses.export"]');
     expect(api).toContain('action: "expense.exported"');
     expect(api).not.toContain("receiptUrl");

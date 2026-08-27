@@ -1,14 +1,31 @@
-import { createHash } from "node:crypto";
 import type { MutationResult } from "@myst-os/sdk";
 import type { NextRequest } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { expenses, getDb, payoutRunAdjustments, payoutRuns } from "@/db";
+import {
+  expenseAllocations,
+  expenseReceiptCaptures,
+  expenses,
+  getDb,
+  payoutRunAdjustments,
+  payoutRuns,
+} from "@/db";
 import {
   nextPayoutRunVersionDate,
   payoutRunVersion,
   requirePayoutRunExpectedVersion,
 } from "@/lib/commissions";
+import { isExpenseReimbursementEnabled } from "@/lib/expense-feature-flags";
+import {
+  parseExpenseReceiptFile,
+  type ExpenseReceipt,
+} from "@/lib/expense-lifecycle";
+import {
+  cleanupStagedExpenseReceiptEvidenceIfUncommitted,
+  findExactExpenseReceiptDuplicateForPosting,
+  stageExpenseReceiptEvidence,
+  type StagedExpenseReceiptEvidence,
+} from "@/lib/expense-receipt-evidence";
 import { normalizePayoutRunMutationError } from "@/lib/payout-run-mutation-http";
 import {
   claimTeamMutationIdempotency,
@@ -28,8 +45,6 @@ import {
   teamMutationSuccessResult,
 } from "@/lib/team-mutation";
 
-const MAX_BYTES = 10 * 1024 * 1024;
-
 const CreateReimbursementSchema = z.object({
   memberId: z.string().uuid(),
   amountCents: z.number().int().positive(),
@@ -47,6 +62,7 @@ const DeleteReimbursementSchema = z.object({
 
 type ParsedReimbursement = z.infer<typeof CreateReimbursementSchema> & {
   receiptSha256: string | null;
+  receipt: ExpenseReceipt | null;
 };
 
 type ReimbursementMutationData = {
@@ -62,17 +78,6 @@ type ReimbursementMutationSuccess = Extract<
 > &
   ReimbursementMutationData;
 
-function dataUrlBytes(dataUrl: string): number | null {
-  if (!dataUrl.startsWith("data:")) return null;
-  const base64Part = dataUrl.split(",")[1] ?? "";
-  return Math.ceil((base64Part.length * 3) / 4);
-}
-
-function dataUrlSha256(dataUrl: string | null | undefined): string | null {
-  if (!dataUrl) return null;
-  return createHash("sha256").update(dataUrl, "utf8").digest("hex");
-}
-
 async function parseCreatePayload(
   request: NextRequest,
 ): Promise<ParsedReimbursement> {
@@ -87,30 +92,11 @@ async function parseCreatePayload(
     const filenameField = form.get("receiptFilename");
     const vendorField = form.get("vendor");
 
-    let receiptUrl: string | null = null;
-    let receiptFilename: string | null = null;
-    let receiptContentType: string | null = null;
-    let receiptSha256: string | null = null;
-    if (file instanceof File && file.size > 0) {
-      const buffer = Buffer.from(await file.arrayBuffer());
-      if (buffer.byteLength > MAX_BYTES) {
-        throw new TeamMutationFailure(
-          "invalid",
-          "Receipt files must be 10MB or smaller.",
-          {
-            status: 413,
-            fieldErrors: { receiptFile: "Maximum size is 10MB." },
-          },
-        );
-      }
-      receiptContentType = file.type || "application/octet-stream";
-      receiptUrl = `data:${receiptContentType};base64,${buffer.toString("base64")}`;
-      receiptFilename =
-        typeof filenameField === "string" && filenameField.trim().length > 0
-          ? filenameField.trim()
-          : file.name || "receipt";
-      receiptSha256 = createHash("sha256").update(buffer).digest("hex");
-    }
+    const receipt = await parseExpenseReceiptFile(file);
+    const requestedFilename =
+      typeof filenameField === "string" && filenameField.trim().length > 0
+        ? filenameField.trim()
+        : null;
 
     const parsed = CreateReimbursementSchema.safeParse({
       memberId: form.get("memberId"),
@@ -121,9 +107,9 @@ async function parseCreatePayload(
           ? vendorField.trim()
           : null,
       paidAt: form.get("paidAt"),
-      receiptFilename,
-      receiptUrl,
-      receiptContentType,
+      receiptFilename: receipt?.filename ?? requestedFilename,
+      receiptUrl: null,
+      receiptContentType: receipt?.contentType ?? null,
     });
     if (!parsed.success) {
       throw new TeamMutationFailure(
@@ -132,7 +118,11 @@ async function parseCreatePayload(
         { fieldErrors: { reimbursement: "Review the submitted fields." } },
       );
     }
-    return { ...parsed.data, receiptSha256 };
+    return {
+      ...parsed.data,
+      receiptSha256: receipt?.sha256 ?? null,
+      receipt,
+    };
   }
 
   const parsed = CreateReimbursementSchema.safeParse(
@@ -145,19 +135,24 @@ async function parseCreatePayload(
       { fieldErrors: { reimbursement: "Review the submitted fields." } },
     );
   }
-  const bytes = parsed.data.receiptUrl
-    ? dataUrlBytes(parsed.data.receiptUrl)
-    : null;
-  if (bytes !== null && bytes > MAX_BYTES) {
+  if (parsed.data.receiptUrl) {
     throw new TeamMutationFailure(
       "invalid",
-      "Receipt files must be 10MB or smaller.",
-      { status: 413, fieldErrors: { receiptFile: "Maximum size is 10MB." } },
+      "Receipt evidence must be uploaded as a verified file.",
+      {
+        fieldErrors: {
+          receiptFile: "Send receipt files using multipart/form-data.",
+        },
+      },
     );
   }
   return {
     ...parsed.data,
-    receiptSha256: dataUrlSha256(parsed.data.receiptUrl),
+    receiptUrl: null,
+    receiptFilename: null,
+    receiptContentType: null,
+    receiptSha256: null,
+    receipt: null,
   };
 }
 
@@ -275,8 +270,23 @@ export async function POST(
   });
   if (!boundary.ok) return boundary.response;
   const { mutation } = boundary;
+
+  // Expense V2 owns the purchase and reimbursement as one linked workflow.
+  // Retain this legacy mutation only as a feature-flag rollback path; allowing
+  // both writers at once could create a second expense for the same purchase.
+  if (isExpenseReimbursementEnabled()) {
+    return teamMutationExceptionResponse(
+      new TeamMutationFailure(
+        "conflict",
+        "Add employee-paid purchases in Spend. Approval will attach the reimbursement to the next editable payout without creating a second expense.",
+      ),
+      mutation,
+    );
+  }
   let db: ReturnType<typeof getDb> | null = null;
   let claim: TeamMutationIdempotencyClaim | null = null;
+  let stagedReceipt: StagedExpenseReceiptEvidence | null = null;
+  let receiptCommitted = false;
 
   try {
     requirePayoutRunExpectedVersion(mutation);
@@ -307,25 +317,67 @@ export async function POST(
     const executionClaim = claimed.claim;
     claim = executionClaim;
 
+    const actorId = mutation.actor.id;
+    if (!actorId) {
+      throw new TeamMutationFailure(
+        "internal",
+        "The verified reimbursement actor is incomplete.",
+      );
+    }
+    if (payload.receipt) {
+      stagedReceipt = await stageExpenseReceiptEvidence({
+        captureId: executionClaim.id,
+        submittedBy: actorId,
+        receipt: payload.receipt,
+      });
+    }
+
     const paidAt = new Date(payload.paidAt);
     const result = await db.transaction(async (tx) => {
       const run = await lockEditableRun(tx, payoutRunId, mutation);
       const now = new Date();
       const nextVersion = nextPayoutRunVersionDate(run.updatedAt, now);
+      if (stagedReceipt) {
+        const duplicateCaptureId =
+          await findExactExpenseReceiptDuplicateForPosting(tx, {
+            captureId: stagedReceipt.capture.id as string,
+            sha256: stagedReceipt.capture.sha256 ?? null,
+          });
+        if (duplicateCaptureId) {
+          throw new TeamMutationFailure(
+            "conflict",
+            "This receipt already exists. Add the purchase in Spend so an owner can review a legitimate duplicate.",
+          );
+        }
+        await tx.insert(expenseReceiptCaptures).values(stagedReceipt.capture);
+      }
       const [createdExpense] = await tx
         .insert(expenses)
         .values({
           amount: payload.amountCents,
           currency: "USD",
           category: "Reimbursements",
+          categoryId: "reimbursements",
+          categoryNeedsReview: false,
           vendor: payload.vendor ?? null,
           memo: payload.note,
           method: "reimbursement",
           source: "payout_reimbursement",
+          submittedBy: actorId,
+          payerType: "personal",
+          paidByMemberId: payload.memberId,
+          reviewStatus: "draft",
+          reviewedBy: null,
+          reviewedAt: null,
+          receiptCaptureId: stagedReceipt?.capture.id ?? null,
           paidAt,
           receiptFilename: payload.receiptFilename ?? null,
-          receiptUrl: payload.receiptUrl ?? null,
+          receiptUrl: null,
           receiptContentType: payload.receiptContentType ?? null,
+          lifecycleStatus: "draft",
+          version: 1,
+          postedAt: null,
+          postedBy: null,
           createdAt: now,
           updatedAt: now,
         })
@@ -334,6 +386,40 @@ export async function POST(
         throw new TeamMutationFailure(
           "internal",
           "The reimbursement expense could not be created.",
+          { retryable: true },
+        );
+      }
+
+      await tx.insert(expenseAllocations).values({
+        expenseId: createdExpense.id,
+        categoryId: "reimbursements",
+        amountCents: payload.amountCents,
+        createdAt: now,
+      });
+
+      const [postedExpense] = await tx
+        .update(expenses)
+        .set({
+          lifecycleStatus: "posted",
+          reviewStatus: "approved",
+          reviewedBy: actorId,
+          reviewedAt: now,
+          postedBy: actorId,
+          postedAt: now,
+          version: 2,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(expenses.id, createdExpense.id),
+            eq(expenses.lifecycleStatus, "draft"),
+          ),
+        )
+        .returning({ id: expenses.id });
+      if (!postedExpense) {
+        throw new TeamMutationFailure(
+          "internal",
+          "The reimbursement expense could not be posted.",
           { retryable: true },
         );
       }
@@ -391,9 +477,13 @@ export async function POST(
         201,
       );
     });
+    receiptCommitted = true;
 
     return teamMutationResultResponse(result, 201, mutation.correlationId);
   } catch (rawError) {
+    if (stagedReceipt && !receiptCommitted && db) {
+      await cleanupStagedExpenseReceiptEvidenceIfUncommitted(db, stagedReceipt);
+    }
     const error = normalizePayoutRunMutationError(rawError);
     await settleFailure(db, mutation, claim, error, "create");
     return teamMutationExceptionResponse(error, mutation);
@@ -468,19 +558,28 @@ export async function DELETE(
         throw new Error("adjustment_not_reimbursement");
       }
 
-      await tx
-        .delete(payoutRunAdjustments)
-        .where(eq(payoutRunAdjustments.id, adjustment.id));
       if (adjustment.expenseId) {
         await tx
-          .delete(expenses)
+          .update(expenses)
+          .set({
+            lifecycleStatus: "voided",
+            voidedAt: new Date(),
+            voidedBy: mutation.actor.id,
+            voidReason: "Removed from an editable payout run.",
+            version: sql`${expenses.version} + 1`,
+            updatedAt: new Date(),
+          })
           .where(
             and(
               eq(expenses.id, adjustment.expenseId),
               eq(expenses.source, "payout_reimbursement"),
+              eq(expenses.lifecycleStatus, "posted"),
             ),
           );
       }
+      await tx
+        .delete(payoutRunAdjustments)
+        .where(eq(payoutRunAdjustments.id, adjustment.id));
 
       const nextVersion = nextPayoutRunVersionDate(run.updatedAt);
       const [updatedRun] = await tx

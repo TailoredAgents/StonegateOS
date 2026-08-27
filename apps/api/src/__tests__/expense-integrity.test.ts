@@ -131,6 +131,11 @@ describe("expense integrity", () => {
     expect(
       detectExpenseReceiptContentType(Uint8Array.from([0x4d, 0x5a, 0x90])),
     ).toBeNull();
+    expect(
+      detectExpenseReceiptContentType(
+        Buffer.from("000000186674797068656963", "hex"),
+      ),
+    ).toBe("image/heic");
   });
 
   it("permits edits only in Draft and corrections only in Posted", () => {
@@ -259,6 +264,22 @@ describe("expense integrity", () => {
     }
   });
 
+  it("routes the retained manual fallback through stable categories and allocations", () => {
+    const createRoute = source("app/api/admin/expenses/route.ts");
+    const editRoute = source("app/api/admin/expenses/[expenseId]/route.ts");
+
+    for (const route of [createRoute, editRoute]) {
+      expect(route).toContain("resolveExpenseCategoryAlias(");
+      expect(route).toContain("categoryId: category.categoryId");
+      expect(route).toContain(
+        "categoryNeedsReview: category.categoryNeedsReview",
+      );
+      expect(route).toContain("tx.insert(expenseAllocations)");
+      expect(route).toContain("amountCents: parsed.expense.amountCents");
+    }
+    expect(editRoute).toContain(".delete(expenseAllocations)");
+  });
+
   it("uses expected versions and atomic reversal rows for terminal changes", () => {
     const postRoute = source(
       "app/api/admin/expenses/[expenseId]/post/route.ts",
@@ -269,18 +290,25 @@ describe("expense integrity", () => {
     const voidRoute = source(
       "app/api/admin/expenses/[expenseId]/void/route.ts",
     );
+    const managedLifecycle = source("src/lib/expense-managed-lifecycle.ts");
 
     for (const route of [postRoute, correctionRoute, voidRoute]) {
       expect(route).toContain("assertTeamMutationExpectedVersion");
       expect(route).toContain('.for("update")');
       expect(route).toContain("eq(expenses.version, existing.version)");
     }
-    expect(correctionRoute).toContain("amount: -existing.amount");
-    expect(correctionRoute).toContain("reversalOfExpenseId: expenseId");
-    expect(correctionRoute).toContain("correctionOfExpenseId: expenseId");
-    expect(correctionRoute).toContain("correctedByExpenseId: replacement.id");
-    expect(voidRoute).toContain("amount: -existing.amount");
-    expect(voidRoute).toContain("reversalOfExpenseId: expenseId");
+    expect(correctionRoute).toContain("createManagedExpenseCorrection(tx");
+    expect(voidRoute).toContain("createManagedExpenseVoid(tx");
+    expect(managedLifecycle).toContain("amountCents: -input.existing.amount");
+    expect(managedLifecycle).toContain(
+      "reversalOfExpenseId: input.existing.id",
+    );
+    expect(managedLifecycle).toContain(
+      "correctionOfExpenseId: input.existing.id",
+    );
+    expect(correctionRoute).toContain(
+      "correctedByExpenseId: managed.replacement.id",
+    );
   });
 
   it("excludes drafts from summaries and exposes accessible lifecycle actions", () => {
@@ -318,13 +346,34 @@ describe("expense integrity", () => {
     const siteReceipt = source(
       "../site/src/app/api/team/expenses/[expenseId]/receipt/route.ts",
     );
+    const mobileReceipt = source(
+      "../site/src/app/api/mobile/expenses/[expenseId]/receipt/route.ts",
+    );
+    const legacyReceiptSafety = source(
+      "../site/src/lib/legacy-expense-receipt.ts",
+    );
 
-    expect(apiReceipt).toContain('requirePermission(request, "expenses.read")');
+    expect(apiReceipt).toContain("requirePermission(request, [");
+    expect(apiReceipt).toContain('"expenses.submit"');
+    expect(apiReceipt).toContain(
+      "row.submittedBy !== permissionContext.principalId",
+    );
     expect(apiReceipt).toContain('"Cache-Control": "private, no-store"');
+    expect(apiReceipt).toContain("getExpenseReceiptCaptureContentUrl");
+    expect(apiReceipt).toContain("deterministicLegacyReceiptCaptureId");
     expect(siteReceipt).toContain('permissions: "expenses.read"');
-    expect(siteReceipt).toContain('"Content-Disposition": `attachment;');
-    expect(siteReceipt).toContain('"X-Content-Type-Options": "nosniff"');
-    expect(siteReceipt).toContain("SAFE_RECEIPT_CONTENT_TYPES");
+    expect(siteReceipt).toContain('redirect: "manual"');
+    expect(siteReceipt).toContain("parseVerifiedLegacyExpenseReceipt");
+    expect(mobileReceipt).toContain('redirect: "manual"');
+    expect(mobileReceipt).toContain("parseVerifiedLegacyExpenseReceipt");
+    expect(legacyReceiptSafety).toContain(
+      '"Content-Disposition": `attachment;',
+    );
+    expect(legacyReceiptSafety).toContain(
+      '"X-Content-Type-Options": "nosniff"',
+    );
+    expect(legacyReceiptSafety).toContain("SAFE_EXPENSE_RECEIPT_CONTENT_TYPES");
+    expect(legacyReceiptSafety).toContain("MAX_LEGACY_RECEIPT_BYTES");
   });
 
   it("routes mobile expense submissions through review-aware V2 posting", () => {

@@ -40,6 +40,10 @@ jest.mock("@/lib/permissions", () => ({
     granted === "*" ||
     granted === required ||
     (granted.endsWith(".*") && required.startsWith(granted.slice(0, -2))),
+  restrictOwnerOnlyPermissionsForRole: (
+    _role: string | null,
+    permissions: string[],
+  ) => permissions,
 }));
 
 import { createBreakGlassTeamSession } from "@/lib/team-auth";

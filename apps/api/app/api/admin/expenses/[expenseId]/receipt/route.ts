@@ -2,7 +2,14 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { expenses, getDb } from "@/db";
-import { requirePermission } from "@/lib/permissions";
+import { expenseReceiptCaptureErrorResponse } from "@/lib/expense-receipt-capture-route";
+import { getExpenseReceiptCaptureContentUrl } from "@/lib/expense-receipt-captures";
+import { deterministicLegacyReceiptCaptureId } from "@/lib/expense-receipt-legacy-id";
+import {
+  permissionMatches,
+  requirePermission,
+  resolvePermissionContext,
+} from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 
 export async function GET(
@@ -12,8 +19,21 @@ export async function GET(
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "expenses.read");
+  const permissionError = await requirePermission(request, [
+    "expenses.submit",
+    "expenses.approve",
+    "expenses.read",
+  ]);
   if (permissionError) return permissionError;
+  const permissionContext = await resolvePermissionContext(request);
+  if (!permissionContext.authenticated || !permissionContext.principalId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  const canReadAll = permissionContext.permissions.some(
+    (permission) =>
+      permissionMatches(permission, "expenses.approve") ||
+      permissionMatches(permission, "expenses.read"),
+  );
 
   const { expenseId } = await context.params;
   if (!expenseId) {
@@ -26,6 +46,8 @@ export async function GET(
       receiptUrl: expenses.receiptUrl,
       receiptFilename: expenses.receiptFilename,
       receiptContentType: expenses.receiptContentType,
+      receiptCaptureId: expenses.receiptCaptureId,
+      submittedBy: expenses.submittedBy,
     })
     .from(expenses)
     .where(eq(expenses.id, expenseId))
@@ -33,6 +55,39 @@ export async function GET(
 
   if (!row) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+  if (!canReadAll && row.submittedBy !== permissionContext.principalId) {
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+  const captureIds = new Set<string>();
+  if (row.receiptCaptureId) captureIds.add(row.receiptCaptureId);
+  if (row.receiptUrl) {
+    // Posted historical ledger evidence is immutable. The verified backfill
+    // therefore uses a deterministic capture identity that can be read without
+    // rewriting the posted expense row.
+    captureIds.add(deterministicLegacyReceiptCaptureId(expenseId));
+  }
+  for (const captureId of captureIds) {
+    try {
+      const contentUrl = await getExpenseReceiptCaptureContentUrl({
+        captureId,
+        viewerId: permissionContext.principalId,
+        canReviewAll: canReadAll,
+        variant: "original",
+      });
+      return NextResponse.redirect(contentUrl, {
+        status: 307,
+        headers: {
+          "Cache-Control": "private, no-store",
+          "Referrer-Policy": "no-referrer",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    } catch (error) {
+      if (!row.receiptUrl) return expenseReceiptCaptureErrorResponse(error);
+      // A migrated record retains its verified legacy fallback until the
+      // separate cleanup phase has re-read and hashed the private object.
+    }
   }
   if (!row.receiptUrl) {
     return NextResponse.json({ error: "no_receipt" }, { status: 404 });

@@ -14,6 +14,7 @@ type ExpenseProxyOptions = {
   bodyMode?: "json" | "binary";
   maxBodyBytes?: number;
   forwardMutationHeaders?: boolean;
+  forwardRedirect?: boolean;
 };
 
 function errorResponse(
@@ -147,6 +148,7 @@ export async function proxyMobileExpenseRequest(
   try {
     const upstream = await callAdminApiForCurrentSession(apiPath, {
       method,
+      ...(options.forwardRedirect ? { redirect: "manual" as const } : {}),
       ...(body ? { body } : {}),
       ...(bodyMode === "binary" ? { timeoutMs: 5 * 60_000 } : {}),
       headers: {
@@ -159,6 +161,41 @@ export async function proxyMobileExpenseRequest(
         ),
       },
     });
+    if (
+      options.forwardRedirect &&
+      upstream.status >= 300 &&
+      upstream.status < 400
+    ) {
+      const location = upstream.headers.get("location") ?? "";
+      let target: URL | null = null;
+      try {
+        target = new URL(location);
+      } catch {
+        target = null;
+      }
+      if (
+        !target ||
+        !["https:", "http:"].includes(target.protocol) ||
+        target.username ||
+        target.password
+      ) {
+        return errorResponse(
+          502,
+          "invalid_expense_receipt_location",
+          "The private receipt link is unavailable. Try again.",
+          true,
+        );
+      }
+      return new Response(null, {
+        status: 307,
+        headers: {
+          Location: target.toString(),
+          "Cache-Control": "private, no-store",
+          "Referrer-Policy": "no-referrer",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
     const responseBody = await upstream.arrayBuffer();
     const headers = new Headers({
       "Cache-Control": "private, no-store",

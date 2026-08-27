@@ -7,6 +7,8 @@ import {
   expenseIdempotencyPayload,
   parseExpenseRequest,
 } from "@/lib/expense-lifecycle";
+import { createManagedExpenseCorrection } from "@/lib/expense-managed-lifecycle";
+import { assertGenericExpenseMutationAllowed } from "@/lib/expense-managed-mutation";
 import {
   claimTeamMutationIdempotency,
   completeTeamMutationIdempotency,
@@ -34,7 +36,7 @@ export async function POST(
 ): Promise<Response> {
   const boundary = await beginTeamMutation(request, {
     principalTypes: ["human"],
-    requiredPermissions: ["expenses.write"],
+    requiredPermissions: ["expenses.approve"],
     risk: "financial",
     requiresIdempotency: true,
     auditAction: "expense.corrected",
@@ -99,6 +101,7 @@ export async function POST(
       assertTeamMutationExpectedVersion(mutation, existing.version);
       assertExpenseActionAllowed(existing, "correct");
       assertExpenseFinancialShape(existing);
+      await assertGenericExpenseMutationAllowed(tx, existing, "correct");
       const actorId = mutation.actor.id;
       if (!actorId) {
         throw new TeamMutationFailure(
@@ -115,65 +118,13 @@ export async function POST(
       }
 
       const now = new Date();
-      const [reversal] = await tx
-        .insert(expenses)
-        .values({
-          amount: -existing.amount,
-          currency: existing.currency,
-          category: existing.category,
-          vendor: existing.vendor,
-          memo: existing.memo,
-          method: existing.method,
-          source: "manual_correction",
-          paidAt: existing.paidAt,
-          coverageStartAt: existing.coverageStartAt,
-          coverageEndAt: existing.coverageEndAt,
-          lifecycleStatus: "posted",
-          version: 1,
-          postedAt: now,
-          postedBy: actorId,
-          reversalOfExpenseId: expenseId,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning({ id: expenses.id });
-      if (!reversal?.id) {
-        throw new TeamMutationFailure(
-          "internal",
-          "The correction reversal could not be created.",
-          { retryable: true },
-        );
-      }
-
-      const [replacement] = await tx
-        .insert(expenses)
-        .values({
-          amount: parsed.expense.amountCents,
-          currency: "USD",
-          category: parsed.expense.category,
-          vendor: parsed.expense.vendor,
-          memo: parsed.expense.memo,
-          method: parsed.expense.method,
-          source: "manual_correction",
-          paidAt: parsed.expense.paidAt,
-          coverageStartAt: parsed.expense.coverageStartAt,
-          coverageEndAt: parsed.expense.coverageEndAt,
-          lifecycleStatus: "posted",
-          version: 1,
-          postedAt: now,
-          postedBy: actorId,
-          correctionOfExpenseId: expenseId,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning({ id: expenses.id });
-      if (!replacement?.id) {
-        throw new TeamMutationFailure(
-          "internal",
-          "The corrected expense could not be created.",
-          { retryable: true },
-        );
-      }
+      const managed = await createManagedExpenseCorrection(tx, {
+        existing,
+        replacement: parsed.expense,
+        actorId,
+        reason: correctionReason,
+        now,
+      });
 
       const nextVersion = existing.version + 1;
       const [corrected] = await tx
@@ -183,7 +134,7 @@ export async function POST(
           correctedAt: now,
           correctedBy: actorId,
           correctionReason,
-          correctedByExpenseId: replacement.id,
+          correctedByExpenseId: managed.replacement.id,
           version: nextVersion,
           updatedAt: now,
         })
@@ -216,16 +167,21 @@ export async function POST(
         after: {
           lifecycleStatus: "corrected",
           version: nextVersion,
-          reversalExpenseId: reversal.id,
-          replacementExpenseId: replacement.id,
+          reversalExpenseId: managed.reversal.id,
+          replacementExpenseId: managed.replacement.id,
           replacementAmountCents: parsed.expense.amountCents,
           replacementCategory: parsed.expense.category,
           replacementPaidAt: parsed.expense.paidAt.toISOString(),
         },
         metadata: {
           reasonLength: correctionReason.length,
-          originalReceiptPreserved: Boolean(existing.receiptUrl),
+          originalReceiptPreserved: Boolean(
+            existing.receiptUrl || existing.receiptCaptureId,
+          ),
           ledgerMethod: "linked_reversal_and_replacement",
+          allocationStrategy: managed.allocationStrategy,
+          reimbursementClaimId: managed.reimbursementClaimId,
+          reimbursementStatus: managed.reimbursementStatus,
         },
         committedAt: now,
       });
@@ -235,9 +191,12 @@ export async function POST(
           expenseId,
           lifecycleStatus: "corrected" as const,
           version: nextVersion,
-          reversalExpenseId: reversal.id,
-          replacementExpenseId: replacement.id,
-          receiptPreservedOnExpenseId: existing.receiptUrl ? expenseId : null,
+          reversalExpenseId: managed.reversal.id,
+          replacementExpenseId: managed.replacement.id,
+          receiptPreservedOnExpenseId:
+            existing.receiptUrl || existing.receiptCaptureId ? expenseId : null,
+          reimbursementClaimId: managed.reimbursementClaimId,
+          reimbursementStatus: managed.reimbursementStatus,
         },
         {
           auditEventId: audit.auditEventId,

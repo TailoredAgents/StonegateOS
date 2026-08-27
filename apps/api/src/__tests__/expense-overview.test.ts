@@ -31,7 +31,7 @@ function baseInput(
     commissions: [],
     payrollAdjustments: [],
     payoutSnapshots: [],
-    dailyAdEntries: completeAdWeek(),
+    dailyAdEntries: [...completeAdWeek(PRIOR_WEEK_START), ...completeAdWeek()],
     pendingExpenseCount: 0,
     asOf: "2026-08-24",
     ...overrides,
@@ -77,6 +77,39 @@ describe("expense overview week boundaries", () => {
 });
 
 describe("expense overview calculations", () => {
+  it("keeps selected and prior completeness separate and suppresses an unsafe comparison", () => {
+    const result = buildExpenseOverview(
+      baseInput({
+        priorWeekOmittedUnverifiedHistoricalRecordCount: 1,
+      }),
+    );
+
+    expect(result.completeness).toEqual({ state: "complete", reasons: [] });
+    expect(result.omittedUnverifiedHistoricalRecordCount).toBe(0);
+    expect(result.priorWeek).toMatchObject({
+      omittedUnverifiedHistoricalRecordCount: 1,
+      completeness: {
+        state: "incomplete",
+        reasons: ["unverified_historical_records"],
+      },
+    });
+    expect(result.priorWeekChange).toMatchObject({
+      available: false,
+      states: {
+        revenue: "incomplete",
+        expenses: "incomplete",
+        operatingProfit: "incomplete",
+        expenseRatio: "incomplete",
+      },
+      revenueCents: null,
+      revenuePercent: null,
+      unavailableReasons: {
+        currentWeek: [],
+        priorWeek: ["unverified_historical_records"],
+      },
+    });
+  });
+
   it("calculates completed-job revenue, allocated expenses, accrued labor, ads, and prior-week change", () => {
     const result = buildExpenseOverview(
       baseInput({
@@ -87,6 +120,7 @@ describe("expense overview calculations", () => {
             appointmentType: "job",
             completedAt: "2026-08-17T03:59:59.999Z",
             finalTotalCents: 0,
+            commissionDataExpected: false,
           },
           {
             id: "current-1",
@@ -282,6 +316,13 @@ describe("expense overview calculations", () => {
         expenseRatioPercent: 18.75,
       },
       priorWeekChange: {
+        available: true,
+        states: {
+          revenue: "available",
+          expenses: "available",
+          operatingProfit: "available",
+          expenseRatio: "available",
+        },
         revenueCents: 70_000,
         revenuePercent: 87.5,
         expensesCents: 23_500,
@@ -403,6 +444,7 @@ describe("expense overview calculations", () => {
           expense("draft", 20_000, "draft"),
           expense("voided", 30_000, "voided"),
           expense("rejected", 40_000, "posted", "rejected"),
+          expense("pending-post-bypass", 50_000, "posted", "pending"),
         ],
       }),
     );
@@ -425,11 +467,49 @@ describe("expense overview calculations", () => {
       expenseRatioPercent: null,
       categories: [],
       priorWeekChange: {
+        available: true,
+        states: {
+          revenue: "zero_baseline",
+          expenses: "zero_baseline",
+          operatingProfit: "zero_baseline",
+          expenseRatio: "undefined_ratio",
+        },
         revenuePercent: null,
         expensesPercent: null,
         operatingProfitPercent: null,
         expenseRatioPercentagePoints: null,
       },
+    });
+  });
+
+  it("distinguishes a defined amount comparison from an undefined current ratio", () => {
+    const result = buildExpenseOverview(
+      baseInput({
+        jobs: [
+          {
+            id: "prior-revenue",
+            status: "completed",
+            appointmentType: "job",
+            completedAt: "2026-08-12T12:00:00.000Z",
+            finalTotalCents: 100_000,
+            commissionDataExpected: false,
+          },
+        ],
+      }),
+    );
+
+    expect(result.priorWeekChange).toMatchObject({
+      available: true,
+      states: {
+        revenue: "available",
+        expenses: "zero_baseline",
+        operatingProfit: "available",
+        expenseRatio: "undefined_ratio",
+      },
+      revenuePercent: -100,
+      expensesPercent: null,
+      operatingProfitPercent: -100,
+      expenseRatioPercentagePoints: null,
     });
   });
 

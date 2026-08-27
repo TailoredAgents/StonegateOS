@@ -28,6 +28,11 @@ import {
 import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
 import { isGoogleCalendarEnabled } from "@/lib/calendar";
 import { isSquarePosEnabled } from "@/lib/payment-feature-flags";
+import {
+  isExpenseReceiptCaptureApiEnabled,
+  isExpenseReceiptCaptureEnabled,
+  isExpenseReceiptWorkerEnabled,
+} from "@/lib/expense-feature-flags";
 import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
 import { SQUARE_PROVIDER_EVENT_LEASE_MS } from "@/lib/square-payments";
 import {
@@ -58,6 +63,8 @@ const PROVIDERS = [
   "traccar",
   "square",
   "object_storage",
+  "openai_expense_receipts",
+  "worker:outbox",
 ] as const;
 
 type ProviderStatus = "healthy" | "degraded" | "unknown";
@@ -164,7 +171,8 @@ function isObjectStorageFeatureEnabled(): boolean {
   return (
     areAppointmentMediaWritesEnabled() ||
     arePublicQuoteMediaUploadsEnabled() ||
-    isMediaAutoImportEnabled()
+    isMediaAutoImportEnabled() ||
+    isExpenseReceiptCaptureEnabled()
   );
 }
 
@@ -182,8 +190,8 @@ function getObjectStorageBlocker(
   return {
     id: "object_storage_not_configured",
     severity: "blocker",
-    title: "Appointment media storage is enabled but incomplete",
-    detail: `Private object storage cannot accept appointment photos because the following configuration is missing: ${configuration.missing.join(", ")}.`,
+    title: "Private media storage is enabled but incomplete",
+    detail: `Private object storage cannot accept enabled appointment or receipt uploads because the following configuration is missing: ${configuration.missing.join(", ")}.`,
     fix: [
       "Configure the private R2 bucket, endpoint, and scoped object-storage credentials on the API and worker.",
       "Verify bucket CORS and lifecycle rules, redeploy, then complete a test photo upload.",
@@ -198,9 +206,39 @@ export async function GET(request: NextRequest): Promise<Response> {
   const blockers: HealthFinding[] = [];
   const warnings: HealthFinding[] = [];
   const calendarEnabled = isGoogleCalendarEnabled();
+  const receiptApiEnabled = isExpenseReceiptCaptureApiEnabled();
+  const receiptWorkerEnabled = isExpenseReceiptWorkerEnabled();
+  const receiptCaptureEnabled = isExpenseReceiptCaptureEnabled();
   const squareConfiguration = inspectSquareConfiguration();
   const emailConfiguration = inspectEmailProviderConfiguration();
   const objectStorageConfiguration = inspectObjectStorageConfiguration();
+
+  if (receiptApiEnabled !== receiptWorkerEnabled) {
+    blockers.push({
+      id: "expense_receipt_flag_mismatch",
+      severity: "blocker",
+      title: "Receipt capture API and worker flags do not match",
+      detail:
+        "Receipt uploads remain unavailable because API intake and worker analysis must be enabled together.",
+      fix: [
+        "Set `EXPENSE_RECEIPT_CAPTURE_ENABLED` and `EXPENSE_RECEIPT_WORKER_ENABLED` to the same value on both the API and outbox worker.",
+        "Redeploy both services before running the owner receipt canary.",
+      ],
+    });
+  }
+  if (receiptCaptureEnabled && !(process.env["OPENAI_API_KEY"] ?? "").trim()) {
+    blockers.push({
+      id: "expense_receipt_openai_not_configured",
+      severity: "blocker",
+      title: "Receipt extraction is enabled without OpenAI credentials",
+      detail:
+        "Receipt images can be stored, but asynchronous extraction cannot run without OPENAI_API_KEY.",
+      fix: [
+        "Configure `OPENAI_API_KEY` on the outbox worker and API.",
+        "Redeploy, then complete a reviewed receipt canary before employee rollout.",
+      ],
+    });
+  }
 
   if (!emailConfiguration.configured) {
     const issues = [
@@ -285,7 +323,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       const finding: HealthFinding = {
         id: "object_storage_bucket_unreachable",
         severity: isObjectStorageFeatureEnabled() ? "blocker" : "warning",
-        title: "Private appointment-media bucket could not be verified",
+        title: "Private media bucket could not be verified",
         detail: `The owner health check could not complete a read-only HEAD request against the configured bucket: ${detail}.`,
         fix: [
           "Verify the R2 endpoint, private bucket name, and bucket-scoped credentials on the API.",
@@ -518,6 +556,49 @@ export async function GET(request: NextRequest): Promise<Response> {
   ]);
 
   const rowMap = new Map(rows.map((row) => [row.provider, row]));
+  if (receiptCaptureEnabled) {
+    const worker = rowMap.get("worker:outbox");
+    const workerSuccessAt = worker?.lastSuccessAt?.getTime() ?? 0;
+    const workerFailureAt = worker?.lastFailureAt?.getTime() ?? 0;
+    const workerHeartbeatHealthy =
+      workerSuccessAt > 0 &&
+      Date.now() - workerSuccessAt <= 90_000 &&
+      workerSuccessAt >= workerFailureAt;
+    if (!workerHeartbeatHealthy) {
+      blockers.push({
+        id: "expense_receipt_worker_unavailable",
+        severity: "blocker",
+        title: "Receipt analysis worker is unavailable",
+        detail:
+          workerSuccessAt > 0
+            ? "The outbox worker heartbeat is stale or its latest loop failed."
+            : "No outbox worker heartbeat has been recorded.",
+        fix: [
+          "Verify the outbox worker is deployed with the receipt and R2 settings.",
+          "Keep receipt capture disabled until its heartbeat is current.",
+        ],
+      });
+    }
+
+    const receiptProvider = rowMap.get("openai_expense_receipts");
+    const providerSuccessAt = receiptProvider?.lastSuccessAt?.getTime() ?? 0;
+    const providerFailureAt = receiptProvider?.lastFailureAt?.getTime() ?? 0;
+    if (providerSuccessAt === 0 || providerFailureAt > providerSuccessAt) {
+      blockers.push({
+        id: "expense_receipt_canary_required",
+        severity: "blocker",
+        title: "Receipt extraction canary has not passed",
+        detail:
+          providerSuccessAt === 0
+            ? "No successful receipt extraction has been recorded."
+            : "The latest receipt extraction provider event is a failure.",
+        fix: [
+          "Run one owner-only receipt through upload, extraction, human review, and confirmation.",
+          "Verify the posted expense and private receipt before widening the rollout.",
+        ],
+      });
+    }
+  }
   const providers = PROVIDERS.map((provider) => {
     const row = rowMap.get(provider);
     return {

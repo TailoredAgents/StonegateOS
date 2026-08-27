@@ -204,8 +204,43 @@ function rememberVerifiedPrincipal(
   return context;
 }
 
+export function restrictOwnerOnlyPermissionsForRole(
+  roleSlug: string | null | undefined,
+  effective: string[],
+): string[] {
+  const normalizedRole = roleSlug?.trim().toLowerCase() ?? null;
+  if (normalizedRole === "owner") return effective;
+  // Owner-only capabilities are restricted by verified role identity as well
+  // as by stored permissions. Historical custom roles may still contain an
+  // exact grant or a prefix wildcard from before these capabilities existed.
+  // Expand those wildcards into the assignable catalog so a non-owner keeps
+  // legitimate expense access without inheriting approval or financial truth.
+  const sanitized = effective.flatMap((granted) => {
+    const reachesOwnerOnly = TEAM_OWNER_ONLY_PERMISSION_CATALOG.some(
+      (permission) => permissionMatches(granted, permission),
+    );
+    if (!reachesOwnerOnly) return [granted];
+    if (!granted.endsWith(".*") && granted !== "*") return [];
+    return TEAM_ASSIGNABLE_PERMISSION_CATALOG.filter((permission) =>
+      permissionMatches(granted, permission),
+    );
+  });
+  const crewRestricted = new Set([
+    "expenses.read",
+    "expenses.write",
+    "expenses.export",
+  ]);
+  return [
+    ...new Set(
+      normalizedRole === "crew"
+        ? sanitized.filter((permission) => !crewRestricted.has(permission))
+        : sanitized,
+    ),
+  ];
+}
+
 function permissionsForMember(row: MemberPermissionRow): string[] {
-  return computeEffectivePermissions({
+  const effective = computeEffectivePermissions({
     // Role slugs seed records during provisioning/migration; they never grant
     // authority at request time. The stored role and member overrides are the
     // single effective source of truth.
@@ -213,6 +248,7 @@ function permissionsForMember(row: MemberPermissionRow): string[] {
     grant: row.permissionsGrant,
     deny: row.permissionsDeny,
   });
+  return restrictOwnerOnlyPermissionsForRole(row.roleSlug, effective);
 }
 
 function readForwardedTeamSessionToken(request: NextRequest): string | null {
@@ -328,11 +364,29 @@ export async function requirePermission(
   options?: {
     mode?: PermissionMatchMode;
     ignoredKillSwitches?: readonly TeamOperationKillSwitch[];
+    disallowedRoles?: readonly string[];
   },
 ): Promise<Response | null> {
   const context = await resolvePermissionContext(request);
   if (!context.authenticated) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const normalizedRole = context.role?.trim().toLowerCase() ?? null;
+  if (
+    normalizedRole &&
+    options?.disallowedRoles?.some(
+      (role) => role.trim().toLowerCase() === normalizedRole,
+    )
+  ) {
+    return NextResponse.json(
+      {
+        error: "forbidden",
+        required: Array.isArray(required) ? required : [required],
+        role: context.role,
+      },
+      { status: 403 },
+    );
   }
 
   const requiredList = Array.isArray(required) ? required : [required];

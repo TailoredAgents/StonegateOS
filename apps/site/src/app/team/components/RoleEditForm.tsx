@@ -132,8 +132,8 @@ export function RoleEditForm({
       ) : null}
       {role.slug.toLowerCase() === "owner" ? (
         <p className="rounded-xl border border-[color:var(--team-warning-border)] bg-[color:var(--team-warning-surface)] p-3 text-xs text-[color:var(--team-warning-text)]">
-          Irreversible Owner maintenance permissions are system-managed and
-          remain preserved when this reviewed work-permission list is saved.
+          Owner-only financial and maintenance permissions are system-managed
+          and remain preserved when this reviewed work-permission list is saved.
         </p>
       ) : null}
       {droppedLegacyPermissions.length > 0 ? (

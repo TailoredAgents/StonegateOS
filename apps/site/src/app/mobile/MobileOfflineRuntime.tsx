@@ -20,6 +20,12 @@ import {
   type PersistentStorageState,
   type QueueSummary,
 } from "./lib/offline-media";
+import {
+  MOBILE_EXPENSE_QUEUE_EVENT,
+  registerExpenseBackgroundSync,
+  reportExpenseQueueHealth,
+  syncEmployeeExpenseCaptures,
+} from "./lib/expense-capture-queue";
 
 type SnapshotInput = Omit<
   OfflineAppointmentSnapshot,
@@ -131,6 +137,12 @@ export function MobileOfflineRuntime({
     await refreshQueue();
   }, [employeeId, refreshQueue]);
 
+  const synchronizeExpenses = React.useCallback(async () => {
+    await syncEmployeeExpenseCaptures(employeeId).catch(() => undefined);
+    await registerExpenseBackgroundSync();
+    await reportExpenseQueueHealth(employeeId);
+  }, [employeeId]);
+
   React.useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
     void navigator.serviceWorker.register("/mobile-sw.js", {
@@ -212,11 +224,18 @@ export function MobileOfflineRuntime({
   React.useEffect(() => {
     void refreshQueue();
     void synchronize();
+    void synchronizeExpenses();
 
-    const onOnline = () => void synchronize();
+    const onOnline = () => {
+      void synchronize();
+      void synchronizeExpenses();
+    };
     const onQueueChange = () => {
       void refreshQueue();
       void synchronize();
+    };
+    const onExpenseQueueChange = () => {
+      void synchronizeExpenses();
     };
     const onStorageWarning = (event: Event) => {
       const detail = (event as CustomEvent<{ ratio?: number }>).detail;
@@ -230,6 +249,7 @@ export function MobileOfflineRuntime({
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
         void synchronize();
+        void synchronizeExpenses();
         void checkStoragePressure().then(setStoragePressure);
       }
     };
@@ -237,10 +257,13 @@ export function MobileOfflineRuntime({
       if (
         typeof event.data === "object" &&
         event.data !== null &&
-        (event.data as Record<string, unknown>)["type"] ===
-          "stonegate-media-sync-complete"
+        [
+          "stonegate-media-sync-complete",
+          "stonegate-expense-sync-complete",
+        ].includes(String((event.data as Record<string, unknown>)["type"]))
       ) {
         void refreshQueue();
+        void synchronizeExpenses();
         void checkStoragePressure().then(setStoragePressure);
       }
     };
@@ -248,11 +271,13 @@ export function MobileOfflineRuntime({
       void refreshQueue();
       if (document.visibilityState === "visible") {
         void synchronize();
+        void synchronizeExpenses();
       }
     }, 15_000);
 
     window.addEventListener("online", onOnline);
     window.addEventListener(MOBILE_MEDIA_QUEUE_EVENT, onQueueChange);
+    window.addEventListener(MOBILE_EXPENSE_QUEUE_EVENT, onExpenseQueueChange);
     window.addEventListener(MOBILE_MEDIA_SYNC_ISSUE_EVENT, onSyncIssue);
     window.addEventListener(MOBILE_STORAGE_WARNING_EVENT, onStorageWarning);
     document.addEventListener("visibilitychange", onVisibility);
@@ -260,6 +285,10 @@ export function MobileOfflineRuntime({
     return () => {
       window.removeEventListener("online", onOnline);
       window.removeEventListener(MOBILE_MEDIA_QUEUE_EVENT, onQueueChange);
+      window.removeEventListener(
+        MOBILE_EXPENSE_QUEUE_EVENT,
+        onExpenseQueueChange,
+      );
       window.removeEventListener(MOBILE_MEDIA_SYNC_ISSUE_EVENT, onSyncIssue);
       window.removeEventListener(
         MOBILE_STORAGE_WARNING_EVENT,
@@ -269,7 +298,7 @@ export function MobileOfflineRuntime({
       navigator.serviceWorker?.removeEventListener("message", onWorkerMessage);
       window.clearInterval(retryTimer);
     };
-  }, [employeeId, refreshQueue, synchronize]);
+  }, [employeeId, refreshQueue, synchronize, synchronizeExpenses]);
 
   const persistenceWarning =
     persistentStorage !== null && persistentStorage !== "granted";

@@ -186,11 +186,24 @@ describe("contact purge authorization and source contracts", () => {
 
   it("keeps purge out of custom grants and grants it only when stored explicitly", () => {
     expect(TEAM_PERMISSION_CATALOG).toContain("contacts.purge");
-    expect(TEAM_OWNER_ONLY_PERMISSION_CATALOG).toEqual(["contacts.purge"]);
+    expect(TEAM_OWNER_ONLY_PERMISSION_CATALOG).toEqual([
+      "contacts.purge",
+      "expenses.approve",
+      "financials.read",
+      "ad_spend.write",
+    ]);
     expect(TEAM_ASSIGNABLE_PERMISSION_CATALOG).not.toContain("contacts.purge");
+    expect(TEAM_ASSIGNABLE_PERMISSION_CATALOG).not.toContain(
+      "expenses.approve",
+    );
+    expect(TEAM_ASSIGNABLE_PERMISSION_CATALOG).not.toContain("financials.read");
+    expect(TEAM_ASSIGNABLE_PERMISSION_CATALOG).not.toContain("ad_spend.write");
     expect(getDefaultPermissionsForRole("owner")).toEqual([
       "*",
       "contacts.purge",
+      "expenses.approve",
+      "financials.read",
+      "ad_spend.write",
     ]);
     expect(
       computeEffectivePermissions({
@@ -223,7 +236,7 @@ describe("contact purge authorization and source contracts", () => {
     );
     expect(siteRoleUpdateRoute).toContain("permissions: expectedPermissions");
     expect(roleEditForm).toContain(
-      "Irreversible Owner maintenance permissions are system-managed",
+      "Owner-only financial and maintenance permissions are system-managed",
     );
     expect(roleEditForm).toContain(
       "TEAM_OWNER_ONLY_PERMISSION_CATALOG.includes",

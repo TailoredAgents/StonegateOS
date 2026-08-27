@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import sharp from "sharp";
 import {
   decodeLegacyReceiptCursor,
@@ -134,6 +136,20 @@ function memoryHarness(
 }
 
 describe("legacy expense receipt backfill", () => {
+  it("recovers legacy payout receipt provenance from its linked adjustment", () => {
+    const cli = fs.readFileSync(
+      path.resolve(
+        __dirname,
+        "../../scripts/legacy-expense-receipt-backfill.ts",
+      ),
+      "utf8",
+    );
+    expect(cli).toContain("coalesce(");
+    expect(cli).toContain('from "payout_run_adjustments" as adjustment');
+    expect(cli).toContain('select adjustment."created_by"');
+    expect(cli).toContain('where adjustment."expense_id" = ${expenses.id}');
+  });
+
   it("defaults to a bounded dry run and gates destructive cleanup", () => {
     expect(parseLegacyReceiptBackfillArgs([])).toEqual({
       mode: "dry_run",

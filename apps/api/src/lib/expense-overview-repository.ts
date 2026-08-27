@@ -21,11 +21,7 @@ import {
   type ExpenseOverviewLaborGroup,
 } from "@/lib/expense-overview";
 
-type ExpenseLifecycleStatus =
-  | "draft"
-  | "posted"
-  | "voided"
-  | "corrected";
+type ExpenseLifecycleStatus = "draft" | "posted" | "voided" | "corrected";
 type ExpenseReviewStatus = "draft" | "pending" | "approved" | "rejected";
 type PayoutRunStatus = "draft" | "locked" | "paid";
 type CommissionRole = "sales" | "marketing" | "crew";
@@ -51,6 +47,7 @@ export type ExpenseOverviewRepositoryRows = {
     reviewStatus: ExpenseReviewStatus;
     source: string;
     reversalOfExpenseId: string | null;
+    correctionOfExpenseId?: string | null;
   }>;
   allocations: Array<{
     expenseId: string;
@@ -110,6 +107,25 @@ function easternDate(value: Date): string {
       .setZone(EXPENSE_OVERVIEW_TIME_ZONE)
       .toISODate() ?? ""
   );
+}
+
+function easternDateFromInput(value: Date | string): string {
+  if (value instanceof Date) return easternDate(value);
+  const parsed = DateTime.fromISO(value, {
+    zone: EXPENSE_OVERVIEW_TIME_ZONE,
+    setZone: true,
+  });
+  if (!parsed.isValid) {
+    throw new TypeError("Overview asOf must be a valid date or ISO timestamp.");
+  }
+  return parsed.setZone(EXPENSE_OVERVIEW_TIME_ZONE).toISODate() ?? "";
+}
+
+function easternWeekStart(value: Date | string): string {
+  const date = DateTime.fromISO(easternDateFromInput(value), {
+    zone: EXPENSE_OVERVIEW_TIME_ZONE,
+  });
+  return date.minus({ days: date.weekday - 1 }).toFormat("yyyy-MM-dd");
 }
 
 export function getExpenseOverviewLoadWindow(
@@ -201,6 +217,7 @@ export function mapExpenseOverviewRows(input: {
   asOf?: Date | string;
 }): ExpenseOverviewInput {
   const window = getExpenseOverviewLoadWindow(input.weekStart);
+  const historicalCutoff = easternWeekStart(input.asOf ?? new Date());
   const allocationRowsByExpense = new Map<
     string,
     ExpenseOverviewRepositoryRows["allocations"]
@@ -214,12 +231,22 @@ export function mapExpenseOverviewRows(input: {
   const rawExpenseById = new Map(
     input.rows.expenses.map((expense) => [expense.id, expense] as const),
   );
-  const dailyPlatformByExpenseId = new Map<
-    string,
-    ExpenseOverviewAdPlatform
-  >();
+  const periodForDate = (date: string): "current" | "prior" | null => {
+    if (date >= input.weekStart && date < window.endDateExclusive) {
+      return "current";
+    }
+    if (date >= window.priorStartDate && date < input.weekStart) {
+      return "prior";
+    }
+    return null;
+  };
+  const omittedByPeriod = { current: 0, prior: 0 };
+  const recordOmission = (date: string): void => {
+    const period = periodForDate(date);
+    if (period) omittedByPeriod[period] += 1;
+  };
+  const dailyPlatformByExpenseId = new Map<string, ExpenseOverviewAdPlatform>();
   const excludedExpenseIds = new Set<string>();
-  let omittedUnverifiedHistoricalRecordCount = 0;
 
   for (const entry of input.rows.dailyAdEntries) {
     if (entry.amountCents === 0) continue;
@@ -255,7 +282,9 @@ export function mapExpenseOverviewRows(input: {
       linked.reversalOfExpenseId === null &&
       linked.currency === "USD" &&
       linked.amountCents === entry.amountCents &&
-      linked.source === "daily_ad_spend" &&
+      (linked.source === "daily_ad_spend" ||
+        (linked.source === "manual_correction" &&
+          Boolean(linked.correctionOfExpenseId))) &&
       linked.lifecycleStatus === "posted" &&
       linked.reviewStatus === "approved" &&
       easternDate(linked.paidAt) === entry.businessDate &&
@@ -263,7 +292,7 @@ export function mapExpenseOverviewRows(input: {
 
     if (!validLink) {
       if (linked) excludedExpenseIds.add(linked.id);
-      omittedUnverifiedHistoricalRecordCount += 1;
+      recordOmission(entry.businessDate);
       continue;
     }
     dailyPlatformByExpenseId.set(linked.id, entry.platform);
@@ -271,7 +300,13 @@ export function mapExpenseOverviewRows(input: {
 
   const mappedExpenses: ExpenseOverviewInput["expenses"][number][] = [];
   for (const expense of input.rows.expenses) {
-    if (expense.reversalOfExpenseId !== null) continue;
+    if (
+      expense.reversalOfExpenseId !== null ||
+      expense.source === "payout_run" ||
+      expense.source === "payout_reimbursement"
+    ) {
+      continue;
+    }
     if (
       excludedExpenseIds.has(expense.id) ||
       expense.currency !== "USD" ||
@@ -279,7 +314,7 @@ export function mapExpenseOverviewRows(input: {
       expense.amountCents <= 0
     ) {
       if (!excludedExpenseIds.has(expense.id)) {
-        omittedUnverifiedHistoricalRecordCount += 1;
+        recordOmission(easternDate(expense.paidAt));
       }
       continue;
     }
@@ -289,6 +324,10 @@ export function mapExpenseOverviewRows(input: {
       legacyCategory: expense.legacyCategory,
       needsReview: expense.categoryNeedsReview,
     });
+    if (!category.verified && easternDate(expense.paidAt) < historicalCutoff) {
+      recordOmission(easternDate(expense.paidAt));
+      continue;
+    }
     const allocationRows = allocationRowsByExpense.get(expense.id) ?? [];
     mappedExpenses.push({
       id: expense.id,
@@ -363,7 +402,7 @@ export function mapExpenseOverviewRows(input: {
     if (!snapshot) {
       // A finalized run must be present even when it contains zero payout
       // lines. The loader's left join normally creates that row.
-      omittedUnverifiedHistoricalRecordCount += 1;
+      recordOmission(easternDate(adjustment.periodStart));
       continue;
     }
     snapshot.otherPayrollAdjustmentsCents = addCents(
@@ -377,6 +416,11 @@ export function mapExpenseOverviewRows(input: {
     (expense) =>
       expense.reviewStatus === "pending" &&
       isCurrentWeekDate(expense.paidAt, window),
+  ).length;
+  const priorWeekPendingExpenseCount = input.rows.expenses.filter(
+    (expense) =>
+      expense.reviewStatus === "pending" &&
+      periodForDate(easternDate(expense.paidAt)) === "prior",
   ).length;
 
   return {
@@ -400,8 +444,10 @@ export function mapExpenseOverviewRows(input: {
       amountCents: entry.amountCents,
     })),
     pendingExpenseCount,
+    priorWeekPendingExpenseCount,
     asOf: input.asOf ?? new Date(),
-    omittedUnverifiedHistoricalRecordCount,
+    omittedUnverifiedHistoricalRecordCount: omittedByPeriod.current,
+    priorWeekOmittedUnverifiedHistoricalRecordCount: omittedByPeriod.prior,
   };
 }
 
@@ -414,7 +460,9 @@ export async function loadExpenseOverviewInput(
   const window = getExpenseOverviewLoadWindow(weekStart);
 
   const rows = await db.transaction(async (tx) => {
-    await tx.execute(sql`set transaction isolation level repeatable read read only`);
+    await tx.execute(
+      sql`set transaction isolation level repeatable read read only`,
+    );
 
     const jobs = await tx
       .select({
@@ -448,9 +496,13 @@ export async function loadExpenseOverviewInput(
         reviewStatus: expenses.reviewStatus,
         source: expenses.source,
         reversalOfExpenseId: expenses.reversalOfExpenseId,
+        correctionOfExpenseId: expenses.correctionOfExpenseId,
       })
       .from(expenses)
-      .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+      .leftJoin(
+        expenseCategories,
+        eq(expenses.categoryId, expenseCategories.id),
+      )
       .where(
         and(
           isNull(expenses.reversalOfExpenseId),
@@ -531,7 +583,10 @@ export async function loadExpenseOverviewInput(
         amountCents: payoutRunAdjustments.amountCents,
       })
       .from(payoutRunAdjustments)
-      .innerJoin(payoutRuns, eq(payoutRunAdjustments.payoutRunId, payoutRuns.id))
+      .innerJoin(
+        payoutRuns,
+        eq(payoutRunAdjustments.payoutRunId, payoutRuns.id),
+      )
       .where(
         and(
           eq(payoutRuns.periodCanonical, true),

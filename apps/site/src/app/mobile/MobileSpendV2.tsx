@@ -209,6 +209,12 @@ type OverviewPayload = {
   priorWeek: OverviewPeriod;
   priorWeekChange: {
     available: boolean;
+    states: {
+      revenue: "available" | "zero_baseline" | "incomplete";
+      expenses: "available" | "zero_baseline" | "incomplete";
+      operatingProfit: "available" | "zero_baseline" | "incomplete";
+      expenseRatio: "available" | "undefined_ratio" | "incomplete";
+    };
     revenueCents: number | null;
     revenuePercent: number | null;
     expensesCents: number | null;
@@ -325,6 +331,7 @@ function StatusNotice({
   return (
     <div
       role={tone === "error" ? "alert" : "status"}
+      aria-atomic="true"
       className={`rounded-lg border p-3 text-sm leading-6 ${classes}`}
     >
       {message}
@@ -348,14 +355,13 @@ function SegmentedControl({
     <div
       aria-label="Spend views"
       className={`grid ${showOverview ? "grid-cols-3" : "grid-cols-2"} rounded-xl border border-white/10 bg-slate-900 p-1`}
-      role="tablist"
+      role="group"
     >
       {views.map((view) => (
         <button
           key={view}
           type="button"
-          role="tab"
-          aria-selected={value === view}
+          aria-pressed={value === view}
           onClick={() => onChange(view)}
           className={`${focusRing} min-h-11 rounded-lg px-2 text-sm font-semibold transition ${
             value === view ? "bg-white/15 text-white" : "text-slate-300"
@@ -366,6 +372,65 @@ function SegmentedControl({
       ))}
     </div>
   );
+}
+
+export type ExpenseAddChoicePresentation = {
+  id: Exclude<AddWorkflow, null>;
+  label: string;
+  detail: string;
+  primary: boolean;
+  disabled: boolean;
+};
+
+/** Keep the Add surface stable while capabilities fail closed. */
+export function expenseAddChoices(input: {
+  canSubmit: boolean;
+  receiptEnabled: boolean;
+  adSpendEnabled: boolean;
+  pendingCapture: boolean;
+  missingYesterday: boolean;
+}): ExpenseAddChoicePresentation[] {
+  const scanAvailable = input.canSubmit && input.receiptEnabled;
+  const adSpendAvailable = input.adSpendEnabled;
+  const primaryChoice = scanAvailable
+    ? "scan"
+    : adSpendAvailable
+      ? "ads"
+      : "manual";
+
+  return [
+    {
+      id: "scan",
+      label: "Scan receipt",
+      detail: !scanAvailable
+        ? "Unavailable right now"
+        : input.pendingCapture
+          ? "Continue a receipt waiting on this device"
+          : "Camera or photo upload",
+      primary: primaryChoice === "scan",
+      disabled: !scanAvailable,
+    },
+    {
+      id: "ads",
+      label: "Daily ad spend",
+      detail: !adSpendAvailable
+        ? "Owner access or setup required"
+        : input.missingYesterday
+          ? "Yesterday needs an entry"
+          : "Facebook and Google",
+      primary: primaryChoice === "ads",
+      disabled: !adSpendAvailable,
+    },
+    {
+      id: "manual",
+      label: "Manual entry",
+      detail: input.canSubmit
+        ? "Enter an expense without a receipt"
+        : "Expense submission unavailable",
+      primary: primaryChoice === "manual",
+      disabled: !input.canSubmit,
+    },
+  ];
 }
 
 function AddChoices({
@@ -383,50 +448,22 @@ function AddChoices({
   missingYesterday: boolean;
   onChoose: (workflow: Exclude<AddWorkflow, null>) => void;
 }) {
-  const choices: Array<{
-    id: Exclude<AddWorkflow, null>;
-    label: string;
-    detail: string;
-    icon: typeof Camera;
-    primary: boolean;
-    disabled: boolean;
-  }> = [];
-  if (receiptEnabled) {
-    choices.push({
-      id: "scan",
-      label: pendingCapture ? "Continue receipt" : "Scan receipt",
-      detail: pendingCapture
-        ? "A receipt is waiting on this device"
-        : "Camera or photo upload",
-      icon: Camera,
-      primary: true,
-      disabled: !canSubmit,
-    });
-  }
-  if (adSpendEnabled) {
-    choices.push({
-      id: "ads",
-      label: "Daily ad spend",
-      detail: missingYesterday
-        ? "Yesterday needs an entry"
-        : "Facebook and Google",
-      icon: Megaphone,
-      primary: false,
-      disabled: false,
-    });
-  }
-  choices.push({
-    id: "manual",
-    label: "Manual entry",
-    detail: "Enter an expense without a receipt",
-    icon: PencilLine,
-    primary: !receiptEnabled,
-    disabled: !canSubmit,
+  const choices = expenseAddChoices({
+    canSubmit,
+    receiptEnabled,
+    adSpendEnabled,
+    pendingCapture: pendingCapture !== null,
+    missingYesterday,
   });
+  const choiceIcons = {
+    scan: Camera,
+    ads: Megaphone,
+    manual: PencilLine,
+  } satisfies Record<ExpenseAddChoicePresentation["id"], typeof Camera>;
   return (
     <div className="space-y-3">
       {choices.map((choice) => {
-        const Icon = choice.icon;
+        const Icon = choiceIcons[choice.id];
         return (
           <button
             key={choice.id}
@@ -938,7 +975,12 @@ function ExpenseEditor({
       ) : null}
 
       {error ? <StatusNotice tone="error" message={error} /> : null}
-      <div aria-live="polite" className="sr-only">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
         {submitting ? "Submitting expense" : ""}
       </div>
       <button
@@ -1180,23 +1222,6 @@ function ReceiptWorkflow({
     }
   };
 
-  const checkAnalysis = async () => {
-    if (!row) return;
-    setBusy(true);
-    setMessage(null);
-    try {
-      onRow(await refreshExpenseCapture(row.clientCaptureId));
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Receipt status is temporarily unavailable.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const finishConfirmed = async () => {
     if (!row) return;
     setBusy(true);
@@ -1429,6 +1454,7 @@ function ReceiptWorkflow({
           capture="environment"
           onChange={(event) => void selectFile(event)}
           className="sr-only"
+          aria-label="Choose a replacement receipt photo or PDF"
         />
       </div>
     );
@@ -1438,7 +1464,7 @@ function ReceiptWorkflow({
     return (
       <div className={`${cardClass} space-y-4 text-center`}>
         <Clock3 aria-hidden="true" className="mx-auto size-9 text-cyan-200" />
-        <div aria-live="polite">
+        <div role="status" aria-live="polite" aria-atomic="true">
           <h2 className="text-lg font-semibold">Waiting to sync</h2>
           <p className="mt-1 text-sm leading-6 text-slate-300">
             The original is safe on this device. Keep StonegateOS open or
@@ -1475,7 +1501,7 @@ function ReceiptWorkflow({
           aria-hidden="true"
           className="mx-auto size-9 animate-pulse text-cyan-200"
         />
-        <div aria-live="polite">
+        <div role="status" aria-live="polite" aria-atomic="true">
           <h2 className="text-lg font-semibold">Reading receipt</h2>
           <p className="mt-1 text-sm leading-6 text-slate-300">
             You can leave and come back. Nothing can post until you review it.
@@ -1539,26 +1565,22 @@ function ReceiptWorkflow({
           tone="error"
           message={row.error ?? "The receipt could not be analyzed."}
         />
-        <p className="text-sm leading-6 text-slate-300" aria-live="polite">
-          The background worker may retry this receipt. We will keep checking,
-          or you can check again now.
+        <p
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="text-sm leading-6 text-slate-300"
+        >
+          Analysis stopped and no expense was posted. Discard this attempt, then
+          retake the receipt or use Manual entry.
         </p>
         <button
           type="button"
-          onClick={() => void checkAnalysis()}
+          onClick={() => void discard()}
           disabled={busy || !isOnline}
           className={primaryButton}
         >
-          <RotateCcw aria-hidden="true" className="mr-2 inline size-4" />
-          {busy ? "Checking…" : "Check analysis again"}
-        </button>
-        <button
-          type="button"
-          onClick={() => void discard()}
-          disabled={busy}
-          className={`${secondaryButton} w-full`}
-        >
-          Discard receipt
+          {busy ? "Discarding…" : "Discard failed receipt"}
         </button>
         <button
           type="button"
@@ -1830,7 +1852,12 @@ function DailyAdWorkflow({
         </div>
       </label>
       {error ? <StatusNotice tone="error" message={error} /> : null}
-      <div aria-live="polite" className="sr-only">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
         {loading ? "Loading ad spend" : saving ? "Saving ad spend" : ""}
       </div>
       <button
@@ -1959,24 +1986,28 @@ function OverviewView({
           label: "Revenue",
           value: formatExpenseMoney(overview.revenueCents),
           change: overview.priorWeekChange.revenuePercent,
+          state: overview.priorWeekChange.states.revenue,
           unit: "%",
         },
         {
           label: "Expenses",
           value: formatExpenseMoney(overview.totalExpensesCents),
           change: overview.priorWeekChange.expensesPercent,
+          state: overview.priorWeekChange.states.expenses,
           unit: "%",
         },
         {
           label: "Operating profit",
           value: formatExpenseMoney(overview.operatingProfitCents),
           change: overview.priorWeekChange.operatingProfitPercent,
+          state: overview.priorWeekChange.states.operatingProfit,
           unit: "%",
         },
         {
           label: "Expense ratio",
           value: formatExpensePercent(overview.expenseRatioPercent),
           change: overview.priorWeekChange.expenseRatioPercentagePoints,
+          state: overview.priorWeekChange.states.expenseRatio,
           unit: " pts",
         },
       ]
@@ -2019,7 +2050,12 @@ function OverviewView({
           </p>
         ) : null}
       </div>
-      <div aria-live="polite" className="sr-only">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
         {loading ? "Loading weekly overview" : ""}
       </div>
       {error ? <StatusNotice tone="error" message={error} /> : null}
@@ -2095,11 +2131,15 @@ function OverviewView({
                 </p>
                 <p className="mt-1 text-lg font-bold">{card.value}</p>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  {!overview.priorWeekChange.available
+                  {card.state === "incomplete"
                     ? "Comparison unavailable"
-                    : card.change === null
-                      ? "Prior baseline was zero"
-                      : `${card.change >= 0 ? "+" : ""}${card.change.toFixed(1)}${card.unit} vs prior`}
+                    : card.state === "zero_baseline"
+                      ? "Prior week was zero"
+                      : card.state === "undefined_ratio"
+                        ? "Ratio needs revenue in both weeks"
+                        : card.change === null
+                          ? "Comparison unavailable"
+                          : `${card.change >= 0 ? "+" : ""}${card.change.toFixed(1)}${card.unit} vs prior`}
                 </p>
               </div>
             ))}
@@ -2283,6 +2323,38 @@ async function fetchExactDuplicateReviewPage(cursor: string | null): Promise<{
   };
 }
 
+async function fetchExpenseHistoryPage(
+  filter: string,
+  cursor: string | null,
+): Promise<{
+  expenses: ExpenseHistoryRow[];
+  page: { hasMore: boolean; nextCursor: string | null };
+}> {
+  const search = new URLSearchParams({ filter, limit: "40" });
+  if (cursor) search.set("cursor", cursor);
+  const response = await fetch(
+    `/api/mobile/expenses/submissions?${search.toString()}`,
+    { cache: "no-store", credentials: "include" },
+  );
+  const payload = await jsonPayload(response);
+  if (!response.ok) {
+    throw new Error(
+      expenseErrorMessage(payload, "Expense history is unavailable."),
+    );
+  }
+  const page = objectValue(payload?.["page"]);
+  return {
+    expenses: Array.isArray(payload?.["expenses"])
+      ? (payload["expenses"] as ExpenseHistoryRow[])
+      : [],
+    page: {
+      hasMore: page?.["hasMore"] === true,
+      nextCursor:
+        typeof page?.["nextCursor"] === "string" ? page["nextCursor"] : null,
+    },
+  };
+}
+
 function exactDuplicateReceiptHref(captureId: string): string {
   return `/api/mobile/expenses/captures/${encodeURIComponent(captureId)}/content`;
 }
@@ -2395,11 +2467,16 @@ function HistoryView({
   const [filter, setFilter] = React.useState("all");
   const [rows, setRows] = React.useState<ExpenseHistoryRow[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [historyCursor, setHistoryCursor] = React.useState<string | null>(null);
+  const [historyHasMore, setHistoryHasMore] = React.useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [reviewing, setReviewing] = React.useState<ExpenseHistoryRow | null>(
     null,
   );
   const [reason, setReason] = React.useState("");
+  const [reviewCategoryId, setReviewCategoryId] = React.useState("");
+  const [lockVendorRule, setLockVendorRule] = React.useState(false);
   const [reviewBusy, setReviewBusy] = React.useState(false);
   const [reload, setReload] = React.useState(0);
   const [duplicateRows, setDuplicateRows] = React.useState<
@@ -2423,25 +2500,14 @@ function HistoryView({
     let active = true;
     setLoading(true);
     setError(null);
-    void fetch(
-      `/api/mobile/expenses/submissions?filter=${encodeURIComponent(filter)}`,
-      { cache: "no-store" },
-    )
-      .then(async (response) => ({
-        response,
-        payload: await jsonPayload(response),
-      }))
-      .then(({ response, payload }) => {
+    setHistoryCursor(null);
+    setHistoryHasMore(false);
+    void fetchExpenseHistoryPage(filter, null)
+      .then((result) => {
         if (!active) return;
-        if (!response.ok)
-          throw new Error(
-            expenseErrorMessage(payload, "Expense history is unavailable."),
-          );
-        setRows(
-          Array.isArray(payload?.["expenses"])
-            ? (payload["expenses"] as ExpenseHistoryRow[])
-            : [],
-        );
+        setRows(result.expenses);
+        setHistoryCursor(result.page.nextCursor);
+        setHistoryHasMore(result.page.hasMore);
       })
       .catch(
         (reasonValue: unknown) =>
@@ -2497,10 +2563,23 @@ function HistoryView({
       setError("Add a short rejection reason.");
       return;
     }
+    if (decision === "approve" && !reviewCategoryId) {
+      setError("Choose a category before approving this expense.");
+      return;
+    }
     setReviewBusy(true);
     setError(null);
     try {
-      const requestBody = { decision, reason: reason.trim() || null };
+      const categoryChanged =
+        decision === "approve" && reviewCategoryId !== reviewing.categoryId;
+      const requestBody = {
+        decision,
+        reason: reason.trim() || null,
+        ...(categoryChanged ? { categoryId: reviewCategoryId } : {}),
+        ...(decision === "approve" && lockVendorRule
+          ? { lockVendorRule: true }
+          : {}),
+      };
       const attempt = await getExpenseMutationAttempt({
         employeeId,
         operation: `expense-review:${reviewing.id}`,
@@ -2527,6 +2606,8 @@ function HistoryView({
       await acknowledgeExpenseMutationAttempt(attempt);
       setReviewing(null);
       setReason("");
+      setReviewCategoryId("");
+      setLockVendorRule(false);
       setReload((value) => value + 1);
     } catch (reasonValue) {
       setError(
@@ -2537,6 +2618,32 @@ function HistoryView({
       );
     } finally {
       setReviewBusy(false);
+    }
+  };
+
+  const loadMoreHistory = async (): Promise<void> => {
+    if (!historyCursor || historyLoadingMore) return;
+    setHistoryLoadingMore(true);
+    setError(null);
+    try {
+      const result = await fetchExpenseHistoryPage(filter, historyCursor);
+      setRows((current) => {
+        const known = new Set(current.map((row) => row.id));
+        return [
+          ...current,
+          ...result.expenses.filter((row) => !known.has(row.id)),
+        ];
+      });
+      setHistoryCursor(result.page.nextCursor);
+      setHistoryHasMore(result.page.hasMore);
+    } catch (reasonValue) {
+      setError(
+        reasonValue instanceof Error
+          ? reasonValue.message
+          : "More expense history could not be loaded.",
+      );
+    } finally {
+      setHistoryLoadingMore(false);
     }
   };
 
@@ -2886,6 +2993,27 @@ function HistoryView({
             View receipt
           </a>
         ) : null}
+        <label className="block">
+          <FieldLabel>Category</FieldLabel>
+          <select
+            value={reviewCategoryId}
+            onChange={(event) => setReviewCategoryId(event.target.value)}
+            className={controlClass}
+          >
+            <option value="">Choose a category</option>
+            {categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+          {reviewCategoryId !== reviewing.categoryId ? (
+            <p className="mt-1 text-xs text-amber-200">
+              Approval will replace the current category allocation with this
+              category.
+            </p>
+          ) : null}
+        </label>
         <details className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
           <summary
             className={`${focusRing} flex min-h-11 cursor-pointer items-center text-sm font-semibold text-slate-200`}
@@ -2952,6 +3080,30 @@ function HistoryView({
             </div>
           </dl>
         </details>
+        <details className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+          <summary
+            className={`${focusRing} flex min-h-11 cursor-pointer items-center text-sm font-semibold text-slate-200`}
+          >
+            Approval preferences
+          </summary>
+          <label className="mt-3 flex min-h-11 items-center gap-3 border-t border-white/10 pt-3 text-sm text-slate-200">
+            <input
+              type="checkbox"
+              checked={lockVendorRule}
+              disabled={!reviewing.vendor}
+              onChange={(event) => setLockVendorRule(event.target.checked)}
+              className={`${focusRing} size-5 rounded border-white/20 bg-slate-950`}
+            />
+            <span>
+              Remember this category for {reviewing.vendor ?? "this vendor"}
+            </span>
+          </label>
+          {!reviewing.vendor ? (
+            <p className="mt-1 text-xs text-slate-500">
+              A vendor name is required before a category can be remembered.
+            </p>
+          ) : null}
+        </details>
         <label className="block">
           <FieldLabel>Reason (required to reject)</FieldLabel>
           <textarea
@@ -2985,6 +3137,8 @@ function HistoryView({
           onClick={() => {
             setReviewing(null);
             setReason("");
+            setReviewCategoryId("");
+            setLockVendorRule(false);
             setError(null);
           }}
           className={`${secondaryButton} w-full`}
@@ -3063,7 +3217,12 @@ function HistoryView({
           </select>
         </label>
       </div>
-      <div aria-live="polite" className="sr-only">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
         {loading
           ? "Loading expense history"
           : `${rows.length} expense entries loaded`}
@@ -3143,6 +3302,8 @@ function HistoryView({
                 type="button"
                 onClick={() => {
                   setReviewing(row);
+                  setReviewCategoryId(row.categoryId ?? "");
+                  setLockVendorRule(false);
                   setError(null);
                 }}
                 className={`${secondaryButton} flex-1`}
@@ -3153,6 +3314,16 @@ function HistoryView({
           </div>
         </article>
       ))}
+      {historyHasMore ? (
+        <button
+          type="button"
+          disabled={historyLoadingMore}
+          onClick={() => void loadMoreHistory()}
+          className={`${secondaryButton} w-full`}
+        >
+          {historyLoadingMore ? "Loading…" : "Load more expenses"}
+        </button>
+      ) : null}
       {!loading && !rows.length ? (
         <div className={`${cardClass} text-sm text-slate-300`}>
           No expenses match this filter.
@@ -3364,12 +3535,7 @@ export function MobileSpendV2({
         .catch(() => undefined);
     };
     refresh();
-    const poll = window.setInterval(
-      () => {
-        refresh();
-      },
-      captureStatus === "failed" ? 10_000 : 2500,
-    );
+    const poll = window.setInterval(refresh, 2500);
     return () => window.clearInterval(poll);
   }, [activeCapture?.clientCaptureId, activeCapture?.status, receiptEnabled]);
 
@@ -3478,7 +3644,12 @@ export function MobileSpendV2({
         onChange={changeView}
         showOverview={overviewEnabled}
       />
-      <div aria-live="polite" className="sr-only">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
         {!capabilities && !capabilitiesError
           ? "Loading optional expense tools"
           : capabilitiesError

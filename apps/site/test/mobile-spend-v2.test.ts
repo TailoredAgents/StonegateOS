@@ -6,11 +6,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   MobileSpendV2,
+  expenseAddChoices,
   expenseOverviewReasonDetail,
 } from "../src/app/mobile/MobileSpendV2";
 import {
   expenseCaptureQueueStatus,
   shouldPollExpenseCaptureStatus,
+  summarizeExpenseCaptureQueueHealth,
+  type ExpenseCaptureQueueRow,
 } from "../src/app/mobile/lib/expense-capture-queue";
 import {
   acknowledgeExpenseMutationAttempt,
@@ -200,16 +203,50 @@ void test("expense payload fingerprints are canonical and reject unsafe values",
   );
 });
 
-void test("confirmed captures are terminal while failed analysis remains tracked", () => {
+void test("only active analysis polls while terminal states remain tracked", () => {
   assert.equal(expenseCaptureQueueStatus("confirmed"), "confirmed");
   assert.equal(expenseCaptureQueueStatus("discarded"), "discarded");
   assert.equal(expenseCaptureQueueStatus("ready"), "ready");
   assert.equal(expenseCaptureQueueStatus("failed"), "failed");
   assert.equal(expenseCaptureQueueStatus("analyzing"), "processing");
-  assert.equal(shouldPollExpenseCaptureStatus("failed"), true);
+  assert.equal(shouldPollExpenseCaptureStatus("failed"), false);
   assert.equal(shouldPollExpenseCaptureStatus("processing"), true);
   assert.equal(shouldPollExpenseCaptureStatus("confirmed"), false);
   assert.equal(shouldPollExpenseCaptureStatus("discarded"), false);
+});
+
+void test("receipt queue telemetry counts only captures awaiting server acknowledgement", () => {
+  const row = (
+    status: ExpenseCaptureQueueRow["status"],
+    createdAt: number,
+    options: Partial<ExpenseCaptureQueueRow> = {},
+  ): ExpenseCaptureQueueRow => ({
+    clientCaptureId: `${status}-${createdAt}`,
+    employeeId: "employee-a",
+    filename: "receipt.jpg",
+    contentType: "image/jpeg",
+    byteLength: 10,
+    checksumSha256: "a".repeat(64),
+    status,
+    error: null,
+    attempts: 0,
+    serverCapture: null,
+    createdAt,
+    updatedAt: createdAt,
+    ...options,
+  });
+
+  assert.deepEqual(
+    summarizeExpenseCaptureQueueHealth([
+      row("draft", 10),
+      row("queued", 20),
+      row("syncing", 30, { error: "network interrupted" }),
+      row("failed", 40),
+      row("processing", 5, { serverCapture: { status: "analyzing" } }),
+      row("ready", 1, { serverCapture: { status: "ready" } }),
+    ]),
+    { queuedCount: 3, failedCount: 2, oldestQueuedAt: 20 },
+  );
 });
 
 void test("overview completeness explains every production reason", () => {
@@ -247,6 +284,47 @@ void test("overview completeness explains every production reason", () => {
   );
 });
 
+void test("Add always presents three choices with one filled primary action", () => {
+  const scenarios = [
+    {
+      canSubmit: true,
+      receiptEnabled: true,
+      adSpendEnabled: true,
+      pendingCapture: false,
+      missingYesterday: false,
+      primary: "scan",
+    },
+    {
+      canSubmit: true,
+      receiptEnabled: false,
+      adSpendEnabled: false,
+      pendingCapture: false,
+      missingYesterday: false,
+      primary: "manual",
+    },
+    {
+      canSubmit: false,
+      receiptEnabled: false,
+      adSpendEnabled: true,
+      pendingCapture: false,
+      missingYesterday: true,
+      primary: "ads",
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const choices = expenseAddChoices(scenario);
+    assert.deepEqual(
+      choices.map((choice) => choice.id),
+      ["scan", "ads", "manual"],
+    );
+    assert.deepEqual(
+      choices.filter((choice) => choice.primary).map((choice) => choice.id),
+      [scenario.primary],
+    );
+  }
+});
+
 void test("Spend V2 keeps the locked navigation and offline-store contracts", async () => {
   const [component, session, offlineMedia, mutationKeys, worker] =
     await Promise.all([
@@ -266,12 +344,20 @@ void test("Spend V2 keeps the locked navigation and offline-store contracts", as
   assert.match(component, /id: "manual"/u);
   assert.match(component, /Waiting to sync/u);
   assert.match(component, /aria-live="polite"/u);
-  assert.match(component, /role="tablist"/u);
-  assert.match(component, /role="tab"/u);
-  assert.match(component, /aria-selected=/u);
+  assert.match(
+    component,
+    /role="status"\s+aria-live="polite"\s+aria-atomic="true"/u,
+  );
+  assert.match(component, /role="group"/u);
+  assert.match(component, /aria-pressed=/u);
+  assert.doesNotMatch(component, /role="tablist"/u);
+  assert.doesNotMatch(component, /role="tab"/u);
   assert.match(component, /focus-visible:ring-2/u);
   assert.match(component, /focus-within:ring-2/u);
   assert.match(component, /min-h-11/u);
+  assert.match(component, /workflow === null \? \(/u);
+  assert.match(component, /Choose a replacement receipt photo or PDF/u);
+  assert.match(component, /aria-atomic="true"/u);
   assert.match(component, /Submit for approval/u);
   assert.match(component, /Reimbursement/u);
   assert.match(component, /getExpenseMutationAttempt/u);
@@ -306,12 +392,25 @@ void test("Spend V2 keeps the locked navigation and offline-store contracts", as
   assert.match(component, /Matched receipt/u);
   assert.match(component, /Prior-week comparison unavailable/u);
   assert.match(component, /priorWeekChange\.available/u);
+  assert.match(component, /priorWeekChange\.states\.revenue/u);
+  assert.match(component, /priorWeekChange\.states\.expenseRatio/u);
+  assert.match(component, /Prior week was zero/u);
+  assert.match(component, /Ratio needs revenue in both weeks/u);
   assert.match(component, /priorWeek\.completeness\.reasons/u);
   assert.match(component, /missingFinalTotalCount/u);
   assert.match(component, /omittedUnverifiedHistoricalRecordCount/u);
   assert.match(component, /unverifiedExpenseCategoryCount/u);
   assert.match(component, /Expense details/u);
   assert.match(component, /Category allocation/u);
+  assert.match(
+    component,
+    /More details[\s\S]*?<FieldLabel>Notes<\/FieldLabel>[\s\S]*?<FieldLabel>Payment method<\/FieldLabel>[\s\S]*?<FieldLabel>Job link<\/FieldLabel>[\s\S]*?Split categories/u,
+  );
+  assert.equal(
+    component.match(/<FieldLabel>Filter history<\/FieldLabel>/gu)?.length,
+    1,
+  );
+  assert.doesNotMatch(component, /bulk.{0,20}approv|approv.{0,20}all/iu);
   assert.doesNotMatch(component, /pie chart/iu);
   assert.match(session, /"expenses\.submit"/u);
   assert.match(session, /"expenses\.approve"/u);
@@ -325,9 +424,17 @@ void test("Spend V2 keeps the locked navigation and offline-store contracts", as
   assert.match(worker, /stonegate-expense-receipts/u);
   assert.match(worker, /stonegate-media-sync/u);
   assert.match(worker, /capture\?\.status === "confirmed"/u);
+  assert.match(worker, /\/api\/mobile\/expenses\/queue-health/u);
+  assert.match(worker, /await reportExpenseQueueHealth\(employeeId\)/u);
+  const expenseProxy = await readFile(
+    `${siteRoot}/src/app/api/mobile/expenses/lib/expense-proxy.ts`,
+    "utf8",
+  );
+  assert.match(expenseProxy, /redirect: "manual"/u);
+  assert.match(expenseProxy, /Referrer-Policy/u);
 });
 
-void test("the initial mobile surface fails optional tools closed", () => {
+void test("the initial mobile surface keeps three choices while optional tools fail closed", () => {
   const html = renderToStaticMarkup(
     createElement(MobileSpendV2, {
       employee: { id: "11111111-1111-4111-8111-111111111111", name: "Crew" },
@@ -342,10 +449,12 @@ void test("the initial mobile surface fails optional tools closed", () => {
 
   assert.match(html, />Add</u);
   assert.match(html, />History</u);
+  assert.match(html, /Scan receipt/u);
+  assert.match(html, /Daily ad spend/u);
   assert.match(html, /Manual entry/u);
+  assert.match(html, /Unavailable right now/u);
+  assert.match(html, /Owner access or setup required/u);
   assert.match(html, /Loading optional expense tools/u);
   assert.doesNotMatch(html, />Overview</u);
-  assert.doesNotMatch(html, /Scan receipt/u);
-  assert.doesNotMatch(html, /Daily ad spend/u);
   assert.doesNotMatch(html, /Recent expenses/u);
 });

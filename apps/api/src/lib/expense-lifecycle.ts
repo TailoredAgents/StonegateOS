@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import {
+  detectExpenseReceiptUploadContentType,
+  type ExpenseReceiptContentType,
+} from "@/lib/expense-receipt-storage";
 import { TeamMutationFailure } from "@/lib/team-mutation";
 
 export const MAX_EXPENSE_CENTS = 100_000_000;
@@ -14,7 +18,7 @@ const ALLOWED_METHODS = [
   "zelle",
   "other",
 ] as const;
-const MANUAL_SOURCES = new Set(["manual", "manual_correction"]);
+const MANUAL_SOURCES = new Set(["manual", "manual_correction", "receipt_scan"]);
 
 const optionalText = (maximum: number) =>
   z
@@ -65,8 +69,8 @@ export type ValidatedExpenseWrite = Omit<
 
 export type ExpenseReceipt = {
   filename: string;
-  contentType: "image/jpeg" | "image/png" | "image/webp" | "application/pdf";
-  dataUrl: string;
+  contentType: ExpenseReceiptContentType;
+  bytes: Buffer;
   sha256: string;
   byteLength: number;
 };
@@ -192,44 +196,10 @@ function sanitizedFilename(value: string): string {
 export function detectExpenseReceiptContentType(
   bytes: Uint8Array,
 ): ExpenseReceipt["contentType"] | null {
-  if (
-    bytes.length >= 3 &&
-    bytes[0] === 0xff &&
-    bytes[1] === 0xd8 &&
-    bytes[2] === 0xff
-  ) {
-    return "image/jpeg";
-  }
-  if (
-    bytes.length >= 8 &&
-    bytes[0] === 0x89 &&
-    bytes[1] === 0x50 &&
-    bytes[2] === 0x4e &&
-    bytes[3] === 0x47 &&
-    bytes[4] === 0x0d &&
-    bytes[5] === 0x0a &&
-    bytes[6] === 0x1a &&
-    bytes[7] === 0x0a
-  ) {
-    return "image/png";
-  }
-  if (
-    bytes.length >= 12 &&
-    String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" &&
-    String.fromCharCode(...bytes.slice(8, 12)) === "WEBP"
-  ) {
-    return "image/webp";
-  }
-  if (
-    bytes.length >= 5 &&
-    String.fromCharCode(...bytes.slice(0, 5)) === "%PDF-"
-  ) {
-    return "application/pdf";
-  }
-  return null;
+  return detectExpenseReceiptUploadContentType(Buffer.from(bytes));
 }
 
-async function parseReceipt(
+export async function parseExpenseReceiptFile(
   value: FormDataEntryValue | null,
 ): Promise<ExpenseReceipt | null> {
   if (value === null) return null;
@@ -249,7 +219,7 @@ async function parseReceipt(
     );
   }
 
-  const bytes = new Uint8Array(await value.arrayBuffer());
+  const bytes = Buffer.from(await value.arrayBuffer());
   const contentType = detectExpenseReceiptContentType(bytes);
   if (!contentType) {
     throw new TeamMutationFailure(
@@ -257,19 +227,18 @@ async function parseReceipt(
       "The receipt file type could not be verified.",
       {
         fieldErrors: {
-          receiptFile: "Use a JPEG, PNG, WebP, or PDF receipt.",
+          receiptFile: "Use a JPEG, PNG, WebP, HEIC, or PDF receipt.",
         },
       },
     );
   }
 
-  const buffer = Buffer.from(bytes);
   return {
     filename: sanitizedFilename(value.name || "receipt"),
     contentType,
-    dataUrl: `data:${contentType};base64,${buffer.toString("base64")}`,
-    sha256: createHash("sha256").update(buffer).digest("hex"),
-    byteLength: buffer.byteLength,
+    bytes,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    byteLength: bytes.byteLength,
   };
 }
 
@@ -317,7 +286,7 @@ export async function parseExpenseRequest(
     };
     rawReason = formString(form, "reason");
     if (options.allowReceipt !== false) {
-      receipt = await parseReceipt(form.get("receiptFile"));
+      receipt = await parseExpenseReceiptFile(form.get("receiptFile"));
     } else if (form.get("receiptFile") instanceof File) {
       const file = form.get("receiptFile") as File;
       if (file.size > 0) {

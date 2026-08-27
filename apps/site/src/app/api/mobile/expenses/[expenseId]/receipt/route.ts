@@ -5,23 +5,12 @@ import {
   hasMobilePermission,
   resolveMobileSessionFromCookies,
 } from "../../../../../mobile/lib/session";
+import {
+  parseVerifiedLegacyExpenseReceipt,
+  safeExpenseReceiptResponseHeaders,
+} from "@/lib/legacy-expense-receipt";
 
 export const dynamic = "force-dynamic";
-
-function parseDataUrl(
-  dataUrl: string,
-): { contentType: string; buffer: Buffer } | null {
-  if (!dataUrl.startsWith("data:")) return null;
-  const match = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
-  if (!match) return null;
-  const contentType = match[1] || "application/octet-stream";
-  const base64 = match[2] || "";
-  return { contentType, buffer: Buffer.from(base64, "base64") };
-}
-
-function sanitizeFilename(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "receipt";
-}
 
 export async function GET(
   _request: NextRequest,
@@ -50,8 +39,38 @@ export async function GET(
     `/api/admin/expenses/${encodeURIComponent(normalizedExpenseId)}/receipt`,
     {
       method: "GET",
+      redirect: "manual",
     },
   );
+  if (apiResponse.status >= 300 && apiResponse.status < 400) {
+    const location = apiResponse.headers.get("location") ?? "";
+    let target: URL | null = null;
+    try {
+      target = new URL(location);
+    } catch {
+      target = null;
+    }
+    if (
+      !target ||
+      !["https:", "http:"].includes(target.protocol) ||
+      target.username ||
+      target.password
+    ) {
+      return NextResponse.json(
+        { error: "invalid_receipt_location" },
+        { status: 502, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+    return new Response(null, {
+      status: 307,
+      headers: {
+        Location: target.toString(),
+        "Cache-Control": "private, no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  }
   if (!apiResponse.ok) {
     return NextResponse.json(
       { error: "not_found" },
@@ -70,21 +89,25 @@ export async function GET(
     return NextResponse.json({ error: "no_receipt" }, { status: 404 });
   }
 
-  const parsed = parseDataUrl(payload.dataUrl);
+  const parsed = parseVerifiedLegacyExpenseReceipt({
+    dataUrl: payload.dataUrl,
+    reportedContentType: payload.contentType,
+  });
   if (!parsed) {
-    return NextResponse.json({ error: "invalid_receipt" }, { status: 500 });
+    return NextResponse.json(
+      { error: "invalid_receipt" },
+      { status: 415, headers: { "Cache-Control": "private, no-store" } },
+    );
   }
 
-  const filename = sanitizeFilename(payload.filename ?? "receipt");
-  const contentType = payload.contentType ?? parsed.contentType;
+  const contentType = parsed.contentType;
   const arrayBuffer = new ArrayBuffer(parsed.buffer.byteLength);
   new Uint8Array(arrayBuffer).set(parsed.buffer);
   const blob = new Blob([arrayBuffer], { type: contentType });
   return new Response(blob, {
-    headers: {
-      "Content-Type": contentType,
-      "Content-Disposition": `inline; filename="${filename}"`,
-      "Cache-Control": "private, max-age=60",
-    },
+    headers: safeExpenseReceiptResponseHeaders({
+      filename: payload.filename ?? "receipt",
+      contentType,
+    }),
   });
 }

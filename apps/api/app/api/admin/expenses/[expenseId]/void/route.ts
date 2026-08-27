@@ -6,6 +6,8 @@ import {
   assertExpenseFinancialShape,
   parseExpenseReasonRequest,
 } from "@/lib/expense-lifecycle";
+import { createManagedExpenseVoid } from "@/lib/expense-managed-lifecycle";
+import { assertGenericExpenseMutationAllowed } from "@/lib/expense-managed-mutation";
 import {
   claimTeamMutationIdempotency,
   completeTeamMutationIdempotency,
@@ -33,7 +35,7 @@ export async function POST(
 ): Promise<Response> {
   const boundary = await beginTeamMutation(request, {
     principalTypes: ["human"],
-    requiredPermissions: ["expenses.write"],
+    requiredPermissions: ["expenses.approve"],
     risk: "financial",
     requiresIdempotency: true,
     auditAction: "expense.voided",
@@ -95,6 +97,7 @@ export async function POST(
       assertTeamMutationExpectedVersion(mutation, existing.version);
       assertExpenseActionAllowed(existing, "void");
       assertExpenseFinancialShape(existing);
+      await assertGenericExpenseMutationAllowed(tx, existing, "void");
       const actorId = mutation.actor.id;
       if (!actorId) {
         throw new TeamMutationFailure(
@@ -104,35 +107,12 @@ export async function POST(
       }
 
       const now = new Date();
-      const [reversal] = await tx
-        .insert(expenses)
-        .values({
-          amount: -existing.amount,
-          currency: existing.currency,
-          category: existing.category,
-          vendor: existing.vendor,
-          memo: existing.memo,
-          method: existing.method,
-          source: "manual_correction",
-          paidAt: existing.paidAt,
-          coverageStartAt: existing.coverageStartAt,
-          coverageEndAt: existing.coverageEndAt,
-          lifecycleStatus: "posted",
-          version: 1,
-          postedAt: now,
-          postedBy: actorId,
-          reversalOfExpenseId: expenseId,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning({ id: expenses.id });
-      if (!reversal?.id) {
-        throw new TeamMutationFailure(
-          "internal",
-          "The void reversal could not be created.",
-          { retryable: true },
-        );
-      }
+      const managed = await createManagedExpenseVoid(tx, {
+        existing,
+        actorId,
+        reason,
+        now,
+      });
 
       const nextVersion = existing.version + 1;
       const [voided] = await tx
@@ -173,12 +153,16 @@ export async function POST(
           lifecycleStatus: "voided",
           voidedAt: now.toISOString(),
           version: nextVersion,
-          reversalExpenseId: reversal.id,
+          reversalExpenseId: managed.reversal.id,
         },
         metadata: {
           reasonLength: reason.length,
-          originalReceiptPreserved: Boolean(existing.receiptUrl),
+          originalReceiptPreserved: Boolean(
+            existing.receiptUrl || existing.receiptCaptureId,
+          ),
           ledgerMethod: "linked_reversal",
+          reimbursementClaimId: managed.reimbursementClaimId,
+          reimbursementStatus: managed.reimbursementStatus,
         },
         committedAt: now,
       });
@@ -188,8 +172,11 @@ export async function POST(
           expenseId,
           lifecycleStatus: "voided" as const,
           version: nextVersion,
-          reversalExpenseId: reversal.id,
-          receiptPreservedOnExpenseId: existing.receiptUrl ? expenseId : null,
+          reversalExpenseId: managed.reversal.id,
+          receiptPreservedOnExpenseId:
+            existing.receiptUrl || existing.receiptCaptureId ? expenseId : null,
+          reimbursementClaimId: managed.reimbursementClaimId,
+          reimbursementStatus: managed.reimbursementStatus,
         },
         {
           auditEventId: audit.auditEventId,

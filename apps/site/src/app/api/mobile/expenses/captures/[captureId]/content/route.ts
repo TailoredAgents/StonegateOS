@@ -21,6 +21,9 @@ export async function GET(
   return proxyMobileExpenseRequest(
     request,
     `/api/admin/expenses/captures/${encodeExpenseRouteId(captureId)}/content${query}`,
-    { permission: ["expenses.submit", "expenses.approve"] },
+    {
+      permission: ["expenses.submit", "expenses.approve"],
+      forwardRedirect: true,
+    },
   );
 }

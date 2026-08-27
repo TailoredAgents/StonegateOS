@@ -60,6 +60,10 @@ jest.mock("@/db", () => ({
 jest.mock("@/lib/permissions", () => ({
   computeEffectivePermissions: () => [],
   permissionMatches: () => false,
+  restrictOwnerOnlyPermissionsForRole: (
+    _role: string | null,
+    permissions: string[],
+  ) => permissions,
 }));
 
 import {

@@ -561,6 +561,7 @@ describeOrSkip("Quote lifecycle integration", () => {
         kind: "quote.sent",
         quoteId: createdQuoteId,
         sendAttemptId: attemptId,
+        autoFirstTouch: true,
       },
       dedupeKey: `quote.sent:${createdQuoteId}:${attemptId}:sms`,
     });
@@ -574,6 +575,7 @@ describeOrSkip("Quote lifecycle integration", () => {
         kind: "quote.sent",
         quoteId: createdQuoteId,
         sendAttemptId: attemptId,
+        autoFirstTouch: true,
       },
       dedupeKey: `quote.sent:${createdQuoteId}:${attemptId}:email`,
     });

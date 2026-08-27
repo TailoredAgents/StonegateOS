@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import {
   expenseAllocations,
   expenseCategories,
@@ -15,6 +15,10 @@ import {
   parseExpenseSubmission,
 } from "@/lib/expense-submissions";
 import {
+  encodeExpenseHistoryCursor,
+  parseExpenseHistoryQuery,
+} from "@/lib/expense-submission-history";
+import {
   permissionMatches,
   requirePermission,
   resolvePermissionContext,
@@ -28,18 +32,11 @@ import {
 } from "@/lib/team-mutation-idempotency";
 import {
   beginTeamMutation,
+  TeamMutationFailure,
   teamMutationExceptionResponse,
   teamMutationResultResponse,
   teamMutationSuccessResult,
 } from "@/lib/team-mutation";
-
-const HISTORY_FILTERS = new Set([
-  "all",
-  "pending",
-  "approved",
-  "rejected",
-  "reimbursement",
-]);
 
 function hasPermission(permissions: string[], required: string): boolean {
   return permissions.some((permission) =>
@@ -71,17 +68,25 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!access.canSubmit && !access.canApprove) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
-  const requestedFilter =
-    request.nextUrl.searchParams.get("filter")?.trim().toLowerCase() ?? "all";
-  if (!HISTORY_FILTERS.has(requestedFilter)) {
-    return NextResponse.json(
-      {
-        error: "invalid_filter",
-        field: "filter",
-        message: "Choose a valid expense history filter.",
-      },
-      { status: 422 },
+  let query: ReturnType<typeof parseExpenseHistoryQuery>;
+  try {
+    query = parseExpenseHistoryQuery(
+      request.nextUrl.searchParams,
+      access.canApprove,
     );
+  } catch (error) {
+    if (error instanceof TeamMutationFailure) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: error.code,
+          message: error.message,
+          ...(error.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
+        },
+        { status: error.status, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+    throw error;
   }
 
   const conditions = [
@@ -92,17 +97,44 @@ export async function GET(request: NextRequest): Promise<Response> {
     conditions.push(eq(expenses.submittedBy, context.principalId));
   }
   if (
-    requestedFilter === "pending" ||
-    requestedFilter === "approved" ||
-    requestedFilter === "rejected"
+    query.filter === "pending" ||
+    query.filter === "approved" ||
+    query.filter === "rejected"
   ) {
-    conditions.push(eq(expenses.reviewStatus, requestedFilter));
+    conditions.push(eq(expenses.reviewStatus, query.filter));
   }
-  if (requestedFilter === "reimbursement") {
+  if (query.filter === "reimbursement") {
     conditions.push(eq(expenses.payerType, "personal"));
   }
 
-  const rows = await getDb()
+  const pendingRank = sql<number>`case when ${expenses.reviewStatus} = 'pending' then 0 else 1 end`;
+  if (query.cursor) {
+    const timestampBoundary = or(
+      lt(expenses.paidAt, query.cursor.paidAt),
+      and(
+        eq(expenses.paidAt, query.cursor.paidAt),
+        or(
+          lt(expenses.createdAt, query.cursor.createdAt),
+          and(
+            eq(expenses.createdAt, query.cursor.createdAt),
+            lt(expenses.id, query.cursor.id),
+          ),
+        ),
+      ),
+    );
+    const pageBoundary = access.canApprove
+      ? or(
+          sql`${pendingRank} > ${query.cursor.pendingRank}`,
+          and(
+            sql`${pendingRank} = ${query.cursor.pendingRank}`,
+            timestampBoundary,
+          ),
+        )
+      : timestampBoundary;
+    if (pageBoundary) conditions.push(pageBoundary);
+  }
+
+  const pageRows = await getDb()
     .select({
       id: expenses.id,
       amountCents: expenses.amount,
@@ -114,6 +146,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       notes: expenses.memo,
       method: expenses.method,
       source: expenses.source,
+      paidAt: expenses.paidAt,
       purchaseDate:
         sql<string>`to_char(${expenses.paidAt} AT TIME ZONE 'America/New_York', 'YYYY-MM-DD')`.as(
           "purchase_date",
@@ -150,15 +183,14 @@ export async function GET(request: NextRequest): Promise<Response> {
     )
     .where(and(...conditions))
     .orderBy(
-      ...(access.canApprove
-        ? [
-            sql`case when ${expenses.reviewStatus} = 'pending' then 0 else 1 end`,
-          ]
-        : []),
+      ...(access.canApprove ? [pendingRank] : []),
       desc(expenses.paidAt),
       desc(expenses.createdAt),
+      desc(expenses.id),
     )
-    .limit(100);
+    .limit(query.limit + 1);
+  const hasMore = pageRows.length > query.limit;
+  const rows = hasMore ? pageRows.slice(0, query.limit) : pageRows;
 
   const memberIds = Array.from(
     new Set(
@@ -208,11 +240,27 @@ export async function GET(request: NextRequest): Promise<Response> {
     });
     allocationsByExpense.set(allocation.expenseId, list);
   }
+  const lastRow = rows.at(-1) ?? null;
 
   return NextResponse.json(
     {
       ok: true,
       access,
+      page: {
+        limit: query.limit,
+        hasMore,
+        nextCursor:
+          hasMore && lastRow
+            ? encodeExpenseHistoryCursor({
+                filter: query.filter,
+                ownerQueue: access.canApprove,
+                pendingRank: lastRow.reviewStatus === "pending" ? 0 : 1,
+                paidAt: lastRow.paidAt,
+                createdAt: lastRow.createdAt,
+                id: lastRow.id,
+              })
+            : null,
+      },
       expenses: rows.map((row) => ({
         id: row.id,
         amountCents: row.amountCents,

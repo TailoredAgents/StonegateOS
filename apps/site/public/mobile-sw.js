@@ -863,6 +863,46 @@ async function putExpenseQueueRow(row) {
   }
 }
 
+async function reportExpenseQueueHealth(employeeId) {
+  try {
+    const rows = (await getExpenseQueue()).filter(
+      (row) =>
+        row.employeeId === employeeId &&
+        !row.serverCapture &&
+        ["queued", "syncing", "failed"].includes(row.status),
+    );
+    const failedCount = rows.filter(
+      (row) => row.status === "failed" || Boolean(row.error),
+    ).length;
+    const oldestQueuedAt = rows.reduce(
+      (oldest, row) =>
+        oldest === null || row.createdAt < oldest ? row.createdAt : oldest,
+      null,
+    );
+    await workerFetchWithTimeout(
+      "/api/mobile/expenses/queue-health",
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          deviceId: await getOrCreateDeviceId(),
+          queuedCount: rows.length,
+          failedCount,
+          oldestQueuedAt:
+            oldestQueuedAt === null
+              ? null
+              : new Date(oldestQueuedAt).toISOString(),
+          reportedAt: new Date().toISOString(),
+        }),
+      },
+      QUEUE_HEALTH_TIMEOUT_MS,
+    );
+  } catch {
+    // The next background or foreground sync reports the queue again.
+  }
+}
+
 async function materializeExpenseReceipt(row) {
   return materializeQueuedUploadBody({
     ...row,
@@ -1038,6 +1078,7 @@ async function performExpenseSyncQueue() {
     if (outcome === "retry") retryableFailures += 1;
     if (outcome === "auth_paused") break;
   }
+  await reportExpenseQueueHealth(employeeId);
   const clients = await self.clients.matchAll({
     type: "window",
     includeUncontrolled: true,

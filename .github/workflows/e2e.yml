@@ -7,6 +7,61 @@ on:
     branches: ["main"]
 
 jobs:
+  expense-v2-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: postgres://myst:myst@localhost:5432/mystos
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mystos
+          POSTGRES_USER: myst
+          POSTGRES_PASSWORD: myst
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U myst -d mystos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply database migrations
+        run: pnpm db:migrate
+
+      - name: Run mandatory expense workflow integration tests
+        run: >-
+          pnpm --filter api test -- --runInBand
+          src/__tests__/expense-v2-database-guards.integration.test.ts
+          src/__tests__/expense-submission-workflow.integration.test.ts
+          src/__tests__/expense-receipt-confirmation.integration.test.ts
+          src/__tests__/expense-receipt-analysis-retry.integration.test.ts
+          src/__tests__/expense-receipt-duplicate-concurrency.integration.test.ts
+          src/__tests__/expense-managed-lifecycle.integration.test.ts
+          src/__tests__/expense-operations-monitor.integration.test.ts
+          src/__tests__/expense-reimbursement-payout-transitions.integration.test.ts
+
   playwright-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -48,6 +103,18 @@ jobs:
 
       - name: Run API unit tests
         run: pnpm test
+
+      - name: Run mobile expense contract tests
+        working-directory: apps/site
+        run: >-
+          node --import tsx --test
+          test/binary-upload.test.ts
+          test/legacy-expense-receipt.test.ts
+          test/mobile-expense-capture-route.test.ts
+          test/mobile-spend-v2.test.ts
+
+      - name: Validate mobile service worker syntax
+        run: node --check apps/site/public/mobile-sw.js
 
       - name: Build applications
         run: pnpm build

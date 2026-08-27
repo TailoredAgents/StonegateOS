@@ -17,6 +17,9 @@ const mockDb = {
   select: jest.fn<MockSelectQuery, [unknown?]>(),
   update: jest.fn<unknown, [unknown?]>(),
 };
+const mockRestrictOwnerOnlyPermissionsForRole = jest.fn(
+  (_role: string | null, permissions: string[]) => permissions,
+);
 
 const mockTeamSessions = {
   id: "team_sessions.id",
@@ -64,6 +67,7 @@ jest.mock("@/db", () => ({
 jest.mock("@/lib/permissions", () => ({
   computeEffectivePermissions: () => ["contacts.read"],
   getDefaultPermissionsForRole: () => [],
+  restrictOwnerOnlyPermissionsForRole: mockRestrictOwnerOnlyPermissionsForRole,
 }));
 
 import {
@@ -243,5 +247,9 @@ describe("verified team session metadata", () => {
     );
     expect(JSON.stringify(result)).not.toContain("verified-session-token");
     expect(JSON.stringify(result)).not.toContain("sessionHash");
+    expect(mockRestrictOwnerOnlyPermissionsForRole).toHaveBeenCalledWith(
+      "office",
+      ["contacts.read"],
+    );
   });
 });

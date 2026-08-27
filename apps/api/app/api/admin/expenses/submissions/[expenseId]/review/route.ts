@@ -122,10 +122,15 @@ export async function POST(
         after: {
           lifecycleStatus: reviewed.lifecycleStatus,
           reviewStatus: reviewed.reviewStatus,
+          categoryId: reviewed.categoryId,
+          category: reviewed.category,
           version: reviewed.version,
         },
         metadata: {
           reasonLength: parsed.data.reason?.length ?? 0,
+          categoryCorrected: parsed.data.categoryId !== undefined,
+          allocationCount: parsed.data.allocations?.length ?? 0,
+          vendorRuleLocked: parsed.data.lockVendorRule,
           reimbursementClaimId: reviewed.reimbursementClaimId,
           reimbursementStatus: reviewed.reimbursementStatus,
         },

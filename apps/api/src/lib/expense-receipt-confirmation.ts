@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { expenseReceiptCaptures } from "@/db";
+import { findExactExpenseReceiptDuplicateForPosting } from "@/lib/expense-receipt-evidence";
 import {
   createExpenseSubmissionInTransaction,
   parseExpenseSubmission,
@@ -97,6 +98,7 @@ export async function confirmExpenseReceiptInTransaction(
       submittedBy: expenseReceiptCaptures.submittedBy,
       status: expenseReceiptCaptures.status,
       version: expenseReceiptCaptures.version,
+      sha256: expenseReceiptCaptures.sha256,
       exactDuplicateOfCaptureId:
         expenseReceiptCaptures.exactDuplicateOfCaptureId,
     })
@@ -129,8 +131,14 @@ export async function confirmExpenseReceiptInTransaction(
     );
   }
 
+  const exactDuplicateOfCaptureId =
+    capture.exactDuplicateOfCaptureId ??
+    (await findExactExpenseReceiptDuplicateForPosting(tx, {
+      captureId: capture.id,
+      sha256: capture.sha256,
+    }));
   const duplicateReason = input.confirmation.exactDuplicateOverrideReason;
-  if (capture.exactDuplicateOfCaptureId) {
+  if (exactDuplicateOfCaptureId) {
     if (!input.canApprove) {
       throw new TeamMutationFailure(
         "conflict",
@@ -181,13 +189,12 @@ export async function confirmExpenseReceiptInTransaction(
     .set({
       status: "confirmed",
       confirmedAt: now,
-      duplicateOverrideReason: capture.exactDuplicateOfCaptureId
+      exactDuplicateOfCaptureId,
+      duplicateOverrideReason: exactDuplicateOfCaptureId
         ? duplicateReason
         : null,
-      duplicateOverrideBy: capture.exactDuplicateOfCaptureId
-        ? input.actorId
-        : null,
-      duplicateOverrideAt: capture.exactDuplicateOfCaptureId ? now : null,
+      duplicateOverrideBy: exactDuplicateOfCaptureId ? input.actorId : null,
+      duplicateOverrideAt: exactDuplicateOfCaptureId ? now : null,
       version: capture.version + 1,
       updatedAt: now,
     })
@@ -217,7 +224,7 @@ export async function confirmExpenseReceiptInTransaction(
     captureVersion: confirmed.version,
     priorCaptureVersion: capture.version,
     captureSubmittedBy: capture.submittedBy,
-    exactDuplicateOfCaptureId: capture.exactDuplicateOfCaptureId,
-    duplicateOverrideRecorded: Boolean(capture.exactDuplicateOfCaptureId),
+    exactDuplicateOfCaptureId,
+    duplicateOverrideRecorded: Boolean(exactDuplicateOfCaptureId),
   };
 }

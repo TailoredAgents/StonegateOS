@@ -10,6 +10,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { isControlledProviderTestRuntime } from "@myst-os/sdk";
+import { createHash } from "node:crypto";
 import {
   recordProviderFailure,
   recordProviderSuccess,
@@ -336,6 +337,7 @@ export async function createMediaUploadUrl(input: {
   byteLength: number;
   checksumSha256Hex?: string | null;
   expiresInSeconds?: number;
+  writeOnce?: boolean;
 }): Promise<{ url: string; headers: Record<string, string>; expiresAt: Date }> {
   await ensureBucket();
   const storage = getStorage();
@@ -357,6 +359,7 @@ export async function createMediaUploadUrl(input: {
     ContentType: input.contentType,
     ...(provider === "s3" ? { ContentLength: input.byteLength } : {}),
     ...(checksum ? { ChecksumSHA256: checksum } : {}),
+    ...(input.writeOnce ? { IfNoneMatch: "*" } : {}),
   });
   const expiresInSeconds = Math.min(
     Math.max(input.expiresInSeconds ?? 600, 30),
@@ -370,6 +373,7 @@ export async function createMediaUploadUrl(input: {
     headers: {
       "content-type": input.contentType,
       ...(checksum ? { "x-amz-checksum-sha256": checksum } : {}),
+      ...(input.writeOnce ? { "if-none-match": "*" } : {}),
     },
     expiresAt: new Date(Date.now() + expiresInSeconds * 1_000),
   };
@@ -448,6 +452,80 @@ export async function putMediaObject(input: {
       }),
     ),
   );
+}
+
+function isPreconditionFailed(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as {
+    name?: unknown;
+    Code?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+  };
+  return (
+    candidate.name === "PreconditionFailed" ||
+    candidate.Code === "PreconditionFailed" ||
+    candidate.$metadata?.httpStatusCode === 412
+  );
+}
+
+function normalizedStoredContentType(value: string | null): string | null {
+  const normalized = value?.split(";", 1)[0]?.trim().toLowerCase();
+  return normalized || null;
+}
+
+/**
+ * Create immutable evidence without ever replacing bytes at an existing key.
+ * A retry that encounters the same object is accepted only after R2/S3 is
+ * re-read and its length, MIME type, and SHA-256 all match the intended body.
+ */
+export async function putImmutableMediaObject(input: {
+  key: string;
+  body: Buffer;
+  contentType: string;
+  cacheControl?: string;
+}): Promise<"created" | "already_exists"> {
+  await ensureBucket();
+  const storage = getStorage();
+  let outcome: "created" | "already_exists" = "created";
+  try {
+    await storage.client.send(
+      new PutObjectCommand({
+        Bucket: storage.config.bucket,
+        Key: input.key,
+        Body: input.body,
+        ContentLength: input.body.byteLength,
+        ContentType: input.contentType,
+        CacheControl:
+          input.cacheControl ?? "private, max-age=31536000, immutable",
+        IfNoneMatch: "*",
+      }),
+    );
+    await recordStorageSuccess();
+  } catch (error) {
+    if (!isPreconditionFailed(error)) {
+      await recordStorageFailure("put_immutable_object", error);
+      throw error;
+    }
+    outcome = "already_exists";
+  }
+
+  const [head, storedBytes] = await Promise.all([
+    headMediaObject(input.key),
+    getMediaObject(input.key, input.body.byteLength + 1),
+  ]);
+  const expectedType = normalizedStoredContentType(input.contentType);
+  const storedType = normalizedStoredContentType(head.contentType);
+  const expectedSha256 = createHash("sha256").update(input.body).digest("hex");
+  const storedSha256 = createHash("sha256").update(storedBytes).digest("hex");
+  if (
+    head.byteLength !== input.body.byteLength ||
+    storedBytes.byteLength !== input.body.byteLength ||
+    storedType !== expectedType ||
+    storedSha256 !== expectedSha256
+  ) {
+    throw new Error("media_immutable_object_conflict");
+  }
+  return outcome;
 }
 
 export async function deleteMediaObject(key: string): Promise<void> {

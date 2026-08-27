@@ -50,7 +50,7 @@ import {
   getMediaObject,
   getMediaStorageProvider,
   headMediaObject,
-  putMediaObject,
+  putImmutableMediaObject,
 } from "@/lib/media-storage";
 import {
   recordProviderFailure,
@@ -524,6 +524,7 @@ export async function createExpenseReceiptUploadIntent(input: {
     byteLength: upload.byteLength,
     checksumSha256Hex: upload.checksumSha256,
     expiresInSeconds: UPLOAD_URL_LIFETIME_SECONDS,
+    writeOnce: true,
   });
   const now = new Date();
   const [created] = await getDb()
@@ -599,6 +600,7 @@ export async function createExpenseReceiptUploadIntent(input: {
     byteLength: existing.byteLength ?? upload.byteLength,
     checksumSha256Hex: existing.sha256,
     expiresInSeconds: Math.min(remainingSeconds, UPLOAD_URL_LIFETIME_SECONDS),
+    writeOnce: true,
   });
   return {
     capture: toExpenseReceiptCaptureStatusDto(existing),
@@ -788,18 +790,11 @@ export async function finalizeExpenseReceiptUpload(input: {
   let normalizedObjectKey: string | null = null;
   if (verified.normalized && keys.normalizedObjectKey) {
     normalizedObjectKey = keys.normalizedObjectKey;
-    await putMediaObject({
+    await putImmutableMediaObject({
       key: normalizedObjectKey,
       body: verified.normalized.bytes,
       contentType: verified.normalized.contentType,
     });
-    const normalizedHead = await headMediaObject(normalizedObjectKey);
-    if (normalizedHead.byteLength !== verified.normalized.bytes.byteLength) {
-      throw new ExpenseReceiptCaptureError(
-        "expense_receipt_storage_verification_failed",
-        502,
-      );
-    }
   }
 
   const exactDuplicateOfCaptureId = await firstExactDuplicateCapture({
@@ -860,7 +855,6 @@ export async function getExpenseReceiptCaptureStatus(input: {
   viewerId: string;
   canReviewAll: boolean;
 }): Promise<ExpenseReceiptCaptureStatusDto> {
-  assertReceiptFeatureEnabled();
   const capture = await findCaptureForViewer(input);
   const status = toExpenseReceiptCaptureStatusDto(capture);
   return input.canReviewAll && capture.uploadedAt && status.contentPath === null
@@ -876,7 +870,6 @@ export async function discardExpenseReceiptCapture(input: {
   viewerId: string;
   canReviewAll: boolean;
 }): Promise<ExpenseReceiptCaptureStatusDto> {
-  assertReceiptFeatureEnabled();
   const capture = await findCaptureForViewer(input);
   if (capture.status === "discarded") {
     return toExpenseReceiptCaptureStatusDto(capture);
@@ -926,7 +919,6 @@ export async function getExpenseReceiptCaptureContentUrl(input: {
   canReviewAll: boolean;
   variant: "original" | "normalized";
 }): Promise<string> {
-  assertReceiptFeatureEnabled();
   const capture = await findCaptureForViewer(input);
   if (
     !capture.uploadedAt ||

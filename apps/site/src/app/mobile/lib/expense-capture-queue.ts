@@ -2,6 +2,11 @@ import {
   expenseErrorMessage,
   expenseReceiptContentType,
 } from "../spend-v2-utils";
+import {
+  readBinaryUploadFile,
+  verifyBinaryUploadPayload,
+} from "./binary-upload";
+import { getOrCreateMobileDeviceId } from "./offline-media";
 
 export const MOBILE_EXPENSE_QUEUE_EVENT = "stonegate:expense-queue-change";
 export const MOBILE_EXPENSE_SYNC_TAG = "stonegate-expense-receipts";
@@ -14,6 +19,16 @@ const MEDIA_QUEUE_STORE = "media-upload-queue";
 const METADATA_STORE = "app-metadata";
 const EXPENSE_QUEUE_STORE = "expense-capture-queue";
 const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
+const QUEUE_HEALTH_TIMEOUT_MS = 30 * 1000;
+const QUEUE_HEALTH_REFRESH_MS = 5 * 60 * 1000;
+const QUEUE_HEALTH_FAILURE_BACKOFF_MS = 60 * 1000;
+
+const queueHealthReports = new Map<
+  string,
+  { fingerprint: string; reportedAt: number }
+>();
+const queueHealthFailuresUntil = new Map<string, number>();
+const queueHealthInFlight = new Map<string, Promise<boolean>>();
 
 export type ExpenseCaptureQueueStatus =
   | "draft"
@@ -40,6 +55,34 @@ export type ExpenseCaptureQueueRow = {
   createdAt: number;
   updatedAt: number;
 };
+
+export type ExpenseCaptureQueueHealthSummary = {
+  queuedCount: number;
+  failedCount: number;
+  oldestQueuedAt: number | null;
+};
+
+function requiresServerAcknowledgement(row: ExpenseCaptureQueueRow): boolean {
+  if (row.serverCapture) return false;
+  return ["queued", "syncing", "failed"].includes(row.status);
+}
+
+export function summarizeExpenseCaptureQueueHealth(
+  rows: readonly ExpenseCaptureQueueRow[],
+): ExpenseCaptureQueueHealthSummary {
+  const pending = rows.filter(requiresServerAcknowledgement);
+  return {
+    queuedCount: pending.length,
+    failedCount: pending.filter(
+      (row) => row.status === "failed" || Boolean(row.error),
+    ).length,
+    oldestQueuedAt: pending.reduce<number | null>(
+      (oldest, row) =>
+        oldest === null || row.createdAt < oldest ? row.createdAt : oldest,
+      null,
+    ),
+  };
+}
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -171,12 +214,6 @@ export async function listExpenseCaptureQueue(
     .sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
-}
-
 export async function createExpenseCaptureDraft(
   employeeId: string,
   file: File,
@@ -184,15 +221,22 @@ export async function createExpenseCaptureDraft(
   const contentType = expenseReceiptContentType(file);
   if (!contentType)
     throw new Error("Use a JPEG, PNG, WebP, HEIC, or PDF receipt.");
-  if (file.size < 1 || file.size > MAX_RECEIPT_BYTES) {
-    throw new Error("Receipts must be 10 MB or smaller.");
-  }
-  const bytes = await file.arrayBuffer();
-  if (bytes.byteLength !== file.size)
+  let prepared;
+  try {
+    prepared = await readBinaryUploadFile({
+      file,
+      maxBytes: MAX_RECEIPT_BYTES,
+    });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "binary_upload_size_invalid"
+    ) {
+      throw new Error("Receipts must be 10 MB or smaller.");
+    }
     throw new Error("The receipt could not be read.");
-  const checksumSha256 = bytesToHex(
-    new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
-  );
+  }
+  const { bytes, checksumSha256 } = prepared;
   const now = Date.now();
   const row: ExpenseCaptureQueueRow = {
     clientCaptureId: crypto.randomUUID(),
@@ -270,7 +314,7 @@ export function expenseCaptureQueueStatus(
 export function shouldPollExpenseCaptureStatus(
   status: ExpenseCaptureQueueStatus,
 ): boolean {
-  return status === "processing" || status === "failed";
+  return status === "processing";
 }
 
 function captureFailureMessage(
@@ -289,15 +333,14 @@ export async function syncExpenseCapture(
   if (
     current.status === "draft" ||
     current.status === "confirmed" ||
-    current.status === "discarded"
+    current.status === "discarded" ||
+    (current.status === "failed" && current.serverCapture !== null)
   ) {
     return current;
   }
   if (
     current.serverCapture &&
-    (current.status === "ready" ||
-      current.status === "processing" ||
-      current.status === "failed")
+    (current.status === "ready" || current.status === "processing")
   ) {
     return refreshExpenseCapture(current.clientCaptureId);
   }
@@ -369,12 +412,17 @@ export async function syncExpenseCapture(
       typeof intentPayload?.["uploadUrl"] === "string"
         ? intentPayload["uploadUrl"]
         : null;
-    if (uploadUrl && syncing.bytes) {
+    if (uploadUrl) {
+      const uploadBody = await verifyBinaryUploadPayload({
+        bytes: syncing.bytes,
+        expectedByteLength: syncing.byteLength,
+        expectedChecksumSha256: syncing.checksumSha256,
+      });
       const uploadResponse = await fetch(uploadUrl, {
         method: "PUT",
         credentials: "include",
         headers: { "Content-Type": syncing.contentType },
-        body: syncing.bytes.slice(0),
+        body: uploadBody,
       });
       if (!uploadResponse.ok) {
         throw new Error("The receipt upload was interrupted.");
@@ -463,6 +511,86 @@ export async function syncEmployeeExpenseCaptures(
     }
     await syncExpenseCapture(row.clientCaptureId).catch(() => undefined);
   }
+}
+
+async function performExpenseQueueHealthReport(
+  employeeId: string,
+): Promise<boolean> {
+  try {
+    const summary = summarizeExpenseCaptureQueueHealth(
+      await listExpenseCaptureQueue(employeeId),
+    );
+    const fingerprint = `${summary.queuedCount}:${summary.failedCount}:${summary.oldestQueuedAt ?? ""}`;
+    const lastReport = queueHealthReports.get(employeeId);
+    const now = Date.now();
+    if (
+      lastReport?.fingerprint === fingerprint &&
+      lastReport.reportedAt > now - QUEUE_HEALTH_REFRESH_MS
+    ) {
+      return true;
+    }
+
+    const controller = new AbortController();
+    const timer = globalThis.setTimeout(
+      () => controller.abort(),
+      QUEUE_HEALTH_TIMEOUT_MS,
+    );
+    let response: Response;
+    try {
+      response = await fetch("/api/mobile/expenses/queue-health", {
+        method: "POST",
+        credentials: "same-origin",
+        keepalive: true,
+        signal: controller.signal,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          deviceId: await getOrCreateMobileDeviceId(),
+          queuedCount: summary.queuedCount,
+          failedCount: summary.failedCount,
+          oldestQueuedAt:
+            summary.oldestQueuedAt === null
+              ? null
+              : new Date(summary.oldestQueuedAt).toISOString(),
+          reportedAt: new Date(now).toISOString(),
+        }),
+      });
+    } finally {
+      globalThis.clearTimeout(timer);
+    }
+    if (!response.ok) {
+      queueHealthFailuresUntil.set(
+        employeeId,
+        Date.now() + QUEUE_HEALTH_FAILURE_BACKOFF_MS,
+      );
+      return false;
+    }
+    queueHealthFailuresUntil.delete(employeeId);
+    queueHealthReports.set(employeeId, { fingerprint, reportedAt: now });
+    return true;
+  } catch {
+    queueHealthFailuresUntil.set(
+      employeeId,
+      Date.now() + QUEUE_HEALTH_FAILURE_BACKOFF_MS,
+    );
+    return false;
+  }
+}
+
+export function reportExpenseQueueHealth(employeeId: string): Promise<boolean> {
+  const active = queueHealthInFlight.get(employeeId);
+  if (active) return active;
+  if ((queueHealthFailuresUntil.get(employeeId) ?? 0) > Date.now()) {
+    return Promise.resolve(false);
+  }
+
+  const promise = performExpenseQueueHealthReport(employeeId);
+  const settled = promise.finally(() => {
+    if (queueHealthInFlight.get(employeeId) === settled) {
+      queueHealthInFlight.delete(employeeId);
+    }
+  });
+  queueHealthInFlight.set(employeeId, settled);
+  return settled;
 }
 
 export async function registerExpenseBackgroundSync(): Promise<void> {

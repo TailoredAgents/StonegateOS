@@ -11,6 +11,15 @@ describe("Expense Tracking V2 database foundation", () => {
   const migration = source(
     "src/db/migrations/0102_expense_tracking_v2_foundation.sql",
   );
+  const correctionControls = source(
+    "src/db/migrations/0103_expense_v2_correction_controls.sql",
+  );
+  const releaseGuards = source(
+    "src/db/migrations/0105_expense_v2_release_guards.sql",
+  );
+  const dumpAliasBackfill = source(
+    "src/db/migrations/0107_expense_dump_alias_and_backfill.sql",
+  );
 
   it("registers the additive expense migrations after the booking backfill", () => {
     const journal = JSON.parse(
@@ -18,7 +27,7 @@ describe("Expense Tracking V2 database foundation", () => {
     ) as { entries?: Array<{ idx?: number; tag?: string }> };
     const entries = journal.entries ?? [];
 
-    expect(entries.slice(-4)).toEqual([
+    expect(entries.slice(-7)).toEqual([
       expect.objectContaining({
         idx: 98,
         tag: "0101_online_booking_quote_range_backfill",
@@ -34,6 +43,18 @@ describe("Expense Tracking V2 database foundation", () => {
       expect.objectContaining({
         idx: 101,
         tag: "0104_expense_receipt_retry_state",
+      }),
+      expect.objectContaining({
+        idx: 102,
+        tag: "0105_expense_v2_release_guards",
+      }),
+      expect.objectContaining({
+        idx: 103,
+        tag: "0106_expense_mobile_queue_health",
+      }),
+      expect.objectContaining({
+        idx: 104,
+        tag: "0107_expense_dump_alias_and_backfill",
       }),
     ]);
   });
@@ -63,6 +84,8 @@ describe("Expense Tracking V2 database foundation", () => {
       '"category_needs_review" = (\n    nullif(btrim("category"), \'\') IS NOT NULL AND "category_id" IS NULL',
     );
     expect(migration).not.toMatch(/UPDATE\s+"expenses"[\s\S]*ELSE\s+'other'/iu);
+    expect(dumpAliasBackfill).toContain("VALUES ('dump_fees', 'Dump', 'dump')");
+    expect(dumpAliasBackfill).toContain('INSERT INTO "expense_allocations"');
   });
 
   it("stores receipt references and analysis state without a new data-url column", () => {
@@ -105,6 +128,15 @@ describe("Expense Tracking V2 database foundation", () => {
     expect(migration).toContain(
       "daily ad spend confirmations cannot be deleted",
     );
+    expect(releaseGuards).toContain(
+      'CREATE CONSTRAINT TRIGGER "daily_ad_spend_expense_link_guard"',
+    );
+    expect(releaseGuards).toContain(
+      'CREATE CONSTRAINT TRIGGER "current_daily_ad_expense_posted_guard"',
+    );
+    expect(releaseGuards).toContain(
+      'expense."amount_cents" = entry."amount_cents"',
+    );
   });
 
   it("links a reimbursement claim to exactly one underlying expense", () => {
@@ -113,11 +145,29 @@ describe("Expense Tracking V2 database foundation", () => {
     );
     expect(migration).toContain('"expense_reimbursement_claims_expense_key"');
     expect(migration).toContain('"payout_adjustment_id" uuid REFERENCES');
-    expect(migration).toContain(
-      "reimbursement claim financial evidence is immutable",
+    expect(correctionControls).toContain(
+      "reimbursement financial evidence may only follow a linked expense correction",
+    );
+    expect(correctionControls).toContain(
+      "active reimbursements require the linked correction workflow",
     );
     expect(migration).not.toMatch(
       /CREATE TABLE IF NOT EXISTS "expense_reimbursement_claims"[\s\S]*?"receipt_url"/u,
     );
+  });
+
+  it("prevents pending submissions from becoming posted ledger entries", () => {
+    expect(releaseGuards).toContain('"expenses_review_lifecycle_check"');
+    expect(releaseGuards).toContain(
+      "\"lifecycle_status\" = 'draft' OR \"review_status\" = 'approved'",
+    );
+  });
+
+  it("removes legacy global expense grants from crew", () => {
+    expect(releaseGuards).toContain(
+      "array_remove(coalesce(\"permissions\", ARRAY[]::text[]), 'expenses.read')",
+    );
+    expect(releaseGuards).toContain("'expenses.write'");
+    expect(migration).toContain("expenses.submit");
   });
 });

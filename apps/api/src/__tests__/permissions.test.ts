@@ -4,6 +4,7 @@ import {
   getTeamOperationKillSwitchForRisk,
   getDefaultPermissionsForRole,
   permissionMatches,
+  restrictOwnerOnlyPermissionsForRole,
   TEAM_PERMISSION_CATALOG,
 } from "@/lib/permissions";
 
@@ -48,6 +49,9 @@ describe("team role permissions", () => {
     expect(getDefaultPermissionsForRole("owner")).toEqual([
       "*",
       "contacts.purge",
+      "expenses.approve",
+      "financials.read",
+      "ad_spend.write",
     ]);
   });
 
@@ -76,13 +80,9 @@ describe("team role permissions", () => {
       ]),
     );
     expect(office).toContain("expenses.submit");
-    expect(crew).toEqual(
-      expect.arrayContaining([
-        "expenses.read",
-        "expenses.write",
-        "expenses.submit",
-      ]),
-    );
+    expect(crew).toContain("expenses.submit");
+    expect(crew).not.toContain("expenses.read");
+    expect(crew).not.toContain("expenses.write");
     for (const permissions of [office, crew, sales, readOnly]) {
       expect(permissions).toEqual(
         expect.not.arrayContaining(privilegedExpensePermissions),
@@ -90,6 +90,54 @@ describe("team role permissions", () => {
     }
     expect(sales).not.toContain("expenses.submit");
     expect(readOnly).not.toContain("expenses.submit");
+  });
+
+  it("cannot grant owner-only expense authority to a non-owner through wildcards", () => {
+    expect(
+      restrictOwnerOnlyPermissionsForRole("crew", [
+        "expenses.*",
+        "financials.read",
+        "ad_spend.write",
+      ]),
+    ).toEqual(expect.arrayContaining(["expenses.submit"]));
+    expect(
+      restrictOwnerOnlyPermissionsForRole("crew", [
+        "expenses.*",
+        "financials.read",
+        "ad_spend.write",
+      ]),
+    ).not.toEqual(
+      expect.arrayContaining([
+        "expenses.approve",
+        "financials.read",
+        "ad_spend.write",
+      ]),
+    );
+    expect(
+      restrictOwnerOnlyPermissionsForRole("owner", [
+        "expenses.*",
+        "financials.read",
+        "ad_spend.write",
+      ]),
+    ).toEqual(["expenses.*", "financials.read", "ad_spend.write"]);
+  });
+
+  it("keeps crew on submitter-scoped expense routes despite legacy grants", () => {
+    expect(
+      restrictOwnerOnlyPermissionsForRole("crew", [
+        "expenses.submit",
+        "expenses.read",
+        "expenses.write",
+        "expenses.export",
+      ]),
+    ).toEqual(["expenses.submit"]);
+    expect(
+      restrictOwnerOnlyPermissionsForRole("office", [
+        "expenses.submit",
+        "expenses.read",
+        "expenses.export",
+      ]),
+    ).toEqual(["expenses.submit", "expenses.read", "expenses.export"]);
   });
 
   it("grants appointment media and payment collection by role", () => {
@@ -181,6 +229,9 @@ describe("team role permissions", () => {
     expect(permissions).not.toContain("payments.read");
     expect(permissions).not.toContain("payments.manage");
     expect(permissions).not.toContain("access.break_glass");
+    expect(permissions).not.toContain("expenses.approve");
+    expect(permissions).not.toContain("financials.read");
+    expect(permissions).not.toContain("ad_spend.write");
     expect(permissions).not.toContain("*");
   });
 

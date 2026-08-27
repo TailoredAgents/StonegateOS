@@ -34,4 +34,67 @@ describe("expense receipt capture pipeline contract", () => {
       "/api/admin/expenses/captures/${capture.id}/content",
     );
   });
+
+  it("makes both initial and retry receipt upload intents write-once", () => {
+    const service = read("apps/api/src/lib/expense-receipt-captures.ts");
+    const intentStart = service.indexOf(
+      "export async function createExpenseReceiptUploadIntent",
+    );
+    const duplicateLookupStart = service.indexOf(
+      "async function firstExactDuplicateCapture",
+    );
+    const uploadIntent = service.slice(intentStart, duplicateLookupStart);
+
+    expect(intentStart).toBeGreaterThan(0);
+    expect(duplicateLookupStart).toBeGreaterThan(intentStart);
+    expect(uploadIntent.match(/createMediaUploadUrl\(\{/gu)).toHaveLength(2);
+    expect(uploadIntent.match(/writeOnce: true/gu)).toHaveLength(2);
+    expect(service).toContain("putImmutableMediaObject");
+  });
+
+  it("enforces the owner-only pilot at both discovery and upload boundaries", () => {
+    const capabilities = read(
+      "apps/api/app/api/admin/expenses/capabilities/route.ts",
+    );
+    const captureCollection = read(
+      "apps/api/app/api/admin/expenses/captures/route.ts",
+    );
+    expect(capabilities).toContain("canUseExpenseReceiptCapture(canApprove)");
+    expect(captureCollection).toContain(
+      "canUseExpenseReceiptCapture(canApprove)",
+    );
+    expect(
+      captureCollection.indexOf("canUseExpenseReceiptCapture(canApprove)"),
+    ).toBeLessThan(
+      captureCollection.indexOf("createExpenseReceiptUploadIntent({"),
+    );
+  });
+
+  it("keeps authorized captured evidence readable when intake flags are disabled", () => {
+    const service = read("apps/api/src/lib/expense-receipt-captures.ts");
+    const statusStart = service.indexOf(
+      "export async function getExpenseReceiptCaptureStatus",
+    );
+    const discardStart = service.indexOf(
+      "export async function discardExpenseReceiptCapture",
+    );
+    const contentStart = service.indexOf(
+      "export async function getExpenseReceiptCaptureContentUrl",
+    );
+    const storedExtractionStart = service.indexOf("type StoredExtraction");
+
+    expect(statusStart).toBeGreaterThan(0);
+    expect(discardStart).toBeGreaterThan(statusStart);
+    expect(contentStart).toBeGreaterThan(discardStart);
+    expect(storedExtractionStart).toBeGreaterThan(contentStart);
+    expect(service.slice(statusStart, discardStart)).not.toContain(
+      "assertReceiptFeatureEnabled",
+    );
+    expect(service.slice(discardStart, contentStart)).not.toContain(
+      "assertReceiptFeatureEnabled",
+    );
+    expect(service.slice(contentStart, storedExtractionStart)).not.toContain(
+      "assertReceiptFeatureEnabled",
+    );
+  });
 });

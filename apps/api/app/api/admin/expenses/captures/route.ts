@@ -10,8 +10,13 @@ import {
   expenseReceiptCaptureErrorResponse,
   requireExpenseCaptureActorId,
 } from "@/lib/expense-receipt-capture-route";
+import { canUseExpenseReceiptCapture } from "@/lib/expense-feature-flags";
 import { ExpenseReceiptUploadIntentSchema } from "@/lib/expense-receipt-storage";
-import { requirePermission } from "@/lib/permissions";
+import {
+  permissionMatches,
+  requirePermission,
+  resolvePermissionContext,
+} from "@/lib/permissions";
 
 /** Owner-only queue for employee captures blocked by an exact hash match. */
 export async function GET(request: NextRequest): Promise<Response> {
@@ -48,6 +53,24 @@ export async function GET(request: NextRequest): Promise<Response> {
 export async function POST(request: NextRequest): Promise<Response> {
   const permissionError = await requirePermission(request, "expenses.submit");
   if (permissionError) return permissionError;
+
+  const permissionContext = await resolvePermissionContext(request);
+  const canApprove = permissionContext.permissions.some((permission) =>
+    permissionMatches(permission, "expenses.approve"),
+  );
+  if (
+    !permissionContext.authenticated ||
+    !permissionContext.principalId ||
+    !canUseExpenseReceiptCapture(canApprove)
+  ) {
+    return NextResponse.json(
+      {
+        error: "expense_receipt_capture_unavailable",
+        message: "Receipt scanning is not available for this account yet.",
+      },
+      { status: 403, headers: { "Cache-Control": "private, no-store" } },
+    );
+  }
 
   const payload = (await request.json().catch(() => null)) as unknown;
   const parsed = ExpenseReceiptUploadIntentSchema.safeParse(payload);

@@ -715,6 +715,27 @@
       "when": 1789862400000,
       "tag": "0104_expense_receipt_retry_state",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1789948800000,
+      "tag": "0105_expense_v2_release_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1790035200000,
+      "tag": "0106_expense_mobile_queue_health",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1790121600000,
+      "tag": "0107_expense_dump_alias_and_backfill",
+      "breakpoints": true
     }
   ]
 }

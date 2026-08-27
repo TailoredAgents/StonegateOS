@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 
 const mockRequirePermission = jest.fn<
   Promise<Response | null>,
-  [NextRequest, string]
+  [NextRequest, string, { disallowedRoles: string[] }?]
 >();
 const mockGetDb = jest.fn(() => {
   throw new Error("database must not be reached");
@@ -73,6 +73,7 @@ describe("expense export route access boundary", () => {
     expect(mockRequirePermission).toHaveBeenCalledWith(
       expect.anything(),
       "expenses.export",
+      { disallowedRoles: ["crew"] },
     );
     expect(mockGetDb).not.toHaveBeenCalled();
     expect(mockRecordAuditEvent).not.toHaveBeenCalled();

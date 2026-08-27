@@ -112,6 +112,13 @@ type CrewPoolOverrideDaysPayload = {
   overrides: CrewPoolOverrideDay[];
 };
 
+type ExpenseCapabilitiesPayload = {
+  ok: true;
+  capabilities?: {
+    reimbursement?: boolean;
+  };
+};
+
 function fmtMoney(cents: number, currency: string) {
   try {
     return new Intl.NumberFormat("en-US", {
@@ -178,14 +185,20 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
   let crewPoolOverrideDays: CrewPoolOverrideDay[] = [];
   let overrideDaysTimeZone = "America/New_York";
   let overrideError: string | null = null;
+  let expenseReimbursementV2Enabled = false;
 
   try {
-    const [settingsRes, runsRes, membersRes, overridesRes] = await Promise.all([
-      callAdminApiAs(principal, "/api/admin/commissions/settings"),
-      callAdminApiAs(principal, "/api/admin/commissions/payout-runs?limit=10"),
-      callAdminApiAs(principal, "/api/admin/team/members"),
-      callAdminApiAs(principal, "/api/admin/commissions/crew-pool-overrides"),
-    ]);
+    const [settingsRes, runsRes, membersRes, overridesRes, capabilitiesRes] =
+      await Promise.all([
+        callAdminApiAs(principal, "/api/admin/commissions/settings"),
+        callAdminApiAs(
+          principal,
+          "/api/admin/commissions/payout-runs?limit=10",
+        ),
+        callAdminApiAs(principal, "/api/admin/team/members"),
+        callAdminApiAs(principal, "/api/admin/commissions/crew-pool-overrides"),
+        callAdminApiAs(principal, "/api/admin/expenses/capabilities"),
+      ]);
 
     if (settingsRes.ok) {
       const payload = (await settingsRes.json()) as CommissionSettingsPayload;
@@ -213,6 +226,13 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
       overrideDaysTimeZone = payload.timezone ?? overrideDaysTimeZone;
     } else {
       overrideError = `Labor override days unavailable (HTTP ${overridesRes.status})`;
+    }
+
+    if (capabilitiesRes.ok) {
+      const payload =
+        (await capabilitiesRes.json()) as ExpenseCapabilitiesPayload;
+      expenseReimbursementV2Enabled =
+        payload.capabilities?.reimbursement === true;
     }
   } catch {
     commissionError = commissionError ?? "Commission settings unavailable.";
@@ -422,10 +442,9 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                             Reimbursements
                           </h4>
                           <p className="mt-1 text-xs text-slate-600">
-                            Use this when someone paid out of pocket for company
-                            supplies or tools. It adds to that person&apos;s
-                            payout and logs the business expense with the
-                            receipt.
+                            {expenseReimbursementV2Enabled
+                              ? "Approved employee-paid expenses from Spend appear here automatically."
+                              : "Use this when someone paid out of pocket for company supplies or tools. It adds to that person's payout and logs the business expense with the receipt."}
                           </p>
                         </div>
                         <div className="text-right text-xs text-slate-600">
@@ -436,7 +455,8 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                         </div>
                       </div>
 
-                      {run.status === "draft" ? (
+                      {run.status === "draft" &&
+                      !expenseReimbursementV2Enabled ? (
                         <form
                           action={`/api/team/commissions/payout-runs/${run.id}/reimbursements`}
                           method="post"
@@ -522,7 +542,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                             <input
                               name="receiptFile"
                               type="file"
-                              accept="image/*"
+                              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf,.heic,.heif,.pdf"
                               className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                             />
                             <span className="text-[11px] text-slate-500">
@@ -538,6 +558,12 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                             </SubmitButton>
                           </div>
                         </form>
+                      ) : expenseReimbursementV2Enabled ? (
+                        <p className="mt-4 text-xs text-slate-600">
+                          Add employee-paid purchases in Spend. Once approved,
+                          the reimbursement is attached to the next editable
+                          payout automatically.
+                        </p>
                       ) : (
                         <p className="mt-4 text-xs text-slate-600">
                           Reimbursements are locked once the payout run is

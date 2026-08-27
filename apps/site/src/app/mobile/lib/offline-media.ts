@@ -1,3 +1,5 @@
+import { binaryUploadSha256Hex } from "./binary-upload";
+
 export const MOBILE_MEDIA_QUEUE_EVENT = "stonegate:media-queue-change";
 export const MOBILE_MEDIA_SYNC_ISSUE_EVENT = "stonegate:media-sync-issue";
 export const MOBILE_STORAGE_WARNING_EVENT = "stonegate:storage-warning";
@@ -952,8 +954,8 @@ export async function normalizeImageForQueue(file: File): Promise<{
 
   const blob = await canvasBlob(canvas, "image/jpeg", 0.84);
   const blobBytes = await readBlobArrayBuffer(blob, "image_read_failed");
-  const digest = await promiseWithTimeout(
-    crypto.subtle.digest("SHA-256", blobBytes),
+  const checksumSha256 = await promiseWithTimeout(
+    binaryUploadSha256Hex(blobBytes),
     IMAGE_DIGEST_TIMEOUT_MS,
     "image_digest_failed",
   );
@@ -962,7 +964,7 @@ export async function normalizeImageForQueue(file: File): Promise<{
     blob,
     filename: `${baseName}.jpg`,
     contentType: "image/jpeg",
-    checksumSha256: bytesToHex(new Uint8Array(digest)),
+    checksumSha256,
   };
 }
 
@@ -1095,7 +1097,7 @@ async function migrateLegacyQueuedMediaBytes(
   }
 }
 
-async function getOrCreateMobileDeviceId(): Promise<string> {
+export async function getOrCreateMobileDeviceId(): Promise<string> {
   const database = await openDatabase();
   const transaction = database.transaction(METADATA_STORE, "readwrite");
   const completion = transactionDone(transaction);
@@ -1557,14 +1559,10 @@ async function materializeQueuedUploadBody(
             sawSizeMismatch = true;
             throw new Error("queued_media_blob_size_mismatch");
           }
-          const checksum = bytesToHex(
-            new Uint8Array(
-              await promiseWithTimeout(
-                crypto.subtle.digest("SHA-256", candidateBytes),
-                IMAGE_DIGEST_TIMEOUT_MS,
-                "queued_media_digest_failed",
-              ),
-            ),
+          const checksum = await promiseWithTimeout(
+            binaryUploadSha256Hex(candidateBytes),
+            IMAGE_DIGEST_TIMEOUT_MS,
+            "queued_media_digest_failed",
           );
           if (checksum !== row.checksumSha256.toLowerCase()) {
             throw new Error("queued_media_checksum_mismatch");

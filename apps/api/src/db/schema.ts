@@ -4263,6 +4263,56 @@ export const mobileOfflineMediaQueueHealth = pgTable(
   }),
 );
 
+export const mobileExpenseQueueHealth = pgTable(
+  "mobile_expense_queue_health",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    teamMemberId: uuid("team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "cascade" }),
+    clientDeviceId: uuid("client_device_id").notNull(),
+    queuedCount: integer("queued_count").default(0).notNull(),
+    failedCount: integer("failed_count").default(0).notNull(),
+    oldestQueuedAt: timestamp("oldest_queued_at", { withTimezone: true }),
+    clientReportedAt: timestamp("client_reported_at", {
+      withTimezone: true,
+    }).notNull(),
+    lastReportedAt: timestamp("last_reported_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    memberDeviceIdx: uniqueIndex(
+      "mobile_expense_queue_health_member_device_key",
+    ).on(table.teamMemberId, table.clientDeviceId),
+    staleQueueIdx: index("mobile_expense_queue_health_stale_idx")
+      .on(table.oldestQueuedAt)
+      .where(sql`${table.queuedCount} > 0`),
+    lastReportedIdx: index("mobile_expense_queue_health_last_reported_idx").on(
+      table.lastReportedAt,
+    ),
+    queuedCountCheck: check(
+      "mobile_expense_queue_health_queued_count_check",
+      sql`${table.queuedCount} BETWEEN 0 AND 10000`,
+    ),
+    failedCountCheck: check(
+      "mobile_expense_queue_health_failed_count_check",
+      sql`${table.failedCount} BETWEEN 0 AND ${table.queuedCount}`,
+    ),
+    queueStateCheck: check(
+      "mobile_expense_queue_health_queue_state_check",
+      sql`(${table.queuedCount} = 0 AND ${table.failedCount} = 0 AND ${table.oldestQueuedAt} IS NULL) OR (${table.queuedCount} > 0 AND ${table.oldestQueuedAt} IS NOT NULL)`,
+    ),
+  }),
+);
+
 export const partnerBookings = pgTable(
   "partner_bookings",
   {
@@ -5765,6 +5815,10 @@ export const expenses = pgTable(
     reviewShapeCheck: check(
       "expenses_review_shape_check",
       sql`(${table.reviewStatus} IN ('draft', 'pending') AND ${table.reviewedAt} IS NULL AND ${table.reviewedBy} IS NULL) OR (${table.reviewStatus} IN ('approved', 'rejected') AND ${table.reviewedAt} IS NOT NULL)`,
+    ),
+    reviewLifecycleCheck: check(
+      "expenses_review_lifecycle_check",
+      sql`${table.lifecycleStatus} = 'draft' OR ${table.reviewStatus} = 'approved'`,
     ),
     lifecycleTimelineCheck: check(
       "expenses_lifecycle_timeline_check",

@@ -46,6 +46,7 @@
     "appointment-media:backfill:preflight": "tsx apps/api/scripts/appointment-media-backfill.ts --remote-preflight",
     "appointment-media:backfill": "tsx apps/api/scripts/appointment-media-backfill.ts --execute",
     "appointment-media:cleanup": "tsx apps/api/scripts/appointment-media-cleanup.ts",
+    "expense-receipt:benchmark": "tsx apps/api/scripts/expense-receipt-benchmark.ts",
     "outbox:worker": "tsx scripts/outbox-worker.ts",
     "outbox:worker:prod": "NODE_ENV=production tsx scripts/outbox-worker.ts",
     "discord:agent": "tsx scripts/discord-agent-bot.ts",

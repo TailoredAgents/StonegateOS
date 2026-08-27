@@ -97,6 +97,10 @@ export type ExpenseOverviewInput = {
   asOf?: ExpenseOverviewDate;
   /** Rows excluded by the repository because historical evidence is unverified. */
   omittedUnverifiedHistoricalRecordCount?: number;
+  /** Pending submissions whose purchase date falls in the prior week. */
+  priorWeekPendingExpenseCount?: number;
+  /** Prior-week rows excluded because historical evidence is unverified. */
+  priorWeekOmittedUnverifiedHistoricalRecordCount?: number;
 };
 
 export type ExpenseOverviewWeekBoundary = {
@@ -146,14 +150,40 @@ export type ExpenseOverviewPeriodMetrics = {
   expenseRatioPercent: number | null;
 };
 
+export type ExpenseOverviewPercentChangeState =
+  | "available"
+  | "zero_baseline"
+  | "incomplete";
+
+export type ExpenseOverviewRatioChangeState =
+  | "available"
+  | "undefined_ratio"
+  | "incomplete";
+
 export type ExpenseOverviewPriorWeekChange = {
-  revenueCents: number;
+  /** True when both weeks have complete records; individual math may still be undefined. */
+  available: boolean;
+  states: {
+    /** Percentage change is undefined when the prior amount is zero. */
+    revenue: ExpenseOverviewPercentChangeState;
+    /** Percentage change is undefined when the prior amount is zero. */
+    expenses: ExpenseOverviewPercentChangeState;
+    /** Percentage change is undefined when the prior amount is zero. */
+    operatingProfit: ExpenseOverviewPercentChangeState;
+    /** Percentage-point change requires a defined expense ratio in both weeks. */
+    expenseRatio: ExpenseOverviewRatioChangeState;
+  };
+  revenueCents: number | null;
   revenuePercent: number | null;
-  expensesCents: number;
+  expensesCents: number | null;
   expensesPercent: number | null;
-  operatingProfitCents: number;
+  operatingProfitCents: number | null;
   operatingProfitPercent: number | null;
   expenseRatioPercentagePoints: number | null;
+  unavailableReasons: {
+    currentWeek: ExpenseOverviewIncompleteReason[];
+    priorWeek: ExpenseOverviewIncompleteReason[];
+  };
 };
 
 export type ExpenseOverviewMissingAdEntry = {
@@ -171,7 +201,19 @@ export type ExpenseOverviewIncompleteReason =
 
 export type ExpenseOverviewResult = ExpenseOverviewPeriodMetrics & {
   week: ExpenseOverviewWeekBoundary;
-  priorWeek: ExpenseOverviewWeekBoundary & ExpenseOverviewPeriodMetrics;
+  priorWeek: ExpenseOverviewWeekBoundary &
+    ExpenseOverviewPeriodMetrics & {
+      pendingExpenseCount: number;
+      missingAdEntries: ExpenseOverviewMissingAdEntry[];
+      missingCommissionDataCount: number;
+      missingFinalTotalCount: number;
+      omittedUnverifiedHistoricalRecordCount: number;
+      unverifiedExpenseCategoryCount: number;
+      completeness: {
+        state: "complete" | "incomplete";
+        reasons: ExpenseOverviewIncompleteReason[];
+      };
+    };
   priorWeekChange: ExpenseOverviewPriorWeekChange;
   categories: ExpenseOverviewCategory[];
   labor: ExpenseOverviewLaborBreakdown;
@@ -573,7 +615,9 @@ function calculatePeriod(
   for (const expense of input.expenses) {
     if (
       expense.lifecycleStatus !== "posted" ||
-      expense.reviewStatus === "rejected" ||
+      (expense.reviewStatus !== null &&
+        expense.reviewStatus !== undefined &&
+        expense.reviewStatus !== "approved") ||
       expense.source === "payout_run" ||
       expense.isReimbursementAdjustment === true
     ) {
@@ -734,11 +778,19 @@ export function buildExpenseOverview(
   input: ExpenseOverviewInput,
 ): ExpenseOverviewResult {
   assertCount(input.pendingExpenseCount, "pendingExpenseCount");
+  const priorWeekPendingExpenseCount = input.priorWeekPendingExpenseCount ?? 0;
+  assertCount(priorWeekPendingExpenseCount, "priorWeekPendingExpenseCount");
   const omittedUnverifiedHistoricalRecordCount =
     input.omittedUnverifiedHistoricalRecordCount ?? 0;
   assertCount(
     omittedUnverifiedHistoricalRecordCount,
     "omittedUnverifiedHistoricalRecordCount",
+  );
+  const priorWeekOmittedUnverifiedHistoricalRecordCount =
+    input.priorWeekOmittedUnverifiedHistoricalRecordCount ?? 0;
+  assertCount(
+    priorWeekOmittedUnverifiedHistoricalRecordCount,
+    "priorWeekOmittedUnverifiedHistoricalRecordCount",
   );
 
   const week = getExpenseOverviewWeekBoundary(input.weekStart);
@@ -750,7 +802,11 @@ export function buildExpenseOverview(
   const prior = calculatePeriod(input, priorWeekBoundary);
   const categories = categoryOutput(current);
   const missingAdEntries = getMissingAdEntries(input, week);
+  const priorMissingAdEntries = getMissingAdEntries(input, priorWeekBoundary);
   const unverifiedExpenseCategoryCount = categories.filter(
+    (category) => !category.verified,
+  ).length;
+  const priorUnverifiedExpenseCategoryCount = categoryOutput(prior).filter(
     (category) => !category.verified,
   ).length;
 
@@ -770,30 +826,100 @@ export function buildExpenseOverview(
     reasons.push("unverified_expense_categories");
   }
 
+  const priorReasons: ExpenseOverviewIncompleteReason[] = [];
+  if (priorMissingAdEntries.length > 0) {
+    priorReasons.push("missing_ad_entries");
+  }
+  if (prior.missingCommissionDataCount > 0) {
+    priorReasons.push("missing_commission_data");
+  }
+  if (prior.missingFinalTotalCount > 0) {
+    priorReasons.push("missing_final_totals");
+  }
+  if (priorWeekPendingExpenseCount > 0) {
+    priorReasons.push("pending_expenses");
+  }
+  if (priorWeekOmittedUnverifiedHistoricalRecordCount > 0) {
+    priorReasons.push("unverified_historical_records");
+  }
+  if (priorUnverifiedExpenseCategoryCount > 0) {
+    priorReasons.push("unverified_expense_categories");
+  }
+  const comparisonAvailable = reasons.length === 0 && priorReasons.length === 0;
+
   return {
     ...current.metrics,
     week,
-    priorWeek: { ...priorWeekBoundary, ...prior.metrics },
+    priorWeek: {
+      ...priorWeekBoundary,
+      ...prior.metrics,
+      pendingExpenseCount: priorWeekPendingExpenseCount,
+      missingAdEntries: priorMissingAdEntries,
+      missingCommissionDataCount: prior.missingCommissionDataCount,
+      missingFinalTotalCount: prior.missingFinalTotalCount,
+      omittedUnverifiedHistoricalRecordCount:
+        priorWeekOmittedUnverifiedHistoricalRecordCount,
+      unverifiedExpenseCategoryCount: priorUnverifiedExpenseCategoryCount,
+      completeness: {
+        state: priorReasons.length === 0 ? "complete" : "incomplete",
+        reasons: priorReasons,
+      },
+    },
     priorWeekChange: {
-      revenueCents: current.metrics.revenueCents - prior.metrics.revenueCents,
-      revenuePercent: percentChange(
-        current.metrics.revenueCents,
-        prior.metrics.revenueCents,
-      ),
-      expensesCents:
-        current.metrics.totalExpensesCents - prior.metrics.totalExpensesCents,
-      expensesPercent: percentChange(
-        current.metrics.totalExpensesCents,
-        prior.metrics.totalExpensesCents,
-      ),
-      operatingProfitCents:
-        current.metrics.operatingProfitCents -
-        prior.metrics.operatingProfitCents,
-      operatingProfitPercent: percentChange(
-        current.metrics.operatingProfitCents,
-        prior.metrics.operatingProfitCents,
-      ),
+      available: comparisonAvailable,
+      states: {
+        revenue: !comparisonAvailable
+          ? "incomplete"
+          : prior.metrics.revenueCents === 0
+            ? "zero_baseline"
+            : "available",
+        expenses: !comparisonAvailable
+          ? "incomplete"
+          : prior.metrics.totalExpensesCents === 0
+            ? "zero_baseline"
+            : "available",
+        operatingProfit: !comparisonAvailable
+          ? "incomplete"
+          : prior.metrics.operatingProfitCents === 0
+            ? "zero_baseline"
+            : "available",
+        expenseRatio: !comparisonAvailable
+          ? "incomplete"
+          : current.metrics.expenseRatioPercent === null ||
+              prior.metrics.expenseRatioPercent === null
+            ? "undefined_ratio"
+            : "available",
+      },
+      revenueCents: comparisonAvailable
+        ? current.metrics.revenueCents - prior.metrics.revenueCents
+        : null,
+      revenuePercent: comparisonAvailable
+        ? percentChange(
+            current.metrics.revenueCents,
+            prior.metrics.revenueCents,
+          )
+        : null,
+      expensesCents: comparisonAvailable
+        ? current.metrics.totalExpensesCents - prior.metrics.totalExpensesCents
+        : null,
+      expensesPercent: comparisonAvailable
+        ? percentChange(
+            current.metrics.totalExpensesCents,
+            prior.metrics.totalExpensesCents,
+          )
+        : null,
+      operatingProfitCents: comparisonAvailable
+        ? current.metrics.operatingProfitCents -
+          prior.metrics.operatingProfitCents
+        : null,
+      operatingProfitPercent: comparisonAvailable
+        ? percentChange(
+            current.metrics.operatingProfitCents,
+            prior.metrics.operatingProfitCents,
+          )
+        : null,
       expenseRatioPercentagePoints:
+        !comparisonAvailable ||
         current.metrics.expenseRatioPercent === null ||
         prior.metrics.expenseRatioPercent === null
           ? null
@@ -802,6 +928,10 @@ export function buildExpenseOverview(
                 prior.metrics.expenseRatioPercent) *
                 100,
             ) / 100,
+      unavailableReasons: {
+        currentWeek: reasons,
+        priorWeek: priorReasons,
+      },
     },
     categories,
     labor: current.labor,

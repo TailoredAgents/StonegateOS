@@ -184,7 +184,10 @@ export async function PUT(
       body: bytes,
       redirect: "error",
     });
-    if (!storageResponse.ok) {
+    // Write-once receipt URLs return 412 when a retry reaches an object that
+    // was already uploaded. Treat that as transport success; finalization
+    // performs the authoritative byte-length, MIME, and SHA-256 verification.
+    if (!storageResponse.ok && storageResponse.status !== 412) {
       return failure(
         storageResponse.status >= 500 ? 502 : 409,
         "receipt_storage_upload_failed",

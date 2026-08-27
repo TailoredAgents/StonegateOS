@@ -473,11 +473,11 @@ function ExpenseFields({
           <input
             name="receiptFile"
             type="file"
-            accept="image/jpeg,image/png,image/webp,application/pdf"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
             className={INPUT_CLASS}
           />
           <span className="text-[11px] text-slate-500">
-            JPEG, PNG, WebP, or PDF; maximum 10 MB. A new file replaces a
+            JPEG, PNG, WebP, HEIC, or PDF; maximum 10 MB. A new file replaces a
             draft&apos;s current receipt.
           </span>
         </label>
@@ -641,7 +641,7 @@ export async function ExpensesSection({
   filters?: ExpenseFilters;
 }): Promise<React.ReactElement> {
   const principal = await requireCurrentTeamPrincipal();
-  const canWrite = hasTeamPermission(principal, "expenses.write");
+  const canWrite = hasTeamPermission(principal, "expenses.approve");
   const canExport = hasTeamPermission(principal, "expenses.export");
   const normalizedView = rawView?.trim().toLowerCase() ?? "";
   const viewIsValid =

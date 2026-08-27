@@ -1,11 +1,24 @@
 import type { NextRequest } from "next/server";
 import { and, eq } from "drizzle-orm";
-import { expenses, getDb } from "@/db";
+import {
+  expenseAllocations,
+  expenseReceiptCaptures,
+  expenses,
+  getDb,
+} from "@/db";
+import { resolveExpenseCategoryAlias } from "@/lib/expense-categories";
 import {
   assertExpenseActionAllowed,
   expenseIdempotencyPayload,
   parseExpenseRequest,
 } from "@/lib/expense-lifecycle";
+import { assertGenericExpenseMutationAllowed } from "@/lib/expense-managed-mutation";
+import {
+  cleanupStagedExpenseReceiptEvidenceIfUncommitted,
+  findExactExpenseReceiptDuplicateForPosting,
+  stageExpenseReceiptEvidence,
+  type StagedExpenseReceiptEvidence,
+} from "@/lib/expense-receipt-evidence";
 import {
   claimTeamMutationIdempotency,
   completeTeamMutationIdempotency,
@@ -34,7 +47,7 @@ export async function PATCH(
 ): Promise<Response> {
   const boundary = await beginTeamMutation(request, {
     principalTypes: ["human"],
-    requiredPermissions: ["expenses.write"],
+    requiredPermissions: ["expenses.approve"],
     risk: "financial",
     requiresIdempotency: true,
     auditAction: "expense.draft_updated",
@@ -67,6 +80,8 @@ export async function PATCH(
 
   let db: ReturnType<typeof getDb> | null = null;
   let claim: TeamMutationIdempotencyClaim | null = null;
+  let stagedReceipt: StagedExpenseReceiptEvidence | null = null;
+  let receiptCommitted = false;
   try {
     const parsed = await parseExpenseRequest(request);
     db = getDb();
@@ -80,6 +95,20 @@ export async function PATCH(
       return teamMutationIdempotencyReplayResponse(claimed.replay);
     }
     claim = claimed.claim;
+    const actorId = mutation.actor.id;
+    if (!actorId) {
+      throw new TeamMutationFailure(
+        "internal",
+        "The verified expense actor is incomplete.",
+      );
+    }
+    if (parsed.receipt) {
+      stagedReceipt = await stageExpenseReceiptEvidence({
+        captureId: claim.id,
+        submittedBy: actorId,
+        receipt: parsed.receipt,
+      });
+    }
 
     const result = await db.transaction(async (tx) => {
       const [existing] = await tx
@@ -95,15 +124,36 @@ export async function PATCH(
       }
       assertTeamMutationExpectedVersion(mutation, existing.version);
       assertExpenseActionAllowed(existing, "edit");
+      await assertGenericExpenseMutationAllowed(tx, existing, "edit");
 
       const now = new Date();
+      if (stagedReceipt) {
+        const duplicateCaptureId =
+          await findExactExpenseReceiptDuplicateForPosting(tx, {
+            captureId: stagedReceipt.capture.id as string,
+            sha256: stagedReceipt.capture.sha256 ?? null,
+          });
+        if (duplicateCaptureId) {
+          throw new TeamMutationFailure(
+            "conflict",
+            "This receipt already exists. Leave the receipt field empty or use Scan receipt for an owner-reviewed duplicate.",
+          );
+        }
+        await tx.insert(expenseReceiptCaptures).values(stagedReceipt.capture);
+      }
+      const category = await resolveExpenseCategoryAlias(
+        tx,
+        parsed.expense.category,
+      );
       const nextVersion = existing.version + 1;
       const [updated] = await tx
         .update(expenses)
         .set({
           amount: parsed.expense.amountCents,
           currency: "USD",
-          category: parsed.expense.category,
+          category: category.category,
+          categoryId: category.categoryId,
+          categoryNeedsReview: category.categoryNeedsReview,
           vendor: parsed.expense.vendor,
           memo: parsed.expense.memo,
           method: parsed.expense.method,
@@ -111,9 +161,16 @@ export async function PATCH(
           coverageStartAt: parsed.expense.coverageStartAt,
           coverageEndAt: parsed.expense.coverageEndAt,
           receiptFilename: parsed.receipt?.filename ?? existing.receiptFilename,
-          receiptUrl: parsed.receipt?.dataUrl ?? existing.receiptUrl,
+          receiptUrl: existing.receiptUrl,
           receiptContentType:
             parsed.receipt?.contentType ?? existing.receiptContentType,
+          receiptCaptureId:
+            stagedReceipt?.capture.id ?? existing.receiptCaptureId,
+          submittedBy: existing.submittedBy ?? actorId,
+          reviewStatus: "draft",
+          reviewedBy: null,
+          reviewedAt: null,
+          reviewReason: null,
           version: nextVersion,
           updatedAt: now,
         })
@@ -133,6 +190,18 @@ export async function PATCH(
         );
       }
 
+      await tx
+        .delete(expenseAllocations)
+        .where(eq(expenseAllocations.expenseId, expenseId));
+      if (category.categoryId) {
+        await tx.insert(expenseAllocations).values({
+          expenseId,
+          categoryId: category.categoryId,
+          amountCents: parsed.expense.amountCents,
+          createdAt: now,
+        });
+      }
+
       const audit = await mutation.audit.insertSuccess(tx, {
         entityType: "expense",
         entityId: expenseId,
@@ -145,7 +214,9 @@ export async function PATCH(
         },
         after: {
           amountCents: parsed.expense.amountCents,
-          category: parsed.expense.category,
+          category: category.category,
+          categoryId: category.categoryId,
+          categoryNeedsReview: category.categoryNeedsReview,
           paidAt: parsed.expense.paidAt.toISOString(),
           lifecycleStatus: "draft",
           version: nextVersion,
@@ -180,9 +251,13 @@ export async function PATCH(
       );
       return mutationResult;
     });
+    receiptCommitted = true;
 
     return teamMutationResultResponse(result, 200, mutation.correlationId);
   } catch (error) {
+    if (stagedReceipt && !receiptCommitted && db) {
+      await cleanupStagedExpenseReceiptEvidenceIfUncommitted(db, stagedReceipt);
+    }
     if (db && claim) {
       try {
         await settleTeamMutationIdempotencyFailure(db, mutation, claim, error);

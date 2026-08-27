@@ -94,6 +94,23 @@ export const ExpenseReviewDecisionSchema = z
   .object({
     decision: z.enum(["approve", "reject"]),
     reason: nullableText(500),
+    categoryId: z.string().trim().regex(CATEGORY_ID_PATTERN).optional(),
+    allocations: z
+      .array(
+        z
+          .object({
+            categoryId: z.string().trim().regex(CATEGORY_ID_PATTERN),
+            amountCents: z
+              .number()
+              .int()
+              .min(1)
+              .max(EXPENSE_SUBMISSION_MAX_CENTS),
+          })
+          .strict(),
+      )
+      .max(32)
+      .optional(),
+    lockVendorRule: z.boolean().optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -102,6 +119,25 @@ export const ExpenseReviewDecisionSchema = z
         code: z.ZodIssueCode.custom,
         path: ["reason"],
         message: "Add a brief reason so the submitter knows what to fix.",
+      });
+    }
+    if (
+      value.decision === "reject" &&
+      (value.categoryId !== undefined ||
+        value.allocations !== undefined ||
+        value.lockVendorRule)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["decision"],
+        message: "Category changes can only be saved when approving.",
+      });
+    }
+    if (value.allocations !== undefined && value.categoryId === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["categoryId"],
+        message: "Choose the primary category for this split.",
       });
     }
   });
@@ -346,6 +382,61 @@ async function recordApprovedVendorCategory(
     });
 }
 
+async function lockApprovedVendorCategory(
+  tx: TeamMutationTransaction,
+  input: {
+    vendor: string | null;
+    categoryId: string;
+    reviewerId: string;
+    now: Date;
+  },
+): Promise<void> {
+  const normalizedVendor = normalizeReceiptVendor(input.vendor);
+  if (!normalizedVendor) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "Add a vendor before remembering its category.",
+      { fieldErrors: { lockVendorRule: "A vendor name is required." } },
+    );
+  }
+
+  await tx
+    .update(expenseVendorCategoryRules)
+    .set({
+      ownerLocked: false,
+      lockedBy: null,
+      lockedAt: null,
+      updatedAt: input.now,
+    })
+    .where(eq(expenseVendorCategoryRules.normalizedVendor, normalizedVendor));
+
+  await tx
+    .insert(expenseVendorCategoryRules)
+    .values({
+      normalizedVendor,
+      categoryId: input.categoryId,
+      confirmationCount: 0,
+      disagreementCount: 0,
+      ownerLocked: true,
+      lockedBy: input.reviewerId,
+      lockedAt: input.now,
+      createdAt: input.now,
+      updatedAt: input.now,
+    })
+    .onConflictDoUpdate({
+      target: [
+        expenseVendorCategoryRules.normalizedVendor,
+        expenseVendorCategoryRules.categoryId,
+      ],
+      set: {
+        ownerLocked: true,
+        lockedBy: input.reviewerId,
+        lockedAt: input.now,
+        updatedAt: input.now,
+      },
+    });
+}
+
 export type AttachedReimbursement = {
   claimId: string;
   adjustmentId: string;
@@ -468,9 +559,15 @@ async function attachClaimToNextDraftPayout(
   const [nextRun] = await tx
     .select({ id: payoutRuns.id })
     .from(payoutRuns)
-    .where(eq(payoutRuns.status, "draft"))
+    .where(
+      and(
+        eq(payoutRuns.status, "draft"),
+        eq(payoutRuns.periodCanonical, true),
+        eq(payoutRuns.timezone, EXPENSE_BUSINESS_TIME_ZONE),
+      ),
+    )
     .orderBy(asc(payoutRuns.scheduledPayoutAt), asc(payoutRuns.id))
-    .for("update", { skipLocked: true })
+    .for("update")
     .limit(1);
   if (!nextRun) return null;
   const attached = await attachApprovedReimbursementClaimsToDraftPayout(tx, {
@@ -666,6 +763,8 @@ export async function reviewExpenseSubmissionInTransaction(
   version: number;
   reimbursementClaimId: string | null;
   reimbursementStatus: "approved" | "attached" | null;
+  categoryId: string | null;
+  category: string | null;
 }> {
   const now = input.now ?? new Date();
   const [existing] = await tx
@@ -739,12 +838,110 @@ export async function reviewExpenseSubmissionInTransaction(
       version: nextVersion,
       reimbursementClaimId: null,
       reimbursementStatus: null,
+      categoryId: existing.categoryId,
+      category: null,
     };
+  }
+
+  const requestedCategoryId = input.decision.categoryId ?? existing.categoryId;
+  if (!requestedCategoryId) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "Choose a category before approving this expense.",
+      { fieldErrors: { categoryId: "Choose an active expense category." } },
+    );
+  }
+  const requestedAllocations =
+    input.decision.allocations && input.decision.allocations.length > 0
+      ? input.decision.allocations
+      : input.decision.categoryId
+        ? [{ categoryId: requestedCategoryId, amountCents: existing.amount }]
+        : null;
+  let approvedCategoryName: string | null = null;
+  if (requestedAllocations) {
+    const validated = validateExpenseAllocations({
+      totalCents: existing.amount,
+      allocations: requestedAllocations,
+    });
+    if (!validated.ok) {
+      throw new TeamMutationFailure(
+        "invalid",
+        "Category splits must add up to the expense total exactly.",
+        {
+          fieldErrors: {
+            allocations:
+              validated.issues[0]?.message ??
+              "Review the category split amounts.",
+          },
+        },
+      );
+    }
+    if (
+      !validated.allocationSet.allocations.some(
+        (allocation) => allocation.categoryId === requestedCategoryId,
+      )
+    ) {
+      throw new TeamMutationFailure(
+        "invalid",
+        "The primary category must be included in the category split.",
+        { fieldErrors: { categoryId: "Choose an allocated category." } },
+      );
+    }
+    const categoryIds = validated.allocationSet.allocations.map(
+      (allocation) => allocation.categoryId,
+    );
+    const categoryRows = await tx
+      .select({ id: expenseCategories.id, name: expenseCategories.name })
+      .from(expenseCategories)
+      .where(
+        and(
+          inArray(expenseCategories.id, categoryIds),
+          eq(expenseCategories.isActive, true),
+        ),
+      );
+    if (categoryRows.length !== new Set(categoryIds).size) {
+      throw new TeamMutationFailure(
+        "invalid",
+        "One or more expense categories are unavailable.",
+        { fieldErrors: { categoryId: "Choose active expense categories." } },
+      );
+    }
+    approvedCategoryName =
+      categoryRows.find((category) => category.id === requestedCategoryId)
+        ?.name ?? null;
+    if (!approvedCategoryName) {
+      throw new TeamMutationFailure(
+        "invalid",
+        "Choose an active primary category.",
+        { fieldErrors: { categoryId: "Choose an active expense category." } },
+      );
+    }
+    await tx
+      .delete(expenseAllocations)
+      .where(eq(expenseAllocations.expenseId, existing.id));
+    await tx.insert(expenseAllocations).values(
+      validated.allocationSet.allocations.map((allocation) => ({
+        expenseId: existing.id,
+        categoryId: allocation.categoryId,
+        amountCents: allocation.amountCents,
+        createdAt: now,
+      })),
+    );
+  } else if (existing.categoryId) {
+    const [category] = await tx
+      .select({ name: expenseCategories.name })
+      .from(expenseCategories)
+      .where(eq(expenseCategories.id, existing.categoryId))
+      .limit(1);
+    approvedCategoryName = category?.name ?? null;
   }
 
   const [approved] = await tx
     .update(expenses)
     .set({
+      categoryId: requestedCategoryId,
+      ...(approvedCategoryName ? { category: approvedCategoryName } : {}),
+      categoryNeedsReview: false,
       reviewStatus: "approved",
       reviewedBy: input.reviewerId,
       reviewedAt: now,
@@ -770,10 +967,16 @@ export async function reviewExpenseSubmissionInTransaction(
       { retryable: true },
     );
   }
-  if (existing.categoryId) {
-    await recordApprovedVendorCategory(tx, {
+  await recordApprovedVendorCategory(tx, {
+    vendor: existing.vendor,
+    categoryId: requestedCategoryId,
+  });
+  if (input.decision.lockVendorRule) {
+    await lockApprovedVendorCategory(tx, {
       vendor: existing.vendor,
-      categoryId: existing.categoryId,
+      categoryId: requestedCategoryId,
+      reviewerId: input.reviewerId,
+      now,
     });
   }
 
@@ -798,6 +1001,8 @@ export async function reviewExpenseSubmissionInTransaction(
     version: nextVersion,
     reimbursementClaimId,
     reimbursementStatus,
+    categoryId: requestedCategoryId,
+    category: approvedCategoryName,
   };
 }
 

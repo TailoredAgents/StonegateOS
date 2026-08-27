@@ -5,6 +5,7 @@ import {
   assertExpenseActionAllowed,
   assertExpenseFinancialShape,
 } from "@/lib/expense-lifecycle";
+import { assertGenericExpenseMutationAllowed } from "@/lib/expense-managed-mutation";
 import {
   claimTeamMutationIdempotency,
   completeTeamMutationIdempotency,
@@ -32,7 +33,7 @@ export async function POST(
 ): Promise<Response> {
   const boundary = await beginTeamMutation(request, {
     principalTypes: ["human"],
-    requiredPermissions: ["expenses.write"],
+    requiredPermissions: ["expenses.approve"],
     risk: "financial",
     requiresIdempotency: true,
     auditAction: "expense.posted",
@@ -93,6 +94,7 @@ export async function POST(
       assertTeamMutationExpectedVersion(mutation, existing.version);
       assertExpenseActionAllowed(existing, "post");
       assertExpenseFinancialShape(existing);
+      await assertGenericExpenseMutationAllowed(tx, existing, "post");
       const actorId = mutation.actor.id;
       if (!actorId) {
         throw new TeamMutationFailure(
@@ -103,12 +105,21 @@ export async function POST(
 
       const now = new Date();
       const nextVersion = existing.version + 1;
+      const approvesMigratedLegacyDraft = existing.reviewStatus !== "approved";
       const [updated] = await tx
         .update(expenses)
         .set({
           lifecycleStatus: "posted",
           postedAt: now,
           postedBy: actorId,
+          ...(approvesMigratedLegacyDraft
+            ? {
+                reviewStatus: "approved" as const,
+                reviewedBy: actorId,
+                reviewedAt: now,
+                reviewReason: "Approved while posting migrated legacy draft",
+              }
+            : {}),
           version: nextVersion,
           updatedAt: now,
         })
@@ -133,10 +144,12 @@ export async function POST(
         entityId: expenseId,
         before: {
           lifecycleStatus: existing.lifecycleStatus,
+          reviewStatus: existing.reviewStatus,
           version: existing.version,
         },
         after: {
           lifecycleStatus: "posted",
+          reviewStatus: "approved",
           postedAt: now.toISOString(),
           version: nextVersion,
         },
@@ -144,6 +157,7 @@ export async function POST(
           amountCents: existing.amount,
           currency: existing.currency,
           source: existing.source,
+          migratedLegacyDraftApproved: approvesMigratedLegacyDraft,
         },
         committedAt: now,
       });

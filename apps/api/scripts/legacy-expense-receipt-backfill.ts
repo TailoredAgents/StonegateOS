@@ -5,7 +5,7 @@ import {
   getMediaObject,
   getMediaStorageProvider,
   headMediaObject,
-  putMediaObject,
+  putImmutableMediaObject,
 } from "../src/lib/media-storage";
 import {
   LegacyReceiptBackfillError,
@@ -74,7 +74,16 @@ function createRepository(): LegacyReceiptRepository {
       return db
         .select({
           expenseId: expenses.id,
-          submittedBy: expenses.submittedBy,
+          submittedBy: sql<string | null>`coalesce(
+            ${expenses.submittedBy},
+            (
+              select adjustment."created_by"
+              from "payout_run_adjustments" as adjustment
+              where adjustment."expense_id" = ${expenses.id}
+              order by adjustment."created_at" asc, adjustment."id" asc
+              limit 1
+            )
+          )`,
           lifecycleStatus: expenses.lifecycleStatus,
           version: expenses.version,
           receiptCaptureId: expenses.receiptCaptureId,
@@ -190,7 +199,7 @@ function createStorage(provider: "r2" | "s3"): LegacyReceiptObjectStorage {
       }
     },
     async write(input) {
-      await putMediaObject(input);
+      await putImmutableMediaObject(input);
     },
   };
 }

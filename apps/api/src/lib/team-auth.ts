@@ -11,6 +11,7 @@ import {
 import {
   computeEffectivePermissions,
   permissionMatches,
+  restrictOwnerOnlyPermissionsForRole,
 } from "@/lib/permissions";
 import {
   getVerifiedTeamAuthActor,
@@ -138,11 +139,14 @@ export async function createBreakGlassTeamSession(input: {
 
     if (!memberRow?.id || memberRow.active !== true) return null;
 
-    const effectivePermissions = computeEffectivePermissions({
-      rolePermissions: memberRow.rolePermissions ?? [],
-      grant: memberRow.permissionsGrant ?? [],
-      deny: memberRow.permissionsDeny ?? [],
-    });
+    const effectivePermissions = restrictOwnerOnlyPermissionsForRole(
+      memberRow.roleSlug,
+      computeEffectivePermissions({
+        rolePermissions: memberRow.rolePermissions ?? [],
+        grant: memberRow.permissionsGrant ?? [],
+        deny: memberRow.permissionsDeny ?? [],
+      }),
+    );
     if (
       permissionIsExplicitlyDenied(
         memberRow.permissionsDeny,
@@ -595,11 +599,14 @@ export async function requireTeamSession(request: NextRequest): Promise<
   const roleSlug = memberRow.roleSlug
     ? memberRow.roleSlug.trim().toLowerCase()
     : null;
-  const permissions = computeEffectivePermissions({
-    rolePermissions: memberRow.rolePermissions ?? [],
-    grant: memberRow.permissionsGrant ?? [],
-    deny: memberRow.permissionsDeny ?? [],
-  });
+  const permissions = restrictOwnerOnlyPermissionsForRole(
+    roleSlug,
+    computeEffectivePermissions({
+      rolePermissions: memberRow.rolePermissions ?? [],
+      grant: memberRow.permissionsGrant ?? [],
+      deny: memberRow.permissionsDeny ?? [],
+    }),
+  );
 
   return {
     ok: true,

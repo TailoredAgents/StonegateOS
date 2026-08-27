@@ -89,12 +89,35 @@ export function isTeamPermission(value: string): value is TeamPermission {
   return TEAM_PERMISSION_SET.has(value);
 }
 
+/**
+ * Owner-only human capabilities that Access must never add to a custom role
+ * or member. Built-in Owner storage receives these explicitly through
+ * provisioning/migrations; a bare legacy wildcard does not acquire them.
+ */
+export const TEAM_OWNER_ONLY_PERMISSION_CATALOG = [
+  "contacts.purge",
+  "expenses.approve",
+  "financials.read",
+  "ad_spend.write",
+] as const satisfies readonly TeamPermission[];
+
+const TEAM_OWNER_ONLY_PERMISSION_SET: ReadonlySet<string> = new Set(
+  TEAM_OWNER_ONLY_PERMISSION_CATALOG,
+);
+
+export type TeamOwnerOnlyPermission =
+  (typeof TEAM_OWNER_ONLY_PERMISSION_CATALOG)[number];
+export type TeamAssignablePermission = Exclude<
+  TeamPermission,
+  "access.break_glass" | TeamOwnerOnlyPermission | "sessions.manage_self"
+>;
+
 /** Permissions an access administrator may assign to roles or members. */
-export const TEAM_ASSIGNABLE_PERMISSION_CATALOG =
+export const TEAM_ASSIGNABLE_PERMISSION_CATALOG: TeamAssignablePermission[] =
   TEAM_PERMISSION_CATALOG.filter(
-    (permission) =>
+    (permission): permission is TeamAssignablePermission =>
       permission !== "access.break_glass" &&
-      permission !== "contacts.purge" &&
+      !TEAM_OWNER_ONLY_PERMISSION_SET.has(permission) &&
       permission !== "sessions.manage_self",
   );
 
@@ -104,21 +127,9 @@ const TEAM_ASSIGNABLE_PERMISSION_SET: ReadonlySet<string> = new Set(
 
 export function isAssignableTeamPermission(
   value: string,
-): value is Exclude<
-  TeamPermission,
-  "access.break_glass" | "contacts.purge" | "sessions.manage_self"
-> {
+): value is TeamAssignablePermission {
   return TEAM_ASSIGNABLE_PERMISSION_SET.has(value);
 }
-
-/**
- * Irreversible human capabilities that Access must never add to a custom role
- * or member. Built-in Owner storage receives these explicitly through
- * provisioning/migrations; a bare legacy wildcard does not acquire them.
- */
-export const TEAM_OWNER_ONLY_PERMISSION_CATALOG = [
-  "contacts.purge",
-] as const satisfies readonly TeamPermission[];
 
 /**
  * Capabilities owned by a verified person rather than by their CRM job role.
@@ -259,8 +270,6 @@ export const TEAM_ROLE_PERMISSION_TEMPLATES = {
       "appointment_media.capture",
       "payments.read",
       "payments.collect",
-      "expenses.read",
-      "expenses.write",
       "expenses.submit",
     ],
   },

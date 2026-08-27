@@ -188,6 +188,18 @@ services:
         sync: false
       - key: MOBILE_OFFLINE_MEDIA_ENABLED
         sync: false
+      - key: EXPENSE_RECEIPT_CAPTURE_ENABLED
+        sync: false
+      - key: EXPENSE_RECEIPT_WORKER_ENABLED
+        sync: false
+      - key: EXPENSE_RECEIPT_CREW_ENABLED
+        sync: false
+      - key: EXPENSE_AD_SPEND_ENABLED
+        sync: false
+      - key: EXPENSE_REIMBURSEMENT_ENABLED
+        sync: false
+      - key: EXPENSE_OVERVIEW_ENABLED
+        sync: false
       - key: SQUARE_POS_ENABLED
         sync: false
       - key: MEDIA_OBJECT_ENDPOINT
@@ -231,6 +243,10 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
+        sync: false
+      - key: OPENAI_EXPENSE_MODEL
+        sync: false
+      - key: OPENAI_EXPENSE_TIMEOUT_MS
         sync: false
       - key: TWILIO_ACCOUNT_SID
         sync: false
@@ -375,6 +391,10 @@ services:
         sync: false
       - key: MOBILE_OFFLINE_MEDIA_ENABLED
         sync: false
+      - key: EXPENSE_RECEIPT_CAPTURE_ENABLED
+        sync: false
+      - key: EXPENSE_RECEIPT_WORKER_ENABLED
+        sync: false
       - key: SQUARE_POS_ENABLED
         sync: false
       - key: MEDIA_OBJECT_ENDPOINT
@@ -412,6 +432,10 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
+        sync: false
+      - key: OPENAI_EXPENSE_MODEL
+        sync: false
+      - key: OPENAI_EXPENSE_TIMEOUT_MS
         sync: false
       - key: TWILIO_ACCOUNT_SID
         sync: false

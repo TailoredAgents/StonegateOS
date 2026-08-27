@@ -1,7 +1,13 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, asc, desc, sql } from "drizzle-orm";
-import { expenses, getDb } from "@/db";
+import {
+  expenseAllocations,
+  expenseReceiptCaptures,
+  expenses,
+  getDb,
+} from "@/db";
+import { resolveExpenseCategoryAlias } from "@/lib/expense-categories";
 import {
   buildExpenseWhere,
   encodeExpenseCursor,
@@ -11,6 +17,12 @@ import {
   expenseIdempotencyPayload,
   parseExpenseRequest,
 } from "@/lib/expense-lifecycle";
+import {
+  cleanupStagedExpenseReceiptEvidenceIfUncommitted,
+  findExactExpenseReceiptDuplicateForPosting,
+  stageExpenseReceiptEvidence,
+  type StagedExpenseReceiptEvidence,
+} from "@/lib/expense-receipt-evidence";
 import { requirePermission } from "@/lib/permissions";
 import {
   claimTeamMutationIdempotency,
@@ -39,7 +51,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "expenses.read");
+  const permissionError = await requirePermission(request, "expenses.read", {
+    disallowedRoles: ["crew"],
+  });
   if (permissionError) return permissionError;
 
   const parsed = parseExpenseQuery(request.nextUrl.searchParams);
@@ -63,9 +77,10 @@ export async function GET(request: NextRequest): Promise<Response> {
         coverageEndAt: expenses.coverageEndAt,
         receiptFilename: expenses.receiptFilename,
         receiptContentType: expenses.receiptContentType,
-        hasReceipt: sql<boolean>`${expenses.receiptUrl} IS NOT NULL`.as(
-          "has_receipt",
-        ),
+        hasReceipt:
+          sql<boolean>`${expenses.receiptUrl} IS NOT NULL OR ${expenses.receiptCaptureId} IS NOT NULL`.as(
+            "has_receipt",
+          ),
         bankTransactionId: expenses.bankTransactionId,
         payoutRunId: expenses.payoutRunId,
         lifecycleStatus: expenses.lifecycleStatus,
@@ -141,7 +156,9 @@ export async function GET(request: NextRequest): Promise<Response> {
           externallyManaged: Boolean(
             row.bankTransactionId ||
               row.payoutRunId ||
-              (row.source !== "manual" && row.source !== "manual_correction"),
+              ["daily_ad_spend", "payout_run", "payout_reimbursement"].includes(
+                row.source,
+              ),
           ),
           requiresFinanceReview:
             row.amountCents <= 0 ||
@@ -206,7 +223,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 export async function POST(request: NextRequest): Promise<Response> {
   const boundary = await beginTeamMutation(request, {
     principalTypes: ["human"],
-    requiredPermissions: ["expenses.write"],
+    requiredPermissions: ["expenses.approve"],
     risk: "financial",
     requiresIdempotency: true,
     auditAction: "expense.draft_created",
@@ -216,6 +233,8 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   let db: ReturnType<typeof getDb> | null = null;
   let claim: TeamMutationIdempotencyClaim | null = null;
+  let stagedReceipt: StagedExpenseReceiptEvidence | null = null;
+  let receiptCommitted = false;
   try {
     const parsed = await parseExpenseRequest(request);
     db = getDb();
@@ -229,24 +248,66 @@ export async function POST(request: NextRequest): Promise<Response> {
       return teamMutationIdempotencyReplayResponse(claimed.replay);
     }
     claim = claimed.claim;
+    const actorId = mutation.actor.id;
+    if (!actorId) {
+      throw new TeamMutationFailure(
+        "internal",
+        "The verified expense actor is incomplete.",
+      );
+    }
+    if (parsed.receipt) {
+      stagedReceipt = await stageExpenseReceiptEvidence({
+        captureId: claim.id,
+        submittedBy: actorId,
+        receipt: parsed.receipt,
+      });
+    }
 
     const result = await db.transaction(async (tx) => {
       const now = new Date();
+      if (stagedReceipt) {
+        const duplicateCaptureId =
+          await findExactExpenseReceiptDuplicateForPosting(tx, {
+            captureId: stagedReceipt.capture.id as string,
+            sha256: stagedReceipt.capture.sha256 ?? null,
+          });
+        if (duplicateCaptureId) {
+          throw new TeamMutationFailure(
+            "conflict",
+            "This receipt already exists. Use Scan receipt so an owner can review a legitimate duplicate.",
+          );
+        }
+        await tx.insert(expenseReceiptCaptures).values(stagedReceipt.capture);
+      }
+      const category = await resolveExpenseCategoryAlias(
+        tx,
+        parsed.expense.category,
+      );
       const [row] = await tx
         .insert(expenses)
         .values({
           amount: parsed.expense.amountCents,
           currency: "USD",
-          category: parsed.expense.category,
+          category: category.category,
+          categoryId: category.categoryId,
+          categoryNeedsReview: category.categoryNeedsReview,
           vendor: parsed.expense.vendor,
           memo: parsed.expense.memo,
           method: parsed.expense.method,
           source: "manual",
+          submittedBy: actorId,
+          payerType: "company",
+          paidByMemberId: null,
+          reviewStatus: "draft",
+          reviewedBy: null,
+          reviewedAt: null,
+          reviewReason: null,
+          receiptCaptureId: stagedReceipt?.capture.id ?? null,
           paidAt: parsed.expense.paidAt,
           coverageStartAt: parsed.expense.coverageStartAt,
           coverageEndAt: parsed.expense.coverageEndAt,
           receiptFilename: parsed.receipt?.filename ?? null,
-          receiptUrl: parsed.receipt?.dataUrl ?? null,
+          receiptUrl: null,
           receiptContentType: parsed.receipt?.contentType ?? null,
           lifecycleStatus: "draft",
           version: 1,
@@ -263,13 +324,24 @@ export async function POST(request: NextRequest): Promise<Response> {
         );
       }
 
+      if (category.categoryId) {
+        await tx.insert(expenseAllocations).values({
+          expenseId: row.id,
+          categoryId: category.categoryId,
+          amountCents: parsed.expense.amountCents,
+          createdAt: now,
+        });
+      }
+
       const audit = await mutation.audit.insertSuccess(tx, {
         entityType: "expense",
         entityId: row.id,
         after: {
           amountCents: parsed.expense.amountCents,
           currency: "USD",
-          category: parsed.expense.category,
+          category: category.category,
+          categoryId: category.categoryId,
+          categoryNeedsReview: category.categoryNeedsReview,
           paidAt: parsed.expense.paidAt.toISOString(),
           lifecycleStatus: "draft",
           version: 1,
@@ -304,9 +376,13 @@ export async function POST(request: NextRequest): Promise<Response> {
       );
       return mutationResult;
     });
+    receiptCommitted = true;
 
     return teamMutationResultResponse(result, 201, mutation.correlationId);
   } catch (error) {
+    if (stagedReceipt && !receiptCommitted && db) {
+      await cleanupStagedExpenseReceiptEvidenceIfUncommitted(db, stagedReceipt);
+    }
     if (db && claim) {
       try {
         await settleTeamMutationIdempotencyFailure(db, mutation, claim, error);
