@@ -38,10 +38,14 @@ type TeamSessionApiResponse = {
 
 export function buildAllowedMobileScreens(member: MobileTeamMember): string[] {
   const permissions = member.permissions ?? [];
-  const isOwner = member.roleSlug === "owner" || hasMobilePermission(permissions, "*");
+  const isOwner =
+    member.roleSlug === "owner" || hasMobilePermission(permissions, "*");
   const screens = new Set<string>(["settings"]);
 
-  if (hasMobilePermission(permissions, "messages.read") || hasMobilePermission(permissions, "messages.send")) {
+  if (
+    hasMobilePermission(permissions, "messages.read") ||
+    hasMobilePermission(permissions, "messages.send")
+  ) {
     screens.add("inbox");
   }
   if (hasMobilePermission(permissions, "appointments.read")) {
@@ -60,7 +64,10 @@ export function buildAllowedMobileScreens(member: MobileTeamMember): string[] {
   ) {
     screens.add("quotes");
   }
-  if (hasMobilePermission(permissions, "expenses.read") || hasMobilePermission(permissions, "expenses.write")) {
+  if (
+    hasMobilePermission(permissions, "expenses.submit") ||
+    hasMobilePermission(permissions, "expenses.approve")
+  ) {
     screens.add("expenses");
   }
   if (isOwner) {
@@ -71,7 +78,9 @@ export function buildAllowedMobileScreens(member: MobileTeamMember): string[] {
   return Array.from(screens);
 }
 
-export async function resolveMobileSessionFromToken(sessionToken: string): Promise<MobileSession | null> {
+export async function resolveMobileSessionFromToken(
+  sessionToken: string,
+): Promise<MobileSession | null> {
   const token = sessionToken.trim();
   if (!token) return null;
 
@@ -79,11 +88,13 @@ export async function resolveMobileSessionFromToken(sessionToken: string): Promi
   const res = await fetch(`${base}/api/public/team/session`, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store"
+    cache: "no-store",
   });
 
   if (!res.ok) return null;
-  const payload = (await res.json().catch(() => null)) as TeamSessionApiResponse | null;
+  const payload = (await res
+    .json()
+    .catch(() => null)) as TeamSessionApiResponse | null;
   const row = payload?.teamMember;
   if (!payload?.ok || !row?.id || !row.name) return null;
 
@@ -93,13 +104,15 @@ export async function resolveMobileSessionFromToken(sessionToken: string): Promi
     email: row.email ?? null,
     roleSlug: row.roleSlug ?? null,
     passwordSet: Boolean(row.passwordSet),
-    permissions: Array.isArray(row.permissions) ? row.permissions : []
+    permissions: Array.isArray(row.permissions) ? row.permissions : [],
   };
 
   return {
     teamMember,
     allowedScreens: buildAllowedMobileScreens(teamMember),
-    isOwner: teamMember.roleSlug === "owner" || hasMobilePermission(teamMember.permissions, "*")
+    isOwner:
+      teamMember.roleSlug === "owner" ||
+      hasMobilePermission(teamMember.permissions, "*"),
   };
 }
 

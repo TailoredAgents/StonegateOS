@@ -3,11 +3,12 @@ export const MOBILE_MEDIA_SYNC_ISSUE_EVENT = "stonegate:media-sync-issue";
 export const MOBILE_STORAGE_WARNING_EVENT = "stonegate:storage-warning";
 
 const DATABASE_NAME = "stonegate-mobile";
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 const SNAPSHOT_STORE = "appointment-snapshots";
 const MEDIA_STORE = "appointment-media";
 const QUEUE_STORE = "media-upload-queue";
 const METADATA_STORE = "app-metadata";
+const EXPENSE_QUEUE_STORE = "expense-capture-queue";
 const LAST_EMPLOYEE_KEY = "stonegate:last-mobile-employee";
 const SNAPSHOT_TTL_MS = 48 * 60 * 60 * 1000;
 const STALE_QUEUE_MS = 24 * 60 * 60 * 1000;
@@ -339,6 +340,16 @@ function openDatabase(): Promise<IDBDatabase> {
         database.createObjectStore(METADATA_STORE, {
           keyPath: "key",
         });
+      }
+      // Version 4 adds receipt capture without touching appointment snapshots,
+      // cached media, or the existing upload queue.
+      if (!database.objectStoreNames.contains(EXPENSE_QUEUE_STORE)) {
+        const store = database.createObjectStore(EXPENSE_QUEUE_STORE, {
+          keyPath: "clientCaptureId",
+        });
+        store.createIndex("employeeId", "employeeId", { unique: false });
+        store.createIndex("status", "status", { unique: false });
+        store.createIndex("updatedAt", "updatedAt", { unique: false });
       }
     };
     request.onsuccess = () => resolve(request.result);

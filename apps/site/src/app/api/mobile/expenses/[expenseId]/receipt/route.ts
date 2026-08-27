@@ -33,7 +33,10 @@ export async function GET(
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  if (!hasMobilePermission(session.teamMember.permissions, "expenses.read")) {
+  if (
+    !hasMobilePermission(session.teamMember.permissions, "expenses.submit") &&
+    !hasMobilePermission(session.teamMember.permissions, "expenses.approve")
+  ) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 

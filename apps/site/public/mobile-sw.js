@@ -1,11 +1,12 @@
-const SHELL_CACHE = "stonegate-mobile-shell-v12";
+const SHELL_CACHE = "stonegate-mobile-shell-v13";
 const DATABASE_NAME = "stonegate-mobile";
-const DATABASE_VERSION = 3;
-// Version 3 keeps queued media binary-safe across WebKit and Chromium.
+const DATABASE_VERSION = 4;
+// Version 4 adds an independent receipt queue while preserving every v3 store.
 const SNAPSHOT_STORE = "appointment-snapshots";
 const MEDIA_STORE = "appointment-media";
 const QUEUE_STORE = "media-upload-queue";
 const METADATA_STORE = "app-metadata";
+const EXPENSE_QUEUE_STORE = "expense-capture-queue";
 const UPLOAD_ROW_LEASE_MS = 10 * 60 * 1000;
 const API_FETCH_TIMEOUT_MS = 45 * 1000;
 const OBJECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
@@ -21,6 +22,7 @@ const SHELL_URLS = [
   "/favicon.png",
 ];
 let workerActiveSync = null;
+let workerActiveExpenseSync = null;
 
 function workerIsAbortError(error) {
   return (
@@ -201,6 +203,14 @@ function openDatabase() {
         database.createObjectStore(METADATA_STORE, {
           keyPath: "key",
         });
+      }
+      if (!database.objectStoreNames.contains(EXPENSE_QUEUE_STORE)) {
+        const store = database.createObjectStore(EXPENSE_QUEUE_STORE, {
+          keyPath: "clientCaptureId",
+        });
+        store.createIndex("employeeId", "employeeId", { unique: false });
+        store.createIndex("status", "status", { unique: false });
+        store.createIndex("updatedAt", "updatedAt", { unique: false });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -810,14 +820,233 @@ function syncQueue() {
   return settled;
 }
 
+async function getExpenseQueue() {
+  const database = await openDatabase();
+  const transaction = database.transaction(EXPENSE_QUEUE_STORE, "readonly");
+  const completion = transactionDone(transaction);
+  const keys = await requestResult(
+    transaction.objectStore(EXPENSE_QUEUE_STORE).getAllKeys(),
+  );
+  await completion;
+  database.close();
+
+  const rows = await Promise.all(
+    keys
+      .filter((key) => typeof key === "string")
+      .map(async (captureId) => {
+        const rowDatabase = await openDatabase();
+        const rowTransaction = rowDatabase.transaction(
+          EXPENSE_QUEUE_STORE,
+          "readonly",
+        );
+        const rowCompletion = transactionDone(rowTransaction);
+        const row = await requestResult(
+          rowTransaction.objectStore(EXPENSE_QUEUE_STORE).get(captureId),
+        );
+        await rowCompletion;
+        rowDatabase.close();
+        return row;
+      }),
+  );
+  return rows.filter(Boolean);
+}
+
+async function putExpenseQueueRow(row) {
+  const database = await openDatabase();
+  const transaction = database.transaction(EXPENSE_QUEUE_STORE, "readwrite");
+  const completion = transactionDone(transaction);
+  transaction.objectStore(EXPENSE_QUEUE_STORE).put(row);
+  try {
+    await completion;
+  } finally {
+    database.close();
+  }
+}
+
+async function materializeExpenseReceipt(row) {
+  return materializeQueuedUploadBody({
+    ...row,
+    byteCount: row.byteLength,
+  });
+}
+
+async function uploadExpenseCapture(row) {
+  const syncing = {
+    ...row,
+    status: "syncing",
+    error: null,
+    attempts: (row.attempts || 0) + 1,
+    updatedAt: Date.now(),
+  };
+  await putExpenseQueueRow(syncing);
+  try {
+    const { response: intentResponse, payload: intentPayload } =
+      await workerFetchJsonWithTimeout(
+        "/api/mobile/expenses/captures",
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            clientCaptureId: syncing.clientCaptureId,
+            filename: syncing.filename,
+            contentType: syncing.contentType,
+            byteLength: syncing.byteLength,
+            checksumSha256: syncing.checksumSha256,
+          }),
+        },
+        API_FETCH_TIMEOUT_MS,
+      );
+    if (!intentResponse.ok) {
+      throw workerResponseFailure(
+        intentResponse,
+        intentPayload,
+        "expense_receipt_intent_failed",
+      );
+    }
+    const capture = intentPayload?.capture;
+    if (capture?.status === "ready") {
+      const ready = {
+        ...syncing,
+        status: "ready",
+        serverCapture: capture,
+        updatedAt: Date.now(),
+      };
+      delete ready.bytes;
+      await putExpenseQueueRow(ready);
+      return "success";
+    }
+    if (typeof intentPayload?.uploadUrl === "string") {
+      const uploadBody = await materializeExpenseReceipt(syncing);
+      const uploadResponse = await workerFetchWithTimeout(
+        intentPayload.uploadUrl,
+        {
+          method: "PUT",
+          credentials: "include",
+          headers: { "content-type": syncing.contentType },
+          body: uploadBody,
+        },
+        OBJECT_UPLOAD_TIMEOUT_MS,
+      );
+      if (!uploadResponse.ok) {
+        throw workerResponseFailure(
+          uploadResponse,
+          null,
+          "expense_receipt_upload_failed",
+        );
+      }
+    }
+    const { response: finalizeResponse, payload: finalizePayload } =
+      await workerFetchJsonWithTimeout(
+        `/api/mobile/expenses/captures/${encodeURIComponent(syncing.clientCaptureId)}/finalize`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ checksumSha256: syncing.checksumSha256 }),
+        },
+        API_FETCH_TIMEOUT_MS,
+      );
+    if (!finalizeResponse.ok) {
+      throw workerResponseFailure(
+        finalizeResponse,
+        finalizePayload,
+        "expense_receipt_finalize_failed",
+      );
+    }
+    const finalizedCapture = finalizePayload?.capture || null;
+    const acknowledged = {
+      ...syncing,
+      status: finalizedCapture?.status === "ready" ? "ready" : "processing",
+      serverCapture: finalizedCapture,
+      updatedAt: Date.now(),
+    };
+    delete acknowledged.bytes;
+    await putExpenseQueueRow(acknowledged);
+    return "success";
+  } catch (error) {
+    const outcome = workerUploadFailureMode(error);
+    await putExpenseQueueRow({
+      ...syncing,
+      status: "queued",
+      error:
+        error instanceof Error
+          ? error.message
+          : "The receipt upload will retry.",
+      updatedAt: Date.now(),
+    });
+    return outcome;
+  }
+}
+
+async function performExpenseSyncQueue() {
+  const openWindows = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  });
+  if (openWindows.length) return;
+  const employeeId = await getActiveEmployeeId();
+  if (!employeeId) return;
+  const rows = (await getExpenseQueue()).filter(
+    (row) =>
+      row.employeeId === employeeId &&
+      (row.status === "queued" || row.status === "syncing"),
+  );
+  if (!rows.length) return;
+
+  const { response: sessionResponse, payload: sessionPayload } =
+    await workerFetchJsonWithTimeout(
+      "/api/mobile/me",
+      { credentials: "include", cache: "no-store" },
+      API_FETCH_TIMEOUT_MS,
+    );
+  if (!sessionResponse.ok || sessionPayload?.teamMember?.id !== employeeId) {
+    if (sessionResponse.status >= 500) {
+      throw new Error("expense_receipt_session_unavailable");
+    }
+    return;
+  }
+
+  let retryableFailures = 0;
+  for (const row of rows) {
+    const outcome = await uploadExpenseCapture(row);
+    if (outcome === "retry") retryableFailures += 1;
+    if (outcome === "auth_paused") break;
+  }
+  const clients = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  });
+  for (const client of clients) {
+    client.postMessage({ type: "stonegate-expense-sync-complete" });
+  }
+  if (retryableFailures) throw new Error("expense_receipt_sync_incomplete");
+}
+
+function syncExpenseQueue() {
+  if (workerActiveExpenseSync) return workerActiveExpenseSync;
+  const promise = performExpenseSyncQueue();
+  const settled = promise.finally(() => {
+    if (workerActiveExpenseSync === settled) workerActiveExpenseSync = null;
+  });
+  workerActiveExpenseSync = settled;
+  return settled;
+}
+
 self.addEventListener("sync", (event) => {
   if (event.tag === "stonegate-media-sync") {
     event.waitUntil(syncQueue());
+  }
+  if (event.tag === "stonegate-expense-receipts") {
+    event.waitUntil(syncExpenseQueue());
   }
 });
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "stonegate-sync-media") {
     event.waitUntil(syncQueue());
+  }
+  if (event.data?.type === "stonegate-sync-expenses") {
+    event.waitUntil(syncExpenseQueue());
   }
 });

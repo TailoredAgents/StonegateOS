@@ -249,7 +249,7 @@ describe("expense integrity", () => {
     for (const routePath of routePaths) {
       const route = source(routePath);
       expect(route).toContain("beginTeamMutation(request");
-      expect(route).toContain('requiredPermissions: ["expenses.write"]');
+      expect(route).toContain('requiredPermissions: ["expenses.approve"]');
       expect(route).toContain('risk: "financial"');
       expect(route).toContain("claimTeamMutationIdempotency");
       expect(route).toContain("db.transaction(async (tx)");
@@ -327,22 +327,34 @@ describe("expense integrity", () => {
     expect(siteReceipt).toContain("SAFE_RECEIPT_CONTENT_TYPES");
   });
 
-  it("keeps the shared mobile expense entry compatible through Draft then Posted", () => {
-    const mobileAction = source("../site/src/app/mobile/actions.ts");
+  it("routes mobile expense submissions through review-aware V2 posting", () => {
     const mobilePage = source("../site/src/app/mobile/page.tsx");
+    const mobileSpend = source("../site/src/app/mobile/MobileSpendV2.tsx");
+    const mobileProxy = source(
+      "../site/src/app/api/mobile/expenses/submissions/route.ts",
+    );
+    const submissionRoute = source(
+      "app/api/admin/expenses/submissions/route.ts",
+    );
+    const submissionDomain = source("src/lib/expense-submissions.ts");
 
-    expect(mobileAction).toContain(
-      'headers: { "Idempotency-Key": idempotencyKey }',
-    );
-    expect(mobileAction).toContain(
-      '"Idempotency-Key": `${idempotencyKey}:post`',
-    );
-    expect(mobileAction).toContain('"If-Match": String(version)');
-    expect(mobileAction).toContain(
+    expect(mobilePage).toContain("<MobileSpendV2");
+    expect(mobileSpend).toContain('"/api/mobile/expenses/submissions"');
+    expect(mobileSpend).toContain('"Idempotency-Key": idempotencyKey');
+    expect(mobileSpend).toContain('"Submit for approval"');
+    expect(mobileSpend).not.toContain(
       "/api/admin/expenses/${encodeURIComponent(expenseId)}/post",
     );
-    expect(mobileAction).not.toContain('body.set("source", "mobile")');
-    expect(mobilePage).toContain('name="idempotencyKey"');
-    expect(mobilePage).toContain('name="paidAt"');
+    expect(mobileProxy).toContain('permission: "expenses.submit"');
+    expect(submissionRoute).toContain(
+      'requiredPermissions: ["expenses.submit"]',
+    );
+    expect(submissionRoute).toContain("createExpenseSubmissionInTransaction");
+    expect(submissionDomain).toContain(
+      'const reviewStatus = input.canApprove ? "approved" : "pending"',
+    );
+    expect(submissionDomain).toContain(
+      'lifecycleStatus: input.canApprove ? "posted" : "draft"',
+    );
   });
 });
