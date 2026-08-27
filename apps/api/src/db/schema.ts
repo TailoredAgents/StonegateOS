@@ -5565,6 +5565,12 @@ export const expenseReceiptCaptures = pgTable(
     analysisCompletedAt: timestamp("analysis_completed_at", {
       withTimezone: true,
     }),
+    analysisAttemptCount: integer("analysis_attempt_count")
+      .default(0)
+      .notNull(),
+    analysisNextAttemptAt: timestamp("analysis_next_attempt_at", {
+      withTimezone: true,
+    }),
     analysisModel: text("analysis_model"),
     extraction: jsonb("extraction").$type<Record<string, unknown> | null>(),
     analysisWarnings: jsonb("analysis_warnings").$type<string[] | null>(),
@@ -5613,6 +5619,14 @@ export const expenseReceiptCaptures = pgTable(
     versionCheck: check(
       "expense_receipt_captures_version_check",
       sql`${table.version} >= 1`,
+    ),
+    analysisAttemptCountCheck: check(
+      "expense_receipt_captures_analysis_attempt_count_check",
+      sql`${table.analysisAttemptCount} >= 0`,
+    ),
+    retryStateCheck: check(
+      "expense_receipt_captures_retry_state_check",
+      sql`${table.analysisNextAttemptAt} IS NULL OR (${table.status} = 'queued' AND ${table.failureCode} IS NOT NULL AND ${table.analysisStartedAt} IS NULL AND ${table.analysisCompletedAt} IS NULL)`,
     ),
   }),
 );

@@ -296,7 +296,10 @@ function outcomeForOutboxHandlerError(
     // target the already-persisted ID. Both operations therefore converge on
     // retry instead of treating an ambiguous provider response as success.
     event.type === "appointment.calendar_sync_requested" ||
-    (event.type === "expense.receipt.analyze" && attempt < 5) ||
+    // Receipt analysis owns its terminal attempt budget on the capture row.
+    // Infrastructure failures before that state can be persisted must remain
+    // retryable or a queued/polling client would be orphaned permanently.
+    event.type === "expense.receipt.analyze" ||
     (event.type.startsWith("facebook.") && attempt < 5) ||
     event.type.startsWith("call.recording.");
   console.warn("[outbox] handler_error", {

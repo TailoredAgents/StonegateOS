@@ -701,6 +701,20 @@
       "when": 1789689600000,
       "tag": "0102_expense_tracking_v2_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1789776000000,
+      "tag": "0103_expense_v2_correction_controls",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1789862400000,
+      "tag": "0104_expense_receipt_retry_state",
+      "breakpoints": true
     }
   ]
 }

@@ -12,13 +12,13 @@ describe("Expense Tracking V2 database foundation", () => {
     "src/db/migrations/0102_expense_tracking_v2_foundation.sql",
   );
 
-  it("registers the additive migration after the booking backfill", () => {
+  it("registers the additive expense migrations after the booking backfill", () => {
     const journal = JSON.parse(
       source("src/db/migrations/meta/_journal.json"),
     ) as { entries?: Array<{ idx?: number; tag?: string }> };
     const entries = journal.entries ?? [];
 
-    expect(entries.slice(-2)).toEqual([
+    expect(entries.slice(-4)).toEqual([
       expect.objectContaining({
         idx: 98,
         tag: "0101_online_booking_quote_range_backfill",
@@ -26,6 +26,14 @@ describe("Expense Tracking V2 database foundation", () => {
       expect.objectContaining({
         idx: 99,
         tag: "0102_expense_tracking_v2_foundation",
+      }),
+      expect.objectContaining({
+        idx: 100,
+        tag: "0103_expense_v2_correction_controls",
+      }),
+      expect.objectContaining({
+        idx: 101,
+        tag: "0104_expense_receipt_retry_state",
       }),
     ]);
   });

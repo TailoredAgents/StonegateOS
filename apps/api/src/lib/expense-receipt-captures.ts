@@ -18,6 +18,7 @@ import {
   getDb,
   outboxEvents,
   teamMembers,
+  type DatabaseClient,
 } from "@/db";
 import {
   buildExpenseReceiptReview,
@@ -55,6 +56,7 @@ import {
   recordProviderFailure,
   recordProviderSuccess,
 } from "@/lib/provider-health";
+import { getOutboxRetryDelayMs } from "@/lib/outbox-finalization";
 
 const UPLOAD_URL_LIFETIME_SECONDS = 5 * 60;
 const ANALYSIS_LEASE_MS = 10 * 60 * 1_000;
@@ -67,6 +69,12 @@ const UUID_PATTERN =
 
 type CaptureRow = typeof expenseReceiptCaptures.$inferSelect;
 type CaptureStatus = CaptureRow["status"];
+type ReceiptCaptureTransaction = Parameters<
+  DatabaseClient["transaction"]
+>[0] extends (tx: infer Transaction) => Promise<unknown>
+  ? Transaction
+  : never;
+type ReceiptCaptureDb = DatabaseClient | ReceiptCaptureTransaction;
 
 export class ExpenseReceiptCaptureError extends Error {
   constructor(
@@ -120,8 +128,11 @@ function canAccessCapture(
   return canReviewAll || capture.submittedBy === viewerId;
 }
 
-async function findCapture(captureId: string): Promise<CaptureRow | null> {
-  const [capture] = await getDb()
+async function findCapture(
+  captureId: string,
+  db: ReceiptCaptureDb = getDb(),
+): Promise<CaptureRow | null> {
+  const [capture] = await db
     .select()
     .from(expenseReceiptCaptures)
     .where(eq(expenseReceiptCaptures.id, captureId))
@@ -168,6 +179,9 @@ export type ExpenseReceiptCaptureStatusDto = {
   analysisQueuedAt: string | null;
   analysisStartedAt: string | null;
   analysisCompletedAt: string | null;
+  analysisAttemptCount: number;
+  analysisNextAttemptAt: string | null;
+  retryPending: boolean;
   analysisModel: string | null;
   extraction: Record<string, unknown> | null;
   exactDuplicateOfCaptureId: string | null;
@@ -195,6 +209,10 @@ export function toExpenseReceiptCaptureStatusDto(
     analysisQueuedAt: capture.analysisQueuedAt?.toISOString() ?? null,
     analysisStartedAt: capture.analysisStartedAt?.toISOString() ?? null,
     analysisCompletedAt: capture.analysisCompletedAt?.toISOString() ?? null,
+    analysisAttemptCount: capture.analysisAttemptCount,
+    analysisNextAttemptAt: capture.analysisNextAttemptAt?.toISOString() ?? null,
+    retryPending:
+      capture.status === "queued" && capture.analysisNextAttemptAt !== null,
     analysisModel: capture.analysisModel,
     extraction: responseExtraction(capture),
     exactDuplicateOfCaptureId: capture.exactDuplicateOfCaptureId,
@@ -952,8 +970,9 @@ function readStoredRawExtraction(
 
 async function duplicateCandidatesForCapture(
   capture: CaptureRow,
+  db: ReceiptCaptureDb = getDb(),
 ): Promise<ReceiptDuplicateCandidate[]> {
-  const rows = await getDb()
+  const rows = await db
     .select({
       id: expenseReceiptCaptures.id,
       sha256: expenseReceiptCaptures.sha256,
@@ -988,6 +1007,7 @@ async function duplicateCandidatesForCapture(
 
 async function categorySuggestionForExtraction(
   extraction: ExpenseReceiptExtraction,
+  db: ReceiptCaptureDb = getDb(),
 ): Promise<ReturnType<typeof selectExpenseCategory>> {
   const normalizedVendor = normalizeReceiptVendor(extraction.vendor);
   if (!normalizedVendor) {
@@ -997,7 +1017,7 @@ async function categorySuggestionForExtraction(
       aiSuggestedCategoryId: extraction.suggestedCategoryId,
     });
   }
-  const rows = await getDb()
+  const rows = await db
     .select()
     .from(expenseVendorCategoryRules)
     .where(eq(expenseVendorCategoryRules.normalizedVendor, normalizedVendor));
@@ -1019,21 +1039,25 @@ async function categorySuggestionForExtraction(
   });
 }
 
-async function markCaptureAnalysisFailed(input: {
-  capture: CaptureRow;
-  code: string;
-  message: string;
-}): Promise<CaptureRow | null> {
-  const now = new Date();
-  const [failed] = await getDb()
+async function markCaptureAnalysisFailed(
+  db: ReceiptCaptureDb,
+  input: {
+    capture: CaptureRow;
+    code: string;
+    message: string;
+    now: Date;
+  },
+): Promise<CaptureRow | null> {
+  const [failed] = await db
     .update(expenseReceiptCaptures)
     .set({
       status: "failed",
       failureCode: input.code.slice(0, 160),
       failureMessage: input.message.slice(0, 500),
-      analysisCompletedAt: now,
+      analysisCompletedAt: input.now,
+      analysisNextAttemptAt: null,
       version: input.capture.version + 1,
-      updatedAt: now,
+      updatedAt: input.now,
     })
     .where(
       and(
@@ -1046,89 +1070,118 @@ async function markCaptureAnalysisFailed(input: {
   return failed ?? null;
 }
 
-async function resetFailedCaptureToQueued(
-  capture: CaptureRow,
-): Promise<CaptureRow> {
-  const now = new Date();
-  const [queued] = await getDb()
+async function requeueCaptureAfterRetryableFailure(
+  db: ReceiptCaptureDb,
+  input: {
+    capture: CaptureRow;
+    code: string;
+    message: string;
+    retryAt: Date;
+    now: Date;
+  },
+): Promise<CaptureRow | null> {
+  const [queued] = await db
     .update(expenseReceiptCaptures)
     .set({
       status: "queued",
-      analysisQueuedAt: now,
+      failureCode: input.code.slice(0, 160),
+      failureMessage: input.message.slice(0, 500),
+      analysisQueuedAt: input.now,
       analysisStartedAt: null,
       analysisCompletedAt: null,
-      failureCode: null,
-      failureMessage: null,
-      version: capture.version + 1,
-      updatedAt: now,
+      analysisNextAttemptAt: input.retryAt,
+      version: input.capture.version + 1,
+      updatedAt: input.now,
     })
     .where(
       and(
-        eq(expenseReceiptCaptures.id, capture.id),
-        eq(expenseReceiptCaptures.status, "failed"),
-        eq(expenseReceiptCaptures.version, capture.version),
+        eq(expenseReceiptCaptures.id, input.capture.id),
+        eq(expenseReceiptCaptures.status, "analyzing"),
+        eq(expenseReceiptCaptures.version, input.capture.version),
       ),
     )
     .returning();
-  if (!queued) {
-    throw new Error("expense_receipt_retry_claim_failed");
-  }
-  return queued;
+  return queued ?? null;
 }
 
 async function claimCaptureForAnalysis(
+  db: ReceiptCaptureDb,
   captureId: string,
+  now: Date,
 ): Promise<
   | { kind: "claimed"; capture: CaptureRow }
   | { kind: "complete" }
   | { kind: "retry"; at: Date; error: string }
 > {
-  let capture = await findCapture(captureId);
+  let capture = await findCapture(captureId, db);
   if (
     !capture ||
-    ["ready", "confirmed", "discarded"].includes(capture.status)
+    ["ready", "failed", "confirmed", "discarded"].includes(capture.status)
   ) {
     return { kind: "complete" };
   }
   if (capture.status === "analyzing") {
-    const leaseStarted = capture.analysisStartedAt?.getTime() ?? Date.now();
+    const leaseStarted = capture.analysisStartedAt?.getTime() ?? now.getTime();
     const leaseExpiresAt = new Date(leaseStarted + ANALYSIS_LEASE_MS);
-    if (leaseExpiresAt.getTime() > Date.now()) {
+    if (leaseExpiresAt.getTime() > now.getTime()) {
       return {
         kind: "retry",
         at: leaseExpiresAt,
         error: "expense_receipt_analysis_in_flight",
       };
     }
-    const failed = await markCaptureAnalysisFailed({
+    const leaseFailure = {
       capture,
       code: "expense_receipt_analysis_lease_expired",
       message:
         "The previous analysis worker did not finish before its lease expired.",
+      now,
+    };
+    if (capture.analysisAttemptCount >= MAX_ANALYSIS_ATTEMPTS) {
+      const failed = await markCaptureAnalysisFailed(db, leaseFailure);
+      return failed
+        ? { kind: "complete" }
+        : {
+            kind: "retry",
+            at: new Date(now.getTime() + 30_000),
+            error: "expense_receipt_analysis_claim_changed",
+          };
+    }
+    const queued = await requeueCaptureAfterRetryableFailure(db, {
+      ...leaseFailure,
+      retryAt: now,
     });
-    if (!failed) {
+    if (!queued) {
       return {
         kind: "retry",
-        at: new Date(Date.now() + 30_000),
+        at: new Date(now.getTime() + 30_000),
         error: "expense_receipt_analysis_claim_changed",
       };
     }
-    capture = failed;
-  }
-  if (capture.status === "failed") {
-    capture = await resetFailedCaptureToQueued(capture);
+    capture = queued;
   }
   if (capture.status !== "queued") {
     return { kind: "complete" };
   }
+  if (
+    capture.analysisNextAttemptAt &&
+    capture.analysisNextAttemptAt.getTime() > now.getTime()
+  ) {
+    return {
+      kind: "retry",
+      at: capture.analysisNextAttemptAt,
+      error: capture.failureCode ?? "expense_receipt_analysis_retry_scheduled",
+    };
+  }
 
-  const now = new Date();
-  const [claimed] = await getDb()
+  const [claimed] = await db
     .update(expenseReceiptCaptures)
     .set({
       status: "analyzing",
       analysisStartedAt: now,
       analysisCompletedAt: null,
+      analysisAttemptCount: capture.analysisAttemptCount + 1,
+      analysisNextAttemptAt: null,
       failureCode: null,
       failureMessage: null,
       version: capture.version + 1,
@@ -1180,19 +1233,30 @@ export type ExpenseReceiptAnalysisOutboxOutcome = {
   nextAttemptAt?: Date;
 };
 
-/** Worker entry point. It can only move a capture to review-ready or failed. */
-export async function processExpenseReceiptAnalysisOutbox(input: {
-  captureId: string;
-  priorAttempts: number;
-}): Promise<ExpenseReceiptAnalysisOutboxOutcome> {
+/**
+ * Worker entry point. Retryable failures return the capture to `queued` so
+ * clients keep polling; only permanent or exhausted analysis becomes failed.
+ */
+export async function processExpenseReceiptAnalysisOutbox(
+  input: {
+    captureId: string;
+    priorAttempts: number;
+  },
+  dependencies: {
+    db?: ReceiptCaptureDb;
+    now?: () => Date;
+  } = {},
+): Promise<ExpenseReceiptAnalysisOutboxOutcome> {
+  const now = dependencies.now ?? (() => new Date());
   if (!isExpenseReceiptCaptureEnabled()) {
     return {
       status: "retry",
       error: "expense_receipt_capture_disabled",
-      nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+      nextAttemptAt: new Date(now().getTime() + 15 * 60_000),
     };
   }
-  const claim = await claimCaptureForAnalysis(input.captureId);
+  const db = dependencies.db ?? getDb();
+  const claim = await claimCaptureForAnalysis(db, input.captureId, now());
   if (claim.kind === "complete") return { status: "processed" };
   if (claim.kind === "retry") {
     return {
@@ -1221,7 +1285,7 @@ export async function processExpenseReceiptAnalysisOutbox(input: {
     });
     await recordExpenseOpenAiSuccess();
 
-    const candidates = await duplicateCandidatesForCapture(capture);
+    const candidates = await duplicateCandidatesForCapture(capture, db);
     const duplicates = detectExpenseReceiptDuplicates(
       {
         sha256: capture.sha256,
@@ -1234,6 +1298,7 @@ export async function processExpenseReceiptAnalysisOutbox(input: {
     const review = buildExpenseReceiptReview(analyzed.extraction);
     const categorySuggestion = await categorySuggestionForExtraction(
       analyzed.extraction,
+      db,
     );
     const storedExtraction: StoredExtraction = {
       schemaVersion: 1,
@@ -1246,8 +1311,8 @@ export async function processExpenseReceiptAnalysisOutbox(input: {
       capture.exactDuplicateOfCaptureId ??
       duplicates.exactMatches[0]?.candidateId ??
       null;
-    const now = new Date();
-    const [ready] = await getDb()
+    const completedAt = now();
+    const [ready] = await db
       .update(expenseReceiptCaptures)
       .set({
         status: "ready",
@@ -1255,11 +1320,12 @@ export async function processExpenseReceiptAnalysisOutbox(input: {
         extraction: storedExtraction,
         analysisWarnings: analyzed.extraction.warnings,
         exactDuplicateOfCaptureId,
-        analysisCompletedAt: now,
+        analysisCompletedAt: completedAt,
+        analysisNextAttemptAt: null,
         failureCode: null,
         failureMessage: null,
         version: capture.version + 1,
-        updatedAt: now,
+        updatedAt: completedAt,
       })
       .where(
         and(
@@ -1271,25 +1337,23 @@ export async function processExpenseReceiptAnalysisOutbox(input: {
       .returning({ id: expenseReceiptCaptures.id });
     if (!ready) throw new Error("expense_receipt_analysis_finalize_changed");
 
-    await getDb()
-      .insert(auditLogs)
-      .values({
-        actorType: "worker",
-        actorId: null,
-        actorRole: null,
-        actorLabel: "outbox",
-        action: "expense.receipt.analysis_ready",
-        entityType: "expense_receipt_capture",
-        entityId: capture.id,
-        meta: {
-          model: analyzed.model,
-          fieldsToCheck: review.fieldsToCheck,
-          duplicateRisk: duplicates.highestRisk,
-          categorySuggestionSource: categorySuggestion.source,
-          humanConfirmationRequired: true,
-        },
-        createdAt: now,
-      });
+    await db.insert(auditLogs).values({
+      actorType: "worker",
+      actorId: null,
+      actorRole: null,
+      actorLabel: "outbox",
+      action: "expense.receipt.analysis_ready",
+      entityType: "expense_receipt_capture",
+      entityId: capture.id,
+      meta: {
+        model: analyzed.model,
+        fieldsToCheck: review.fieldsToCheck,
+        duplicateRisk: duplicates.highestRisk,
+        categorySuggestionSource: categorySuggestion.source,
+        humanConfirmationRequired: true,
+      },
+      createdAt: completedAt,
+    });
     console.info("[expense.receipt] analysis_ready", {
       captureId: capture.id,
       model: analyzed.model,
@@ -1305,17 +1369,50 @@ export async function processExpenseReceiptAnalysisOutbox(input: {
     if (providerError) {
       await recordExpenseOpenAiFailure(`${code}:${detail}`);
     }
-    await markCaptureAnalysisFailed({ capture, code, message: detail });
-    const attemptNumber = input.priorAttempts + 1;
+    const attemptNumber = capture.analysisAttemptCount;
     const retryable = providerError?.retryable ?? true;
+    const shouldRetry = retryable && attemptNumber < MAX_ANALYSIS_ATTEMPTS;
+    const failedAt = now();
+    if (shouldRetry) {
+      const retryAt = new Date(
+        failedAt.getTime() + getOutboxRetryDelayMs(Math.max(1, attemptNumber)),
+      );
+      const queued = await requeueCaptureAfterRetryableFailure(db, {
+        capture,
+        code,
+        message: detail,
+        retryAt,
+        now: failedAt,
+      });
+      if (!queued) {
+        throw new Error("expense_receipt_analysis_retry_finalize_changed");
+      }
+      console.warn("[expense.receipt] analysis_failed", {
+        captureId: capture.id,
+        code,
+        attemptNumber,
+        retryable,
+        terminal: false,
+      });
+      return { status: "retry", error: code, nextAttemptAt: retryAt };
+    }
+
+    const failed = await markCaptureAnalysisFailed(db, {
+      capture,
+      code,
+      message: detail,
+      now: failedAt,
+    });
+    if (!failed) {
+      throw new Error("expense_receipt_analysis_failure_finalize_changed");
+    }
     console.warn("[expense.receipt] analysis_failed", {
       captureId: capture.id,
       code,
       attemptNumber,
       retryable,
+      terminal: true,
     });
-    return retryable && attemptNumber < MAX_ANALYSIS_ATTEMPTS
-      ? { status: "retry", error: code }
-      : { status: "processed", error: code };
+    return { status: "processed", error: code };
   }
 }
