@@ -1,10 +1,23 @@
-import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import {
   auditLogs,
   expenseReceiptCaptures,
   expenseVendorCategoryRules,
+  expenses,
   getDb,
   outboxEvents,
+  teamMembers,
 } from "@/db";
 import {
   buildExpenseReceiptReview,
@@ -47,6 +60,10 @@ const UPLOAD_URL_LIFETIME_SECONDS = 5 * 60;
 const ANALYSIS_LEASE_MS = 10 * 60 * 1_000;
 const MAX_ANALYSIS_ATTEMPTS = 5;
 const MAX_DUPLICATE_CANDIDATES = 10_000;
+const DEFAULT_DUPLICATE_REVIEW_LIMIT = 25;
+const MAX_DUPLICATE_REVIEW_LIMIT = 100;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 type CaptureRow = typeof expenseReceiptCaptures.$inferSelect;
 type CaptureStatus = CaptureRow["status"];
@@ -156,6 +173,8 @@ export type ExpenseReceiptCaptureStatusDto = {
   exactDuplicateOfCaptureId: string | null;
   failure: { code: string; message: string | null } | null;
   contentPath: string | null;
+  createdAt: string;
+  updatedAt: string;
   requiresHumanConfirmation: true;
 };
 
@@ -186,7 +205,271 @@ export function toExpenseReceiptCaptureStatusDto(
       hasUploadedEvidence && capture.status !== "discarded"
         ? `/api/admin/expenses/captures/${capture.id}/content`
         : null,
+    createdAt: capture.createdAt.toISOString(),
+    updatedAt: capture.updatedAt.toISOString(),
     requiresHumanConfirmation: true,
+  };
+}
+
+export type ExactDuplicateCaptureReviewQuery = {
+  limit: number;
+  cursor: { updatedAt: Date; id: string } | null;
+};
+
+function encodeExactDuplicateReviewCursor(input: {
+  updatedAt: Date;
+  id: string;
+}): string {
+  return Buffer.from(
+    JSON.stringify([input.updatedAt.toISOString(), input.id]),
+    "utf8",
+  ).toString("base64url");
+}
+
+function decodeExactDuplicateReviewCursor(
+  value: string,
+): { updatedAt: Date; id: string } | null {
+  try {
+    const decoded = JSON.parse(
+      Buffer.from(value, "base64url").toString("utf8"),
+    ) as unknown;
+    if (
+      !Array.isArray(decoded) ||
+      decoded.length !== 2 ||
+      typeof decoded[0] !== "string" ||
+      typeof decoded[1] !== "string" ||
+      !UUID_PATTERN.test(decoded[1])
+    ) {
+      return null;
+    }
+    const updatedAt = new Date(decoded[0]);
+    if (
+      Number.isNaN(updatedAt.getTime()) ||
+      updatedAt.toISOString() !== decoded[0]
+    ) {
+      return null;
+    }
+    return { updatedAt, id: decoded[1] };
+  } catch {
+    return null;
+  }
+}
+
+export function parseExactDuplicateCaptureReviewQuery(
+  searchParams: URLSearchParams,
+): ExactDuplicateCaptureReviewQuery {
+  const rawLimit = searchParams.get("limit")?.trim() ?? "";
+  const limit = rawLimit ? Number(rawLimit) : DEFAULT_DUPLICATE_REVIEW_LIMIT;
+  if (
+    (rawLimit && !/^\d+$/u.test(rawLimit)) ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > MAX_DUPLICATE_REVIEW_LIMIT
+  ) {
+    throw new ExpenseReceiptCaptureError(
+      "expense_receipt_review_limit_invalid",
+      400,
+      `Use a review queue limit from 1 through ${MAX_DUPLICATE_REVIEW_LIMIT}.`,
+    );
+  }
+  const rawCursor = searchParams.get("cursor")?.trim() ?? "";
+  const cursor =
+    rawCursor && rawCursor.length <= 256
+      ? decodeExactDuplicateReviewCursor(rawCursor)
+      : null;
+  if (rawCursor && !cursor) {
+    throw new ExpenseReceiptCaptureError(
+      "expense_receipt_review_cursor_invalid",
+      400,
+      "Refresh the duplicate review queue and try again.",
+    );
+  }
+  return { limit, cursor };
+}
+
+export type ExactDuplicateCaptureReviewItem = {
+  capture: ExpenseReceiptCaptureStatusDto;
+  submitter: { id: string; name: string };
+  duplicate: {
+    capture: {
+      id: string;
+      status: CaptureStatus;
+      filename: string;
+      submittedBy: string;
+      submitterName: string;
+      contentPath: string | null;
+    };
+    expense: {
+      id: string;
+      amountCents: number;
+      currency: string;
+      categoryId: string | null;
+      category: string | null;
+      vendor: string | null;
+      paidAt: string;
+      lifecycleStatus: string;
+      reviewStatus: string;
+    } | null;
+  } | null;
+};
+
+/**
+ * Owner review queue for analyzed exact duplicates that crew cannot confirm.
+ * This is deliberately not a general capture listing surface.
+ */
+export async function listExactDuplicateExpenseReceiptCaptures(
+  query: ExactDuplicateCaptureReviewQuery,
+): Promise<{
+  captures: ExactDuplicateCaptureReviewItem[];
+  page: { limit: number; hasMore: boolean; nextCursor: string | null };
+}> {
+  assertReceiptFeatureEnabled();
+  const cursorPredicate = query.cursor
+    ? or(
+        gt(expenseReceiptCaptures.updatedAt, query.cursor.updatedAt),
+        and(
+          eq(expenseReceiptCaptures.updatedAt, query.cursor.updatedAt),
+          gt(expenseReceiptCaptures.id, query.cursor.id),
+        ),
+      )
+    : undefined;
+  const rows = await getDb()
+    .select()
+    .from(expenseReceiptCaptures)
+    .where(
+      and(
+        eq(expenseReceiptCaptures.status, "ready"),
+        isNotNull(expenseReceiptCaptures.exactDuplicateOfCaptureId),
+        cursorPredicate,
+      ),
+    )
+    .orderBy(
+      asc(expenseReceiptCaptures.updatedAt),
+      asc(expenseReceiptCaptures.id),
+    )
+    .limit(query.limit + 1);
+  const hasMore = rows.length > query.limit;
+  const captures = hasMore ? rows.slice(0, query.limit) : rows;
+  const duplicateCaptureIds = Array.from(
+    new Set(
+      captures.flatMap((capture) =>
+        capture.exactDuplicateOfCaptureId
+          ? [capture.exactDuplicateOfCaptureId]
+          : [],
+      ),
+    ),
+  );
+  const duplicateCaptures =
+    duplicateCaptureIds.length > 0
+      ? await getDb()
+          .select()
+          .from(expenseReceiptCaptures)
+          .where(inArray(expenseReceiptCaptures.id, duplicateCaptureIds))
+      : [];
+  const submitterIds = Array.from(
+    new Set([
+      ...captures.map((capture) => capture.submittedBy),
+      ...duplicateCaptures.map((capture) => capture.submittedBy),
+    ]),
+  );
+  const submitters =
+    submitterIds.length > 0
+      ? await getDb()
+          .select({ id: teamMembers.id, name: teamMembers.name })
+          .from(teamMembers)
+          .where(inArray(teamMembers.id, submitterIds))
+      : [];
+  const duplicateExpenses =
+    duplicateCaptureIds.length > 0
+      ? await getDb()
+          .select({
+            id: expenses.id,
+            receiptCaptureId: expenses.receiptCaptureId,
+            amountCents: expenses.amount,
+            currency: expenses.currency,
+            categoryId: expenses.categoryId,
+            category: expenses.category,
+            vendor: expenses.vendor,
+            paidAt: expenses.paidAt,
+            lifecycleStatus: expenses.lifecycleStatus,
+            reviewStatus: expenses.reviewStatus,
+          })
+          .from(expenses)
+          .where(inArray(expenses.receiptCaptureId, duplicateCaptureIds))
+      : [];
+  const captureById = new Map(
+    duplicateCaptures.map((capture) => [capture.id, capture]),
+  );
+  const submitterNameById = new Map(
+    submitters.map((submitter) => [submitter.id, submitter.name]),
+  );
+  const expenseByCaptureId = new Map(
+    duplicateExpenses.flatMap((expense) =>
+      expense.receiptCaptureId
+        ? ([[expense.receiptCaptureId, expense]] as const)
+        : [],
+    ),
+  );
+  const lastCapture = captures.at(-1) ?? null;
+
+  return {
+    captures: captures.map((capture) => {
+      const duplicateCaptureId = capture.exactDuplicateOfCaptureId;
+      const duplicateCapture = duplicateCaptureId
+        ? (captureById.get(duplicateCaptureId) ?? null)
+        : null;
+      const duplicateExpense = duplicateCaptureId
+        ? (expenseByCaptureId.get(duplicateCaptureId) ?? null)
+        : null;
+      return {
+        capture: toExpenseReceiptCaptureStatusDto(capture),
+        submitter: {
+          id: capture.submittedBy,
+          name:
+            submitterNameById.get(capture.submittedBy) ?? "Former team member",
+        },
+        duplicate: duplicateCapture
+          ? {
+              capture: {
+                id: duplicateCapture.id,
+                status: duplicateCapture.status,
+                filename: duplicateCapture.filename,
+                submittedBy: duplicateCapture.submittedBy,
+                submitterName:
+                  submitterNameById.get(duplicateCapture.submittedBy) ??
+                  "Former team member",
+                contentPath: duplicateCapture.uploadedAt
+                  ? `/api/admin/expenses/captures/${duplicateCapture.id}/content`
+                  : null,
+              },
+              expense: duplicateExpense
+                ? {
+                    id: duplicateExpense.id,
+                    amountCents: duplicateExpense.amountCents,
+                    currency: duplicateExpense.currency,
+                    categoryId: duplicateExpense.categoryId,
+                    category: duplicateExpense.category,
+                    vendor: duplicateExpense.vendor,
+                    paidAt: duplicateExpense.paidAt.toISOString(),
+                    lifecycleStatus: duplicateExpense.lifecycleStatus,
+                    reviewStatus: duplicateExpense.reviewStatus,
+                  }
+                : null,
+            }
+          : null,
+      } satisfies ExactDuplicateCaptureReviewItem;
+    }),
+    page: {
+      limit: query.limit,
+      hasMore,
+      nextCursor:
+        hasMore && lastCapture
+          ? encodeExactDuplicateReviewCursor({
+              updatedAt: lastCapture.updatedAt,
+              id: lastCapture.id,
+            })
+          : null,
+    },
   };
 }
 
@@ -560,7 +843,14 @@ export async function getExpenseReceiptCaptureStatus(input: {
   canReviewAll: boolean;
 }): Promise<ExpenseReceiptCaptureStatusDto> {
   assertReceiptFeatureEnabled();
-  return toExpenseReceiptCaptureStatusDto(await findCaptureForViewer(input));
+  const capture = await findCaptureForViewer(input);
+  const status = toExpenseReceiptCaptureStatusDto(capture);
+  return input.canReviewAll && capture.uploadedAt && status.contentPath === null
+    ? {
+        ...status,
+        contentPath: `/api/admin/expenses/captures/${capture.id}/content`,
+      }
+    : status;
 }
 
 export async function discardExpenseReceiptCapture(input: {
@@ -620,7 +910,10 @@ export async function getExpenseReceiptCaptureContentUrl(input: {
 }): Promise<string> {
   assertReceiptFeatureEnabled();
   const capture = await findCaptureForViewer(input);
-  if (!capture.uploadedAt || capture.status === "discarded") {
+  if (
+    !capture.uploadedAt ||
+    (capture.status === "discarded" && !input.canReviewAll)
+  ) {
     throw new ExpenseReceiptCaptureError(
       "expense_receipt_content_unavailable",
       409,
