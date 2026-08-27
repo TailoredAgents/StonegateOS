@@ -542,7 +542,8 @@ export async function POST(
         .from(appointments)
         .leftJoin(contacts, eq(appointments.contactId, contacts.id))
         .where(eq(appointments.id, appointmentId))
-        .for("update")
+        // PostgreSQL cannot lock the nullable side of this outer join.
+        .for("update", { of: appointments })
         .limit(1);
 
       if (!existing) {

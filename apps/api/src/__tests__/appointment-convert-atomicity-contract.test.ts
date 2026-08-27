@@ -110,7 +110,10 @@ describe("appointment quote-to-job conversion atomicity contract", () => {
       "await acquireScheduleConflictLock(tx)",
       transaction,
     );
-    const rowLock = route.indexOf('.for("update")', transaction);
+    const rowLock = route.indexOf(
+      '.for("update", { of: appointments })',
+      transaction,
+    );
     const stale = route.indexOf("currentVersion !== expectedVersion", rowLock);
     const cas = route.indexOf(
       "eq(appointments.updatedAt, existing.updatedAt)",
@@ -127,6 +130,7 @@ describe("appointment quote-to-job conversion atomicity contract", () => {
     expect(rowLock).toBeGreaterThan(scheduleLock);
     expect(stale).toBeGreaterThan(rowLock);
     expect(cas).toBeGreaterThan(stale);
+    expect(route).not.toContain('.for("update")');
     expect(route).toContain("storeTerminalFailure(");
   });
 
