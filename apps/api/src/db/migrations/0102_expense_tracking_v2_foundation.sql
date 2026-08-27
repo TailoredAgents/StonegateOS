@@ -608,6 +608,14 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF OLD."submitted_by" IS NOT NULL OR OLD."receipt_capture_id" IS NOT NULL THEN
+      RAISE EXCEPTION 'expense v2 ledger entries cannot be deleted'
+        USING ERRCODE = '55000';
+    END IF;
+    RETURN OLD;
+  END IF;
+
   IF OLD."lifecycle_status" <> 'draft' AND (
     NEW."category_id" IS DISTINCT FROM OLD."category_id"
     OR NEW."category_needs_review" IS DISTINCT FROM OLD."category_needs_review"
@@ -630,7 +638,7 @@ $$;
 
 DROP TRIGGER IF EXISTS "expenses_v2_evidence_guard" ON "expenses";
 CREATE TRIGGER "expenses_v2_evidence_guard"
-  BEFORE UPDATE ON "expenses"
+  BEFORE UPDATE OR DELETE ON "expenses"
   FOR EACH ROW EXECUTE FUNCTION enforce_expense_v2_evidence_immutability();
 
 CREATE OR REPLACE FUNCTION enforce_expense_allocation_immutability()

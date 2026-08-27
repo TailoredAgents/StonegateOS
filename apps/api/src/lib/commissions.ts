@@ -18,6 +18,10 @@ import {
 } from "@/db";
 import type { AuditActor } from "@/lib/audit";
 import {
+  attachApprovedReimbursementClaimsToDraftPayout,
+  markAttachedReimbursementClaimsPaid,
+} from "@/lib/expense-submissions";
+import {
   resolveLockedCrewPayout,
   type ConfiguredCrewPayoutRule,
   type LockedCrewPayoutResolution,
@@ -1833,6 +1837,13 @@ export async function lockPayoutRun(
       return { ...data, ...(mutationResult ? { mutationResult } : {}) };
     }
 
+    const attachedReimbursements =
+      await attachApprovedReimbursementClaimsToDraftPayout(tx, {
+        payoutRunId: input.payoutRunId,
+        actorId: actor.id ?? null,
+        touchPayoutRun: false,
+      });
+
     await recalculatePayoutPeriodAppointments(
       tx as unknown as DatabaseClient,
       run.periodStart,
@@ -1989,6 +2000,7 @@ export async function lockPayoutRun(
         priorStatus: "draft",
         resultingStatus: "locked",
         lineCount: lines.length,
+        reimbursementClaimsAttached: attachedReimbursements.length,
       },
       execution: input.execution,
     });
@@ -2249,6 +2261,14 @@ export async function markPayoutRunPaid(
       resultingVersion = versionedRun.updatedAt;
     }
 
+    const reimbursementClaimsPaid = await markAttachedReimbursementClaimsPaid(
+      tx,
+      {
+        payoutRunId,
+        paidAt: actualPaidAt,
+      },
+    );
+
     const data: PayoutRunTransitionData = {
       payoutRunId,
       status: "paid",
@@ -2268,6 +2288,7 @@ export async function markPayoutRunPaid(
         payrollExpenseChanged,
         payrollExpensePostedBy: payrollExpense?.postedBy ?? null,
         payrollExpensePaidAt: payrollExpense?.paidAt.toISOString() ?? null,
+        reimbursementClaimsPaid,
       },
       execution: input.execution,
     });
