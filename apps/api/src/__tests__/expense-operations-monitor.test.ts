@@ -1,5 +1,6 @@
 import {
   buildExpenseOperationsMonitorSnapshot,
+  CLIENT_RECEIPT_QUEUE_FRESHNESS_MINUTES,
   ExpenseOperationsMonitorInputError,
   getExpenseOperationsOverviewPairStarts,
   normalizeExpenseReceiptFailureCode,
@@ -59,6 +60,19 @@ function aggregateInput(): ExpenseOperationsMonitorAggregateInput {
       exactWarnings: 3,
       fuzzyWarnings: 2,
       unresolvedExactWarnings: 1,
+    },
+    clientReceiptQueue: {
+      freshReportCount: 3,
+      freshDeviceCount: 2,
+      queuedCount: 5,
+      failedCount: 2,
+      freshReportsWithQueued: 2,
+      freshReportsWithFailures: 1,
+      oldestQueuedAt: new Date("2026-08-27T12:00:00.000Z"),
+      staleReportCount: 2,
+      staleDeviceCount: 2,
+      staleReportsWithQueued: 1,
+      staleReportsWithFailures: 1,
     },
     pendingApprovals: {
       count: 2,
@@ -197,7 +211,7 @@ describe("expense operations monitoring", () => {
 
     expect(snapshot).toMatchObject({
       generatedAt: "2026-08-27T14:00:00.000Z",
-      schemaVersion: 1,
+      schemaVersion: 2,
       timezone: "America/New_York",
       receipts: {
         statusCounts: {
@@ -225,6 +239,30 @@ describe("expense operations monitoring", () => {
           failureCode: "openai_expense_http_429",
         },
         duplicateWarnings: { unresolvedExactWarnings: 1 },
+        clientQueue: {
+          source: "client_reported_metadata",
+          freshness: {
+            basis: "server_received_at",
+            windowMinutes: 15,
+            freshAfter: "2026-08-27T13:45:00.000Z",
+          },
+          current: {
+            reportCount: 3,
+            deviceCount: 2,
+            queuedCount: 5,
+            failedCount: 2,
+            reportsWithQueued: 2,
+            reportsWithFailures: 1,
+            oldestQueuedAt: "2026-08-27T12:00:00.000Z",
+            oldestQueuedAgeMinutes: 120,
+          },
+          stale: {
+            reportCount: 2,
+            deviceCount: 2,
+            reportsWithQueued: 1,
+            reportsWithFailures: 1,
+          },
+        },
       },
       approvals: {
         pendingCount: 2,
@@ -280,9 +318,15 @@ describe("expense operations monitoring", () => {
       "vendor",
       "paymentLastFour",
       "provider-secret-detail",
+      "teamMemberId",
+      "clientDeviceId",
     ]) {
       expect(serialized).not.toContain(sensitiveField);
     }
+  });
+
+  it("defines client queue freshness as three five-minute reporting windows", () => {
+    expect(CLIENT_RECEIPT_QUEUE_FRESHNESS_MINUTES).toBe(15);
   });
 
   it("uses null instead of a misleading zero-percent rate", () => {

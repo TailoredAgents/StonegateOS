@@ -16,7 +16,7 @@ describeOrSkip("expense operations monitor database integration", () => {
       { now: new Date("2026-08-27T14:00:00.000Z") },
     );
 
-    expect(monitor.schemaVersion).toBe(1);
+    expect(monitor.schemaVersion).toBe(2);
     expect(monitor.timezone).toBe("America/New_York");
     expect(monitor.window).toMatchObject({
       lookbackDays: 30,
@@ -25,6 +25,25 @@ describeOrSkip("expense operations monitor database integration", () => {
     expect(monitor.receipts.latencyMs.measurement).toBe(
       "uploaded_to_analysis_completed",
     );
+    expect(monitor.receipts.clientQueue).toMatchObject({
+      source: "client_reported_metadata",
+      freshness: {
+        basis: "server_received_at",
+        windowMinutes: 15,
+        freshAfter: "2026-08-27T13:45:00.000Z",
+      },
+    });
+    for (const value of [
+      monitor.receipts.clientQueue.current.reportCount,
+      monitor.receipts.clientQueue.current.deviceCount,
+      monitor.receipts.clientQueue.current.queuedCount,
+      monitor.receipts.clientQueue.current.failedCount,
+      monitor.receipts.clientQueue.stale.reportCount,
+      monitor.receipts.clientQueue.stale.deviceCount,
+    ]) {
+      expect(Number.isInteger(value)).toBe(true);
+      expect(value).toBeGreaterThanOrEqual(0);
+    }
     for (const status of [
       "pending_upload",
       "queued",
@@ -48,6 +67,8 @@ describeOrSkip("expense operations monitor database integration", () => {
       "failureMessage",
       "paymentLastFour",
       "vendor",
+      "teamMemberId",
+      "clientDeviceId",
     ]) {
       expect(serialized).not.toContain(sensitiveField);
     }

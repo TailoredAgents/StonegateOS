@@ -4,10 +4,12 @@ import {
   desc,
   eq,
   gte,
+  gt,
   inArray,
   isNotNull,
   isNull,
   lte,
+  lt,
   ne,
   or,
   sql,
@@ -18,6 +20,7 @@ import {
   expenseReceiptCaptures,
   expenseReimbursementClaims,
   expenses,
+  mobileExpenseQueueHealth,
   type DatabaseClient,
 } from "@/db";
 import {
@@ -33,6 +36,15 @@ const MAX_LOOKBACK_DAYS = 90;
 const DEFAULT_OVERVIEW_WEEKS = 4;
 const MAX_OVERVIEW_WEEKS = 8;
 const DAY_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * Mobile clients refresh unchanged queue metadata every five minutes while
+ * active. Three missed refreshes mark a report stale without treating one
+ * brief background/network interruption as an incident.
+ */
+export const CLIENT_RECEIPT_QUEUE_FRESHNESS_MINUTES = 15;
+const CLIENT_RECEIPT_QUEUE_FRESHNESS_MS =
+  CLIENT_RECEIPT_QUEUE_FRESHNESS_MINUTES * 60_000;
 
 const RECEIPT_STATUSES = [
   "pending_upload",
@@ -184,6 +196,19 @@ export type ExpenseOperationsMonitorAggregateInput = {
     fuzzyWarnings: number;
     unresolvedExactWarnings: number;
   };
+  clientReceiptQueue: {
+    freshReportCount: number;
+    freshDeviceCount: number;
+    queuedCount: number;
+    failedCount: number;
+    freshReportsWithQueued: number;
+    freshReportsWithFailures: number;
+    oldestQueuedAt: Date | null;
+    staleReportCount: number;
+    staleDeviceCount: number;
+    staleReportsWithQueued: number;
+    staleReportsWithFailures: number;
+  };
   pendingApprovals: {
     count: number;
     amountCents: number;
@@ -327,9 +352,12 @@ export function buildExpenseOperationsMonitorSnapshot(
   const overviewWeeks = [...input.overview.weeks]
     .sort((left, right) => right.startDate.localeCompare(left.startDate))
     .slice(0, input.overview.requestedWeeks);
+  const clientQueueFreshAfter = new Date(
+    input.now.getTime() - CLIENT_RECEIPT_QUEUE_FRESHNESS_MS,
+  );
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: input.now.toISOString(),
     timezone: EXPENSE_OVERVIEW_TIME_ZONE,
     window: {
@@ -364,6 +392,36 @@ export function buildExpenseOperationsMonitorSnapshot(
         : null,
       failureCodes: normalizeFailureRows(input.receiptFailureRows),
       duplicateWarnings: input.duplicates,
+      clientQueue: {
+        source: "client_reported_metadata" as const,
+        freshness: {
+          basis: "server_received_at" as const,
+          windowMinutes: CLIENT_RECEIPT_QUEUE_FRESHNESS_MINUTES,
+          freshAfter: clientQueueFreshAfter.toISOString(),
+        },
+        current: {
+          reportCount: input.clientReceiptQueue.freshReportCount,
+          deviceCount: input.clientReceiptQueue.freshDeviceCount,
+          queuedCount: input.clientReceiptQueue.queuedCount,
+          failedCount: input.clientReceiptQueue.failedCount,
+          reportsWithQueued: input.clientReceiptQueue.freshReportsWithQueued,
+          reportsWithFailures:
+            input.clientReceiptQueue.freshReportsWithFailures,
+          oldestQueuedAt:
+            input.clientReceiptQueue.oldestQueuedAt?.toISOString() ?? null,
+          oldestQueuedAgeMinutes: ageMinutes(
+            input.now,
+            input.clientReceiptQueue.oldestQueuedAt,
+          ),
+        },
+        stale: {
+          reportCount: input.clientReceiptQueue.staleReportCount,
+          deviceCount: input.clientReceiptQueue.staleDeviceCount,
+          reportsWithQueued: input.clientReceiptQueue.staleReportsWithQueued,
+          reportsWithFailures:
+            input.clientReceiptQueue.staleReportsWithFailures,
+        },
+      },
     },
     approvals: {
       pendingCount: input.pendingApprovals.count,
@@ -508,6 +566,9 @@ export async function readExpenseOperationsMonitor(
       .setZone(EXPENSE_OVERVIEW_TIME_ZONE)
       .minus({ days: 1 })
       .toISODate() ?? "";
+  const clientQueueFreshAfter = new Date(
+    now.getTime() - CLIENT_RECEIPT_QUEUE_FRESHNESS_MS,
+  );
 
   const statusCount = sql<number>`count(*)::integer`.mapWith(Number);
   const failureCount = sql<number>`count(*)::integer`.mapWith(Number);
@@ -520,6 +581,7 @@ export async function readExpenseOperationsMonitor(
     retryRows,
     oldestQueuedRows,
     duplicateRows,
+    clientQueueRows,
     pendingApprovalRows,
     reimbursementRows,
     enteredYesterdayAdRows,
@@ -633,6 +695,51 @@ export async function readExpenseOperationsMonitor(
       .where(gte(expenseReceiptCaptures.createdAt, since)),
     db
       .select({
+        freshReportCount:
+          sql<number>`count(*) filter (where ${gte(mobileExpenseQueueHealth.lastReportedAt, clientQueueFreshAfter)})::integer`.mapWith(
+            Number,
+          ),
+        freshDeviceCount:
+          sql<number>`count(distinct ${mobileExpenseQueueHealth.clientDeviceId}) filter (where ${gte(mobileExpenseQueueHealth.lastReportedAt, clientQueueFreshAfter)})::integer`.mapWith(
+            Number,
+          ),
+        queuedCount:
+          sql<number>`coalesce(sum(${mobileExpenseQueueHealth.queuedCount}) filter (where ${gte(mobileExpenseQueueHealth.lastReportedAt, clientQueueFreshAfter)}), 0)::bigint`.mapWith(
+            Number,
+          ),
+        failedCount:
+          sql<number>`coalesce(sum(${mobileExpenseQueueHealth.failedCount}) filter (where ${gte(mobileExpenseQueueHealth.lastReportedAt, clientQueueFreshAfter)}), 0)::bigint`.mapWith(
+            Number,
+          ),
+        freshReportsWithQueued:
+          sql<number>`count(*) filter (where ${and(gte(mobileExpenseQueueHealth.lastReportedAt, clientQueueFreshAfter), gt(mobileExpenseQueueHealth.queuedCount, 0))})::integer`.mapWith(
+            Number,
+          ),
+        freshReportsWithFailures:
+          sql<number>`count(*) filter (where ${and(gte(mobileExpenseQueueHealth.lastReportedAt, clientQueueFreshAfter), gt(mobileExpenseQueueHealth.failedCount, 0))})::integer`.mapWith(
+            Number,
+          ),
+        oldestQueuedAt: sql<Date | null>`min(${mobileExpenseQueueHealth.oldestQueuedAt}) filter (where ${and(gte(mobileExpenseQueueHealth.lastReportedAt, clientQueueFreshAfter), gt(mobileExpenseQueueHealth.queuedCount, 0))})`,
+        staleReportCount:
+          sql<number>`count(*) filter (where ${lt(mobileExpenseQueueHealth.lastReportedAt, clientQueueFreshAfter)})::integer`.mapWith(
+            Number,
+          ),
+        staleDeviceCount:
+          sql<number>`count(distinct ${mobileExpenseQueueHealth.clientDeviceId}) filter (where ${lt(mobileExpenseQueueHealth.lastReportedAt, clientQueueFreshAfter)})::integer`.mapWith(
+            Number,
+          ),
+        staleReportsWithQueued:
+          sql<number>`count(*) filter (where ${and(lt(mobileExpenseQueueHealth.lastReportedAt, clientQueueFreshAfter), gt(mobileExpenseQueueHealth.queuedCount, 0))})::integer`.mapWith(
+            Number,
+          ),
+        staleReportsWithFailures:
+          sql<number>`count(*) filter (where ${and(lt(mobileExpenseQueueHealth.lastReportedAt, clientQueueFreshAfter), gt(mobileExpenseQueueHealth.failedCount, 0))})::integer`.mapWith(
+            Number,
+          ),
+      })
+      .from(mobileExpenseQueueHealth),
+    db
+      .select({
         count: sql<number>`count(*)::integer`.mapWith(Number),
         amountCents:
           sql<number>`coalesce(sum(${expenses.amount}), 0)::bigint`.mapWith(
@@ -736,6 +843,19 @@ export async function readExpenseOperationsMonitor(
       exactWarnings: 0,
       fuzzyWarnings: 0,
       unresolvedExactWarnings: 0,
+    },
+    clientReceiptQueue: clientQueueRows[0] ?? {
+      freshReportCount: 0,
+      freshDeviceCount: 0,
+      queuedCount: 0,
+      failedCount: 0,
+      freshReportsWithQueued: 0,
+      freshReportsWithFailures: 0,
+      oldestQueuedAt: null,
+      staleReportCount: 0,
+      staleDeviceCount: 0,
+      staleReportsWithQueued: 0,
+      staleReportsWithFailures: 0,
     },
     pendingApprovals: pendingApprovalRows[0] ?? {
       count: 0,
