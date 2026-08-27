@@ -808,3 +808,58 @@ COMMENT ON TABLE "daily_ad_spend" IS
   'Manual authoritative ad-spend registry; absent row means missing, zero means confirmed zero.';
 COMMENT ON TABLE "expense_reimbursement_claims" IS
   'Workflow for reimbursing one existing personal-paid expense without creating another expense.';
+
+-- Materialize V2 capability defaults because persisted permissions, not role
+-- slugs evaluated at request time, are the authorization source of truth.
+UPDATE "team_roles"
+SET "permissions" = (
+      SELECT ARRAY(
+        SELECT DISTINCT permission
+        FROM unnest(
+          coalesce("permissions", ARRAY[]::text[])
+          || CASE lower(trim("slug"))
+               WHEN 'owner' THEN ARRAY[
+                 'expenses.submit', 'expenses.approve',
+                 'financials.read', 'ad_spend.write'
+               ]::text[]
+               WHEN 'office' THEN ARRAY['expenses.submit']::text[]
+               WHEN 'crew' THEN ARRAY['expenses.submit']::text[]
+               ELSE ARRAY[]::text[]
+             END
+        ) AS permission
+        ORDER BY permission
+      )
+    ),
+    "updated_at" = now()
+WHERE lower(trim("slug")) IN ('owner', 'office', 'crew');
+
+-- Preserve direct legacy grants/denies when write authority is split. This
+-- intentionally does not grant approval, overview, or ad-spend authority.
+UPDATE "team_members"
+SET "permissions_grant" = (
+      SELECT ARRAY(
+        SELECT DISTINCT permission
+        FROM unnest(
+          coalesce("permissions_grant", ARRAY[]::text[])
+          || ARRAY['expenses.submit']::text[]
+        ) AS permission
+        ORDER BY permission
+      )
+    ),
+    "updated_at" = now()
+WHERE 'expenses.write' = ANY(coalesce("permissions_grant", ARRAY[]::text[]));
+
+UPDATE "team_members"
+SET "permissions_deny" = (
+      SELECT ARRAY(
+        SELECT DISTINCT permission
+        FROM unnest(
+          coalesce("permissions_deny", ARRAY[]::text[])
+          || ARRAY['expenses.submit']::text[]
+        ) AS permission
+        ORDER BY permission
+      )
+    ),
+    "updated_at" = now()
+WHERE 'expenses.write' = ANY(coalesce("permissions_deny", ARRAY[]::text[]))
+   OR 'expenses.*' = ANY(coalesce("permissions_deny", ARRAY[]::text[]));

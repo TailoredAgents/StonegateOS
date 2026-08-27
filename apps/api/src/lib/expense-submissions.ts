@@ -526,6 +526,7 @@ export async function createExpenseSubmissionInTransaction(
   input: {
     submission: ExpenseSubmissionInput;
     actorId: string;
+    submittedById?: string;
     canApprove: boolean;
     source: ExpenseSubmissionSource;
     receiptCaptureId?: string | null;
@@ -565,7 +566,7 @@ export async function createExpenseSubmissionInTransaction(
       memo: input.submission.notes,
       method: input.submission.method,
       source: input.source,
-      submittedBy: input.actorId,
+      submittedBy: input.submittedById ?? input.actorId,
       payerType: input.submission.payerType,
       paidByMemberId: input.submission.paidByMemberId,
       reviewStatus,
