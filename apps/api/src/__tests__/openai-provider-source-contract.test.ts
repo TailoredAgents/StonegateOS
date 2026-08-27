@@ -40,7 +40,13 @@ describe("OpenAI provider source and E2E contracts", () => {
       .filter((file) =>
         readFileSync(file, "utf8").includes("resolveOpenAiApiEndpoint"),
       );
-    expect(callSiteFiles).toHaveLength(18);
+    expect(callSiteFiles).toHaveLength(19);
+    expect(callSiteFiles).toContain(
+      join(
+        REPOSITORY_ROOT,
+        "apps/api/src/lib/expense-receipt-openai.ts",
+      ),
+    );
   });
 
   it("wires the loopback-only fake into Compose and every E2E environment", () => {

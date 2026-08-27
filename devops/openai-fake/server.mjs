@@ -146,6 +146,8 @@ function chooseString(key, schema) {
     value = "customer@example.test";
   } else if (/phone/u.test(lowerKey)) {
     value = "+15555550123";
+  } else if (schema.pattern === "^[0-9]{4}$") {
+    value = "4242";
   } else if (schema.format === "date-time") {
     value = "2026-08-08T12:00:00.000Z";
   } else if (schema.format === "date") {

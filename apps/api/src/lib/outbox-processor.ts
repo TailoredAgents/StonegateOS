@@ -148,6 +148,7 @@ import {
   getTwilioWebhookPublicBaseUrl,
 } from "@/lib/twilio-webhook-auth";
 import { buildLegacyOutboxProviderRequestKey } from "@/lib/outbox-provider-request-key";
+import { processExpenseReceiptAnalysisOutbox } from "@/lib/expense-receipt-captures";
 import {
   finalizeSalesEscalationCallAttempt,
   prepareSalesEscalationCallAttempt,
@@ -295,6 +296,7 @@ function outcomeForOutboxHandlerError(
     // target the already-persisted ID. Both operations therefore converge on
     // retry instead of treating an ambiguous provider response as success.
     event.type === "appointment.calendar_sync_requested" ||
+    (event.type === "expense.receipt.analyze" && attempt < 5) ||
     (event.type.startsWith("facebook.") && attempt < 5) ||
     event.type.startsWith("call.recording.");
   console.warn("[outbox] handler_error", {
@@ -3626,6 +3628,21 @@ async function handleOutboxEvent(
   event: OutboxEventRecord,
 ): Promise<OutboxOutcome> {
   switch (event.type) {
+    case "expense.receipt.analyze": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const captureId = readStringValue(payload?.["captureId"]);
+      if (!captureId) {
+        return {
+          status: "skipped",
+          error: "expense_receipt_capture_id_missing",
+        };
+      }
+      return processExpenseReceiptAnalysisOutbox({
+        captureId,
+        priorAttempts: event.attempts ?? 0,
+      });
+    }
+
     case "staff_notification.dispatch": {
       if (getTeamOperationKillSwitchForRisk("external") === "external_sends") {
         return {

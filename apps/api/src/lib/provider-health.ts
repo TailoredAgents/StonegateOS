@@ -7,6 +7,7 @@ export type ProviderName =
   | "meta_ads"
   | "google_ads"
   | "google_ads_analyst"
+  | "openai_expense_receipts"
   | "traccar"
   | "square"
   | "object_storage";

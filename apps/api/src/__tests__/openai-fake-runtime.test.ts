@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
+import { ExpenseReceiptExtractionSchema } from "@/lib/expense-receipt-domain";
+import { EXPENSE_RECEIPT_EXTRACTION_JSON_SCHEMA } from "@/lib/expense-receipt-openai";
 
 const REPOSITORY_ROOT = resolve(process.cwd(), "../..");
 const port = 43_200 + (process.pid % 1_000);
@@ -67,6 +69,50 @@ beforeEach(async () => {
 });
 
 describe("local OpenAI fake runtime", () => {
+  it("returns a valid strict receipt extraction without retaining image data", async () => {
+    const imageMarker = "private-receipt-image-must-not-be-captured";
+    const response = await fetch(`${origin}/v1/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-e2e",
+        store: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_image",
+                image_url: `data:image/jpeg;base64,${imageMarker}`,
+              },
+            ],
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "expense_receipt_extraction",
+            strict: true,
+            schema: EXPENSE_RECEIPT_EXTRACTION_JSON_SCHEMA,
+          },
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as { output_text: string };
+    expect(
+      ExpenseReceiptExtractionSchema.safeParse(
+        JSON.parse(payload.output_text) as unknown,
+      ).success,
+    ).toBe(true);
+
+    const captures = await fetch(`${origin}/__control/requests`).then(
+      (result) => result.json() as Promise<{ requests: unknown[] }>,
+    );
+    expect(JSON.stringify(captures)).not.toContain(imageMarker);
+    expect(stdout).not.toContain(imageMarker);
+  });
+
   it("returns Responses API text and schema-shaped output without capturing prompts or secrets", async () => {
     const secret = "sk-this-must-never-be-captured";
     const prompt = "customer-private-prompt-must-not-be-captured";
