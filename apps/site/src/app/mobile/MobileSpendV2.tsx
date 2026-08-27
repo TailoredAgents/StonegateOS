@@ -339,6 +339,7 @@ function ExpenseEditor({
   canApprove,
   initial,
   attentionFields = [],
+  vendorPrimary = false,
   duplicateRisk = null,
   submitting,
   submitLabel,
@@ -358,6 +359,7 @@ function ExpenseEditor({
     method: string;
   }>;
   attentionFields?: string[];
+  vendorPrimary?: boolean;
   duplicateRisk?: "exact" | "fuzzy" | null;
   submitting: boolean;
   submitLabel: string;
@@ -402,6 +404,20 @@ function ExpenseEditor({
   const idempotencyKey = React.useMemo(
     () => mutationKeyForPayload(submissionFingerprint),
     [submissionFingerprint],
+  );
+  const vendorField = (
+    <label className="block">
+      <FieldLabel>
+        Vendor {attentionFields.includes("vendor") ? <AttentionBadge /> : null}
+      </FieldLabel>
+      <input
+        value={vendor}
+        onChange={(event) => setVendor(event.target.value)}
+        maxLength={240}
+        className={controlClass}
+        placeholder="Optional"
+      />
+    </label>
   );
 
   const enableSplits = () => {
@@ -519,6 +535,8 @@ function ExpenseEditor({
           }
         />
       ) : null}
+
+      {vendorPrimary ? vendorField : null}
 
       <label className="block">
         <FieldLabel>
@@ -644,19 +662,7 @@ function ExpenseEditor({
           More details
         </summary>
         <div className="mt-3 space-y-3 border-t border-white/10 pt-3">
-          <label className="block">
-            <FieldLabel>
-              Vendor{" "}
-              {attentionFields.includes("vendor") ? <AttentionBadge /> : null}
-            </FieldLabel>
-            <input
-              value={vendor}
-              onChange={(event) => setVendor(event.target.value)}
-              maxLength={240}
-              className={controlClass}
-              placeholder="Optional"
-            />
-          </label>
+          {vendorPrimary ? null : vendorField}
           <label className="block">
             <FieldLabel>Notes</FieldLabel>
             <textarea
@@ -1285,6 +1291,7 @@ function ReceiptWorkflow({
         canApprove={canApprove}
         initial={extracted.initial}
         attentionFields={extracted.attention}
+        vendorPrimary
         duplicateRisk={extracted.duplicateRisk}
         submitting={busy}
         submitLabel={canApprove ? "Post expense" : "Submit for approval"}

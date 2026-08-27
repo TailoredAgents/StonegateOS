@@ -98,6 +98,18 @@ void test("Spend V2 keeps the locked navigation and offline-store contracts", as
   assert.match(component, /min-h-11/u);
   assert.match(component, /Submit for approval/u);
   assert.match(component, /Reimbursement/u);
+  assert.match(component, /vendorPrimary\?: boolean/u);
+  assert.match(component, /vendorPrimary = false,/u);
+  assert.match(component, /\{vendorPrimary \? vendorField : null\}/u);
+  assert.match(component, /\{vendorPrimary \? null : vendorField\}/u);
+  assert.match(
+    component,
+    /attentionFields=\{extracted\.attention\}\s+vendorPrimary\s+duplicateRisk=/u,
+  );
+  assert.match(
+    component,
+    /const vendorField = \([\s\S]*?attentionFields\.includes\("vendor"\) \? <AttentionBadge \/> : null/u,
+  );
   assert.doesNotMatch(component, /pie chart/iu);
   assert.match(session, /"expenses\.submit"/u);
   assert.match(session, /"expenses\.approve"/u);
