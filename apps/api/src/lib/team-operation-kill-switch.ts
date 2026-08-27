@@ -27,6 +27,9 @@ const KILL_SWITCH_PERMISSIONS: ReadonlyArray<{
     category: "financial_mutations",
     env: "TEAM_KILL_FINANCIAL_MUTATIONS",
     permissions: new Set([
+      "ad_spend.write",
+      "expenses.approve",
+      "expenses.submit",
       "expenses.write",
       "payments.collect",
       "payments.manage",
@@ -49,7 +52,7 @@ const KILL_SWITCH_PERMISSIONS: ReadonlyArray<{
   {
     category: "advertising_changes",
     env: "TEAM_KILL_ADVERTISING_CHANGES",
-    permissions: new Set(["marketing.apply"]),
+    permissions: new Set(["ad_spend.write", "marketing.apply"]),
   },
   {
     category: "publishing",

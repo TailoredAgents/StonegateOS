@@ -102,15 +102,27 @@ describe("Access role templates", () => {
       label: "Resolve payment mismatches",
       sensitive: true,
     });
+    expect(describeAccessPermission("expenses.submit")).toEqual({
+      label: "Submit expenses for review",
+      sensitive: true,
+    });
+    expect(describeAccessPermission("expenses.approve")).toEqual({
+      label: "Approve submitted expenses",
+      sensitive: true,
+    });
+    expect(describeAccessPermission("financials.read")).toEqual({
+      label: "View expense financial overview",
+      sensitive: true,
+    });
+    expect(describeAccessPermission("ad_spend.write")).toEqual({
+      label: "Enter daily ad spend",
+      sensitive: true,
+    });
   });
 
   it("requires explicit application and review with accessible feedback", () => {
-    expect(ROLE_FORM).toContain(
-      'pattern={"[A-Za-z][A-Za-z0-9_\\\\-]{1,63}"}',
-    );
-    expect(ROLE_FORM).not.toContain(
-      'pattern="[A-Za-z][A-Za-z0-9_-]{1,63}"',
-    );
+    expect(ROLE_FORM).toContain('pattern={"[A-Za-z][A-Za-z0-9_\\\\-]{1,63}"}');
+    expect(ROLE_FORM).not.toContain('pattern="[A-Za-z][A-Za-z0-9_-]{1,63}"');
     expect(ROLE_FORM).toContain('type="button"');
     expect(ROLE_FORM).toContain("Apply selected template");
     expect(ROLE_FORM).toContain("never grants access until");

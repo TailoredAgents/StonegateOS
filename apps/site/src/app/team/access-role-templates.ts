@@ -6,6 +6,7 @@ import {
 
 const PERMISSION_GROUP_LABELS: Readonly<Record<string, string>> = {
   access: "Access and team",
+  ad_spend: "Daily ad spend",
   appointments: "Appointments",
   appointment_media: "Appointment media",
   audit: "Audit",
@@ -16,6 +17,7 @@ const PERMISSION_GROUP_LABELS: Readonly<Record<string, string>> = {
   contacts: "Contacts",
   expenses: "Expenses",
   finance: "Finance",
+  financials: "Expense overview",
   marketing: "Marketing",
   messages: "Messaging",
   outbox: "Provider delivery",
@@ -31,6 +33,7 @@ const PERMISSION_GROUP_LABELS: Readonly<Record<string, string>> = {
 
 const PERMISSION_OBJECT_LABELS: Readonly<Record<string, string>> = {
   access: "team access",
+  ad_spend: "daily ad spend",
   appointments: "appointments",
   appointment_media: "appointment media",
   audit: "audit history",
@@ -41,6 +44,7 @@ const PERMISSION_OBJECT_LABELS: Readonly<Record<string, string>> = {
   contacts: "contacts",
   expenses: "expenses",
   finance: "financial reports",
+  financials: "expense financial overview",
   marketing: "marketing",
   messages: "conversations",
   outbox: "provider operations",
@@ -82,6 +86,7 @@ const PERMISSION_ACTION_LABELS: Readonly<Record<string, string>> = {
 };
 
 const PERMISSION_LABEL_OVERRIDES: Readonly<Record<string, string>> = {
+  "ad_spend.write": "Enter daily ad spend",
   "appointment_media.capture": "Capture appointment photos and media",
   "appointment_media.manage": "Manage appointment photos and media",
   "appointments.override_conflicts": "Override appointment conflicts",
@@ -90,6 +95,9 @@ const PERMISSION_LABEL_OVERRIDES: Readonly<Record<string, string>> = {
   "calls.reconcile": "Resolve uncertain call outcomes",
   "commissions.pay": "Mark commission payouts paid",
   "contacts.merge": "Merge duplicate contacts",
+  "expenses.approve": "Approve submitted expenses",
+  "expenses.submit": "Submit expenses for review",
+  "financials.read": "View expense financial overview",
   "messages.export": "Export customer conversations",
   "messages.delete": "Delete conversation messages",
   "messages.send": "Send customer messages",
@@ -107,6 +115,7 @@ const PERMISSION_LABEL_OVERRIDES: Readonly<Record<string, string>> = {
 
 const SENSITIVE_PERMISSIONS: ReadonlySet<string> = new Set([
   "access.manage",
+  "ad_spend.write",
   "appointments.override_conflicts",
   "audit.export",
   "automation.write",
@@ -116,6 +125,9 @@ const SENSITIVE_PERMISSIONS: ReadonlySet<string> = new Set([
   "contacts.delete",
   "contacts.merge",
   "expenses.export",
+  "expenses.approve",
+  "expenses.submit",
+  "financials.read",
   "marketing.apply",
   "marketing.publish",
   "messages.delete",

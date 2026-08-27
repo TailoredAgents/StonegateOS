@@ -51,6 +51,47 @@ describe("team role permissions", () => {
     ]);
   });
 
+  it("scopes the Expense Tracking V2 permissions to submitters and full-access owners", () => {
+    const owner = computeEffectivePermissions({
+      rolePermissions: getDefaultPermissionsForRole("owner"),
+      grant: [],
+      deny: [],
+    });
+    const office = getDefaultPermissionsForRole("office");
+    const crew = getDefaultPermissionsForRole("crew");
+    const sales = getDefaultPermissionsForRole("sales");
+    const readOnly = getDefaultPermissionsForRole("read_only");
+    const privilegedExpensePermissions = [
+      "expenses.approve",
+      "financials.read",
+      "ad_spend.write",
+    ];
+
+    expect(owner).toEqual(
+      expect.arrayContaining([
+        "expenses.submit",
+        "expenses.approve",
+        "financials.read",
+        "ad_spend.write",
+      ]),
+    );
+    expect(office).toContain("expenses.submit");
+    expect(crew).toEqual(
+      expect.arrayContaining([
+        "expenses.read",
+        "expenses.write",
+        "expenses.submit",
+      ]),
+    );
+    for (const permissions of [office, crew, sales, readOnly]) {
+      expect(permissions).toEqual(
+        expect.not.arrayContaining(privilegedExpensePermissions),
+      );
+    }
+    expect(sales).not.toContain("expenses.submit");
+    expect(readOnly).not.toContain("expenses.submit");
+  });
+
   it("grants appointment media and payment collection by role", () => {
     const office = getDefaultPermissionsForRole("office");
     const sales = getDefaultPermissionsForRole("sales");
@@ -198,6 +239,10 @@ describe("team role permissions", () => {
         "partners.invite",
         "partners.rates",
         "finance.read",
+        "financials.read",
+        "ad_spend.write",
+        "expenses.submit",
+        "expenses.approve",
         "commissions.read",
         "commissions.manage",
         "commissions.pay",
@@ -312,6 +357,15 @@ describe("team role permissions", () => {
       expect(getTeamOperationKillSwitch(["expenses.write"])).toBe(
         "financial_mutations",
       );
+      expect(getTeamOperationKillSwitch(["expenses.submit"])).toBe(
+        "financial_mutations",
+      );
+      expect(getTeamOperationKillSwitch(["expenses.approve"])).toBe(
+        "financial_mutations",
+      );
+      expect(getTeamOperationKillSwitch(["ad_spend.write"])).toBe(
+        "financial_mutations",
+      );
       expect(getTeamOperationKillSwitch(["commissions.manage"])).toBe(
         "financial_mutations",
       );
@@ -324,6 +378,11 @@ describe("team role permissions", () => {
       expect(getTeamOperationKillSwitch(["marketing.apply"])).toBe(
         "advertising_changes",
       );
+      process.env["TEAM_KILL_FINANCIAL_MUTATIONS"] = "0";
+      expect(getTeamOperationKillSwitch(["ad_spend.write"])).toBe(
+        "advertising_changes",
+      );
+      process.env["TEAM_KILL_FINANCIAL_MUTATIONS"] = "true";
       expect(getTeamOperationKillSwitch(["marketing.publish"])).toBe(
         "publishing",
       );
