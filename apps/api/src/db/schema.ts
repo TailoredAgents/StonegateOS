@@ -17,6 +17,7 @@ import {
   doublePrecision,
   customType,
   check,
+  date,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
@@ -50,6 +51,37 @@ export const expenseLifecycleStatusEnum = pgEnum("expense_lifecycle_status", [
   "posted",
   "voided",
   "corrected",
+]);
+export const expenseReviewStatusEnum = pgEnum("expense_review_status", [
+  "draft",
+  "pending",
+  "approved",
+  "rejected",
+]);
+export const expensePayerTypeEnum = pgEnum("expense_payer_type", [
+  "company",
+  "personal",
+]);
+export const expenseReceiptCaptureStatusEnum = pgEnum(
+  "expense_receipt_capture_status",
+  [
+    "pending_upload",
+    "uploaded",
+    "queued",
+    "analyzing",
+    "ready",
+    "failed",
+    "confirmed",
+    "discarded",
+  ],
+);
+export const expenseReimbursementStatusEnum = pgEnum(
+  "expense_reimbursement_status",
+  ["pending", "approved", "attached", "paid", "rejected"],
+);
+export const dailyAdPlatformEnum = pgEnum("daily_ad_platform", [
+  "facebook",
+  "google",
 ]);
 
 export type AppointmentLeadSourceType =
@@ -5441,6 +5473,150 @@ export const plaidTransactions = pgTable(
   }),
 );
 
+/** Stable accounting categories used by Expense Tracking V2. */
+export const expenseCategories = pgTable(
+  "expense_categories",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    sortOrder: integer("sort_order").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    isLegacy: boolean("is_legacy").default(false).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    nameKey: uniqueIndex("expense_categories_name_key").on(table.name),
+    activeSortIdx: index("expense_categories_active_sort_idx").on(
+      table.isActive,
+      table.sortOrder,
+    ),
+    idCheck: check(
+      "expense_categories_id_check",
+      sql`${table.id} ~ '^[a-z][a-z0-9_]{1,63}$'`,
+    ),
+  }),
+);
+
+/** Normalized historical and user-facing labels mapped to stable categories. */
+export const expenseCategoryAliases = pgTable(
+  "expense_category_aliases",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => expenseCategories.id, { onDelete: "restrict" }),
+    alias: text("alias").notNull(),
+    normalizedAlias: text("normalized_alias").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    normalizedAliasKey: uniqueIndex(
+      "expense_category_aliases_normalized_key",
+    ).on(table.normalizedAlias),
+    categoryIdx: index("expense_category_aliases_category_idx").on(
+      table.categoryId,
+    ),
+    normalizedAliasCheck: check(
+      "expense_category_aliases_normalized_check",
+      sql`${table.normalizedAlias} = lower(btrim(${table.normalizedAlias})) AND length(${table.normalizedAlias}) > 0`,
+    ),
+  }),
+);
+
+/**
+ * Private-object receipt intake record. Object keys are stored here while the
+ * receipt bytes remain in R2; legacy data URLs continue to live on expenses
+ * until their separate verified migration.
+ */
+export const expenseReceiptCaptures = pgTable(
+  "expense_receipt_captures",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    submittedBy: uuid("submitted_by")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    status: expenseReceiptCaptureStatusEnum("status")
+      .default("pending_upload")
+      .notNull(),
+    storageProvider: text("storage_provider").default("r2").notNull(),
+    originalObjectKey: text("original_object_key").notNull(),
+    normalizedObjectKey: text("normalized_object_key"),
+    filename: text("filename").notNull(),
+    declaredContentType: text("declared_content_type").notNull(),
+    verifiedContentType: text("verified_content_type"),
+    byteLength: integer("byte_length"),
+    sha256: varchar("sha256", { length: 64 }),
+    uploadExpiresAt: timestamp("upload_expires_at", {
+      withTimezone: true,
+    }).notNull(),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }),
+    analysisQueuedAt: timestamp("analysis_queued_at", { withTimezone: true }),
+    analysisStartedAt: timestamp("analysis_started_at", {
+      withTimezone: true,
+    }),
+    analysisCompletedAt: timestamp("analysis_completed_at", {
+      withTimezone: true,
+    }),
+    analysisModel: text("analysis_model"),
+    extraction: jsonb("extraction").$type<Record<string, unknown> | null>(),
+    analysisWarnings: jsonb("analysis_warnings").$type<string[] | null>(),
+    failureCode: text("failure_code"),
+    failureMessage: text("failure_message"),
+    exactDuplicateOfCaptureId: uuid("exact_duplicate_of_capture_id"),
+    duplicateOverrideReason: text("duplicate_override_reason"),
+    duplicateOverrideBy: uuid("duplicate_override_by").references(
+      () => teamMembers.id,
+      { onDelete: "set null" },
+    ),
+    duplicateOverrideAt: timestamp("duplicate_override_at", {
+      withTimezone: true,
+    }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    discardedAt: timestamp("discarded_at", { withTimezone: true }),
+    version: integer("version").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    objectKey: uniqueIndex("expense_receipt_captures_object_key").on(
+      table.originalObjectKey,
+    ),
+    submitterCreatedIdx: index(
+      "expense_receipt_captures_submitter_created_idx",
+    ).on(table.submittedBy, table.createdAt),
+    statusUpdatedIdx: index("expense_receipt_captures_status_updated_idx").on(
+      table.status,
+      table.updatedAt,
+    ),
+    hashIdx: index("expense_receipt_captures_sha256_idx").on(table.sha256),
+    hashCheck: check(
+      "expense_receipt_captures_sha256_check",
+      sql`${table.sha256} IS NULL OR ${table.sha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+    byteLengthCheck: check(
+      "expense_receipt_captures_byte_length_check",
+      sql`${table.byteLength} IS NULL OR ${table.byteLength} BETWEEN 1 AND 10485760`,
+    ),
+    versionCheck: check(
+      "expense_receipt_captures_version_check",
+      sql`${table.version} >= 1`,
+    ),
+  }),
+);
+
 export const expenses = pgTable(
   "expenses",
   {
@@ -5448,10 +5624,38 @@ export const expenses = pgTable(
     amount: integer("amount_cents").notNull(),
     currency: varchar("currency", { length: 8 }).default("USD").notNull(),
     category: text("category"),
+    categoryId: text("category_id").references(() => expenseCategories.id, {
+      onDelete: "restrict",
+    }),
+    categoryNeedsReview: boolean("category_needs_review")
+      .default(false)
+      .notNull(),
     vendor: text("vendor"),
     memo: text("memo"),
     method: text("method"),
     source: text("source").default("manual").notNull(),
+    submittedBy: uuid("submitted_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    payerType: expensePayerTypeEnum("payer_type").default("company").notNull(),
+    paidByMemberId: uuid("paid_by_member_id").references(() => teamMembers.id, {
+      onDelete: "restrict",
+    }),
+    reviewStatus: expenseReviewStatusEnum("review_status")
+      .default("approved")
+      .notNull(),
+    reviewedBy: uuid("reviewed_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }).defaultNow(),
+    reviewReason: text("review_reason"),
+    receiptCaptureId: uuid("receipt_capture_id").references(
+      () => expenseReceiptCaptures.id,
+      { onDelete: "restrict" },
+    ),
+    appointmentId: uuid("appointment_id").references(() => appointments.id, {
+      onDelete: "set null",
+    }),
     paidAt: timestamp("paid_at", { withTimezone: true }).defaultNow().notNull(),
     coverageStartAt: timestamp("coverage_start_at", { withTimezone: true }),
     coverageEndAt: timestamp("coverage_end_at", { withTimezone: true }),
@@ -5498,6 +5702,22 @@ export const expenses = pgTable(
     lifecycleStatusIdx: index("expenses_lifecycle_status_idx").on(
       table.lifecycleStatus,
     ),
+    categoryIdIdx: index("expenses_category_id_idx").on(table.categoryId),
+    submitterPaidAtIdx: index("expenses_submitter_paid_at_idx").on(
+      table.submittedBy,
+      table.paidAt,
+    ),
+    reviewStatusCreatedIdx: index("expenses_review_status_created_idx").on(
+      table.reviewStatus,
+      table.createdAt,
+    ),
+    paidByMemberIdx: index("expenses_paid_by_member_idx").on(
+      table.paidByMemberId,
+    ),
+    receiptCaptureKey: uniqueIndex("expenses_receipt_capture_key").on(
+      table.receiptCaptureId,
+    ),
+    appointmentIdx: index("expenses_appointment_idx").on(table.appointmentId),
     reversalOfIdx: uniqueIndex("expenses_reversal_of_key").on(
       table.reversalOfExpenseId,
     ),
@@ -5524,9 +5744,218 @@ export const expenses = pgTable(
       "expenses_amount_direction_check",
       sql`(${table.reversalOfExpenseId} IS NULL AND ${table.amount} > 0) OR (${table.reversalOfExpenseId} IS NOT NULL AND ${table.amount} < 0)`,
     ),
+    payerShapeCheck: check(
+      "expenses_payer_shape_check",
+      sql`(${table.payerType} = 'company' AND ${table.paidByMemberId} IS NULL) OR (${table.payerType} = 'personal' AND ${table.paidByMemberId} IS NOT NULL)`,
+    ),
+    reviewShapeCheck: check(
+      "expenses_review_shape_check",
+      sql`(${table.reviewStatus} IN ('draft', 'pending') AND ${table.reviewedAt} IS NULL AND ${table.reviewedBy} IS NULL) OR (${table.reviewStatus} IN ('approved', 'rejected') AND ${table.reviewedAt} IS NOT NULL)`,
+    ),
     lifecycleTimelineCheck: check(
       "expenses_lifecycle_timeline_check",
-      sql`(${table.lifecycleStatus} = 'draft' AND ${table.postedAt} IS NULL AND ${table.postedBy} IS NULL AND ${table.voidedAt} IS NULL AND ${table.voidedBy} IS NULL AND ${table.voidReason} IS NULL AND ${table.correctedAt} IS NULL AND ${table.correctedBy} IS NULL AND ${table.correctionReason} IS NULL AND ${table.reversalOfExpenseId} IS NULL AND ${table.correctionOfExpenseId} IS NULL AND ${table.correctedByExpenseId} IS NULL) OR (${table.lifecycleStatus} = 'posted' AND ${table.postedAt} IS NOT NULL AND ${table.voidedAt} IS NULL AND ${table.voidedBy} IS NULL AND ${table.voidReason} IS NULL AND ${table.correctedAt} IS NULL AND ${table.correctedBy} IS NULL AND ${table.correctionReason} IS NULL AND ${table.correctedByExpenseId} IS NULL) OR (${table.lifecycleStatus} = 'voided' AND ${table.postedAt} IS NOT NULL AND ${table.voidedAt} IS NOT NULL AND ${table.voidReason} IS NOT NULL AND ${table.correctedAt} IS NULL AND ${table.correctedBy} IS NULL AND ${table.correctionReason} IS NULL AND ${table.reversalOfExpenseId} IS NULL AND ${table.correctedByExpenseId} IS NULL) OR (${table.lifecycleStatus} = 'corrected' AND ${table.postedAt} IS NOT NULL AND ${table.voidedAt} IS NULL AND ${table.voidedBy} IS NULL AND ${table.voidReason} IS NULL AND ${table.correctedAt} IS NOT NULL AND ${table.correctionReason} IS NOT NULL AND ${table.reversalOfExpenseId} IS NULL AND ${table.correctedByExpenseId} IS NOT NULL)`,
+      sql`(${table.lifecycleStatus} = 'draft' AND ${table.postedAt} IS NULL AND ${table.postedBy} IS NULL AND ${table.voidedAt} IS NULL AND ${table.voidedBy} IS NULL AND ${table.voidReason} IS NULL AND ${table.correctedAt} IS NULL AND ${table.correctedBy} IS NULL AND ${table.correctionReason} IS NULL AND ${table.correctedByExpenseId} IS NULL AND ((${table.reversalOfExpenseId} IS NULL AND ${table.correctionOfExpenseId} IS NULL) OR ${table.source} = 'manual_correction')) OR (${table.lifecycleStatus} = 'posted' AND ${table.postedAt} IS NOT NULL AND ${table.voidedAt} IS NULL AND ${table.voidedBy} IS NULL AND ${table.voidReason} IS NULL AND ${table.correctedAt} IS NULL AND ${table.correctedBy} IS NULL AND ${table.correctionReason} IS NULL AND ${table.correctedByExpenseId} IS NULL) OR (${table.lifecycleStatus} = 'voided' AND ${table.postedAt} IS NOT NULL AND ${table.voidedAt} IS NOT NULL AND ${table.voidReason} IS NOT NULL AND ${table.correctedAt} IS NULL AND ${table.correctedBy} IS NULL AND ${table.correctionReason} IS NULL AND ${table.reversalOfExpenseId} IS NULL AND ${table.correctedByExpenseId} IS NULL) OR (${table.lifecycleStatus} = 'corrected' AND ${table.postedAt} IS NOT NULL AND ${table.voidedAt} IS NULL AND ${table.voidedBy} IS NULL AND ${table.voidReason} IS NULL AND ${table.correctedAt} IS NOT NULL AND ${table.correctionReason} IS NOT NULL AND ${table.reversalOfExpenseId} IS NULL AND ${table.correctedByExpenseId} IS NOT NULL)`,
+    ),
+  }),
+);
+
+/** Signed category allocations; the deferred database constraint keeps totals exact. */
+export const expenseAllocations = pgTable(
+  "expense_allocations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    expenseId: uuid("expense_id")
+      .notNull()
+      .references(() => expenses.id, { onDelete: "restrict" }),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => expenseCategories.id, { onDelete: "restrict" }),
+    amountCents: integer("amount_cents").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    expenseCategoryKey: uniqueIndex(
+      "expense_allocations_expense_category_key",
+    ).on(table.expenseId, table.categoryId),
+    categoryExpenseIdx: index("expense_allocations_category_expense_idx").on(
+      table.categoryId,
+      table.expenseId,
+    ),
+    amountCheck: check(
+      "expense_allocations_amount_check",
+      sql`${table.amountCents} <> 0`,
+    ),
+  }),
+);
+
+/** Aggregated approval feedback used for deterministic vendor/category learning. */
+export const expenseVendorCategoryRules = pgTable(
+  "expense_vendor_category_rules",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    normalizedVendor: text("normalized_vendor").notNull(),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => expenseCategories.id, { onDelete: "restrict" }),
+    confirmationCount: integer("confirmation_count").default(0).notNull(),
+    disagreementCount: integer("disagreement_count").default(0).notNull(),
+    ownerLocked: boolean("owner_locked").default(false).notNull(),
+    lockedBy: uuid("locked_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    vendorCategoryKey: uniqueIndex(
+      "expense_vendor_category_rules_vendor_category_key",
+    ).on(table.normalizedVendor, table.categoryId),
+    vendorIdx: index("expense_vendor_category_rules_vendor_idx").on(
+      table.normalizedVendor,
+    ),
+    ownerLockKey: uniqueIndex("expense_vendor_category_rules_owner_lock_key")
+      .on(table.normalizedVendor)
+      .where(sql`${table.ownerLocked} = true`),
+    countsCheck: check(
+      "expense_vendor_category_rules_counts_check",
+      sql`${table.confirmationCount} >= 0 AND ${table.disagreementCount} >= 0`,
+    ),
+    lockShapeCheck: check(
+      "expense_vendor_category_rules_lock_shape_check",
+      sql`(${table.ownerLocked} = false AND ${table.lockedAt} IS NULL) OR (${table.ownerLocked} = true AND ${table.lockedAt} IS NOT NULL)`,
+    ),
+  }),
+);
+
+/** Manual accounting truth for daily Meta and Google advertising spend. */
+export const dailyAdSpend = pgTable(
+  "daily_ad_spend",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    platform: dailyAdPlatformEnum("platform").notNull(),
+    businessDate: date("business_date", { mode: "string" }).notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    currentExpenseId: uuid("current_expense_id").references(() => expenses.id, {
+      onDelete: "restrict",
+    }),
+    enteredBy: uuid("entered_by")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    version: integer("version").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    platformDateKey: uniqueIndex("daily_ad_spend_platform_date_key").on(
+      table.platform,
+      table.businessDate,
+    ),
+    dateIdx: index("daily_ad_spend_date_idx").on(table.businessDate),
+    expenseKey: uniqueIndex("daily_ad_spend_current_expense_key").on(
+      table.currentExpenseId,
+    ),
+    amountCheck: check(
+      "daily_ad_spend_amount_check",
+      sql`${table.amountCents} >= 0`,
+    ),
+    pointerCheck: check(
+      "daily_ad_spend_pointer_check",
+      sql`(${table.amountCents} = 0 AND ${table.currentExpenseId} IS NULL) OR (${table.amountCents} > 0 AND ${table.currentExpenseId} IS NOT NULL)`,
+    ),
+    versionCheck: check(
+      "daily_ad_spend_version_check",
+      sql`${table.version} >= 1`,
+    ),
+  }),
+);
+
+/**
+ * Reimbursement workflow state for an existing personal-paid expense. The
+ * payout adjustment points back to this same expense and never creates a
+ * second ledger expense.
+ */
+export const expenseReimbursementClaims = pgTable(
+  "expense_reimbursement_claims",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    expenseId: uuid("expense_id")
+      .notNull()
+      .references(() => expenses.id, { onDelete: "restrict" }),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    amountCents: integer("amount_cents").notNull(),
+    status: expenseReimbursementStatusEnum("status")
+      .default("pending")
+      .notNull(),
+    reviewedBy: uuid("reviewed_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewReason: text("review_reason"),
+    payoutRunId: uuid("payout_run_id").references(() => payoutRuns.id, {
+      onDelete: "restrict",
+    }),
+    payoutAdjustmentId: uuid("payout_adjustment_id").references(
+      () => payoutRunAdjustments.id,
+      { onDelete: "restrict" },
+    ),
+    attachedAt: timestamp("attached_at", { withTimezone: true }),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+    version: integer("version").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    expenseKey: uniqueIndex("expense_reimbursement_claims_expense_key").on(
+      table.expenseId,
+    ),
+    adjustmentKey: uniqueIndex(
+      "expense_reimbursement_claims_adjustment_key",
+    ).on(table.payoutAdjustmentId),
+    memberStatusIdx: index("expense_reimbursement_claims_member_status_idx").on(
+      table.memberId,
+      table.status,
+    ),
+    statusCreatedIdx: index(
+      "expense_reimbursement_claims_status_created_idx",
+    ).on(table.status, table.createdAt),
+    amountCheck: check(
+      "expense_reimbursement_claims_amount_check",
+      sql`${table.amountCents} > 0`,
+    ),
+    versionCheck: check(
+      "expense_reimbursement_claims_version_check",
+      sql`${table.version} >= 1`,
+    ),
+    attachmentShapeCheck: check(
+      "expense_reimbursement_claims_attachment_shape_check",
+      sql`(${table.status} IN ('pending', 'approved', 'rejected') AND ${table.payoutRunId} IS NULL AND ${table.payoutAdjustmentId} IS NULL AND ${table.attachedAt} IS NULL AND ${table.paidAt} IS NULL) OR (${table.status} = 'attached' AND ${table.payoutRunId} IS NOT NULL AND ${table.payoutAdjustmentId} IS NOT NULL AND ${table.attachedAt} IS NOT NULL AND ${table.paidAt} IS NULL) OR (${table.status} = 'paid' AND ${table.payoutRunId} IS NOT NULL AND ${table.payoutAdjustmentId} IS NOT NULL AND ${table.attachedAt} IS NOT NULL AND ${table.paidAt} IS NOT NULL)`,
+    ),
+    reviewShapeCheck: check(
+      "expense_reimbursement_claims_review_shape_check",
+      sql`(${table.status} = 'pending' AND ${table.reviewedAt} IS NULL AND ${table.reviewedBy} IS NULL AND ${table.reviewReason} IS NULL) OR (${table.status} IN ('approved', 'attached', 'paid') AND ${table.reviewedAt} IS NOT NULL) OR (${table.status} = 'rejected' AND ${table.reviewedAt} IS NOT NULL AND nullif(btrim(${table.reviewReason}), '') IS NOT NULL)`,
     ),
   }),
 );
@@ -5556,7 +5985,7 @@ export const plaidTransactionRelations = relations(
   }),
 );
 
-export const expenseRelations = relations(expenses, ({ one }) => ({
+export const expenseRelations = relations(expenses, ({ one, many }) => ({
   bankTransaction: one(plaidTransactions, {
     fields: [expenses.bankTransactionId],
     references: [plaidTransactions.id],
@@ -5565,7 +5994,35 @@ export const expenseRelations = relations(expenses, ({ one }) => ({
     fields: [expenses.payoutRunId],
     references: [payoutRuns.id],
   }),
+  categoryRecord: one(expenseCategories, {
+    fields: [expenses.categoryId],
+    references: [expenseCategories.id],
+  }),
+  receiptCapture: one(expenseReceiptCaptures, {
+    fields: [expenses.receiptCaptureId],
+    references: [expenseReceiptCaptures.id],
+  }),
+  appointment: one(appointments, {
+    fields: [expenses.appointmentId],
+    references: [appointments.id],
+  }),
+  allocations: many(expenseAllocations),
+  reimbursementClaims: many(expenseReimbursementClaims),
 }));
+
+export const expenseAllocationRelations = relations(
+  expenseAllocations,
+  ({ one }) => ({
+    expense: one(expenses, {
+      fields: [expenseAllocations.expenseId],
+      references: [expenses.id],
+    }),
+    category: one(expenseCategories, {
+      fields: [expenseAllocations.categoryId],
+      references: [expenseCategories.id],
+    }),
+  }),
+);
 
 // Provider-neutral payment attempts and ledger.
 export const paymentAttempts = pgTable(

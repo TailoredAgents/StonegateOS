@@ -694,6 +694,13 @@
       "when": 1789603200000,
       "tag": "0101_online_booking_quote_range_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1789689600000,
+      "tag": "0102_expense_tracking_v2_foundation",
+      "breakpoints": true
     }
   ]
 }
