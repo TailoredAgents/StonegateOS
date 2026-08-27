@@ -47,8 +47,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Apply database migrations
+      - name: Apply database migrations through the production prefix
+        run: >-
+          pnpm --filter api exec tsx scripts/migrate-to-target.ts
+          0101_online_booking_quote_range_backfill
+
+      - name: Seed populated Expense V2 migration regression
+        run: >-
+          pnpm --filter api exec tsx
+          scripts/expense-v2-migration-regression.ts seed
+
+      - name: Apply remaining database migrations
         run: pnpm db:migrate
+
+      - name: Verify populated Expense V2 migration regression
+        run: >-
+          pnpm --filter api exec tsx
+          scripts/expense-v2-migration-regression.ts verify
 
       - name: Run mandatory expense workflow integration tests
         run: >-

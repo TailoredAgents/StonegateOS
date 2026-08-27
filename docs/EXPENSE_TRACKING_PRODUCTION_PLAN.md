@@ -25,7 +25,7 @@ This document is the implementation checklist and production-readiness record fo
 ### Financial data and controls
 
 - [x] Add stable expense category IDs, aliases for current labels, and seeded categories: Dump Fees, Fuel, Meals, Equipment, Vehicle, Insurance, Software, Advertising, Supplies, Tolls/Parking, Subcontractors, Office/Admin, Other, and legacy Reimbursements.
-  - Verification: Migrations `0102_expense_tracking_v2_foundation.sql` and `0107_expense_dump_alias_and_backfill.sql` applied on a clean PostgreSQL database; `expense-v2-foundation.test.ts` and `expense-v2-database-guards.integration.test.ts` passed.
+  - Verification: Migrations `0102_expense_tracking_v2_foundation.sql` and `0107_expense_dump_alias_and_backfill.sql` passed both a clean PostgreSQL migration and a populated `0101` production-prefix upgrade containing posted, draft, known-label, and unknown-label expenses. The regression verifies exact allocations, unchanged ledger evidence, restored immutability guards, and is required by CI alongside `expense-v2-foundation.test.ts` and `expense-v2-database-guards.integration.test.ts`.
 - [x] Add expense allocations so one receipt can optionally be split across categories; allocations must exactly equal the expense total.
   - Verification: Database allocation guards and submission transactions passed in `expense-v2-database-guards.integration.test.ts` and `expense-submission-workflow.integration.test.ts`; client exact-cent validation passed in `mobile-spend-v2.test.ts`.
 - [x] Add submitter, payer type (`company` or `personal`), paid-by member, review status, reviewer, source, and receipt-capture references.

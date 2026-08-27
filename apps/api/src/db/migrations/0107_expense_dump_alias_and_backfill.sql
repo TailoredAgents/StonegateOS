@@ -13,6 +13,12 @@ LOCK TABLE "expense_allocations" IN SHARE ROW EXCLUSIVE MODE;
 
 ALTER TABLE "expenses"
   DISABLE TRIGGER "expenses_lifecycle_transition_guard";
+-- 0102 intentionally makes posted V2 evidence immutable. This one-time,
+-- deterministic category repair must temporarily bypass that guard while the
+-- table lock above prevents concurrent writes. PostgreSQL rolls the trigger
+-- state back with the migration transaction if any statement fails.
+ALTER TABLE "expenses"
+  DISABLE TRIGGER "expenses_v2_evidence_guard";
 ALTER TABLE "expense_allocations"
   DISABLE TRIGGER "expense_allocations_immutability_guard";
 
@@ -31,7 +37,16 @@ WHERE "category_id" = 'dump_fees'
   AND "amount_cents" <> 0
 ON CONFLICT ("expense_id", "category_id") DO NOTHING;
 
+-- Flush the deferred allocation and daily-ad integrity checks before ALTER
+-- TABLE restores the guards; PostgreSQL rejects ALTER TABLE while a relation
+-- still has pending trigger events.
+SET CONSTRAINTS ALL IMMEDIATE;
+
 ALTER TABLE "expense_allocations"
   ENABLE TRIGGER "expense_allocations_immutability_guard";
 ALTER TABLE "expenses"
+  ENABLE TRIGGER "expenses_v2_evidence_guard";
+ALTER TABLE "expenses"
   ENABLE TRIGGER "expenses_lifecycle_transition_guard";
+
+SET CONSTRAINTS ALL DEFERRED;

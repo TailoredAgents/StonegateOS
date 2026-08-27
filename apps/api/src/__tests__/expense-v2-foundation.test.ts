@@ -86,6 +86,15 @@ describe("Expense Tracking V2 database foundation", () => {
     expect(migration).not.toMatch(/UPDATE\s+"expenses"[\s\S]*ELSE\s+'other'/iu);
     expect(dumpAliasBackfill).toContain("VALUES ('dump_fees', 'Dump', 'dump')");
     expect(dumpAliasBackfill).toContain('INSERT INTO "expense_allocations"');
+    expect(dumpAliasBackfill).toMatch(
+      /DISABLE TRIGGER "expenses_v2_evidence_guard"[\s\S]*UPDATE "expenses"[\s\S]*ENABLE TRIGGER "expenses_v2_evidence_guard"/u,
+    );
+    expect(dumpAliasBackfill).toMatch(
+      /DISABLE TRIGGER "expense_allocations_immutability_guard"[\s\S]*INSERT INTO "expense_allocations"[\s\S]*ENABLE TRIGGER "expense_allocations_immutability_guard"/u,
+    );
+    expect(dumpAliasBackfill).toMatch(
+      /INSERT INTO "expense_allocations"[\s\S]*SET CONSTRAINTS ALL IMMEDIATE;[\s\S]*ENABLE TRIGGER "expense_allocations_immutability_guard"/u,
+    );
   });
 
   it("stores receipt references and analysis state without a new data-url column", () => {
