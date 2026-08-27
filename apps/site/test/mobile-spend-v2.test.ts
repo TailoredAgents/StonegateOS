@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MobileSpendV2 } from "../src/app/mobile/MobileSpendV2";
+import {
+  MobileSpendV2,
+  expenseOverviewReasonDetail,
+} from "../src/app/mobile/MobileSpendV2";
 import {
   expenseCaptureQueueStatus,
   shouldPollExpenseCaptureStatus,
@@ -209,6 +212,41 @@ void test("confirmed captures are terminal while failed analysis remains tracked
   assert.equal(shouldPollExpenseCaptureStatus("discarded"), false);
 });
 
+void test("overview completeness explains every production reason", () => {
+  const period = {
+    pendingExpenseCount: 2,
+    missingAdEntries: [{}, {}, {}],
+    missingCommissionDataCount: 4,
+    missingFinalTotalCount: 5,
+    omittedUnverifiedHistoricalRecordCount: 6,
+    unverifiedExpenseCategoryCount: 7,
+  };
+  assert.match(
+    expenseOverviewReasonDetail("missing_ad_entries", period),
+    /3 days missing Facebook or Google/u,
+  );
+  assert.match(
+    expenseOverviewReasonDetail("missing_commission_data", period),
+    /4 completed jobs missing commission/u,
+  );
+  assert.match(
+    expenseOverviewReasonDetail("missing_final_totals", period),
+    /5 completed jobs missing a final total/u,
+  );
+  assert.match(
+    expenseOverviewReasonDetail("pending_expenses", period),
+    /2 expenses awaiting review/u,
+  );
+  assert.match(
+    expenseOverviewReasonDetail("unverified_historical_records", period),
+    /6 unverified historical records were omitted/u,
+  );
+  assert.match(
+    expenseOverviewReasonDetail("unverified_expense_categories", period),
+    /7 expense categories need verification/u,
+  );
+});
+
 void test("Spend V2 keeps the locked navigation and offline-store contracts", async () => {
   const [component, session, offlineMedia, mutationKeys, worker] =
     await Promise.all([
@@ -223,15 +261,16 @@ void test("Spend V2 keeps the locked navigation and offline-store contracts", as
     ]);
 
   assert.match(component, /\["add", "overview", "history"\]/u);
-  assert.match(component, /id: "scan" as const/u);
-  assert.match(component, /id: "ads" as const/u);
-  assert.match(component, /id: "manual" as const/u);
+  assert.match(component, /id: "scan"/u);
+  assert.match(component, /id: "ads"/u);
+  assert.match(component, /id: "manual"/u);
   assert.match(component, /Waiting to sync/u);
   assert.match(component, /aria-live="polite"/u);
   assert.match(component, /role="tablist"/u);
   assert.match(component, /role="tab"/u);
   assert.match(component, /aria-selected=/u);
   assert.match(component, /focus-visible:ring-2/u);
+  assert.match(component, /focus-within:ring-2/u);
   assert.match(component, /min-h-11/u);
   assert.match(component, /Submit for approval/u);
   assert.match(component, /Reimbursement/u);
@@ -254,6 +293,25 @@ void test("Spend V2 keeps the locked navigation and offline-store contracts", as
     component,
     /const vendorField = \([\s\S]*?attentionFields\.includes\("vendor"\) \? <AttentionBadge \/> : null/u,
   );
+  assert.match(component, /fetch\("\/api\/mobile\/expenses\/capabilities"/u);
+  assert.match(component, /capabilities\?\.receiptCapture === true/u);
+  assert.match(component, /capabilities\?\.dailyAdSpend === true/u);
+  assert.match(component, /capabilities\?\.overview === true/u);
+  assert.match(component, /capabilities\?\.reimbursement === true/u);
+  assert.match(component, /capabilities\?\.exactDuplicateReview === true/u);
+  assert.match(component, /fetchExactDuplicateReviewPage/u);
+  assert.match(component, /owner-duplicate-confirm:/u);
+  assert.match(component, /"If-Match": String\(item\.capture\.version\)/u);
+  assert.match(component, /Current receipt/u);
+  assert.match(component, /Matched receipt/u);
+  assert.match(component, /Prior-week comparison unavailable/u);
+  assert.match(component, /priorWeekChange\.available/u);
+  assert.match(component, /priorWeek\.completeness\.reasons/u);
+  assert.match(component, /missingFinalTotalCount/u);
+  assert.match(component, /omittedUnverifiedHistoricalRecordCount/u);
+  assert.match(component, /unverifiedExpenseCategoryCount/u);
+  assert.match(component, /Expense details/u);
+  assert.match(component, /Category allocation/u);
   assert.doesNotMatch(component, /pie chart/iu);
   assert.match(session, /"expenses\.submit"/u);
   assert.match(session, /"expenses\.approve"/u);
@@ -269,7 +327,7 @@ void test("Spend V2 keeps the locked navigation and offline-store contracts", as
   assert.match(worker, /capture\?\.status === "confirmed"/u);
 });
 
-void test("the initial mobile surface exposes three focused Add choices", () => {
+void test("the initial mobile surface fails optional tools closed", () => {
   const html = renderToStaticMarkup(
     createElement(MobileSpendV2, {
       employee: { id: "11111111-1111-4111-8111-111111111111", name: "Crew" },
@@ -283,11 +341,11 @@ void test("the initial mobile surface exposes three focused Add choices", () => 
   );
 
   assert.match(html, />Add</u);
-  assert.match(html, />Overview</u);
   assert.match(html, />History</u);
-  assert.match(html, /Scan receipt/u);
-  assert.match(html, /Daily ad spend/u);
   assert.match(html, /Manual entry/u);
-  assert.match(html, /Overview, owner only/u);
+  assert.match(html, /Loading optional expense tools/u);
+  assert.doesNotMatch(html, />Overview</u);
+  assert.doesNotMatch(html, /Scan receipt/u);
+  assert.doesNotMatch(html, /Daily ad spend/u);
   assert.doesNotMatch(html, /Recent expenses/u);
 });

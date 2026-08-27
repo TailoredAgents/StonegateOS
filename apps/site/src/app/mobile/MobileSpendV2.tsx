@@ -50,20 +50,119 @@ type ExpenseCategory = { id: string; name: string; sortOrder?: number };
 type MemberOption = { id: string; name: string };
 type JobOption = { id: string; label: string; date: string };
 
+type ExpenseCapabilities = {
+  manualEntry: boolean;
+  receiptCapture: boolean;
+  reimbursement: boolean;
+  dailyAdSpend: boolean;
+  overview: boolean;
+  exactDuplicateReview: boolean;
+};
+
 type ExpenseHistoryRow = {
   id: string;
   amountCents: number;
+  currency: string;
+  categoryId: string | null;
   category: string;
+  categoryNeedsReview: boolean;
+  allocations: Array<{
+    categoryId: string;
+    category: string;
+    amountCents: number;
+  }>;
   vendor: string | null;
+  notes: string | null;
+  method: string | null;
+  source: string;
   purchaseDate: string;
   payerType: "company" | "personal";
+  paidByMember: MemberOption | null;
   submitter: MemberOption | null;
-  reviewStatus: "pending" | "approved" | "rejected" | null;
+  reviewStatus: "draft" | "pending" | "approved" | "rejected" | null;
+  reviewer: MemberOption | null;
+  reviewedAt: string | null;
   reviewReason: string | null;
   lifecycleStatus: string;
   version: number;
-  receipt: { captureId: string | null; status: string | null } | null;
+  appointmentId: string | null;
+  receipt: {
+    captureId: string | null;
+    status: string | null;
+    filename: string | null;
+  } | null;
   reimbursement: { claimId: string | null; status: string | null } | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ExpenseCaptureStatus = Record<string, unknown> & {
+  id: string;
+  status: string;
+  version: number;
+  filename: string;
+  contentPath: string | null;
+};
+
+type ExactDuplicateReviewItem = {
+  capture: ExpenseCaptureStatus;
+  submitter: MemberOption;
+  duplicate: {
+    capture: {
+      id: string;
+      status: string;
+      filename: string;
+      submittedBy: string;
+      submitterName: string;
+      contentPath: string | null;
+    };
+    expense: {
+      id: string;
+      amountCents: number;
+      currency: string;
+      categoryId: string | null;
+      category: string | null;
+      vendor: string | null;
+      paidAt: string;
+      lifecycleStatus: string;
+      reviewStatus: string;
+    } | null;
+  } | null;
+};
+
+type ExpenseOverviewIncompleteReason =
+  | "missing_ad_entries"
+  | "missing_commission_data"
+  | "missing_final_totals"
+  | "pending_expenses"
+  | "unverified_historical_records"
+  | "unverified_expense_categories";
+
+type OverviewCompleteness = {
+  state: "complete" | "incomplete";
+  reasons: ExpenseOverviewIncompleteReason[];
+};
+
+type OverviewPeriod = {
+  week?: never;
+  startDate: string;
+  endDate: string;
+  revenueCents: number;
+  ordinaryExpensesCents: number;
+  laborCents: number;
+  totalExpensesCents: number;
+  operatingProfitCents: number;
+  expenseRatioPercent: number | null;
+  pendingExpenseCount: number;
+  missingAdEntries: Array<{
+    businessDate: string;
+    missingPlatforms: Array<"facebook" | "google">;
+  }>;
+  missingCommissionDataCount: number;
+  missingFinalTotalCount: number;
+  omittedUnverifiedHistoricalRecordCount: number;
+  unverifiedExpenseCategoryCount: number;
+  completeness: OverviewCompleteness;
 };
 
 type DailyAdEntry = {
@@ -102,14 +201,25 @@ function dailyAdEntry(value: unknown): DailyAdEntry | null {
 type OverviewPayload = {
   week: { startDate: string; endDate: string };
   revenueCents: number;
+  ordinaryExpensesCents: number;
+  laborCents: number;
   totalExpensesCents: number;
   operatingProfitCents: number;
   expenseRatioPercent: number | null;
+  priorWeek: OverviewPeriod;
   priorWeekChange: {
+    available: boolean;
+    revenueCents: number | null;
     revenuePercent: number | null;
+    expensesCents: number | null;
     expensesPercent: number | null;
+    operatingProfitCents: number | null;
     operatingProfitPercent: number | null;
     expenseRatioPercentagePoints: number | null;
+    unavailableReasons: {
+      currentWeek: ExpenseOverviewIncompleteReason[];
+      priorWeek: ExpenseOverviewIncompleteReason[];
+    };
   };
   categories: Array<{
     id: string;
@@ -140,7 +250,10 @@ type OverviewPayload = {
     missingPlatforms: Array<"facebook" | "google">;
   }>;
   missingCommissionDataCount: number;
-  completeness: { state: "complete" | "incomplete"; reasons: string[] };
+  missingFinalTotalCount: number;
+  omittedUnverifiedHistoricalRecordCount: number;
+  unverifiedExpenseCategoryCount: number;
+  completeness: OverviewCompleteness;
 };
 
 type SubmissionBody = {
@@ -155,6 +268,10 @@ type SubmissionBody = {
   paidByMemberId: string | null;
   appointmentId: string | null;
 };
+
+type ExpenseMutationAttempt = Awaited<
+  ReturnType<typeof getExpenseMutationAttempt>
+>;
 
 const focusRing =
   "outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950";
@@ -218,57 +335,65 @@ function StatusNotice({
 function SegmentedControl({
   value,
   onChange,
-  canViewOverview,
+  showOverview,
 }: {
   value: SpendView;
   onChange: (view: SpendView) => void;
-  canViewOverview: boolean;
+  showOverview: boolean;
 }) {
+  const views: SpendView[] = showOverview
+    ? ["add", "overview", "history"]
+    : ["add", "history"];
   return (
     <div
       aria-label="Spend views"
-      className="grid grid-cols-3 rounded-xl border border-white/10 bg-slate-900 p-1"
+      className={`grid ${showOverview ? "grid-cols-3" : "grid-cols-2"} rounded-xl border border-white/10 bg-slate-900 p-1`}
       role="tablist"
     >
-      {(["add", "overview", "history"] as const).map((view) => {
-        const disabled = view === "overview" && !canViewOverview;
-        return (
-          <button
-            key={view}
-            type="button"
-            role="tab"
-            aria-selected={value === view}
-            aria-label={disabled ? "Overview, owner only" : undefined}
-            disabled={disabled}
-            onClick={() => onChange(view)}
-            className={`${focusRing} min-h-11 rounded-lg px-2 text-sm font-semibold transition ${
-              value === view ? "bg-white/15 text-white" : "text-slate-300"
-            } disabled:cursor-not-allowed disabled:text-slate-600`}
-          >
-            {view.charAt(0).toUpperCase() + view.slice(1)}
-          </button>
-        );
-      })}
+      {views.map((view) => (
+        <button
+          key={view}
+          type="button"
+          role="tab"
+          aria-selected={value === view}
+          onClick={() => onChange(view)}
+          className={`${focusRing} min-h-11 rounded-lg px-2 text-sm font-semibold transition ${
+            value === view ? "bg-white/15 text-white" : "text-slate-300"
+          }`}
+        >
+          {view.charAt(0).toUpperCase() + view.slice(1)}
+        </button>
+      ))}
     </div>
   );
 }
 
 function AddChoices({
   canSubmit,
-  canWriteAdSpend,
+  receiptEnabled,
+  adSpendEnabled,
   pendingCapture,
   missingYesterday,
   onChoose,
 }: {
   canSubmit: boolean;
-  canWriteAdSpend: boolean;
+  receiptEnabled: boolean;
+  adSpendEnabled: boolean;
   pendingCapture: ExpenseCaptureQueueRow | null;
   missingYesterday: boolean;
   onChoose: (workflow: Exclude<AddWorkflow, null>) => void;
 }) {
-  const choices = [
-    {
-      id: "scan" as const,
+  const choices: Array<{
+    id: Exclude<AddWorkflow, null>;
+    label: string;
+    detail: string;
+    icon: typeof Camera;
+    primary: boolean;
+    disabled: boolean;
+  }> = [];
+  if (receiptEnabled) {
+    choices.push({
+      id: "scan",
       label: pendingCapture ? "Continue receipt" : "Scan receipt",
       detail: pendingCapture
         ? "A receipt is waiting on this device"
@@ -276,28 +401,28 @@ function AddChoices({
       icon: Camera,
       primary: true,
       disabled: !canSubmit,
-    },
-    {
-      id: "ads" as const,
+    });
+  }
+  if (adSpendEnabled) {
+    choices.push({
+      id: "ads",
       label: "Daily ad spend",
-      detail: canWriteAdSpend
-        ? missingYesterday
-          ? "Yesterday needs an entry"
-          : "Facebook and Google"
-        : "Owner only",
+      detail: missingYesterday
+        ? "Yesterday needs an entry"
+        : "Facebook and Google",
       icon: Megaphone,
       primary: false,
-      disabled: !canWriteAdSpend,
-    },
-    {
-      id: "manual" as const,
-      label: "Manual entry",
-      detail: "Enter an expense without a receipt",
-      icon: PencilLine,
-      primary: false,
-      disabled: !canSubmit,
-    },
-  ];
+      disabled: false,
+    });
+  }
+  choices.push({
+    id: "manual",
+    label: "Manual entry",
+    detail: "Enter an expense without a receipt",
+    icon: PencilLine,
+    primary: !receiptEnabled,
+    disabled: !canSubmit,
+  });
   return (
     <div className="space-y-3">
       {choices.map((choice) => {
@@ -338,11 +463,13 @@ function ExpenseEditor({
   memberOptions,
   jobs,
   canApprove,
+  allowReimbursement,
   initial,
   attentionFields = [],
   vendorPrimary = false,
   duplicateRisk = null,
   submitting,
+  submitDisabled = false,
   submitLabel,
   onBack,
   onSubmit,
@@ -352,6 +479,7 @@ function ExpenseEditor({
   memberOptions: MemberOption[];
   jobs: JobOption[];
   canApprove: boolean;
+  allowReimbursement: boolean;
   initial?: Partial<{
     amount: string;
     purchaseDate: string;
@@ -363,6 +491,7 @@ function ExpenseEditor({
   vendorPrimary?: boolean;
   duplicateRisk?: "exact" | "fuzzy" | null;
   submitting: boolean;
+  submitDisabled?: boolean;
   submitLabel: string;
   onBack: () => void;
   onSubmit: (
@@ -387,6 +516,13 @@ function ExpenseEditor({
   const [splits, setSplits] = React.useState<SplitRow[]>([]);
   const [overrideReason, setOverrideReason] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!allowReimbursement) {
+      setPayerType("company");
+      setPaidByMemberId(currentMember.id);
+    }
+  }, [allowReimbursement, currentMember.id]);
   const vendorField = (
     <label className="block">
       <FieldLabel>
@@ -583,33 +719,42 @@ function ExpenseEditor({
         </select>
       </label>
 
-      <fieldset>
-        <legend className="text-xs font-semibold text-slate-300">
-          Who paid?
-        </legend>
-        <div className="mt-1.5 grid grid-cols-2 gap-2">
-          {(["company", "personal"] as const).map((value) => (
-            <label
-              key={value}
-              className={`${focusRing} flex min-h-11 cursor-pointer items-center justify-center rounded-lg border px-3 text-sm font-semibold ${payerType === value ? "border-cyan-300 bg-cyan-300/10 text-cyan-100" : "border-white/15 bg-slate-950 text-slate-300"}`}
-            >
-              <input
-                type="radio"
-                name="payerType"
-                value={value}
-                checked={payerType === value}
-                onChange={() => setPayerType(value)}
-                className="sr-only"
-              />
-              {value === "company"
-                ? "Company"
-                : canApprove
-                  ? "Personal"
-                  : "I paid"}
-            </label>
-          ))}
+      {allowReimbursement ? (
+        <fieldset>
+          <legend className="text-xs font-semibold text-slate-300">
+            Who paid?
+          </legend>
+          <div className="mt-1.5 grid grid-cols-2 gap-2">
+            {(["company", "personal"] as const).map((value) => (
+              <label
+                key={value}
+                className={`flex min-h-11 cursor-pointer items-center justify-center rounded-lg border px-3 text-sm font-semibold outline-none focus-within:ring-2 focus-within:ring-cyan-200 focus-within:ring-offset-2 focus-within:ring-offset-slate-950 ${payerType === value ? "border-cyan-300 bg-cyan-300/10 text-cyan-100" : "border-white/15 bg-slate-950 text-slate-300"}`}
+              >
+                <input
+                  type="radio"
+                  name="payerType"
+                  value={value}
+                  checked={payerType === value}
+                  onChange={() => setPayerType(value)}
+                  className="sr-only"
+                />
+                {value === "company"
+                  ? "Company"
+                  : canApprove
+                    ? "Personal"
+                    : "I paid"}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      ) : (
+        <div>
+          <FieldLabel>Who paid?</FieldLabel>
+          <p className="flex min-h-11 items-center rounded-lg border border-white/15 bg-slate-950 px-3 text-sm font-semibold text-slate-200">
+            Company
+          </p>
         </div>
-      </fieldset>
+      )}
 
       {payerType === "personal" ? (
         canApprove ? (
@@ -798,7 +943,11 @@ function ExpenseEditor({
       </div>
       <button
         type="submit"
-        disabled={submitting || (duplicateRisk === "exact" && !canApprove)}
+        disabled={
+          submitting ||
+          submitDisabled ||
+          (duplicateRisk === "exact" && !canApprove)
+        }
         className={primaryButton}
       >
         {submitting ? "Working…" : submitLabel}
@@ -815,12 +964,13 @@ function ExpenseEditor({
   );
 }
 
-function receiptExtraction(row: ExpenseCaptureQueueRow): {
+function receiptExtractionFromCapture(
+  capture: Record<string, unknown> | null,
+): {
   initial: Parameters<typeof ExpenseEditor>[0]["initial"];
   attention: string[];
   duplicateRisk: "exact" | "fuzzy" | null;
 } {
-  const capture = row.serverCapture;
   const extraction = objectValue(capture?.["extraction"]);
   const review = objectValue(extraction?.["review"]);
   const fields = objectValue(review?.["fields"]);
@@ -869,6 +1019,12 @@ function receiptExtraction(row: ExpenseCaptureQueueRow): {
   };
 }
 
+function receiptExtraction(
+  row: ExpenseCaptureQueueRow,
+): ReturnType<typeof receiptExtractionFromCapture> {
+  return receiptExtractionFromCapture(row.serverCapture);
+}
+
 function ReceiptWorkflow({
   row,
   employeeId,
@@ -877,6 +1033,7 @@ function ReceiptWorkflow({
   members,
   jobs,
   canApprove,
+  allowReimbursement,
   onRow,
   onDone,
   onBack,
@@ -888,6 +1045,7 @@ function ReceiptWorkflow({
   members: MemberOption[];
   jobs: JobOption[];
   canApprove: boolean;
+  allowReimbursement: boolean;
   onRow: (row: ExpenseCaptureQueueRow | null) => void;
   onDone: (message: string) => void;
   onBack: () => void;
@@ -1448,6 +1606,7 @@ function ReceiptWorkflow({
         memberOptions={members}
         jobs={jobs}
         canApprove={canApprove}
+        allowReimbursement={allowReimbursement}
         initial={extracted.initial}
         attentionFields={extracted.attention}
         vendorPrimary
@@ -1693,14 +1852,61 @@ function DailyAdWorkflow({
   );
 }
 
+type OverviewReasonCounts = {
+  pendingExpenseCount: number;
+  missingAdEntries: Array<unknown>;
+  missingCommissionDataCount: number;
+  missingFinalTotalCount: number;
+  omittedUnverifiedHistoricalRecordCount: number;
+  unverifiedExpenseCategoryCount: number;
+};
+
+export function expenseOverviewReasonDetail(
+  reason: ExpenseOverviewIncompleteReason,
+  period: OverviewReasonCounts,
+): string {
+  switch (reason) {
+    case "missing_ad_entries":
+      return `${period.missingAdEntries.length} day${period.missingAdEntries.length === 1 ? "" : "s"} missing Facebook or Google ad entries`;
+    case "missing_commission_data":
+      return `${period.missingCommissionDataCount} completed job${period.missingCommissionDataCount === 1 ? "" : "s"} missing commission data`;
+    case "missing_final_totals":
+      return `${period.missingFinalTotalCount} completed job${period.missingFinalTotalCount === 1 ? "" : "s"} missing a final total`;
+    case "pending_expenses":
+      return `${period.pendingExpenseCount} expense${period.pendingExpenseCount === 1 ? "" : "s"} awaiting review`;
+    case "unverified_historical_records":
+      return `${period.omittedUnverifiedHistoricalRecordCount} unverified historical record${period.omittedUnverifiedHistoricalRecordCount === 1 ? " was" : "s were"} omitted`;
+    case "unverified_expense_categories":
+      return `${period.unverifiedExpenseCategoryCount} expense categor${period.unverifiedExpenseCategoryCount === 1 ? "y needs" : "ies need"} verification`;
+  }
+}
+
+function OverviewCompletenessReasons({
+  reasons,
+  period,
+}: {
+  reasons: ExpenseOverviewIncompleteReason[];
+  period: OverviewReasonCounts;
+}) {
+  return (
+    <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-5">
+      {reasons.map((reason) => (
+        <li key={reason}>{expenseOverviewReasonDetail(reason, period)}.</li>
+      ))}
+    </ul>
+  );
+}
+
 function OverviewView({
   weekStart,
   onWeekStart,
   onMissingAd,
+  canEnterAdSpend,
 }: {
   weekStart: string;
   onWeekStart: (date: string) => void;
   onMissingAd: (date: string) => void;
+  canEnterAdSpend: boolean;
 }) {
   const [overview, setOverview] = React.useState<OverviewPayload | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -1747,6 +1953,34 @@ function OverviewView({
     ) ?? [1]),
   );
   const firstMissingDate = overview?.missingAdEntries[0]?.businessDate ?? null;
+  const headlineCards = overview
+    ? [
+        {
+          label: "Revenue",
+          value: formatExpenseMoney(overview.revenueCents),
+          change: overview.priorWeekChange.revenuePercent,
+          unit: "%",
+        },
+        {
+          label: "Expenses",
+          value: formatExpenseMoney(overview.totalExpensesCents),
+          change: overview.priorWeekChange.expensesPercent,
+          unit: "%",
+        },
+        {
+          label: "Operating profit",
+          value: formatExpenseMoney(overview.operatingProfitCents),
+          change: overview.priorWeekChange.operatingProfitPercent,
+          unit: "%",
+        },
+        {
+          label: "Expense ratio",
+          value: formatExpensePercent(overview.expenseRatioPercent),
+          change: overview.priorWeekChange.expenseRatioPercentagePoints,
+          unit: " pts",
+        },
+      ]
+    : [];
   return (
     <div className="space-y-4">
       <div className={cardClass}>
@@ -1800,20 +2034,13 @@ function OverviewView({
                 />
                 <div>
                   <p className="text-sm font-bold">This week is incomplete</p>
-                  <p className="mt-1 text-xs leading-5">
-                    {overview.pendingExpenseCount
-                      ? `${overview.pendingExpenseCount} pending expense${overview.pendingExpenseCount === 1 ? "" : "s"}. `
-                      : ""}
-                    {overview.missingCommissionDataCount
-                      ? `${overview.missingCommissionDataCount} job${overview.missingCommissionDataCount === 1 ? " is" : "s are"} missing commission data. `
-                      : ""}
-                    {overview.missingAdEntries.length
-                      ? `${overview.missingAdEntries.length} day${overview.missingAdEntries.length === 1 ? "" : "s"} need ad entries.`
-                      : ""}
-                  </p>
+                  <OverviewCompletenessReasons
+                    reasons={overview.completeness.reasons}
+                    period={overview}
+                  />
                 </div>
               </div>
-              {firstMissingDate ? (
+              {firstMissingDate && canEnterAdSpend ? (
                 <button
                   type="button"
                   onClick={() => onMissingAd(firstMissingDate)}
@@ -1824,39 +2051,56 @@ function OverviewView({
               ) : null}
             </div>
           ) : null}
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              [
-                "Revenue",
-                overview.revenueCents,
-                overview.priorWeekChange.revenuePercent,
-              ],
-              [
-                "Expenses",
-                overview.totalExpensesCents,
-                overview.priorWeekChange.expensesPercent,
-              ],
-              [
-                "Operating profit",
-                overview.operatingProfitCents,
-                overview.priorWeekChange.operatingProfitPercent,
-              ],
-              ["Expense ratio", null, overview.expenseRatioPercent],
-            ].map(([label, cents, change], index) => (
-              <div key={String(label)} className={cardClass}>
-                <p className="text-xs font-semibold text-slate-400">{label}</p>
-                <p className="mt-1 text-lg font-bold">
-                  {index === 3
-                    ? formatExpensePercent(change as number | null)
-                    : formatExpenseMoney(cents as number)}
-                </p>
-                {index < 3 ? (
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    {change === null
-                      ? "No prior-week %"
-                      : `${(change as number) >= 0 ? "+" : ""}${(change as number).toFixed(1)}% vs prior`}
-                  </p>
+          {!overview.priorWeekChange.available ? (
+            <details className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+              <summary
+                className={`${focusRing} flex min-h-11 cursor-pointer items-center text-sm font-semibold text-slate-200`}
+              >
+                Prior-week comparison unavailable
+              </summary>
+              <div className="space-y-3 border-t border-white/10 pt-3 text-slate-300">
+                {overview.priorWeekChange.unavailableReasons.currentWeek
+                  .length ? (
+                  <div>
+                    <p className="text-xs font-bold text-slate-200">
+                      Selected week
+                    </p>
+                    <OverviewCompletenessReasons
+                      reasons={
+                        overview.priorWeekChange.unavailableReasons.currentWeek
+                      }
+                      period={overview}
+                    />
+                  </div>
                 ) : null}
+                {overview.priorWeek.completeness.reasons.length ? (
+                  <div>
+                    <p className="text-xs font-bold text-slate-200">
+                      Prior week
+                    </p>
+                    <OverviewCompletenessReasons
+                      reasons={overview.priorWeek.completeness.reasons}
+                      period={overview.priorWeek}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            </details>
+          ) : null}
+          <div className="grid grid-cols-2 gap-3">
+            {headlineCards.map((card) => (
+              <div key={card.label} className={cardClass}>
+                <p className="text-xs font-semibold text-slate-400">
+                  {card.label}
+                </p>
+                <p className="mt-1 text-lg font-bold">{card.value}</p>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {!overview.priorWeekChange.available
+                    ? "Comparison unavailable"
+                    : card.change === null
+                      ? "Prior baseline was zero"
+                      : `${card.change >= 0 ? "+" : ""}${card.change.toFixed(1)}${card.unit} vs prior`}
+                </p>
               </div>
             ))}
           </div>
@@ -2010,13 +2254,142 @@ const historyFilters = [
   ["reimbursement", "Reimbursements"],
 ] as const;
 
+async function fetchExactDuplicateReviewPage(cursor: string | null): Promise<{
+  captures: ExactDuplicateReviewItem[];
+  page: { hasMore: boolean; nextCursor: string | null };
+}> {
+  const search = new URLSearchParams({ limit: "20" });
+  if (cursor) search.set("cursor", cursor);
+  const response = await fetch(
+    `/api/mobile/expenses/captures?${search.toString()}`,
+    { cache: "no-store", credentials: "include" },
+  );
+  const payload = await jsonPayload(response);
+  if (!response.ok) {
+    throw new Error(
+      expenseErrorMessage(payload, "Duplicate receipts are unavailable."),
+    );
+  }
+  const page = objectValue(payload?.["page"]);
+  return {
+    captures: Array.isArray(payload?.["captures"])
+      ? (payload["captures"] as ExactDuplicateReviewItem[])
+      : [],
+    page: {
+      hasMore: page?.["hasMore"] === true,
+      nextCursor:
+        typeof page?.["nextCursor"] === "string" ? page["nextCursor"] : null,
+    },
+  };
+}
+
+function exactDuplicateReceiptHref(captureId: string): string {
+  return `/api/mobile/expenses/captures/${encodeURIComponent(captureId)}/content`;
+}
+
+function ExactDuplicateQueueCard({
+  item,
+  categories,
+  onReview,
+}: {
+  item: ExactDuplicateReviewItem;
+  categories: ExpenseCategory[];
+  onReview: () => void;
+}) {
+  const extracted = receiptExtractionFromCapture(item.capture);
+  const category = categories.find(
+    (candidate) => candidate.id === extracted.initial?.categoryId,
+  );
+  return (
+    <article className="rounded-xl border border-rose-300/25 bg-rose-300/[0.06] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-rose-200">
+            Exact receipt match
+          </p>
+          <p className="mt-1 truncate text-sm font-semibold text-white">
+            {extracted.initial?.vendor || "Vendor needs review"}
+          </p>
+          <p className="mt-0.5 text-xs text-slate-300">
+            Submitted by {item.submitter.name}
+          </p>
+        </div>
+        <p className="shrink-0 text-base font-bold">
+          {extracted.initial?.amount
+            ? `$${extracted.initial.amount}`
+            : "Check total"}
+        </p>
+      </div>
+      <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div>
+          <dt className="text-slate-500">Receipt date</dt>
+          <dd className="mt-0.5 text-slate-200">
+            {extracted.initial?.purchaseDate || "Check this"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-slate-500">Suggested category</dt>
+          <dd className="mt-0.5 truncate text-slate-200">
+            {category?.name || "Check this"}
+          </dd>
+        </div>
+      </dl>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <a
+          href={exactDuplicateReceiptHref(item.capture.id)}
+          target="_blank"
+          rel="noreferrer"
+          className={`${secondaryButton} flex items-center justify-center text-center`}
+        >
+          Current receipt
+        </a>
+        {item.duplicate?.capture.contentPath ? (
+          <a
+            href={exactDuplicateReceiptHref(item.duplicate.capture.id)}
+            target="_blank"
+            rel="noreferrer"
+            className={`${secondaryButton} flex items-center justify-center text-center`}
+          >
+            Matched receipt
+          </a>
+        ) : (
+          <span className="flex min-h-11 items-center justify-center rounded-lg border border-white/10 px-2 text-center text-xs text-slate-500">
+            Match unavailable
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onReview}
+        className={`${secondaryButton} mt-3 w-full`}
+      >
+        Review duplicate
+      </button>
+    </article>
+  );
+}
+
 function HistoryView({
   employeeId,
+  currentMember,
+  memberOptions,
+  categories,
+  jobs,
+  canSubmit,
   canApprove,
+  allowReimbursement,
+  exactDuplicateReviewEnabled,
   refreshToken,
 }: {
   employeeId: string;
+  currentMember: MemberOption;
+  memberOptions: MemberOption[];
+  categories: ExpenseCategory[];
+  jobs: JobOption[];
+  canSubmit: boolean;
   canApprove: boolean;
+  allowReimbursement: boolean;
+  exactDuplicateReviewEnabled: boolean;
   refreshToken: number;
 }) {
   const [filter, setFilter] = React.useState("all");
@@ -2029,6 +2402,22 @@ function HistoryView({
   const [reason, setReason] = React.useState("");
   const [reviewBusy, setReviewBusy] = React.useState(false);
   const [reload, setReload] = React.useState(0);
+  const [duplicateRows, setDuplicateRows] = React.useState<
+    ExactDuplicateReviewItem[]
+  >([]);
+  const [duplicateCursor, setDuplicateCursor] = React.useState<string | null>(
+    null,
+  );
+  const [duplicateHasMore, setDuplicateHasMore] = React.useState(false);
+  const [duplicateLoading, setDuplicateLoading] = React.useState(false);
+  const [duplicateError, setDuplicateError] = React.useState<string | null>(
+    null,
+  );
+  const [reviewingDuplicate, setReviewingDuplicate] =
+    React.useState<ExactDuplicateReviewItem | null>(null);
+  const [duplicateBusy, setDuplicateBusy] = React.useState(false);
+  const [duplicateReload, setDuplicateReload] = React.useState(0);
+  const [success, setSuccess] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let active = true;
@@ -2068,6 +2457,39 @@ function HistoryView({
       active = false;
     };
   }, [filter, refreshToken, reload]);
+
+  React.useEffect(() => {
+    if (!exactDuplicateReviewEnabled) {
+      setDuplicateRows([]);
+      setDuplicateCursor(null);
+      setDuplicateHasMore(false);
+      setReviewingDuplicate(null);
+      return;
+    }
+    let active = true;
+    setDuplicateLoading(true);
+    setDuplicateError(null);
+    void fetchExactDuplicateReviewPage(null)
+      .then((result) => {
+        if (!active) return;
+        setDuplicateRows(result.captures);
+        setDuplicateCursor(result.page.nextCursor);
+        setDuplicateHasMore(result.page.hasMore);
+      })
+      .catch(
+        (reasonValue: unknown) =>
+          active &&
+          setDuplicateError(
+            reasonValue instanceof Error
+              ? reasonValue.message
+              : "Duplicate receipts are unavailable.",
+          ),
+      )
+      .finally(() => active && setDuplicateLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [duplicateReload, exactDuplicateReviewEnabled, refreshToken]);
 
   const review = async (decision: "approve" | "reject") => {
     if (!reviewing) return;
@@ -2118,7 +2540,324 @@ function HistoryView({
     }
   };
 
+  const finishDuplicateReview = (captureId: string, message: string): void => {
+    setDuplicateRows((current) =>
+      current.filter((item) => item.capture.id !== captureId),
+    );
+    setReviewingDuplicate(null);
+    setDuplicateError(null);
+    setSuccess(message);
+    setDuplicateReload((value) => value + 1);
+    setReload((value) => value + 1);
+  };
+
+  const reconcileDuplicateCapture = async (
+    item: ExactDuplicateReviewItem,
+    attempt: ExpenseMutationAttempt | null,
+  ): Promise<boolean> => {
+    const response = await fetch(
+      `/api/mobile/expenses/captures/${encodeURIComponent(item.capture.id)}`,
+      { cache: "no-store", credentials: "include" },
+    ).catch(() => null);
+    if (!response?.ok) return false;
+    const payload = await jsonPayload(response);
+    const capture = objectValue(payload?.["capture"]);
+    const status = capture?.["status"];
+    if (status === "confirmed") {
+      if (attempt) {
+        await acknowledgeExpenseMutationAttempt(attempt).catch(() => undefined);
+      }
+      finishDuplicateReview(
+        item.capture.id,
+        "The duplicate receipt was already confirmed.",
+      );
+      return true;
+    }
+    if (status === "discarded") {
+      finishDuplicateReview(item.capture.id, "The receipt was discarded.");
+      return true;
+    }
+    if (
+      capture &&
+      typeof capture["id"] === "string" &&
+      typeof capture["version"] === "number"
+    ) {
+      const nextItem = {
+        ...item,
+        capture: capture as ExpenseCaptureStatus,
+      };
+      setReviewingDuplicate(nextItem);
+      setDuplicateRows((current) =>
+        current.map((candidate) =>
+          candidate.capture.id === item.capture.id ? nextItem : candidate,
+        ),
+      );
+    }
+    return false;
+  };
+
+  const confirmDuplicate = async (
+    body: SubmissionBody,
+    overrideReason: string | null,
+  ): Promise<void> => {
+    const item = reviewingDuplicate;
+    if (!item) return;
+    if (!canSubmit) {
+      setDuplicateError(
+        "This owner can review duplicates but cannot post expenses. Ask an owner with expense submission access to finish it.",
+      );
+      return;
+    }
+    const requestBody = {
+      ...body,
+      ...(overrideReason
+        ? { exactDuplicateOverrideReason: overrideReason }
+        : {}),
+    };
+    let attempt: ExpenseMutationAttempt | null = null;
+    setDuplicateBusy(true);
+    setDuplicateError(null);
+    setSuccess(null);
+    try {
+      attempt = await getExpenseMutationAttempt({
+        employeeId,
+        operation: `owner-duplicate-confirm:${item.capture.id}`,
+        payload: { version: item.capture.version, body: requestBody },
+      });
+      const response = await fetch(
+        `/api/mobile/expenses/captures/${encodeURIComponent(item.capture.id)}/confirm`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": attempt.idempotencyKey,
+            "If-Match": String(item.capture.version),
+          },
+          body: JSON.stringify(requestBody),
+        },
+      );
+      const payload = await jsonPayload(response);
+      if (!response.ok) {
+        if (
+          (response.status === 409 || response.status === 412) &&
+          (await reconcileDuplicateCapture(item, attempt))
+        ) {
+          return;
+        }
+        setDuplicateError(
+          expenseErrorMessage(
+            payload,
+            "The duplicate receipt was not confirmed.",
+          ),
+        );
+        return;
+      }
+      await acknowledgeExpenseMutationAttempt(attempt);
+      finishDuplicateReview(item.capture.id, "Duplicate expense posted.");
+    } catch (reasonValue) {
+      if (await reconcileDuplicateCapture(item, attempt)) return;
+      setDuplicateError(
+        reasonValue instanceof Error &&
+          reasonValue.message.startsWith("Secure expense retry storage")
+          ? reasonValue.message
+          : "The response was interrupted. The same confirmation is ready to retry safely.",
+      );
+    } finally {
+      setDuplicateBusy(false);
+    }
+  };
+
+  const discardDuplicate = async (): Promise<void> => {
+    const item = reviewingDuplicate;
+    if (!item) return;
+    setDuplicateBusy(true);
+    setDuplicateError(null);
+    setSuccess(null);
+    try {
+      const response = await fetch(
+        `/api/mobile/expenses/captures/${encodeURIComponent(item.capture.id)}`,
+        { method: "DELETE", credentials: "include" },
+      );
+      const payload = await jsonPayload(response);
+      if (!response.ok) {
+        if (await reconcileDuplicateCapture(item, null)) return;
+        setDuplicateError(
+          expenseErrorMessage(
+            payload,
+            "The receipt was not discarded and remains in the review queue.",
+          ),
+        );
+        return;
+      }
+      finishDuplicateReview(item.capture.id, "Duplicate receipt discarded.");
+    } catch {
+      if (await reconcileDuplicateCapture(item, null)) return;
+      setDuplicateError(
+        "The discard response was interrupted. The receipt remains in the queue until the server confirms it.",
+      );
+    } finally {
+      setDuplicateBusy(false);
+    }
+  };
+
+  const loadMoreDuplicates = async (): Promise<void> => {
+    if (!duplicateCursor || duplicateLoading) return;
+    setDuplicateLoading(true);
+    setDuplicateError(null);
+    try {
+      const result = await fetchExactDuplicateReviewPage(duplicateCursor);
+      setDuplicateRows((current) => {
+        const knownIds = new Set(current.map((item) => item.capture.id));
+        return [
+          ...current,
+          ...result.captures.filter((item) => !knownIds.has(item.capture.id)),
+        ];
+      });
+      setDuplicateCursor(result.page.nextCursor);
+      setDuplicateHasMore(result.page.hasMore);
+    } catch (reasonValue) {
+      setDuplicateError(
+        reasonValue instanceof Error
+          ? reasonValue.message
+          : "More duplicate receipts could not be loaded.",
+      );
+    } finally {
+      setDuplicateLoading(false);
+    }
+  };
+
+  if (reviewingDuplicate) {
+    const extracted = receiptExtractionFromCapture(reviewingDuplicate.capture);
+    const duplicate = reviewingDuplicate.duplicate;
+    return (
+      <div className={`${cardClass} space-y-4`}>
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-rose-200">
+            Exact duplicate review
+          </p>
+          <h2 className="mt-1 text-lg font-semibold">Confirm before posting</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-300">
+            Submitted by {reviewingDuplicate.submitter.name}. Compare both
+            originals and record why this should be posted again.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <a
+            href={exactDuplicateReceiptHref(reviewingDuplicate.capture.id)}
+            target="_blank"
+            rel="noreferrer"
+            className={`${secondaryButton} flex items-center justify-center text-center`}
+          >
+            Current receipt
+          </a>
+          {duplicate?.capture.contentPath ? (
+            <a
+              href={exactDuplicateReceiptHref(duplicate.capture.id)}
+              target="_blank"
+              rel="noreferrer"
+              className={`${secondaryButton} flex items-center justify-center text-center`}
+            >
+              Matched receipt
+            </a>
+          ) : (
+            <span className="flex min-h-11 items-center justify-center rounded-lg border border-white/10 px-2 text-center text-xs text-slate-500">
+              Matched receipt unavailable
+            </span>
+          )}
+        </div>
+        <details className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+          <summary
+            className={`${focusRing} flex min-h-11 cursor-pointer items-center text-sm font-semibold text-slate-200`}
+          >
+            Matched entry details
+          </summary>
+          <dl className="grid grid-cols-2 gap-3 border-t border-white/10 pt-3 text-xs">
+            <div>
+              <dt className="text-slate-500">Original submitter</dt>
+              <dd className="mt-1 text-slate-200">
+                {duplicate?.capture.submitterName ?? "Unknown"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Original filename</dt>
+              <dd className="mt-1 break-words text-slate-200">
+                {duplicate?.capture.filename ?? "Unavailable"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Posted amount</dt>
+              <dd className="mt-1 text-slate-200">
+                {duplicate?.expense
+                  ? formatExpenseMoney(duplicate.expense.amountCents)
+                  : "No posted expense"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Vendor / category</dt>
+              <dd className="mt-1 text-slate-200">
+                {duplicate?.expense
+                  ? [duplicate.expense.vendor, duplicate.expense.category]
+                      .filter(Boolean)
+                      .join(" · ") || "Not recorded"
+                  : "Not recorded"}
+              </dd>
+            </div>
+          </dl>
+        </details>
+        {!canSubmit ? (
+          <StatusNotice
+            tone="error"
+            message="Your role can review duplicates but cannot post expenses. Another owner with expense submission access must confirm this receipt."
+          />
+        ) : null}
+        {duplicateError ? (
+          <StatusNotice tone="error" message={duplicateError} />
+        ) : null}
+        <ExpenseEditor
+          key={`${reviewingDuplicate.capture.id}:${reviewingDuplicate.capture.version}`}
+          categories={categories}
+          currentMember={currentMember}
+          memberOptions={memberOptions}
+          jobs={jobs}
+          canApprove={canApprove}
+          allowReimbursement={allowReimbursement}
+          initial={extracted.initial}
+          attentionFields={extracted.attention}
+          vendorPrimary
+          duplicateRisk="exact"
+          submitting={duplicateBusy}
+          submitDisabled={!canSubmit}
+          submitLabel="Post expense"
+          onBack={() => {
+            setReviewingDuplicate(null);
+            setDuplicateError(null);
+          }}
+          onSubmit={confirmDuplicate}
+        />
+        <details className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+          <summary
+            className={`${focusRing} flex min-h-11 cursor-pointer items-center text-sm font-semibold text-slate-300`}
+          >
+            Receipt actions
+          </summary>
+          <button
+            type="button"
+            disabled={duplicateBusy}
+            onClick={() => void discardDuplicate()}
+            className={`${secondaryButton} mt-3 w-full border-rose-300/30 text-rose-100`}
+          >
+            Discard duplicate receipt
+          </button>
+        </details>
+      </div>
+    );
+  }
+
   if (reviewing) {
+    const linkedJob = reviewing.appointmentId
+      ? (jobs.find((job) => job.id === reviewing.appointmentId) ?? null)
+      : null;
     return (
       <div className={`${cardClass} space-y-4`}>
         <div>
@@ -2147,6 +2886,72 @@ function HistoryView({
             View receipt
           </a>
         ) : null}
+        <details className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+          <summary
+            className={`${focusRing} flex min-h-11 cursor-pointer items-center text-sm font-semibold text-slate-200`}
+          >
+            Expense details
+          </summary>
+          <dl className="grid grid-cols-2 gap-3 border-t border-white/10 pt-3 text-xs">
+            <div>
+              <dt className="text-slate-500">Vendor</dt>
+              <dd className="mt-1 break-words text-slate-200">
+                {reviewing.vendor ?? "Not provided"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Payer</dt>
+              <dd className="mt-1 text-slate-200">
+                {reviewing.payerType === "personal"
+                  ? (reviewing.paidByMember?.name ?? "Employee-paid")
+                  : "Company"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Payment method</dt>
+              <dd className="mt-1 capitalize text-slate-200">
+                {reviewing.method ?? "Not provided"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Job</dt>
+              <dd className="mt-1 break-words text-slate-200">
+                {linkedJob
+                  ? `${linkedJob.date} · ${linkedJob.label}`
+                  : reviewing.appointmentId
+                    ? `Job ${reviewing.appointmentId}`
+                    : "Not linked"}
+              </dd>
+            </div>
+            <div className="col-span-2">
+              <dt className="text-slate-500">Notes</dt>
+              <dd className="mt-1 whitespace-pre-wrap break-words text-slate-200">
+                {reviewing.notes ?? "None"}
+              </dd>
+            </div>
+            <div className="col-span-2">
+              <dt className="text-slate-500">Category allocation</dt>
+              <dd className="mt-1 space-y-1 text-slate-200">
+                {reviewing.allocations?.length ? (
+                  reviewing.allocations.map((allocation) => (
+                    <span
+                      key={allocation.categoryId}
+                      className="flex justify-between gap-3"
+                    >
+                      <span>{allocation.category}</span>
+                      <span>{formatExpenseMoney(allocation.amountCents)}</span>
+                    </span>
+                  ))
+                ) : (
+                  <span className="flex justify-between gap-3">
+                    <span>{reviewing.category}</span>
+                    <span>{formatExpenseMoney(reviewing.amountCents)}</span>
+                  </span>
+                )}
+              </dd>
+            </div>
+          </dl>
+        </details>
         <label className="block">
           <FieldLabel>Reason (required to reject)</FieldLabel>
           <textarea
@@ -2192,6 +2997,56 @@ function HistoryView({
 
   return (
     <div className="space-y-4">
+      {success ? <StatusNotice tone="success" message={success} /> : null}
+      {duplicateError ? (
+        <StatusNotice tone="error" message={duplicateError} />
+      ) : null}
+      {exactDuplicateReviewEnabled &&
+      (duplicateLoading || duplicateRows.length > 0) ? (
+        <section
+          aria-labelledby="duplicate-review-heading"
+          className="space-y-3"
+        >
+          <div className={cardClass}>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-rose-200">
+              Owner review
+            </p>
+            <h2 id="duplicate-review-heading" className="mt-1 font-semibold">
+              Exact duplicate receipts
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-slate-400">
+              Compare both originals before posting or discarding.
+            </p>
+          </div>
+          {duplicateRows.map((item) => (
+            <ExactDuplicateQueueCard
+              key={item.capture.id}
+              item={item}
+              categories={categories}
+              onReview={() => {
+                setReviewingDuplicate(item);
+                setDuplicateError(null);
+                setSuccess(null);
+              }}
+            />
+          ))}
+          {duplicateLoading && !duplicateRows.length ? (
+            <div className={`${cardClass} text-sm text-slate-300`}>
+              Checking exact duplicate receipts…
+            </div>
+          ) : null}
+          {duplicateHasMore ? (
+            <button
+              type="button"
+              disabled={duplicateLoading}
+              onClick={() => void loadMoreDuplicates()}
+              className={`${secondaryButton} w-full`}
+            >
+              {duplicateLoading ? "Loading…" : "Load more duplicates"}
+            </button>
+          ) : null}
+        </section>
+      ) : null}
       <div className={cardClass}>
         <label className="block">
           <FieldLabel>Filter history</FieldLabel>
@@ -2250,8 +3105,10 @@ function HistoryView({
             </div>
             <div>
               <dt className="text-slate-500">Paid by</dt>
-              <dd className="mt-0.5 capitalize text-slate-300">
-                {row.payerType}
+              <dd className="mt-0.5 text-slate-300">
+                {row.payerType === "personal"
+                  ? (row.paidByMember?.name ?? "Employee-paid")
+                  : "Company"}
               </dd>
             </div>
             <div>
@@ -2325,6 +3182,11 @@ export function MobileSpendV2({
   const yesterday = addDateKeyDays(easternDateKey(), -1);
   const [view, setView] = React.useState<SpendView>("add");
   const [workflow, setWorkflow] = React.useState<AddWorkflow>(null);
+  const [capabilities, setCapabilities] =
+    React.useState<ExpenseCapabilities | null>(null);
+  const [capabilitiesError, setCapabilitiesError] = React.useState<
+    string | null
+  >(null);
   const [categories, setCategories] = React.useState<ExpenseCategory[]>([]);
   const [activeCapture, setActiveCapture] =
     React.useState<ExpenseCaptureQueueRow | null>(null);
@@ -2339,6 +3201,88 @@ export function MobileSpendV2({
     tone: "error" | "success";
   } | null>(null);
   const [historyRefresh, setHistoryRefresh] = React.useState(0);
+  const receiptEnabled = Boolean(
+    canSubmit && capabilities?.receiptCapture === true,
+  );
+  const adSpendEnabled = Boolean(
+    canWriteAdSpend && capabilities?.dailyAdSpend === true,
+  );
+  const overviewEnabled = Boolean(
+    canViewOverview && capabilities?.overview === true,
+  );
+  const reimbursementEnabled = Boolean(
+    canSubmit && capabilities?.reimbursement === true,
+  );
+  const exactDuplicateReviewEnabled = Boolean(
+    canApprove && capabilities?.exactDuplicateReview === true,
+  );
+
+  React.useEffect(() => {
+    let active = true;
+    setCapabilities(null);
+    setCapabilitiesError(null);
+    void fetch("/api/mobile/expenses/capabilities", {
+      cache: "no-store",
+      credentials: "include",
+    })
+      .then(async (response) => ({
+        response,
+        payload: await jsonPayload(response),
+      }))
+      .then(({ response, payload }) => {
+        if (!active) return;
+        if (!response.ok) {
+          throw new Error(
+            expenseErrorMessage(
+              payload,
+              "Optional expense tools are unavailable.",
+            ),
+          );
+        }
+        const value = objectValue(payload?.["capabilities"]);
+        if (!value) throw new Error("Optional expense tools are unavailable.");
+        setCapabilities({
+          manualEntry: value["manualEntry"] === true,
+          receiptCapture: value["receiptCapture"] === true,
+          reimbursement: value["reimbursement"] === true,
+          dailyAdSpend: value["dailyAdSpend"] === true,
+          overview: value["overview"] === true,
+          exactDuplicateReview: value["exactDuplicateReview"] === true,
+        });
+      })
+      .catch(
+        (reasonValue: unknown) =>
+          active &&
+          setCapabilitiesError(
+            reasonValue instanceof Error
+              ? reasonValue.message
+              : "Optional expense tools are unavailable.",
+          ),
+      );
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!capabilities) return;
+    if (view === "overview" && !overviewEnabled) {
+      setView("add");
+      setWorkflow(null);
+    } else if (
+      (workflow === "scan" && !receiptEnabled) ||
+      (workflow === "ads" && !adSpendEnabled)
+    ) {
+      setWorkflow(null);
+    }
+  }, [
+    adSpendEnabled,
+    capabilities,
+    overviewEnabled,
+    receiptEnabled,
+    view,
+    workflow,
+  ]);
 
   React.useEffect(() => {
     if (!canSubmit && !canApprove) return;
@@ -2377,9 +3321,14 @@ export function MobileSpendV2({
 
   React.useEffect(() => {
     reloadQueue();
-    void syncEmployeeExpenseCaptures(employee.id).then(reloadQueue);
-    const onOnline = () =>
+    if (receiptEnabled) {
       void syncEmployeeExpenseCaptures(employee.id).then(reloadQueue);
+    }
+    const onOnline = () => {
+      if (receiptEnabled) {
+        void syncEmployeeExpenseCaptures(employee.id).then(reloadQueue);
+      }
+    };
     const onQueue = () => reloadQueue();
     const onWorker = (event: MessageEvent<unknown>) => {
       if (
@@ -2395,12 +3344,13 @@ export function MobileSpendV2({
       window.removeEventListener(MOBILE_EXPENSE_QUEUE_EVENT, onQueue);
       navigator.serviceWorker?.removeEventListener("message", onWorker);
     };
-  }, [employee.id, reloadQueue]);
+  }, [employee.id, receiptEnabled, reloadQueue]);
 
   React.useEffect(() => {
     const captureId = activeCapture?.clientCaptureId;
     const captureStatus = activeCapture?.status;
     if (
+      !receiptEnabled ||
       !captureId ||
       !captureStatus ||
       !shouldPollExpenseCaptureStatus(captureStatus)
@@ -2421,10 +3371,13 @@ export function MobileSpendV2({
       captureStatus === "failed" ? 10_000 : 2500,
     );
     return () => window.clearInterval(poll);
-  }, [activeCapture?.clientCaptureId, activeCapture?.status]);
+  }, [activeCapture?.clientCaptureId, activeCapture?.status, receiptEnabled]);
 
   React.useEffect(() => {
-    if (!canWriteAdSpend) return;
+    if (!adSpendEnabled) {
+      setMissingYesterday(false);
+      return;
+    }
     void fetch(
       `/api/mobile/expenses/daily-ad-spend?businessDate=${encodeURIComponent(yesterday)}`,
       { cache: "no-store" },
@@ -2436,7 +3389,7 @@ export function MobileSpendV2({
         ),
       )
       .catch(() => undefined);
-  }, [canWriteAdSpend, yesterday, historyRefresh]);
+  }, [adSpendEnabled, yesterday, historyRefresh]);
 
   const done = (message: string) => {
     setNotice({ tone: "success", message });
@@ -2523,8 +3476,18 @@ export function MobileSpendV2({
       <SegmentedControl
         value={view}
         onChange={changeView}
-        canViewOverview={canViewOverview}
+        showOverview={overviewEnabled}
       />
+      <div aria-live="polite" className="sr-only">
+        {!capabilities && !capabilitiesError
+          ? "Loading optional expense tools"
+          : capabilitiesError
+            ? "Optional expense tools are unavailable"
+            : "Optional expense tools loaded"}
+      </div>
+      {capabilitiesError ? (
+        <StatusNotice tone="info" message={capabilitiesError} />
+      ) : null}
       {notice ? (
         <StatusNotice tone={notice.tone} message={notice.message} />
       ) : null}
@@ -2532,7 +3495,8 @@ export function MobileSpendV2({
         workflow === null ? (
           <AddChoices
             canSubmit={canSubmit}
-            canWriteAdSpend={canWriteAdSpend}
+            receiptEnabled={receiptEnabled}
+            adSpendEnabled={adSpendEnabled}
             pendingCapture={activeCapture}
             missingYesterday={missingYesterday}
             onChoose={(choice) => {
@@ -2550,6 +3514,7 @@ export function MobileSpendV2({
             members={memberOptions}
             jobs={jobs}
             canApprove={canApprove}
+            allowReimbursement={reimbursementEnabled}
             onRow={setActiveCapture}
             onDone={done}
             onBack={() => setWorkflow(null)}
@@ -2570,6 +3535,7 @@ export function MobileSpendV2({
               memberOptions={memberOptions}
               jobs={jobs}
               canApprove={canApprove}
+              allowReimbursement={reimbursementEnabled}
               submitting={submitting}
               submitLabel={canApprove ? "Post expense" : "Submit for approval"}
               onBack={() => setWorkflow(null)}
@@ -2584,16 +3550,24 @@ export function MobileSpendV2({
             onSaved={done}
           />
         )
-      ) : view === "overview" && canViewOverview ? (
+      ) : view === "overview" && overviewEnabled ? (
         <OverviewView
           weekStart={weekStart}
           onWeekStart={setWeekStart}
           onMissingAd={openMissingAd}
+          canEnterAdSpend={adSpendEnabled}
         />
       ) : view === "history" ? (
         <HistoryView
           employeeId={employee.id}
+          currentMember={employee}
+          memberOptions={memberOptions}
+          categories={categories}
+          jobs={jobs}
+          canSubmit={canSubmit}
           canApprove={canApprove}
+          allowReimbursement={reimbursementEnabled}
+          exactDuplicateReviewEnabled={exactDuplicateReviewEnabled}
           refreshToken={historyRefresh}
         />
       ) : null}
