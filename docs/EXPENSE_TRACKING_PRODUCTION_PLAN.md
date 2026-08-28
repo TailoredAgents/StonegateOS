@@ -277,8 +277,11 @@ all existing financial-integrity rules remain authoritative.
 - [ ] Roll out database -> API -> site -> owner flag, enter verified current
       costs, and reconcile at least one cross-month week before relying on the
       operating-profit result.
-  - Verification: Pending production deployment IDs, owner-entered fixture
-    reconciliation, audit review, and rollback observation.
+  - Verification: Partial—migration `0108` and the fixed-cost API/site shipped
+    in commit `0c2a4b8e`; `EXPENSE_FIXED_COSTS_ENABLED=1` is live. No fixed-cost
+    rows were entered during deployment. Owner-entered data, a cross-month
+    production reconciliation, audit review, and rollback observation remain
+    required before treating production profit as fully reconciled.
 
 ## Verification and production rollout
 
@@ -297,13 +300,20 @@ all existing financial-integrity rules remain authoritative.
 - [x] Confirm Overview reconciles exactly against fixture revenue, allocations, labor, ads, corrections, and reimbursements.
   - Verification: Exact-cent fixture assertions passed in `expense-overview.test.ts` and `expense-overview-repository.test.ts`, including zero denominators and finalized payroll replacement.
 - [x] Release behind separate receipt, ad-spend, reimbursement, and Overview flags.
-  - Verification: `expense-feature-flags.test.ts` passed independent default-off controls. Receipt API/worker flags must agree, and `EXPENSE_RECEIPT_CREW_ENABLED` keeps the first 30-50 scans owner-only.
-- [ ] Deploy in order: database expansion -> API -> worker -> site.
-  - Verification: Local clean-database migration, API tests, worker contracts, and site build passed. No production deployment or feature enablement was performed because rollout gates remain open.
+  - Verification: `expense-feature-flags.test.ts` passed independent default-off controls. In production, receipt API/worker, crew, ad-spend, reimbursement, Overview, and fixed-cost flags were explicitly enabled on 2026-08-27 Eastern time after the worker-first handoff.
+- [x] Deploy in order: database expansion -> API -> worker -> site.
+  - Verification: Render auto-deployed commit `0c2a4b8e`. The API pre-deploy
+    applied and verified migration `0108` before feature activation; API deploy
+    `dep-da8famht0dsc73c3b9n0`, worker deploy
+    `dep-da8famht0dsc73c3bb50`, and site deploy
+    `dep-da8famht0dsc73c3bcfg` all reached `live`. Receipt processing was then
+    activated worker-first (`dep-da8fd3cs728c73bjnqeg`) before all API expense
+    flags (`dep-da8fdt0n74is73dq464g`). Final `/api/readyz` returned HTTP 200
+    with database, migration `0108`, worker heartbeat, and queue checks healthy.
 - [ ] Pilot owner-only scanning with 30-50 receipts, then enable owner ad entry and Overview, then crew submission.
-  - Verification: Owner/crew audience gates are implemented and default off; live owner pilot, benchmark, and staged enablement remain pending.
+  - Verification: Not completed—the owner/crew audience gates remain implemented, but explicit full-production enablement was requested before the owner-only pilot and benchmark were run. Those evidence gates remain open even though crew access is live.
 - [ ] Monitor analysis latency/failures, correction rate, duplicate warnings, unsynced queue age, pending approvals, missing ad days, reimbursement backlog, and incomplete overview weeks.
-  - Verification: Aggregate-only operations endpoint, fresh/stale client queue telemetry, permission checks, and monitor integration tests passed. Live production observations remain pending.
+  - Verification: Aggregate-only operations endpoint, fresh/stale client queue telemetry, permission checks, and monitor integration tests passed. Initial post-enable readiness, queue, heartbeat, and error-log checks were healthy; sustained production observation remains pending.
 - [x] Keep the existing manual expense path available as rollback; disabling flags must not hide or corrupt captured ledger data.
   - Verification: Capability/source tests confirm manual entry remains available; captured status/content paths remain readable with intake flags off, and feature-flag tests confirm independent rollback.
 
@@ -320,15 +330,15 @@ all existing financial-integrity rules remain authoritative.
 
 ## Rollout record
 
-| Stage                       | Status                                    | Verification notes                                                                                                                              |
-| --------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Database expansion          | Locally verified; production pending      | Migrations through `0108` applied cleanly to fresh PostgreSQL 16; a second dry run found no pending work; 9 integration suites/18 cases passed. |
-| API                         | Locally verified; production pending      | Full API run passed 267 suites/2,871 tests (10 suites/21 tests skipped); typecheck and production build passed.                                 |
-| Receipt analysis worker     | Locally verified; production pending      | Async outbox, retry, terminal failure, and flag-mismatch contracts passed; no live provider benchmark was run.                                  |
-| Mobile site                 | Build verified; device validation pending | Production build, all 32 site tests, and the 4-scenario dual-browser mobile spec passed; physical accessibility/offline matrix remains open.    |
-| Owner receipt pilot         | Pending                                   | Enable receipt API + worker while keeping `EXPENSE_RECEIPT_CREW_ENABLED=0`; requires 30-50 reviewed receipts.                                   |
-| Owner ad spend and Overview | Pending                                   | Enable only after owner receipt pilot reconciliation.                                                                                           |
-| Crew submissions            | Pending                                   | Requires benchmark thresholds, physical-device matrix, owner pilot, and explicit crew-flag enablement.                                          |
+| Stage                       | Status                                   | Verification notes                                                                                                                                                     |
+| --------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database expansion          | Production live                          | Migration `0108` applied and verified during API pre-deploy; final readiness reports `0108_expense_recurring_fixed_costs`.                                             |
+| API                         | Production live; all expense flags on    | Code deploy `dep-da8famht0dsc73c3b9n0` and flag deploy `dep-da8fdt0n74is73dq464g` are live; readiness is healthy.                                                      |
+| Receipt analysis worker     | Production live and enabled              | Code deploy `dep-da8famht0dsc73c3bb50` and worker-first flag deploy `dep-da8fd3cs728c73bjnqeg` are live with fresh heartbeats; the 100-receipt benchmark remains open. |
+| Mobile site                 | Production live; device validation open  | Deploy `dep-da8famht0dsc73c3bcfg` is live; build, 32 site tests, and dual-browser mobile specs passed; the physical accessibility/offline matrix remains open.         |
+| Owner receipt pilot         | Not completed                            | The owner-only 30–50 receipt pilot remains open. Crew access was enabled afterward only because explicit full-production enablement was requested.                     |
+| Owner ad spend and Overview | Production enabled                       | Manual ad spend, Overview, and fixed-cost setup flags are live. No ad or fixed-cost values were entered during deployment.                                             |
+| Crew submissions            | Enabled by explicit production direction | Crew receipt submission is live; benchmark thresholds, physical-device validation, and monitoring remain open rollout risks.                                           |
 
 ## Deferred/out of scope
 
