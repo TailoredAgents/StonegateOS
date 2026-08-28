@@ -22,6 +22,7 @@ const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
 const QUEUE_HEALTH_TIMEOUT_MS = 30 * 1000;
 const QUEUE_HEALTH_REFRESH_MS = 5 * 60 * 1000;
 const QUEUE_HEALTH_FAILURE_BACKOFF_MS = 60 * 1000;
+const SERVICE_WORKER_READY_TIMEOUT_MS = 1500;
 
 const queueHealthReports = new Map<
   string,
@@ -29,6 +30,24 @@ const queueHealthReports = new Map<
 >();
 const queueHealthFailuresUntil = new Map<string, number>();
 const queueHealthInFlight = new Map<string, Promise<boolean>>();
+
+export function createKeyedSingleFlight<Key, Value>(): (
+  key: Key,
+  operation: () => Promise<Value>,
+) => Promise<Value> {
+  const active = new Map<Key, Promise<Value>>();
+  return (key, operation) => {
+    const existing = active.get(key);
+    if (existing) return existing;
+
+    const pending = Promise.resolve().then(operation);
+    const settled = pending.finally(() => {
+      if (active.get(key) === settled) active.delete(key);
+    });
+    active.set(key, settled);
+    return settled;
+  };
+}
 
 export type ExpenseCaptureQueueStatus =
   | "draft"
@@ -61,6 +80,12 @@ export type ExpenseCaptureQueueHealthSummary = {
   failedCount: number;
   oldestQueuedAt: number | null;
 };
+
+const runCaptureSyncSingleFlight = createKeyedSingleFlight<
+  string,
+  ExpenseCaptureQueueRow
+>();
+const runEmployeeSyncSingleFlight = createKeyedSingleFlight<string, void>();
 
 function requiresServerAcknowledgement(row: ExpenseCaptureQueueRow): boolean {
   if (row.serverCapture) return false;
@@ -269,7 +294,7 @@ export async function queueExpenseCapture(
     updatedAt: Date.now(),
   };
   await writeRow(queued);
-  await registerExpenseBackgroundSync();
+  void registerExpenseBackgroundSync();
   return queued;
 }
 
@@ -325,7 +350,7 @@ function captureFailureMessage(
     : null;
 }
 
-export async function syncExpenseCapture(
+async function performExpenseCaptureSync(
   clientCaptureId: string,
 ): Promise<ExpenseCaptureQueueRow> {
   const current = await getExpenseCaptureQueueRow(clientCaptureId);
@@ -465,9 +490,17 @@ export async function syncExpenseCapture(
       updatedAt: Date.now(),
     };
     await writeRow(retry);
-    await registerExpenseBackgroundSync();
+    void registerExpenseBackgroundSync();
     return retry;
   }
+}
+
+export function syncExpenseCapture(
+  clientCaptureId: string,
+): Promise<ExpenseCaptureQueueRow> {
+  return runCaptureSyncSingleFlight(clientCaptureId, () =>
+    performExpenseCaptureSync(clientCaptureId),
+  );
 }
 
 export async function refreshExpenseCapture(
@@ -497,7 +530,7 @@ export async function refreshExpenseCapture(
   return row;
 }
 
-export async function syncEmployeeExpenseCaptures(
+async function performEmployeeExpenseCaptureSync(
   employeeId: string,
 ): Promise<void> {
   const rows = await listExpenseCaptureQueue(employeeId);
@@ -511,6 +544,12 @@ export async function syncEmployeeExpenseCaptures(
     }
     await syncExpenseCapture(row.clientCaptureId).catch(() => undefined);
   }
+}
+
+export function syncEmployeeExpenseCaptures(employeeId: string): Promise<void> {
+  return runEmployeeSyncSingleFlight(employeeId, () =>
+    performEmployeeExpenseCaptureSync(employeeId),
+  );
 }
 
 async function performExpenseQueueHealthReport(
@@ -597,7 +636,28 @@ export async function registerExpenseBackgroundSync(): Promise<void> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator))
     return;
   try {
-    const registration = await navigator.serviceWorker.ready;
+    const existing = await navigator.serviceWorker.getRegistration("/mobile");
+    const registration =
+      existing ??
+      (await new Promise<ServiceWorkerRegistration | null>((resolve) => {
+        let finished = false;
+        let timeout: ReturnType<typeof globalThis.setTimeout> | null = null;
+        const finish = (value: ServiceWorkerRegistration | null) => {
+          if (finished) return;
+          finished = true;
+          if (timeout !== null) globalThis.clearTimeout(timeout);
+          resolve(value);
+        };
+        timeout = globalThis.setTimeout(
+          () => finish(null),
+          SERVICE_WORKER_READY_TIMEOUT_MS,
+        );
+        void navigator.serviceWorker.ready.then(
+          (value) => finish(value),
+          () => finish(null),
+        );
+      }));
+    if (!registration) return;
     if ("sync" in registration) {
       await (
         registration as ServiceWorkerRegistration & {

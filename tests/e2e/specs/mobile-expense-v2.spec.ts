@@ -6,6 +6,154 @@ test.describe("Mobile Spend V2", () => {
     serviceWorkers: "block",
   });
 
+  test("coalesces receipt sync triggers into one upload", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(!isMobile, "This workflow is covered by the mobile projects.");
+
+    const browserErrors: string[] = [];
+    let intentCount = 0;
+    let uploadCount = 0;
+    let finalizeCount = 0;
+    page.on("pageerror", (error) => browserErrors.push(error.message));
+
+    await page.route("**/api/mobile/expenses/capabilities", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          capabilities: {
+            manualEntry: true,
+            receiptCapture: true,
+            reimbursement: true,
+            dailyAdSpend: false,
+            overview: false,
+            exactDuplicateReview: true,
+            fixedCosts: false,
+          },
+        }),
+      }),
+    );
+    await page.route("**/api/mobile/expenses/categories", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          categories: [{ id: "fuel", name: "Fuel" }],
+        }),
+      }),
+    );
+    await page.route("**/api/mobile/expenses/queue-health", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true }),
+      }),
+    );
+    await page.route("**/api/mobile/expenses/captures", async (route) => {
+      expect(route.request().method()).toBe("POST");
+      intentCount += 1;
+      const body = route.request().postDataJSON() as {
+        clientCaptureId: string;
+      };
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await route.fulfill({
+        status: intentCount === 1 ? 201 : 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          capture: {
+            id: "11111111-1111-4111-8111-111111111111",
+            clientCaptureId: body.clientCaptureId,
+            status: "awaiting_upload",
+            version: 1,
+          },
+          uploadUrl: `/api/mobile/expenses/captures/${body.clientCaptureId}/upload`,
+        }),
+      });
+    });
+    await page.route(
+      "**/api/mobile/expenses/captures/*/upload",
+      async (route) => {
+        expect(route.request().method()).toBe("PUT");
+        uploadCount += 1;
+        await route.fulfill({ status: 204 });
+      },
+    );
+    await page.route(
+      "**/api/mobile/expenses/captures/*/finalize",
+      async (route) => {
+        expect(route.request().method()).toBe("POST");
+        finalizeCount += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            capture: {
+              id: "11111111-1111-4111-8111-111111111111",
+              status: "ready",
+              version: 2,
+              extraction: {
+                review: {
+                  fields: {
+                    vendor: { value: "Test Fuel" },
+                    transactionDate: { value: "2026-08-28" },
+                    totalCents: { value: 1250 },
+                    suggestedCategoryId: { value: "fuel" },
+                  },
+                  fieldsToCheck: [],
+                },
+              },
+            },
+          }),
+        });
+      },
+    );
+
+    await page.goto("/mobile?screen=expenses");
+    await page.getByRole("button", { name: /^Scan receipt/u }).click();
+    await page.getByLabel("Choose receipt photo or PDF").setInputFiles({
+      name: "receipt.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z0V8AAAAASUVORK5CYII=",
+        "base64",
+      ),
+    });
+    await expect(
+      page.getByRole("heading", { name: "Use this receipt?" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Extract receipt details" }).click();
+    await expect.poll(() => intentCount).toBe(1);
+
+    await page.evaluate(() => {
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        window.dispatchEvent(
+          new CustomEvent("stonegate:expense-queue-change", {
+            detail: { employeeId: "mobile-owner" },
+          }),
+        );
+        window.dispatchEvent(new Event("online"));
+      }
+    });
+
+    await expect(
+      page.getByRole("heading", { name: "Confirm every value" }),
+    ).toBeVisible();
+    await expect.poll(() => uploadCount).toBe(1);
+    await expect.poll(() => finalizeCount).toBe(1);
+    await page.waitForTimeout(250);
+
+    expect(intentCount).toBe(1);
+    expect(uploadCount).toBe(1);
+    expect(finalizeCount).toBe(1);
+    expect(browserErrors).toEqual([]);
+  });
+
   test("keeps Add focused and exposes the essential manual and ad fields", async ({
     page,
     isMobile,

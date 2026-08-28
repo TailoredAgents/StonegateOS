@@ -5,6 +5,11 @@ import {
   readMobileExpenseBody,
   requireMobileExpenseSession,
 } from "@/app/api/mobile/expenses/lib/expense-proxy";
+import {
+  receiptUploadAdmission,
+  receiptUploadAdmissionResponse,
+  receiptUploadDeclaredLength,
+} from "@/app/api/mobile/expenses/lib/receipt-upload-admission";
 
 const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
 const ALLOWED_CONTENT_TYPES = new Set([
@@ -58,20 +63,40 @@ export async function PUT(
       "Use a JPEG, PNG, WebP, HEIC, or PDF receipt.",
     );
   }
-  const bytes = await readMobileExpenseBody(request, MAX_RECEIPT_BYTES);
-  if (!bytes?.byteLength) {
+  const declaredLength = receiptUploadDeclaredLength(
+    request.headers.get("content-length"),
+    MAX_RECEIPT_BYTES,
+  );
+  if (!declaredLength.ok) {
     return failure(
-      bytes === null ? 413 : 400,
-      bytes === null ? "receipt_too_large" : "empty_receipt",
-      bytes === null
+      declaredLength.reason === "too_large" ? 413 : 400,
+      declaredLength.reason === "too_large"
+        ? "receipt_too_large"
+        : "invalid_content_length",
+      declaredLength.reason === "too_large"
         ? "Receipts must be 10 MB or smaller."
-        : "Choose a receipt to upload.",
+        : "The receipt size header is invalid.",
     );
   }
 
   const { captureId } = await context.params;
+  const admission = receiptUploadAdmission.tryAcquire(captureId);
+  if (!admission.ok) {
+    return receiptUploadAdmissionResponse(admission.rejection);
+  }
   const encodedCaptureId = encodeExpenseRouteId(captureId);
   try {
+    const bytes = await readMobileExpenseBody(request, MAX_RECEIPT_BYTES);
+    if (!bytes?.byteLength) {
+      return failure(
+        bytes === null ? 413 : 400,
+        bytes === null ? "receipt_too_large" : "empty_receipt",
+        bytes === null
+          ? "Receipts must be 10 MB or smaller."
+          : "Choose a receipt to upload.",
+      );
+    }
+
     const statusResponse = await callAdminApiForCurrentSession(
       `/api/admin/expenses/captures/${encodedCaptureId}`,
       { method: "GET" },
@@ -205,5 +230,7 @@ export async function PUT(
       timedOut ? "receipt_upload_timeout" : "receipt_upload_unavailable",
       "The receipt remains queued on this device and will retry.",
     );
+  } finally {
+    admission.release();
   }
 }

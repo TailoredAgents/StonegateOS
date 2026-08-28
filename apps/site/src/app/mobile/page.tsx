@@ -53,6 +53,7 @@ import { MobileCompletionFinalTotalFields } from "./MobileCompletionFinalTotalFi
 import { MobileLogoutForm } from "./MobileLogoutForm";
 import { MobileOfflineRuntime } from "./MobileOfflineRuntime";
 import { MobilePayoutCreateButton } from "./MobilePayoutCreateButton";
+import { MobileSpendErrorBoundary } from "./MobileSpendErrorBoundary";
 import { MobileSpendV2 } from "./MobileSpendV2";
 import type { AppointmentMediaSummary } from "./MobileQuotedWorkPanel";
 import type { AppointmentPaymentSummary } from "./MobilePaymentPanel";
@@ -5340,21 +5341,23 @@ export default async function MobileHomePage({
               </div>
             </div>
           ) : activeScreen === "expenses" ? (
-            <MobileSpendV2
-              employee={{
-                id: session.teamMember.id,
-                name: session.teamMember.name,
-              }}
-              canSubmit={canSubmitExpenses}
-              canApprove={canApproveExpenses}
-              canViewOverview={canReadFinancials}
-              canWriteAdSpend={canWriteAdSpend}
-              members={teamMembers.map((member) => ({
-                id: member.id,
-                name: member.name,
-              }))}
-              jobs={mobileExpenseJobs}
-            />
+            <MobileSpendErrorBoundary>
+              <MobileSpendV2
+                employee={{
+                  id: session.teamMember.id,
+                  name: session.teamMember.name,
+                }}
+                canSubmit={canSubmitExpenses}
+                canApprove={canApproveExpenses}
+                canViewOverview={canReadFinancials}
+                canWriteAdSpend={canWriteAdSpend}
+                members={teamMembers.map((member) => ({
+                  id: member.id,
+                  name: member.name,
+                }))}
+                jobs={mobileExpenseJobs}
+              />
+            </MobileSpendErrorBoundary>
           ) : activeScreen === "settings" ? (
             <div className="space-y-4">
               <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">

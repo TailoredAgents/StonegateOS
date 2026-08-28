@@ -127,6 +127,8 @@ jobs:
           test/binary-upload.test.ts
           test/legacy-expense-receipt.test.ts
           test/mobile-expense-capture-route.test.ts
+          test/mobile-expense-capture-single-flight.test.ts
+          test/receipt-upload-admission.test.ts
           test/mobile-fixed-cost-route.test.ts
           test/mobile-spend-v2.test.ts
 

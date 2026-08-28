@@ -1307,6 +1307,7 @@ function ReceiptWorkflow({
   onBack: () => void;
 }) {
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const extractionInFlightRef = React.useRef(false);
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
@@ -1360,13 +1361,25 @@ function ReceiptWorkflow({
   };
 
   const startExtraction = async () => {
-    if (!row) return;
+    if (!row || extractionInFlightRef.current) return;
+    extractionInFlightRef.current = true;
     setBusy(true);
-    const queued = await queueExpenseCapture(row.clientCaptureId);
-    onRow(queued);
-    const synchronized = await syncExpenseCapture(row.clientCaptureId);
-    onRow(synchronized);
-    setBusy(false);
+    setMessage(null);
+    try {
+      const queued = await queueExpenseCapture(row.clientCaptureId);
+      onRow(queued);
+      const synchronized = await syncExpenseCapture(row.clientCaptureId);
+      onRow(synchronized);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "The receipt could not start syncing. Retry when connected.",
+      );
+    } finally {
+      extractionInFlightRef.current = false;
+      setBusy(false);
+    }
   };
 
   const discard = async () => {
@@ -3784,11 +3797,15 @@ export function MobileSpendV2({
   React.useEffect(() => {
     reloadQueue();
     if (receiptEnabled) {
-      void syncEmployeeExpenseCaptures(employee.id).then(reloadQueue);
+      void syncEmployeeExpenseCaptures(employee.id)
+        .then(reloadQueue)
+        .catch(() => undefined);
     }
     const onOnline = () => {
       if (receiptEnabled) {
-        void syncEmployeeExpenseCaptures(employee.id).then(reloadQueue);
+        void syncEmployeeExpenseCaptures(employee.id)
+          .then(reloadQueue)
+          .catch(() => undefined);
       }
     };
     const onQueue = () => reloadQueue();

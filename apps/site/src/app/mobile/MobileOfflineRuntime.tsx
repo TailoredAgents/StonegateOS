@@ -109,6 +109,7 @@ export function MobileOfflineRuntime({
   );
   const [syncIssue, setSyncIssue] =
     React.useState<MobileMediaSyncIssueEventDetail | null>(null);
+  const expenseSyncInFlightRef = React.useRef<Promise<void> | null>(null);
 
   const refreshQueue = React.useCallback(async () => {
     const rows = await listEmployeeQueue(employeeId).catch(() => null);
@@ -137,10 +138,22 @@ export function MobileOfflineRuntime({
     await refreshQueue();
   }, [employeeId, refreshQueue]);
 
-  const synchronizeExpenses = React.useCallback(async () => {
-    await syncEmployeeExpenseCaptures(employeeId).catch(() => undefined);
-    await registerExpenseBackgroundSync();
-    await reportExpenseQueueHealth(employeeId);
+  const synchronizeExpenses = React.useCallback((): Promise<void> => {
+    const active = expenseSyncInFlightRef.current;
+    if (active) return active;
+
+    const operation = (async () => {
+      await syncEmployeeExpenseCaptures(employeeId).catch(() => undefined);
+      void registerExpenseBackgroundSync();
+      await reportExpenseQueueHealth(employeeId);
+    })();
+    const settled = operation.finally(() => {
+      if (expenseSyncInFlightRef.current === settled) {
+        expenseSyncInFlightRef.current = null;
+      }
+    });
+    expenseSyncInFlightRef.current = settled;
+    return settled;
   }, [employeeId]);
 
   React.useEffect(() => {
