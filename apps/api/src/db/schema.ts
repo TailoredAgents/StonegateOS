@@ -5946,6 +5946,89 @@ export const expenseAllocations = pgTable(
   }),
 );
 
+/**
+ * Human-confirmed operational facts from landfill and transfer-station scale
+ * tickets. AI extraction remains on the immutable receipt capture; only the
+ * reviewed values attached to an expense become reporting facts here.
+ */
+export const expenseDumpDetails = pgTable(
+  "expense_dump_details",
+  {
+    expenseId: uuid("expense_id")
+      .primaryKey()
+      .references(() => expenses.id, { onDelete: "restrict" }),
+    weightStatus: text("weight_status")
+      .$type<"confirmed" | "unreadable">()
+      .notNull(),
+    facilityName: text("facility_name"),
+    ticketNumber: text("ticket_number"),
+    material: text("material"),
+    grossWeightPounds: integer("gross_weight_pounds"),
+    tareWeightPounds: integer("tare_weight_pounds"),
+    netWeightPounds: integer("net_weight_pounds"),
+    billedWeightMilliTons: integer("billed_weight_milli_tons"),
+    unitRateCentsPerTon: integer("unit_rate_cents_per_ton"),
+    confirmedBy: uuid("confirmed_by")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    ticketLookupIdx: index("expense_dump_details_ticket_lookup_idx").on(
+      table.facilityName,
+      table.ticketNumber,
+    ),
+    confirmedAtIdx: index("expense_dump_details_confirmed_at_idx").on(
+      table.confirmedAt,
+    ),
+    weightStatusCheck: check(
+      "expense_dump_details_weight_status_check",
+      sql`${table.weightStatus} IN ('confirmed', 'unreadable')`,
+    ),
+    weightShapeCheck: check(
+      "expense_dump_details_weight_shape_check",
+      sql`(${table.weightStatus} = 'confirmed' AND ${table.netWeightPounds} BETWEEN 1 AND 10000000) OR (${table.weightStatus} = 'unreadable' AND ${table.netWeightPounds} IS NULL)`,
+    ),
+    grossWeightCheck: check(
+      "expense_dump_details_gross_weight_check",
+      sql`${table.grossWeightPounds} IS NULL OR ${table.grossWeightPounds} BETWEEN 1 AND 10000000`,
+    ),
+    tareWeightCheck: check(
+      "expense_dump_details_tare_weight_check",
+      sql`${table.tareWeightPounds} IS NULL OR ${table.tareWeightPounds} BETWEEN 0 AND 10000000`,
+    ),
+    grossTareCheck: check(
+      "expense_dump_details_gross_tare_check",
+      sql`${table.grossWeightPounds} IS NULL OR ${table.tareWeightPounds} IS NULL OR ${table.grossWeightPounds} >= ${table.tareWeightPounds}`,
+    ),
+    billedWeightCheck: check(
+      "expense_dump_details_billed_weight_check",
+      sql`${table.billedWeightMilliTons} IS NULL OR ${table.billedWeightMilliTons} BETWEEN 0 AND 10000000`,
+    ),
+    unitRateCheck: check(
+      "expense_dump_details_unit_rate_check",
+      sql`${table.unitRateCentsPerTon} IS NULL OR ${table.unitRateCentsPerTon} BETWEEN 0 AND 100000000`,
+    ),
+    facilityNameCheck: check(
+      "expense_dump_details_facility_name_check",
+      sql`${table.facilityName} IS NULL OR char_length(btrim(${table.facilityName})) BETWEEN 1 AND 240`,
+    ),
+    ticketNumberCheck: check(
+      "expense_dump_details_ticket_number_check",
+      sql`${table.ticketNumber} IS NULL OR char_length(btrim(${table.ticketNumber})) BETWEEN 1 AND 120`,
+    ),
+    materialCheck: check(
+      "expense_dump_details_material_check",
+      sql`${table.material} IS NULL OR char_length(btrim(${table.material})) BETWEEN 1 AND 240`,
+    ),
+  }),
+);
+
 /** Aggregated approval feedback used for deterministic vendor/category learning. */
 export const expenseVendorCategoryRules = pgTable(
   "expense_vendor_category_rules",

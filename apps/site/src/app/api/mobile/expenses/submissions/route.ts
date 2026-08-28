@@ -6,6 +6,7 @@ const FILTERS = new Set([
   "approved",
   "rejected",
   "reimbursement",
+  "dump_tickets",
 ]);
 
 export async function GET(request: Request): Promise<Response> {

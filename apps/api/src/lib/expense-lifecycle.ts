@@ -4,6 +4,10 @@ import {
   detectExpenseReceiptUploadContentType,
   type ExpenseReceiptContentType,
 } from "@/lib/expense-receipt-storage";
+import {
+  ExpenseDumpDetailsSchema,
+  type ExpenseDumpDetailsInput,
+} from "@/lib/expense-submissions";
 import { TeamMutationFailure } from "@/lib/team-mutation";
 
 export const MAX_EXPENSE_CENTS = 100_000_000;
@@ -50,6 +54,7 @@ export const ExpenseWriteSchema = z
 export const ExpenseCorrectionSchema = ExpenseWriteSchema.extend({
   reason: z.string().trim().min(3).max(500),
   coveredByFixedCostSeriesId: z.string().uuid().nullable().optional(),
+  dumpDetails: ExpenseDumpDetailsSchema.nullable().optional(),
 }).strict();
 
 export const ExpenseReasonSchema = z
@@ -82,6 +87,8 @@ export type ParsedExpenseRequest = {
   reason: string | null;
   /** Undefined preserves an existing link; null explicitly clears it. */
   coveredByFixedCostSeriesId?: string | null;
+  /** Undefined preserves reviewed facts; null explicitly removes them. */
+  dumpDetails?: ExpenseDumpDetailsInput | null;
 };
 
 export type ExpenseLifecycleRecord = {
@@ -263,12 +270,14 @@ export async function parseExpenseRequest(
     requireReason?: boolean;
     allowReceipt?: boolean;
     allowFixedCostCoverage?: boolean;
+    allowDumpDetails?: boolean;
   } = {},
 ): Promise<ParsedExpenseRequest> {
   const contentType = request.headers.get("content-type") ?? "";
   let rawExpense: unknown;
   let rawReason: unknown = null;
   let rawCoveredByFixedCostSeriesId: unknown = undefined;
+  let rawDumpDetails: unknown = undefined;
   let receipt: ExpenseReceipt | null = null;
 
   if (contentType.includes("multipart/form-data")) {
@@ -294,11 +303,21 @@ export async function parseExpenseRequest(
     };
     rawReason = formString(form, "reason");
     if (options.allowFixedCostCoverage) {
-      rawCoveredByFixedCostSeriesId = form.has(
-        "coveredByFixedCostSeriesId",
-      )
+      rawCoveredByFixedCostSeriesId = form.has("coveredByFixedCostSeriesId")
         ? formString(form, "coveredByFixedCostSeriesId")
         : undefined;
+    }
+    if (options.allowDumpDetails && form.has("dumpDetails")) {
+      const serialized = formString(form, "dumpDetails");
+      try {
+        rawDumpDetails = serialized === null ? null : JSON.parse(serialized);
+      } catch {
+        throw new TeamMutationFailure(
+          "invalid",
+          "The dump-ticket correction could not be read.",
+          { fieldErrors: { dumpDetails: "Review the dump-ticket fields." } },
+        );
+      }
     }
     if (options.allowReceipt !== false) {
       receipt = await parseExpenseReceiptFile(form.get("receiptFile"));
@@ -323,17 +342,19 @@ export async function parseExpenseRequest(
         throw new Error("invalid_json_shape");
       }
       if (options.requireReason) {
-        const {
-          reason,
-          coveredByFixedCostSeriesId,
-          ...expense
-        } = body;
+        const { reason, coveredByFixedCostSeriesId, dumpDetails, ...expense } =
+          body;
         rawExpense = expense;
         rawReason = reason;
         if (options.allowFixedCostCoverage) {
           rawCoveredByFixedCostSeriesId = coveredByFixedCostSeriesId;
         } else if (coveredByFixedCostSeriesId !== undefined) {
           rawExpense = { ...expense, coveredByFixedCostSeriesId };
+        }
+        if (options.allowDumpDetails) {
+          rawDumpDetails = dumpDetails;
+        } else if (dumpDetails !== undefined) {
+          rawExpense = { ...expense, dumpDetails };
         }
       } else {
         rawExpense = body;
@@ -362,8 +383,15 @@ export async function parseExpenseRequest(
       .strict()
       .safeParse({ coveredByFixedCostSeriesId: rawCoveredByFixedCostSeriesId });
     if (!parsedCoverage.success) invalidPayload(parsedCoverage.error);
-    coveredByFixedCostSeriesId =
-      parsedCoverage.data.coveredByFixedCostSeriesId;
+    coveredByFixedCostSeriesId = parsedCoverage.data.coveredByFixedCostSeriesId;
+  }
+  let dumpDetails: ExpenseDumpDetailsInput | null | undefined;
+  if (options.allowDumpDetails) {
+    const parsedDumpDetails = ExpenseDumpDetailsSchema.nullable()
+      .optional()
+      .safeParse(rawDumpDetails);
+    if (!parsedDumpDetails.success) invalidPayload(parsedDumpDetails.error);
+    dumpDetails = parsedDumpDetails.data;
   }
   return {
     expense,
@@ -372,6 +400,7 @@ export async function parseExpenseRequest(
     ...(coveredByFixedCostSeriesId !== undefined
       ? { coveredByFixedCostSeriesId }
       : {}),
+    ...(dumpDetails !== undefined ? { dumpDetails } : {}),
   };
 }
 
@@ -475,6 +504,9 @@ export function expenseIdempotencyPayload(
       ? {
           coveredByFixedCostSeriesId: parsed.coveredByFixedCostSeriesId,
         }
+      : {}),
+    ...(parsed.dumpDetails !== undefined
+      ? { dumpDetails: parsed.dumpDetails }
       : {}),
     receipt: parsed.receipt
       ? {

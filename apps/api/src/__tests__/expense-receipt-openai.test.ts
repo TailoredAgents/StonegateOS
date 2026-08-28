@@ -6,6 +6,8 @@ import {
 } from "@/lib/expense-receipt-openai";
 
 const validExtraction = {
+  documentType: "standard_receipt",
+  dumpTicket: null,
   vendor: "Fuel Stop",
   transactionDate: "2026-08-26",
   totalCents: 5_432,
@@ -15,6 +17,7 @@ const validExtraction = {
   lineItems: [{ description: "Fuel", amountCents: 5_432 }],
   warnings: [],
   fieldConfidence: {
+    documentType: 0.99,
     vendor: 0.99,
     transactionDate: 0.98,
     totalCents: 0.99,
@@ -65,6 +68,29 @@ describe("expense receipt Responses API adapter", () => {
       type: "input_image",
       detail: "high",
     });
+    expect(JSON.stringify(payload)).toContain("dumpTicket");
+    expect(JSON.stringify(payload)).toContain("billedWeightMilliTons");
+  });
+
+  it("instructs the model to inspect both orientations and keep scale units separate", () => {
+    const payload = buildExpenseReceiptOpenAiRequest({
+      model: "gpt-4.1-mini",
+      filename: "landscape-scale-ticket.jpg",
+      contentType: "image/jpeg",
+      bytes: Buffer.from("jpeg-bytes"),
+    });
+    const serialized = JSON.stringify(payload);
+    expect(serialized).toContain("portrait, landscape");
+    expect(serialized).toContain(
+      "netWeightPounds is only the explicitly printed",
+    );
+    expect(serialized).toContain(
+      "suggestedCategoryId should normally be dump_fees",
+    );
+    expect(serialized).toContain("billing or operating company");
+    expect(serialized).toContain(
+      "paymentLastFour is null unless four payment-card digits",
+    );
   });
 
   it("uses the supported file-input form for PDFs", () => {

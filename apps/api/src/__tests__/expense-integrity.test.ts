@@ -5,6 +5,7 @@ import {
   assertExpenseFinancialShape,
   detectExpenseReceiptContentType,
   MAX_EXPENSE_CENTS,
+  parseExpenseRequest,
   validateExpenseWriteInput,
 } from "@/lib/expense-lifecycle";
 import { TeamMutationFailure } from "@/lib/team-mutation";
@@ -64,6 +65,67 @@ describe("expense integrity", () => {
     expect(parsed.coverageEndAt?.toISOString()).toBe(
       "2026-08-31T12:00:00.000Z",
     );
+  });
+
+  it("parses reviewed dump facts on correction while preserving omission and explicit removal", async () => {
+    const request = (dumpDetails: unknown, include = true) =>
+      new Request("https://api.example.test/expenses/id/correct", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...validExpense({
+            paidAt: "2026-08-27T16:00:00.000Z",
+            coverageStartAt: null,
+            coverageEndAt: null,
+          }),
+          reason: "Corrected reviewed scale-ticket facts",
+          ...(include ? { dumpDetails } : {}),
+        }),
+      });
+    const replacement = await parseExpenseRequest(
+      request({
+        weightStatus: "confirmed",
+        facilityName: "Speedway Transfer Station",
+        ticketNumber: "697723",
+        material: "Const & Demo",
+        grossWeightPounds: 15_780,
+        tareWeightPounds: 12_880,
+        netWeightPounds: 2_900,
+        billedWeightMilliTons: 1_450,
+        unitRateCentsPerTon: 5_000,
+        reviewed: true,
+      }),
+      { requireReason: true, allowDumpDetails: true },
+    );
+    expect(replacement.dumpDetails).toMatchObject({
+      netWeightPounds: 2_900,
+      reviewed: true,
+    });
+    expect(
+      (
+        await parseExpenseRequest(request(null), {
+          requireReason: true,
+          allowDumpDetails: true,
+        })
+      ).dumpDetails,
+    ).toBeNull();
+    expect(
+      "dumpDetails" in
+        (await parseExpenseRequest(request(undefined, false), {
+          requireReason: true,
+          allowDumpDetails: true,
+        })),
+    ).toBe(false);
+    await expect(
+      parseExpenseRequest(
+        request({
+          weightStatus: "confirmed",
+          netWeightPounds: 2_900,
+          reviewed: false,
+        }),
+        { requireReason: true, allowDumpDetails: true },
+      ),
+    ).rejects.toBeInstanceOf(TeamMutationFailure);
   });
 
   it.each([

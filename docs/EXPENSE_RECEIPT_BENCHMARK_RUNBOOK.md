@@ -8,7 +8,7 @@ The manifest is strict JSON:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "representativeCorpusReviewed": true,
   "groundTruthReviewed": true,
   "receipts": [
@@ -16,20 +16,27 @@ The manifest is strict JSON:
       "id": "receipt-001",
       "file": "receipts/001.jpg",
       "contentType": "image/jpeg",
+      "layout": "landscape",
+      "documentType": "scale_ticket",
       "expected": {
         "totalCents": 1234,
         "transactionDate": "2026-08-26",
-        "vendor": "Example Vendor"
+        "vendor": "Example Vendor",
+        "netWeightPounds": 2900
       }
     }
   ]
 }
 ```
 
-Use at least 100 receipts. IDs and relative file names must be unique. Every
-total, date, and vendor must be human-reviewed, exact ground truth. The two
-top-level review flags are an explicit sign-off that the corpus is
-representative and its labels were checked.
+Use at least 100 receipts, including at least 20 portrait receipts, 20
+landscape receipts, and 20 scale tickets with readable net weights. IDs and
+relative file names must be unique. Every total, date, vendor, document type,
+and scale-ticket net weight must be human-reviewed, exact ground truth. Use a
+`null` net weight for ordinary receipts; include at least 20 ordinary receipts
+as false-weight negative controls. The two top-level review flags are an
+explicit sign-off that the corpus is representative and its labels were
+checked.
 
 First validate the complete manifest, paths, byte signatures, MIME types,
 sizes, hashes, and image normalization. This mode makes no API requests:
@@ -59,4 +66,7 @@ misses; there are no automatic retries.
 Only aggregate JSON is printed: corpus count, analyzed/failure counts, model,
 thresholds, exact-match percentages, and pass/fail. Receipt contents, paths,
 IDs, vendors, and provider error text are never printed. The rollout gate
-passes only at 98% exact totals and 95% exact transaction dates and vendors.
+passes only at 98% exact totals, 95% exact transaction dates/vendors/document
+types, and 98% exact net weights across the reviewed scale-ticket cohort.
+Ordinary receipts must produce no net weight in 100% of the negative-control
+cohort.

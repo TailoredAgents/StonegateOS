@@ -1,11 +1,17 @@
 import { z } from "zod";
 
-export const EXPENSE_RECEIPT_BENCHMARK_SCHEMA_VERSION = 1 as const;
+export const EXPENSE_RECEIPT_BENCHMARK_SCHEMA_VERSION = 2 as const;
 export const EXPENSE_RECEIPT_BENCHMARK_MINIMUM_COUNT = 100;
 export const EXPENSE_RECEIPT_BENCHMARK_MAXIMUM_COUNT = 500;
 export const EXPENSE_RECEIPT_BENCHMARK_TOTAL_THRESHOLD_BPS = 9_800;
 export const EXPENSE_RECEIPT_BENCHMARK_DATE_THRESHOLD_BPS = 9_500;
 export const EXPENSE_RECEIPT_BENCHMARK_VENDOR_THRESHOLD_BPS = 9_500;
+export const EXPENSE_RECEIPT_BENCHMARK_DOCUMENT_TYPE_THRESHOLD_BPS = 9_500;
+export const EXPENSE_RECEIPT_BENCHMARK_NET_WEIGHT_THRESHOLD_BPS = 9_800;
+export const EXPENSE_RECEIPT_BENCHMARK_NON_SCALE_WEIGHT_NULL_THRESHOLD_BPS = 10_000;
+export const EXPENSE_RECEIPT_BENCHMARK_MINIMUM_LAYOUT_COUNT = 20;
+export const EXPENSE_RECEIPT_BENCHMARK_MINIMUM_WEIGHTED_SCALE_TICKET_COUNT = 20;
+export const EXPENSE_RECEIPT_BENCHMARK_MINIMUM_STANDARD_RECEIPT_COUNT = 20;
 
 const MAX_RECEIPT_MONEY_CENTS = 100_000_000;
 const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
@@ -76,6 +82,8 @@ const receiptSchema = z
       message: "Use a safe path relative to the manifest directory.",
     }),
     contentType: z.enum(EXPENSE_RECEIPT_BENCHMARK_CONTENT_TYPES),
+    layout: z.enum(["portrait", "landscape"]),
+    documentType: z.enum(["standard_receipt", "scale_ticket"]),
     expected: z
       .object({
         totalCents: z.number().int().min(1).max(MAX_RECEIPT_MONEY_CENTS),
@@ -83,6 +91,7 @@ const receiptSchema = z
           message: "Use a real calendar date in YYYY-MM-DD form.",
         }),
         vendor: exactNonblankString(240),
+        netWeightPounds: z.number().int().min(1).max(10_000_000).nullable(),
       })
       .strict(),
   })
@@ -119,7 +128,53 @@ const manifestSchema = z
         });
       }
       files.add(receipt.file);
+      if (
+        receipt.documentType === "standard_receipt" &&
+        receipt.expected.netWeightPounds !== null
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["receipts", index, "expected", "netWeightPounds"],
+          message: "Standard receipts cannot have scale-ticket weight truth.",
+        });
+      }
     });
+    for (const layout of ["portrait", "landscape"] as const) {
+      if (
+        value.receipts.filter((receipt) => receipt.layout === layout).length <
+        EXPENSE_RECEIPT_BENCHMARK_MINIMUM_LAYOUT_COUNT
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["receipts"],
+          message: `Include at least ${EXPENSE_RECEIPT_BENCHMARK_MINIMUM_LAYOUT_COUNT} ${layout} receipts.`,
+        });
+      }
+    }
+    if (
+      value.receipts.filter(
+        (receipt) =>
+          receipt.documentType === "scale_ticket" &&
+          receipt.expected.netWeightPounds !== null,
+      ).length < EXPENSE_RECEIPT_BENCHMARK_MINIMUM_WEIGHTED_SCALE_TICKET_COUNT
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["receipts"],
+        message: `Include at least ${EXPENSE_RECEIPT_BENCHMARK_MINIMUM_WEIGHTED_SCALE_TICKET_COUNT} scale tickets with reviewed net weights.`,
+      });
+    }
+    if (
+      value.receipts.filter(
+        (receipt) => receipt.documentType === "standard_receipt",
+      ).length < EXPENSE_RECEIPT_BENCHMARK_MINIMUM_STANDARD_RECEIPT_COUNT
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["receipts"],
+        message: `Include at least ${EXPENSE_RECEIPT_BENCHMARK_MINIMUM_STANDARD_RECEIPT_COUNT} standard receipts as false-weight negative controls.`,
+      });
+    }
   });
 
 export type ExpenseReceiptBenchmarkManifest = z.infer<typeof manifestSchema>;
@@ -254,6 +309,8 @@ export type ExpenseReceiptBenchmarkExtraction = {
   totalCents: number | null;
   transactionDate: string | null;
   vendor: string | null;
+  documentType: "standard_receipt" | "scale_ticket" | "unknown";
+  netWeightPounds: number | null;
 };
 
 export type ExpenseReceiptBenchmarkResult = {
@@ -278,6 +335,9 @@ export type ExpenseReceiptBenchmarkScore = {
     total: ExpenseReceiptBenchmarkMetric;
     transactionDate: ExpenseReceiptBenchmarkMetric;
     vendor: ExpenseReceiptBenchmarkMetric;
+    documentType: ExpenseReceiptBenchmarkMetric;
+    netWeightPounds: ExpenseReceiptBenchmarkMetric;
+    nonScaleWeightNull: ExpenseReceiptBenchmarkMetric;
   };
 };
 
@@ -320,6 +380,13 @@ export function scoreExpenseReceiptBenchmark(
   let totalExact = 0;
   let dateExact = 0;
   let vendorExact = 0;
+  let documentTypeExact = 0;
+  let netWeightExact = 0;
+  let nonScaleWeightNullExact = 0;
+  const scaleTicketCount = manifest.receipts.filter(
+    (receipt) => receipt.documentType === "scale_ticket",
+  ).length;
+  const standardReceiptCount = manifest.receipts.length - scaleTicketCount;
   let analyzedCount = 0;
   for (const receipt of manifest.receipts) {
     if (!resultById.has(receipt.id)) {
@@ -333,6 +400,16 @@ export function scoreExpenseReceiptBenchmark(
       dateExact += 1;
     }
     if (extraction.vendor === receipt.expected.vendor) vendorExact += 1;
+    if (extraction.documentType === receipt.documentType) {
+      documentTypeExact += 1;
+    }
+    if (receipt.documentType === "scale_ticket") {
+      if (extraction.netWeightPounds === receipt.expected.netWeightPounds) {
+        netWeightExact += 1;
+      }
+    } else if (extraction.netWeightPounds === null) {
+      nonScaleWeightNullExact += 1;
+    }
   }
 
   const evaluatedCount = manifest.receipts.length;
@@ -352,13 +429,31 @@ export function scoreExpenseReceiptBenchmark(
       evaluatedCount,
       EXPENSE_RECEIPT_BENCHMARK_VENDOR_THRESHOLD_BPS,
     ),
+    documentType: metric(
+      documentTypeExact,
+      evaluatedCount,
+      EXPENSE_RECEIPT_BENCHMARK_DOCUMENT_TYPE_THRESHOLD_BPS,
+    ),
+    netWeightPounds: metric(
+      netWeightExact,
+      scaleTicketCount,
+      EXPENSE_RECEIPT_BENCHMARK_NET_WEIGHT_THRESHOLD_BPS,
+    ),
+    nonScaleWeightNull: metric(
+      nonScaleWeightNullExact,
+      standardReceiptCount,
+      EXPENSE_RECEIPT_BENCHMARK_NON_SCALE_WEIGHT_NULL_THRESHOLD_BPS,
+    ),
   };
 
   return {
     passed:
       metrics.total.passed &&
       metrics.transactionDate.passed &&
-      metrics.vendor.passed,
+      metrics.vendor.passed &&
+      metrics.documentType.passed &&
+      metrics.netWeightPounds.passed &&
+      metrics.nonScaleWeightNull.passed,
     receiptCount: evaluatedCount,
     analyzedCount,
     providerFailureCount: evaluatedCount - analyzedCount,
@@ -375,6 +470,9 @@ export type ExpenseReceiptBenchmarkValidationReport = {
     totalExactPercent: 98;
     transactionDateExactPercent: 95;
     vendorExactPercent: 95;
+    documentTypeExactPercent: 95;
+    scaleTicketNetWeightExactPercent: 98;
+    nonScaleWeightNullExactPercent: 100;
   };
   liveRun: {
     apiRequestsMade: false;
@@ -396,6 +494,9 @@ export function expenseReceiptBenchmarkValidationReport(
       totalExactPercent: 98,
       transactionDateExactPercent: 95,
       vendorExactPercent: 95,
+      documentTypeExactPercent: 95,
+      scaleTicketNetWeightExactPercent: 98,
+      nonScaleWeightNullExactPercent: 100,
     },
     liveRun: {
       apiRequestsMade: false,

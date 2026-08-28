@@ -7,6 +7,9 @@ export const DEFAULT_FUZZY_DUPLICATE_WINDOW_DAYS = 3;
 const MAX_LINE_ITEMS = 100;
 const MAX_WARNINGS = 20;
 const MAX_ALLOCATIONS = 32;
+export const MAX_DUMP_WEIGHT_POUNDS = 10_000_000;
+export const MAX_DUMP_BILLED_WEIGHT_MILLI_TONS = 10_000_000;
+export const MAX_DUMP_UNIT_RATE_CENTS_PER_TON = 100_000_000;
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1_000;
 const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const SHA_256_PATTERN = /^[a-f0-9]{64}$/iu;
@@ -57,8 +60,99 @@ export type ExpenseReceiptLineItem = z.infer<
   typeof ExpenseReceiptLineItemSchema
 >;
 
+export const ExpenseReceiptDocumentTypeSchema = z.enum([
+  "standard_receipt",
+  "scale_ticket",
+  "unknown",
+]);
+
+export type ExpenseReceiptDocumentType = z.infer<
+  typeof ExpenseReceiptDocumentTypeSchema
+>;
+
+const nullableDumpWeightPoundsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_DUMP_WEIGHT_POUNDS)
+  .nullable();
+
+const nullableNonnegativeDumpWeightPoundsSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(MAX_DUMP_WEIGHT_POUNDS)
+  .nullable();
+
+const dumpTicketFieldConfidenceSchema = z
+  .object({
+    facilityName: nullableConfidenceSchema,
+    ticketNumber: nullableConfidenceSchema,
+    material: nullableConfidenceSchema,
+    grossWeightPounds: nullableConfidenceSchema,
+    tareWeightPounds: nullableConfidenceSchema,
+    netWeightPounds: nullableConfidenceSchema,
+    billedWeightMilliTons: nullableConfidenceSchema,
+    unitRateCentsPerTon: nullableConfidenceSchema,
+  })
+  .strict();
+
+const DUMP_TICKET_FIELDS = [
+  "facilityName",
+  "ticketNumber",
+  "material",
+  "grossWeightPounds",
+  "tareWeightPounds",
+  "netWeightPounds",
+  "billedWeightMilliTons",
+  "unitRateCentsPerTon",
+] as const;
+
+export const ExpenseReceiptDumpTicketSchema = z
+  .object({
+    facilityName: z.string().trim().min(1).max(240).nullable(),
+    ticketNumber: z.string().trim().min(1).max(120).nullable(),
+    material: z.string().trim().min(1).max(240).nullable(),
+    grossWeightPounds: nullableDumpWeightPoundsSchema,
+    tareWeightPounds: nullableNonnegativeDumpWeightPoundsSchema,
+    netWeightPounds: nullableDumpWeightPoundsSchema,
+    billedWeightMilliTons: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_DUMP_BILLED_WEIGHT_MILLI_TONS)
+      .nullable(),
+    unitRateCentsPerTon: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_DUMP_UNIT_RATE_CENTS_PER_TON)
+      .nullable(),
+    fieldConfidence: dumpTicketFieldConfidenceSchema,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    for (const field of DUMP_TICKET_FIELDS) {
+      const hasValue = value[field] !== null;
+      const hasConfidence = value.fieldConfidence[field] !== null;
+      if (hasValue === hasConfidence) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fieldConfidence", field],
+        message: hasValue
+          ? "A populated dump-ticket field requires a confidence score."
+          : "A missing dump-ticket field must use null confidence.",
+      });
+    }
+  });
+
+export type ExpenseReceiptDumpTicket = z.infer<
+  typeof ExpenseReceiptDumpTicketSchema
+>;
+
 const fieldConfidenceSchema = z
   .object({
+    documentType: nullableConfidenceSchema,
     vendor: nullableConfidenceSchema,
     transactionDate: nullableConfidenceSchema,
     totalCents: nullableConfidenceSchema,
@@ -69,7 +163,7 @@ const fieldConfidenceSchema = z
   })
   .strict();
 
-const EXTRACTION_CONFIDENCE_FIELDS = [
+const LEGACY_EXTRACTION_CONFIDENCE_FIELDS = [
   "vendor",
   "transactionDate",
   "totalCents",
@@ -79,6 +173,11 @@ const EXTRACTION_CONFIDENCE_FIELDS = [
   "lineItems",
 ] as const;
 
+const EXTRACTION_CONFIDENCE_FIELDS = [
+  "documentType",
+  ...LEGACY_EXTRACTION_CONFIDENCE_FIELDS,
+] as const;
+
 /**
  * Strict model-output contract for receipt extraction.
  *
@@ -86,7 +185,7 @@ const EXTRACTION_CONFIDENCE_FIELDS = [
  * never omitted, defaulted, or inferred. That makes missing evidence distinct
  * from malformed model output and is compatible with strict structured output.
  */
-export const ExpenseReceiptExtractionSchema = z
+const ExpenseReceiptExtractionV1Schema = z
   .object({
     vendor: z.string().trim().min(1).max(240).nullable(),
     transactionDate: nullableDateOnlySchema,
@@ -103,11 +202,11 @@ export const ExpenseReceiptExtractionSchema = z
       .max(MAX_LINE_ITEMS)
       .nullable(),
     warnings: z.array(z.string().trim().min(1).max(500)).max(MAX_WARNINGS),
-    fieldConfidence: fieldConfidenceSchema,
+    fieldConfidence: fieldConfidenceSchema.omit({ documentType: true }),
   })
   .strict()
   .superRefine((value, ctx) => {
-    for (const field of EXTRACTION_CONFIDENCE_FIELDS) {
+    for (const field of LEGACY_EXTRACTION_CONFIDENCE_FIELDS) {
       const hasValue = value[field] !== null;
       const hasConfidence = value.fieldConfidence[field] !== null;
       if (hasValue === hasConfidence) continue;
@@ -134,11 +233,115 @@ export const ExpenseReceiptExtractionSchema = z
     }
   });
 
+export const ExpenseReceiptExtractionSchema = z
+  .object({
+    documentType: ExpenseReceiptDocumentTypeSchema,
+    dumpTicket: ExpenseReceiptDumpTicketSchema.nullable(),
+    vendor: z.string().trim().min(1).max(240).nullable(),
+    transactionDate: nullableDateOnlySchema,
+    totalCents: z.number().int().min(1).max(MAX_RECEIPT_MONEY_CENTS).nullable(),
+    taxCents: z.number().int().min(0).max(MAX_RECEIPT_MONEY_CENTS).nullable(),
+    paymentLastFour: z
+      .string()
+      .regex(/^\d{4}$/u)
+      .nullable(),
+    suggestedCategoryId: nullableCategoryIdSchema,
+    lineItems: z
+      .array(ExpenseReceiptLineItemSchema)
+      .min(1)
+      .max(MAX_LINE_ITEMS)
+      .nullable(),
+    warnings: z.array(z.string().trim().min(1).max(500)).max(MAX_WARNINGS),
+    fieldConfidence: fieldConfidenceSchema,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    for (const field of EXTRACTION_CONFIDENCE_FIELDS) {
+      if (field === "documentType") continue;
+      const hasValue = value[field] !== null;
+      const hasConfidence = value.fieldConfidence[field] !== null;
+      if (hasValue === hasConfidence) continue;
+
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fieldConfidence", field],
+        message: hasValue
+          ? "A populated extraction field requires a confidence score."
+          : "A missing extraction field must use null confidence.",
+      });
+    }
+
+    if (
+      value.documentType !== "unknown" &&
+      value.fieldConfidence.documentType === null
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fieldConfidence", "documentType"],
+        message: "A classified document type requires a confidence score.",
+      });
+    }
+    if (
+      value.documentType === "standard_receipt" &&
+      value.dumpTicket !== null
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dumpTicket"],
+        message: "A standard receipt cannot include scale-ticket fields.",
+      });
+    }
+    if (value.documentType === "scale_ticket" && value.dumpTicket === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dumpTicket"],
+        message: "A scale ticket requires a dump-ticket extraction object.",
+      });
+    }
+
+    if (
+      value.taxCents !== null &&
+      value.totalCents !== null &&
+      value.taxCents > value.totalCents
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["taxCents"],
+        message: "Receipt tax cannot exceed the receipt total.",
+      });
+    }
+  });
+
 export type ExpenseReceiptExtraction = z.infer<
   typeof ExpenseReceiptExtractionSchema
 >;
 export type ExpenseReceiptExtractionField =
-  (typeof EXTRACTION_CONFIDENCE_FIELDS)[number];
+  | (typeof EXTRACTION_CONFIDENCE_FIELDS)[number]
+  | `dumpTicket.${(typeof DUMP_TICKET_FIELDS)[number]}`;
+
+/**
+ * Reads immutable capture evidence written before the scale-ticket contract.
+ * Missing V2 facts stay explicitly unknown; they are never reconstructed from
+ * vendor names, categories, or other historical fields.
+ */
+export function parseStoredExpenseReceiptExtraction(
+  input: unknown,
+): ExpenseReceiptExtraction | null {
+  const current = ExpenseReceiptExtractionSchema.safeParse(input);
+  if (current.success) return current.data;
+
+  const legacy = ExpenseReceiptExtractionV1Schema.safeParse(input);
+  if (!legacy.success) return null;
+  return {
+    ...legacy.data,
+    documentType: "unknown",
+    dumpTicket: null,
+    fieldConfidence: {
+      documentType: null,
+      ...legacy.data.fieldConfidence,
+    },
+  };
+}
 
 export type ExpenseReceiptExtractionValidationResult =
   | {
@@ -175,11 +378,12 @@ export type ExpenseReceiptReviewField<T> = {
   confidence: number | null;
   status: "ready" | "check_this";
   attentionLabel: "Check this" | null;
-  reason: "missing" | "low_confidence" | null;
+  reason: "missing" | "low_confidence" | "conflicting_evidence" | null;
 };
 
 export type ExpenseReceiptReview = {
   fields: {
+    documentType: ExpenseReceiptReviewField<ExpenseReceiptDocumentType>;
     vendor: ExpenseReceiptReviewField<string>;
     transactionDate: ExpenseReceiptReviewField<string>;
     totalCents: ExpenseReceiptReviewField<number>;
@@ -187,6 +391,13 @@ export type ExpenseReceiptReview = {
     paymentLastFour: ExpenseReceiptReviewField<string>;
     suggestedCategoryId: ExpenseReceiptReviewField<string>;
     lineItems: ExpenseReceiptReviewField<ExpenseReceiptLineItem[]>;
+    dumpTicket:
+      | {
+          [Field in (typeof DUMP_TICKET_FIELDS)[number]]: ExpenseReceiptReviewField<
+            NonNullable<ExpenseReceiptDumpTicket[Field]>
+          >;
+        }
+      | null;
   };
   fieldsToCheck: ExpenseReceiptExtractionField[];
   warnings: string[];
@@ -239,6 +450,13 @@ export function buildExpenseReceiptReview(
   }
 
   const fields: ExpenseReceiptReview["fields"] = {
+    documentType: reviewField({
+      value: extraction.documentType,
+      confidence: extraction.fieldConfidence.documentType,
+      threshold: confidenceThreshold,
+      required: true,
+      blankWhenUncertain: false,
+    }),
     vendor: reviewField({
       value: extraction.vendor,
       confidence: extraction.fieldConfidence.vendor,
@@ -288,14 +506,77 @@ export function buildExpenseReceiptReview(
       required: false,
       blankWhenUncertain: false,
     }),
+    dumpTicket: extraction.dumpTicket
+      ? (Object.fromEntries(
+          DUMP_TICKET_FIELDS.map((field) => [
+            field,
+            reviewField({
+              value: extraction.dumpTicket?.[field] ?? null,
+              confidence: extraction.dumpTicket?.fieldConfidence[field] ?? null,
+              threshold: confidenceThreshold,
+              required:
+                extraction.documentType === "scale_ticket" &&
+                field === "netWeightPounds",
+              blankWhenUncertain: field === "netWeightPounds",
+            }),
+          ]),
+        ) as NonNullable<ExpenseReceiptReview["fields"]["dumpTicket"]>)
+      : null,
   };
+
+  const dumpTicket = extraction.dumpTicket;
+  const dumpWeightsConflict = Boolean(
+    dumpTicket &&
+      dumpTicket.grossWeightPounds !== null &&
+      dumpTicket.tareWeightPounds !== null &&
+      (dumpTicket.grossWeightPounds < dumpTicket.tareWeightPounds ||
+        (dumpTicket.netWeightPounds !== null &&
+          dumpTicket.grossWeightPounds - dumpTicket.tareWeightPounds !==
+            dumpTicket.netWeightPounds)),
+  );
+  if (dumpWeightsConflict && fields.dumpTicket) {
+    for (const field of [
+      "grossWeightPounds",
+      "tareWeightPounds",
+      "netWeightPounds",
+    ] as const) {
+      if (fields.dumpTicket[field].value === null) continue;
+      fields.dumpTicket[field] = {
+        ...fields.dumpTicket[field],
+        status: "check_this",
+        attentionLabel: "Check this",
+        reason: "conflicting_evidence",
+      };
+    }
+  }
+
+  const dumpFieldsToCheck = fields.dumpTicket
+    ? DUMP_TICKET_FIELDS.flatMap((field) =>
+        fields.dumpTicket?.[field].status === "check_this"
+          ? ([`dumpTicket.${field}`] as const)
+          : [],
+      )
+    : extraction.documentType === "scale_ticket"
+      ? (["dumpTicket.netWeightPounds"] as const)
+      : [];
 
   return {
     fields,
-    fieldsToCheck: EXTRACTION_CONFIDENCE_FIELDS.filter(
-      (field) => fields[field].status === "check_this",
-    ),
-    warnings: [...extraction.warnings],
+    fieldsToCheck: [
+      ...EXTRACTION_CONFIDENCE_FIELDS.filter(
+        (field) => fields[field].status === "check_this",
+      ),
+      ...dumpFieldsToCheck,
+    ],
+    warnings: [
+      ...extraction.warnings,
+      ...(dumpWeightsConflict &&
+      !extraction.warnings.includes(
+        "The printed gross, tare, and net weights do not reconcile.",
+      )
+        ? ["The printed gross, tare, and net weights do not reconcile."]
+        : []),
+    ],
     requiresHumanConfirmation: true,
   };
 }

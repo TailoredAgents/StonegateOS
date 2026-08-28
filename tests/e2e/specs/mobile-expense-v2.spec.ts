@@ -16,6 +16,7 @@ test.describe("Mobile Spend V2", () => {
     let intentCount = 0;
     let uploadCount = 0;
     let finalizeCount = 0;
+    let confirmCount = 0;
     page.on("pageerror", (error) => browserErrors.push(error.message));
 
     await page.route("**/api/mobile/expenses/capabilities", (route) =>
@@ -32,6 +33,7 @@ test.describe("Mobile Spend V2", () => {
             overview: false,
             exactDuplicateReview: true,
             fixedCosts: false,
+            dumpTickets: true,
           },
         }),
       }),
@@ -42,7 +44,10 @@ test.describe("Mobile Spend V2", () => {
         contentType: "application/json",
         body: JSON.stringify({
           ok: true,
-          categories: [{ id: "fuel", name: "Fuel" }],
+          categories: [
+            { id: "dump_fees", name: "Dump Fees" },
+            { id: "fuel", name: "Fuel" },
+          ],
         }),
       }),
     );
@@ -97,18 +102,95 @@ test.describe("Mobile Spend V2", () => {
               id: "11111111-1111-4111-8111-111111111111",
               status: "ready",
               version: 2,
+              contentPath:
+                "/api/admin/expenses/captures/11111111-1111-4111-8111-111111111111/content",
               extraction: {
+                raw: {
+                  documentType: "scale_ticket",
+                  paymentLastFour: null,
+                  dumpTicket: {
+                    facilityName: "Speedway Transfer Station",
+                    ticketNumber: "697723",
+                    material: "Const & Demo",
+                    grossWeightPounds: 15_780,
+                    tareWeightPounds: 12_880,
+                    netWeightPounds: 2_900,
+                    billedWeightMilliTons: 1_450,
+                    unitRateCentsPerTon: 5_000,
+                  },
+                },
                 review: {
                   fields: {
-                    vendor: { value: "Test Fuel" },
-                    transactionDate: { value: "2026-08-28" },
-                    totalCents: { value: 1250 },
-                    suggestedCategoryId: { value: "fuel" },
+                    vendor: { value: "Capital Waste Services" },
+                    transactionDate: { value: "2026-08-27" },
+                    totalCents: { value: 9_141 },
+                    paymentLastFour: { value: null },
+                    suggestedCategoryId: { value: "dump_fees" },
+                    dumpTicket: {
+                      value: {
+                        facilityName: "Speedway Transfer Station",
+                        ticketNumber: "697723",
+                        material: "Const & Demo",
+                        grossWeightPounds: 15_780,
+                        tareWeightPounds: 12_880,
+                        netWeightPounds: 2_900,
+                        billedWeightMilliTons: 1_450,
+                        unitRateCentsPerTon: 5_000,
+                      },
+                    },
                   },
                   fieldsToCheck: [],
                 },
+                categorySuggestion: { categoryId: "dump_fees" },
               },
             },
+          }),
+        });
+      },
+    );
+    await page.route(
+      "**/api/mobile/expenses/captures/*/confirm",
+      async (route) => {
+        expect(route.request().method()).toBe("POST");
+        confirmCount += 1;
+        const body = route.request().postDataJSON() as Record<string, unknown>;
+        expect(body["receiptReviewContractVersion"]).toBe(2);
+        expect(body["amountCents"]).toBe(9_141);
+        expect(body["categoryId"]).toBe("dump_fees");
+        expect(body["dumpDetails"]).toEqual({
+          weightStatus: "confirmed",
+          facilityName: "Speedway Transfer Station",
+          ticketNumber: confirmCount === 1 ? "697723" : "697724",
+          material: "Const & Demo",
+          grossWeightPounds: 15_780,
+          tareWeightPounds: 12_880,
+          netWeightPounds: 2_900,
+          billedWeightMilliTons: 1_450,
+          unitRateCentsPerTon: 5_000,
+          reviewed: true,
+        });
+        if (confirmCount === 1) {
+          await route.fulfill({
+            status: 409,
+            contentType: "application/json",
+            body: JSON.stringify({
+              ok: false,
+              code: "conflict",
+              message:
+                "This facility and ticket number already exist. An owner must review and override it.",
+              fieldErrors: {
+                exactDuplicateOverrideReason: "Owner approval is required.",
+              },
+            }),
+          });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            data: { reviewStatus: "approved" },
           }),
         });
       },
@@ -144,13 +226,58 @@ test.describe("Mobile Spend V2", () => {
     await expect(
       page.getByRole("heading", { name: "Confirm every value" }),
     ).toBeVisible();
+    const receiptEvidence = page.getByRole("link", {
+      name: "View receipt",
+      exact: true,
+    });
+    await expect(receiptEvidence).toBeVisible();
+    await expect(receiptEvidence).toHaveAttribute("target", "_blank");
+    await expect(receiptEvidence).toHaveAttribute("rel", "noreferrer");
+    await expect(receiptEvidence).toHaveAttribute(
+      "href",
+      "/api/mobile/expenses/captures/11111111-1111-4111-8111-111111111111/content",
+    );
+    await expect(page.getByLabel("Net weight (lb)")).toHaveValue("2900");
+    await expect(
+      page.getByText("2,900 lb · 1.45 tons", { exact: true }),
+    ).toBeVisible();
+    const ordinaryReceiptOverride = page.getByLabel(
+      "This is not a scale ticket",
+    );
+    await expect(ordinaryReceiptOverride).toBeVisible();
+    await ordinaryReceiptOverride.check();
+    await expect(page.getByLabel("Net weight (lb)")).not.toBeVisible();
+    await expect(
+      page.getByText("Weight details will not be saved.", { exact: false }),
+    ).toBeVisible();
+    await ordinaryReceiptOverride.uncheck();
+    await expect(page.getByLabel("Net weight (lb)")).toHaveValue("2900");
+    await expect(page.getByLabel("Ticket number")).not.toBeVisible();
+    await page.getByText("Scale ticket details", { exact: true }).click();
+    await expect(page.getByLabel("Ticket number")).toHaveValue("697723");
+    await expect(page.getByLabel("Billed weight (tons)")).toHaveValue("1.45");
     await expect.poll(() => uploadCount).toBe(1);
     await expect.poll(() => finalizeCount).toBe(1);
+    await page
+      .getByRole("button", { name: "Post expense", exact: true })
+      .click();
+    await expect.poll(() => confirmCount).toBe(1);
+    await expect(page.getByLabel("Duplicate override reason")).toBeVisible();
+    await page.getByLabel("Ticket number").fill("697724");
+    await expect(page.getByLabel("Duplicate override reason")).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Post expense", exact: true })
+      .click();
+    await expect.poll(() => confirmCount).toBe(2);
+    await expect(
+      page.getByText("Expense posted.", { exact: true }),
+    ).toBeVisible();
     await page.waitForTimeout(250);
 
     expect(intentCount).toBe(1);
     expect(uploadCount).toBe(1);
     expect(finalizeCount).toBe(1);
+    expect(confirmCount).toBe(2);
     expect(browserErrors).toEqual([]);
   });
 
@@ -163,6 +290,8 @@ test.describe("Mobile Spend V2", () => {
     const fixedCostSeriesId = "11111111-1111-4111-8111-111111111111";
     let linkedSubmissionSeen = false;
     let linkedApprovalSeen = false;
+    let dumpCorrectionSeen = false;
+    let dumpRemovalSeen = false;
 
     await page.route("**/api/mobile/expenses/capabilities", (route) =>
       route.fulfill({
@@ -178,6 +307,7 @@ test.describe("Mobile Spend V2", () => {
             overview: true,
             exactDuplicateReview: true,
             fixedCosts: true,
+            dumpTickets: true,
           },
         }),
       }),
@@ -189,6 +319,7 @@ test.describe("Mobile Spend V2", () => {
         body: JSON.stringify({
           ok: true,
           categories: [
+            { id: "dump_fees", name: "Dump Fees" },
             { id: "fuel", name: "Fuel" },
             { id: "supplies", name: "Supplies" },
             { id: "office_admin", name: "Office/Admin" },
@@ -314,6 +445,9 @@ test.describe("Mobile Spend V2", () => {
               method: "ach",
               source: "receipt_scan",
               purchaseDate: "2026-08-27",
+              paidAt: "2026-08-27T15:45:00.000Z",
+              coverageStartAt: null,
+              coverageEndAt: null,
               payerType: "company",
               paidByMember: null,
               submitter: {
@@ -327,7 +461,7 @@ test.describe("Mobile Spend V2", () => {
               },
               reviewedAt: "2026-08-27T12:00:00.000Z",
               reviewReason: null,
-              lifecycleStatus: "posted",
+              lifecycleStatus: "corrected",
               version: 2,
               appointmentId: null,
               coveredByFixedCostSeriesId: fixedCostSeriesId,
@@ -341,10 +475,128 @@ test.describe("Mobile Spend V2", () => {
               createdAt: "2026-08-27T12:00:00.000Z",
               updatedAt: "2026-08-27T12:00:00.000Z",
             },
+            {
+              id: "88888888-8888-4888-8888-888888888888",
+              amountCents: 9_141,
+              currency: "USD",
+              categoryId: "dump_fees",
+              category: "Dump Fees",
+              categoryNeedsReview: false,
+              allocations: [
+                {
+                  categoryId: "dump_fees",
+                  category: "Dump Fees",
+                  amountCents: 9_141,
+                },
+              ],
+              vendor: "Capital Waste Services",
+              notes: null,
+              method: "card",
+              source: "receipt_scan",
+              purchaseDate: "2026-08-27",
+              paidAt: "2026-08-27T15:45:00.000Z",
+              coverageStartAt: null,
+              coverageEndAt: null,
+              payerType: "company",
+              paidByMember: null,
+              submitter: {
+                id: "33333333-3333-4333-8333-333333333333",
+                name: "Owner",
+              },
+              reviewStatus: "approved",
+              reviewer: {
+                id: "33333333-3333-4333-8333-333333333333",
+                name: "Owner",
+              },
+              reviewedAt: "2026-08-27T16:00:00.000Z",
+              reviewReason: null,
+              lifecycleStatus: "posted",
+              version: 2,
+              appointmentId: null,
+              coveredByFixedCostSeriesId: null,
+              coveredByFixedCostName: null,
+              dumpDetails: {
+                weightStatus: "confirmed",
+                facilityName: "Speedway Transfer Station",
+                ticketNumber: "697723",
+                material: "Construction/Demo",
+                grossWeightPounds: 15_780,
+                tareWeightPounds: 12_880,
+                netWeightPounds: 2_900,
+                billedWeightMilliTons: 1_450,
+                unitRateCentsPerTon: 5_000,
+                confirmedBy: {
+                  id: "33333333-3333-4333-8333-333333333333",
+                  name: "Owner",
+                },
+                confirmedAt: "2026-08-27T16:00:00.000Z",
+                createdAt: "2026-08-27T16:00:00.000Z",
+              },
+              receipt: {
+                captureId: "99999999-9999-4999-8999-999999999999",
+                status: "confirmed",
+                filename: "scale-ticket.jpg",
+              },
+              reimbursement: null,
+              createdAt: "2026-08-27T16:00:00.000Z",
+              updatedAt: "2026-08-27T16:00:00.000Z",
+            },
           ],
         }),
       }),
     );
+    await page.route("**/api/mobile/expenses/*/correct", async (route) => {
+      expect(route.request().method()).toBe("POST");
+      expect(route.request().headers()["idempotency-key"]).toBeTruthy();
+      expect(route.request().headers()["if-match"]).toBe("2");
+      const correctionBody = route.request().postDataJSON() as Record<
+        string,
+        unknown
+      >;
+      const removal = correctionBody["dumpDetails"] === null;
+      expect(correctionBody).toEqual({
+        amountCents: 9_141,
+        currency: "USD",
+        category: "Dump Fees",
+        vendor: "Capital Waste Services",
+        memo: null,
+        method: "card",
+        paidAt: "2026-08-27T15:45:00.000Z",
+        coverageStartAt: null,
+        coverageEndAt: null,
+        reason: removal
+          ? "Scanner classification was incorrect"
+          : "Corrected from the printed scale ticket",
+        dumpDetails: removal
+          ? null
+          : {
+              weightStatus: "confirmed",
+              facilityName: "Speedway Transfer Station",
+              ticketNumber: "697723",
+              material: "Construction/Demo",
+              grossWeightPounds: 15_780,
+              tareWeightPounds: 12_880,
+              netWeightPounds: 3_000,
+              billedWeightMilliTons: 1_450,
+              unitRateCentsPerTon: 5_000,
+              reviewed: true,
+            },
+      });
+      if (removal) dumpRemovalSeen = true;
+      else dumpCorrectionSeen = true;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            lifecycleStatus: "corrected",
+            replacementExpenseId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            dumpDetailsRecorded: !removal,
+          },
+        }),
+      });
+    });
     await page.route(
       "**/api/mobile/expenses/submissions/*/review",
       async (route) => {
@@ -486,9 +738,76 @@ test.describe("Mobile Spend V2", () => {
       name: "Receipt",
       exact: true,
     });
-    await expect(receiptLinks).toHaveCount(2);
+    await expect(receiptLinks).toHaveCount(3);
     await expect(receiptLinks.first()).toBeVisible();
     await expect(receiptLinks.last()).toBeVisible();
+    await expect(
+      page.getByRole("option", { name: "Dump expenses", exact: true }),
+    ).toBeAttached();
+    await expect(page.getByText("corrected", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("2,900 lb · 1.45 tons · Construction/Demo", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    const scaleDetails = page.getByText("Scale ticket details", {
+      exact: true,
+    });
+    await scaleDetails.click();
+    await expect(
+      page.getByText("Speedway Transfer Station", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("$50.00 / ton", { exact: true })).toBeVisible();
+
+    await page
+      .getByRole("button", { name: "Correct weight", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Correct dump weight", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Net weight (lb)")).toHaveValue("2900");
+    await expect(
+      page.getByRole("link", { name: "View receipt", exact: true }),
+    ).toHaveAttribute(
+      "href",
+      "/api/mobile/expenses/captures/99999999-9999-4999-8999-999999999999/content",
+    );
+    await page.getByLabel("Net weight (lb)").fill("3000");
+    await page
+      .getByLabel("Correction reason")
+      .fill("Corrected from the printed scale ticket");
+    await page
+      .getByRole("button", { name: "Save reviewed weight", exact: true })
+      .click();
+    await expect.poll(() => dumpCorrectionSeen).toBe(true);
+    await expect(
+      page.getByText(
+        "Reviewed dump weight saved with a linked correction. The original expense remains in History.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+
+    await page
+      .getByRole("button", { name: "Correct weight", exact: true })
+      .click();
+    await page.getByLabel("Remove scale-ticket details").check();
+    await expect(page.getByLabel("Net weight (lb)")).not.toBeVisible();
+    await page
+      .getByLabel("Correction reason")
+      .fill("Scanner classification was incorrect");
+    await page
+      .getByRole("button", {
+        name: "Save classification correction",
+        exact: true,
+      })
+      .click();
+    await expect.poll(() => dumpRemovalSeen).toBe(true);
+    await expect(
+      page.getByText(
+        "Scale-ticket details removed with a linked correction. The original expense remains in History.",
+        { exact: true },
+      ),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: "Review", exact: true }).click();
     const approvalCoverage = page.getByLabel(
@@ -524,6 +843,7 @@ test.describe("Mobile Spend V2", () => {
             overview: true,
             exactDuplicateReview: false,
             fixedCosts: true,
+            dumpTickets: true,
           },
         }),
       }),
@@ -583,6 +903,14 @@ test.describe("Mobile Spend V2", () => {
             omittedUnverifiedHistoricalRecordCount: 0,
             unverifiedExpenseCategoryCount: 0,
             completeness: { state: "complete", reasons: [] },
+            dumpActivity: {
+              dumpFeeCents: 0,
+              ticketCount: 0,
+              weightedTicketCount: 0,
+              netWeightPounds: 0,
+              averageCostPerTonCents: null,
+              missingWeightCount: 0,
+            },
           },
           priorWeekChange: {
             available: true,
@@ -639,6 +967,14 @@ test.describe("Mobile Spend V2", () => {
             amountCents: 15_000,
             subrows: { facebookCents: 10_000, googleCents: 5_000 },
             unattributedCents: 0,
+          },
+          dumpActivity: {
+            dumpFeeCents: 10_000,
+            ticketCount: 2,
+            weightedTicketCount: 1,
+            netWeightPounds: 2_900,
+            averageCostPerTonCents: 6_304,
+            missingWeightCount: 1,
           },
           pendingExpenseCount: 0,
           missingAdEntries: [],
@@ -775,6 +1111,16 @@ test.describe("Mobile Spend V2", () => {
     ).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Expense mix" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "2,900 lb · 1.45 tons" }),
+    ).toBeVisible();
+    await expect(page.getByText("$63.04", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(
+        "1 dump expense is missing a confirmed net weight; no weight was estimated.",
+        { exact: true },
+      ),
     ).toBeVisible();
     await expect(page.getByText("125.0%")).toBeVisible();
     const finalCategory = page

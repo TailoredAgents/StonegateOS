@@ -38,6 +38,7 @@ function baseRows(
     jobs: [],
     expenses: [],
     allocations: [],
+    dumpDetails: [],
     commissions: [],
     payoutLines: [],
     payoutAdjustments: [],
@@ -552,6 +553,106 @@ describe("expense overview repository mapping", () => {
       fixedCosts: {
         coveredExpenseCount: 1,
         coveredExpenseAmountCents: 31_000,
+      },
+    });
+  });
+
+  it("maps confirmed dump facts for both reporting weeks", () => {
+    const mapped = mapExpenseOverviewRows({
+      weekStart: WEEK_START,
+      asOf: "2026-08-24",
+      rows: baseRows({
+        expenses: [
+          {
+            id: "current-dump",
+            amountCents: 9_141,
+            currency: "USD",
+            legacyCategory: "Dump Fees",
+            categoryId: "dump_fees",
+            categoryName: "Dump Fees",
+            categoryNeedsReview: false,
+            paidAt: new Date("2026-08-20T16:00:00.000Z"),
+            lifecycleStatus: "posted",
+            reviewStatus: "approved",
+            source: "receipt_scan",
+            reversalOfExpenseId: null,
+          },
+          {
+            id: "prior-dump",
+            amountCents: 5_000,
+            currency: "USD",
+            legacyCategory: "Dump Fees",
+            categoryId: "dump_fees",
+            categoryName: "Dump Fees",
+            categoryNeedsReview: false,
+            paidAt: new Date("2026-08-12T16:00:00.000Z"),
+            lifecycleStatus: "posted",
+            reviewStatus: "approved",
+            source: "receipt_scan",
+            reversalOfExpenseId: null,
+          },
+        ],
+        allocations: [
+          {
+            expenseId: "current-dump",
+            amountCents: 9_141,
+            categoryId: "dump_fees",
+            categoryName: "Dump Fees",
+            expenseCategoryNeedsReview: false,
+          },
+          {
+            expenseId: "prior-dump",
+            amountCents: 5_000,
+            categoryId: "dump_fees",
+            categoryName: "Dump Fees",
+            expenseCategoryNeedsReview: false,
+          },
+        ],
+        dumpDetails: [
+          {
+            expenseId: "current-dump",
+            weightStatus: "confirmed",
+            netWeightPounds: 2_900,
+          },
+          {
+            expenseId: "prior-dump",
+            weightStatus: "confirmed",
+            netWeightPounds: 2_000,
+          },
+        ],
+      }),
+    });
+
+    expect(mapped.dumpDetails).toEqual([
+      {
+        expenseId: "current-dump",
+        weightStatus: "confirmed",
+        netWeightPounds: 2_900,
+      },
+      {
+        expenseId: "prior-dump",
+        weightStatus: "confirmed",
+        netWeightPounds: 2_000,
+      },
+    ]);
+    expect(buildExpenseOverview(mapped)).toMatchObject({
+      dumpActivity: {
+        dumpFeeCents: 9_141,
+        ticketCount: 1,
+        weightedTicketCount: 1,
+        netWeightPounds: 2_900,
+        averageCostPerTonCents: 6_304,
+        missingWeightCount: 0,
+      },
+      priorWeek: {
+        dumpActivity: {
+          dumpFeeCents: 5_000,
+          ticketCount: 1,
+          weightedTicketCount: 1,
+          netWeightPounds: 2_000,
+          averageCostPerTonCents: 5_000,
+          missingWeightCount: 0,
+        },
       },
     });
   });

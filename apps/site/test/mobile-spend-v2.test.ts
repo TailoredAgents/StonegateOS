@@ -6,8 +6,21 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   MobileSpendV2,
+  buildExpenseDumpCorrectionBody,
+  buildExpenseDumpSubmissionDetails,
   expenseAddChoices,
+  expenseCaptureEvidenceHref,
+  expenseConfirmationDuplicateKind,
+  expenseDumpActivityValue,
+  expenseHistoryCanCorrectDumpWeight,
+  expenseHistoryCorrectionLabel,
+  expenseHistoryDisplayStatus,
+  expenseHistoryDumpDetailsValue,
   expenseOverviewReasonDetail,
+  formatExpenseDumpWeight,
+  parseExpenseDumpMilliTonsInput,
+  parseExpenseDumpPoundsInput,
+  receiptExtractionFromCapture,
 } from "../src/app/mobile/MobileSpendV2";
 import {
   MobileExpenseDonut,
@@ -82,6 +95,513 @@ void test("allocation totals surface incomplete rows instead of rounding", () =>
     expenseAllocationTotal([{ amountCents: 1_001 }, { amountCents: null }]),
     null,
   );
+});
+
+void test("dump weights remain exact across pounds, tons, and dollars", () => {
+  assert.equal(parseExpenseDumpPoundsInput("15,780"), 15_780);
+  assert.equal(parseExpenseDumpPoundsInput("0"), null);
+  assert.equal(parseExpenseDumpPoundsInput("0", { allowZero: true }), 0);
+  assert.equal(parseExpenseDumpPoundsInput("2900.5"), null);
+  assert.equal(parseExpenseDumpMilliTonsInput("1.45"), 1_450);
+  assert.equal(parseExpenseDumpMilliTonsInput("0"), 0);
+  assert.equal(parseExpenseDumpMilliTonsInput("1.2345"), null);
+  assert.equal(formatExpenseDumpWeight(2_900), "2,900 lb · 1.45 tons");
+  assert.equal(formatExpenseDumpWeight(2_000), "2,000 lb · 1 ton");
+});
+
+void test("dump submission records only reviewed weight and preserves readable context", () => {
+  const reviewed = buildExpenseDumpSubmissionDetails(
+    {
+      weightStatus: "confirmed",
+      facilityName: "Speedway Transfer Station",
+      ticketNumber: "697723",
+      material: "Construction/Demo",
+      grossWeightPounds: "15,780",
+      tareWeightPounds: "12,880",
+      netWeightPounds: "2,900",
+      billedWeightTons: "1.45",
+      unitRateDollarsPerTon: "50.00",
+    },
+    { required: true },
+  );
+  assert.deepEqual(reviewed, {
+    ok: true,
+    details: {
+      weightStatus: "confirmed",
+      facilityName: "Speedway Transfer Station",
+      ticketNumber: "697723",
+      material: "Construction/Demo",
+      grossWeightPounds: 15_780,
+      tareWeightPounds: 12_880,
+      netWeightPounds: 2_900,
+      billedWeightMilliTons: 1_450,
+      unitRateCentsPerTon: 5_000,
+      reviewed: true,
+    },
+  });
+
+  const billedOnly = buildExpenseDumpSubmissionDetails(
+    {
+      weightStatus: "confirmed",
+      facilityName: "",
+      ticketNumber: "",
+      material: "",
+      grossWeightPounds: "",
+      tareWeightPounds: "",
+      netWeightPounds: "",
+      billedWeightTons: "1.45",
+      unitRateDollarsPerTon: "",
+    },
+    { required: true },
+  );
+  assert.equal(
+    billedOnly.ok,
+    false,
+    "billed weight must not bypass net review",
+  );
+
+  const unreadable = buildExpenseDumpSubmissionDetails(
+    {
+      weightStatus: "unreadable",
+      facilityName: "Speedway Transfer Station",
+      ticketNumber: "697723",
+      material: "Construction/Demo",
+      grossWeightPounds: "15780",
+      tareWeightPounds: "0",
+      netWeightPounds: "stale invalid value",
+      billedWeightTons: "0",
+      unitRateDollarsPerTon: "0.00",
+    },
+    { required: true },
+  );
+  assert.deepEqual(unreadable, {
+    ok: true,
+    details: {
+      weightStatus: "unreadable",
+      facilityName: "Speedway Transfer Station",
+      ticketNumber: "697723",
+      material: "Construction/Demo",
+      grossWeightPounds: 15_780,
+      tareWeightPounds: 0,
+      netWeightPounds: null,
+      billedWeightMilliTons: 0,
+      unitRateCentsPerTon: 0,
+      reviewed: true,
+    },
+  });
+
+  const invalidSecondaryWeights = buildExpenseDumpSubmissionDetails(
+    {
+      weightStatus: "unreadable",
+      facilityName: "Speedway Transfer Station",
+      ticketNumber: "697723",
+      material: "Construction/Demo",
+      grossWeightPounds: "12000",
+      tareWeightPounds: "13000",
+      netWeightPounds: "",
+      billedWeightTons: "1.45",
+      unitRateDollarsPerTon: "50.00",
+    },
+    { required: true },
+  );
+  assert.deepEqual(invalidSecondaryWeights, {
+    ok: false,
+    message: "Gross weight cannot be less than tare weight.",
+  });
+});
+
+void test("scale-ticket review keeps low-confidence net blank without losing readable fields", () => {
+  const extracted = receiptExtractionFromCapture({
+    id: "11111111-1111-4111-8111-111111111111",
+    status: "ready",
+    version: 2,
+    filename: "scale-ticket.jpg",
+    contentPath: "/receipt",
+    extraction: {
+      raw: {
+        documentType: "scale_ticket",
+        paymentLastFour: null,
+        dumpTicket: {
+          facilityName: "Speedway Transfer Station",
+          ticketNumber: "697723",
+          material: "Construction/Demo",
+          grossWeightPounds: 15_780,
+          tareWeightPounds: 12_880,
+          netWeightPounds: 2_900,
+          billedWeightMilliTons: 1_450,
+          unitRateCentsPerTon: 5_000,
+        },
+      },
+      review: {
+        fields: {
+          vendor: { value: "Capital Waste Services" },
+          transactionDate: { value: "2026-08-27" },
+          totalCents: { value: 9_141 },
+          paymentLastFour: { value: null },
+          suggestedCategoryId: { value: "dump_fees" },
+          dumpTicket: {
+            value: {
+              facilityName: "Speedway Transfer Station",
+              ticketNumber: "697723",
+              material: "Construction/Demo",
+              grossWeightPounds: 15_780,
+              tareWeightPounds: 12_880,
+              netWeightPounds: null,
+              billedWeightMilliTons: 1_450,
+              unitRateCentsPerTon: 5_000,
+            },
+          },
+        },
+        fieldsToCheck: ["dumpTicket.netWeightPounds"],
+      },
+      categorySuggestion: { categoryId: "dump_fees" },
+      duplicates: { highestRisk: null },
+    },
+  });
+  assert.equal(extracted.initial?.documentType, "scale_ticket");
+  assert.equal(extracted.initial?.requiresScaleTicketReview, true);
+  assert.equal(extracted.initial?.categoryId, "dump_fees");
+  assert.equal(extracted.initial?.dumpDetails?.netWeightPounds, "");
+  assert.equal(extracted.initial?.dumpDetails?.grossWeightPounds, "15780");
+  assert.equal(extracted.initial?.dumpDetails?.billedWeightTons, "1.45");
+  assert.deepEqual(extracted.attention, ["dumpTicket.netWeightPounds"]);
+
+  const standard = receiptExtractionFromCapture({
+    id: "22222222-2222-4222-8222-222222222222",
+    status: "ready",
+    version: 2,
+    filename: "vertical.jpg",
+    contentPath: "/receipt",
+    extraction: {
+      raw: { documentType: "standard_receipt", dumpTicket: null },
+      review: { fields: {}, fieldsToCheck: [] },
+    },
+  });
+  assert.equal(standard.initial?.documentType, "standard_receipt");
+  assert.equal(standard.initial?.requiresScaleTicketReview, false);
+  assert.equal(standard.initial?.dumpDetails?.netWeightPounds, "");
+
+  const ambiguous = receiptExtractionFromCapture({
+    id: "33333333-3333-4333-8333-333333333333",
+    status: "ready",
+    version: 2,
+    filename: "ambiguous.jpg",
+    contentPath: "/receipt",
+    extraction: {
+      raw: {
+        documentType: "unknown",
+        dumpTicket: {
+          facilityName: null,
+          ticketNumber: null,
+          material: null,
+          grossWeightPounds: null,
+          tareWeightPounds: null,
+          netWeightPounds: null,
+          billedWeightMilliTons: null,
+          unitRateCentsPerTon: null,
+        },
+      },
+      review: { fields: {}, fieldsToCheck: [] },
+    },
+  });
+  assert.equal(ambiguous.initial?.documentType, "unknown");
+  assert.equal(ambiguous.initial?.requiresScaleTicketReview, true);
+
+  const malformedFutureShape = receiptExtractionFromCapture({
+    id: "44444444-4444-4444-8444-444444444444",
+    status: "ready",
+    version: 2,
+    filename: "future-shape.jpg",
+    contentPath: "/receipt",
+    extraction: {
+      raw: { documentType: "unknown", dumpTicket: "future-shape" },
+      review: { fields: {}, fieldsToCheck: [] },
+    },
+  });
+  assert.equal(malformedFutureShape.initial?.requiresScaleTicketReview, true);
+});
+
+void test("rolling deploy defaults missing dump reporting data without crashing", () => {
+  assert.deepEqual(expenseDumpActivityValue(undefined), {
+    dumpFeeCents: 0,
+    ticketCount: 0,
+    weightedTicketCount: 0,
+    netWeightPounds: 0,
+    averageCostPerTonCents: null,
+    missingWeightCount: 0,
+  });
+  assert.equal(expenseHistoryDumpDetailsValue(undefined), null);
+  assert.deepEqual(
+    expenseHistoryDumpDetailsValue({
+      weightStatus: "confirmed",
+      facilityName: "Speedway Transfer Station",
+      ticketNumber: "697723",
+      material: "Construction/Demo",
+      grossWeightPounds: 15_780,
+      tareWeightPounds: 12_880,
+      netWeightPounds: 2_900,
+      billedWeightMilliTons: 1_450,
+      unitRateCentsPerTon: 5_000,
+      confirmedBy: { id: "owner-1", name: "Owner" },
+      confirmedAt: "2026-08-27T16:00:00.000Z",
+    }),
+    {
+      weightStatus: "confirmed",
+      facilityName: "Speedway Transfer Station",
+      ticketNumber: "697723",
+      material: "Construction/Demo",
+      grossWeightPounds: 15_780,
+      tareWeightPounds: 12_880,
+      netWeightPounds: 2_900,
+      billedWeightMilliTons: 1_450,
+      unitRateCentsPerTon: 5_000,
+      confirmedBy: { id: "owner-1", name: "Owner" },
+      confirmedAt: "2026-08-27T16:00:00.000Z",
+      createdAt: null,
+    },
+  );
+});
+
+void test("history prioritizes corrected and voided ledger state", () => {
+  assert.equal(expenseHistoryDisplayStatus("posted", "approved"), "approved");
+  assert.equal(
+    expenseHistoryDisplayStatus("corrected", "approved"),
+    "corrected",
+  );
+  assert.equal(expenseHistoryDisplayStatus("voided", "approved"), "voided");
+  assert.equal(expenseHistoryDisplayStatus("posted", null), "posted");
+  assert.equal(
+    expenseHistoryCorrectionLabel({
+      reversalOfExpenseId: "original",
+      correctionOfExpenseId: null,
+      correctedByExpenseId: null,
+    }),
+    "Correction reversal — offsets original",
+  );
+  assert.equal(
+    expenseHistoryCorrectionLabel({
+      reversalOfExpenseId: null,
+      correctionOfExpenseId: "original",
+      correctedByExpenseId: null,
+    }),
+    "Active corrected entry",
+  );
+  assert.equal(
+    expenseHistoryCorrectionLabel({
+      reversalOfExpenseId: null,
+      correctionOfExpenseId: null,
+      correctedByExpenseId: "replacement",
+    }),
+    "Original expense — replaced",
+  );
+});
+
+void test("receipt evidence links stay on the authenticated mobile route", () => {
+  const captureId = "11111111-1111-4111-8111-111111111111";
+  assert.equal(
+    expenseCaptureEvidenceHref({
+      id: captureId,
+      contentPath: `/api/admin/expenses/captures/${captureId}/content`,
+    }),
+    `/api/mobile/expenses/captures/${captureId}/content`,
+  );
+  assert.equal(
+    expenseCaptureEvidenceHref({
+      id: "../admin",
+      contentPath: "/api/admin/expenses/captures/unsafe/content",
+    }),
+    null,
+  );
+  assert.equal(expenseCaptureEvidenceHref({ id: captureId }), null);
+});
+
+void test("runtime duplicate responses distinguish scale tickets from receipt hashes", () => {
+  assert.equal(
+    expenseConfirmationDuplicateKind(409, {
+      message: "This facility and ticket number already exist.",
+      fieldErrors: {
+        exactDuplicateOverrideReason: "Owner approval is required.",
+      },
+    }),
+    "scale_ticket",
+  );
+  assert.equal(
+    expenseConfirmationDuplicateKind(422, {
+      message: "Add a specific reason for posting a duplicate receipt.",
+      fieldErrors: {
+        exactDuplicateOverrideReason: "Enter at least 10 characters.",
+      },
+    }),
+    "exact_receipt",
+  );
+  const genericDuplicate = {
+    message: "Add a specific reason for posting a duplicate expense.",
+    fieldErrors: {
+      exactDuplicateOverrideReason: "Enter at least 10 characters.",
+    },
+  };
+  assert.equal(
+    expenseConfirmationDuplicateKind(422, genericDuplicate, {
+      attemptedDumpDetails: true,
+    }),
+    "scale_ticket",
+  );
+  assert.equal(
+    expenseConfirmationDuplicateKind(422, genericDuplicate, {
+      attemptedDumpDetails: true,
+      knownExactReceipt: true,
+    }),
+    "exact_receipt",
+  );
+  assert.equal(
+    expenseConfirmationDuplicateKind(409, {
+      message: "The expense changed while it was being saved.",
+    }),
+    null,
+  );
+});
+
+void test("posted dump corrections preserve the exact financial replacement", () => {
+  const row: Parameters<typeof expenseHistoryCanCorrectDumpWeight>[0] = {
+    id: "88888888-8888-4888-8888-888888888888",
+    amountCents: 9_141,
+    currency: "USD",
+    category: "Dump Fees",
+    categoryNeedsReview: false,
+    vendor: "Capital Waste Services",
+    notes: "Scale ticket",
+    method: "card",
+    source: "receipt_scan",
+    lifecycleStatus: "posted",
+    version: 2,
+    allocations: [
+      { categoryId: "dump_fees", category: "Dump Fees", amountCents: 9_141 },
+    ],
+    paidAt: "2026-08-27T15:45:00.000Z",
+    coverageStartAt: null,
+    coverageEndAt: null,
+  };
+  assert.equal(expenseHistoryCanCorrectDumpWeight(row, true), true);
+  assert.equal(
+    expenseHistoryCanCorrectDumpWeight({ ...row, source: "manual" }, true),
+    true,
+  );
+  assert.equal(
+    expenseHistoryCanCorrectDumpWeight(
+      { ...row, source: "manual_correction" },
+      true,
+    ),
+    true,
+  );
+  assert.equal(expenseHistoryCanCorrectDumpWeight(row, false), false);
+  assert.equal(
+    expenseHistoryCanCorrectDumpWeight({ ...row, paidAt: undefined }, true),
+    false,
+    "an older History DTO must hide the action",
+  );
+  assert.equal(
+    expenseHistoryCanCorrectDumpWeight(
+      { ...row, lifecycleStatus: "corrected" },
+      true,
+    ),
+    false,
+  );
+
+  assert.deepEqual(
+    buildExpenseDumpCorrectionBody(
+      row,
+      {
+        weightStatus: "confirmed",
+        facilityName: "Speedway Transfer Station",
+        ticketNumber: "697723",
+        material: "Construction/Demo",
+        grossWeightPounds: "15780",
+        tareWeightPounds: "12880",
+        netWeightPounds: "2900",
+        billedWeightTons: "1.45",
+        unitRateDollarsPerTon: "50.00",
+      },
+      "Corrected the reviewed net weight",
+    ),
+    {
+      ok: true,
+      body: {
+        amountCents: 9_141,
+        currency: "USD",
+        category: "Dump Fees",
+        vendor: "Capital Waste Services",
+        memo: "Scale ticket",
+        method: "card",
+        paidAt: "2026-08-27T15:45:00.000Z",
+        coverageStartAt: null,
+        coverageEndAt: null,
+        reason: "Corrected the reviewed net weight",
+        dumpDetails: {
+          weightStatus: "confirmed",
+          facilityName: "Speedway Transfer Station",
+          ticketNumber: "697723",
+          material: "Construction/Demo",
+          grossWeightPounds: 15_780,
+          tareWeightPounds: 12_880,
+          netWeightPounds: 2_900,
+          billedWeightMilliTons: 1_450,
+          unitRateCentsPerTon: 5_000,
+          reviewed: true,
+        },
+      },
+    },
+  );
+
+  const removed = buildExpenseDumpCorrectionBody(
+    row,
+    {
+      weightStatus: "confirmed",
+      facilityName: "",
+      ticketNumber: "",
+      material: "",
+      grossWeightPounds: "",
+      tareWeightPounds: "",
+      netWeightPounds: "",
+      billedWeightTons: "",
+      unitRateDollarsPerTon: "",
+    },
+    "Removed an incorrect scale-ticket classification",
+    true,
+  );
+  assert.equal(removed.ok, true);
+  if (removed.ok) assert.equal(removed.body.dumpDetails, null);
+});
+
+void test("mobile dump correction proxy remains owner-only and version-bound", async () => {
+  const [route, historyRoute, component] = await Promise.all([
+    readFile(
+      `${siteRoot}/src/app/api/mobile/expenses/[expenseId]/correct/route.ts`,
+      "utf8",
+    ),
+    readFile(
+      `${siteRoot}/src/app/api/mobile/expenses/submissions/route.ts`,
+      "utf8",
+    ),
+    readFile(`${siteRoot}/src/app/mobile/MobileSpendV2.tsx`, "utf8"),
+  ]);
+  assert.match(route, /permission: "expenses\.approve"/u);
+  assert.match(route, /method: "POST"/u);
+  assert.match(
+    route,
+    /\/api\/admin\/expenses\/\$\{encodeExpenseRouteId\(expenseId\)\}\/correct/u,
+  );
+  assert.match(component, /operation: `expense-dump-correct:\$\{row\.id\}`/u);
+  assert.match(component, /"If-Match": String\(row\.version\)/u);
+  assert.match(component, /"Idempotency-Key": attempt\.idempotencyKey/u);
+  assert.match(component, /Save reviewed weight/u);
+  assert.match(component, /Remove scale-ticket details/u);
+  assert.match(component, /Save classification correction/u);
+  assert.match(
+    component,
+    /row\.dumpDetails\s*\? "Correct weight"\s*: "Add weight"/u,
+  );
+  assert.match(component, /The original expense remains in History/u);
+  assert.match(historyRoute, /"dump_tickets"/u);
 });
 
 void test("receipt type inference supports camera and plan-approved file types", () => {
@@ -525,8 +1045,47 @@ void test("Spend V2 keeps the locked navigation and offline-store contracts", as
   assert.match(component, /capabilities\?\.reimbursement === true/u);
   assert.match(component, /capabilities\?\.exactDuplicateReview === true/u);
   assert.match(component, /capabilities\?\.fixedCosts === true/u);
+  assert.match(component, /capabilities\?\.dumpTickets === true/u);
+  assert.match(component, /dumpTickets: value\["dumpTickets"\] === true/u);
   assert.match(component, /MobileFixedCosts/u);
   assert.match(component, /MobileExpenseDonut/u);
+  assert.match(component, /DumpActivityPanel/u);
+  assert.match(component, /Scale ticket details/u);
+  assert.match(component, />\s*View receipt\s*</u);
+  assert.match(component, /href=\{receiptContentHref\}/u);
+  assert.match(component, /target="_blank"/u);
+  assert.match(component, /rel="noreferrer"/u);
+  assert.match(component, /Net weight is unreadable/u);
+  assert.match(component, /Portrait or landscape/u);
+  assert.match(
+    component,
+    /if \(runtimeDuplicateKind === "scale_ticket"\)[\s\S]*?setRuntimeDuplicateKind\(null\)/u,
+  );
+  assert.match(
+    component,
+    /attemptedDumpDetails: body\.dumpDetails !== undefined/u,
+  );
+  assert.match(
+    component,
+    /knownExactReceipt:\s*receiptExtraction\(row\)\.duplicateRisk ===\s*"exact"/u,
+  );
+  assert.match(component, /existing receipt or scale ticket/u);
+  assert.match(component, /\["dump_tickets", "Dump expenses"\]/u);
+  assert.match(component, /dumpDetails\?: ExpenseDumpSubmissionDetails/u);
+  assert.match(component, /This is not a scale ticket/u);
+  assert.match(component, /scaleTicketDisposition/u);
+  assert.equal(component.match(/receiptReviewContractVersion: 2/gu)?.length, 2);
+  assert.match(
+    component,
+    /const requiresScaleTicketReview = Boolean\([\s\S]*?"dumpTicket" in raw[\s\S]*?"dumpDetails" in raw/u,
+  );
+  assert.match(
+    component,
+    /visibleHistoryFilters = dumpTicketsEnabled[\s\S]*?value !== "dump_tickets"/u,
+  );
+  assert.match(component, /Original expense — replaced/u);
+  assert.match(component, /Correction reversal — offsets original/u);
+  assert.match(component, /Active corrected entry/u);
   assert.match(component, /fetchExactDuplicateReviewPage/u);
   assert.match(component, /owner-duplicate-confirm:/u);
   assert.match(component, /"If-Match": String\(item\.capture\.version\)/u);
@@ -608,7 +1167,7 @@ void test("fixed-cost coverage stays optional under More details for manual and 
   );
   assert.match(
     component,
-    /fetch\("\/api\/mobile\/expenses\/submissions"[\s\S]*?body: JSON\.stringify\(body\)/u,
+    /fetch\("\/api\/mobile\/expenses\/submissions"[\s\S]*?body: JSON\.stringify\(requestBody\)/u,
   );
   assert.match(
     component,

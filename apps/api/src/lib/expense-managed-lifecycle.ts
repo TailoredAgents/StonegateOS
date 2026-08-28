@@ -1,11 +1,16 @@
 import { and, eq } from "drizzle-orm";
 import {
   expenseAllocations,
+  expenseDumpDetails,
   expenseReimbursementClaims,
   expenses,
   payoutRunAdjustments,
   payoutRuns,
 } from "@/db";
+import {
+  replaceExpenseDumpDetailsInTransaction,
+  type ExpenseDumpDetailsInput,
+} from "@/lib/expense-submissions";
 import {
   normalizeExpenseCategoryAlias,
   resolveExpenseCategoryAlias,
@@ -14,6 +19,10 @@ import {
   assertExpenseFixedCostCoverageLink,
   assertFixedCostCoverageLinkCanBeEstablished,
 } from "@/lib/expense-fixed-cost-coverage";
+import {
+  findScaleTicketDuplicateForPosting,
+  normalizeScaleTicketDuplicateIdentity,
+} from "@/lib/expense-receipt-evidence";
 import {
   TeamMutationFailure,
   type TeamMutationTransaction,
@@ -38,6 +47,8 @@ export type ManagedExpenseCorrectionResult = {
   allocationStrategy: "preserved" | "single_category" | "unverified";
   reimbursementClaimId: string | null;
   reimbursementStatus: "pending" | "approved" | "attached" | null;
+  dumpDetailsRecorded: boolean;
+  scaleTicketDuplicateOfExpenseId: string | null;
 };
 
 export type ManagedExpenseVoidResult = {
@@ -105,6 +116,8 @@ async function insertGeneratedEntry(
       coverageStartAt: Date | null;
       coverageEndAt: Date | null;
     };
+    dumpDetails?: ExpenseDumpDetailsInput | null;
+    dumpDetailsConfirmation?: { confirmedBy: string; confirmedAt: Date };
   },
 ): Promise<GeneratedLedgerEntry> {
   const financial = input.replacement ?? {
@@ -177,6 +190,16 @@ async function insertGeneratedEntry(
         createdAt: input.now,
       })),
     );
+  }
+
+  if (input.dumpDetails) {
+    await replaceExpenseDumpDetailsInTransaction(tx, {
+      expenseId: created.id,
+      dumpDetails: input.dumpDetails,
+      confirmedBy: input.dumpDetailsConfirmation?.confirmedBy ?? input.actorId,
+      confirmedAt: input.dumpDetailsConfirmation?.confirmedAt,
+      now: input.now,
+    });
   }
 
   const [posted] = await tx
@@ -453,9 +476,16 @@ export async function createManagedExpenseCorrection(
     /** Undefined preserves the original; null intentionally unlinks. */
     coveredByFixedCostSeriesId?: string | null;
     canManageFixedCostCoverage?: boolean;
+    /** Undefined preserves existing facts; null explicitly removes them. */
+    dumpDetails?: ExpenseDumpDetailsInput | null;
   },
 ): Promise<ManagedExpenseCorrectionResult> {
   const originalAllocations = await loadAllocations(tx, input.existing.id);
+  const [originalDumpDetails] = await tx
+    .select()
+    .from(expenseDumpDetails)
+    .where(eq(expenseDumpDetails.expenseId, input.existing.id))
+    .limit(1);
   const replacementCategory = await resolveReplacementCategory(
     tx,
     input.existing,
@@ -478,6 +508,89 @@ export async function createManagedExpenseCorrection(
           },
         ]
       : [];
+  const hasPositiveDumpFeesAllocation = replacementAllocations.some(
+    (allocation) =>
+      allocation.categoryId === "dump_fees" && allocation.amountCents > 0,
+  );
+  const preservesDumpDetails =
+    input.dumpDetails === undefined && Boolean(originalDumpDetails);
+  let replacementDumpDetails: ExpenseDumpDetailsInput | null;
+  if (input.dumpDetails === undefined) {
+    if (originalDumpDetails && !hasPositiveDumpFeesAllocation) {
+      throw new TeamMutationFailure(
+        "invalid",
+        "Remove the reviewed dump-ticket facts when changing away from Dump Fees.",
+        {
+          fieldErrors: {
+            dumpDetails:
+              "Explicitly remove the dump-ticket details for this correction.",
+          },
+        },
+      );
+    }
+    replacementDumpDetails = originalDumpDetails
+      ? {
+          weightStatus: originalDumpDetails.weightStatus,
+          facilityName: originalDumpDetails.facilityName,
+          ticketNumber: originalDumpDetails.ticketNumber,
+          material: originalDumpDetails.material,
+          grossWeightPounds: originalDumpDetails.grossWeightPounds,
+          tareWeightPounds: originalDumpDetails.tareWeightPounds,
+          netWeightPounds: originalDumpDetails.netWeightPounds,
+          billedWeightMilliTons: originalDumpDetails.billedWeightMilliTons,
+          unitRateCentsPerTon: originalDumpDetails.unitRateCentsPerTon,
+          reviewed: true,
+        }
+      : null;
+  } else {
+    replacementDumpDetails = input.dumpDetails;
+  }
+  if (replacementDumpDetails && !hasPositiveDumpFeesAllocation) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "Dump-ticket facts require a positive Dump Fees allocation.",
+      {
+        fieldErrors: {
+          dumpDetails: "Choose Dump Fees or remove the dump-ticket details.",
+        },
+      },
+    );
+  }
+  let scaleTicketDuplicateOfExpenseId: string | null = null;
+  if (input.dumpDetails) {
+    const originalIdentity = normalizeScaleTicketDuplicateIdentity({
+      facilityName: originalDumpDetails?.facilityName ?? null,
+      ticketNumber: originalDumpDetails?.ticketNumber ?? null,
+    });
+    const replacementIdentity = normalizeScaleTicketDuplicateIdentity({
+      facilityName: input.dumpDetails.facilityName,
+      ticketNumber: input.dumpDetails.ticketNumber,
+    });
+    const identityChanged =
+      replacementIdentity !== null &&
+      (replacementIdentity.facilityName !== originalIdentity?.facilityName ||
+        replacementIdentity.ticketNumber !== originalIdentity?.ticketNumber);
+    if (identityChanged) {
+      scaleTicketDuplicateOfExpenseId =
+        await findScaleTicketDuplicateForPosting(tx, {
+          facilityName: input.dumpDetails.facilityName,
+          ticketNumber: input.dumpDetails.ticketNumber,
+          excludeExpenseIds: [input.existing.id],
+        });
+      if (scaleTicketDuplicateOfExpenseId && input.reason.trim().length < 10) {
+        throw new TeamMutationFailure(
+          "invalid",
+          "Add a specific correction reason to override the duplicate scale ticket.",
+          {
+            fieldErrors: {
+              reason:
+                "Enter at least 10 characters explaining why this is not a duplicate expense.",
+            },
+          },
+        );
+      }
+    }
+  }
   const coveredByFixedCostSeriesId =
     input.coveredByFixedCostSeriesId === undefined
       ? input.existing.coveredByFixedCostSeriesId
@@ -520,6 +633,14 @@ export async function createManagedExpenseCorrection(
     now: input.now,
     kind: { correctionOfExpenseId: input.existing.id },
     coveredByFixedCostSeriesId,
+    dumpDetails: replacementDumpDetails,
+    dumpDetailsConfirmation:
+      preservesDumpDetails && originalDumpDetails
+        ? {
+            confirmedBy: originalDumpDetails.confirmedBy,
+            confirmedAt: originalDumpDetails.confirmedAt,
+          }
+        : undefined,
     replacement: {
       vendor: input.replacement.vendor,
       memo: input.replacement.memo,
@@ -548,6 +669,8 @@ export async function createManagedExpenseCorrection(
         : "unverified",
     reimbursementClaimId: reimbursement.claimId,
     reimbursementStatus: reimbursement.status,
+    dumpDetailsRecorded: replacementDumpDetails !== null,
+    scaleTicketDuplicateOfExpenseId,
   };
 }
 

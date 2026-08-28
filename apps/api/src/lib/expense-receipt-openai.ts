@@ -1,6 +1,9 @@
 import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
 import {
   ExpenseReceiptExtractionSchema,
+  MAX_DUMP_BILLED_WEIGHT_MILLI_TONS,
+  MAX_DUMP_UNIT_RATE_CENTS_PER_TON,
+  MAX_DUMP_WEIGHT_POUNDS,
   MAX_RECEIPT_MONEY_CENTS,
   type ExpenseReceiptExtraction,
 } from "@/lib/expense-receipt-domain";
@@ -91,6 +94,84 @@ export const EXPENSE_RECEIPT_EXTRACTION_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
+    documentType: {
+      type: "string",
+      enum: ["standard_receipt", "scale_ticket", "unknown"],
+    },
+    dumpTicket: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            facilityName: { type: ["string", "null"], maxLength: 240 },
+            ticketNumber: { type: ["string", "null"], maxLength: 120 },
+            material: { type: ["string", "null"], maxLength: 240 },
+            grossWeightPounds: {
+              type: ["integer", "null"],
+              minimum: 1,
+              maximum: MAX_DUMP_WEIGHT_POUNDS,
+            },
+            tareWeightPounds: {
+              type: ["integer", "null"],
+              minimum: 0,
+              maximum: MAX_DUMP_WEIGHT_POUNDS,
+            },
+            netWeightPounds: {
+              type: ["integer", "null"],
+              minimum: 1,
+              maximum: MAX_DUMP_WEIGHT_POUNDS,
+            },
+            billedWeightMilliTons: {
+              type: ["integer", "null"],
+              minimum: 0,
+              maximum: MAX_DUMP_BILLED_WEIGHT_MILLI_TONS,
+            },
+            unitRateCentsPerTon: {
+              type: ["integer", "null"],
+              minimum: 0,
+              maximum: MAX_DUMP_UNIT_RATE_CENTS_PER_TON,
+            },
+            fieldConfidence: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                facilityName: nullableConfidenceJsonSchema,
+                ticketNumber: nullableConfidenceJsonSchema,
+                material: nullableConfidenceJsonSchema,
+                grossWeightPounds: nullableConfidenceJsonSchema,
+                tareWeightPounds: nullableConfidenceJsonSchema,
+                netWeightPounds: nullableConfidenceJsonSchema,
+                billedWeightMilliTons: nullableConfidenceJsonSchema,
+                unitRateCentsPerTon: nullableConfidenceJsonSchema,
+              },
+              required: [
+                "facilityName",
+                "ticketNumber",
+                "material",
+                "grossWeightPounds",
+                "tareWeightPounds",
+                "netWeightPounds",
+                "billedWeightMilliTons",
+                "unitRateCentsPerTon",
+              ],
+            },
+          },
+          required: [
+            "facilityName",
+            "ticketNumber",
+            "material",
+            "grossWeightPounds",
+            "tareWeightPounds",
+            "netWeightPounds",
+            "billedWeightMilliTons",
+            "unitRateCentsPerTon",
+            "fieldConfidence",
+          ],
+        },
+        { type: "null" },
+      ],
+    },
     vendor: { type: ["string", "null"], maxLength: 240 },
     transactionDate: {
       type: ["string", "null"],
@@ -149,6 +230,7 @@ export const EXPENSE_RECEIPT_EXTRACTION_JSON_SCHEMA = {
       type: "object",
       additionalProperties: false,
       properties: {
+        documentType: nullableConfidenceJsonSchema,
         vendor: nullableConfidenceJsonSchema,
         transactionDate: nullableConfidenceJsonSchema,
         totalCents: nullableConfidenceJsonSchema,
@@ -158,6 +240,7 @@ export const EXPENSE_RECEIPT_EXTRACTION_JSON_SCHEMA = {
         lineItems: nullableConfidenceJsonSchema,
       },
       required: [
+        "documentType",
         "vendor",
         "transactionDate",
         "totalCents",
@@ -169,6 +252,8 @@ export const EXPENSE_RECEIPT_EXTRACTION_JSON_SCHEMA = {
     },
   },
   required: [
+    "documentType",
+    "dumpTicket",
     "vendor",
     "transactionDate",
     "totalCents",
@@ -184,6 +269,19 @@ export const EXPENSE_RECEIPT_EXTRACTION_JSON_SCHEMA = {
 const SYSTEM_PROMPT = `You extract accounting facts from receipt evidence for human review.
 
 Rules:
+- Inspect the entire document at any portrait, landscape, sideways, or camera-rotated orientation.
+- documentType is scale_ticket for landfill, transfer-station, disposal, or weigh-scale tickets; standard_receipt for ordinary receipts; otherwise unknown.
+- For a scale ticket, return dumpTicket even when some values are unreadable. For other document types, dumpTicket must be null.
+- facilityName is the named landfill, transfer station, or scale site, which may differ from the billing company/vendor.
+- ticketNumber is the scale-ticket identifier, not a site ID, payment reference, customer number, or PO number.
+- Copy material exactly as printed when readable. If several descriptions appear, prefer the explicitly labeled MATERIAL field over a charge-line description.
+- grossWeightPounds, tareWeightPounds, and netWeightPounds are whole pounds. Prefer explicitly labeled Gross, Tare, and Net values.
+- billedWeightMilliTons is the printed billed or charge quantity in US tons multiplied by 1000. Example: 1.45 tons is 1450. Do not use an unrelated item quantity.
+- unitRateCentsPerTon is the printed per-ton rate in cents. Example: $50.00 per ton is 5000.
+- netWeightPounds is only the explicitly printed net weight in pounds. Never derive or convert it from billed tons; preserve that separate evidence in billedWeightMilliTons.
+- suggestedCategoryId should normally be dump_fees for a scale ticket unless visible evidence clearly supports another allowed category.
+- vendor is the billing or operating company shown on the ticket; do not replace it with facilityName when those names differ.
+- If printed gross minus tare disagrees with printed net, preserve the visibly labeled values and add a warning. Do not silently repair them.
 - Never guess or infer a value that is not visibly supported by the receipt.
 - Use null for missing, ambiguous, obscured, or unreadable values.
 - The total is the final amount paid, in integer USD cents. Do not use subtotal.
@@ -192,7 +290,7 @@ Rules:
 - paymentLastFour is null unless four payment-card digits are explicitly shown.
 - suggestedCategoryId must be one allowed category ID or null.
 - Confidence is 0 through 1 and must be null whenever its field is null.
-- Put glare, cropping, duplicate totals, uncertain currency, handwritten changes, and other review risks in warnings.
+- Put glare, cropping, uncertain orientation, conflicting weights, duplicate totals, uncertain currency, handwritten changes, and other review risks in warnings.
 - This extraction never authorizes or posts an expense. A human must confirm it.`;
 
 export function buildExpenseReceiptOpenAiRequest(input: {

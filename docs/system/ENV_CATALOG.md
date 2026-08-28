@@ -87,6 +87,8 @@ Expense Tracking V2 rollout controls (all default off in production):
 - `EXPENSE_AD_SPEND_ENABLED`
 - `EXPENSE_REIMBURSEMENT_ENABLED`
 - `EXPENSE_OVERVIEW_ENABLED`
+- `EXPENSE_DUMP_TICKETS_ENABLED` (gates new dump-ticket review, mutations, and
+  History filtering; stored dump facts remain readable when disabled)
 - `EXPENSE_FIXED_COSTS_ENABLED` (gates owner setup and mutations; existing
   schedules continue to affect Overview when disabled)
 

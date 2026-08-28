@@ -4,6 +4,7 @@ import { and, desc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import {
   expenseAllocations,
   expenseCategories,
+  expenseDumpDetails,
   expenseFixedCostVersions,
   expenseReceiptCaptures,
   expenseReimbursementClaims,
@@ -13,8 +14,9 @@ import {
 } from "@/db";
 import {
   createExpenseSubmissionInTransaction,
-  parseExpenseSubmission,
+  parseExpenseSubmissionRequest,
 } from "@/lib/expense-submissions";
+import { isExpenseDumpTicketsEnabled } from "@/lib/expense-feature-flags";
 import {
   encodeExpenseHistoryCursor,
   parseExpenseHistoryQuery,
@@ -77,6 +79,16 @@ export async function GET(request: NextRequest): Promise<Response> {
       request.nextUrl.searchParams,
       access.canApprove,
     );
+    if (query.filter === "dump_tickets" && !isExpenseDumpTicketsEnabled()) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "expense_dump_tickets_disabled",
+          message: "Dump-ticket history is temporarily unavailable.",
+        },
+        { status: 503, headers: { "Cache-Control": "no-store" } },
+      );
+    }
   } catch (error) {
     if (error instanceof TeamMutationFailure) {
       return NextResponse.json(
@@ -108,6 +120,15 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
   if (query.filter === "reimbursement") {
     conditions.push(eq(expenses.payerType, "personal"));
+  }
+  if (query.filter === "dump_tickets") {
+    conditions.push(sql<boolean>`EXISTS (
+      SELECT 1
+      FROM ${expenseAllocations} AS dump_allocation
+      WHERE dump_allocation.expense_id = ${expenses.id}
+        AND dump_allocation.category_id = 'dump_fees'
+        AND dump_allocation.amount_cents > 0
+    )`);
   }
 
   const pendingRank = sql<number>`case when ${expenses.reviewStatus} = 'pending' then 0 else 1 end`;
@@ -150,6 +171,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       method: expenses.method,
       source: expenses.source,
       paidAt: expenses.paidAt,
+      coverageStartAt: expenses.coverageStartAt,
+      coverageEndAt: expenses.coverageEndAt,
       purchaseDate:
         sql<string>`to_char(${expenses.paidAt} AT TIME ZONE 'America/New_York', 'YYYY-MM-DD')`.as(
           "purchase_date",
@@ -162,6 +185,9 @@ export async function GET(request: NextRequest): Promise<Response> {
       reviewedAt: expenses.reviewedAt,
       reviewReason: expenses.reviewReason,
       lifecycleStatus: expenses.lifecycleStatus,
+      reversalOfExpenseId: expenses.reversalOfExpenseId,
+      correctionOfExpenseId: expenses.correctionOfExpenseId,
+      correctedByExpenseId: expenses.correctedByExpenseId,
       version: expenses.version,
       appointmentId: expenses.appointmentId,
       receiptCaptureId: expenses.receiptCaptureId,
@@ -181,6 +207,19 @@ export async function GET(request: NextRequest): Promise<Response> {
       ),
       reimbursementClaimId: expenseReimbursementClaims.id,
       reimbursementStatus: expenseReimbursementClaims.status,
+      dumpDetailsExpenseId: expenseDumpDetails.expenseId,
+      dumpWeightStatus: expenseDumpDetails.weightStatus,
+      dumpFacilityName: expenseDumpDetails.facilityName,
+      dumpTicketNumber: expenseDumpDetails.ticketNumber,
+      dumpMaterial: expenseDumpDetails.material,
+      dumpGrossWeightPounds: expenseDumpDetails.grossWeightPounds,
+      dumpTareWeightPounds: expenseDumpDetails.tareWeightPounds,
+      dumpNetWeightPounds: expenseDumpDetails.netWeightPounds,
+      dumpBilledWeightMilliTons: expenseDumpDetails.billedWeightMilliTons,
+      dumpUnitRateCentsPerTon: expenseDumpDetails.unitRateCentsPerTon,
+      dumpConfirmedBy: expenseDumpDetails.confirmedBy,
+      dumpConfirmedAt: expenseDumpDetails.confirmedAt,
+      dumpDetailsCreatedAt: expenseDumpDetails.createdAt,
       createdAt: expenses.createdAt,
       updatedAt: expenses.updatedAt,
     })
@@ -193,6 +232,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       expenseReimbursementClaims,
       eq(expenseReimbursementClaims.expenseId, expenses.id),
     )
+    .leftJoin(expenseDumpDetails, eq(expenseDumpDetails.expenseId, expenses.id))
     .where(and(...conditions))
     .orderBy(
       ...(access.canApprove ? [pendingRank] : []),
@@ -207,9 +247,12 @@ export async function GET(request: NextRequest): Promise<Response> {
   const memberIds = Array.from(
     new Set(
       rows.flatMap((row) =>
-        [row.submittedBy, row.paidByMemberId, row.reviewedBy].filter(
-          (id): id is string => Boolean(id),
-        ),
+        [
+          row.submittedBy,
+          row.paidByMemberId,
+          row.reviewedBy,
+          row.dumpConfirmedBy,
+        ].filter((id): id is string => Boolean(id)),
       ),
     ),
   );
@@ -286,6 +329,13 @@ export async function GET(request: NextRequest): Promise<Response> {
         method: row.method,
         source: row.source,
         purchaseDate: row.purchaseDate,
+        paidAt: access.canApprove ? row.paidAt.toISOString() : null,
+        coverageStartAt: access.canApprove
+          ? (row.coverageStartAt?.toISOString() ?? null)
+          : null,
+        coverageEndAt: access.canApprove
+          ? (row.coverageEndAt?.toISOString() ?? null)
+          : null,
         payerType: row.payerType,
         paidByMember: row.paidByMemberId
           ? {
@@ -309,6 +359,9 @@ export async function GET(request: NextRequest): Promise<Response> {
         reviewedAt: row.reviewedAt?.toISOString() ?? null,
         reviewReason: row.reviewReason,
         lifecycleStatus: row.lifecycleStatus,
+        reversalOfExpenseId: row.reversalOfExpenseId,
+        correctionOfExpenseId: row.correctionOfExpenseId,
+        correctedByExpenseId: row.correctedByExpenseId,
         version: row.version,
         appointmentId: row.appointmentId,
         coveredByFixedCostSeriesId: access.canReadFinancials
@@ -335,6 +388,29 @@ export async function GET(request: NextRequest): Promise<Response> {
           : row.payerType === "personal" && row.reviewStatus === "pending"
             ? { claimId: null, status: "awaiting_approval" }
             : null,
+        dumpDetails: row.dumpDetailsExpenseId
+          ? {
+              weightStatus: row.dumpWeightStatus,
+              facilityName: row.dumpFacilityName,
+              ticketNumber: row.dumpTicketNumber,
+              material: row.dumpMaterial,
+              grossWeightPounds: row.dumpGrossWeightPounds,
+              tareWeightPounds: row.dumpTareWeightPounds,
+              netWeightPounds: row.dumpNetWeightPounds,
+              billedWeightMilliTons: row.dumpBilledWeightMilliTons,
+              unitRateCentsPerTon: row.dumpUnitRateCentsPerTon,
+              confirmedBy: row.dumpConfirmedBy
+                ? {
+                    id: row.dumpConfirmedBy,
+                    name:
+                      memberNames.get(row.dumpConfirmedBy) ??
+                      "Former team member",
+                  }
+                : null,
+              confirmedAt: row.dumpConfirmedAt?.toISOString() ?? null,
+              createdAt: row.dumpDetailsCreatedAt?.toISOString() ?? null,
+            }
+          : null,
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
       })),
@@ -363,13 +439,31 @@ export async function POST(request: NextRequest): Promise<Response> {
   let claim: TeamMutationIdempotencyClaim | null = null;
   try {
     const body = (await request.json().catch(() => null)) as unknown;
-    const submission = parseExpenseSubmission(body);
+    const parsedSubmission = parseExpenseSubmissionRequest(body);
+    const { submission } = parsedSubmission;
+    if (
+      !isExpenseDumpTicketsEnabled() &&
+      (submission.dumpDetails !== null ||
+        parsedSubmission.exactDuplicateOverrideReason !== null)
+    ) {
+      throw new TeamMutationFailure(
+        "provider_failed",
+        "Dump-ticket entry is temporarily unavailable.",
+        {
+          status: 503,
+          retryable: false,
+          fieldErrors: {
+            dumpDetails: "Refresh the expense tracker and try again later.",
+          },
+        },
+      );
+    }
     db = getDb();
     const claimed = await claimTeamMutationIdempotency(db, mutation, {
       route: "POST /api/admin/expenses/submissions",
       entityType: "expense",
       entityId: "new",
-      payload: submission,
+      payload: parsedSubmission,
     });
     if (claimed.kind === "replay") {
       return teamMutationIdempotencyReplayResponse(claimed.replay);
@@ -384,6 +478,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         canManageFixedCostCoverage:
           access.canApprove && access.canReadFinancials,
         source: "manual",
+        duplicateOverrideReason: parsedSubmission.exactDuplicateOverrideReason,
       });
       const audit = await mutation.audit.insertSuccess(tx, {
         entityType: "expense",
@@ -396,6 +491,10 @@ export async function POST(request: NextRequest): Promise<Response> {
           lifecycleStatus: created.lifecycleStatus,
           reviewStatus: created.reviewStatus,
           coveredByFixedCostSeriesId: created.coveredByFixedCostSeriesId,
+          dumpDetailsRecorded: created.dumpDetailsRecorded,
+          scaleTicketDuplicateOfExpenseId:
+            created.scaleTicketDuplicateOfExpenseId,
+          duplicateOverrideRecorded: created.duplicateOverrideRecorded,
           version: created.version,
         },
         metadata: {
@@ -403,9 +502,19 @@ export async function POST(request: NextRequest): Promise<Response> {
           reimbursementClaimId: created.reimbursementClaimId,
           reimbursementStatus: created.reimbursementStatus,
           source: "manual",
+          dumpWeightStatus: submission.dumpDetails?.weightStatus ?? null,
+          dumpNetWeightPounds: submission.dumpDetails?.netWeightPounds ?? null,
+          scaleTicketDuplicateOfExpenseId:
+            created.scaleTicketDuplicateOfExpenseId,
+          duplicateOverrideRecorded: created.duplicateOverrideRecorded,
+          duplicateOverrideReasonLength:
+            parsedSubmission.exactDuplicateOverrideReason?.length ?? 0,
         },
       });
-      const mutationResult = teamMutationSuccessResult(mutation, created, {
+      const responseData = access.canApprove
+        ? created
+        : { ...created, scaleTicketDuplicateOfExpenseId: null };
+      const mutationResult = teamMutationSuccessResult(mutation, responseData, {
         auditEventId: audit.auditEventId,
         committedAt: audit.committedAt,
         entityType: "expense",

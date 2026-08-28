@@ -12,17 +12,20 @@ import {
 
 function manifestInput(count = 100): unknown {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     representativeCorpusReviewed: true,
     groundTruthReviewed: true,
     receipts: Array.from({ length: count }, (_, index) => ({
       id: `receipt-${String(index + 1).padStart(3, "0")}`,
       file: `receipts/${String(index + 1).padStart(3, "0")}.jpg`,
       contentType: "image/jpeg",
+      layout: index % 2 === 0 ? "portrait" : "landscape",
+      documentType: index < 25 ? "scale_ticket" : "standard_receipt",
       expected: {
         totalCents: 1_000 + index,
         transactionDate: "2026-08-01",
         vendor: `Vendor ${index + 1}`,
+        netWeightPounds: index < 25 ? 2_000 + index : null,
       },
     })),
   };
@@ -33,7 +36,10 @@ function exactResults(
 ): ExpenseReceiptBenchmarkResult[] {
   return manifest.receipts.map((receipt) => ({
     id: receipt.id,
-    extraction: { ...receipt.expected },
+    extraction: {
+      ...receipt.expected,
+      documentType: receipt.documentType,
+    },
   }));
 }
 
@@ -41,7 +47,7 @@ describe("expense receipt benchmark manifest", () => {
   it("requires at least 100 reviewed, representative receipts", () => {
     expect(parseExpenseReceiptBenchmarkManifest(manifestInput())).toMatchObject(
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
         representativeCorpusReviewed: true,
         groundTruthReviewed: true,
       },
@@ -164,6 +170,45 @@ describe("expense receipt benchmark scoring", () => {
       passed: false,
     });
     expect(score.passed).toBe(false);
+  });
+
+  it("fails on any hallucinated scale weight for a standard receipt", () => {
+    const manifest = parseExpenseReceiptBenchmarkManifest(manifestInput());
+    const results = exactResults(manifest);
+    results[25]!.extraction!.netWeightPounds = 2_000;
+
+    expect(scoreExpenseReceiptBenchmark(manifest, results)).toMatchObject({
+      passed: false,
+      metrics: {
+        nonScaleWeightNull: {
+          exactCount: 74,
+          evaluatedCount: 75,
+          passed: false,
+        },
+      },
+    });
+  });
+
+  it("scores reviewed-null scale-ticket truth as part of net-weight accuracy", () => {
+    const input = manifestInput() as {
+      receipts: Array<{
+        documentType: "scale_ticket" | "standard_receipt";
+        expected: { netWeightPounds: number | null };
+      }>;
+    };
+    input.receipts[25]!.documentType = "scale_ticket";
+    input.receipts[25]!.expected.netWeightPounds = null;
+    const manifest = parseExpenseReceiptBenchmarkManifest(input);
+    const results = exactResults(manifest);
+    results[25]!.extraction!.netWeightPounds = 4_000;
+
+    expect(
+      scoreExpenseReceiptBenchmark(manifest, results).metrics.netWeightPounds,
+    ).toMatchObject({
+      exactCount: 25,
+      evaluatedCount: 26,
+      passed: false,
+    });
   });
 
   it("never includes receipt IDs, paths, or ground truth in aggregate output", () => {

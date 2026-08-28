@@ -27,8 +27,15 @@ describe("fixed monthly cost migration contract", () => {
         tag: "0108_expense_recurring_fixed_costs",
       }),
     ]);
-    expect(entries.at(-2)?.tag).toBe("0107_expense_dump_alias_and_backfill");
-    expect(entries.at(-1)?.tag).toBe("0108_expense_recurring_fixed_costs");
+    const fixedCostIndex = entries.findIndex(
+      (entry) => entry.tag === "0108_expense_recurring_fixed_costs",
+    );
+    expect(entries[fixedCostIndex - 1]?.tag).toBe(
+      "0107_expense_dump_alias_and_backfill",
+    );
+    expect(entries[fixedCostIndex]?.tag).toBe(
+      "0108_expense_recurring_fixed_costs",
+    );
   });
 
   it("creates stable series and exact, effective-dated versions", () => {

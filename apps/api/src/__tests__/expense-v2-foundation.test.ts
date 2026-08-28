@@ -27,7 +27,7 @@ describe("Expense Tracking V2 database foundation", () => {
     ) as { entries?: Array<{ idx?: number; tag?: string }> };
     const entries = journal.entries ?? [];
 
-    expect(entries.slice(-8)).toEqual([
+    expect(entries.slice(-9)).toEqual([
       expect.objectContaining({
         idx: 98,
         tag: "0101_online_booking_quote_range_backfill",
@@ -59,6 +59,10 @@ describe("Expense Tracking V2 database foundation", () => {
       expect.objectContaining({
         idx: 105,
         tag: "0108_expense_recurring_fixed_costs",
+      }),
+      expect.objectContaining({
+        idx: 106,
+        tag: "0109_expense_dump_ticket_details",
       }),
     ]);
   });

@@ -5,6 +5,7 @@ import {
   appointments,
   expenseAllocations,
   expenseCategories,
+  expenseDumpDetails,
   expenseReimbursementClaims,
   expenses,
   expenseVendorCategoryRules,
@@ -13,14 +14,21 @@ import {
   teamMembers,
 } from "@/db";
 import {
+  MAX_DUMP_BILLED_WEIGHT_MILLI_TONS,
+  MAX_DUMP_UNIT_RATE_CENTS_PER_TON,
+  MAX_DUMP_WEIGHT_POUNDS,
   normalizeReceiptVendor,
   validateExpenseAllocations,
 } from "@/lib/expense-receipt-domain";
-import { isExpenseReimbursementEnabled } from "@/lib/expense-feature-flags";
+import {
+  isExpenseDumpTicketsEnabled,
+  isExpenseReimbursementEnabled,
+} from "@/lib/expense-feature-flags";
 import {
   assertExpenseFixedCostCoverageLink,
   assertFixedCostCoverageLinkCanBeEstablished,
 } from "@/lib/expense-fixed-cost-coverage";
+import { findScaleTicketDuplicateForPosting } from "@/lib/expense-receipt-evidence";
 import {
   TeamMutationFailure,
   type TeamMutationTransaction,
@@ -48,6 +56,58 @@ const nullableText = (maximum: number) =>
     .nullable()
     .optional()
     .transform((value) => value || null);
+
+const nullablePositiveInteger = (maximum: number) =>
+  z.number().int().min(1).max(maximum).nullable().optional().default(null);
+
+const nullableNonnegativeInteger = (maximum: number) =>
+  z.number().int().min(0).max(maximum).nullable().optional().default(null);
+
+export const ExpenseDumpDetailsSchema = z
+  .object({
+    weightStatus: z.enum(["confirmed", "unreadable"]),
+    facilityName: nullableText(240),
+    ticketNumber: nullableText(120),
+    material: nullableText(240),
+    grossWeightPounds: nullablePositiveInteger(MAX_DUMP_WEIGHT_POUNDS),
+    tareWeightPounds: nullableNonnegativeInteger(MAX_DUMP_WEIGHT_POUNDS),
+    netWeightPounds: nullablePositiveInteger(MAX_DUMP_WEIGHT_POUNDS),
+    billedWeightMilliTons: nullableNonnegativeInteger(
+      MAX_DUMP_BILLED_WEIGHT_MILLI_TONS,
+    ),
+    unitRateCentsPerTon: nullableNonnegativeInteger(
+      MAX_DUMP_UNIT_RATE_CENTS_PER_TON,
+    ),
+    reviewed: z.literal(true),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.weightStatus === "confirmed" && value.netWeightPounds === null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["netWeightPounds"],
+        message: "Enter the confirmed net weight in pounds.",
+      });
+    }
+    if (value.weightStatus === "unreadable" && value.netWeightPounds !== null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["netWeightPounds"],
+        message: "Remove the net weight or mark it confirmed.",
+      });
+    }
+    if (value.grossWeightPounds !== null && value.tareWeightPounds !== null) {
+      if (value.grossWeightPounds < value.tareWeightPounds) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["grossWeightPounds"],
+          message: "Gross weight cannot be less than tare weight.",
+        });
+      }
+    }
+  });
+
+export type ExpenseDumpDetailsInput = z.infer<typeof ExpenseDumpDetailsSchema>;
 
 export const ExpenseSubmissionSchema = z
   .object({
@@ -81,6 +141,7 @@ export const ExpenseSubmissionSchema = z
       .nullable()
       .optional()
       .default(null),
+    dumpDetails: ExpenseDumpDetailsSchema.nullable().optional().default(null),
   })
   .strict()
   .superRefine((value, context) => {
@@ -122,6 +183,8 @@ export const ExpenseReviewDecisionSchema = z
       .optional(),
     lockVendorRule: z.boolean().optional(),
     coveredByFixedCostSeriesId: z.string().uuid().nullable().optional(),
+    dumpDetails: ExpenseDumpDetailsSchema.nullable().optional(),
+    scaleTicketDisposition: z.literal("not_scale_ticket").optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -137,7 +200,9 @@ export const ExpenseReviewDecisionSchema = z
       (value.categoryId !== undefined ||
         value.allocations !== undefined ||
         value.lockVendorRule ||
-        value.coveredByFixedCostSeriesId !== undefined)
+        value.coveredByFixedCostSeriesId !== undefined ||
+        value.dumpDetails !== undefined ||
+        value.scaleTicketDisposition !== undefined)
     ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -152,10 +217,83 @@ export const ExpenseReviewDecisionSchema = z
         message: "Choose the primary category for this split.",
       });
     }
+    if (
+      value.scaleTicketDisposition === "not_scale_ticket" &&
+      value.dumpDetails !== undefined
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["scaleTicketDisposition"],
+        message:
+          "Remove the scale-ticket fields before changing the classification.",
+      });
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dumpDetails"],
+        message:
+          "Remove these fields or keep the expense classified as a scale ticket.",
+      });
+    }
   });
 
 export type ExpenseSubmissionInput = z.infer<typeof ExpenseSubmissionSchema>;
 export type ExpenseReviewDecision = z.infer<typeof ExpenseReviewDecisionSchema>;
+
+export type ParsedExpenseSubmissionRequest = {
+  submission: ExpenseSubmissionInput;
+  exactDuplicateOverrideReason: string | null;
+};
+
+export function parseExpenseDuplicateOverrideReason(
+  input: unknown,
+): string | null {
+  if (input === undefined || input === null) return null;
+  if (typeof input !== "string") {
+    throw new TeamMutationFailure(
+      "invalid",
+      "The duplicate override reason must be text.",
+      {
+        fieldErrors: {
+          exactDuplicateOverrideReason: "Enter a written override reason.",
+        },
+      },
+    );
+  }
+  const reason = input.trim() || null;
+  if (reason && reason.length > 500) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "The duplicate override reason is too long.",
+      {
+        fieldErrors: {
+          exactDuplicateOverrideReason: "Keep the reason under 500 characters.",
+        },
+      },
+    );
+  }
+  return reason;
+}
+
+export function parseExpenseSubmissionRequest(
+  input: unknown,
+): ParsedExpenseSubmissionRequest {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {
+      submission: parseExpenseSubmission(input),
+      exactDuplicateOverrideReason: null,
+    };
+  }
+  const { exactDuplicateOverrideReason, ...submissionBody } = input as Record<
+    string,
+    unknown
+  >;
+  return {
+    submission: parseExpenseSubmission(submissionBody),
+    exactDuplicateOverrideReason: parseExpenseDuplicateOverrideReason(
+      exactDuplicateOverrideReason,
+    ),
+  };
+}
 
 export type ExpenseSubmissionSource = "manual" | "receipt_scan";
 
@@ -166,8 +304,43 @@ export type CreatedExpenseSubmission = {
   reimbursementClaimId: string | null;
   reimbursementStatus: "approved" | "attached" | null;
   coveredByFixedCostSeriesId: string | null;
+  dumpDetailsRecorded: boolean;
+  scaleTicketDuplicateOfExpenseId: string | null;
+  duplicateOverrideRecorded: boolean;
   version: number;
 };
+
+export async function replaceExpenseDumpDetailsInTransaction(
+  tx: TeamMutationTransaction,
+  input: {
+    expenseId: string;
+    dumpDetails: ExpenseDumpDetailsInput | null;
+    confirmedBy: string;
+    confirmedAt?: Date;
+    now: Date;
+  },
+): Promise<void> {
+  await tx
+    .delete(expenseDumpDetails)
+    .where(eq(expenseDumpDetails.expenseId, input.expenseId));
+  if (!input.dumpDetails) return;
+
+  await tx.insert(expenseDumpDetails).values({
+    expenseId: input.expenseId,
+    weightStatus: input.dumpDetails.weightStatus,
+    facilityName: input.dumpDetails.facilityName,
+    ticketNumber: input.dumpDetails.ticketNumber,
+    material: input.dumpDetails.material,
+    grossWeightPounds: input.dumpDetails.grossWeightPounds,
+    tareWeightPounds: input.dumpDetails.tareWeightPounds,
+    netWeightPounds: input.dumpDetails.netWeightPounds,
+    billedWeightMilliTons: input.dumpDetails.billedWeightMilliTons,
+    unitRateCentsPerTon: input.dumpDetails.unitRateCentsPerTon,
+    confirmedBy: input.confirmedBy,
+    confirmedAt: input.confirmedAt ?? input.now,
+    createdAt: input.now,
+  });
+}
 
 function invalidFields(error: z.ZodError): Record<string, string> | undefined {
   const flattened = error.flatten().fieldErrors as Record<
@@ -645,6 +818,8 @@ export async function createExpenseSubmissionInTransaction(
     canManageFixedCostCoverage?: boolean;
     source: ExpenseSubmissionSource;
     receiptCaptureId?: string | null;
+    duplicateOverrideReason?: string | null;
+    externalDuplicateMatched?: boolean;
     now?: Date;
   },
 ): Promise<CreatedExpenseSubmission> {
@@ -693,6 +868,85 @@ export async function createExpenseSubmissionInTransaction(
   if (!primaryCategory) {
     throw new TeamMutationFailure("invalid", "Choose an active category.");
   }
+  if (
+    input.submission.dumpDetails &&
+    !normalizedAllocations.some(
+      (allocation) => allocation.categoryId === "dump_fees",
+    )
+  ) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "Scale-ticket details require a Dump Fees category allocation.",
+      {
+        fieldErrors: {
+          categoryId: "Include Dump Fees before saving scale-ticket details.",
+        },
+      },
+    );
+  }
+  const scaleTicketDuplicateOfExpenseId = input.submission.dumpDetails
+    ? await findScaleTicketDuplicateForPosting(tx, {
+        facilityName: input.submission.dumpDetails.facilityName,
+        ticketNumber: input.submission.dumpDetails.ticketNumber,
+      })
+    : null;
+  const duplicateOverrideReason = input.duplicateOverrideReason ?? null;
+  const hasDuplicate = Boolean(
+    input.externalDuplicateMatched || scaleTicketDuplicateOfExpenseId,
+  );
+  if (input.externalDuplicateMatched && !input.canApprove) {
+    throw new TeamMutationFailure(
+      "conflict",
+      "This exact receipt already exists. An owner must review and override it.",
+      {
+        fieldErrors: {
+          exactDuplicateOverrideReason: "Owner approval is required.",
+        },
+      },
+    );
+  }
+  if (hasDuplicate && input.canApprove) {
+    if (!duplicateOverrideReason || duplicateOverrideReason.length < 10) {
+      throw new TeamMutationFailure(
+        "invalid",
+        "Add a specific reason for posting a duplicate expense.",
+        {
+          fieldErrors: {
+            exactDuplicateOverrideReason:
+              "Enter at least 10 characters explaining why this is not a duplicate expense.",
+          },
+        },
+      );
+    }
+  } else if (
+    scaleTicketDuplicateOfExpenseId &&
+    !input.canApprove &&
+    duplicateOverrideReason
+  ) {
+    throw new TeamMutationFailure(
+      "forbidden",
+      "Only an owner can override a matching facility and ticket number.",
+      {
+        fieldErrors: {
+          exactDuplicateOverrideReason:
+            "Remove the override reason and submit this expense for owner review.",
+        },
+      },
+    );
+  } else if (duplicateOverrideReason) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "A duplicate override is only allowed when a duplicate was detected.",
+      {
+        fieldErrors: {
+          exactDuplicateOverrideReason: "Remove the override reason.",
+        },
+      },
+    );
+  }
+  const duplicateOverrideRecorded = Boolean(
+    input.canApprove && hasDuplicate && duplicateOverrideReason,
+  );
   if (input.submission.coveredByFixedCostSeriesId) {
     await assertExpenseFixedCostCoverageLink(tx, {
       seriesId: input.submission.coveredByFixedCostSeriesId,
@@ -721,6 +975,7 @@ export async function createExpenseSubmissionInTransaction(
       reviewStatus,
       reviewedBy: input.canApprove ? input.actorId : null,
       reviewedAt: input.canApprove ? now : null,
+      reviewReason: duplicateOverrideRecorded ? duplicateOverrideReason : null,
       receiptCaptureId: input.receiptCaptureId ?? null,
       appointmentId: input.submission.appointmentId,
       paidAt: expenseBusinessDateToTimestamp(input.submission.purchaseDate),
@@ -748,6 +1003,15 @@ export async function createExpenseSubmissionInTransaction(
       createdAt: now,
     })),
   );
+
+  if (input.submission.dumpDetails) {
+    await replaceExpenseDumpDetailsInTransaction(tx, {
+      expenseId: created.id,
+      dumpDetails: input.submission.dumpDetails,
+      confirmedBy: input.actorId,
+      now,
+    });
+  }
 
   let reimbursementClaimId: string | null = null;
   let reimbursementStatus: "approved" | "attached" | null = null;
@@ -797,6 +1061,9 @@ export async function createExpenseSubmissionInTransaction(
     reimbursementClaimId,
     reimbursementStatus,
     coveredByFixedCostSeriesId: input.submission.coveredByFixedCostSeriesId,
+    dumpDetailsRecorded: input.submission.dumpDetails !== null,
+    scaleTicketDuplicateOfExpenseId,
+    duplicateOverrideRecorded,
     version: input.canApprove ? 2 : 1,
   };
 }
@@ -809,6 +1076,7 @@ export async function reviewExpenseSubmissionInTransaction(
     expectedVersion: number;
     decision: ExpenseReviewDecision;
     canManageFixedCostCoverage?: boolean;
+    dumpTicketsEnabled?: boolean;
     now?: Date;
   },
 ): Promise<{
@@ -821,6 +1089,8 @@ export async function reviewExpenseSubmissionInTransaction(
   categoryId: string | null;
   category: string | null;
   coveredByFixedCostSeriesId: string | null;
+  dumpDetailsRecorded: boolean;
+  scaleTicketDuplicateOfExpenseId: string | null;
 }> {
   const now = input.now ?? new Date();
   const [existing] = await tx
@@ -846,6 +1116,32 @@ export async function reviewExpenseSubmissionInTransaction(
       status: 404,
     });
   }
+  const [existingDumpDetails] = await tx
+    .select()
+    .from(expenseDumpDetails)
+    .where(eq(expenseDumpDetails.expenseId, existing.id))
+    .for("update")
+    .limit(1);
+  const dumpTicketsEnabled =
+    input.dumpTicketsEnabled ?? isExpenseDumpTicketsEnabled();
+  if (
+    !dumpTicketsEnabled &&
+    input.decision.decision === "approve" &&
+    (input.decision.dumpDetails !== undefined ||
+      input.decision.scaleTicketDisposition !== undefined)
+  ) {
+    throw new TeamMutationFailure(
+      "provider_failed",
+      "Dump-ticket review is temporarily unavailable.",
+      {
+        status: 503,
+        retryable: false,
+        fieldErrors: {
+          dumpDetails: "Refresh the expense tracker and try again later.",
+        },
+      },
+    );
+  }
   if (
     existing.lifecycleStatus !== "draft" ||
     existing.reviewStatus !== "pending"
@@ -853,6 +1149,20 @@ export async function reviewExpenseSubmissionInTransaction(
     throw new TeamMutationFailure(
       "conflict",
       "This expense is no longer awaiting review.",
+    );
+  }
+  if (
+    input.decision.scaleTicketDisposition === "not_scale_ticket" &&
+    !existingDumpDetails
+  ) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "This expense does not have scale-ticket details to remove.",
+      {
+        fieldErrors: {
+          scaleTicketDisposition: "Remove the classification override.",
+        },
+      },
     );
   }
   if (existing.version !== input.expectedVersion) {
@@ -899,6 +1209,8 @@ export async function reviewExpenseSubmissionInTransaction(
       categoryId: existing.categoryId,
       category: null,
       coveredByFixedCostSeriesId: existing.coveredByFixedCostSeriesId,
+      dumpDetailsRecorded: Boolean(existingDumpDetails),
+      scaleTicketDuplicateOfExpenseId: null,
     };
   }
 
@@ -1028,6 +1340,85 @@ export async function reviewExpenseSubmissionInTransaction(
     });
   }
 
+  const effectiveDumpDetails =
+    input.decision.scaleTicketDisposition === "not_scale_ticket"
+      ? null
+      : input.decision.dumpDetails === undefined
+        ? existingDumpDetails
+          ? {
+              weightStatus: existingDumpDetails.weightStatus,
+              facilityName: existingDumpDetails.facilityName,
+              ticketNumber: existingDumpDetails.ticketNumber,
+              material: existingDumpDetails.material,
+              grossWeightPounds: existingDumpDetails.grossWeightPounds,
+              tareWeightPounds: existingDumpDetails.tareWeightPounds,
+              netWeightPounds: existingDumpDetails.netWeightPounds,
+              billedWeightMilliTons: existingDumpDetails.billedWeightMilliTons,
+              unitRateCentsPerTon: existingDumpDetails.unitRateCentsPerTon,
+              reviewed: true as const,
+            }
+          : null
+        : input.decision.dumpDetails;
+  if (effectiveDumpDetails) {
+    const allocationEvidence =
+      finalAllocations ??
+      (await tx
+        .select({
+          categoryId: expenseAllocations.categoryId,
+          amountCents: expenseAllocations.amountCents,
+        })
+        .from(expenseAllocations)
+        .where(eq(expenseAllocations.expenseId, existing.id)));
+    if (
+      !allocationEvidence.some(
+        (allocation) => allocation.categoryId === "dump_fees",
+      )
+    ) {
+      throw new TeamMutationFailure(
+        "invalid",
+        "Scale-ticket details require a Dump Fees category allocation.",
+        {
+          fieldErrors: {
+            categoryId: "Include Dump Fees or remove the scale-ticket details.",
+          },
+        },
+      );
+    }
+  }
+  const scaleTicketDuplicateOfExpenseId = effectiveDumpDetails
+    ? await findScaleTicketDuplicateForPosting(tx, {
+        facilityName: effectiveDumpDetails.facilityName,
+        ticketNumber: effectiveDumpDetails.ticketNumber,
+        excludeExpenseIds: [existing.id],
+      })
+    : null;
+  if (
+    scaleTicketDuplicateOfExpenseId &&
+    (input.decision.reason?.trim().length ?? 0) < 10
+  ) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "Add a specific review reason to approve the matching scale ticket.",
+      {
+        fieldErrors: {
+          reason:
+            "Enter at least 10 characters explaining why this is not a duplicate expense.",
+        },
+      },
+    );
+  }
+  if (
+    input.decision.dumpDetails !== undefined ||
+    input.decision.scaleTicketDisposition === "not_scale_ticket"
+  ) {
+    await replaceExpenseDumpDetailsInTransaction(tx, {
+      expenseId: existing.id,
+      dumpDetails: effectiveDumpDetails,
+      confirmedBy: input.reviewerId,
+      now,
+    });
+  }
+
   const [approved] = await tx
     .update(expenses)
     .set({
@@ -1097,6 +1488,8 @@ export async function reviewExpenseSubmissionInTransaction(
     categoryId: requestedCategoryId,
     category: approvedCategoryName,
     coveredByFixedCostSeriesId,
+    dumpDetailsRecorded: Boolean(effectiveDumpDetails),
+    scaleTicketDuplicateOfExpenseId,
   };
 }
 

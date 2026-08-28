@@ -7,6 +7,7 @@ export const EXPENSE_HISTORY_FILTERS = [
   "approved",
   "rejected",
   "reimbursement",
+  "dump_tickets",
 ] as const;
 
 export type ExpenseHistoryFilter = (typeof EXPENSE_HISTORY_FILTERS)[number];

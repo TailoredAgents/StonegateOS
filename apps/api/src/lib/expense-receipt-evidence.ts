@@ -1,5 +1,11 @@
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
-import { expenseReceiptCaptures, type DatabaseClient } from "@/db";
+import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import {
+  expenseDumpDetails,
+  expenseReceiptCaptures,
+  expenses,
+  type DatabaseClient,
+} from "@/db";
+import { normalizeReceiptVendor } from "@/lib/expense-receipt-domain";
 import type { ExpenseReceipt } from "@/lib/expense-lifecycle";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
 import {
@@ -156,4 +162,70 @@ export async function findExactExpenseReceiptDuplicateForPosting(
     )
     .limit(1);
   return duplicate?.id ?? null;
+}
+
+export function normalizeScaleTicketDuplicateIdentity(input: {
+  facilityName: string | null;
+  ticketNumber: string | null;
+}): { facilityName: string; ticketNumber: string } | null {
+  const facilityName = normalizeReceiptVendor(input.facilityName);
+  const ticketNumber = normalizeReceiptVendor(input.ticketNumber);
+  return facilityName && ticketNumber ? { facilityName, ticketNumber } : null;
+}
+
+/**
+ * A second photograph has a different SHA, so serialize and compare the two
+ * stable human-reviewed scale-ticket identifiers before ledger posting.
+ */
+export async function findScaleTicketDuplicateForPosting(
+  tx: TeamMutationTransaction,
+  input: {
+    facilityName: string | null;
+    ticketNumber: string | null;
+    excludeExpenseIds?: readonly string[];
+  },
+): Promise<string | null> {
+  const normalized = normalizeScaleTicketDuplicateIdentity(input);
+  if (!normalized) return null;
+  const lockKey = `expense-scale-ticket:${normalized.facilityName}:${normalized.ticketNumber}`;
+  await tx.execute(
+    sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`,
+  );
+
+  const candidates = await tx
+    .select({
+      expenseId: expenseDumpDetails.expenseId,
+      facilityName: expenseDumpDetails.facilityName,
+      ticketNumber: expenseDumpDetails.ticketNumber,
+    })
+    .from(expenseDumpDetails)
+    .innerJoin(expenses, eq(expenses.id, expenseDumpDetails.expenseId))
+    .where(
+      and(
+        inArray(expenses.lifecycleStatus, ["draft", "posted"]),
+        or(
+          isNull(expenses.reviewStatus),
+          ne(expenses.reviewStatus, "rejected"),
+        ),
+        sql`${expenseDumpDetails.facilityName} IS NOT NULL`,
+        sql`${expenseDumpDetails.ticketNumber} IS NOT NULL`,
+      ),
+    )
+    .orderBy(
+      asc(expenseDumpDetails.createdAt),
+      asc(expenseDumpDetails.expenseId),
+    );
+  return (
+    candidates.find((candidate) => {
+      if (input.excludeExpenseIds?.includes(candidate.expenseId)) return false;
+      const candidateIdentity = normalizeScaleTicketDuplicateIdentity({
+        facilityName: candidate.facilityName,
+        ticketNumber: candidate.ticketNumber,
+      });
+      return (
+        candidateIdentity?.facilityName === normalized.facilityName &&
+        candidateIdentity.ticketNumber === normalized.ticketNumber
+      );
+    })?.expenseId ?? null
+  );
 }

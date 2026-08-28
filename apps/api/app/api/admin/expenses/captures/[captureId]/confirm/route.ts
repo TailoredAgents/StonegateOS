@@ -1,6 +1,9 @@
 import type { NextRequest } from "next/server";
 import { getDb } from "@/db";
-import { isExpenseReceiptCaptureEnabled } from "@/lib/expense-feature-flags";
+import {
+  isExpenseDumpTicketsEnabled,
+  isExpenseReceiptCaptureEnabled,
+} from "@/lib/expense-feature-flags";
 import {
   confirmExpenseReceiptInTransaction,
   parseExpenseReceiptConfirmation,
@@ -106,6 +109,24 @@ export async function POST(
     const confirmation = parseExpenseReceiptConfirmation(
       (await request.json().catch(() => null)) as unknown,
     );
+    const dumpTicketsEnabled = isExpenseDumpTicketsEnabled();
+    if (
+      !dumpTicketsEnabled &&
+      (confirmation.submission.dumpDetails !== null ||
+        confirmation.scaleTicketDisposition !== null)
+    ) {
+      throw new TeamMutationFailure(
+        "provider_failed",
+        "Dump-ticket review is temporarily unavailable.",
+        {
+          status: 503,
+          retryable: false,
+          fieldErrors: {
+            dumpDetails: "Refresh the expense tracker and try again later.",
+          },
+        },
+      );
+    }
 
     db = getDb();
     const claimed = await claimTeamMutationIdempotency(db, mutation, {
@@ -116,6 +137,8 @@ export async function POST(
         ...confirmation.submission,
         captureVersion: expectedVersion,
         exactDuplicateOverrideReason: confirmation.exactDuplicateOverrideReason,
+        scaleTicketDisposition: confirmation.scaleTicketDisposition,
+        receiptReviewContractVersion: confirmation.receiptReviewContractVersion,
       },
     });
     if (claimed.kind === "replay") {
@@ -132,6 +155,7 @@ export async function POST(
         canManageFixedCostCoverage: canManageFixedCostCoverage(
           permissionContext.permissions,
         ),
+        dumpTicketsEnabled,
         confirmation,
       });
       const audit = await mutation.audit.insertSuccess(tx, {
@@ -145,19 +169,32 @@ export async function POST(
           reviewStatus: confirmed.reviewStatus,
           lifecycleStatus: confirmed.lifecycleStatus,
           coveredByFixedCostSeriesId: confirmed.coveredByFixedCostSeriesId,
+          dumpDetailsRecorded: confirmed.dumpDetailsRecorded,
         },
         metadata: {
           exactDuplicateOfCaptureId: confirmed.exactDuplicateOfCaptureId,
+          scaleTicketDuplicateOfExpenseId:
+            confirmed.scaleTicketDuplicateOfExpenseId,
           duplicateOverrideRecorded: confirmed.duplicateOverrideRecorded,
           duplicateOverrideReasonLength:
             confirmation.exactDuplicateOverrideReason?.length ?? 0,
           humanConfirmed: true,
+          receiptReviewContractVersion:
+            confirmation.receiptReviewContractVersion,
+          dumpWeightStatus:
+            confirmation.submission.dumpDetails?.weightStatus ?? null,
+          dumpNetWeightPounds:
+            confirmation.submission.dumpDetails?.netWeightPounds ?? null,
+          scaleTicketDisposition: confirmation.scaleTicketDisposition,
+          humanScaleTicketClassificationOverridden:
+            confirmation.scaleTicketDisposition === "not_scale_ticket",
         },
       });
       const {
         priorCaptureVersion: _priorCaptureVersion,
         captureSubmittedBy: _captureSubmittedBy,
         exactDuplicateOfCaptureId: _exactDuplicateOfCaptureId,
+        scaleTicketDuplicateOfExpenseId: _scaleTicketDuplicateOfExpenseId,
         duplicateOverrideRecorded: _duplicateOverrideRecorded,
         ...data
       } = confirmed;

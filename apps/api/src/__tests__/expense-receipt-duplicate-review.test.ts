@@ -69,15 +69,18 @@ describe("exact duplicate receipt review queue", () => {
     const confirmation = read(
       "apps/api/src/lib/expense-receipt-confirmation.ts",
     );
+    const submissions = read("apps/api/src/lib/expense-submissions.ts");
 
     expect(captures).toContain('eq(expenseReceiptCaptures.status, "ready")');
     expect(captures).toContain(
       "isNotNull(expenseReceiptCaptures.exactDuplicateOfCaptureId)",
     );
     expect(captures).toContain(".limit(query.limit + 1)");
-    expect(confirmation).toContain("if (!input.canApprove)");
     expect(confirmation).toContain(
-      "if (!duplicateReason || duplicateReason.length < 10)",
+      "if (exactDuplicateOfCaptureId && !input.canApprove)",
+    );
+    expect(submissions).toContain(
+      "if (!duplicateOverrideReason || duplicateOverrideReason.length < 10)",
     );
     expect(confirmation).toContain("duplicateOverrideReason:");
     expect(confirmation).toContain("duplicateOverrideBy:");

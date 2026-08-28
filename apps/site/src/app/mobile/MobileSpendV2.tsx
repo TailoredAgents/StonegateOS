@@ -56,6 +56,38 @@ type ExpenseCategory = { id: string; name: string; sortOrder?: number };
 type MemberOption = { id: string; name: string };
 type JobOption = { id: string; label: string; date: string };
 
+export type ExpenseDumpDetails = {
+  weightStatus: "confirmed" | "unreadable";
+  facilityName: string | null;
+  ticketNumber: string | null;
+  material: string | null;
+  grossWeightPounds: number | null;
+  tareWeightPounds: number | null;
+  netWeightPounds: number | null;
+  billedWeightMilliTons: number | null;
+  unitRateCentsPerTon: number | null;
+};
+
+export type ExpenseDumpDetailsDraft = {
+  weightStatus: "confirmed" | "unreadable";
+  facilityName: string;
+  ticketNumber: string;
+  material: string;
+  grossWeightPounds: string;
+  tareWeightPounds: string;
+  netWeightPounds: string;
+  billedWeightTons: string;
+  unitRateDollarsPerTon: string;
+};
+
+type ExpenseDumpSubmissionDetails = ExpenseDumpDetails & { reviewed: true };
+
+type ExpenseHistoryDumpDetails = ExpenseDumpDetails & {
+  confirmedBy: MemberOption | null;
+  confirmedAt: string | null;
+  createdAt: string | null;
+};
+
 type ExpenseCapabilities = {
   manualEntry: boolean;
   receiptCapture: boolean;
@@ -64,6 +96,7 @@ type ExpenseCapabilities = {
   overview: boolean;
   exactDuplicateReview: boolean;
   fixedCosts: boolean;
+  dumpTickets: boolean;
 };
 
 type ExpenseHistoryRow = {
@@ -83,6 +116,9 @@ type ExpenseHistoryRow = {
   method: string | null;
   source: string;
   purchaseDate: string;
+  paidAt?: string | null;
+  coverageStartAt?: string | null;
+  coverageEndAt?: string | null;
   payerType: "company" | "personal";
   paidByMember: MemberOption | null;
   submitter: MemberOption | null;
@@ -95,6 +131,10 @@ type ExpenseHistoryRow = {
   appointmentId: string | null;
   coveredByFixedCostSeriesId: string | null;
   coveredByFixedCostName: string | null;
+  dumpDetails: ExpenseHistoryDumpDetails | null;
+  reversalOfExpenseId: string | null;
+  correctionOfExpenseId: string | null;
+  correctedByExpenseId: string | null;
   receipt: {
     captureId: string | null;
     status: string | null;
@@ -179,6 +219,16 @@ type OverviewPeriod = {
   omittedUnverifiedHistoricalRecordCount: number;
   unverifiedExpenseCategoryCount: number;
   completeness: OverviewCompleteness;
+  dumpActivity: ExpenseDumpActivity;
+};
+
+type ExpenseDumpActivity = {
+  dumpFeeCents: number;
+  ticketCount: number;
+  weightedTicketCount: number;
+  netWeightPounds: number;
+  averageCostPerTonCents: number | null;
+  missingWeightCount: number;
 };
 
 type DailyAdEntry = {
@@ -273,6 +323,7 @@ type OverviewPayload = {
     subrows: { facebookCents: number; googleCents: number };
     unattributedCents: number;
   };
+  dumpActivity: ExpenseDumpActivity;
   pendingExpenseCount: number;
   missingAdEntries: Array<{
     businessDate: string;
@@ -297,7 +348,43 @@ type SubmissionBody = {
   payerType: "company" | "personal";
   paidByMemberId: string | null;
   appointmentId: string | null;
+  dumpDetails?: ExpenseDumpSubmissionDetails;
 };
+
+type ScaleTicketDisposition = "not_scale_ticket" | null;
+
+type ExpenseDumpCorrectionBody = {
+  amountCents: number;
+  currency: "USD";
+  category: string;
+  vendor: string | null;
+  memo: string | null;
+  method: SubmissionBody["method"];
+  paidAt: string;
+  coverageStartAt: string | null;
+  coverageEndAt: string | null;
+  reason: string;
+  dumpDetails: ExpenseDumpSubmissionDetails | null;
+};
+
+type ExpenseDumpCorrectionRow = Pick<
+  ExpenseHistoryRow,
+  | "id"
+  | "amountCents"
+  | "currency"
+  | "category"
+  | "categoryNeedsReview"
+  | "vendor"
+  | "notes"
+  | "method"
+  | "source"
+  | "lifecycleStatus"
+  | "version"
+  | "allocations"
+  | "paidAt"
+  | "coverageStartAt"
+  | "coverageEndAt"
+>;
 
 type ExpenseMutationAttempt = Awaited<
   ReturnType<typeof getExpenseMutationAttempt>
@@ -314,6 +401,507 @@ function objectValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object"
     ? (value as Record<string, unknown>)
     : null;
+}
+
+const expenseWeightFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 0,
+});
+const expenseTonsFormatter = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 3,
+});
+const expenseConfirmationFormatter = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: "America/New_York",
+});
+const expenseCaptureIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const expenseRecordIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const expensePaymentMethods = new Set([
+  "card",
+  "cash",
+  "ach",
+  "check",
+  "zelle",
+  "other",
+]);
+
+function nullableExpenseString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function nullableExpenseInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+export function expenseCaptureEvidenceHref(capture: unknown): string | null {
+  const record = objectValue(capture);
+  const captureId = record?.["id"];
+  const contentPath = record?.["contentPath"];
+  return typeof contentPath === "string" &&
+    contentPath.trim().length > 0 &&
+    typeof captureId === "string" &&
+    expenseCaptureIdPattern.test(captureId)
+    ? `/api/mobile/expenses/captures/${encodeURIComponent(captureId)}/content`
+    : null;
+}
+
+export function expenseConfirmationDuplicateKind(
+  status: number,
+  payloadValue: unknown,
+  context: {
+    attemptedDumpDetails?: boolean;
+    knownExactReceipt?: boolean;
+  } = {},
+): "scale_ticket" | "exact_receipt" | null {
+  const payload = objectValue(payloadValue);
+  const fieldErrors = objectValue(payload?.["fieldErrors"]);
+  const overrideError = fieldErrors?.["exactDuplicateOverrideReason"];
+  const message = [payload?.["message"], overrideError]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  const duplicateResponse =
+    typeof overrideError === "string" ||
+    (status === 409 && /duplicate|already exist/iu.test(message));
+  if (!duplicateResponse) return null;
+  if (context.knownExactReceipt) return "exact_receipt";
+  return (
+    context.attemptedDumpDetails === true ||
+    /facility|ticket number|scale[- ]ticket/iu.test(message)
+  )
+    ? "scale_ticket"
+    : "exact_receipt";
+}
+
+function emptyExpenseDumpDetailsDraft(): ExpenseDumpDetailsDraft {
+  return {
+    weightStatus: "confirmed",
+    facilityName: "",
+    ticketNumber: "",
+    material: "",
+    grossWeightPounds: "",
+    tareWeightPounds: "",
+    netWeightPounds: "",
+    billedWeightTons: "",
+    unitRateDollarsPerTon: "",
+  };
+}
+
+function expenseDumpDetailsDraft(
+  details: Partial<ExpenseDumpDetails> | null | undefined,
+): ExpenseDumpDetailsDraft {
+  const billedWeightMilliTons = details?.billedWeightMilliTons ?? null;
+  return {
+    ...emptyExpenseDumpDetailsDraft(),
+    weightStatus: details?.weightStatus ?? "confirmed",
+    facilityName: details?.facilityName ?? "",
+    ticketNumber: details?.ticketNumber ?? "",
+    material: details?.material ?? "",
+    grossWeightPounds:
+      typeof details?.grossWeightPounds === "number"
+        ? String(details.grossWeightPounds)
+        : "",
+    tareWeightPounds:
+      typeof details?.tareWeightPounds === "number"
+        ? String(details.tareWeightPounds)
+        : "",
+    netWeightPounds:
+      typeof details?.netWeightPounds === "number"
+        ? String(details.netWeightPounds)
+        : "",
+    billedWeightTons:
+      typeof billedWeightMilliTons === "number"
+        ? (billedWeightMilliTons / 1_000)
+            .toFixed(3)
+            .replace(/0+$/u, "")
+            .replace(/\.$/u, "")
+        : "",
+    unitRateDollarsPerTon:
+      typeof details?.unitRateCentsPerTon === "number"
+        ? centsToMoneyInput(details.unitRateCentsPerTon)
+        : "",
+  };
+}
+
+export function parseExpenseDumpPoundsInput(
+  value: string,
+  options: { allowZero?: boolean } = {},
+): number | null {
+  const normalized = value.replace(/[\s,]/gu, "");
+  if (!/^[0-9]{1,8}$/u.test(normalized)) return null;
+  const pounds = Number(normalized);
+  return Number.isSafeInteger(pounds) &&
+    pounds <= 10_000_000 &&
+    (pounds > 0 || (options.allowZero === true && pounds === 0))
+    ? pounds
+    : null;
+}
+
+export function parseExpenseDumpMilliTonsInput(value: string): number | null {
+  const normalized = value.trim().replaceAll(",", "");
+  const match = /^(\d{1,5})(?:\.(\d{1,3}))?$/u.exec(normalized);
+  if (!match) return null;
+  const whole = Number(match[1]);
+  const fraction = Number((match[2] ?? "").padEnd(3, "0"));
+  const milliTons = whole * 1_000 + fraction;
+  return milliTons >= 0 && milliTons <= 10_000_000 ? milliTons : null;
+}
+
+export function formatExpenseDumpWeight(pounds: number): string {
+  if (!Number.isSafeInteger(pounds) || pounds <= 0) return "Weight unreadable";
+  const tons = pounds / 2_000;
+  return `${expenseWeightFormatter.format(pounds)} lb · ${expenseTonsFormatter.format(tons)} ${tons === 1 ? "ton" : "tons"}`;
+}
+
+function formatExpenseDumpTons(milliTons: number): string {
+  const tons = milliTons / 1_000;
+  return `${expenseTonsFormatter.format(tons)} ${tons === 1 ? "ton" : "tons"}`;
+}
+
+function formatExpenseDumpConfirmation(
+  value: string | null | undefined,
+): string {
+  if (!value) return "";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : expenseConfirmationFormatter.format(parsed);
+}
+
+function expenseDumpDraftHasData(draft: ExpenseDumpDetailsDraft): boolean {
+  return [
+    draft.facilityName,
+    draft.ticketNumber,
+    draft.material,
+    draft.grossWeightPounds,
+    draft.tareWeightPounds,
+    draft.netWeightPounds,
+    draft.billedWeightTons,
+    draft.unitRateDollarsPerTon,
+  ].some((value) => value.trim().length > 0);
+}
+
+export function buildExpenseDumpSubmissionDetails(
+  draft: ExpenseDumpDetailsDraft,
+  options: { required: boolean },
+):
+  | { ok: true; details: ExpenseDumpSubmissionDetails | null }
+  | { ok: false; message: string } {
+  const hasData = expenseDumpDraftHasData(draft);
+  if (!options.required && !hasData && draft.weightStatus === "confirmed") {
+    return { ok: true, details: null };
+  }
+
+  const parsePounds = (
+    value: string,
+    label: string,
+    allowZero = false,
+  ): number | null | string => {
+    if (!value.trim()) return null;
+    return (
+      parseExpenseDumpPoundsInput(value, { allowZero }) ??
+      `${label} must be a whole number of pounds.`
+    );
+  };
+  const grossWeightPounds = parsePounds(
+    draft.grossWeightPounds,
+    "Gross weight",
+  );
+  if (typeof grossWeightPounds === "string") {
+    return { ok: false, message: grossWeightPounds };
+  }
+  const tareWeightPounds = parsePounds(
+    draft.tareWeightPounds,
+    "Tare weight",
+    true,
+  );
+  if (typeof tareWeightPounds === "string") {
+    return { ok: false, message: tareWeightPounds };
+  }
+  const netWeightPounds =
+    draft.weightStatus === "unreadable"
+      ? null
+      : parsePounds(draft.netWeightPounds, "Net weight");
+  if (typeof netWeightPounds === "string") {
+    return { ok: false, message: netWeightPounds };
+  }
+  const billedWeightMilliTons = draft.billedWeightTons.trim()
+    ? parseExpenseDumpMilliTonsInput(draft.billedWeightTons)
+    : null;
+  if (draft.billedWeightTons.trim() && billedWeightMilliTons === null) {
+    return {
+      ok: false,
+      message:
+        "Billed weight must be a valid ton value with up to three decimals.",
+    };
+  }
+  const unitRateCentsPerTon = draft.unitRateDollarsPerTon.trim()
+    ? moneyInputToCents(draft.unitRateDollarsPerTon)
+    : null;
+  if (
+    draft.unitRateDollarsPerTon.trim() &&
+    (unitRateCentsPerTon === null ||
+      unitRateCentsPerTon < 0 ||
+      unitRateCentsPerTon > 100_000_000)
+  ) {
+    return {
+      ok: false,
+      message: "Unit rate must be a valid dollar amount per ton.",
+    };
+  }
+  if (
+    grossWeightPounds !== null &&
+    tareWeightPounds !== null &&
+    grossWeightPounds < tareWeightPounds
+  ) {
+    return {
+      ok: false,
+      message: "Gross weight cannot be less than tare weight.",
+    };
+  }
+  if (draft.weightStatus === "unreadable") {
+    return {
+      ok: true,
+      details: {
+        weightStatus: "unreadable",
+        facilityName: nullableExpenseString(draft.facilityName),
+        ticketNumber: nullableExpenseString(draft.ticketNumber),
+        material: nullableExpenseString(draft.material),
+        grossWeightPounds,
+        tareWeightPounds,
+        netWeightPounds: null,
+        billedWeightMilliTons,
+        unitRateCentsPerTon,
+        reviewed: true,
+      },
+    };
+  }
+  if (netWeightPounds === null) {
+    return {
+      ok: false,
+      message:
+        options.required || hasData
+          ? "Enter the net weight, or mark the scale-ticket weight unreadable."
+          : "Enter the net weight printed on the scale ticket.",
+    };
+  }
+  return {
+    ok: true,
+    details: {
+      weightStatus: "confirmed",
+      facilityName: nullableExpenseString(draft.facilityName),
+      ticketNumber: nullableExpenseString(draft.ticketNumber),
+      material: nullableExpenseString(draft.material),
+      grossWeightPounds,
+      tareWeightPounds,
+      netWeightPounds,
+      billedWeightMilliTons,
+      unitRateCentsPerTon,
+      reviewed: true,
+    },
+  };
+}
+
+function exactExpenseIsoInstant(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+export function expenseHistoryCanCorrectDumpWeight(
+  row: ExpenseDumpCorrectionRow,
+  canApprove: boolean,
+): boolean {
+  const validCoverage = (value: unknown): boolean =>
+    value === null || exactExpenseIsoInstant(value);
+  return (
+    canApprove &&
+    expenseRecordIdPattern.test(row.id) &&
+    row.lifecycleStatus === "posted" &&
+    ["manual", "receipt_scan", "manual_correction"].includes(row.source) &&
+    row.currency === "USD" &&
+    Number.isSafeInteger(row.amountCents) &&
+    row.amountCents > 0 &&
+    row.category.trim().length > 0 &&
+    row.category.trim().length <= 120 &&
+    !row.categoryNeedsReview &&
+    (row.method === null || expensePaymentMethods.has(row.method)) &&
+    Number.isSafeInteger(row.version) &&
+    row.version >= 1 &&
+    row.allocations.some(
+      (allocation) =>
+        allocation.categoryId === "dump_fees" && allocation.amountCents > 0,
+    ) &&
+    exactExpenseIsoInstant(row.paidAt) &&
+    validCoverage(row.coverageStartAt) &&
+    validCoverage(row.coverageEndAt)
+  );
+}
+
+export function buildExpenseDumpCorrectionBody(
+  row: ExpenseDumpCorrectionRow,
+  draft: ExpenseDumpDetailsDraft,
+  reasonValue: string,
+  removeDumpDetails = false,
+):
+  | { ok: true; body: ExpenseDumpCorrectionBody }
+  | { ok: false; message: string } {
+  if (!expenseHistoryCanCorrectDumpWeight(row, true) || !row.paidAt) {
+    return {
+      ok: false,
+      message: "Refresh History before correcting this dump weight.",
+    };
+  }
+  const reason = reasonValue.trim();
+  if (reason.length < 3 || reason.length > 500) {
+    return {
+      ok: false,
+      message: "Explain the weight correction in 3 to 500 characters.",
+    };
+  }
+  const parsedDumpDetails = removeDumpDetails
+    ? ({ ok: true, details: null } as const)
+    : buildExpenseDumpSubmissionDetails(draft, { required: true });
+  if (!parsedDumpDetails.ok) return parsedDumpDetails;
+  if (!removeDumpDetails && !parsedDumpDetails.details) {
+    return {
+      ok: false,
+      message: "Review the dump-ticket weight before saving the correction.",
+    };
+  }
+  return {
+    ok: true,
+    body: {
+      amountCents: row.amountCents,
+      currency: "USD",
+      category: row.category,
+      vendor: row.vendor,
+      memo: row.notes,
+      method: row.method as SubmissionBody["method"],
+      paidAt: row.paidAt,
+      coverageStartAt: row.coverageStartAt ?? null,
+      coverageEndAt: row.coverageEndAt ?? null,
+      reason,
+      dumpDetails: parsedDumpDetails.details,
+    },
+  };
+}
+
+const emptyExpenseDumpActivity: ExpenseDumpActivity = {
+  dumpFeeCents: 0,
+  ticketCount: 0,
+  weightedTicketCount: 0,
+  netWeightPounds: 0,
+  averageCostPerTonCents: null,
+  missingWeightCount: 0,
+};
+
+export function expenseDumpActivityValue(value: unknown): ExpenseDumpActivity {
+  const activity = objectValue(value);
+  const nonnegative = (name: string): number => {
+    const candidate = activity?.[name];
+    return typeof candidate === "number" &&
+      Number.isSafeInteger(candidate) &&
+      candidate >= 0
+      ? candidate
+      : 0;
+  };
+  const average = activity?.["averageCostPerTonCents"];
+  return {
+    ...emptyExpenseDumpActivity,
+    dumpFeeCents: nonnegative("dumpFeeCents"),
+    ticketCount: nonnegative("ticketCount"),
+    weightedTicketCount: nonnegative("weightedTicketCount"),
+    netWeightPounds: nonnegative("netWeightPounds"),
+    averageCostPerTonCents:
+      typeof average === "number" &&
+      Number.isSafeInteger(average) &&
+      average >= 0
+        ? average
+        : null,
+    missingWeightCount: nonnegative("missingWeightCount"),
+  };
+}
+
+export function expenseHistoryDumpDetailsValue(
+  value: unknown,
+): ExpenseHistoryDumpDetails | null {
+  const details = objectValue(value);
+  if (!details) return null;
+  const netWeightPounds = nullableExpenseInteger(details["netWeightPounds"]);
+  const rawStatus = details["weightStatus"];
+  const rawConfirmedBy = objectValue(details["confirmedBy"]);
+  const weightStatus =
+    rawStatus === "confirmed" || rawStatus === "unreadable"
+      ? rawStatus
+      : netWeightPounds && netWeightPounds > 0
+        ? "confirmed"
+        : "unreadable";
+  return {
+    weightStatus,
+    facilityName: nullableExpenseString(details["facilityName"]),
+    ticketNumber: nullableExpenseString(details["ticketNumber"]),
+    material: nullableExpenseString(details["material"]),
+    grossWeightPounds: nullableExpenseInteger(details["grossWeightPounds"]),
+    tareWeightPounds: nullableExpenseInteger(details["tareWeightPounds"]),
+    netWeightPounds,
+    billedWeightMilliTons: nullableExpenseInteger(
+      details["billedWeightMilliTons"],
+    ),
+    unitRateCentsPerTon: nullableExpenseInteger(details["unitRateCentsPerTon"]),
+    confirmedBy:
+      typeof rawConfirmedBy?.["id"] === "string" &&
+      typeof rawConfirmedBy["name"] === "string"
+        ? { id: rawConfirmedBy["id"], name: rawConfirmedBy["name"] }
+        : null,
+    confirmedAt: nullableExpenseString(details["confirmedAt"]),
+    createdAt: nullableExpenseString(details["createdAt"]),
+  };
+}
+
+export function expenseHistoryDisplayStatus(
+  lifecycleStatus: string,
+  reviewStatus: ExpenseHistoryRow["reviewStatus"],
+): string {
+  return lifecycleStatus === "corrected" || lifecycleStatus === "voided"
+    ? lifecycleStatus
+    : (reviewStatus ?? lifecycleStatus);
+}
+
+export function expenseHistoryCorrectionLabel(
+  row: Pick<
+    ExpenseHistoryRow,
+    "reversalOfExpenseId" | "correctionOfExpenseId" | "correctedByExpenseId"
+  >,
+): string | null {
+  if (row.reversalOfExpenseId) {
+    return "Correction reversal — offsets original";
+  }
+  if (row.correctedByExpenseId) {
+    return "Original expense — replaced";
+  }
+  if (row.correctionOfExpenseId) {
+    return "Active corrected entry";
+  }
+  return null;
+}
+
+function expenseOverviewWithDumpDefaults(
+  value: Record<string, unknown>,
+): OverviewPayload {
+  const priorWeek = objectValue(value["priorWeek"]);
+  return {
+    ...(value as unknown as OverviewPayload),
+    dumpActivity: expenseDumpActivityValue(value["dumpActivity"]),
+    priorWeek: {
+      ...(priorWeek as unknown as OverviewPeriod),
+      dumpActivity: expenseDumpActivityValue(priorWeek?.["dumpActivity"]),
+    },
+  };
 }
 
 async function jsonPayload(
@@ -657,6 +1245,253 @@ function AddChoices({
 
 type SplitRow = { key: string; categoryId: string; amount: string };
 
+function dumpAttentionField(attentionFields: string[], field: string): boolean {
+  return attentionFields.some(
+    (candidate) =>
+      candidate === "dumpTicket" ||
+      candidate === "dumpDetails" ||
+      candidate === field ||
+      candidate === `dumpTicket.${field}` ||
+      candidate === `dumpDetails.${field}`,
+  );
+}
+
+function DumpTicketFields({
+  draft,
+  onChange,
+  required,
+  attentionFields,
+}: {
+  draft: ExpenseDumpDetailsDraft;
+  onChange: (draft: ExpenseDumpDetailsDraft) => void;
+  required: boolean;
+  attentionFields: string[];
+}) {
+  const netHelpId = React.useId();
+  const unreadable = draft.weightStatus === "unreadable";
+  const netWeight = parseExpenseDumpPoundsInput(draft.netWeightPounds);
+  const grossWeight = parseExpenseDumpPoundsInput(draft.grossWeightPounds);
+  const tareWeight = parseExpenseDumpPoundsInput(draft.tareWeightPounds, {
+    allowZero: true,
+  });
+  const measuredNet =
+    grossWeight !== null && tareWeight !== null
+      ? grossWeight - tareWeight
+      : null;
+  const mismatch =
+    netWeight !== null &&
+    measuredNet !== null &&
+    measuredNet > 0 &&
+    measuredNet !== netWeight;
+  const update = <Key extends keyof ExpenseDumpDetailsDraft>(
+    key: Key,
+    value: ExpenseDumpDetailsDraft[Key],
+  ) => onChange({ ...draft, [key]: value });
+
+  return (
+    <fieldset className="space-y-3 rounded-xl border border-cyan-200/15 bg-cyan-200/[0.04] p-3">
+      <legend className="px-1 text-xs font-bold uppercase tracking-[0.14em] text-cyan-200">
+        Dump weight
+      </legend>
+      <p role="status" aria-live="polite" className="sr-only">
+        {required
+          ? "Scale ticket detected. Review the net weight."
+          : "Dump-ticket fields are available."}
+      </p>
+      <label className="block">
+        <FieldLabel>
+          Net weight (lb)
+          {dumpAttentionField(attentionFields, "netWeightPounds") ? (
+            <AttentionBadge />
+          ) : null}
+        </FieldLabel>
+        <input
+          value={draft.netWeightPounds}
+          onChange={(event) => update("netWeightPounds", event.target.value)}
+          inputMode="numeric"
+          autoComplete="off"
+          placeholder="0"
+          disabled={unreadable}
+          required={required && !unreadable}
+          aria-describedby={netHelpId}
+          aria-invalid={
+            draft.netWeightPounds.trim().length > 0 && netWeight === null
+          }
+          className={`${controlClass} text-lg font-semibold`}
+        />
+      </label>
+      <p id={netHelpId} className="text-xs leading-5 text-slate-400">
+        {unreadable
+          ? "The ticket will be logged without weight; Overview will show it as missing."
+          : netWeight
+            ? formatExpenseDumpWeight(netWeight)
+            : "Use the printed Net weight. Tons are calculated automatically."}
+      </p>
+      <label className="flex min-h-11 items-center gap-3 text-sm text-slate-200">
+        <input
+          type="checkbox"
+          checked={unreadable}
+          onChange={(event) =>
+            onChange({
+              ...draft,
+              weightStatus: event.target.checked ? "unreadable" : "confirmed",
+              ...(event.target.checked ? { netWeightPounds: "" } : {}),
+            })
+          }
+          className={`${focusRing} size-5 rounded border-white/20 bg-slate-950`}
+        />
+        <span>Net weight is unreadable</span>
+      </label>
+      <details className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
+        <summary
+          className={`${focusRing} flex min-h-11 cursor-pointer items-center text-sm font-semibold text-cyan-100`}
+        >
+          Scale ticket details
+        </summary>
+        <div className="mt-3 space-y-3 border-t border-white/10 pt-3">
+          <label className="block">
+            <FieldLabel>
+              Facility
+              {dumpAttentionField(attentionFields, "facilityName") ? (
+                <AttentionBadge />
+              ) : null}
+            </FieldLabel>
+            <input
+              value={draft.facilityName}
+              onChange={(event) => update("facilityName", event.target.value)}
+              maxLength={240}
+              className={controlClass}
+              placeholder="Optional"
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <FieldLabel>
+                Ticket number
+                {dumpAttentionField(attentionFields, "ticketNumber") ? (
+                  <AttentionBadge />
+                ) : null}
+              </FieldLabel>
+              <input
+                value={draft.ticketNumber}
+                onChange={(event) => update("ticketNumber", event.target.value)}
+                maxLength={120}
+                className={controlClass}
+                placeholder="Optional"
+              />
+            </label>
+            <label className="block">
+              <FieldLabel>
+                Material
+                {dumpAttentionField(attentionFields, "material") ? (
+                  <AttentionBadge />
+                ) : null}
+              </FieldLabel>
+              <input
+                value={draft.material}
+                onChange={(event) => update("material", event.target.value)}
+                maxLength={240}
+                className={controlClass}
+                placeholder="Optional"
+              />
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <FieldLabel>
+                Gross weight (lb)
+                {dumpAttentionField(attentionFields, "grossWeightPounds") ? (
+                  <AttentionBadge />
+                ) : null}
+              </FieldLabel>
+              <input
+                value={draft.grossWeightPounds}
+                onChange={(event) =>
+                  update("grossWeightPounds", event.target.value)
+                }
+                inputMode="numeric"
+                className={controlClass}
+                placeholder="Optional"
+              />
+            </label>
+            <label className="block">
+              <FieldLabel>
+                Tare weight (lb)
+                {dumpAttentionField(attentionFields, "tareWeightPounds") ? (
+                  <AttentionBadge />
+                ) : null}
+              </FieldLabel>
+              <input
+                value={draft.tareWeightPounds}
+                onChange={(event) =>
+                  update("tareWeightPounds", event.target.value)
+                }
+                inputMode="numeric"
+                className={controlClass}
+                placeholder="Optional"
+              />
+            </label>
+          </div>
+          {mismatch ? (
+            <p className="rounded-lg border border-amber-300/30 bg-amber-300/10 p-2 text-xs leading-5 text-amber-100">
+              Gross minus tare is {formatExpenseDumpWeight(measuredNet ?? 0)}.
+              Check the printed net weight before submitting.
+            </p>
+          ) : null}
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <FieldLabel>
+                Billed weight (tons)
+                {dumpAttentionField(
+                  attentionFields,
+                  "billedWeightMilliTons",
+                ) ? (
+                  <AttentionBadge />
+                ) : null}
+              </FieldLabel>
+              <input
+                value={draft.billedWeightTons}
+                onChange={(event) =>
+                  update("billedWeightTons", event.target.value)
+                }
+                inputMode="decimal"
+                className={controlClass}
+                placeholder="Optional"
+              />
+            </label>
+            <label className="block">
+              <FieldLabel>
+                Unit rate / ton
+                {dumpAttentionField(attentionFields, "unitRateCentsPerTon") ? (
+                  <AttentionBadge />
+                ) : null}
+              </FieldLabel>
+              <div className="relative">
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                >
+                  $
+                </span>
+                <input
+                  value={draft.unitRateDollarsPerTon}
+                  onChange={(event) =>
+                    update("unitRateDollarsPerTon", event.target.value)
+                  }
+                  inputMode="decimal"
+                  aria-label="Unit rate in dollars per ton"
+                  className={`${controlClass} pl-7`}
+                  placeholder="Optional"
+                />
+              </div>
+            </label>
+          </div>
+        </div>
+      </details>
+    </fieldset>
+  );
+}
+
 function ExpenseEditor({
   categories,
   currentMember,
@@ -665,6 +1500,7 @@ function ExpenseEditor({
   canApprove,
   allowReimbursement,
   fixedCostCoverageEnabled,
+  dumpTicketsEnabled,
   initial,
   attentionFields = [],
   vendorPrimary = false,
@@ -673,6 +1509,7 @@ function ExpenseEditor({
   submitDisabled = false,
   submitLabel,
   onBack,
+  onDumpIdentityChange,
   onSubmit,
 }: {
   categories: ExpenseCategory[];
@@ -682,12 +1519,16 @@ function ExpenseEditor({
   canApprove: boolean;
   allowReimbursement: boolean;
   fixedCostCoverageEnabled: boolean;
+  dumpTicketsEnabled: boolean;
   initial?: Partial<{
     amount: string;
     purchaseDate: string;
     categoryId: string;
     vendor: string;
     method: string;
+    documentType: "standard_receipt" | "scale_ticket" | "unknown";
+    requiresScaleTicketReview: boolean;
+    dumpDetails: ExpenseDumpDetailsDraft;
   }>;
   attentionFields?: string[];
   vendorPrimary?: boolean;
@@ -696,9 +1537,11 @@ function ExpenseEditor({
   submitDisabled?: boolean;
   submitLabel: string;
   onBack: () => void;
+  onDumpIdentityChange?: () => void;
   onSubmit: (
     body: SubmissionBody,
     duplicateOverrideReason: string | null,
+    scaleTicketDisposition: ScaleTicketDisposition,
   ) => Promise<void>;
 }) {
   const [amount, setAmount] = React.useState(initial?.amount ?? "");
@@ -713,13 +1556,36 @@ function ExpenseEditor({
   const [paidByMemberId, setPaidByMemberId] = React.useState(currentMember.id);
   const [notes, setNotes] = React.useState("");
   const [method, setMethod] = React.useState(initial?.method ?? "");
+  const [dumpDetails, setDumpDetails] = React.useState(
+    initial?.dumpDetails ?? emptyExpenseDumpDetailsDraft(),
+  );
   const [appointmentId, setAppointmentId] = React.useState("");
   const [splitEnabled, setSplitEnabled] = React.useState(false);
   const [splits, setSplits] = React.useState<SplitRow[]>([]);
   const [coveredByFixedCostSeriesId, setCoveredByFixedCostSeriesId] =
     React.useState("");
   const [overrideReason, setOverrideReason] = React.useState("");
+  const [notScaleTicket, setNotScaleTicket] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const detectedScaleTicket = Boolean(
+    dumpTicketsEnabled &&
+      (initial?.documentType === "scale_ticket" ||
+        initial?.requiresScaleTicketReview),
+  );
+  const hasInitialDumpDetails = Boolean(
+    dumpTicketsEnabled &&
+      initial?.dumpDetails &&
+      (expenseDumpDraftHasData(initial.dumpDetails) ||
+        initial.dumpDetails.weightStatus === "unreadable"),
+  );
+  const dumpCategorySelected =
+    categoryId === "dump_fees" ||
+    (splitEnabled && splits.some((row) => row.categoryId === "dump_fees"));
+  const showDumpDetails = Boolean(
+    dumpTicketsEnabled &&
+      !notScaleTicket &&
+      (detectedScaleTicket || hasInitialDumpDetails || dumpCategorySelected),
+  );
 
   React.useEffect(() => {
     if (!allowReimbursement) {
@@ -775,6 +1641,17 @@ function ExpenseEditor({
     );
   };
 
+  const updateDumpDetails = (next: ExpenseDumpDetailsDraft) => {
+    if (
+      next.facilityName !== dumpDetails.facilityName ||
+      next.ticketNumber !== dumpDetails.ticketNumber
+    ) {
+      setOverrideReason("");
+      onDumpIdentityChange?.();
+    }
+    setDumpDetails(next);
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
@@ -789,6 +1666,15 @@ function ExpenseEditor({
     }
     if (!categoryId) {
       setError("Choose an expense category.");
+      return;
+    }
+    const parsedDumpDetails = showDumpDetails
+      ? buildExpenseDumpSubmissionDetails(dumpDetails, {
+          required: detectedScaleTicket,
+        })
+      : ({ ok: true, details: null } as const);
+    if (!parsedDumpDetails.ok) {
+      setError(parsedDumpDetails.message);
       return;
     }
     let allocations: SubmissionBody["allocations"];
@@ -855,8 +1741,8 @@ function ExpenseEditor({
     ) {
       setError(
         canApprove
-          ? "Add at least 10 characters explaining this exact duplicate override."
-          : "Only an owner can override an exact duplicate receipt.",
+          ? "Add at least 10 characters explaining this duplicate override."
+          : "Only an owner can override a matching receipt or scale ticket.",
       );
       return;
     }
@@ -873,8 +1759,12 @@ function ExpenseEditor({
         payerType,
         paidByMemberId: payerType === "personal" ? paidByMemberId : null,
         appointmentId: appointmentId || null,
+        ...(parsedDumpDetails.details
+          ? { dumpDetails: parsedDumpDetails.details }
+          : {}),
       },
       duplicateRisk === "exact" ? overrideReason.trim() || null : null,
+      detectedScaleTicket && notScaleTicket ? "not_scale_ticket" : null,
     );
   };
 
@@ -886,8 +1776,8 @@ function ExpenseEditor({
           message={
             duplicateRisk === "exact"
               ? canApprove
-                ? "This is an exact match for another receipt. Confirm why it should be entered again."
-                : "This is an exact duplicate. An owner must review it before it can be submitted."
+                ? "This matches an existing receipt or scale ticket. Confirm why it should be entered again."
+                : "This may duplicate an existing receipt or scale ticket. An owner must review it before it can be submitted."
               : "This looks similar to a nearby receipt. Review the details carefully before submitting."
           }
         />
@@ -958,6 +1848,46 @@ function ExpenseEditor({
           ))}
         </select>
       </label>
+
+      {detectedScaleTicket ? (
+        <div className="rounded-xl border border-cyan-300/25 bg-cyan-300/[0.06] p-3">
+          <p className="text-sm font-semibold text-cyan-100">
+            Scanner identified a scale ticket
+          </p>
+          <p className="mt-1 text-xs leading-5 text-slate-300">
+            Confirm the printed weight below. If this is an ordinary receipt,
+            use the option here so no weight is stored.
+          </p>
+          <label className="mt-2 flex min-h-11 items-center gap-3 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm text-slate-200">
+            <input
+              type="checkbox"
+              checked={notScaleTicket}
+              onChange={(event) => {
+                setNotScaleTicket(event.target.checked);
+                setOverrideReason("");
+                onDumpIdentityChange?.();
+              }}
+              className={`${focusRing} size-5 rounded border-white/20 bg-slate-950`}
+            />
+            <span>This is not a scale ticket</span>
+          </label>
+          {notScaleTicket ? (
+            <p className="mt-2 text-xs font-semibold text-amber-100">
+              Weight details will not be saved. Double-check the category before
+              submitting.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {showDumpDetails ? (
+        <DumpTicketFields
+          draft={dumpDetails}
+          onChange={updateDumpDetails}
+          required={detectedScaleTicket}
+          attentionFields={attentionFields}
+        />
+      ) : null}
 
       {allowReimbursement ? (
         <fieldset>
@@ -1218,7 +2148,32 @@ function ExpenseEditor({
   );
 }
 
-function receiptExtractionFromCapture(
+function receiptDumpReviewValue(input: {
+  fields: Record<string, unknown> | null;
+  rawDumpTicket: Record<string, unknown> | null;
+  name: keyof Omit<ExpenseDumpDetails, "weightStatus">;
+}): unknown {
+  const reviewedDump =
+    objectValue(input.fields?.["dumpTicket"]) ??
+    objectValue(input.fields?.["dumpDetails"]);
+  const reviewedValue = objectValue(reviewedDump?.["value"]);
+  if (reviewedValue && input.name in reviewedValue) {
+    return reviewedValue[input.name];
+  }
+  const nestedFields = objectValue(reviewedDump?.["fields"]);
+  const nestedField =
+    objectValue(nestedFields?.[input.name]) ??
+    objectValue(reviewedDump?.[input.name]);
+  if (nestedField && "value" in nestedField) return nestedField["value"];
+  if (reviewedDump && input.name in reviewedDump) {
+    return reviewedDump[input.name];
+  }
+  const rolloutField = objectValue(input.fields?.[input.name]);
+  if (rolloutField && "value" in rolloutField) return rolloutField["value"];
+  return input.rawDumpTicket?.[input.name];
+}
+
+export function receiptExtractionFromCapture(
   capture: Record<string, unknown> | null,
 ): {
   initial: Parameters<typeof ExpenseEditor>[0]["initial"];
@@ -1232,7 +2187,43 @@ function receiptExtractionFromCapture(
     objectValue(fields?.[name])?.["value"];
   const categorySuggestion = objectValue(extraction?.["categorySuggestion"]);
   const duplicates = objectValue(extraction?.["duplicates"]);
-  const raw = objectValue(extraction?.["raw"]);
+  const rawSource =
+    extraction && "raw" in extraction ? extraction["raw"] : extraction;
+  const raw = objectValue(rawSource);
+  const requiresScaleTicketReview = Boolean(
+    raw &&
+      (raw["documentType"] === "scale_ticket" ||
+        raw["receiptType"] === "scale_ticket" ||
+        ("dumpTicket" in raw && raw["dumpTicket"] !== null) ||
+        ("dumpDetails" in raw && raw["dumpDetails"] !== null)),
+  );
+  const rawDumpTicket =
+    objectValue(raw?.["dumpTicket"]) ?? objectValue(raw?.["dumpDetails"]);
+  const rawDocumentType = raw?.["documentType"] ?? raw?.["receiptType"];
+  const documentType =
+    rawDocumentType === "scale_ticket" ||
+    rawDocumentType === "standard_receipt" ||
+    rawDocumentType === "unknown"
+      ? rawDocumentType
+      : "unknown";
+  const dumpValue = (
+    name: keyof Omit<ExpenseDumpDetails, "weightStatus">,
+  ): unknown => receiptDumpReviewValue({ fields, rawDumpTicket, name });
+  const dumpDetails: ExpenseDumpDetails = {
+    weightStatus: "confirmed",
+    facilityName: nullableExpenseString(dumpValue("facilityName")),
+    ticketNumber: nullableExpenseString(dumpValue("ticketNumber")),
+    material: nullableExpenseString(dumpValue("material")),
+    grossWeightPounds: nullableExpenseInteger(dumpValue("grossWeightPounds")),
+    tareWeightPounds: nullableExpenseInteger(dumpValue("tareWeightPounds")),
+    netWeightPounds: nullableExpenseInteger(dumpValue("netWeightPounds")),
+    billedWeightMilliTons: nullableExpenseInteger(
+      dumpValue("billedWeightMilliTons"),
+    ),
+    unitRateCentsPerTon: nullableExpenseInteger(
+      dumpValue("unitRateCentsPerTon"),
+    ),
+  };
   const total = fieldValue("totalCents");
   const lastFour = fieldValue("paymentLastFour");
   const highestRisk = duplicates?.["highestRisk"];
@@ -1258,6 +2249,9 @@ function receiptExtractionFromCapture(
         typeof raw?.["paymentLastFour"] === "string"
           ? "card"
           : "",
+      documentType,
+      requiresScaleTicketReview,
+      dumpDetails: expenseDumpDetailsDraft(dumpDetails),
     },
     attention: Array.isArray(review?.["fieldsToCheck"])
       ? review["fieldsToCheck"].filter(
@@ -1289,6 +2283,7 @@ function ReceiptWorkflow({
   canApprove,
   allowReimbursement,
   fixedCostCoverageEnabled,
+  dumpTicketsEnabled,
   onRow,
   onDone,
   onBack,
@@ -1302,6 +2297,7 @@ function ReceiptWorkflow({
   canApprove: boolean;
   allowReimbursement: boolean;
   fixedCostCoverageEnabled: boolean;
+  dumpTicketsEnabled: boolean;
   onRow: (row: ExpenseCaptureQueueRow | null) => void;
   onDone: (message: string) => void;
   onBack: () => void;
@@ -1312,6 +2308,13 @@ function ReceiptWorkflow({
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
   const [isOnline, setIsOnline] = React.useState(true);
+  const [runtimeDuplicateKind, setRuntimeDuplicateKind] = React.useState<
+    "scale_ticket" | "exact_receipt" | null
+  >(null);
+
+  React.useEffect(() => {
+    setRuntimeDuplicateKind(null);
+  }, [row?.clientCaptureId]);
 
   React.useEffect(() => {
     setIsOnline(navigator.onLine);
@@ -1476,6 +2479,7 @@ function ReceiptWorkflow({
   const confirm = async (
     body: SubmissionBody,
     overrideReason: string | null,
+    scaleTicketDisposition: ScaleTicketDisposition,
   ) => {
     if (!row?.serverCapture) return;
     const version = row.serverCapture["version"];
@@ -1487,9 +2491,11 @@ function ReceiptWorkflow({
     setMessage(null);
     const requestBody = {
       ...body,
+      ...(dumpTicketsEnabled ? { receiptReviewContractVersion: 2 } : {}),
       ...(overrideReason
         ? { exactDuplicateOverrideReason: overrideReason }
         : {}),
+      ...(scaleTicketDisposition ? { scaleTicketDisposition } : {}),
     };
     let attempt: Awaited<ReturnType<typeof getExpenseMutationAttempt>> | null =
       null;
@@ -1514,6 +2520,16 @@ function ReceiptWorkflow({
       );
       const payload = await jsonPayload(response);
       if (!response.ok) {
+        const duplicateKind = expenseConfirmationDuplicateKind(
+          response.status,
+          payload,
+          {
+            attemptedDumpDetails: body.dumpDetails !== undefined,
+            knownExactReceipt:
+              receiptExtraction(row).duplicateRisk === "exact",
+          },
+        );
+        if (duplicateKind) setRuntimeDuplicateKind(duplicateKind);
         if (response.status === 409 || response.status === 412) {
           const refreshed = await refreshExpenseCapture(
             row.clientCaptureId,
@@ -1580,8 +2596,9 @@ function ReceiptWorkflow({
           </p>
           <h2 className="mt-1 text-lg font-semibold">Take a clear photo</h2>
           <p className="mt-1 text-sm leading-6 text-slate-300">
-            Keep the full receipt in frame. You will review every value before
-            it posts.
+            Portrait or landscape, keep all four corners in frame. On scale
+            tickets, make the weight block and total easy to read. You will
+            review every value before it posts.
           </p>
         </div>
         {message ? <StatusNotice tone="error" message={message} /> : null}
@@ -1821,6 +2838,7 @@ function ReceiptWorkflow({
   }
 
   const extracted = receiptExtraction(row);
+  const receiptContentHref = expenseCaptureEvidenceHref(row.serverCapture);
   return (
     <div className={cardClass}>
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -1832,6 +2850,17 @@ function ReceiptWorkflow({
           <p className="mt-1 text-sm text-slate-300">
             The scan only prefills this form.
           </p>
+          {receiptContentHref ? (
+            <a
+              href={receiptContentHref}
+              target="_blank"
+              rel="noreferrer"
+              className={`${focusRing} mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/15 bg-slate-900 px-3 text-sm font-semibold text-white`}
+            >
+              <FileText aria-hidden="true" className="size-4" />
+              View receipt
+            </a>
+          ) : null}
         </div>
         <button
           type="button"
@@ -1857,13 +2886,24 @@ function ReceiptWorkflow({
         canApprove={canApprove}
         allowReimbursement={allowReimbursement}
         fixedCostCoverageEnabled={fixedCostCoverageEnabled}
+        dumpTicketsEnabled={dumpTicketsEnabled}
         initial={extracted.initial}
         attentionFields={extracted.attention}
         vendorPrimary
-        duplicateRisk={extracted.duplicateRisk}
+        duplicateRisk={
+          extracted.duplicateRisk === "exact" || runtimeDuplicateKind
+            ? "exact"
+            : extracted.duplicateRisk
+        }
         submitting={busy}
         submitLabel={canApprove ? "Post expense" : "Submit for approval"}
         onBack={onBack}
+        onDumpIdentityChange={() => {
+          if (runtimeDuplicateKind === "scale_ticket") {
+            setRuntimeDuplicateKind(null);
+            setMessage(null);
+          }
+        }}
         onSubmit={confirm}
       />
     </div>
@@ -2152,6 +3192,66 @@ function OverviewCompletenessReasons({
   );
 }
 
+function DumpActivityPanel({ activity }: { activity: ExpenseDumpActivity }) {
+  const headingId = React.useId();
+  if (
+    activity.ticketCount === 0 &&
+    activity.dumpFeeCents === 0 &&
+    activity.weightedTicketCount === 0
+  ) {
+    return null;
+  }
+  return (
+    <section aria-labelledby={headingId} className={cardClass}>
+      <p className="text-xs font-bold uppercase tracking-[0.14em] text-cyan-300">
+        Dump activity
+      </p>
+      <h2 id={headingId} className="mt-1 text-lg font-semibold">
+        {activity.netWeightPounds > 0
+          ? formatExpenseDumpWeight(activity.netWeightPounds)
+          : "No confirmed weight"}
+      </h2>
+      <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
+        <div className="rounded-lg border border-white/10 bg-slate-950/50 p-2.5">
+          <dt className="text-slate-400">Tickets</dt>
+          <dd className="mt-1 text-sm font-bold text-white">
+            {activity.ticketCount}
+          </dd>
+        </div>
+        <div className="rounded-lg border border-white/10 bg-slate-950/50 p-2.5">
+          <dt className="text-slate-400">Dump fees</dt>
+          <dd className="mt-1 text-sm font-bold text-white">
+            {formatExpenseMoney(activity.dumpFeeCents)}
+          </dd>
+        </div>
+        <div className="rounded-lg border border-white/10 bg-slate-950/50 p-2.5">
+          <dt className="text-slate-400">Cost / ton</dt>
+          <dd className="mt-1 text-sm font-bold text-white">
+            {activity.averageCostPerTonCents === null
+              ? "—"
+              : formatExpenseMoney(activity.averageCostPerTonCents)}
+          </dd>
+        </div>
+      </dl>
+      <p className="mt-3 text-xs leading-5 text-slate-400">
+        Weight recorded on {activity.weightedTicketCount} of{" "}
+        {activity.ticketCount} dump expense
+        {activity.ticketCount === 1 ? "" : "s"}.
+      </p>
+      {activity.missingWeightCount > 0 ? (
+        <p
+          role="status"
+          className="mt-1 text-xs font-semibold leading-5 text-amber-100"
+        >
+          {activity.missingWeightCount} dump expense
+          {activity.missingWeightCount === 1 ? " is" : "s are"} missing a
+          confirmed net weight; no weight was estimated.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 function OverviewView({
   weekStart,
   onWeekStart,
@@ -2202,7 +3302,7 @@ function OverviewView({
           throw new Error(
             expenseErrorMessage(payload, "The weekly overview is unavailable."),
           );
-        setOverview(payload as unknown as OverviewPayload);
+        setOverview(expenseOverviewWithDumpDefaults(payload ?? {}));
       })
       .catch(
         (reason: unknown) =>
@@ -2455,6 +3555,7 @@ function OverviewView({
             categories={overview.categories}
             totalExpensesCents={overview.totalExpensesCents}
           />
+          <DumpActivityPanel activity={overview.dumpActivity} />
           <details className={cardClass}>
             <summary
               className={`${focusRing} flex min-h-11 cursor-pointer items-center text-sm font-semibold text-cyan-100`}
@@ -2550,6 +3651,7 @@ const historyFilters = [
   ["pending", "Pending"],
   ["approved", "Approved"],
   ["rejected", "Rejected"],
+  ["dump_tickets", "Dump expenses"],
   ["reimbursement", "Reimbursements"],
 ] as const;
 
@@ -2604,7 +3706,31 @@ async function fetchExpenseHistoryPage(
   const page = objectValue(payload?.["page"]);
   return {
     expenses: Array.isArray(payload?.["expenses"])
-      ? (payload["expenses"] as ExpenseHistoryRow[])
+      ? payload["expenses"].flatMap((value) => {
+          const row = objectValue(value);
+          return row
+            ? [
+                {
+                  ...(row as unknown as ExpenseHistoryRow),
+                  dumpDetails: expenseHistoryDumpDetailsValue(
+                    row["dumpDetails"],
+                  ),
+                  reversalOfExpenseId:
+                    typeof row["reversalOfExpenseId"] === "string"
+                      ? row["reversalOfExpenseId"]
+                      : null,
+                  correctionOfExpenseId:
+                    typeof row["correctionOfExpenseId"] === "string"
+                      ? row["correctionOfExpenseId"]
+                      : null,
+                  correctedByExpenseId:
+                    typeof row["correctedByExpenseId"] === "string"
+                      ? row["correctedByExpenseId"]
+                      : null,
+                },
+              ]
+            : [];
+        })
       : [],
     page: {
       hasMore: page?.["hasMore"] === true,
@@ -2616,6 +3742,15 @@ async function fetchExpenseHistoryPage(
 
 function exactDuplicateReceiptHref(captureId: string): string {
   return `/api/mobile/expenses/captures/${encodeURIComponent(captureId)}/content`;
+}
+
+function expenseHistoryReceiptHref(
+  row: Pick<ExpenseHistoryRow, "id" | "receipt">,
+): string | null {
+  if (!row.receipt) return null;
+  return row.receipt.captureId
+    ? `/api/mobile/expenses/captures/${encodeURIComponent(row.receipt.captureId)}/content`
+    : `/api/mobile/expenses/${encodeURIComponent(row.id)}/receipt`;
 }
 
 function ExactDuplicateQueueCard({
@@ -2711,6 +3846,7 @@ function HistoryView({
   allowReimbursement,
   exactDuplicateReviewEnabled,
   fixedCostCoverageEnabled,
+  dumpTicketsEnabled,
   refreshToken,
 }: {
   employeeId: string;
@@ -2723,6 +3859,7 @@ function HistoryView({
   allowReimbursement: boolean;
   exactDuplicateReviewEnabled: boolean;
   fixedCostCoverageEnabled: boolean;
+  dumpTicketsEnabled: boolean;
   refreshToken: number;
 }) {
   const [filter, setFilter] = React.useState("all");
@@ -2737,12 +3874,25 @@ function HistoryView({
   );
   const [reason, setReason] = React.useState("");
   const [reviewCategoryId, setReviewCategoryId] = React.useState("");
+  const [reviewDumpDetails, setReviewDumpDetails] = React.useState(
+    emptyExpenseDumpDetailsDraft(),
+  );
+  const [reviewNotScaleTicket, setReviewNotScaleTicket] = React.useState(false);
   const [
     reviewCoveredByFixedCostSeriesId,
     setReviewCoveredByFixedCostSeriesId,
   ] = React.useState("");
   const [lockVendorRule, setLockVendorRule] = React.useState(false);
   const [reviewBusy, setReviewBusy] = React.useState(false);
+  const [correctingDump, setCorrectingDump] =
+    React.useState<ExpenseHistoryRow | null>(null);
+  const [correctionDumpDetails, setCorrectionDumpDetails] = React.useState(
+    emptyExpenseDumpDetailsDraft(),
+  );
+  const [correctionRemoveDumpDetails, setCorrectionRemoveDumpDetails] =
+    React.useState(false);
+  const [correctionReason, setCorrectionReason] = React.useState("");
+  const [correctionBusy, setCorrectionBusy] = React.useState(false);
   const [reload, setReload] = React.useState(0);
   const [duplicateRows, setDuplicateRows] = React.useState<
     ExactDuplicateReviewItem[]
@@ -2760,6 +3910,13 @@ function HistoryView({
   const [duplicateBusy, setDuplicateBusy] = React.useState(false);
   const [duplicateReload, setDuplicateReload] = React.useState(0);
   const [success, setSuccess] = React.useState<string | null>(null);
+  const visibleHistoryFilters = dumpTicketsEnabled
+    ? historyFilters
+    : historyFilters.filter(([value]) => value !== "dump_tickets");
+
+  React.useEffect(() => {
+    if (!dumpTicketsEnabled && filter === "dump_tickets") setFilter("all");
+  }, [dumpTicketsEnabled, filter]);
 
   React.useEffect(() => {
     let active = true;
@@ -2832,6 +3989,25 @@ function HistoryView({
       setError("Choose a category before approving this expense.");
       return;
     }
+    const reviewShowsDumpDetails = Boolean(
+      dumpTicketsEnabled &&
+        !reviewNotScaleTicket &&
+        (reviewing.dumpDetails ||
+          reviewCategoryId === "dump_fees" ||
+          reviewing.allocations.some(
+            (allocation) => allocation.categoryId === "dump_fees",
+          )),
+    );
+    const parsedDumpDetails =
+      decision === "approve" && reviewShowsDumpDetails
+        ? buildExpenseDumpSubmissionDetails(reviewDumpDetails, {
+            required: Boolean(reviewing.dumpDetails),
+          })
+        : ({ ok: true, details: null } as const);
+    if (!parsedDumpDetails.ok) {
+      setError(parsedDumpDetails.message);
+      return;
+    }
     setReviewBusy(true);
     setError(null);
     try {
@@ -2849,6 +4025,12 @@ function HistoryView({
           : {}),
         ...(decision === "approve" && lockVendorRule
           ? { lockVendorRule: true }
+          : {}),
+        ...(decision === "approve" && parsedDumpDetails.details
+          ? { dumpDetails: parsedDumpDetails.details }
+          : {}),
+        ...(decision === "approve" && reviewNotScaleTicket
+          ? { scaleTicketDisposition: "not_scale_ticket" as const }
           : {}),
       };
       const attempt = await getExpenseMutationAttempt({
@@ -2878,6 +4060,8 @@ function HistoryView({
       setReviewing(null);
       setReason("");
       setReviewCategoryId("");
+      setReviewDumpDetails(emptyExpenseDumpDetailsDraft());
+      setReviewNotScaleTicket(false);
       setReviewCoveredByFixedCostSeriesId("");
       setLockVendorRule(false);
       setReload((value) => value + 1);
@@ -2916,6 +4100,78 @@ function HistoryView({
       );
     } finally {
       setHistoryLoadingMore(false);
+    }
+  };
+
+  const correctDumpWeight = async (
+    event: React.FormEvent<HTMLFormElement>,
+  ): Promise<void> => {
+    event.preventDefault();
+    const row = correctingDump;
+    if (!row) return;
+    const correction = buildExpenseDumpCorrectionBody(
+      row,
+      correctionDumpDetails,
+      correctionReason,
+      correctionRemoveDumpDetails,
+    );
+    if (!correction.ok) {
+      setError(correction.message);
+      return;
+    }
+    setCorrectionBusy(true);
+    setError(null);
+    setSuccess(null);
+    let attempt: ExpenseMutationAttempt | null = null;
+    try {
+      attempt = await getExpenseMutationAttempt({
+        employeeId,
+        operation: `expense-dump-correct:${row.id}`,
+        payload: { version: row.version, body: correction.body },
+      });
+      const response = await fetch(
+        `/api/mobile/expenses/${encodeURIComponent(row.id)}/correct`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": attempt.idempotencyKey,
+            "If-Match": String(row.version),
+          },
+          body: JSON.stringify(correction.body),
+        },
+      );
+      const payload = await jsonPayload(response);
+      if (!response.ok) {
+        setError(
+          expenseErrorMessage(
+            payload,
+            "The reviewed dump weight was not saved.",
+          ),
+        );
+        return;
+      }
+      await acknowledgeExpenseMutationAttempt(attempt);
+      setCorrectingDump(null);
+      setCorrectionDumpDetails(emptyExpenseDumpDetailsDraft());
+      setCorrectionRemoveDumpDetails(false);
+      setCorrectionReason("");
+      setSuccess(
+        correctionRemoveDumpDetails
+          ? "Scale-ticket details removed with a linked correction. The original expense remains in History."
+          : "Reviewed dump weight saved with a linked correction. The original expense remains in History.",
+      );
+      setReload((value) => value + 1);
+    } catch (reasonValue) {
+      setError(
+        reasonValue instanceof Error &&
+          reasonValue.message.startsWith("Secure expense retry storage")
+          ? reasonValue.message
+          : "The response was interrupted. Retry the same reviewed weight safely; the original remains unchanged until the server confirms it.",
+      );
+    } finally {
+      setCorrectionBusy(false);
     }
   };
 
@@ -2978,6 +4234,7 @@ function HistoryView({
   const confirmDuplicate = async (
     body: SubmissionBody,
     overrideReason: string | null,
+    scaleTicketDisposition: ScaleTicketDisposition,
   ): Promise<void> => {
     const item = reviewingDuplicate;
     if (!item) return;
@@ -2989,9 +4246,11 @@ function HistoryView({
     }
     const requestBody = {
       ...body,
+      ...(dumpTicketsEnabled ? { receiptReviewContractVersion: 2 } : {}),
       ...(overrideReason
         ? { exactDuplicateOverrideReason: overrideReason }
         : {}),
+      ...(scaleTicketDisposition ? { scaleTicketDisposition } : {}),
     };
     let attempt: ExpenseMutationAttempt | null = null;
     setDuplicateBusy(true);
@@ -3202,6 +4461,7 @@ function HistoryView({
           canApprove={canApprove}
           allowReimbursement={allowReimbursement}
           fixedCostCoverageEnabled={fixedCostCoverageEnabled}
+          dumpTicketsEnabled={dumpTicketsEnabled}
           initial={extracted.initial}
           attentionFields={extracted.attention}
           vendorPrimary
@@ -3234,10 +4494,136 @@ function HistoryView({
     );
   }
 
+  if (correctingDump) {
+    const receiptHref = expenseHistoryReceiptHref(correctingDump);
+    return (
+      <form
+        onSubmit={(event) => void correctDumpWeight(event)}
+        className={`${cardClass} space-y-4`}
+      >
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-300">
+            Dump expense correction
+          </p>
+          <h2 className="mt-1 text-lg font-semibold">
+            {correctingDump.dumpDetails
+              ? "Correct dump weight"
+              : "Add dump weight"}
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-slate-300">
+            {formatExpenseMoney(correctingDump.amountCents)} ·{" "}
+            {correctingDump.category} · {correctingDump.purchaseDate}. This
+            creates a linked replacement and keeps the original in History.
+          </p>
+        </div>
+        {receiptHref ? (
+          <a
+            href={receiptHref}
+            target="_blank"
+            rel="noreferrer"
+            className={`${secondaryButton} flex w-full items-center justify-center gap-2`}
+          >
+            <FileText aria-hidden="true" className="size-4" />
+            View receipt
+          </a>
+        ) : null}
+        {correctingDump.dumpDetails ? (
+          <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+            <label className="flex min-h-11 items-center gap-3 text-sm text-slate-200">
+              <input
+                type="checkbox"
+                checked={correctionRemoveDumpDetails}
+                onChange={(event) =>
+                  setCorrectionRemoveDumpDetails(event.target.checked)
+                }
+                className={`${focusRing} size-5 rounded border-white/20 bg-slate-950`}
+              />
+              <span>Remove scale-ticket details</span>
+            </label>
+            {correctionRemoveDumpDetails ? (
+              <p className="mt-2 text-xs font-semibold text-amber-100">
+                The active corrected entry will keep the expense amount and
+                receipt, but no longer count as a weighed load.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        {!correctionRemoveDumpDetails ? (
+          <DumpTicketFields
+            draft={correctionDumpDetails}
+            onChange={setCorrectionDumpDetails}
+            required
+            attentionFields={[]}
+          />
+        ) : null}
+        <label className="block">
+          <FieldLabel>Correction reason</FieldLabel>
+          <textarea
+            value={correctionReason}
+            onChange={(event) => setCorrectionReason(event.target.value)}
+            minLength={3}
+            maxLength={500}
+            rows={3}
+            required
+            className={controlClass}
+            placeholder="What was corrected?"
+          />
+        </label>
+        {error ? <StatusNotice tone="error" message={error} /> : null}
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="sr-only"
+        >
+          {correctionBusy
+            ? correctionRemoveDumpDetails
+              ? "Removing scale-ticket details"
+              : "Saving reviewed dump weight"
+            : ""}
+        </div>
+        <button
+          type="submit"
+          disabled={correctionBusy}
+          className={primaryButton}
+        >
+          {correctionBusy
+            ? "Saving…"
+            : correctionRemoveDumpDetails
+              ? "Save classification correction"
+              : "Save reviewed weight"}
+        </button>
+        <button
+          type="button"
+          disabled={correctionBusy}
+          onClick={() => {
+            setCorrectingDump(null);
+            setCorrectionDumpDetails(emptyExpenseDumpDetailsDraft());
+            setCorrectionRemoveDumpDetails(false);
+            setCorrectionReason("");
+            setError(null);
+          }}
+          className={`${secondaryButton} w-full`}
+        >
+          Back
+        </button>
+      </form>
+    );
+  }
+
   if (reviewing) {
     const linkedJob = reviewing.appointmentId
       ? (jobs.find((job) => job.id === reviewing.appointmentId) ?? null)
       : null;
+    const reviewShowsDumpDetails = Boolean(
+      dumpTicketsEnabled &&
+        !reviewNotScaleTicket &&
+        (reviewing.dumpDetails ||
+          reviewCategoryId === "dump_fees" ||
+          reviewing.allocations.some(
+            (allocation) => allocation.categoryId === "dump_fees",
+          )),
+    );
     return (
       <div className={`${cardClass} space-y-4`}>
         <div>
@@ -3251,6 +4637,17 @@ function HistoryView({
             Submitted by {reviewing.submitter?.name ?? "Unknown"} for{" "}
             {reviewing.purchaseDate}.
           </p>
+          {reviewing.dumpDetails ? (
+            <p className="mt-1 text-sm font-semibold text-cyan-100">
+              {reviewing.dumpDetails.weightStatus === "confirmed" &&
+              reviewing.dumpDetails.netWeightPounds
+                ? formatExpenseDumpWeight(reviewing.dumpDetails.netWeightPounds)
+                : "Net weight unreadable"}
+              {reviewing.dumpDetails.material
+                ? ` · ${reviewing.dumpDetails.material}`
+                : ""}
+            </p>
+          ) : null}
         </div>
         {reviewing.receipt ? (
           <a
@@ -3287,6 +4684,38 @@ function HistoryView({
             </p>
           ) : null}
         </label>
+        {dumpTicketsEnabled && reviewing.dumpDetails ? (
+          <div className="rounded-xl border border-cyan-300/25 bg-cyan-300/[0.06] p-3">
+            <p className="text-sm font-semibold text-cyan-100">
+              Scale-ticket classification
+            </p>
+            <label className="mt-2 flex min-h-11 items-center gap-3 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm text-slate-200">
+              <input
+                type="checkbox"
+                checked={reviewNotScaleTicket}
+                onChange={(event) =>
+                  setReviewNotScaleTicket(event.target.checked)
+                }
+                className={`${focusRing} size-5 rounded border-white/20 bg-slate-950`}
+              />
+              <span>This is not a scale ticket</span>
+            </label>
+            {reviewNotScaleTicket ? (
+              <p className="mt-2 text-xs font-semibold text-amber-100">
+                Approval will remove the draft weight details. Review the
+                category before approving.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        {reviewShowsDumpDetails ? (
+          <DumpTicketFields
+            draft={reviewDumpDetails}
+            onChange={setReviewDumpDetails}
+            required={Boolean(reviewing.dumpDetails)}
+            attentionFields={[]}
+          />
+        ) : null}
         <details className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
           <summary
             className={`${focusRing} flex min-h-11 cursor-pointer items-center text-sm font-semibold text-slate-200`}
@@ -3392,13 +4821,16 @@ function HistoryView({
           ) : null}
         </details>
         <label className="block">
-          <FieldLabel>Reason (required to reject)</FieldLabel>
+          <FieldLabel>
+            Review note (required to reject or approve a matching ticket)
+          </FieldLabel>
           <textarea
             value={reason}
             onChange={(event) => setReason(event.target.value)}
             rows={3}
             maxLength={500}
             className={controlClass}
+            placeholder="Explain a rejection or why a matching ticket is valid"
           />
         </label>
         {error ? <StatusNotice tone="error" message={error} /> : null}
@@ -3425,6 +4857,8 @@ function HistoryView({
             setReviewing(null);
             setReason("");
             setReviewCategoryId("");
+            setReviewDumpDetails(emptyExpenseDumpDetailsDraft());
+            setReviewNotScaleTicket(false);
             setReviewCoveredByFixedCostSeriesId("");
             setLockVendorRule(false);
             setError(null);
@@ -3497,7 +4931,7 @@ function HistoryView({
             onChange={(event) => setFilter(event.target.value)}
             className={controlClass}
           >
-            {historyFilters.map(([value, label]) => (
+            {visibleHistoryFilters.map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
               </option>
@@ -3516,104 +4950,263 @@ function HistoryView({
           : `${rows.length} expense entries loaded`}
       </div>
       {error ? <StatusNotice tone="error" message={error} /> : null}
-      {rows.map((row) => (
-        <article key={row.id} className={cardClass}>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-lg font-bold">
-                {formatExpenseMoney(row.amountCents)}
+      {rows.map((row) => {
+        const displayStatus = expenseHistoryDisplayStatus(
+          row.lifecycleStatus,
+          row.reviewStatus,
+        );
+        const canCorrectDumpWeight = expenseHistoryCanCorrectDumpWeight(
+          row,
+          canApprove && dumpTicketsEnabled,
+        );
+        const correctionLabel = expenseHistoryCorrectionLabel(row);
+        return (
+          <article key={row.id} className={cardClass}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-lg font-bold">
+                  {formatExpenseMoney(row.amountCents)}
+                </p>
+                <p className="mt-0.5 truncate text-sm font-semibold text-slate-200">
+                  {row.category}
+                  {row.vendor ? ` · ${row.vendor}` : ""}
+                </p>
+              </div>
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-slate-900 px-2 py-1 text-[11px] font-bold capitalize text-slate-200">
+                {displayStatus === "pending" ? (
+                  <Clock3 aria-hidden="true" className="size-3" />
+                ) : displayStatus === "approved" ? (
+                  <CheckCircle2 aria-hidden="true" className="size-3" />
+                ) : (
+                  <CircleAlert aria-hidden="true" className="size-3" />
+                )}
+                {displayStatus}
+              </span>
+            </div>
+            {correctionLabel ? (
+              <p className="mt-2 text-xs font-semibold text-cyan-100">
+                {correctionLabel}
               </p>
-              <p className="mt-0.5 truncate text-sm font-semibold text-slate-200">
-                {row.category}
-                {row.vendor ? ` · ${row.vendor}` : ""}
-              </p>
-            </div>
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-slate-900 px-2 py-1 text-[11px] font-bold capitalize text-slate-200">
-              {row.reviewStatus === "pending" ? (
-                <Clock3 aria-hidden="true" className="size-3" />
-              ) : row.reviewStatus === "approved" ? (
-                <CheckCircle2 aria-hidden="true" className="size-3" />
-              ) : (
-                <CircleAlert aria-hidden="true" className="size-3" />
-              )}
-              {row.reviewStatus ?? row.lifecycleStatus}
-            </span>
-          </div>
-          <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <div>
-              <dt className="text-slate-400">Date</dt>
-              <dd className="mt-0.5 text-slate-300">{row.purchaseDate}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-400">Submitted by</dt>
-              <dd className="mt-0.5 truncate text-slate-300">
-                {row.submitter?.name ?? "Legacy entry"}
-              </dd>
-            </div>
-            {row.coveredByFixedCostSeriesId ? (
-              <div className="col-span-2">
-                <dt className="text-slate-400">Overview</dt>
-                <dd className="mt-0.5 font-semibold text-cyan-100">
-                  Excluded from Overview — covered by{" "}
-                  {row.coveredByFixedCostName ?? "a fixed monthly cost"}
+            ) : null}
+            <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <dt className="text-slate-400">Date</dt>
+                <dd className="mt-0.5 text-slate-300">{row.purchaseDate}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-400">Submitted by</dt>
+                <dd className="mt-0.5 truncate text-slate-300">
+                  {row.submitter?.name ?? "Legacy entry"}
                 </dd>
               </div>
+              {row.dumpDetails ||
+              row.categoryId === "dump_fees" ||
+              row.allocations.some(
+                (allocation) => allocation.categoryId === "dump_fees",
+              ) ? (
+                <div className="col-span-2">
+                  <dt className="text-slate-400">Dump weight</dt>
+                  <dd className="mt-0.5 font-semibold text-cyan-100">
+                    {row.dumpDetails?.weightStatus === "confirmed" &&
+                    row.dumpDetails.netWeightPounds
+                      ? formatExpenseDumpWeight(row.dumpDetails.netWeightPounds)
+                      : row.dumpDetails?.weightStatus === "unreadable"
+                        ? "Net weight unreadable"
+                        : "Not recorded"}
+                    {row.dumpDetails?.material
+                      ? ` · ${row.dumpDetails.material}`
+                      : ""}
+                  </dd>
+                </div>
+              ) : null}
+              {row.coveredByFixedCostSeriesId ? (
+                <div className="col-span-2">
+                  <dt className="text-slate-400">Overview</dt>
+                  <dd className="mt-0.5 font-semibold text-cyan-100">
+                    Excluded from Overview — covered by{" "}
+                    {row.coveredByFixedCostName ?? "a fixed monthly cost"}
+                  </dd>
+                </div>
+              ) : null}
+              <div>
+                <dt className="text-slate-400">Paid by</dt>
+                <dd className="mt-0.5 text-slate-300">
+                  {row.payerType === "personal"
+                    ? (row.paidByMember?.name ?? "Employee-paid")
+                    : "Company"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-slate-400">Reimbursement</dt>
+                <dd className="mt-0.5 capitalize text-slate-300">
+                  {row.reimbursement?.status?.replaceAll("_", " ") ?? "None"}
+                </dd>
+              </div>
+            </dl>
+            {row.reviewReason ? (
+              <p className="mt-3 rounded-lg border border-white/10 bg-slate-950 p-2 text-xs leading-5 text-slate-300">
+                {row.reviewReason}
+              </p>
             ) : null}
-            <div>
-              <dt className="text-slate-400">Paid by</dt>
-              <dd className="mt-0.5 text-slate-300">
-                {row.payerType === "personal"
-                  ? (row.paidByMember?.name ?? "Employee-paid")
-                  : "Company"}
-              </dd>
+            {row.dumpDetails ? (
+              <details className="mt-3 rounded-lg border border-white/10 bg-slate-950/40 p-3">
+                <summary
+                  className={`${focusRing} flex min-h-11 cursor-pointer items-center text-sm font-semibold text-cyan-100`}
+                >
+                  Scale ticket details
+                </summary>
+                <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-white/10 pt-3 text-xs">
+                  {row.dumpDetails.facilityName ? (
+                    <div className="col-span-2">
+                      <dt className="text-slate-500">Facility</dt>
+                      <dd className="mt-1 break-words text-slate-200">
+                        {row.dumpDetails.facilityName}
+                      </dd>
+                    </div>
+                  ) : null}
+                  {row.dumpDetails.ticketNumber ? (
+                    <div>
+                      <dt className="text-slate-500">Ticket number</dt>
+                      <dd className="mt-1 break-words text-slate-200">
+                        {row.dumpDetails.ticketNumber}
+                      </dd>
+                    </div>
+                  ) : null}
+                  {row.dumpDetails.material ? (
+                    <div>
+                      <dt className="text-slate-500">Material</dt>
+                      <dd className="mt-1 break-words text-slate-200">
+                        {row.dumpDetails.material}
+                      </dd>
+                    </div>
+                  ) : null}
+                  {row.dumpDetails.grossWeightPounds !== null ? (
+                    <div>
+                      <dt className="text-slate-500">Gross weight</dt>
+                      <dd className="mt-1 text-slate-200">
+                        {expenseWeightFormatter.format(
+                          row.dumpDetails.grossWeightPounds,
+                        )}{" "}
+                        lb
+                      </dd>
+                    </div>
+                  ) : null}
+                  {row.dumpDetails.tareWeightPounds !== null ? (
+                    <div>
+                      <dt className="text-slate-500">Tare weight</dt>
+                      <dd className="mt-1 text-slate-200">
+                        {expenseWeightFormatter.format(
+                          row.dumpDetails.tareWeightPounds,
+                        )}{" "}
+                        lb
+                      </dd>
+                    </div>
+                  ) : null}
+                  <div>
+                    <dt className="text-slate-500">Net weight</dt>
+                    <dd className="mt-1 text-slate-200">
+                      {row.dumpDetails.weightStatus === "confirmed" &&
+                      row.dumpDetails.netWeightPounds
+                        ? formatExpenseDumpWeight(
+                            row.dumpDetails.netWeightPounds,
+                          )
+                        : "Unreadable"}
+                    </dd>
+                  </div>
+                  {row.dumpDetails.billedWeightMilliTons !== null ? (
+                    <div>
+                      <dt className="text-slate-500">Billed weight</dt>
+                      <dd className="mt-1 text-slate-200">
+                        {formatExpenseDumpTons(
+                          row.dumpDetails.billedWeightMilliTons,
+                        )}
+                      </dd>
+                    </div>
+                  ) : null}
+                  {row.dumpDetails.unitRateCentsPerTon !== null ? (
+                    <div>
+                      <dt className="text-slate-500">Unit rate</dt>
+                      <dd className="mt-1 text-slate-200">
+                        {formatExpenseMoney(
+                          row.dumpDetails.unitRateCentsPerTon,
+                        )}{" "}
+                        / ton
+                      </dd>
+                    </div>
+                  ) : null}
+                  {row.dumpDetails.confirmedBy ||
+                  row.dumpDetails.confirmedAt ? (
+                    <div className="col-span-2">
+                      <dt className="text-slate-500">Weight confirmation</dt>
+                      <dd className="mt-1 text-slate-200">
+                        {[
+                          row.dumpDetails.confirmedBy?.name,
+                          formatExpenseDumpConfirmation(
+                            row.dumpDetails.confirmedAt,
+                          ),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </details>
+            ) : null}
+            <div className="mt-3 flex gap-2">
+              {row.receipt ? (
+                <a
+                  href={expenseHistoryReceiptHref(row) ?? "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={`${secondaryButton} flex flex-1 items-center justify-center`}
+                >
+                  Receipt
+                </a>
+              ) : null}
+              {canCorrectDumpWeight ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCorrectingDump(row);
+                    setCorrectionDumpDetails(
+                      expenseDumpDetailsDraft(row.dumpDetails),
+                    );
+                    setCorrectionRemoveDumpDetails(false);
+                    setCorrectionReason("");
+                    setError(null);
+                    setSuccess(null);
+                  }}
+                  className={`${secondaryButton} flex-1`}
+                >
+                  {row.dumpDetails ? "Correct weight" : "Add weight"}
+                </button>
+              ) : null}
+              {canApprove && row.reviewStatus === "pending" ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReviewing(row);
+                    setReviewCategoryId(row.categoryId ?? "");
+                    setReviewDumpDetails(
+                      expenseDumpDetailsDraft(row.dumpDetails),
+                    );
+                    setReviewNotScaleTicket(false);
+                    setReviewCoveredByFixedCostSeriesId(
+                      row.coveredByFixedCostSeriesId ?? "",
+                    );
+                    setLockVendorRule(false);
+                    setError(null);
+                  }}
+                  className={`${secondaryButton} flex-1`}
+                >
+                  Review
+                </button>
+              ) : null}
             </div>
-            <div>
-              <dt className="text-slate-400">Reimbursement</dt>
-              <dd className="mt-0.5 capitalize text-slate-300">
-                {row.reimbursement?.status?.replaceAll("_", " ") ?? "None"}
-              </dd>
-            </div>
-          </dl>
-          {row.reviewReason ? (
-            <p className="mt-3 rounded-lg border border-white/10 bg-slate-950 p-2 text-xs leading-5 text-slate-300">
-              {row.reviewReason}
-            </p>
-          ) : null}
-          <div className="mt-3 flex gap-2">
-            {row.receipt ? (
-              <a
-                href={
-                  row.receipt.captureId
-                    ? `/api/mobile/expenses/captures/${encodeURIComponent(row.receipt.captureId)}/content`
-                    : `/api/mobile/expenses/${encodeURIComponent(row.id)}/receipt`
-                }
-                target="_blank"
-                rel="noreferrer"
-                className={`${secondaryButton} flex flex-1 items-center justify-center`}
-              >
-                Receipt
-              </a>
-            ) : null}
-            {canApprove && row.reviewStatus === "pending" ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setReviewing(row);
-                  setReviewCategoryId(row.categoryId ?? "");
-                  setReviewCoveredByFixedCostSeriesId(
-                    row.coveredByFixedCostSeriesId ?? "",
-                  );
-                  setLockVendorRule(false);
-                  setError(null);
-                }}
-                className={`${secondaryButton} flex-1`}
-              >
-                Review
-              </button>
-            ) : null}
-          </div>
-        </article>
-      ))}
+          </article>
+        );
+      })}
       {historyHasMore ? (
         <button
           type="button"
@@ -3667,6 +5260,9 @@ export function MobileSpendV2({
     mondayForDateKey(easternDateKey()),
   );
   const [submitting, setSubmitting] = React.useState(false);
+  const [manualDuplicateRisk, setManualDuplicateRisk] = React.useState<
+    "scale_ticket" | null
+  >(null);
   const [notice, setNotice] = React.useState<{
     message: string;
     tone: "error" | "success";
@@ -3690,6 +5286,7 @@ export function MobileSpendV2({
   const fixedCostsEnabled = Boolean(
     canApprove && canViewOverview && capabilities?.fixedCosts === true,
   );
+  const dumpTicketsEnabled = capabilities?.dumpTickets === true;
 
   React.useEffect(() => {
     let active = true;
@@ -3723,6 +5320,7 @@ export function MobileSpendV2({
           overview: value["overview"] === true,
           exactDuplicateReview: value["exactDuplicateReview"] === true,
           fixedCosts: value["fixedCosts"] === true,
+          dumpTickets: value["dumpTickets"] === true,
         });
       })
       .catch(
@@ -3867,18 +5465,28 @@ export function MobileSpendV2({
 
   const done = (message: string) => {
     setNotice({ tone: "success", message });
+    setManualDuplicateRisk(null);
     setWorkflow(null);
     setHistoryRefresh((value) => value + 1);
   };
 
-  const manualSubmit = async (body: SubmissionBody) => {
+  const manualSubmit = async (
+    body: SubmissionBody,
+    duplicateOverrideReason: string | null,
+  ) => {
     setSubmitting(true);
     setNotice(null);
+    const requestBody = {
+      ...body,
+      ...(duplicateOverrideReason
+        ? { exactDuplicateOverrideReason: duplicateOverrideReason }
+        : {}),
+    };
     try {
       const attempt = await getExpenseMutationAttempt({
         employeeId: employee.id,
         operation: "manual-expense-submit",
-        payload: body,
+        payload: requestBody,
       });
       const response = await fetch("/api/mobile/expenses/submissions", {
         method: "POST",
@@ -3887,10 +5495,13 @@ export function MobileSpendV2({
           "Content-Type": "application/json",
           "Idempotency-Key": attempt.idempotencyKey,
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(requestBody),
       });
       const payload = await jsonPayload(response);
       if (!response.ok) {
+        if (expenseConfirmationDuplicateKind(response.status, payload)) {
+          setManualDuplicateRisk("scale_ticket");
+        }
         setNotice({
           tone: "error",
           message: expenseErrorMessage(
@@ -3901,6 +5512,7 @@ export function MobileSpendV2({
         return;
       }
       await acknowledgeExpenseMutationAttempt(attempt);
+      setManualDuplicateRisk(null);
       const data = objectValue(payload?.["data"]);
       done(
         data?.["reviewStatus"] === "pending"
@@ -3924,6 +5536,7 @@ export function MobileSpendV2({
   const changeView = (next: SpendView) => {
     setView(next);
     setWorkflow(null);
+    setManualDuplicateRisk(null);
     setNotice(null);
   };
 
@@ -3980,6 +5593,7 @@ export function MobileSpendV2({
             missingYesterday={missingYesterday}
             onChoose={(choice) => {
               if (choice === "ads") setAdDate(yesterday);
+              setManualDuplicateRisk(null);
               setWorkflow(choice);
               setNotice(null);
             }}
@@ -3995,6 +5609,7 @@ export function MobileSpendV2({
             canApprove={canApprove}
             allowReimbursement={reimbursementEnabled}
             fixedCostCoverageEnabled={fixedCostsEnabled}
+            dumpTicketsEnabled={dumpTicketsEnabled}
             onRow={setActiveCapture}
             onDone={done}
             onBack={() => setWorkflow(null)}
@@ -4017,10 +5632,21 @@ export function MobileSpendV2({
               canApprove={canApprove}
               allowReimbursement={reimbursementEnabled}
               fixedCostCoverageEnabled={fixedCostsEnabled}
+              dumpTicketsEnabled={dumpTicketsEnabled}
+              duplicateRisk={manualDuplicateRisk ? "exact" : null}
               submitting={submitting}
               submitLabel={canApprove ? "Post expense" : "Submit for approval"}
-              onBack={() => setWorkflow(null)}
-              onSubmit={(body) => manualSubmit(body)}
+              onBack={() => {
+                setManualDuplicateRisk(null);
+                setWorkflow(null);
+              }}
+              onDumpIdentityChange={() => {
+                setManualDuplicateRisk(null);
+                setNotice(null);
+              }}
+              onSubmit={(body, duplicateOverrideReason) =>
+                manualSubmit(body, duplicateOverrideReason)
+              }
             />
           </div>
         ) : (
@@ -4053,6 +5679,7 @@ export function MobileSpendV2({
           allowReimbursement={reimbursementEnabled}
           exactDuplicateReviewEnabled={exactDuplicateReviewEnabled}
           fixedCostCoverageEnabled={fixedCostsEnabled}
+          dumpTicketsEnabled={dumpTicketsEnabled}
           refreshToken={historyRefresh}
         />
       ) : null}

@@ -95,6 +95,13 @@ export type ExpenseOverviewFixedCostInput = {
   state: "active" | "ended";
 };
 
+export type ExpenseOverviewDumpDetailInput = {
+  expenseId: string;
+  weightStatus: "confirmed" | "unreadable";
+  /** Canonical US-pound measure. Null is allowed only when explicitly unreadable. */
+  netWeightPounds: number | null;
+};
+
 export type ExpenseOverviewInput = {
   /** Exact Eastern Monday in YYYY-MM-DD form. */
   weekStart: string;
@@ -104,6 +111,8 @@ export type ExpenseOverviewInput = {
   payrollAdjustments: readonly ExpenseOverviewPayrollAdjustmentInput[];
   payoutSnapshots: readonly ExpenseOverviewPayoutSnapshotInput[];
   dailyAdEntries: readonly ExpenseOverviewDailyAdInput[];
+  /** Human-confirmed dump-ticket facts; raw AI extraction is never reported. */
+  dumpDetails?: readonly ExpenseOverviewDumpDetailInput[];
   /** Append-only effective-dated monthly overhead facts. */
   fixedCosts?: readonly ExpenseOverviewFixedCostInput[];
   /** Pending submissions whose purchase date falls in the selected week. */
@@ -158,6 +167,21 @@ export type ExpenseOverviewAdvertisingBreakdown = {
   unattributedCents: number;
 };
 
+export type ExpenseOverviewDumpActivity = {
+  /** All positive Dump Fees allocations included in the selected period. */
+  dumpFeeCents: number;
+  /** Posted, approved expenses with a positive Dump Fees allocation. */
+  ticketCount: number;
+  /** Tickets whose human-confirmed net weight is available. */
+  weightedTicketCount: number;
+  /** Sum of confirmed net weights in US pounds. */
+  netWeightPounds: number;
+  /** Effective final dump cost per US short ton for weighted tickets only. */
+  averageCostPerTonCents: number | null;
+  /** Dump expenses omitted from weight-based metrics because weight is absent. */
+  missingWeightCount: number;
+};
+
 export type ExpenseOverviewPeriodMetrics = {
   revenueCents: number;
   ordinaryExpensesCents: number;
@@ -166,6 +190,7 @@ export type ExpenseOverviewPeriodMetrics = {
   totalExpensesCents: number;
   operatingProfitCents: number;
   expenseRatioPercent: number | null;
+  dumpActivity: ExpenseOverviewDumpActivity;
 };
 
 export type ExpenseOverviewPercentChangeState =
@@ -382,6 +407,61 @@ function percent(numerator: number, denominator: number): number | null {
 function percentChange(current: number, prior: number): number | null {
   if (prior === 0) return null;
   return Math.round(((current - prior) / Math.abs(prior)) * 10_000) / 100;
+}
+
+function dumpDetailsByExpense(
+  input: ExpenseOverviewInput,
+): Map<string, ExpenseOverviewDumpDetailInput> {
+  const byExpense = new Map<string, ExpenseOverviewDumpDetailInput>();
+  for (const detail of input.dumpDetails ?? []) {
+    const expenseId = detail.expenseId.trim();
+    if (!expenseId) {
+      throw new TypeError("Dump-ticket facts require an expense ID.");
+    }
+    if (byExpense.has(expenseId)) {
+      throw new TypeError(
+        `Duplicate dump-ticket facts for expense ${expenseId}.`,
+      );
+    }
+    if (detail.weightStatus === "confirmed") {
+      if (
+        !Number.isSafeInteger(detail.netWeightPounds) ||
+        (detail.netWeightPounds ?? 0) <= 0
+      ) {
+        throw new TypeError(
+          `Confirmed dump-ticket weight for expense ${expenseId} must be positive pounds.`,
+        );
+      }
+    } else if (
+      detail.weightStatus !== "unreadable" ||
+      detail.netWeightPounds !== null
+    ) {
+      throw new TypeError(
+        `Unreadable dump-ticket weight for expense ${expenseId} must be null.`,
+      );
+    }
+    byExpense.set(expenseId, { ...detail, expenseId });
+  }
+  return byExpense;
+}
+
+/** Round an effective final cost to the nearest cent per US short ton. */
+function costPerShortTonCents(
+  trackedDumpFeeCents: number,
+  netWeightPounds: number,
+): number | null {
+  if (netWeightPounds === 0) return null;
+  assertSafeCents(trackedDumpFeeCents, "tracked dump fees", {
+    nonnegative: true,
+  });
+  assertCount(netWeightPounds, "dump net weight pounds");
+  const numerator = BigInt(trackedDumpFeeCents) * 2_000n;
+  const denominator = BigInt(netWeightPounds);
+  const rounded = (numerator + denominator / 2n) / denominator;
+  if (rounded > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError("Dump cost per ton exceeds the safe integer range.");
+  }
+  return Number(rounded);
 }
 
 function resolveAllocations(
@@ -816,6 +896,12 @@ function calculatePeriod(
   let googleCents = 0;
   let coveredExpenseCount = 0;
   let coveredExpenseAmountCents = 0;
+  let dumpFeeCents = 0;
+  let trackedDumpFeeCents = 0;
+  let dumpTicketCount = 0;
+  let weightedDumpTicketCount = 0;
+  let dumpNetWeightPounds = 0;
+  const dumpDetails = dumpDetailsByExpense(input);
   for (const expense of input.expenses) {
     if (
       expense.lifecycleStatus !== "posted" ||
@@ -829,13 +915,14 @@ function calculatePeriod(
     }
     const date = easternDateKey(expense.purchaseDate, "expense purchaseDate");
     if (!inPeriod(date, period)) continue;
+    const allocations = resolveAllocations(expense);
+    let coveredByFixedCost = false;
     if (expense.coveredByFixedCostSeriesId) {
       if (expense.reviewStatus !== "approved") {
         throw new TypeError(
           "Expenses covered by fixed costs must be owner-approved.",
         );
       }
-      const allocations = resolveAllocations(expense);
       const schedule = fixedCostEffectiveOnDate(
         input,
         expense.coveredByFixedCostSeriesId,
@@ -859,9 +946,45 @@ function calculatePeriod(
         expense.amountCents,
         "fixed-cost covered evidence total",
       );
-      continue;
+      coveredByFixedCost = true;
     }
-    const allocations = resolveAllocations(expense);
+    let expenseDumpFeeCents = 0;
+    for (const allocation of allocations) {
+      if (allocation.category.id === "dump_fees") {
+        expenseDumpFeeCents = addCents(
+          expenseDumpFeeCents,
+          allocation.amountCents,
+          `expense ${expense.id} dump allocation`,
+        );
+      }
+    }
+    if (expenseDumpFeeCents > 0) {
+      dumpFeeCents = addCents(
+        dumpFeeCents,
+        expenseDumpFeeCents,
+        "dump fee total",
+      );
+      dumpTicketCount += 1;
+      const detail = dumpDetails.get(expense.id);
+      if (
+        detail?.weightStatus === "confirmed" &&
+        detail.netWeightPounds !== null
+      ) {
+        trackedDumpFeeCents = addCents(
+          trackedDumpFeeCents,
+          expenseDumpFeeCents,
+          "weighted dump fee total",
+        );
+        dumpNetWeightPounds = addCents(
+          dumpNetWeightPounds,
+          detail.netWeightPounds,
+          "dump net weight pounds",
+        );
+        weightedDumpTicketCount += 1;
+      }
+    }
+    if (coveredByFixedCost) continue;
+
     ordinaryExpensesCents = addCents(
       ordinaryExpensesCents,
       expense.amountCents,
@@ -968,6 +1091,17 @@ function calculatePeriod(
       totalExpensesCents,
       operatingProfitCents,
       expenseRatioPercent: percent(totalExpensesCents, revenueCents),
+      dumpActivity: {
+        dumpFeeCents,
+        ticketCount: dumpTicketCount,
+        weightedTicketCount: weightedDumpTicketCount,
+        netWeightPounds: dumpNetWeightPounds,
+        averageCostPerTonCents: costPerShortTonCents(
+          trackedDumpFeeCents,
+          dumpNetWeightPounds,
+        ),
+        missingWeightCount: dumpTicketCount - weightedDumpTicketCount,
+      },
     },
     categoryTotals,
     labor: laborResult.labor,

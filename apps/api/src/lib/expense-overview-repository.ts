@@ -6,6 +6,7 @@ import {
   dailyAdSpend,
   expenseAllocations,
   expenseCategories,
+  expenseDumpDetails,
   expenseFixedCostVersions,
   expenses,
   payoutRunAdjustments,
@@ -57,6 +58,11 @@ export type ExpenseOverviewRepositoryRows = {
     categoryId: string;
     categoryName: string;
     expenseCategoryNeedsReview: boolean;
+  }>;
+  dumpDetails: Array<{
+    expenseId: string;
+    weightStatus: "confirmed" | "unreadable";
+    netWeightPounds: number | null;
   }>;
   commissions: Array<{
     appointmentId: string;
@@ -456,6 +462,7 @@ export function mapExpenseOverviewRows(input: {
       businessDate: entry.businessDate,
       amountCents: entry.amountCents,
     })),
+    dumpDetails: input.rows.dumpDetails.map((detail) => ({ ...detail })),
     fixedCosts: input.rows.fixedCostVersions.map((fixedCost) => ({
       seriesId: fixedCost.seriesId,
       version: fixedCost.version,
@@ -553,6 +560,22 @@ export async function loadExpenseOverviewInput(
         expenseCategories,
         eq(expenseAllocations.categoryId, expenseCategories.id),
       )
+      .where(
+        and(
+          isNull(expenses.reversalOfExpenseId),
+          gte(expenses.paidAt, window.priorStartAt),
+          lt(expenses.paidAt, window.currentEndAtExclusive),
+        ),
+      );
+
+    const dumpDetails = await tx
+      .select({
+        expenseId: expenseDumpDetails.expenseId,
+        weightStatus: expenseDumpDetails.weightStatus,
+        netWeightPounds: expenseDumpDetails.netWeightPounds,
+      })
+      .from(expenseDumpDetails)
+      .innerJoin(expenses, eq(expenseDumpDetails.expenseId, expenses.id))
       .where(
         and(
           isNull(expenses.reversalOfExpenseId),
@@ -696,6 +719,7 @@ export async function loadExpenseOverviewInput(
       jobs,
       expenses: expenseRows,
       allocations,
+      dumpDetails,
       commissions: commissions.map((commission) => ({
         ...commission,
         // The joined time range proves this is non-null; keep the assertion at

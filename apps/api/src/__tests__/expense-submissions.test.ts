@@ -1,7 +1,9 @@
 import {
   EXPENSE_BUSINESS_TIME_ZONE,
+  ExpenseDumpDetailsSchema,
   ExpenseReviewDecisionSchema,
   expenseBusinessDateToTimestamp,
+  parseExpenseSubmissionRequest,
   parseExpenseSubmission,
 } from "@/lib/expense-submissions";
 import { assertFixedCostCoverageLinkCanBeEstablished } from "@/lib/expense-fixed-cost-coverage";
@@ -37,6 +39,24 @@ describe("expense submissions", () => {
     expect(result.allocations).toEqual([
       { categoryId: "fuel", amountCents: 12_345 },
     ]);
+  });
+
+  it("separates and bounds the owner duplicate override from manual expense fields", () => {
+    expect(
+      parseExpenseSubmissionRequest({
+        ...validSubmission(),
+        exactDuplicateOverrideReason: "  Separate verified charge  ",
+      }),
+    ).toMatchObject({
+      exactDuplicateOverrideReason: "Separate verified charge",
+      submission: { amountCents: 12_345 },
+    });
+    expect(() =>
+      parseExpenseSubmissionRequest({
+        ...validSubmission(),
+        exactDuplicateOverrideReason: 123,
+      }),
+    ).toThrow("must be text");
   });
 
   it("accepts a nullable fixed-cost coverage link while preserving the implicit allocation", () => {
@@ -184,6 +204,77 @@ describe("expense submissions", () => {
     ).toBe("personal");
   });
 
+  it("preserves human-reviewed scale-ticket facts without deriving weight", () => {
+    const result = parseExpenseSubmission(
+      validSubmission({
+        categoryId: "dump_fees",
+        dumpDetails: {
+          weightStatus: "confirmed",
+          facilityName: "Speedway Transfer Station",
+          ticketNumber: "697723",
+          material: "Construction & Demo",
+          grossWeightPounds: 15_780,
+          tareWeightPounds: 12_880,
+          netWeightPounds: 2_900,
+          billedWeightMilliTons: 1_450,
+          unitRateCentsPerTon: 5_000,
+          reviewed: true,
+        },
+      }),
+    );
+
+    expect(result.dumpDetails).toMatchObject({
+      weightStatus: "confirmed",
+      netWeightPounds: 2_900,
+      billedWeightMilliTons: 1_450,
+      reviewed: true,
+    });
+  });
+
+  it("allows explicit zero scale values and preserves readable facts when net weight is unreadable", () => {
+    expect(
+      ExpenseDumpDetailsSchema.parse({
+        weightStatus: "unreadable",
+        facilityName: "Transfer station",
+        ticketNumber: null,
+        material: null,
+        grossWeightPounds: 5_000,
+        tareWeightPounds: 0,
+        netWeightPounds: null,
+        billedWeightMilliTons: 0,
+        unitRateCentsPerTon: 0,
+        reviewed: true,
+      }),
+    ).toMatchObject({
+      grossWeightPounds: 5_000,
+      tareWeightPounds: 0,
+      netWeightPounds: null,
+      billedWeightMilliTons: 0,
+      unitRateCentsPerTon: 0,
+    });
+  });
+
+  it.each([
+    ["unreviewed", { weightStatus: "confirmed", netWeightPounds: 1_000 }],
+    ["confirmed without net", { weightStatus: "confirmed", reviewed: true }],
+    [
+      "unreadable with net",
+      { weightStatus: "unreadable", netWeightPounds: 1_000, reviewed: true },
+    ],
+    [
+      "gross below tare",
+      {
+        weightStatus: "confirmed",
+        grossWeightPounds: 900,
+        tareWeightPounds: 1_000,
+        netWeightPounds: 100,
+        reviewed: true,
+      },
+    ],
+  ])("rejects %s scale-ticket confirmation", (_label, dumpDetails) => {
+    expectInvalid(validSubmission({ categoryId: "dump_fees", dumpDetails }));
+  });
+
   it.each(["2026-02-30", "1999-12-31", "2999-01-01", "08/20/2026"])(
     "rejects unsupported purchase date %s",
     (purchaseDate) => {
@@ -239,6 +330,28 @@ describe("expense submissions", () => {
         decision: "reject",
         reason: "Wrong total",
         coveredByFixedCostSeriesId: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      ExpenseReviewDecisionSchema.parse({
+        decision: "approve",
+        reason: null,
+        scaleTicketDisposition: "not_scale_ticket",
+      }).scaleTicketDisposition,
+    ).toBe("not_scale_ticket");
+    expect(
+      ExpenseReviewDecisionSchema.safeParse({
+        decision: "approve",
+        reason: null,
+        scaleTicketDisposition: "not_scale_ticket",
+        dumpDetails: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      ExpenseReviewDecisionSchema.safeParse({
+        decision: "reject",
+        reason: "Not a scale ticket",
+        scaleTicketDisposition: "not_scale_ticket",
       }).success,
     ).toBe(false);
   });

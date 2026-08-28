@@ -5,6 +5,7 @@ import {
   ExpenseAllocationSetSchema,
   ExpenseReceiptExtractionSchema,
   normalizeReceiptVendor,
+  parseStoredExpenseReceiptExtraction,
   selectExpenseCategory,
   validateExpenseAllocations,
   validateExpenseReceiptExtraction,
@@ -20,6 +21,8 @@ function validExtraction(
   overrides: Partial<ExpenseReceiptExtraction> = {},
 ): ExpenseReceiptExtraction {
   return {
+    documentType: "standard_receipt",
+    dumpTicket: null,
     vendor: "Stonegate Fuel",
     transactionDate: "2026-08-24",
     totalCents: 7_543,
@@ -32,6 +35,7 @@ function validExtraction(
     ],
     warnings: [],
     fieldConfidence: {
+      documentType: 0.99,
       vendor: 0.99,
       transactionDate: 0.98,
       totalCents: 0.99,
@@ -64,6 +68,8 @@ describe("expense receipt extraction contract", () => {
 
   it("represents every missing value as null without inventing defaults", () => {
     const result = ExpenseReceiptExtractionSchema.parse({
+      documentType: "unknown",
+      dumpTicket: null,
       vendor: null,
       transactionDate: null,
       totalCents: null,
@@ -73,6 +79,7 @@ describe("expense receipt extraction contract", () => {
       lineItems: null,
       warnings: ["Receipt is partially obscured."],
       fieldConfidence: {
+        documentType: null,
         vendor: null,
         transactionDate: null,
         totalCents: null,
@@ -177,6 +184,93 @@ describe("expense receipt extraction contract", () => {
       issues: [{ field: "transactionDate" }],
     });
   });
+
+  it("accepts a horizontal scale ticket with exact, unit-safe weight facts", () => {
+    const extraction = ExpenseReceiptExtractionSchema.parse({
+      ...validExtraction(),
+      documentType: "scale_ticket",
+      dumpTicket: {
+        facilityName: "Speedway Transfer Station",
+        ticketNumber: "697723",
+        material: "Const & Demo",
+        grossWeightPounds: 15_780,
+        tareWeightPounds: 12_880,
+        netWeightPounds: 2_900,
+        billedWeightMilliTons: 1_450,
+        unitRateCentsPerTon: 5_000,
+        fieldConfidence: {
+          facilityName: 0.99,
+          ticketNumber: 0.99,
+          material: 0.97,
+          grossWeightPounds: 0.99,
+          tareWeightPounds: 0.99,
+          netWeightPounds: 0.99,
+          billedWeightMilliTons: 0.99,
+          unitRateCentsPerTon: 0.98,
+        },
+      },
+      vendor: "Capital Waste Services",
+      transactionDate: "2026-08-27",
+      totalCents: 9_141,
+      taxCents: 0,
+      paymentLastFour: null,
+      suggestedCategoryId: "dump_fees",
+      lineItems: null,
+      fieldConfidence: {
+        ...validExtraction().fieldConfidence,
+        documentType: 0.99,
+        transactionDate: 0.99,
+        totalCents: 0.99,
+        taxCents: 0.99,
+        paymentLastFour: null,
+        suggestedCategoryId: 0.99,
+        lineItems: null,
+      },
+    });
+
+    expect(extraction).toMatchObject({
+      vendor: "Capital Waste Services",
+      transactionDate: "2026-08-27",
+      totalCents: 9_141,
+      taxCents: 0,
+      paymentLastFour: null,
+      suggestedCategoryId: "dump_fees",
+      lineItems: null,
+    });
+    expect(extraction.dumpTicket).toMatchObject({
+      facilityName: "Speedway Transfer Station",
+      ticketNumber: "697723",
+      material: "Const & Demo",
+      grossWeightPounds: 15_780,
+      tareWeightPounds: 12_880,
+      netWeightPounds: 2_900,
+      billedWeightMilliTons: 1_450,
+      unitRateCentsPerTon: 5_000,
+    });
+  });
+
+  it("upgrades legacy stored extraction with unknown V2 facts without guessing", () => {
+    const current = validExtraction();
+    const {
+      documentType: _documentType,
+      dumpTicket: _dumpTicket,
+      fieldConfidence,
+      ...legacy
+    } = current;
+    const { documentType: _documentConfidence, ...legacyConfidence } =
+      fieldConfidence;
+
+    expect(
+      parseStoredExpenseReceiptExtraction({
+        ...legacy,
+        fieldConfidence: legacyConfidence,
+      }),
+    ).toMatchObject({
+      documentType: "unknown",
+      dumpTicket: null,
+      fieldConfidence: { documentType: null },
+    });
+  });
 });
 
 describe("expense receipt human-review semantics", () => {
@@ -266,6 +360,47 @@ describe("expense receipt human-review semantics", () => {
     expect(() =>
       buildExpenseReceiptReview(validExtraction(), Number.NaN),
     ).toThrow(RangeError);
+  });
+
+  it("flags conflicting printed scale weights without rejecting or rewriting them", () => {
+    const extraction = validExtraction({
+      documentType: "scale_ticket",
+      dumpTicket: {
+        facilityName: "Transfer Station",
+        ticketNumber: "T-100",
+        material: "Construction/Demo",
+        grossWeightPounds: 15_780,
+        tareWeightPounds: 12_880,
+        netWeightPounds: 2_800,
+        billedWeightMilliTons: 1_450,
+        unitRateCentsPerTon: 5_000,
+        fieldConfidence: {
+          facilityName: 0.99,
+          ticketNumber: 0.99,
+          material: 0.99,
+          grossWeightPounds: 0.99,
+          tareWeightPounds: 0.99,
+          netWeightPounds: 0.99,
+          billedWeightMilliTons: 0.99,
+          unitRateCentsPerTon: 0.99,
+        },
+      },
+      fieldConfidence: {
+        ...validExtraction().fieldConfidence,
+        documentType: 0.99,
+      },
+    });
+    const review = buildExpenseReceiptReview(extraction);
+
+    expect(review.fields.dumpTicket?.netWeightPounds).toMatchObject({
+      value: 2_800,
+      status: "check_this",
+      reason: "conflicting_evidence",
+    });
+    expect(review.fieldsToCheck).toContain("dumpTicket.netWeightPounds");
+    expect(review.warnings).toContain(
+      "The printed gross, tare, and net weights do not reconcile.",
+    );
   });
 });
 

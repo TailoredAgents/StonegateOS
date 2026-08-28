@@ -113,6 +113,70 @@ describe("expense receipt private-upload policy", () => {
     expect(verified.normalized?.bytes.byteLength).toBeGreaterThan(0);
   });
 
+  it("preserves landscape and EXIF-rotated receipt aspect ratios without cropping", async () => {
+    const portrait = await sharp({
+      create: {
+        width: 1_200,
+        height: 2_400,
+        channels: 3,
+        background: "#ffffff",
+      },
+    })
+      .jpeg()
+      .toBuffer();
+    const normalizedPortrait = await verifyAndNormalizeExpenseReceiptUpload({
+      bytes: portrait,
+      declaredContentType: "image/jpeg",
+      declaredByteLength: portrait.byteLength,
+    });
+    const portraitMetadata = await sharp(
+      normalizedPortrait.normalized!.bytes,
+    ).metadata();
+    expect(portraitMetadata).toMatchObject({ width: 1_024, height: 2_048 });
+
+    const landscape = await sharp({
+      create: {
+        width: 2_400,
+        height: 1_200,
+        channels: 3,
+        background: "#ffffff",
+      },
+    })
+      .jpeg()
+      .toBuffer();
+    const normalizedLandscape = await verifyAndNormalizeExpenseReceiptUpload({
+      bytes: landscape,
+      declaredContentType: "image/jpeg",
+      declaredByteLength: landscape.byteLength,
+    });
+    const landscapeMetadata = await sharp(
+      normalizedLandscape.normalized!.bytes,
+    ).metadata();
+    expect(landscapeMetadata).toMatchObject({ width: 2_048, height: 1_024 });
+
+    const rotated = await sharp({
+      create: {
+        width: 1_200,
+        height: 2_400,
+        channels: 3,
+        background: "#ffffff",
+      },
+    })
+      .withMetadata({ orientation: 6 })
+      .jpeg()
+      .toBuffer();
+    const normalizedRotated = await verifyAndNormalizeExpenseReceiptUpload({
+      bytes: rotated,
+      declaredContentType: "image/jpeg",
+      declaredByteLength: rotated.byteLength,
+    });
+    const rotatedMetadata = await sharp(
+      normalizedRotated.normalized!.bytes,
+    ).metadata();
+    expect(rotatedMetadata).toMatchObject({ width: 2_048, height: 1_024 });
+    expect(rotatedMetadata.orientation).toBeUndefined();
+  });
+
   it("rejects mismatched length, type, and digest", async () => {
     const pdf = Buffer.from("%PDF-1.7\nreceipt", "ascii");
     await expect(

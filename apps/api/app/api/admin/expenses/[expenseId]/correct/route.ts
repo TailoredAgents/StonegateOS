@@ -9,6 +9,7 @@ import {
 } from "@/lib/expense-lifecycle";
 import { createManagedExpenseCorrection } from "@/lib/expense-managed-lifecycle";
 import { assertGenericExpenseMutationAllowed } from "@/lib/expense-managed-mutation";
+import { isExpenseDumpTicketsEnabled } from "@/lib/expense-feature-flags";
 import { permissionMatches, resolvePermissionContext } from "@/lib/permissions";
 import {
   claimTeamMutationIdempotency,
@@ -75,7 +76,21 @@ export async function POST(
       requireReason: true,
       allowReceipt: false,
       allowFixedCostCoverage: true,
+      allowDumpDetails: true,
     });
+    if (!isExpenseDumpTicketsEnabled() && parsed.dumpDetails !== undefined) {
+      throw new TeamMutationFailure(
+        "provider_failed",
+        "Dump-ticket corrections are temporarily unavailable.",
+        {
+          status: 503,
+          retryable: false,
+          fieldErrors: {
+            dumpDetails: "Refresh the expense tracker and try again later.",
+          },
+        },
+      );
+    }
     const permissionContext = await resolvePermissionContext(request);
     const canManageFixedCostCoverage = permissionContext.permissions.some(
       (permission) => permissionMatches(permission, "financials.read"),
@@ -132,6 +147,7 @@ export async function POST(
         now,
         coveredByFixedCostSeriesId: parsed.coveredByFixedCostSeriesId,
         canManageFixedCostCoverage,
+        dumpDetails: parsed.dumpDetails,
       });
 
       const nextVersion = existing.version + 1;
@@ -183,6 +199,9 @@ export async function POST(
           replacementPaidAt: parsed.expense.paidAt.toISOString(),
           coveredByFixedCostSeriesId:
             managed.replacement.coveredByFixedCostSeriesId,
+          dumpDetailsRecorded: managed.dumpDetailsRecorded,
+          scaleTicketDuplicateOfExpenseId:
+            managed.scaleTicketDuplicateOfExpenseId,
         },
         metadata: {
           reasonLength: correctionReason.length,
@@ -195,6 +214,14 @@ export async function POST(
           reimbursementStatus: managed.reimbursementStatus,
           coveredByFixedCostSeriesId:
             managed.replacement.coveredByFixedCostSeriesId,
+          dumpDetailsAction:
+            parsed.dumpDetails === undefined
+              ? "preserved"
+              : parsed.dumpDetails === null
+                ? "removed"
+                : "replaced",
+          scaleTicketDuplicateOfExpenseId:
+            managed.scaleTicketDuplicateOfExpenseId,
         },
         committedAt: now,
       });
@@ -212,6 +239,9 @@ export async function POST(
           reimbursementStatus: managed.reimbursementStatus,
           coveredByFixedCostSeriesId:
             managed.replacement.coveredByFixedCostSeriesId,
+          dumpDetailsRecorded: managed.dumpDetailsRecorded,
+          scaleTicketDuplicateOfExpenseId:
+            managed.scaleTicketDuplicateOfExpenseId,
         },
         {
           auditEventId: audit.auditEventId,

@@ -4,6 +4,7 @@ import {
   reviewExpenseSubmissionInTransaction,
 } from "@/lib/expense-submissions";
 import { getDb } from "@/db";
+import { isExpenseDumpTicketsEnabled } from "@/lib/expense-feature-flags";
 import { permissionMatches, resolvePermissionContext } from "@/lib/permissions";
 import {
   claimTeamMutationIdempotency,
@@ -116,6 +117,7 @@ export async function POST(
         expectedVersion: version,
         decision: parsed.data,
         canManageFixedCostCoverage,
+        dumpTicketsEnabled: isExpenseDumpTicketsEnabled(),
       });
       const audit = await mutation.audit.insertSuccess(tx, {
         entityType: "expense",
@@ -132,6 +134,9 @@ export async function POST(
           categoryId: reviewed.categoryId,
           category: reviewed.category,
           coveredByFixedCostSeriesId: reviewed.coveredByFixedCostSeriesId,
+          dumpDetailsRecorded: reviewed.dumpDetailsRecorded,
+          scaleTicketDuplicateOfExpenseId:
+            reviewed.scaleTicketDuplicateOfExpenseId,
           version: reviewed.version,
         },
         metadata: {
@@ -141,6 +146,13 @@ export async function POST(
           vendorRuleLocked: parsed.data.lockVendorRule,
           reimbursementClaimId: reviewed.reimbursementClaimId,
           reimbursementStatus: reviewed.reimbursementStatus,
+          dumpDetailsReviewed: parsed.data.dumpDetails !== undefined,
+          dumpWeightStatus: parsed.data.dumpDetails?.weightStatus ?? null,
+          scaleTicketDisposition: parsed.data.scaleTicketDisposition ?? null,
+          humanScaleTicketClassificationOverridden:
+            parsed.data.scaleTicketDisposition === "not_scale_ticket",
+          scaleTicketDuplicateOfExpenseId:
+            reviewed.scaleTicketDuplicateOfExpenseId,
         },
       });
       const mutationResult = teamMutationSuccessResult(mutation, reviewed, {

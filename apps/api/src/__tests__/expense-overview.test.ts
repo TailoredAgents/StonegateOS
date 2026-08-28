@@ -884,6 +884,193 @@ describe("expense overview calculations", () => {
     expect(result.missingAdEntries).toEqual([]);
   });
 
+  it("reports dump weight and effective cost per ton without overstating partial coverage", () => {
+    const result = buildExpenseOverview(
+      baseInput({
+        expenses: [
+          {
+            id: "weighted-split-dump",
+            amountCents: 10_000,
+            purchaseDate: "2026-08-18",
+            lifecycleStatus: "posted",
+            reviewStatus: "approved",
+            source: "receipt_scan",
+            category: { id: "dump_fees", label: "Dump Fees" },
+            allocations: [
+              {
+                amountCents: 8_000,
+                category: { id: "dump_fees", label: "Dump Fees" },
+              },
+              {
+                amountCents: 2_000,
+                category: { id: "supplies", label: "Supplies" },
+              },
+            ],
+          },
+          {
+            id: "unweighted-dump",
+            amountCents: 6_000,
+            purchaseDate: "2026-08-19",
+            lifecycleStatus: "posted",
+            reviewStatus: "approved",
+            source: "receipt_scan",
+            category: { id: "dump_fees", label: "Dump Fees" },
+          },
+          {
+            id: "corrected-original",
+            amountCents: 50_000,
+            purchaseDate: "2026-08-20",
+            lifecycleStatus: "corrected",
+            reviewStatus: "approved",
+            source: "receipt_scan",
+            category: { id: "dump_fees", label: "Dump Fees" },
+          },
+          {
+            id: "prior-weighted-dump",
+            amountCents: 5_000,
+            purchaseDate: "2026-08-11",
+            lifecycleStatus: "posted",
+            reviewStatus: "approved",
+            source: "receipt_scan",
+            category: { id: "dump_fees", label: "Dump Fees" },
+          },
+        ],
+        dumpDetails: [
+          {
+            expenseId: "weighted-split-dump",
+            weightStatus: "confirmed",
+            netWeightPounds: 2_900,
+          },
+          {
+            expenseId: "unweighted-dump",
+            weightStatus: "unreadable",
+            netWeightPounds: null,
+          },
+          {
+            expenseId: "corrected-original",
+            weightStatus: "confirmed",
+            netWeightPounds: 9_000,
+          },
+          {
+            expenseId: "prior-weighted-dump",
+            weightStatus: "confirmed",
+            netWeightPounds: 2_000,
+          },
+        ],
+      }),
+    );
+
+    expect(result.dumpActivity).toEqual({
+      dumpFeeCents: 14_000,
+      ticketCount: 2,
+      weightedTicketCount: 1,
+      netWeightPounds: 2_900,
+      // Only the tracked $80 dump allocation is divided by 1.45 short tons.
+      averageCostPerTonCents: 5_517,
+      missingWeightCount: 1,
+    });
+    expect(result.priorWeek.dumpActivity).toEqual({
+      dumpFeeCents: 5_000,
+      ticketCount: 1,
+      weightedTicketCount: 1,
+      netWeightPounds: 2_000,
+      averageCostPerTonCents: 5_000,
+      missingWeightCount: 0,
+    });
+  });
+
+  it("keeps fixed-cost-covered dump evidence in operational activity without double-counting spend", () => {
+    const seriesId = "44444444-4444-4444-8444-444444444444";
+    const result = buildExpenseOverview(
+      baseInput({
+        expenses: [
+          {
+            id: "covered-dump-ticket",
+            amountCents: 31_000,
+            purchaseDate: "2026-08-20",
+            lifecycleStatus: "posted",
+            reviewStatus: "approved",
+            source: "receipt_scan",
+            category: { id: "dump_fees", label: "Dump Fees" },
+            coveredByFixedCostSeriesId: seriesId,
+          },
+        ],
+        dumpDetails: [
+          {
+            expenseId: "covered-dump-ticket",
+            weightStatus: "confirmed",
+            netWeightPounds: 6_200,
+          },
+        ],
+        fixedCosts: [
+          {
+            seriesId,
+            version: 1,
+            name: "Monthly transfer-station plan",
+            category: { id: "dump_fees", label: "Dump Fees" },
+            monthlyAmountCents: 31_000,
+            effectiveStartDate: "2026-08-01",
+            state: "active",
+          },
+        ],
+      }),
+    );
+
+    expect(result.ordinaryExpensesCents).toBe(0);
+    expect(result.fixedCosts.coveredExpenseCount).toBe(1);
+    expect(result.dumpActivity).toEqual({
+      dumpFeeCents: 31_000,
+      ticketCount: 1,
+      weightedTicketCount: 1,
+      netWeightPounds: 6_200,
+      averageCostPerTonCents: 10_000,
+      missingWeightCount: 0,
+    });
+  });
+
+  it("returns a null dump cost at zero weight and rejects unverified weight shapes", () => {
+    expect(buildExpenseOverview(baseInput()).dumpActivity).toEqual({
+      dumpFeeCents: 0,
+      ticketCount: 0,
+      weightedTicketCount: 0,
+      netWeightPounds: 0,
+      averageCostPerTonCents: null,
+      missingWeightCount: 0,
+    });
+
+    expect(() =>
+      buildExpenseOverview(
+        baseInput({
+          dumpDetails: [
+            {
+              expenseId: "bad-confirmed-weight",
+              weightStatus: "confirmed",
+              netWeightPounds: null,
+            },
+          ],
+        }),
+      ),
+    ).toThrow("must be positive pounds");
+    expect(() =>
+      buildExpenseOverview(
+        baseInput({
+          dumpDetails: [
+            {
+              expenseId: "duplicate-weight",
+              weightStatus: "unreadable",
+              netWeightPounds: null,
+            },
+            {
+              expenseId: "duplicate-weight",
+              weightStatus: "unreadable",
+              netWeightPounds: null,
+            },
+          ],
+        }),
+      ),
+    ).toThrow("Duplicate dump-ticket facts");
+  });
+
   it("rejects allocation drift and duplicate daily-ad rows", () => {
     expect(() =>
       buildExpenseOverview(

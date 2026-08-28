@@ -1,7 +1,12 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, desc, sql } from "drizzle-orm";
-import { expenseFixedCostVersions, expenses, getDb } from "@/db";
+import { and, desc, eq, sql } from "drizzle-orm";
+import {
+  expenseDumpDetails,
+  expenseFixedCostVersions,
+  expenses,
+  getDb,
+} from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { expenseCsvRow } from "@/lib/expense-export";
 import {
@@ -74,6 +79,15 @@ export async function GET(request: NextRequest): Promise<Response> {
           ORDER BY ${expenseFixedCostVersions.effectiveStartDate} DESC, ${expenseFixedCostVersions.version} DESC
           LIMIT 1
         )`.as("covered_by_fixed_cost_name"),
+        dumpWeightStatus: expenseDumpDetails.weightStatus,
+        dumpFacilityName: expenseDumpDetails.facilityName,
+        dumpTicketNumber: expenseDumpDetails.ticketNumber,
+        dumpMaterial: expenseDumpDetails.material,
+        dumpGrossWeightPounds: expenseDumpDetails.grossWeightPounds,
+        dumpTareWeightPounds: expenseDumpDetails.tareWeightPounds,
+        dumpNetWeightPounds: expenseDumpDetails.netWeightPounds,
+        dumpBilledWeightMilliTons: expenseDumpDetails.billedWeightMilliTons,
+        dumpUnitRateCentsPerTon: expenseDumpDetails.unitRateCentsPerTon,
         lifecycleStatus: expenses.lifecycleStatus,
         postedAt: expenses.postedAt,
         voidedAt: expenses.voidedAt,
@@ -81,6 +95,10 @@ export async function GET(request: NextRequest): Promise<Response> {
         createdAt: expenses.createdAt,
       })
       .from(expenses)
+      .leftJoin(
+        expenseDumpDetails,
+        eq(expenseDumpDetails.expenseId, expenses.id),
+      )
       .where(filters.length > 0 ? and(...filters) : undefined)
       .orderBy(
         desc(expenses.paidAt),
@@ -135,6 +153,15 @@ export async function GET(request: NextRequest): Promise<Response> {
       "Created at",
       "Fixed-cost series ID",
       "Fixed-cost name",
+      "Dump weight status",
+      "Dump facility",
+      "Scale ticket number",
+      "Dump material",
+      "Gross weight (lb)",
+      "Tare weight (lb)",
+      "Net weight (lb)",
+      "Billed weight (milli-tons)",
+      "Unit rate (cents per ton)",
       "Overview treatment",
     ]);
     const csvRows = rows.map((row) => {
@@ -166,6 +193,15 @@ export async function GET(request: NextRequest): Promise<Response> {
         row.createdAt.toISOString(),
         row.coveredByFixedCostSeriesId,
         row.coveredByFixedCostName,
+        row.dumpWeightStatus,
+        row.dumpFacilityName,
+        row.dumpTicketNumber,
+        row.dumpMaterial,
+        row.dumpGrossWeightPounds,
+        row.dumpTareWeightPounds,
+        row.dumpNetWeightPounds,
+        row.dumpBilledWeightMilliTons,
+        row.dumpUnitRateCentsPerTon,
         row.coveredByFixedCostSeriesId
           ? "Excluded from ordinary Overview expenses; fixed-cost accrual counted instead"
           : "Ordinary expense",

@@ -317,6 +317,105 @@ all existing financial-integrity rules remain authoritative.
 - [x] Keep the existing manual expense path available as rollback; disabling flags must not hide or corrupt captured ledger data.
   - Verification: Capability/source tests confirm manual entry remains available; captured status/content paths remain readable with intake flags off, and feature-flag tests confirm independent rollback.
 
+## Portrait, landscape, and dump-ticket addendum
+
+This addendum extends receipt capture without adding another Spend action or
+navigation destination. A person always chooses **Scan receipt**; the scanner
+adapts its review to the document that was captured.
+
+### Locked dump-ticket rules
+
+- Portrait and landscape receipts use the same capture flow. EXIF orientation
+  is normalized and the full source aspect ratio is preserved without cropping.
+- Scale-ticket extraction is evidence only. A human must confirm the weight
+  fields before they become operational reporting facts.
+- Net weight is stored as whole pounds. Printed billed quantity is stored as
+  thousandths of a US short ton, and currency remains integer cents. Reporting
+  never uses binary floating-point values as accounting facts.
+- A confirmed scale ticket records the facility, ticket number, material,
+  gross, tare, net, billed quantity, and unit rate when each value is visible.
+  Missing values remain blank; an unreadable net weight is explicitly recorded
+  rather than invented.
+- The review keeps net weight beside the essential receipt fields. Secondary
+  scale facts stay in one collapsed details section. Ordinary receipts do not
+  show dump controls.
+- History shows a one-line weight summary with the existing receipt entry and
+  exposes the full reviewed scale facts in its existing details disclosure.
+- Weekly Overview reports dump fees, loads with confirmed weight, net tons,
+  effective cost per ton, and missing-weight coverage. Missing weight never
+  changes or invalidates otherwise verified profit dollars.
+- Effective cost per ton uses only the Dump Fees allocation belonging to rows
+  with confirmed weight. It never divides all dump spending by a partial weight
+  sample.
+- Immutable corrections copy reviewed dump facts to the positive replacement
+  only. Reversals carry no load weight; voided and corrected originals remain
+  evidence but do not count in active reporting.
+- Existing historical Dump Fees are not automatically re-read or backfilled.
+  They remain visible as missing weight until a later owner-reviewed workflow.
+
+### Dump-ticket implementation checklist
+
+- [x] Add the strict scale-ticket extraction contract, portrait/landscape
+      instructions, per-field confidence, and a no-inference v1 adapter.
+  - Verification: `expense-receipt-openai.test.ts` and
+    `expense-receipt-domain.test.ts` passed the strict V2 structured-output
+    schema for document type, facility, ticket, material, gross/tare/net pounds,
+    billed thousandths of a ton, unit-rate cents, and per-field confidence. The
+    prompt explicitly handles portrait, landscape, sideways, and rotated
+    evidence; the legacy V1 adapter leaves absent scale facts null rather than
+    deriving them.
+- [x] Persist only human-confirmed dump facts in a constrained one-to-one
+      expense record and preserve immutable correction/void behavior.
+  - Verification: Migration `0109_expense_dump_ticket_details.sql` applied
+    cleanly through all 107 migrations. Confirmation, integrity, migration, and
+    PostgreSQL concurrency tests passed human-review-only persistence, positive
+    Dump Fees allocation, immutable posted facts, positive-replacement copying,
+    weight-free reversals, and child-write serialization against posting. Exact
+    SHA-256 and normalized facility/ticket duplicates are rechecked under
+    advisory locks; owner overrides require a recorded reason.
+- [x] Add conditional mobile review, compact History access, owner approval
+      edits, and accessible status/conversion copy without another primary action.
+  - Verification: `mobile-spend-v2.test.ts` passed 27/27 assertions for compact
+    review, false-positive dismissal, pending approval, dump-only History filter
+    and details, receipt access, and owner Add/Correct/Remove scale-ticket facts.
+    `mobile-expense-v2.spec.ts` passed 6/6 scenarios across Chromium Pixel 7 and
+    WebKit iPhone 13 emulation. This is browser emulation evidence, not a claim
+    of physical-device or screen-reader coverage.
+- [x] Add current/prior weekly dump activity metrics with split-allocation,
+      missing-weight, zero-denominator, correction, and reimbursement coverage.
+  - Verification: Overview and ledger/export tests passed Dump Fees, confirmed
+    ticket count, weighted ticket count, net pounds/tons, effective cost per ton,
+    and missing-weight calculations for current and prior weeks. Reporting uses
+    only the Dump Fees allocation of active confirmed rows, retains operational
+    activity for fixed-cost-covered evidence, excludes reimbursement duplication,
+    and exports reviewed scale facts through CSV.
+- [x] Validate synthetic portrait, landscape, and EXIF-rotated evidence without
+      committing customer receipt images or exposing receipt-level benchmark data.
+  - Verification: Storage tests passed aspect-preserving normalization for
+    portrait `1200x2400 -> 1024x2048`, landscape
+    `2400x1200 -> 2048x1024`, and EXIF orientation 6
+    `2400x1200 -> 2048x1024`. The focused backend matrix passed 149/149 tests;
+    no customer image was committed and no live analysis/provider call was made.
+- [x] Gate dump-ticket writes and controls for a safe rolling deployment while
+      keeping previously stored reporting facts readable.
+  - Verification: `EXPENSE_DUMP_TICKETS_ENABLED` defaults off and publishes the
+    `dumpTickets` capability. The site hides unsupported write/filter/correction
+    controls without hiding stored History or Overview facts; enabled scale
+    confirmations require review contract version 2, and stale clients receive
+    a non-posting HTTP 409 refresh/reopen response. Feature-flag tests passed
+    8/8 and the focused API/site/E2E matrices passed with the capability enabled.
+- [ ] Extend the private receipt benchmark with layout and scale-ticket cohorts;
+      require at least 98% exact net-weight extraction and 100% null/no-hallucination
+      behavior on non-dump negative controls before relying on automated prefills.
+  - Verification: Pending a reviewed private corpus of at least 100
+    representative receipts and an authorized live run. The V2 benchmark harness
+    includes portrait/landscape scale-ticket and non-dump negative-control cohorts,
+    but implementation verification made no provider calls or charges and does
+    not establish the production accuracy thresholds.
+- [ ] Deploy database -> API -> worker -> site, smoke both a normal receipt and
+      a scale ticket, then monitor failures, correction rate, and missing weights.
+  - Verification: Pending production deployment and production smoke evidence.
+
 ## Explicit defaults
 
 - USD only.

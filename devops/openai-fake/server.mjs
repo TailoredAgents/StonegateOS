@@ -216,7 +216,19 @@ function structuredOutput(parsedJson) {
       ? parsedJson.text.format
       : null;
   if (!isRecord(format?.schema)) return null;
-  return JSON.stringify(valueForSchema(format.schema));
+  const output = valueForSchema(format.schema);
+  if (
+    format.name === "expense_receipt_extraction" &&
+    isRecord(output)
+  ) {
+    // The receipt contract has a cross-field rule that a standard receipt
+    // cannot carry scale-ticket details. The generic schema synthesizer picks
+    // the first non-null anyOf branch, so make this deterministic fake response
+    // internally consistent instead of weakening the production schema.
+    output.documentType = "standard_receipt";
+    output.dumpTicket = null;
+  }
+  return JSON.stringify(output);
 }
 
 function currentScenario(endpoint) {

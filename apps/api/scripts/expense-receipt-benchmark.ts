@@ -264,6 +264,9 @@ async function runLiveBenchmark(input: {
           totalCents: analyzed.extraction.totalCents,
           transactionDate: analyzed.extraction.transactionDate,
           vendor: analyzed.extraction.vendor,
+          documentType: analyzed.extraction.documentType,
+          netWeightPounds:
+            analyzed.extraction.dumpTicket?.netWeightPounds ?? null,
         },
       });
     } catch {

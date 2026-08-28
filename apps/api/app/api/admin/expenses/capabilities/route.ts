@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import {
   canUseExpenseReceiptCapture,
   isExpenseAdSpendEnabled,
+  isExpenseDumpTicketsEnabled,
   isExpenseFixedCostsEnabled,
   isExpenseOverviewEnabled,
   isExpenseReimbursementEnabled,
@@ -54,6 +55,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         overview: canReadFinancials && isExpenseOverviewEnabled(),
         fixedCosts:
           canApprove && canReadFinancials && isExpenseFixedCostsEnabled(),
+        dumpTickets: isExpenseDumpTicketsEnabled(),
         exactDuplicateReview: canApprove && receiptCapture,
       },
     },

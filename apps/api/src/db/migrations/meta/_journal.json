@@ -743,6 +743,13 @@
       "when": 1790208000000,
       "tag": "0108_expense_recurring_fixed_costs",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1790294400000,
+      "tag": "0109_expense_dump_ticket_details",
+      "breakpoints": true
     }
   ]
 }

@@ -2,6 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import {
   closeDbForTests,
   expenseAllocations,
+  expenseDumpDetails,
   expenseReimbursementClaims,
   expenses,
   getDb,
@@ -256,6 +257,284 @@ describeOrSkip("managed V2 expense correction lifecycle", () => {
       throw new Error(databaseErrorText(error));
     }
     throw new Error("Expected the verification transaction to roll back.");
+  });
+
+  it("preserves, replaces, or explicitly removes dump facts only on positive correction rows", async () => {
+    try {
+      await getDb().transaction(async (tx) => {
+        const createdAt = new Date("2026-08-27T14:00:00.000Z");
+        const correctedAt = new Date("2026-08-27T15:00:00.000Z");
+        const replacedAt = new Date("2026-08-27T16:00:00.000Z");
+        const [submitter, correctingOwner] = await tx
+          .insert(teamMembers)
+          .values([
+            { name: "Original ticket reviewer", active: true },
+            { name: "Correction ticket reviewer", active: true },
+          ])
+          .returning({ id: teamMembers.id });
+        if (!submitter || !correctingOwner) {
+          throw new Error("dump_correction_members_missing");
+        }
+
+        const created = await createExpenseSubmissionInTransaction(tx, {
+          submission: parseExpenseSubmission({
+            amountCents: 9_141,
+            purchaseDate: "2026-08-27",
+            categoryId: "dump_fees",
+            vendor: "Capital Waste Services",
+            payerType: "company",
+            paidByMemberId: null,
+            dumpDetails: {
+              weightStatus: "confirmed",
+              facilityName: "Speedway Transfer Station",
+              ticketNumber: "697723",
+              material: "Const & Demo",
+              grossWeightPounds: 15_780,
+              tareWeightPounds: 12_880,
+              netWeightPounds: 2_900,
+              billedWeightMilliTons: 1_450,
+              unitRateCentsPerTon: 5_000,
+              reviewed: true,
+            },
+          }),
+          actorId: submitter.id,
+          canApprove: true,
+          source: "receipt_scan",
+          now: createdAt,
+        });
+        const duplicateTarget = await createExpenseSubmissionInTransaction(tx, {
+          submission: parseExpenseSubmission({
+            amountCents: 8_000,
+            purchaseDate: "2026-08-27",
+            categoryId: "dump_fees",
+            vendor: "Another Transfer Operator",
+            payerType: "company",
+            paidByMemberId: null,
+            dumpDetails: {
+              weightStatus: "confirmed",
+              facilityName: "North County Transfer Station",
+              ticketNumber: "DUP-123",
+              material: "Mixed debris",
+              grossWeightPounds: 10_000,
+              tareWeightPounds: 7_000,
+              netWeightPounds: 3_000,
+              billedWeightMilliTons: 1_500,
+              unitRateCentsPerTon: 5_000,
+              reviewed: true,
+            },
+          }),
+          actorId: submitter.id,
+          canApprove: true,
+          source: "receipt_scan",
+          now: createdAt,
+        });
+        const [existing] = await tx
+          .select()
+          .from(expenses)
+          .where(eq(expenses.id, created.expenseId))
+          .for("update");
+        if (!existing) throw new Error("dump_original_missing");
+
+        const preserved = await createManagedExpenseCorrection(tx, {
+          existing,
+          replacement: {
+            amountCents: 9_141,
+            category: "Dump Fees",
+            vendor: "Capital Waste Services",
+            memo: "Corrected memo only",
+            method: "card",
+            paidAt: existing.paidAt,
+            coverageStartAt: null,
+            coverageEndAt: null,
+          },
+          actorId: correctingOwner.id,
+          reason: "Corrected memo without changing ticket facts",
+          now: correctedAt,
+        });
+        expect(preserved.dumpDetailsRecorded).toBe(true);
+        expect(
+          await tx
+            .select({ expenseId: expenseDumpDetails.expenseId })
+            .from(expenseDumpDetails)
+            .where(eq(expenseDumpDetails.expenseId, preserved.reversal.id)),
+        ).toEqual([]);
+        expect(
+          await tx
+            .select({
+              confirmedBy: expenseDumpDetails.confirmedBy,
+              confirmedAt: expenseDumpDetails.confirmedAt,
+              netWeightPounds: expenseDumpDetails.netWeightPounds,
+            })
+            .from(expenseDumpDetails)
+            .where(eq(expenseDumpDetails.expenseId, preserved.replacement.id)),
+        ).toEqual([
+          {
+            confirmedBy: submitter.id,
+            confirmedAt: createdAt,
+            netWeightPounds: 2_900,
+          },
+        ]);
+
+        const [preservedExpense] = await tx
+          .select()
+          .from(expenses)
+          .where(eq(expenses.id, preserved.replacement.id))
+          .for("update");
+        if (!preservedExpense) throw new Error("preserved_expense_missing");
+        const replaced = await createManagedExpenseCorrection(tx, {
+          existing: preservedExpense,
+          replacement: {
+            amountCents: 9_141,
+            category: "Dump Fees",
+            vendor: "Capital Waste Services",
+            memo: "Corrected printed weight",
+            method: "card",
+            paidAt: preservedExpense.paidAt,
+            coverageStartAt: null,
+            coverageEndAt: null,
+          },
+          actorId: correctingOwner.id,
+          reason: "Corrected the printed ticket weight",
+          now: replacedAt,
+          dumpDetails: {
+            weightStatus: "confirmed",
+            facilityName: "Speedway Transfer Station",
+            ticketNumber: "697723",
+            material: "Const & Demo",
+            grossWeightPounds: 15_780,
+            tareWeightPounds: 12_880,
+            netWeightPounds: 2_950,
+            billedWeightMilliTons: 1_450,
+            unitRateCentsPerTon: 5_000,
+            reviewed: true,
+          },
+        });
+        expect(
+          await tx
+            .select({
+              confirmedBy: expenseDumpDetails.confirmedBy,
+              confirmedAt: expenseDumpDetails.confirmedAt,
+              netWeightPounds: expenseDumpDetails.netWeightPounds,
+            })
+            .from(expenseDumpDetails)
+            .where(eq(expenseDumpDetails.expenseId, replaced.replacement.id)),
+        ).toEqual([
+          {
+            confirmedBy: correctingOwner.id,
+            confirmedAt: replacedAt,
+            netWeightPounds: 2_950,
+          },
+        ]);
+
+        const [replacedExpense] = await tx
+          .select()
+          .from(expenses)
+          .where(eq(expenses.id, replaced.replacement.id))
+          .for("update");
+        if (!replacedExpense) throw new Error("replaced_expense_missing");
+        const duplicateCorrectionDetails = {
+          weightStatus: "confirmed" as const,
+          facilityName: " north county transfer-station ",
+          ticketNumber: "DUP 123",
+          material: "Mixed debris",
+          grossWeightPounds: 10_000,
+          tareWeightPounds: 7_000,
+          netWeightPounds: 3_000,
+          billedWeightMilliTons: 1_500,
+          unitRateCentsPerTon: 5_000,
+          reviewed: true as const,
+        };
+        await expect(
+          createManagedExpenseCorrection(tx, {
+            existing: replacedExpense,
+            replacement: {
+              amountCents: 9_141,
+              category: "Dump Fees",
+              vendor: "Capital Waste Services",
+              memo: "Changed ticket",
+              method: "card",
+              paidAt: replacedExpense.paidAt,
+              coverageStartAt: null,
+              coverageEndAt: null,
+            },
+            actorId: correctingOwner.id,
+            reason: "short",
+            now: new Date(replacedAt.getTime() + 250),
+            dumpDetails: duplicateCorrectionDetails,
+          }),
+        ).rejects.toMatchObject({ code: "invalid" });
+        const duplicateOverride = await createManagedExpenseCorrection(tx, {
+          existing: replacedExpense,
+          replacement: {
+            amountCents: 9_141,
+            category: "Dump Fees",
+            vendor: "Capital Waste Services",
+            memo: "Changed ticket after owner review",
+            method: "card",
+            paidAt: replacedExpense.paidAt,
+            coverageStartAt: null,
+            coverageEndAt: null,
+          },
+          actorId: correctingOwner.id,
+          reason: "Verified this is a separate disposal charge",
+          now: new Date(replacedAt.getTime() + 500),
+          dumpDetails: duplicateCorrectionDetails,
+        });
+        expect(duplicateOverride.scaleTicketDuplicateOfExpenseId).toBe(
+          duplicateTarget.expenseId,
+        );
+        const [duplicateOverrideExpense] = await tx
+          .select()
+          .from(expenses)
+          .where(eq(expenses.id, duplicateOverride.replacement.id))
+          .for("update");
+        if (!duplicateOverrideExpense) {
+          throw new Error("duplicate_override_expense_missing");
+        }
+        const fuelReplacement = {
+          amountCents: 9_141,
+          category: "Fuel",
+          vendor: "Capital Waste Services",
+          memo: "Category corrected",
+          method: "card",
+          paidAt: duplicateOverrideExpense.paidAt,
+          coverageStartAt: null,
+          coverageEndAt: null,
+        };
+        await expect(
+          createManagedExpenseCorrection(tx, {
+            existing: duplicateOverrideExpense,
+            replacement: fuelReplacement,
+            actorId: correctingOwner.id,
+            reason: "Changing away from Dump Fees",
+            now: new Date(replacedAt.getTime() + 1_000),
+          }),
+        ).rejects.toMatchObject({ code: "invalid" });
+
+        const removed = await createManagedExpenseCorrection(tx, {
+          existing: duplicateOverrideExpense,
+          replacement: fuelReplacement,
+          actorId: correctingOwner.id,
+          reason: "Changing away from Dump Fees and removing ticket facts",
+          now: new Date(replacedAt.getTime() + 2_000),
+          dumpDetails: null,
+        });
+        expect(removed.dumpDetailsRecorded).toBe(false);
+        expect(
+          await tx
+            .select({ expenseId: expenseDumpDetails.expenseId })
+            .from(expenseDumpDetails)
+            .where(eq(expenseDumpDetails.expenseId, removed.replacement.id)),
+        ).toEqual([]);
+
+        await tx.execute(sql`set constraints all immediate`);
+        throw ROLLBACK;
+      });
+    } catch (error) {
+      if (error === ROLLBACK) return;
+      throw new Error(databaseErrorText(error));
+    }
+    throw new Error("Expected dump correction verification to roll back.");
   });
 
   it("preserves a valid coverage link through correction and supports explicit unlink", async () => {

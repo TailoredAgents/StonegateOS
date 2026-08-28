@@ -1,7 +1,14 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
   encodeExpenseHistoryCursor,
   parseExpenseHistoryQuery,
 } from "@/lib/expense-submission-history";
+
+const submissionsRoute = readFileSync(
+  path.join(process.cwd(), "app/api/admin/expenses/submissions/route.ts"),
+  "utf8",
+);
 
 describe("expense submission history pagination", () => {
   const cursor = {
@@ -19,6 +26,29 @@ describe("expense submission history pagination", () => {
       limit: 40,
       cursor: null,
     });
+  });
+
+  it("accepts the focused dump-ticket cleanup filter", () => {
+    expect(
+      parseExpenseHistoryQuery(
+        new URLSearchParams({ filter: "dump_tickets" }),
+        true,
+      ),
+    ).toEqual({ filter: "dump_tickets", limit: 40, cursor: null });
+  });
+
+  it("gates the dump-ticket filter while keeping correction lineage explicit", () => {
+    expect(submissionsRoute).toContain('query.filter === "dump_tickets" &&');
+    expect(submissionsRoute).toContain("!isExpenseDumpTicketsEnabled()");
+    expect(submissionsRoute).toContain(
+      "reversalOfExpenseId: row.reversalOfExpenseId",
+    );
+    expect(submissionsRoute).toContain(
+      "correctionOfExpenseId: row.correctionOfExpenseId",
+    );
+    expect(submissionsRoute).toContain(
+      "correctedByExpenseId: row.correctedByExpenseId",
+    );
   });
 
   it("round-trips a cursor bound to its filter and owner scope", () => {

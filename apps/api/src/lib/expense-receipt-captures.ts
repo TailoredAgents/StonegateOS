@@ -23,8 +23,8 @@ import {
 import {
   buildExpenseReceiptReview,
   detectExpenseReceiptDuplicates,
-  ExpenseReceiptExtractionSchema,
   normalizeReceiptVendor,
+  parseStoredExpenseReceiptExtraction,
   selectExpenseCategory,
   type ExpenseReceiptExtraction,
   type ReceiptDuplicateCandidate,
@@ -943,7 +943,7 @@ export async function getExpenseReceiptCaptureContentUrl(input: {
 }
 
 type StoredExtraction = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   raw: ExpenseReceiptExtraction;
   review: ReturnType<typeof buildExpenseReceiptReview>;
   categorySuggestion: ReturnType<typeof selectExpenseCategory>;
@@ -956,8 +956,7 @@ function readStoredRawExtraction(
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   const candidate = "raw" in record ? record["raw"] : value;
-  const parsed = ExpenseReceiptExtractionSchema.safeParse(candidate);
-  return parsed.success ? parsed.data : null;
+  return parseStoredExpenseReceiptExtraction(candidate);
 }
 
 async function duplicateCandidatesForCapture(
@@ -1293,7 +1292,7 @@ export async function processExpenseReceiptAnalysisOutbox(
       db,
     );
     const storedExtraction: StoredExtraction = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       raw: analyzed.extraction,
       review,
       categorySuggestion,
@@ -1342,6 +1341,10 @@ export async function processExpenseReceiptAnalysisOutbox(
         fieldsToCheck: review.fieldsToCheck,
         duplicateRisk: duplicates.highestRisk,
         categorySuggestionSource: categorySuggestion.source,
+        documentType: analyzed.extraction.documentType,
+        dumpWeightNeedsReview: review.fieldsToCheck.includes(
+          "dumpTicket.netWeightPounds",
+        ),
         humanConfirmationRequired: true,
       },
       createdAt: completedAt,
@@ -1351,6 +1354,7 @@ export async function processExpenseReceiptAnalysisOutbox(
       model: analyzed.model,
       fieldsToCheck: review.fieldsToCheck.length,
       duplicateRisk: duplicates.highestRisk,
+      documentType: analyzed.extraction.documentType,
     });
     return { status: "processed" };
   } catch (error) {

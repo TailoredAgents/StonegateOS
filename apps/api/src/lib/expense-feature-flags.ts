@@ -39,3 +39,8 @@ export function isExpenseOverviewEnabled(): boolean {
 export function isExpenseFixedCostsEnabled(): boolean {
   return isOperationalFeatureEnabled("EXPENSE_FIXED_COSTS_ENABLED");
 }
+
+/** Gates new dump-ticket capture and mutation surfaces; stored facts remain readable. */
+export function isExpenseDumpTicketsEnabled(): boolean {
+  return isOperationalFeatureEnabled("EXPENSE_DUMP_TICKETS_ENABLED");
+}
