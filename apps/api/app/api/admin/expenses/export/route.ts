@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, desc } from "drizzle-orm";
-import { expenses, getDb } from "@/db";
+import { and, desc, sql } from "drizzle-orm";
+import { expenseFixedCostVersions, expenses, getDb } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { expenseCsvRow } from "@/lib/expense-export";
 import {
@@ -65,6 +65,15 @@ export async function GET(request: NextRequest): Promise<Response> {
         paidAt: expenses.paidAt,
         coverageStartAt: expenses.coverageStartAt,
         coverageEndAt: expenses.coverageEndAt,
+        coveredByFixedCostSeriesId: expenses.coveredByFixedCostSeriesId,
+        coveredByFixedCostName: sql<string | null>`(
+          SELECT ${expenseFixedCostVersions.name}
+          FROM ${expenseFixedCostVersions}
+          WHERE ${expenseFixedCostVersions.seriesId} = ${expenses.coveredByFixedCostSeriesId}
+            AND ${expenseFixedCostVersions.effectiveStartDate} <= (${expenses.paidAt} AT TIME ZONE 'America/New_York')::date
+          ORDER BY ${expenseFixedCostVersions.effectiveStartDate} DESC, ${expenseFixedCostVersions.version} DESC
+          LIMIT 1
+        )`.as("covered_by_fixed_cost_name"),
         lifecycleStatus: expenses.lifecycleStatus,
         postedAt: expenses.postedAt,
         voidedAt: expenses.voidedAt,
@@ -124,6 +133,9 @@ export async function GET(request: NextRequest): Promise<Response> {
       "Voided at",
       "Corrected at",
       "Created at",
+      "Fixed-cost series ID",
+      "Fixed-cost name",
+      "Overview treatment",
     ]);
     const csvRows = rows.map((row) => {
       const needsFinanceReview =
@@ -152,6 +164,11 @@ export async function GET(request: NextRequest): Promise<Response> {
         row.voidedAt?.toISOString(),
         row.correctedAt?.toISOString(),
         row.createdAt.toISOString(),
+        row.coveredByFixedCostSeriesId,
+        row.coveredByFixedCostName,
+        row.coveredByFixedCostSeriesId
+          ? "Excluded from ordinary Overview expenses; fixed-cost accrual counted instead"
+          : "Ordinary expense",
       ]);
     });
 

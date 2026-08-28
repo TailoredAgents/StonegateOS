@@ -34,3 +34,8 @@ export function isExpenseReimbursementEnabled(): boolean {
 export function isExpenseOverviewEnabled(): boolean {
   return isOperationalFeatureEnabled("EXPENSE_OVERVIEW_ENABLED");
 }
+
+/** Gates owner setup/mutations; stored costs always remain in Overview totals. */
+export function isExpenseFixedCostsEnabled(): boolean {
+  return isOperationalFeatureEnabled("EXPENSE_FIXED_COSTS_ENABLED");
+}

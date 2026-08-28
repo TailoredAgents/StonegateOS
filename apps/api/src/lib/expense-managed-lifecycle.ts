@@ -11,6 +11,10 @@ import {
   resolveExpenseCategoryAlias,
 } from "@/lib/expense-categories";
 import {
+  assertExpenseFixedCostCoverageLink,
+  assertFixedCostCoverageLinkCanBeEstablished,
+} from "@/lib/expense-fixed-cost-coverage";
+import {
   TeamMutationFailure,
   type TeamMutationTransaction,
 } from "@/lib/team-mutation";
@@ -25,6 +29,7 @@ type Allocation = {
 type GeneratedLedgerEntry = {
   id: string;
   version: number;
+  coveredByFixedCostSeriesId: string | null;
 };
 
 export type ManagedExpenseCorrectionResult = {
@@ -91,6 +96,7 @@ async function insertGeneratedEntry(
     reason: string;
     now: Date;
     kind: { reversalOfExpenseId: string } | { correctionOfExpenseId: string };
+    coveredByFixedCostSeriesId?: string | null;
     replacement?: {
       vendor: string | null;
       memo: string | null;
@@ -141,6 +147,7 @@ async function insertGeneratedEntry(
       paidAt: financial.paidAt,
       coverageStartAt: financial.coverageStartAt,
       coverageEndAt: financial.coverageEndAt,
+      coveredByFixedCostSeriesId: input.coveredByFixedCostSeriesId ?? null,
       lifecycleStatus: "draft",
       version: 1,
       postedAt: null,
@@ -149,7 +156,10 @@ async function insertGeneratedEntry(
       createdAt: input.now,
       updatedAt: input.now,
     })
-    .returning({ id: expenses.id });
+    .returning({
+      id: expenses.id,
+      coveredByFixedCostSeriesId: expenses.coveredByFixedCostSeriesId,
+    });
   if (!created) {
     throw new TeamMutationFailure(
       "internal",
@@ -185,7 +195,10 @@ async function insertGeneratedEntry(
         eq(expenses.version, 1),
       ),
     )
-    .returning({ id: expenses.id });
+    .returning({
+      id: expenses.id,
+      coveredByFixedCostSeriesId: expenses.coveredByFixedCostSeriesId,
+    });
   if (!posted) {
     throw new TeamMutationFailure(
       "conflict",
@@ -193,7 +206,11 @@ async function insertGeneratedEntry(
       { retryable: true },
     );
   }
-  return { id: posted.id, version: 2 };
+  return {
+    id: posted.id,
+    version: 2,
+    coveredByFixedCostSeriesId: posted.coveredByFixedCostSeriesId,
+  };
 }
 
 async function moveReimbursementToCorrection(
@@ -433,6 +450,9 @@ export async function createManagedExpenseCorrection(
     actorId: string;
     reason: string;
     now: Date;
+    /** Undefined preserves the original; null intentionally unlinks. */
+    coveredByFixedCostSeriesId?: string | null;
+    canManageFixedCostCoverage?: boolean;
   },
 ): Promise<ManagedExpenseCorrectionResult> {
   const originalAllocations = await loadAllocations(tx, input.existing.id);
@@ -458,6 +478,25 @@ export async function createManagedExpenseCorrection(
           },
         ]
       : [];
+  const coveredByFixedCostSeriesId =
+    input.coveredByFixedCostSeriesId === undefined
+      ? input.existing.coveredByFixedCostSeriesId
+      : input.coveredByFixedCostSeriesId;
+  assertFixedCostCoverageLinkCanBeEstablished({
+    existingSeriesId: input.existing.coveredByFixedCostSeriesId,
+    requestedSeriesId: coveredByFixedCostSeriesId,
+    canManageCoverage: input.canManageFixedCostCoverage,
+  });
+  if (coveredByFixedCostSeriesId) {
+    await assertExpenseFixedCostCoverageLink(tx, {
+      seriesId: coveredByFixedCostSeriesId,
+      purchaseDate: input.replacement.paidAt,
+      amountCents: input.replacement.amountCents,
+      categoryId: replacementCategory.categoryId,
+      allocations: replacementAllocations,
+      replacesExpenseId: input.existing.id,
+    });
+  }
 
   const reversal = await insertGeneratedEntry(tx, {
     existing: input.existing,
@@ -480,6 +519,7 @@ export async function createManagedExpenseCorrection(
     reason: input.reason,
     now: input.now,
     kind: { correctionOfExpenseId: input.existing.id },
+    coveredByFixedCostSeriesId,
     replacement: {
       vendor: input.replacement.vendor,
       memo: input.replacement.memo,

@@ -32,6 +32,15 @@ function canApproveExpense(permissions: string[]): boolean {
   );
 }
 
+function canManageFixedCostCoverage(permissions: string[]): boolean {
+  return (
+    canApproveExpense(permissions) &&
+    permissions.some((permission) =>
+      permissionMatches(permission, "financials.read"),
+    )
+  );
+}
+
 function parseCaptureVersion(rawVersion: string | null): number | null {
   if (!rawVersion || !/^\d+$/u.test(rawVersion)) return null;
   const version = Number(rawVersion);
@@ -120,6 +129,9 @@ export async function POST(
         expectedVersion,
         actorId,
         canApprove,
+        canManageFixedCostCoverage: canManageFixedCostCoverage(
+          permissionContext.permissions,
+        ),
         confirmation,
       });
       const audit = await mutation.audit.insertSuccess(tx, {
@@ -132,6 +144,7 @@ export async function POST(
           expenseId: confirmed.expenseId,
           reviewStatus: confirmed.reviewStatus,
           lifecycleStatus: confirmed.lifecycleStatus,
+          coveredByFixedCostSeriesId: confirmed.coveredByFixedCostSeriesId,
         },
         metadata: {
           exactDuplicateOfCaptureId: confirmed.exactDuplicateOfCaptureId,

@@ -10,6 +10,12 @@ import {
   expenseOverviewReasonDetail,
 } from "../src/app/mobile/MobileSpendV2";
 import {
+  MobileExpenseDonut,
+  buildExpenseDonutSegments,
+  type MobileExpenseDonutCategory,
+} from "../src/app/mobile/MobileExpenseDonut";
+import { parseMobileFixedCostsPayload } from "../src/app/mobile/MobileFixedCosts";
+import {
   expenseCaptureQueueStatus,
   shouldPollExpenseCaptureStatus,
   summarizeExpenseCaptureQueueHealth,
@@ -325,6 +331,139 @@ void test("Add always presents three choices with one filled primary action", ()
   }
 });
 
+const donutCategories: MobileExpenseDonutCategory[] = [
+  {
+    id: "labor",
+    label: "Labor",
+    amountCents: 5_000,
+    percentOfExpenses: 50,
+    percentOfRevenue: 25,
+    verified: true,
+  },
+  ...Array.from({ length: 6 }, (_, index) => ({
+    id: `category-${index + 1}`,
+    label: `Category ${index + 1}`,
+    amountCents: 600 - index * 100,
+    percentOfExpenses: 6 - index,
+    percentOfRevenue: 3 - index / 2,
+    verified: index !== 5,
+  })),
+];
+
+void test("expense donut keeps five direct slices and groups the full remainder", () => {
+  const segments = buildExpenseDonutSegments(donutCategories, 7_100);
+  assert.equal(segments.length, 6);
+  assert.deepEqual(
+    segments.slice(0, 5).map((segment) => segment.label),
+    ["Labor", "Category 1", "Category 2", "Category 3", "Category 4"],
+  );
+  assert.equal(
+    new Set(segments.slice(0, 5).map((segment) => segment.color)).size,
+    5,
+  );
+  assert.deepEqual(segments[5], {
+    id: "all-other-categories",
+    label: "All other categories",
+    amountCents: 300,
+    percent: (300 / 7_100) * 100,
+    color: "#64748b",
+    categoryIds: ["category-5", "category-6"],
+    grouped: true,
+  });
+  assert.ok(
+    Math.abs(
+      segments.reduce((sum, segment) => sum + segment.percent, 0) - 100,
+    ) < 0.000_001,
+  );
+  assert.deepEqual(
+    buildExpenseDonutSegments([{ ...donutCategories[0]!, amountCents: 0 }]),
+    [],
+  );
+  assert.deepEqual(buildExpenseDonutSegments(donutCategories, 7_101), []);
+  assert.deepEqual(
+    buildExpenseDonutSegments(
+      [{ ...donutCategories[0]!, amountCents: -100 }],
+      -100,
+    ),
+    [],
+  );
+});
+
+void test("expense donut exposes a full text list and keeps the SVG decorative", () => {
+  const html = renderToStaticMarkup(
+    createElement(MobileExpenseDonut, {
+      categories: donutCategories,
+      totalExpensesCents: 7_100,
+    }),
+  );
+  assert.match(html, /Expense mix/u);
+  assert.match(html, /aria-hidden="true"/u);
+  assert.match(html, /Expense distribution chart/u);
+  assert.match(html, /50\.0% of expenses/u);
+  assert.match(html, /25\.0% of revenue/u);
+  assert.match(html, /Category needs review/u);
+  assert.equal(
+    (html.match(/<li class=/gu) ?? []).length,
+    donutCategories.length,
+  );
+});
+
+void test("expense donut refuses to misstate a net-adjustment week", () => {
+  const html = renderToStaticMarkup(
+    createElement(MobileExpenseDonut, {
+      categories: [
+        { ...donutCategories[0]!, amountCents: 5_000 },
+        { ...donutCategories[1]!, amountCents: -500 },
+      ],
+      totalExpensesCents: 4_500,
+    }),
+  );
+  assert.match(html, /Mix unavailable/u);
+  assert.match(html, /cannot be drawn accurately/u);
+  assert.doesNotMatch(html, /<svg/u);
+});
+
+void test("fixed-cost responses fail closed unless every money and version field is valid", () => {
+  const valid = {
+    ok: true,
+    currency: "USD",
+    asOf: "2026-08-27",
+    summary: {
+      activeCount: 1,
+      monthlyAmountCents: 310_000,
+      dailyAccrualCents: 10_000,
+    },
+    costs: [
+      {
+        seriesId: "11111111-1111-4111-8111-111111111111",
+        version: 2,
+        name: "Rent",
+        categoryId: "office_admin",
+        category: "Office/Admin",
+        monthlyAmountCents: 310_000,
+        effectiveStartDate: "2026-08-01",
+        state: "active",
+        createdAt: "2026-08-01T12:00:00.000Z",
+      },
+    ],
+  };
+  assert.deepEqual(parseMobileFixedCostsPayload(valid), valid);
+  assert.equal(
+    parseMobileFixedCostsPayload({
+      ...valid,
+      costs: [{ ...valid.costs[0], version: 0 }],
+    }),
+    null,
+  );
+  assert.equal(
+    parseMobileFixedCostsPayload({
+      ...valid,
+      summary: { ...valid.summary, dailyAccrualCents: -1 },
+    }),
+    null,
+  );
+});
+
 void test("Spend V2 keeps the locked navigation and offline-store contracts", async () => {
   const [component, session, offlineMedia, mutationKeys, worker] =
     await Promise.all([
@@ -385,6 +524,9 @@ void test("Spend V2 keeps the locked navigation and offline-store contracts", as
   assert.match(component, /capabilities\?\.overview === true/u);
   assert.match(component, /capabilities\?\.reimbursement === true/u);
   assert.match(component, /capabilities\?\.exactDuplicateReview === true/u);
+  assert.match(component, /capabilities\?\.fixedCosts === true/u);
+  assert.match(component, /MobileFixedCosts/u);
+  assert.match(component, /MobileExpenseDonut/u);
   assert.match(component, /fetchExactDuplicateReviewPage/u);
   assert.match(component, /owner-duplicate-confirm:/u);
   assert.match(component, /"If-Match": String\(item\.capture\.version\)/u);
@@ -411,7 +553,7 @@ void test("Spend V2 keeps the locked navigation and offline-store contracts", as
     1,
   );
   assert.doesNotMatch(component, /bulk.{0,20}approv|approv.{0,20}all/iu);
-  assert.doesNotMatch(component, /pie chart/iu);
+  assert.match(component, /Loss after tracked costs/u);
   assert.match(session, /"expenses\.submit"/u);
   assert.match(session, /"expenses\.approve"/u);
   assert.doesNotMatch(session, /"expenses\.write"/u);
@@ -432,6 +574,66 @@ void test("Spend V2 keeps the locked navigation and offline-store contracts", as
   );
   assert.match(expenseProxy, /redirect: "manual"/u);
   assert.match(expenseProxy, /Referrer-Policy/u);
+});
+
+void test("fixed-cost coverage stays optional under More details for manual and receipt submissions", async () => {
+  const component = await readFile(
+    `${siteRoot}/src/app/mobile/MobileSpendV2.tsx`,
+    "utf8",
+  );
+
+  assert.match(
+    component,
+    /type SubmissionBody = \{[\s\S]*?coveredByFixedCostSeriesId\?: string \| null;/u,
+  );
+  assert.match(
+    component,
+    /More details[\s\S]*?<FixedCostCoverageField[\s\S]*?Split categories/u,
+  );
+  assert.match(
+    component,
+    /coveredByFixedCostSeriesId\s*\? \{ coveredByFixedCostSeriesId \}\s*: \{\}/u,
+  );
+  assert.match(
+    component,
+    /function ReceiptWorkflow\([\s\S]*?<ExpenseEditor[\s\S]*?fixedCostCoverageEnabled=\{fixedCostCoverageEnabled\}/u,
+  );
+  assert.match(
+    component,
+    /workflow === "manual"[\s\S]*?<ExpenseEditor[\s\S]*?fixedCostCoverageEnabled=\{fixedCostsEnabled\}/u,
+  );
+  assert.match(
+    component,
+    /const requestBody = \{[\s\S]*?\.\.\.body,[\s\S]*?receipt-confirm:/u,
+  );
+  assert.match(
+    component,
+    /fetch\("\/api\/mobile\/expenses\/submissions"[\s\S]*?body: JSON\.stringify\(body\)/u,
+  );
+  assert.match(
+    component,
+    /type ExpenseHistoryRow = \{[\s\S]*?coveredByFixedCostSeriesId: string \| null;[\s\S]*?coveredByFixedCostName: string \| null;/u,
+  );
+  assert.match(
+    component,
+    /Approval preferences[\s\S]*?<FixedCostCoverageField/u,
+  );
+  assert.match(
+    component,
+    /coveredByFixedCostSeriesId:\s*reviewCoveredByFixedCostSeriesId \|\| null/u,
+  );
+  assert.match(
+    component,
+    /Excluded from Overview — covered by[\s\S]*?row\.coveredByFixedCostName/u,
+  );
+  assert.match(
+    component,
+    /fixedCosts: \{[\s\S]*?coveredExpenseCount: number;[\s\S]*?coveredExpenseAmountCents: number;/u,
+  );
+  assert.match(
+    component,
+    /linked payment[\s\S]*?"remains" : "remain"[\s\S]*?in History and[\s\S]*?"is" : "are"[\s\S]*?excluded from ordinary expense totals\./u,
+  );
 });
 
 void test("the initial mobile surface keeps three choices while optional tools fail closed", () => {

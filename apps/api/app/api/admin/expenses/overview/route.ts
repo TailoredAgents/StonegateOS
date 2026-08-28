@@ -81,6 +81,8 @@ export async function GET(request: NextRequest): Promise<Response> {
           week: "Monday through Sunday",
           revenue: "Final totals for jobs grouped by completion time.",
           expenses: "Posted ledger expenses grouped by purchase date.",
+          fixedCosts:
+            "Owner-verified monthly costs accrued exactly across Eastern calendar days; no synthetic ledger rows.",
           labor:
             overview.labor.state === "actual"
               ? "Finalized payout snapshot."

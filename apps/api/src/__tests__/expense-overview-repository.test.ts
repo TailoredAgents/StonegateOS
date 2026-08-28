@@ -42,6 +42,7 @@ function baseRows(
     payoutLines: [],
     payoutAdjustments: [],
     dailyAdEntries: [],
+    fixedCostVersions: [],
     ...overrides,
   };
 }
@@ -291,6 +292,18 @@ describe("expense overview repository mapping", () => {
         },
       ],
       dailyAdEntries: completeAdWeek(),
+      fixedCostVersions: [
+        {
+          seriesId: "fixed-series",
+          version: 1,
+          name: "Office lease",
+          categoryId: "office_admin",
+          categoryName: "Office/Admin",
+          monthlyAmountCents: 31_000,
+          effectiveStartDate: "2026-08-01",
+          state: "active",
+        },
+      ],
     });
 
     const mapped = mapExpenseOverviewRows({
@@ -335,8 +348,9 @@ describe("expense overview repository mapping", () => {
     expect(overview).toMatchObject({
       revenueCents: 100_000,
       ordinaryExpensesCents: 12_000,
+      fixedCostsCents: 7_000,
       laborCents: 2_000,
-      totalExpensesCents: 14_000,
+      totalExpensesCents: 21_000,
       pendingExpenseCount: 1,
       omittedUnverifiedHistoricalRecordCount: 2,
       advertising: {
@@ -346,6 +360,7 @@ describe("expense overview repository mapping", () => {
       priorWeek: {
         revenueCents: 80_000,
         ordinaryExpensesCents: 1_000,
+        fixedCostsCents: 7_000,
         laborCents: 750,
       },
     });
@@ -356,6 +371,11 @@ describe("expense overview repository mapping", () => {
         expect.objectContaining({ id: "fuel", amountCents: 6_000 }),
         expect.objectContaining({ id: "supplies", amountCents: 4_000 }),
         expect.objectContaining({ id: "advertising", amountCents: 2_000 }),
+        expect.objectContaining({
+          id: "office_admin",
+          amountCents: 7_000,
+          fixedCostCents: 7_000,
+        }),
       ]),
     );
     expect(overview.categories).toEqual(
@@ -472,5 +492,67 @@ describe("expense overview repository mapping", () => {
     expect(mapped.expenses).toEqual([]);
     expect(mapped.omittedUnverifiedHistoricalRecordCount).toBe(1);
     expect(buildExpenseOverview(mapped).ordinaryExpensesCents).toBe(0);
+  });
+
+  it("maps fixed-cost coverage as excluded evidence with transparent counts", () => {
+    const seriesId = "22222222-2222-4222-8222-222222222222";
+    const mapped = mapExpenseOverviewRows({
+      weekStart: WEEK_START,
+      asOf: "2026-08-24",
+      rows: baseRows({
+        expenses: [
+          {
+            id: "covered-receipt",
+            amountCents: 31_000,
+            currency: "USD",
+            legacyCategory: "Office/Admin",
+            categoryId: "office_admin",
+            categoryName: "Office/Admin",
+            categoryNeedsReview: false,
+            paidAt: new Date("2026-08-20T16:00:00.000Z"),
+            lifecycleStatus: "posted",
+            reviewStatus: "approved",
+            source: "receipt_scan",
+            reversalOfExpenseId: null,
+            coveredByFixedCostSeriesId: seriesId,
+          },
+        ],
+        allocations: [
+          {
+            expenseId: "covered-receipt",
+            amountCents: 31_000,
+            categoryId: "office_admin",
+            categoryName: "Office/Admin",
+            expenseCategoryNeedsReview: false,
+          },
+        ],
+        fixedCostVersions: [
+          {
+            seriesId,
+            version: 1,
+            name: "Office lease",
+            categoryId: "office_admin",
+            categoryName: "Office/Admin",
+            monthlyAmountCents: 31_000,
+            effectiveStartDate: "2026-08-01",
+            state: "active",
+          },
+        ],
+      }),
+    });
+
+    expect(mapped.expenses[0]).toMatchObject({
+      id: "covered-receipt",
+      coveredByFixedCostSeriesId: seriesId,
+    });
+    expect(buildExpenseOverview(mapped)).toMatchObject({
+      ordinaryExpensesCents: 0,
+      fixedCostsCents: 7_000,
+      totalExpensesCents: 7_000,
+      fixedCosts: {
+        coveredExpenseCount: 1,
+        coveredExpenseAmountCents: 31_000,
+      },
+    });
   });
 });

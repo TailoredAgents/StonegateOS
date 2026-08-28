@@ -39,6 +39,8 @@ export type ExpenseOverviewExpenseInput = {
   isReimbursementAdjustment?: boolean;
   /** Set only for an expense created from the manual daily-ad registry. */
   dailyAdPlatform?: ExpenseOverviewAdPlatform | null;
+  /** Receipt evidence already represented by virtual fixed-cost accrual. */
+  coveredByFixedCostSeriesId?: string | null;
 };
 
 export type ExpenseOverviewJobInput = {
@@ -82,6 +84,17 @@ export type ExpenseOverviewDailyAdInput = {
   amountCents: number;
 };
 
+export type ExpenseOverviewFixedCostInput = {
+  seriesId: string;
+  version: number;
+  name: string;
+  category: ExpenseOverviewCategoryInput;
+  monthlyAmountCents: number;
+  /** Inclusive Eastern business date. Same-date corrections use the version. */
+  effectiveStartDate: string;
+  state: "active" | "ended";
+};
+
 export type ExpenseOverviewInput = {
   /** Exact Eastern Monday in YYYY-MM-DD form. */
   weekStart: string;
@@ -91,6 +104,8 @@ export type ExpenseOverviewInput = {
   payrollAdjustments: readonly ExpenseOverviewPayrollAdjustmentInput[];
   payoutSnapshots: readonly ExpenseOverviewPayoutSnapshotInput[];
   dailyAdEntries: readonly ExpenseOverviewDailyAdInput[];
+  /** Append-only effective-dated monthly overhead facts. */
+  fixedCosts?: readonly ExpenseOverviewFixedCostInput[];
   /** Pending submissions whose purchase date falls in the selected week. */
   pendingExpenseCount: number;
   /** Used to avoid flagging future ad dates as missing. */
@@ -115,6 +130,8 @@ export type ExpenseOverviewCategory = {
   id: string;
   label: string;
   amountCents: number;
+  /** Portion of this category accrued from owner-verified monthly costs. */
+  fixedCostCents: number;
   percentOfExpenses: number | null;
   percentOfRevenue: number | null;
   verified: boolean;
@@ -144,6 +161,7 @@ export type ExpenseOverviewAdvertisingBreakdown = {
 export type ExpenseOverviewPeriodMetrics = {
   revenueCents: number;
   ordinaryExpensesCents: number;
+  fixedCostsCents: number;
   laborCents: number;
   totalExpensesCents: number;
   operatingProfitCents: number;
@@ -209,6 +227,12 @@ export type ExpenseOverviewResult = ExpenseOverviewPeriodMetrics & {
       missingFinalTotalCount: number;
       omittedUnverifiedHistoricalRecordCount: number;
       unverifiedExpenseCategoryCount: number;
+      fixedCosts: {
+        amountCents: number;
+        activeSeriesCount: number;
+        coveredExpenseCount: number;
+        coveredExpenseAmountCents: number;
+      };
       completeness: {
         state: "complete" | "incomplete";
         reasons: ExpenseOverviewIncompleteReason[];
@@ -218,6 +242,12 @@ export type ExpenseOverviewResult = ExpenseOverviewPeriodMetrics & {
   categories: ExpenseOverviewCategory[];
   labor: ExpenseOverviewLaborBreakdown;
   advertising: ExpenseOverviewAdvertisingBreakdown;
+  fixedCosts: {
+    amountCents: number;
+    activeSeriesCount: number;
+    coveredExpenseCount: number;
+    coveredExpenseAmountCents: number;
+  };
   pendingExpenseCount: number;
   missingAdEntries: ExpenseOverviewMissingAdEntry[];
   missingCommissionDataCount: number;
@@ -239,6 +269,7 @@ type MutableCategoryTotal = {
   id: string;
   label: string;
   amountCents: number;
+  fixedCostCents: number;
   verified: boolean;
 };
 
@@ -247,6 +278,12 @@ type CalculatedPeriod = {
   categoryTotals: Map<string, MutableCategoryTotal>;
   labor: ExpenseOverviewLaborBreakdown;
   advertising: ExpenseOverviewAdvertisingBreakdown;
+  fixedCosts: {
+    amountCents: number;
+    activeSeriesCount: number;
+    coveredExpenseCount: number;
+    coveredExpenseAmountCents: number;
+  };
   missingCommissionDataCount: number;
   missingFinalTotalCount: number;
 };
@@ -389,6 +426,7 @@ function isAdvertisingCategory(
 function addCategoryAmount(
   totals: Map<string, MutableCategoryTotal>,
   allocation: ExpenseOverviewAllocationInput,
+  options: { fixedCost?: boolean } = {},
 ): void {
   const id = allocation.category.id.trim();
   const label = allocation.category.label.trim();
@@ -402,6 +440,13 @@ function addCategoryAmount(
       allocation.amountCents,
       `category ${id} total`,
     );
+    if (options.fixedCost === true) {
+      existing.fixedCostCents = addCents(
+        existing.fixedCostCents,
+        allocation.amountCents,
+        `category ${id} fixed-cost total`,
+      );
+    }
     existing.verified =
       existing.verified && allocation.category.verified !== false;
     return;
@@ -410,6 +455,7 @@ function addCategoryAmount(
     id,
     label,
     amountCents: allocation.amountCents,
+    fixedCostCents: options.fixedCost === true ? allocation.amountCents : 0,
     verified: allocation.category.verified !== false,
   });
 }
@@ -573,6 +619,162 @@ function calculateLabor(
   };
 }
 
+/** Exact-cent allocation of a monthly amount to one Eastern calendar day. */
+export function expenseOverviewFixedCostDailyCents(
+  monthlyAmountCents: number,
+  businessDate: string,
+): number {
+  assertSafeCents(monthlyAmountCents, "fixed monthly amount", {
+    nonnegative: true,
+  });
+  if (monthlyAmountCents === 0) {
+    throw new TypeError("Fixed monthly amount must be greater than zero.");
+  }
+  const date = parseBusinessDate(businessDate, "fixed-cost business date");
+  const daysInMonth = date.daysInMonth;
+  if (!daysInMonth) throw new TypeError("Fixed-cost month is invalid.");
+  const amount = BigInt(monthlyAmountCents);
+  const day = BigInt(date.day);
+  const days = BigInt(daysInMonth);
+  return Number((amount * day) / days - (amount * (day - 1n)) / days);
+}
+
+function fixedCostEffectiveOnDate(
+  input: ExpenseOverviewInput,
+  seriesId: string,
+  businessDate: string,
+): ExpenseOverviewFixedCostInput | null {
+  let effective: ExpenseOverviewFixedCostInput | null = null;
+  for (const candidate of input.fixedCosts ?? []) {
+    if (
+      candidate.seriesId !== seriesId ||
+      candidate.effectiveStartDate > businessDate
+    ) {
+      continue;
+    }
+    if (
+      !effective ||
+      candidate.effectiveStartDate > effective.effectiveStartDate ||
+      (candidate.effectiveStartDate === effective.effectiveStartDate &&
+        candidate.version > effective.version)
+    ) {
+      effective = candidate;
+    }
+  }
+  return effective;
+}
+
+function calculateFixedCosts(
+  input: ExpenseOverviewInput,
+  period: Period,
+  categoryTotals: Map<string, MutableCategoryTotal>,
+): {
+  amountCents: number;
+  activeSeriesCount: number;
+  advertisingCents: number;
+} {
+  const bySeries = new Map<string, ExpenseOverviewFixedCostInput[]>();
+  const versionKeys = new Set<string>();
+  for (const fixedCost of input.fixedCosts ?? []) {
+    const seriesId = fixedCost.seriesId.trim();
+    if (!seriesId) throw new TypeError("Fixed costs require a series ID.");
+    if (!Number.isSafeInteger(fixedCost.version) || fixedCost.version < 1) {
+      throw new TypeError("Fixed-cost versions must be positive integers.");
+    }
+    const versionKey = `${seriesId}:${fixedCost.version}`;
+    if (versionKeys.has(versionKey)) {
+      throw new TypeError(`Duplicate fixed-cost version ${versionKey}.`);
+    }
+    versionKeys.add(versionKey);
+    assertSafeCents(fixedCost.monthlyAmountCents, "fixed monthly amount", {
+      nonnegative: true,
+    });
+    if (fixedCost.monthlyAmountCents === 0) {
+      throw new TypeError("Fixed monthly amount must be greater than zero.");
+    }
+    parseBusinessDate(
+      fixedCost.effectiveStartDate,
+      "fixed-cost effectiveStartDate",
+    );
+    const versions = bySeries.get(seriesId) ?? [];
+    versions.push(fixedCost);
+    bySeries.set(seriesId, versions);
+  }
+  for (const versions of bySeries.values()) {
+    versions.sort(
+      (left, right) =>
+        left.effectiveStartDate.localeCompare(right.effectiveStartDate) ||
+        left.version - right.version,
+    );
+  }
+
+  let amountCents = 0;
+  let advertisingCents = 0;
+  const start = parseBusinessDate(period.startDate, "period start");
+  const periodEnd = parseBusinessDate(period.endDate, "period end");
+  const asOfDate = parseBusinessDate(
+    easternDateKey(input.asOf ?? new Date(), "asOf"),
+    "asOf",
+  );
+  // Historical weeks are complete reporting periods. The current week stops
+  // at today, and a future week has no accrued fixed cost yet. This keeps
+  // actual completed-job revenue from being compared with future overhead.
+  const end = DateTime.min(periodEnd, asOfDate);
+  if (end < start) {
+    return { amountCents: 0, activeSeriesCount: 0, advertisingCents: 0 };
+  }
+  const dayCount = Math.round(end.diff(start, "days").days) + 1;
+  for (let offset = 0; offset < dayCount; offset += 1) {
+    const businessDate = start.plus({ days: offset }).toFormat("yyyy-MM-dd");
+    for (const versions of bySeries.values()) {
+      let effective: ExpenseOverviewFixedCostInput | null = null;
+      // Ascending effective date and version make the final assignment the
+      // authoritative row; the highest version wins same-day corrections.
+      for (const version of versions) {
+        if (version.effectiveStartDate > businessDate) break;
+        effective = version;
+      }
+      if (!effective || effective.state === "ended") continue;
+      const dailyCents = expenseOverviewFixedCostDailyCents(
+        effective.monthlyAmountCents,
+        businessDate,
+      );
+      amountCents = addCents(
+        amountCents,
+        dailyCents,
+        "fixed-cost period total",
+      );
+      addCategoryAmount(
+        categoryTotals,
+        { amountCents: dailyCents, category: effective.category },
+        { fixedCost: true },
+      );
+      if (isAdvertisingCategory(effective.category)) {
+        advertisingCents = addCents(
+          advertisingCents,
+          dailyCents,
+          "fixed advertising total",
+        );
+      }
+    }
+  }
+  let activeSeriesCount = 0;
+  const cutoffDate = end.toFormat("yyyy-MM-dd");
+  for (const versions of bySeries.values()) {
+    let effective: ExpenseOverviewFixedCostInput | null = null;
+    for (const version of versions) {
+      if (version.effectiveStartDate > cutoffDate) break;
+      effective = version;
+    }
+    if (effective?.state === "active") activeSeriesCount += 1;
+  }
+  return {
+    amountCents,
+    activeSeriesCount,
+    advertisingCents,
+  };
+}
+
 function calculatePeriod(
   input: ExpenseOverviewInput,
   boundary: ExpenseOverviewWeekBoundary,
@@ -612,6 +814,8 @@ function calculatePeriod(
   let totalAdvertisingCents = 0;
   let facebookCents = 0;
   let googleCents = 0;
+  let coveredExpenseCount = 0;
+  let coveredExpenseAmountCents = 0;
   for (const expense of input.expenses) {
     if (
       expense.lifecycleStatus !== "posted" ||
@@ -625,6 +829,38 @@ function calculatePeriod(
     }
     const date = easternDateKey(expense.purchaseDate, "expense purchaseDate");
     if (!inPeriod(date, period)) continue;
+    if (expense.coveredByFixedCostSeriesId) {
+      if (expense.reviewStatus !== "approved") {
+        throw new TypeError(
+          "Expenses covered by fixed costs must be owner-approved.",
+        );
+      }
+      const allocations = resolveAllocations(expense);
+      const schedule = fixedCostEffectiveOnDate(
+        input,
+        expense.coveredByFixedCostSeriesId,
+        date,
+      );
+      if (
+        !schedule ||
+        schedule.state !== "active" ||
+        schedule.monthlyAmountCents !== expense.amountCents ||
+        allocations.length !== 1 ||
+        allocations[0]?.category.id !== schedule.category.id ||
+        allocations[0]?.amountCents !== schedule.monthlyAmountCents
+      ) {
+        throw new TypeError(
+          `Expense ${expense.id} does not reconcile to its fixed-cost coverage.`,
+        );
+      }
+      coveredExpenseCount += 1;
+      coveredExpenseAmountCents = addCents(
+        coveredExpenseAmountCents,
+        expense.amountCents,
+        "fixed-cost covered evidence total",
+      );
+      continue;
+    }
     const allocations = resolveAllocations(expense);
     ordinaryExpensesCents = addCents(
       ordinaryExpensesCents,
@@ -662,6 +898,13 @@ function calculatePeriod(
     }
   }
 
+  const fixedCostResult = calculateFixedCosts(input, period, categoryTotals);
+  totalAdvertisingCents = addCents(
+    totalAdvertisingCents,
+    fixedCostResult.advertisingCents,
+    "advertising category total with fixed costs",
+  );
+
   const laborResult = calculateLabor(input, period);
   if (laborResult.labor.amountCents !== 0) {
     addCategoryAmount(categoryTotals, {
@@ -679,11 +922,38 @@ function calculatePeriod(
     googleCents,
     "attributed advertising total",
   );
-  const totalExpensesCents = addCents(
+  const nonLaborExpensesCents = addCents(
     ordinaryExpensesCents,
-    laborResult.labor.amountCents,
-    "total expenses",
+    fixedCostResult.amountCents,
+    "ordinary and fixed expenses",
   );
+  const totalExpensesCents = addCents(
+    nonLaborExpensesCents,
+    laborResult.labor.amountCents,
+    "total expenses including labor",
+  );
+  let categorizedExpensesCents = 0;
+  let categorizedFixedCostsCents = 0;
+  for (const category of categoryTotals.values()) {
+    categorizedExpensesCents = addCents(
+      categorizedExpensesCents,
+      category.amountCents,
+      "categorized expense total",
+    );
+    categorizedFixedCostsCents = addCents(
+      categorizedFixedCostsCents,
+      category.fixedCostCents,
+      "categorized fixed-cost total",
+    );
+  }
+  if (categorizedExpensesCents !== totalExpensesCents) {
+    throw new TypeError("Expense category totals must equal total expenses.");
+  }
+  if (categorizedFixedCostsCents !== fixedCostResult.amountCents) {
+    throw new TypeError(
+      "Fixed-cost category totals must equal fixed-cost expenses.",
+    );
+  }
   const operatingProfitCents = addCents(
     revenueCents,
     -totalExpensesCents,
@@ -693,6 +963,7 @@ function calculatePeriod(
     metrics: {
       revenueCents,
       ordinaryExpensesCents,
+      fixedCostsCents: fixedCostResult.amountCents,
       laborCents: laborResult.labor.amountCents,
       totalExpensesCents,
       operatingProfitCents,
@@ -708,6 +979,12 @@ function calculatePeriod(
         -attributedAdCents,
         "unattributed advertising total",
       ),
+    },
+    fixedCosts: {
+      amountCents: fixedCostResult.amountCents,
+      activeSeriesCount: fixedCostResult.activeSeriesCount,
+      coveredExpenseCount,
+      coveredExpenseAmountCents,
     },
     missingCommissionDataCount: laborResult.missingCommissionDataCount,
     missingFinalTotalCount,
@@ -860,6 +1137,7 @@ export function buildExpenseOverview(
       omittedUnverifiedHistoricalRecordCount:
         priorWeekOmittedUnverifiedHistoricalRecordCount,
       unverifiedExpenseCategoryCount: priorUnverifiedExpenseCategoryCount,
+      fixedCosts: prior.fixedCosts,
       completeness: {
         state: priorReasons.length === 0 ? "complete" : "incomplete",
         reasons: priorReasons,
@@ -936,6 +1214,7 @@ export function buildExpenseOverview(
     categories,
     labor: current.labor,
     advertising: current.advertising,
+    fixedCosts: current.fixedCosts,
     pendingExpenseCount: input.pendingExpenseCount,
     missingAdEntries,
     missingCommissionDataCount: current.missingCommissionDataCount,

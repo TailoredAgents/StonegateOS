@@ -4,7 +4,10 @@ import {
   expenseBusinessDateToTimestamp,
   parseExpenseSubmission,
 } from "@/lib/expense-submissions";
+import { assertFixedCostCoverageLinkCanBeEstablished } from "@/lib/expense-fixed-cost-coverage";
 import { TeamMutationFailure } from "@/lib/team-mutation";
+
+const FIXED_COST_SERIES_ID = "22222222-2222-4222-8222-222222222222";
 
 function validSubmission(overrides: Record<string, unknown> = {}) {
   return {
@@ -34,6 +37,84 @@ describe("expense submissions", () => {
     expect(result.allocations).toEqual([
       { categoryId: "fuel", amountCents: 12_345 },
     ]);
+  });
+
+  it("accepts a nullable fixed-cost coverage link while preserving the implicit allocation", () => {
+    expect(
+      parseExpenseSubmission(
+        validSubmission({
+          coveredByFixedCostSeriesId: FIXED_COST_SERIES_ID,
+        }),
+      ),
+    ).toMatchObject({
+      coveredByFixedCostSeriesId: FIXED_COST_SERIES_ID,
+      allocations: [{ categoryId: "fuel", amountCents: 12_345 }],
+    });
+    expect(
+      parseExpenseSubmission(
+        validSubmission({ coveredByFixedCostSeriesId: null }),
+      ).coveredByFixedCostSeriesId,
+    ).toBeNull();
+    expectInvalid(
+      validSubmission({ coveredByFixedCostSeriesId: "not-a-uuid" }),
+    );
+  });
+
+  it("gates every link change while allowing authorized clearing for rollback", () => {
+    const original = process.env["EXPENSE_FIXED_COSTS_ENABLED"];
+    process.env["EXPENSE_FIXED_COSTS_ENABLED"] = "0";
+    try {
+      expect(() =>
+        assertFixedCostCoverageLinkCanBeEstablished({
+          existingSeriesId: null,
+          requestedSeriesId: FIXED_COST_SERIES_ID,
+          canManageCoverage: true,
+        }),
+      ).toThrow(TeamMutationFailure);
+      expect(() =>
+        assertFixedCostCoverageLinkCanBeEstablished({
+          existingSeriesId: FIXED_COST_SERIES_ID,
+          requestedSeriesId: FIXED_COST_SERIES_ID,
+          canManageCoverage: false,
+        }),
+      ).not.toThrow();
+      expect(() =>
+        assertFixedCostCoverageLinkCanBeEstablished({
+          existingSeriesId: FIXED_COST_SERIES_ID,
+          requestedSeriesId: null,
+          canManageCoverage: false,
+        }),
+      ).toThrow(TeamMutationFailure);
+      expect(() =>
+        assertFixedCostCoverageLinkCanBeEstablished({
+          existingSeriesId: FIXED_COST_SERIES_ID,
+          requestedSeriesId: null,
+          canManageCoverage: true,
+        }),
+      ).not.toThrow();
+
+      process.env["EXPENSE_FIXED_COSTS_ENABLED"] = "1";
+      expect(() =>
+        assertFixedCostCoverageLinkCanBeEstablished({
+          existingSeriesId: null,
+          requestedSeriesId: FIXED_COST_SERIES_ID,
+          canManageCoverage: false,
+        }),
+      ).toThrow(TeamMutationFailure);
+      expect(() =>
+        assertFixedCostCoverageLinkCanBeEstablished({
+          existingSeriesId: null,
+          requestedSeriesId: FIXED_COST_SERIES_ID,
+          canManageCoverage: true,
+        }),
+      ).not.toThrow();
+    } finally {
+      if (original === undefined) {
+        delete process.env["EXPENSE_FIXED_COSTS_ENABLED"];
+      } else {
+        process.env["EXPENSE_FIXED_COSTS_ENABLED"] = original;
+      }
+    }
   });
 
   it("accepts an exact optional split containing the primary category", () => {
@@ -139,5 +220,26 @@ describe("expense submissions", () => {
         reason: "Wrong total",
       }).reason,
     ).toBe("Wrong total");
+    expect(
+      ExpenseReviewDecisionSchema.parse({
+        decision: "approve",
+        reason: null,
+        coveredByFixedCostSeriesId: FIXED_COST_SERIES_ID,
+      }).coveredByFixedCostSeriesId,
+    ).toBe(FIXED_COST_SERIES_ID);
+    expect(
+      ExpenseReviewDecisionSchema.parse({
+        decision: "approve",
+        reason: null,
+        coveredByFixedCostSeriesId: null,
+      }).coveredByFixedCostSeriesId,
+    ).toBeNull();
+    expect(
+      ExpenseReviewDecisionSchema.safeParse({
+        decision: "reject",
+        reason: "Wrong total",
+        coveredByFixedCostSeriesId: null,
+      }).success,
+    ).toBe(false);
   });
 });

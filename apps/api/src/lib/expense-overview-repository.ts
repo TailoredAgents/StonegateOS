@@ -1,4 +1,4 @@
-import { and, eq, gte, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import {
   appointmentCommissions,
@@ -6,6 +6,7 @@ import {
   dailyAdSpend,
   expenseAllocations,
   expenseCategories,
+  expenseFixedCostVersions,
   expenses,
   payoutRunAdjustments,
   payoutRunLines,
@@ -48,6 +49,7 @@ export type ExpenseOverviewRepositoryRows = {
     source: string;
     reversalOfExpenseId: string | null;
     correctionOfExpenseId?: string | null;
+    coveredByFixedCostSeriesId?: string | null;
   }>;
   allocations: Array<{
     expenseId: string;
@@ -82,6 +84,16 @@ export type ExpenseOverviewRepositoryRows = {
     businessDate: string;
     amountCents: number;
     currentExpenseId: string | null;
+  }>;
+  fixedCostVersions: Array<{
+    seriesId: string;
+    version: number;
+    name: string;
+    categoryId: string;
+    categoryName: string;
+    monthlyAmountCents: number;
+    effectiveStartDate: string;
+    state: "active" | "ended";
   }>;
 };
 
@@ -352,6 +364,7 @@ export function mapExpenseOverviewRows(input: {
           }
         : {}),
       dailyAdPlatform: dailyPlatformByExpenseId.get(expense.id) ?? null,
+      coveredByFixedCostSeriesId: expense.coveredByFixedCostSeriesId ?? null,
     });
   }
 
@@ -443,6 +456,20 @@ export function mapExpenseOverviewRows(input: {
       businessDate: entry.businessDate,
       amountCents: entry.amountCents,
     })),
+    fixedCosts: input.rows.fixedCostVersions.map((fixedCost) => ({
+      seriesId: fixedCost.seriesId,
+      version: fixedCost.version,
+      name: fixedCost.name,
+      category: categoryInput({
+        categoryId: fixedCost.categoryId,
+        categoryName: fixedCost.categoryName,
+        legacyCategory: null,
+        needsReview: false,
+      }),
+      monthlyAmountCents: fixedCost.monthlyAmountCents,
+      effectiveStartDate: fixedCost.effectiveStartDate,
+      state: fixedCost.state,
+    })),
     pendingExpenseCount,
     priorWeekPendingExpenseCount,
     asOf: input.asOf ?? new Date(),
@@ -497,6 +524,7 @@ export async function loadExpenseOverviewInput(
         source: expenses.source,
         reversalOfExpenseId: expenses.reversalOfExpenseId,
         correctionOfExpenseId: expenses.correctionOfExpenseId,
+        coveredByFixedCostSeriesId: expenses.coveredByFixedCostSeriesId,
       })
       .from(expenses)
       .leftJoin(
@@ -611,6 +639,59 @@ export async function loadExpenseOverviewInput(
         ),
       );
 
+    const fixedCostSelection = {
+      seriesId: expenseFixedCostVersions.seriesId,
+      version: expenseFixedCostVersions.version,
+      name: expenseFixedCostVersions.name,
+      categoryId: expenseFixedCostVersions.categoryId,
+      categoryName: expenseCategories.name,
+      monthlyAmountCents: expenseFixedCostVersions.monthlyAmountCents,
+      effectiveStartDate: expenseFixedCostVersions.effectiveStartDate,
+      state: expenseFixedCostVersions.state,
+    };
+    // The calculator needs one authoritative version immediately before the
+    // two-week reporting window, plus every revision that can take effect in
+    // the window. DISTINCT ON keeps this bounded as append-only history grows.
+    const fixedCostBaselines = await tx
+      .selectDistinctOn([expenseFixedCostVersions.seriesId], fixedCostSelection)
+      .from(expenseFixedCostVersions)
+      .innerJoin(
+        expenseCategories,
+        eq(expenseFixedCostVersions.categoryId, expenseCategories.id),
+      )
+      .where(
+        lt(expenseFixedCostVersions.effectiveStartDate, window.priorStartDate),
+      )
+      .orderBy(
+        expenseFixedCostVersions.seriesId,
+        desc(expenseFixedCostVersions.effectiveStartDate),
+        desc(expenseFixedCostVersions.version),
+      );
+
+    const fixedCostWindowVersions = await tx
+      .select(fixedCostSelection)
+      .from(expenseFixedCostVersions)
+      .innerJoin(
+        expenseCategories,
+        eq(expenseFixedCostVersions.categoryId, expenseCategories.id),
+      )
+      .where(
+        and(
+          gte(
+            expenseFixedCostVersions.effectiveStartDate,
+            window.priorStartDate,
+          ),
+          lt(
+            expenseFixedCostVersions.effectiveStartDate,
+            window.endDateExclusive,
+          ),
+        ),
+      );
+    const fixedCostVersions = [
+      ...fixedCostBaselines,
+      ...fixedCostWindowVersions,
+    ];
+
     return {
       jobs,
       expenses: expenseRows,
@@ -624,6 +705,7 @@ export async function loadExpenseOverviewInput(
       payoutLines,
       payoutAdjustments,
       dailyAdEntries,
+      fixedCostVersions,
     } satisfies ExpenseOverviewRepositoryRows;
   });
 

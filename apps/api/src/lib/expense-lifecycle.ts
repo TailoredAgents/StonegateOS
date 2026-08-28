@@ -49,6 +49,7 @@ export const ExpenseWriteSchema = z
 
 export const ExpenseCorrectionSchema = ExpenseWriteSchema.extend({
   reason: z.string().trim().min(3).max(500),
+  coveredByFixedCostSeriesId: z.string().uuid().nullable().optional(),
 }).strict();
 
 export const ExpenseReasonSchema = z
@@ -79,6 +80,8 @@ export type ParsedExpenseRequest = {
   expense: ValidatedExpenseWrite;
   receipt: ExpenseReceipt | null;
   reason: string | null;
+  /** Undefined preserves an existing link; null explicitly clears it. */
+  coveredByFixedCostSeriesId?: string | null;
 };
 
 export type ExpenseLifecycleRecord = {
@@ -256,11 +259,16 @@ function numericFormValue(form: FormData, key: string): number {
 
 export async function parseExpenseRequest(
   request: Request,
-  options: { requireReason?: boolean; allowReceipt?: boolean } = {},
+  options: {
+    requireReason?: boolean;
+    allowReceipt?: boolean;
+    allowFixedCostCoverage?: boolean;
+  } = {},
 ): Promise<ParsedExpenseRequest> {
   const contentType = request.headers.get("content-type") ?? "";
   let rawExpense: unknown;
   let rawReason: unknown = null;
+  let rawCoveredByFixedCostSeriesId: unknown = undefined;
   let receipt: ExpenseReceipt | null = null;
 
   if (contentType.includes("multipart/form-data")) {
@@ -285,6 +293,13 @@ export async function parseExpenseRequest(
       coverageEndAt: formString(form, "coverageEndAt"),
     };
     rawReason = formString(form, "reason");
+    if (options.allowFixedCostCoverage) {
+      rawCoveredByFixedCostSeriesId = form.has(
+        "coveredByFixedCostSeriesId",
+      )
+        ? formString(form, "coveredByFixedCostSeriesId")
+        : undefined;
+    }
     if (options.allowReceipt !== false) {
       receipt = await parseExpenseReceiptFile(form.get("receiptFile"));
     } else if (form.get("receiptFile") instanceof File) {
@@ -308,9 +323,18 @@ export async function parseExpenseRequest(
         throw new Error("invalid_json_shape");
       }
       if (options.requireReason) {
-        const { reason, ...expense } = body;
+        const {
+          reason,
+          coveredByFixedCostSeriesId,
+          ...expense
+        } = body;
         rawExpense = expense;
         rawReason = reason;
+        if (options.allowFixedCostCoverage) {
+          rawCoveredByFixedCostSeriesId = coveredByFixedCostSeriesId;
+        } else if (coveredByFixedCostSeriesId !== undefined) {
+          rawExpense = { ...expense, coveredByFixedCostSeriesId };
+        }
       } else {
         rawExpense = body;
       }
@@ -329,7 +353,26 @@ export async function parseExpenseRequest(
     if (!parsedReason.success) invalidPayload(parsedReason.error);
     reason = parsedReason.data.reason;
   }
-  return { expense, receipt, reason };
+  let coveredByFixedCostSeriesId: string | null | undefined;
+  if (options.allowFixedCostCoverage) {
+    const parsedCoverage = z
+      .object({
+        coveredByFixedCostSeriesId: z.string().uuid().nullable().optional(),
+      })
+      .strict()
+      .safeParse({ coveredByFixedCostSeriesId: rawCoveredByFixedCostSeriesId });
+    if (!parsedCoverage.success) invalidPayload(parsedCoverage.error);
+    coveredByFixedCostSeriesId =
+      parsedCoverage.data.coveredByFixedCostSeriesId;
+  }
+  return {
+    expense,
+    receipt,
+    reason,
+    ...(coveredByFixedCostSeriesId !== undefined
+      ? { coveredByFixedCostSeriesId }
+      : {}),
+  };
 }
 
 export async function parseExpenseReasonRequest(
@@ -428,6 +471,11 @@ export function expenseIdempotencyPayload(
     coverageStartAt: parsed.expense.coverageStartAt?.toISOString() ?? null,
     coverageEndAt: parsed.expense.coverageEndAt?.toISOString() ?? null,
     reason: parsed.reason,
+    ...(parsed.coveredByFixedCostSeriesId !== undefined
+      ? {
+          coveredByFixedCostSeriesId: parsed.coveredByFixedCostSeriesId,
+        }
+      : {}),
     receipt: parsed.receipt
       ? {
           sha256: parsed.receipt.sha256,

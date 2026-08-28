@@ -9,6 +9,7 @@ import {
 } from "@/lib/expense-lifecycle";
 import { createManagedExpenseCorrection } from "@/lib/expense-managed-lifecycle";
 import { assertGenericExpenseMutationAllowed } from "@/lib/expense-managed-mutation";
+import { permissionMatches, resolvePermissionContext } from "@/lib/permissions";
 import {
   claimTeamMutationIdempotency,
   completeTeamMutationIdempotency,
@@ -73,7 +74,12 @@ export async function POST(
     const parsed = await parseExpenseRequest(request, {
       requireReason: true,
       allowReceipt: false,
+      allowFixedCostCoverage: true,
     });
+    const permissionContext = await resolvePermissionContext(request);
+    const canManageFixedCostCoverage = permissionContext.permissions.some(
+      (permission) => permissionMatches(permission, "financials.read"),
+    );
     db = getDb();
     const claimed = await claimTeamMutationIdempotency(db, mutation, {
       route: "POST /api/admin/expenses/:expenseId/correct",
@@ -124,6 +130,8 @@ export async function POST(
         actorId,
         reason: correctionReason,
         now,
+        coveredByFixedCostSeriesId: parsed.coveredByFixedCostSeriesId,
+        canManageFixedCostCoverage,
       });
 
       const nextVersion = existing.version + 1;
@@ -163,6 +171,7 @@ export async function POST(
           paidAt: existing.paidAt.toISOString(),
           lifecycleStatus: existing.lifecycleStatus,
           version: existing.version,
+          coveredByFixedCostSeriesId: existing.coveredByFixedCostSeriesId,
         },
         after: {
           lifecycleStatus: "corrected",
@@ -172,6 +181,8 @@ export async function POST(
           replacementAmountCents: parsed.expense.amountCents,
           replacementCategory: parsed.expense.category,
           replacementPaidAt: parsed.expense.paidAt.toISOString(),
+          coveredByFixedCostSeriesId:
+            managed.replacement.coveredByFixedCostSeriesId,
         },
         metadata: {
           reasonLength: correctionReason.length,
@@ -182,6 +193,8 @@ export async function POST(
           allocationStrategy: managed.allocationStrategy,
           reimbursementClaimId: managed.reimbursementClaimId,
           reimbursementStatus: managed.reimbursementStatus,
+          coveredByFixedCostSeriesId:
+            managed.replacement.coveredByFixedCostSeriesId,
         },
         committedAt: now,
       });
@@ -197,6 +210,8 @@ export async function POST(
             existing.receiptUrl || existing.receiptCaptureId ? expenseId : null,
           reimbursementClaimId: managed.reimbursementClaimId,
           reimbursementStatus: managed.reimbursementStatus,
+          coveredByFixedCostSeriesId:
+            managed.replacement.coveredByFixedCostSeriesId,
         },
         {
           auditEventId: audit.auditEventId,

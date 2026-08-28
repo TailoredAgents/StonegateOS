@@ -36,6 +36,7 @@ export async function POST(
   const parsed = buildExpenseFormBody(form, {
     requireReason: true,
     includeReceipt: false,
+    includeFixedCostCoverage: true,
   });
   if (!parsed.ok) {
     return expenseFlashRedirect(redirectTo, parsed.message, false);

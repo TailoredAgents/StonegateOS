@@ -13,6 +13,7 @@ import {
   createManagedExpenseCorrection,
   createManagedExpenseVoid,
 } from "@/lib/expense-managed-lifecycle";
+import { createExpenseFixedCost } from "@/lib/expense-fixed-costs";
 import {
   createExpenseSubmissionInTransaction,
   parseExpenseSubmission,
@@ -40,9 +41,11 @@ describeOrSkip("managed V2 expense correction lifecycle", () => {
   const ROLLBACK = new Error("managed_expense_lifecycle_test_rollback");
   const originalReimbursementFlag =
     process.env["EXPENSE_REIMBURSEMENT_ENABLED"];
+  const originalFixedCostFlag = process.env["EXPENSE_FIXED_COSTS_ENABLED"];
 
   beforeAll(() => {
     process.env["EXPENSE_REIMBURSEMENT_ENABLED"] = "1";
+    process.env["EXPENSE_FIXED_COSTS_ENABLED"] = "1";
   });
 
   afterAll(async () => {
@@ -50,6 +53,11 @@ describeOrSkip("managed V2 expense correction lifecycle", () => {
       delete process.env["EXPENSE_REIMBURSEMENT_ENABLED"];
     } else {
       process.env["EXPENSE_REIMBURSEMENT_ENABLED"] = originalReimbursementFlag;
+    }
+    if (originalFixedCostFlag === undefined) {
+      delete process.env["EXPENSE_FIXED_COSTS_ENABLED"];
+    } else {
+      process.env["EXPENSE_FIXED_COSTS_ENABLED"] = originalFixedCostFlag;
     }
     await closeDbForTests();
   });
@@ -248,5 +256,145 @@ describeOrSkip("managed V2 expense correction lifecycle", () => {
       throw new Error(databaseErrorText(error));
     }
     throw new Error("Expected the verification transaction to roll back.");
+  });
+
+  it("preserves a valid coverage link through correction and supports explicit unlink", async () => {
+    try {
+      await getDb().transaction(async (tx) => {
+        const createdAt = new Date("2026-08-27T15:00:00.000Z");
+        const [owner] = await tx
+          .insert(teamMembers)
+          .values({ name: "Coverage correction owner", active: true })
+          .returning({ id: teamMembers.id });
+        if (!owner) throw new Error("coverage_correction_owner_missing");
+        const schedule = await createExpenseFixedCost(tx, {
+          actorId: owner.id,
+          now: createdAt,
+          name: "Office lease",
+          categoryId: "office_admin",
+          monthlyAmountCents: 31_000,
+          effectiveStartDate: "2026-08-01",
+        });
+        const created = await createExpenseSubmissionInTransaction(tx, {
+          submission: parseExpenseSubmission({
+            amountCents: 31_000,
+            purchaseDate: "2026-08-26",
+            categoryId: "office_admin",
+            payerType: "company",
+            paidByMemberId: null,
+            coveredByFixedCostSeriesId: schedule.seriesId,
+          }),
+          actorId: owner.id,
+          canApprove: true,
+          canManageFixedCostCoverage: true,
+          source: "receipt_scan",
+          now: createdAt,
+        });
+        const [original] = await tx
+          .select()
+          .from(expenses)
+          .where(eq(expenses.id, created.expenseId))
+          .for("update");
+        if (!original) throw new Error("coverage_original_missing");
+
+        const firstCorrectionAt = new Date(createdAt.getTime() + 1_000);
+        const preserved = await createManagedExpenseCorrection(tx, {
+          existing: original,
+          replacement: {
+            amountCents: 31_000,
+            category: "Office/Admin",
+            vendor: "Landlord",
+            memo: "Corrected memo",
+            method: "ach",
+            paidAt: original.paidAt,
+            coverageStartAt: null,
+            coverageEndAt: null,
+          },
+          actorId: owner.id,
+          reason: "Corrected the supporting details",
+          now: firstCorrectionAt,
+        });
+        expect(preserved.replacement.coveredByFixedCostSeriesId).toBe(
+          schedule.seriesId,
+        );
+        expect(preserved.reversal.coveredByFixedCostSeriesId).toBeNull();
+        await tx
+          .update(expenses)
+          .set({
+            lifecycleStatus: "corrected",
+            correctedAt: firstCorrectionAt,
+            correctedBy: owner.id,
+            correctionReason: "Corrected the supporting details",
+            correctedByExpenseId: preserved.replacement.id,
+            version: original.version + 1,
+            updatedAt: firstCorrectionAt,
+          })
+          .where(eq(expenses.id, original.id));
+
+        const [linkedReplacement] = await tx
+          .select()
+          .from(expenses)
+          .where(eq(expenses.id, preserved.replacement.id))
+          .for("update");
+        if (!linkedReplacement) throw new Error("linked_replacement_missing");
+        const unlinkAt = new Date(createdAt.getTime() + 2_000);
+        const unlinked = await createManagedExpenseCorrection(tx, {
+          existing: linkedReplacement,
+          replacement: {
+            amountCents: 31_000,
+            category: "Office/Admin",
+            vendor: "Landlord",
+            memo: "Remove duplicate coverage marker",
+            method: "ach",
+            paidAt: linkedReplacement.paidAt,
+            coverageStartAt: null,
+            coverageEndAt: null,
+          },
+          actorId: owner.id,
+          reason: "Fixed cost coverage was selected by mistake",
+          now: unlinkAt,
+          coveredByFixedCostSeriesId: null,
+          canManageFixedCostCoverage: true,
+        });
+        expect(unlinked.replacement.coveredByFixedCostSeriesId).toBeNull();
+        expect(unlinked.reversal.coveredByFixedCostSeriesId).toBeNull();
+        await tx
+          .update(expenses)
+          .set({
+            lifecycleStatus: "corrected",
+            correctedAt: unlinkAt,
+            correctedBy: owner.id,
+            correctionReason: "Fixed cost coverage was selected by mistake",
+            correctedByExpenseId: unlinked.replacement.id,
+            version: linkedReplacement.version + 1,
+            updatedAt: unlinkAt,
+          })
+          .where(eq(expenses.id, linkedReplacement.id));
+
+        expect(
+          await tx
+            .select({
+              id: expenses.id,
+              lifecycleStatus: expenses.lifecycleStatus,
+              coveredByFixedCostSeriesId: expenses.coveredByFixedCostSeriesId,
+            })
+            .from(expenses)
+            .where(eq(expenses.id, unlinked.replacement.id)),
+        ).toEqual([
+          {
+            id: unlinked.replacement.id,
+            lifecycleStatus: "posted",
+            coveredByFixedCostSeriesId: null,
+          },
+        ]);
+
+        await tx.execute(sql`set constraints all immediate`);
+        throw ROLLBACK;
+      });
+    } catch (error) {
+      if (error === ROLLBACK) return;
+      throw new Error(databaseErrorText(error));
+    }
+    throw new Error("Expected coverage correction verification to roll back.");
   });
 });

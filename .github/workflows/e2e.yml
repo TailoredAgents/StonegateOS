@@ -76,6 +76,7 @@ jobs:
           src/__tests__/expense-managed-lifecycle.integration.test.ts
           src/__tests__/expense-operations-monitor.integration.test.ts
           src/__tests__/expense-reimbursement-payout-transitions.integration.test.ts
+          src/__tests__/expense-fixed-costs.integration.test.ts
 
   playwright-e2e:
     runs-on: ubuntu-latest
@@ -126,6 +127,7 @@ jobs:
           test/binary-upload.test.ts
           test/legacy-expense-receipt.test.ts
           test/mobile-expense-capture-route.test.ts
+          test/mobile-fixed-cost-route.test.ts
           test/mobile-spend-v2.test.ts
 
       - name: Validate mobile service worker syntax

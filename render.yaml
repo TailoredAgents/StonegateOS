@@ -200,6 +200,8 @@ services:
         sync: false
       - key: EXPENSE_OVERVIEW_ENABLED
         sync: false
+      - key: EXPENSE_FIXED_COSTS_ENABLED
+        sync: false
       - key: SQUARE_POS_ENABLED
         sync: false
       - key: MEDIA_OBJECT_ENDPOINT

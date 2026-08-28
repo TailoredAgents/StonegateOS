@@ -40,6 +40,8 @@ type ExpenseListItem = {
   reversalOfExpenseId: string | null;
   correctionOfExpenseId: string | null;
   correctedByExpenseId: string | null;
+  coveredByFixedCostSeriesId: string | null;
+  coveredByFixedCostName: string | null;
   externallyManaged: boolean;
   requiresFinanceReview: boolean;
   receipt: { filename: string; contentType: string } | null;
@@ -155,6 +157,10 @@ function isExpenseListItem(value: unknown): value is ExpenseListItem {
     isNullableUuid(item["reversalOfExpenseId"]) &&
     isNullableUuid(item["correctionOfExpenseId"]) &&
     isNullableUuid(item["correctedByExpenseId"]) &&
+    (item["coveredByFixedCostSeriesId"] === undefined ||
+      isNullableUuid(item["coveredByFixedCostSeriesId"])) &&
+    (item["coveredByFixedCostName"] === undefined ||
+      isNullableString(item["coveredByFixedCostName"])) &&
     typeof item["externallyManaged"] === "boolean" &&
     typeof item["requiresFinanceReview"] === "boolean" &&
     (item["receipt"] === null ||
@@ -578,6 +584,28 @@ function ExpenseActions({
           <input type="hidden" name="version" value={expense.version} />
           <input type="hidden" name="idempotencyKey" value={randomUUID()} />
           <ExpenseFields expense={expense} includeReceipt={false} />
+          {expense.coveredByFixedCostSeriesId ? (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-slate-600">
+                Overview treatment
+              </span>
+              <select
+                name="coveredByFixedCostSeriesId"
+                defaultValue={expense.coveredByFixedCostSeriesId}
+                className={INPUT_CLASS}
+              >
+                <option value={expense.coveredByFixedCostSeriesId}>
+                  Keep covered by{" "}
+                  {expense.coveredByFixedCostName ?? "fixed monthly cost"}
+                </option>
+                <option value="">Count the replacement separately</option>
+              </select>
+              <span className="text-[11px] text-slate-500">
+                Choose separately if this correction no longer matches the fixed
+                monthly amount or category.
+              </span>
+            </label>
+          ) : null}
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-slate-600">
               Correction reason
@@ -1193,6 +1221,15 @@ export async function ExpensesSection({
                           {expense.coverageEndAt
                             ? fmtDay(expense.coverageEndAt)
                             : "?"}
+                        </p>
+                      ) : null}
+                      {expense.coveredByFixedCostSeriesId ? (
+                        <p className="mt-1 text-xs font-medium text-cyan-800">
+                          Kept as evidence and excluded from ordinary Overview
+                          expenses — covered by{" "}
+                          {expense.coveredByFixedCostName ??
+                            "a fixed monthly cost"}
+                          .
                         </p>
                       ) : null}
                       {expense.voidReason ? (

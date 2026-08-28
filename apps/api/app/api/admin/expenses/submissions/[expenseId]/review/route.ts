@@ -4,6 +4,7 @@ import {
   reviewExpenseSubmissionInTransaction,
 } from "@/lib/expense-submissions";
 import { getDb } from "@/db";
+import { permissionMatches, resolvePermissionContext } from "@/lib/permissions";
 import {
   claimTeamMutationIdempotency,
   completeTeamMutationIdempotency,
@@ -92,6 +93,10 @@ export async function POST(
         "The verified expense reviewer is incomplete.",
       );
     }
+    const permissionContext = await resolvePermissionContext(request);
+    const canManageFixedCostCoverage = permissionContext.permissions.some(
+      (permission) => permissionMatches(permission, "financials.read"),
+    );
     db = getDb();
     const claimed = await claimTeamMutationIdempotency(db, mutation, {
       route: "POST /api/admin/expenses/submissions/:expenseId/review",
@@ -110,6 +115,7 @@ export async function POST(
         reviewerId: actorId,
         expectedVersion: version,
         decision: parsed.data,
+        canManageFixedCostCoverage,
       });
       const audit = await mutation.audit.insertSuccess(tx, {
         entityType: "expense",
@@ -117,6 +123,7 @@ export async function POST(
         before: {
           lifecycleStatus: "draft",
           reviewStatus: "pending",
+          coveredByFixedCostSeriesId: null,
           version,
         },
         after: {
@@ -124,6 +131,7 @@ export async function POST(
           reviewStatus: reviewed.reviewStatus,
           categoryId: reviewed.categoryId,
           category: reviewed.category,
+          coveredByFixedCostSeriesId: reviewed.coveredByFixedCostSeriesId,
           version: reviewed.version,
         },
         metadata: {

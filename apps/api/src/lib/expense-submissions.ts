@@ -18,6 +18,10 @@ import {
 } from "@/lib/expense-receipt-domain";
 import { isExpenseReimbursementEnabled } from "@/lib/expense-feature-flags";
 import {
+  assertExpenseFixedCostCoverageLink,
+  assertFixedCostCoverageLinkCanBeEstablished,
+} from "@/lib/expense-fixed-cost-coverage";
+import {
   TeamMutationFailure,
   type TeamMutationTransaction,
 } from "@/lib/team-mutation";
@@ -71,6 +75,12 @@ export const ExpenseSubmissionSchema = z
     payerType: z.enum(["company", "personal"]),
     paidByMemberId: z.string().uuid().nullable().optional().default(null),
     appointmentId: z.string().uuid().nullable().optional().default(null),
+    coveredByFixedCostSeriesId: z
+      .string()
+      .uuid()
+      .nullable()
+      .optional()
+      .default(null),
   })
   .strict()
   .superRefine((value, context) => {
@@ -111,6 +121,7 @@ export const ExpenseReviewDecisionSchema = z
       .max(32)
       .optional(),
     lockVendorRule: z.boolean().optional(),
+    coveredByFixedCostSeriesId: z.string().uuid().nullable().optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -125,7 +136,8 @@ export const ExpenseReviewDecisionSchema = z
       value.decision === "reject" &&
       (value.categoryId !== undefined ||
         value.allocations !== undefined ||
-        value.lockVendorRule)
+        value.lockVendorRule ||
+        value.coveredByFixedCostSeriesId !== undefined)
     ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -153,6 +165,7 @@ export type CreatedExpenseSubmission = {
   reviewStatus: "pending" | "approved";
   reimbursementClaimId: string | null;
   reimbursementStatus: "approved" | "attached" | null;
+  coveredByFixedCostSeriesId: string | null;
   version: number;
 };
 
@@ -272,8 +285,12 @@ async function assertSubmissionReferences(
   actorId: string,
   canApprove: boolean,
 ): Promise<Map<string, { id: string; name: string }>> {
+  const allocations =
+    input.allocations && input.allocations.length > 0
+      ? input.allocations
+      : [{ categoryId: input.categoryId, amountCents: input.amountCents }];
   const categoryIds = Array.from(
-    new Set(input.allocations?.map((allocation) => allocation.categoryId)),
+    new Set(allocations.map((allocation) => allocation.categoryId)),
   );
   const categoryRows = await tx
     .select({ id: expenseCategories.id, name: expenseCategories.name })
@@ -625,12 +642,22 @@ export async function createExpenseSubmissionInTransaction(
     actorId: string;
     submittedById?: string;
     canApprove: boolean;
+    canManageFixedCostCoverage?: boolean;
     source: ExpenseSubmissionSource;
     receiptCaptureId?: string | null;
     now?: Date;
   },
 ): Promise<CreatedExpenseSubmission> {
   const now = input.now ?? new Date();
+  const normalizedAllocations =
+    input.submission.allocations && input.submission.allocations.length > 0
+      ? input.submission.allocations
+      : [
+          {
+            categoryId: input.submission.categoryId,
+            amountCents: input.submission.amountCents,
+          },
+        ];
   if (
     input.submission.payerType === "personal" &&
     !isExpenseReimbursementEnabled()
@@ -640,6 +667,22 @@ export async function createExpenseSubmissionInTransaction(
       "Personal-paid expenses are temporarily unavailable. Use company-paid or contact an owner.",
     );
   }
+  if (input.submission.coveredByFixedCostSeriesId && !input.canApprove) {
+    throw new TeamMutationFailure(
+      "forbidden",
+      "Only an owner can mark an expense as covered by a fixed cost.",
+      {
+        fieldErrors: {
+          coveredByFixedCostSeriesId: "Owner approval is required.",
+        },
+      },
+    );
+  }
+  assertFixedCostCoverageLinkCanBeEstablished({
+    existingSeriesId: null,
+    requestedSeriesId: input.submission.coveredByFixedCostSeriesId,
+    canManageCoverage: input.canManageFixedCostCoverage,
+  });
   const categories = await assertSubmissionReferences(
     tx,
     input.submission,
@@ -649,6 +692,15 @@ export async function createExpenseSubmissionInTransaction(
   const primaryCategory = categories.get(input.submission.categoryId);
   if (!primaryCategory) {
     throw new TeamMutationFailure("invalid", "Choose an active category.");
+  }
+  if (input.submission.coveredByFixedCostSeriesId) {
+    await assertExpenseFixedCostCoverageLink(tx, {
+      seriesId: input.submission.coveredByFixedCostSeriesId,
+      purchaseDate: input.submission.purchaseDate,
+      amountCents: input.submission.amountCents,
+      categoryId: input.submission.categoryId,
+      allocations: normalizedAllocations,
+    });
   }
   const reviewStatus = input.canApprove ? "approved" : "pending";
   const [created] = await tx
@@ -672,6 +724,7 @@ export async function createExpenseSubmissionInTransaction(
       receiptCaptureId: input.receiptCaptureId ?? null,
       appointmentId: input.submission.appointmentId,
       paidAt: expenseBusinessDateToTimestamp(input.submission.purchaseDate),
+      coveredByFixedCostSeriesId: input.submission.coveredByFixedCostSeriesId,
       lifecycleStatus: "draft",
       version: 1,
       postedAt: null,
@@ -688,7 +741,7 @@ export async function createExpenseSubmissionInTransaction(
   }
 
   await tx.insert(expenseAllocations).values(
-    (input.submission.allocations ?? []).map((allocation) => ({
+    normalizedAllocations.map((allocation) => ({
       expenseId: created.id,
       categoryId: allocation.categoryId,
       amountCents: allocation.amountCents,
@@ -743,6 +796,7 @@ export async function createExpenseSubmissionInTransaction(
     reviewStatus,
     reimbursementClaimId,
     reimbursementStatus,
+    coveredByFixedCostSeriesId: input.submission.coveredByFixedCostSeriesId,
     version: input.canApprove ? 2 : 1,
   };
 }
@@ -754,6 +808,7 @@ export async function reviewExpenseSubmissionInTransaction(
     reviewerId: string;
     expectedVersion: number;
     decision: ExpenseReviewDecision;
+    canManageFixedCostCoverage?: boolean;
     now?: Date;
   },
 ): Promise<{
@@ -765,6 +820,7 @@ export async function reviewExpenseSubmissionInTransaction(
   reimbursementStatus: "approved" | "attached" | null;
   categoryId: string | null;
   category: string | null;
+  coveredByFixedCostSeriesId: string | null;
 }> {
   const now = input.now ?? new Date();
   const [existing] = await tx
@@ -775,6 +831,8 @@ export async function reviewExpenseSubmissionInTransaction(
       vendor: expenses.vendor,
       payerType: expenses.payerType,
       paidByMemberId: expenses.paidByMemberId,
+      paidAt: expenses.paidAt,
+      coveredByFixedCostSeriesId: expenses.coveredByFixedCostSeriesId,
       lifecycleStatus: expenses.lifecycleStatus,
       reviewStatus: expenses.reviewStatus,
       version: expenses.version,
@@ -840,6 +898,7 @@ export async function reviewExpenseSubmissionInTransaction(
       reimbursementStatus: null,
       categoryId: existing.categoryId,
       category: null,
+      coveredByFixedCostSeriesId: existing.coveredByFixedCostSeriesId,
     };
   }
 
@@ -857,6 +916,10 @@ export async function reviewExpenseSubmissionInTransaction(
       : input.decision.categoryId
         ? [{ categoryId: requestedCategoryId, amountCents: existing.amount }]
         : null;
+  let finalAllocations: Array<{
+    categoryId: string;
+    amountCents: number;
+  }> | null = null;
   let approvedCategoryName: string | null = null;
   if (requestedAllocations) {
     const validated = validateExpenseAllocations({
@@ -876,6 +939,7 @@ export async function reviewExpenseSubmissionInTransaction(
         },
       );
     }
+    finalAllocations = [...validated.allocationSet.allocations];
     if (
       !validated.allocationSet.allocations.some(
         (allocation) => allocation.categoryId === requestedCategoryId,
@@ -936,6 +1000,34 @@ export async function reviewExpenseSubmissionInTransaction(
     approvedCategoryName = category?.name ?? null;
   }
 
+  const coveredByFixedCostSeriesId =
+    input.decision.coveredByFixedCostSeriesId === undefined
+      ? existing.coveredByFixedCostSeriesId
+      : input.decision.coveredByFixedCostSeriesId;
+  assertFixedCostCoverageLinkCanBeEstablished({
+    existingSeriesId: existing.coveredByFixedCostSeriesId,
+    requestedSeriesId: coveredByFixedCostSeriesId,
+    canManageCoverage: input.canManageFixedCostCoverage,
+  });
+  if (coveredByFixedCostSeriesId) {
+    if (!finalAllocations) {
+      finalAllocations = await tx
+        .select({
+          categoryId: expenseAllocations.categoryId,
+          amountCents: expenseAllocations.amountCents,
+        })
+        .from(expenseAllocations)
+        .where(eq(expenseAllocations.expenseId, existing.id));
+    }
+    await assertExpenseFixedCostCoverageLink(tx, {
+      seriesId: coveredByFixedCostSeriesId,
+      purchaseDate: existing.paidAt,
+      amountCents: existing.amount,
+      categoryId: requestedCategoryId,
+      allocations: finalAllocations,
+    });
+  }
+
   const [approved] = await tx
     .update(expenses)
     .set({
@@ -949,6 +1041,7 @@ export async function reviewExpenseSubmissionInTransaction(
       lifecycleStatus: "posted",
       postedAt: now,
       postedBy: input.reviewerId,
+      coveredByFixedCostSeriesId,
       version: nextVersion,
       updatedAt: now,
     })
@@ -1003,6 +1096,7 @@ export async function reviewExpenseSubmissionInTransaction(
     reimbursementStatus,
     categoryId: requestedCategoryId,
     category: approvedCategoryName,
+    coveredByFixedCostSeriesId,
   };
 }
 

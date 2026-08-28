@@ -68,7 +68,11 @@ function textValue(
 
 export function buildExpenseFormBody(
   form: FormData,
-  options: { requireReason?: boolean; includeReceipt?: boolean } = {},
+  options: {
+    requireReason?: boolean;
+    includeReceipt?: boolean;
+    includeFixedCostCoverage?: boolean;
+  } = {},
 ): ExpenseFormResult {
   const amountCents = parseMoneyToCents(form.get("amount"));
   if (amountCents === null) {
@@ -145,6 +149,21 @@ export function buildExpenseFormBody(
       };
     }
     body.set("reason", reason);
+  }
+
+  if (
+    options.includeFixedCostCoverage &&
+    form.has("coveredByFixedCostSeriesId")
+  ) {
+    const rawSeriesId = form.get("coveredByFixedCostSeriesId");
+    if (typeof rawSeriesId !== "string") {
+      return { ok: false, message: "Choose a valid Overview treatment." };
+    }
+    const seriesId = rawSeriesId.trim();
+    if (seriesId.length > 0 && !UUID_PATTERN.test(seriesId)) {
+      return { ok: false, message: "Choose a valid Overview treatment." };
+    }
+    body.set("coveredByFixedCostSeriesId", seriesId);
   }
 
   if (options.includeReceipt !== false) {

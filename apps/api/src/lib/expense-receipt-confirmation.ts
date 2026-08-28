@@ -88,6 +88,7 @@ export async function confirmExpenseReceiptInTransaction(
     expectedVersion: number;
     actorId: string;
     canApprove: boolean;
+    canManageFixedCostCoverage?: boolean;
     confirmation: ParsedExpenseReceiptConfirmation;
     now?: Date;
   },
@@ -180,6 +181,7 @@ export async function confirmExpenseReceiptInTransaction(
     actorId: input.actorId,
     submittedById: capture.submittedBy,
     canApprove: input.canApprove,
+    canManageFixedCostCoverage: input.canManageFixedCostCoverage,
     source: "receipt_scan",
     receiptCaptureId: capture.id,
     now,

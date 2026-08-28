@@ -482,6 +482,301 @@ describe("expense overview calculations", () => {
     });
   });
 
+  it("accrues effective-dated monthly costs exactly across a month boundary", () => {
+    const result = buildExpenseOverview(
+      baseInput({
+        weekStart: "2026-03-30",
+        fixedCosts: [
+          {
+            seriesId: "lease",
+            version: 1,
+            name: "Office lease",
+            category: { id: "office_admin", label: "Office/Admin" },
+            monthlyAmountCents: 3_100,
+            effectiveStartDate: "2026-03-01",
+            state: "active",
+          },
+          {
+            seriesId: "lease",
+            version: 2,
+            name: "Office software bundle",
+            category: { id: "software", label: "Software" },
+            monthlyAmountCents: 3_000,
+            effectiveStartDate: "2026-04-01",
+            state: "active",
+          },
+          {
+            seriesId: "lease",
+            version: 3,
+            name: "Office software bundle",
+            category: { id: "software", label: "Software" },
+            monthlyAmountCents: 3_000,
+            effectiveStartDate: "2026-04-04",
+            state: "ended",
+          },
+        ],
+        asOf: "2026-04-06",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ordinaryExpensesCents: 0,
+      fixedCostsCents: 500,
+      laborCents: 0,
+      totalExpensesCents: 500,
+      operatingProfitCents: -500,
+      fixedCosts: { amountCents: 500, activeSeriesCount: 0 },
+    });
+    expect(result.categories).toEqual([
+      expect.objectContaining({
+        id: "software",
+        amountCents: 300,
+        fixedCostCents: 300,
+        percentOfExpenses: 60,
+      }),
+      expect.objectContaining({
+        id: "office_admin",
+        amountCents: 200,
+        fixedCostCents: 200,
+        percentOfExpenses: 40,
+      }),
+    ]);
+  });
+
+  it("caps current and future fixed-cost accrual at the Eastern as-of date", () => {
+    const fixedCosts: NonNullable<ExpenseOverviewInput["fixedCosts"]> = [
+      {
+        seriesId: "lease",
+        version: 1,
+        name: "Office lease",
+        category: { id: "office_admin", label: "Office/Admin" },
+        monthlyAmountCents: 3_100,
+        effectiveStartDate: "2026-08-01",
+        state: "active",
+      },
+    ];
+    const current = buildExpenseOverview(
+      baseInput({
+        weekStart: "2026-08-24",
+        fixedCosts,
+        asOf: "2026-08-27T23:59:59-04:00",
+      }),
+    );
+
+    expect(current.fixedCostsCents).toBe(400);
+    expect(current.fixedCosts).toEqual({
+      amountCents: 400,
+      activeSeriesCount: 1,
+      coveredExpenseCount: 0,
+      coveredExpenseAmountCents: 0,
+    });
+    // The completed prior week remains a full seven-day reporting period.
+    expect(current.priorWeek.fixedCostsCents).toBe(700);
+
+    const future = buildExpenseOverview(
+      baseInput({
+        weekStart: "2026-08-31",
+        fixedCosts,
+        asOf: "2026-08-27T23:59:59-04:00",
+      }),
+    );
+
+    expect(future.fixedCostsCents).toBe(0);
+    expect(future.fixedCosts).toEqual({
+      amountCents: 0,
+      activeSeriesCount: 0,
+      coveredExpenseCount: 0,
+      coveredExpenseAmountCents: 0,
+    });
+    expect(future.categories).toEqual([]);
+    expect(future.priorWeek.fixedCostsCents).toBe(400);
+  });
+
+  it("uses the highest fixed-cost version when corrections share a date", () => {
+    const result = buildExpenseOverview(
+      baseInput({
+        fixedCosts: [
+          {
+            seriesId: "service-bundle",
+            version: 1,
+            name: "Original bundle",
+            category: { id: "office_admin", label: "Office/Admin" },
+            monthlyAmountCents: 3_100,
+            effectiveStartDate: "2026-08-01",
+            state: "active",
+          },
+          {
+            seriesId: "service-bundle",
+            version: 2,
+            name: "First correction",
+            category: { id: "software", label: "Software" },
+            monthlyAmountCents: 6_200,
+            effectiveStartDate: WEEK_START,
+            state: "active",
+          },
+          {
+            seriesId: "service-bundle",
+            version: 3,
+            name: "Final correction",
+            category: { id: "equipment", label: "Equipment" },
+            monthlyAmountCents: 9_300,
+            effectiveStartDate: WEEK_START,
+            state: "active",
+          },
+        ],
+      }),
+    );
+
+    expect(result.fixedCostsCents).toBe(2_100);
+    expect(result.categories).toEqual([
+      expect.objectContaining({
+        id: "equipment",
+        amountCents: 2_100,
+        fixedCostCents: 2_100,
+      }),
+    ]);
+    expect(result.priorWeek.fixedCostsCents).toBe(700);
+  });
+
+  it("preserves tiny monthly cents and reconciles category totals exactly", () => {
+    const result = buildExpenseOverview(
+      baseInput({
+        weekStart: "2026-08-31",
+        asOf: "2026-09-07",
+        expenses: [
+          {
+            id: "office-supplies",
+            amountCents: 99,
+            purchaseDate: "2026-08-31",
+            lifecycleStatus: "posted",
+            reviewStatus: "approved",
+            source: "manual",
+            category: { id: "office_admin", label: "Office/Admin" },
+          },
+        ],
+        fixedCosts: [
+          {
+            seriesId: "one-cent-cost",
+            version: 1,
+            name: "One-cent monthly cost",
+            category: { id: "office_admin", label: "Office/Admin" },
+            monthlyAmountCents: 1,
+            effectiveStartDate: "2026-08-01",
+            state: "active",
+          },
+        ],
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ordinaryExpensesCents: 99,
+      fixedCostsCents: 1,
+      totalExpensesCents: 100,
+    });
+    expect(result.categories).toEqual([
+      expect.objectContaining({
+        id: "office_admin",
+        amountCents: 100,
+        fixedCostCents: 1,
+      }),
+    ]);
+    expect(
+      result.categories.reduce(
+        (total, category) => total + category.amountCents,
+        0,
+      ),
+    ).toBe(result.totalExpensesCents);
+  });
+
+  it("keeps linked receipt evidence out of ordinary totals without losing fixed accrual", () => {
+    const result = buildExpenseOverview(
+      baseInput({
+        expenses: [
+          {
+            id: "prior-software-receipt",
+            amountCents: 31_000,
+            purchaseDate: "2026-08-12",
+            lifecycleStatus: "posted",
+            reviewStatus: "approved",
+            source: "receipt_scan",
+            category: { id: "software", label: "Software" },
+            coveredByFixedCostSeriesId: "33333333-3333-4333-8333-333333333333",
+          },
+          {
+            id: "monthly-lease-receipt",
+            amountCents: 31_000,
+            purchaseDate: "2026-08-20",
+            lifecycleStatus: "posted",
+            reviewStatus: "approved",
+            source: "receipt_scan",
+            category: { id: "office_admin", label: "Office/Admin" },
+            coveredByFixedCostSeriesId: "22222222-2222-4222-8222-222222222222",
+          },
+        ],
+        fixedCosts: [
+          {
+            seriesId: "22222222-2222-4222-8222-222222222222",
+            version: 1,
+            name: "Office lease",
+            category: { id: "office_admin", label: "Office/Admin" },
+            monthlyAmountCents: 31_000,
+            effectiveStartDate: "2026-08-01",
+            state: "active",
+          },
+          {
+            seriesId: "33333333-3333-4333-8333-333333333333",
+            version: 1,
+            name: "Software subscription",
+            category: { id: "software", label: "Software" },
+            monthlyAmountCents: 31_000,
+            effectiveStartDate: "2026-08-01",
+            state: "active",
+          },
+          {
+            seriesId: "33333333-3333-4333-8333-333333333333",
+            version: 2,
+            name: "Software subscription",
+            category: { id: "software", label: "Software" },
+            monthlyAmountCents: 31_000,
+            effectiveStartDate: WEEK_START,
+            state: "ended",
+          },
+        ],
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ordinaryExpensesCents: 0,
+      fixedCostsCents: 7_000,
+      totalExpensesCents: 7_000,
+      fixedCosts: {
+        amountCents: 7_000,
+        activeSeriesCount: 1,
+        coveredExpenseCount: 1,
+        coveredExpenseAmountCents: 31_000,
+      },
+    });
+    expect(result.categories).toEqual([
+      expect.objectContaining({
+        id: "office_admin",
+        amountCents: 7_000,
+        fixedCostCents: 7_000,
+      }),
+    ]);
+    expect(
+      result.categories.reduce(
+        (total, category) => total + category.amountCents,
+        0,
+      ),
+    ).toBe(result.totalExpensesCents);
+    expect(result.priorWeek.fixedCosts).toEqual({
+      amountCents: 14_000,
+      activeSeriesCount: 2,
+      coveredExpenseCount: 1,
+      coveredExpenseAmountCents: 31_000,
+    });
+  });
+
   it("distinguishes a defined amount comparison from an undefined current ratio", () => {
     const result = buildExpenseOverview(
       baseInput({

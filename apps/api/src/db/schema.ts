@@ -5581,6 +5581,83 @@ export const expenseCategoryAliases = pgTable(
   }),
 );
 
+/** Stable identities for owner-verified recurring monthly overhead. */
+export const expenseFixedCostSeries = pgTable(
+  "expense_fixed_cost_series",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    createdIdx: index("expense_fixed_cost_series_created_idx").on(
+      table.createdAt,
+      table.id,
+    ),
+  }),
+);
+
+/**
+ * Append-only, effective-dated fixed-cost facts. The latest version effective
+ * on a business date is the accounting truth for that series on that date.
+ */
+export const expenseFixedCostVersions = pgTable(
+  "expense_fixed_cost_versions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    seriesId: uuid("series_id")
+      .notNull()
+      .references(() => expenseFixedCostSeries.id, { onDelete: "restrict" }),
+    version: integer("version").notNull(),
+    name: text("name").notNull(),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => expenseCategories.id, { onDelete: "restrict" }),
+    monthlyAmountCents: integer("monthly_amount_cents").notNull(),
+    effectiveStartDate: date("effective_start_date", {
+      mode: "string",
+    }).notNull(),
+    state: text("state").$type<"active" | "ended">().notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    seriesVersionKey: uniqueIndex(
+      "expense_fixed_cost_versions_series_version_key",
+    ).on(table.seriesId, table.version),
+    effectiveLookupIdx: index(
+      "expense_fixed_cost_versions_effective_lookup_idx",
+    ).on(table.seriesId, table.effectiveStartDate, table.version),
+    categoryEffectiveIdx: index(
+      "expense_fixed_cost_versions_category_effective_idx",
+    ).on(table.categoryId, table.effectiveStartDate),
+    versionCheck: check(
+      "expense_fixed_cost_versions_version_check",
+      sql`${table.version} >= 1`,
+    ),
+    nameCheck: check(
+      "expense_fixed_cost_versions_name_check",
+      sql`char_length(btrim(${table.name})) BETWEEN 1 AND 120`,
+    ),
+    amountCheck: check(
+      "expense_fixed_cost_versions_amount_check",
+      sql`${table.monthlyAmountCents} BETWEEN 1 AND 100000000`,
+    ),
+    stateCheck: check(
+      "expense_fixed_cost_versions_state_check",
+      sql`${table.state} IN ('active', 'ended')`,
+    ),
+  }),
+);
+
 /**
  * Private-object receipt intake record. Object keys are stored here while the
  * receipt bytes remain in R2; legacy data URLs continue to live on expenses
@@ -5723,6 +5800,9 @@ export const expenses = pgTable(
     paidAt: timestamp("paid_at", { withTimezone: true }).defaultNow().notNull(),
     coverageStartAt: timestamp("coverage_start_at", { withTimezone: true }),
     coverageEndAt: timestamp("coverage_end_at", { withTimezone: true }),
+    coveredByFixedCostSeriesId: uuid(
+      "covered_by_fixed_cost_series_id",
+    ).references(() => expenseFixedCostSeries.id, { onDelete: "restrict" }),
     receiptFilename: text("receipt_filename"),
     receiptUrl: text("receipt_url"),
     receiptContentType: text("receipt_content_type"),
@@ -5782,6 +5862,10 @@ export const expenses = pgTable(
       table.receiptCaptureId,
     ),
     appointmentIdx: index("expenses_appointment_idx").on(table.appointmentId),
+    fixedCostCoverageIdx: index("expenses_covered_by_fixed_cost_series_idx").on(
+      table.coveredByFixedCostSeriesId,
+      table.paidAt,
+    ),
     reversalOfIdx: uniqueIndex("expenses_reversal_of_key").on(
       table.reversalOfExpenseId,
     ),
@@ -5819,6 +5903,10 @@ export const expenses = pgTable(
     reviewLifecycleCheck: check(
       "expenses_review_lifecycle_check",
       sql`${table.lifecycleStatus} = 'draft' OR ${table.reviewStatus} = 'approved'`,
+    ),
+    fixedCostCoverageShapeCheck: check(
+      "expenses_fixed_cost_coverage_shape_check",
+      sql`${table.coveredByFixedCostSeriesId} IS NULL OR (${table.reviewStatus} = 'approved' AND ${table.reversalOfExpenseId} IS NULL AND ${table.amount} > 0)`,
     ),
     lifecycleTimelineCheck: check(
       "expenses_lifecycle_timeline_check",

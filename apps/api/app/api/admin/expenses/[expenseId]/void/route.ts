@@ -147,6 +147,7 @@ export async function POST(
         before: {
           amountCents: existing.amount,
           lifecycleStatus: existing.lifecycleStatus,
+          coveredByFixedCostSeriesId: existing.coveredByFixedCostSeriesId,
           version: existing.version,
         },
         after: {
@@ -154,6 +155,7 @@ export async function POST(
           voidedAt: now.toISOString(),
           version: nextVersion,
           reversalExpenseId: managed.reversal.id,
+          coveredByFixedCostSeriesId: existing.coveredByFixedCostSeriesId,
         },
         metadata: {
           reasonLength: reason.length,
@@ -163,6 +165,7 @@ export async function POST(
           ledgerMethod: "linked_reversal",
           reimbursementClaimId: managed.reimbursementClaimId,
           reimbursementStatus: managed.reimbursementStatus,
+          reversalCoveredByFixedCostSeriesId: null,
         },
         committedAt: now,
       });

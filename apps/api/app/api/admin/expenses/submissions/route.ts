@@ -4,6 +4,7 @@ import { and, desc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import {
   expenseAllocations,
   expenseCategories,
+  expenseFixedCostVersions,
   expenseReceiptCaptures,
   expenseReimbursementClaims,
   expenses,
@@ -47,10 +48,12 @@ function hasPermission(permissions: string[], required: string): boolean {
 function expenseAccess(permissions: string[]): {
   canSubmit: boolean;
   canApprove: boolean;
+  canReadFinancials: boolean;
 } {
   return {
     canSubmit: hasPermission(permissions, "expenses.submit"),
     canApprove: hasPermission(permissions, "expenses.approve"),
+    canReadFinancials: hasPermission(permissions, "financials.read"),
   };
 }
 
@@ -162,6 +165,15 @@ export async function GET(request: NextRequest): Promise<Response> {
       version: expenses.version,
       appointmentId: expenses.appointmentId,
       receiptCaptureId: expenses.receiptCaptureId,
+      coveredByFixedCostSeriesId: expenses.coveredByFixedCostSeriesId,
+      coveredByFixedCostName: sql<string | null>`(
+        SELECT ${expenseFixedCostVersions.name}
+        FROM ${expenseFixedCostVersions}
+        WHERE ${expenseFixedCostVersions.seriesId} = ${expenses.coveredByFixedCostSeriesId}
+          AND ${expenseFixedCostVersions.effectiveStartDate} <= (${expenses.paidAt} AT TIME ZONE 'America/New_York')::date
+        ORDER BY ${expenseFixedCostVersions.effectiveStartDate} DESC, ${expenseFixedCostVersions.version} DESC
+        LIMIT 1
+      )`.as("covered_by_fixed_cost_name"),
       receiptCaptureStatus: expenseReceiptCaptures.status,
       legacyReceiptFilename: expenses.receiptFilename,
       hasLegacyReceipt: sql<boolean>`${expenses.receiptUrl} IS NOT NULL`.as(
@@ -299,6 +311,12 @@ export async function GET(request: NextRequest): Promise<Response> {
         lifecycleStatus: row.lifecycleStatus,
         version: row.version,
         appointmentId: row.appointmentId,
+        coveredByFixedCostSeriesId: access.canReadFinancials
+          ? row.coveredByFixedCostSeriesId
+          : null,
+        coveredByFixedCostName: access.canReadFinancials
+          ? row.coveredByFixedCostName
+          : null,
         receipt:
           row.receiptCaptureId || row.hasLegacyReceipt
             ? {
@@ -363,6 +381,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         submission,
         actorId: context.principalId!,
         canApprove: access.canApprove,
+        canManageFixedCostCoverage:
+          access.canApprove && access.canReadFinancials,
         source: "manual",
       });
       const audit = await mutation.audit.insertSuccess(tx, {
@@ -375,6 +395,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           payerType: submission.payerType,
           lifecycleStatus: created.lifecycleStatus,
           reviewStatus: created.reviewStatus,
+          coveredByFixedCostSeriesId: created.coveredByFixedCostSeriesId,
           version: created.version,
         },
         metadata: {

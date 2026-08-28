@@ -42,6 +42,12 @@ import {
   mondayForDateKey,
   moneyInputToCents,
 } from "./spend-v2-utils";
+import { MobileExpenseDonut } from "./MobileExpenseDonut";
+import {
+  MobileFixedCosts,
+  parseMobileFixedCostsPayload,
+  type MobileFixedCost,
+} from "./MobileFixedCosts";
 
 type SpendView = "add" | "overview" | "history";
 type AddWorkflow = "scan" | "manual" | "ads" | null;
@@ -57,6 +63,7 @@ type ExpenseCapabilities = {
   dailyAdSpend: boolean;
   overview: boolean;
   exactDuplicateReview: boolean;
+  fixedCosts: boolean;
 };
 
 type ExpenseHistoryRow = {
@@ -86,6 +93,8 @@ type ExpenseHistoryRow = {
   lifecycleStatus: string;
   version: number;
   appointmentId: string | null;
+  coveredByFixedCostSeriesId: string | null;
+  coveredByFixedCostName: string | null;
   receipt: {
     captureId: string | null;
     status: string | null;
@@ -150,6 +159,13 @@ type OverviewPeriod = {
   revenueCents: number;
   ordinaryExpensesCents: number;
   laborCents: number;
+  fixedCostsCents: number;
+  fixedCosts: {
+    amountCents: number;
+    activeSeriesCount: number;
+    coveredExpenseCount: number;
+    coveredExpenseAmountCents: number;
+  };
   totalExpensesCents: number;
   operatingProfitCents: number;
   expenseRatioPercent: number | null;
@@ -203,6 +219,13 @@ type OverviewPayload = {
   revenueCents: number;
   ordinaryExpensesCents: number;
   laborCents: number;
+  fixedCostsCents: number;
+  fixedCosts: {
+    amountCents: number;
+    activeSeriesCount: number;
+    coveredExpenseCount: number;
+    coveredExpenseAmountCents: number;
+  };
   totalExpensesCents: number;
   operatingProfitCents: number;
   expenseRatioPercent: number | null;
@@ -267,6 +290,7 @@ type SubmissionBody = {
   purchaseDate: string;
   categoryId: string;
   allocations?: Array<{ categoryId: string; amountCents: number }>;
+  coveredByFixedCostSeriesId?: string | null;
   vendor: string | null;
   notes: string | null;
   method: "card" | "cash" | "ach" | "check" | "zelle" | "other" | null;
@@ -296,6 +320,145 @@ async function jsonPayload(
   response: Response,
 ): Promise<Record<string, unknown> | null> {
   return objectValue(await response.json().catch(() => null));
+}
+
+function useFixedCostCoverageOptions(
+  enabled: boolean,
+  businessDate: string,
+): {
+  costs: MobileFixedCost[];
+  loading: boolean;
+  error: string | null;
+} {
+  const [costs, setCosts] = React.useState<MobileFixedCost[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!enabled || !/^\d{4}-\d{2}-\d{2}$/u.test(businessDate)) {
+      setCosts([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    setError(null);
+    void fetch(
+      `/api/mobile/expenses/fixed-costs?asOf=${encodeURIComponent(businessDate)}`,
+      { cache: "no-store", credentials: "include" },
+    )
+      .then(async (response) => ({
+        response,
+        payload: await jsonPayload(response),
+      }))
+      .then(({ response, payload }) => {
+        if (!response.ok) {
+          throw new Error(
+            expenseErrorMessage(payload, "Fixed-cost matching is unavailable."),
+          );
+        }
+        const parsed = parseMobileFixedCostsPayload(payload);
+        if (!parsed) throw new Error("The fixed-cost response was invalid.");
+        if (active) {
+          setCosts(parsed.costs.filter((cost) => cost.state === "active"));
+        }
+      })
+      .catch((reasonValue: unknown) => {
+        if (!active) return;
+        setCosts([]);
+        setError(
+          reasonValue instanceof Error
+            ? reasonValue.message
+            : "Fixed-cost matching is unavailable.",
+        );
+      })
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [businessDate, enabled]);
+
+  return { costs, loading, error };
+}
+
+function FixedCostCoverageField({
+  enabled,
+  purchaseDate,
+  amountCents,
+  categoryId,
+  splitEnabled,
+  value,
+  onChange,
+}: {
+  enabled: boolean;
+  purchaseDate: string;
+  amountCents: number | null;
+  categoryId: string;
+  splitEnabled: boolean;
+  value: string;
+  onChange: (seriesId: string) => void;
+}) {
+  const { costs, loading, error } = useFixedCostCoverageOptions(
+    enabled,
+    purchaseDate,
+  );
+  const selected = costs.find((cost) => cost.seriesId === value) ?? null;
+  const mismatch =
+    selected &&
+    (selected.monthlyAmountCents !== amountCents ||
+      selected.categoryId !== categoryId);
+
+  React.useEffect(() => {
+    if (value && !loading && !costs.some((cost) => cost.seriesId === value)) {
+      onChange("");
+    }
+  }, [costs, loading, onChange, value]);
+
+  if (!enabled) return null;
+  return (
+    <div className="rounded-lg border border-white/10 bg-slate-950 p-3">
+      <label className="block">
+        <FieldLabel>Already included as a fixed cost?</FieldLabel>
+        <select
+          value={value}
+          disabled={loading || splitEnabled || Boolean(error)}
+          onChange={(event) => onChange(event.target.value)}
+          className={controlClass}
+        >
+          <option value="">
+            {loading ? "Loading fixed costs…" : "No — count this separately"}
+          </option>
+          {costs.map((cost) => (
+            <option key={cost.seriesId} value={cost.seriesId}>
+              {cost.name} · {formatExpenseMoney(cost.monthlyAmountCents)}/month
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="mt-2 text-xs leading-5 text-slate-400">
+        Choose a schedule only for that same monthly bill. The receipt stays in
+        History, while Overview uses the daily fixed-cost accrual once.
+      </p>
+      {splitEnabled ? (
+        <p className="mt-1 text-xs text-amber-200">
+          Fixed-cost coverage requires one category.
+        </p>
+      ) : error ? (
+        <p className="mt-1 text-xs text-rose-200">{error}</p>
+      ) : mismatch && selected ? (
+        <p className="mt-1 text-xs text-amber-200">
+          This schedule is {formatExpenseMoney(selected.monthlyAmountCents)} in
+          {` ${selected.category}`}. Match both the amount and category before
+          submitting.
+        </p>
+      ) : value ? (
+        <p className="mt-1 text-xs font-semibold text-emerald-200">
+          This payment will not be counted a second time in Overview.
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
@@ -501,6 +664,7 @@ function ExpenseEditor({
   jobs,
   canApprove,
   allowReimbursement,
+  fixedCostCoverageEnabled,
   initial,
   attentionFields = [],
   vendorPrimary = false,
@@ -517,6 +681,7 @@ function ExpenseEditor({
   jobs: JobOption[];
   canApprove: boolean;
   allowReimbursement: boolean;
+  fixedCostCoverageEnabled: boolean;
   initial?: Partial<{
     amount: string;
     purchaseDate: string;
@@ -551,6 +716,8 @@ function ExpenseEditor({
   const [appointmentId, setAppointmentId] = React.useState("");
   const [splitEnabled, setSplitEnabled] = React.useState(false);
   const [splits, setSplits] = React.useState<SplitRow[]>([]);
+  const [coveredByFixedCostSeriesId, setCoveredByFixedCostSeriesId] =
+    React.useState("");
   const [overrideReason, setOverrideReason] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
 
@@ -581,6 +748,7 @@ function ExpenseEditor({
       setSplits([]);
       return;
     }
+    setCoveredByFixedCostSeriesId("");
     setSplitEnabled(true);
     setSplits([
       { key: crypto.randomUUID(), categoryId, amount },
@@ -647,6 +815,40 @@ function ExpenseEditor({
         return;
       }
     }
+    if (coveredByFixedCostSeriesId) {
+      if (splitEnabled) {
+        setError("Use one category before linking this to a fixed cost.");
+        return;
+      }
+      const response = await fetch(
+        `/api/mobile/expenses/fixed-costs?asOf=${encodeURIComponent(purchaseDate)}`,
+        { cache: "no-store", credentials: "include" },
+      ).catch(() => null);
+      const payload = response ? await jsonPayload(response) : null;
+      const fixedCosts = response?.ok
+        ? parseMobileFixedCostsPayload(payload)
+        : null;
+      const coveredCost = fixedCosts?.costs.find(
+        (cost) =>
+          cost.seriesId === coveredByFixedCostSeriesId &&
+          cost.state === "active",
+      );
+      if (!coveredCost) {
+        setError(
+          "Refresh the fixed-cost selection. That schedule is no longer active for this date.",
+        );
+        return;
+      }
+      if (
+        coveredCost.monthlyAmountCents !== amountCents ||
+        coveredCost.categoryId !== categoryId
+      ) {
+        setError(
+          `Match ${coveredCost.name} to ${formatExpenseMoney(coveredCost.monthlyAmountCents)} and ${coveredCost.category} before submitting.`,
+        );
+        return;
+      }
+    }
     if (
       duplicateRisk === "exact" &&
       (!canApprove || overrideReason.trim().length < 10)
@@ -664,6 +866,7 @@ function ExpenseEditor({
         purchaseDate,
         categoryId,
         ...(allocations ? { allocations } : {}),
+        ...(coveredByFixedCostSeriesId ? { coveredByFixedCostSeriesId } : {}),
         vendor: vendor.trim() || null,
         notes: notes.trim() || null,
         method: method ? (method as SubmissionBody["method"]) : null,
@@ -868,6 +1071,15 @@ function ExpenseEditor({
               ))}
             </select>
           </label>
+          <FixedCostCoverageField
+            enabled={fixedCostCoverageEnabled}
+            purchaseDate={purchaseDate}
+            amountCents={moneyInputToCents(amount)}
+            categoryId={categoryId}
+            splitEnabled={splitEnabled}
+            value={coveredByFixedCostSeriesId}
+            onChange={setCoveredByFixedCostSeriesId}
+          />
           <div>
             <button
               type="button"
@@ -1076,6 +1288,7 @@ function ReceiptWorkflow({
   jobs,
   canApprove,
   allowReimbursement,
+  fixedCostCoverageEnabled,
   onRow,
   onDone,
   onBack,
@@ -1088,6 +1301,7 @@ function ReceiptWorkflow({
   jobs: JobOption[];
   canApprove: boolean;
   allowReimbursement: boolean;
+  fixedCostCoverageEnabled: boolean;
   onRow: (row: ExpenseCaptureQueueRow | null) => void;
   onDone: (message: string) => void;
   onBack: () => void;
@@ -1629,6 +1843,7 @@ function ReceiptWorkflow({
         jobs={jobs}
         canApprove={canApprove}
         allowReimbursement={allowReimbursement}
+        fixedCostCoverageEnabled={fixedCostCoverageEnabled}
         initial={extracted.initial}
         attentionFields={extracted.attention}
         vendorPrimary
@@ -1929,15 +2144,33 @@ function OverviewView({
   onWeekStart,
   onMissingAd,
   canEnterAdSpend,
+  canManageFixedCosts,
+  employeeId,
+  categories,
 }: {
   weekStart: string;
   onWeekStart: (date: string) => void;
   onMissingAd: (date: string) => void;
   canEnterAdSpend: boolean;
+  canManageFixedCosts: boolean;
+  employeeId: string;
+  categories: ExpenseCategory[];
 }) {
   const [overview, setOverview] = React.useState<OverviewPayload | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [managingFixedCosts, setManagingFixedCosts] = React.useState(false);
+  const [fixedCostRefresh, setFixedCostRefresh] = React.useState(0);
+  const manageFixedCostsButtonRef = React.useRef<HTMLButtonElement>(null);
+  const restoreManageFixedCostsFocusRef = React.useRef(false);
+  React.useEffect(() => {
+    if (managingFixedCosts || !restoreManageFixedCostsFocusRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      manageFixedCostsButtonRef.current?.focus();
+      restoreManageFixedCostsFocusRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [managingFixedCosts]);
   React.useEffect(() => {
     let active = true;
     setLoading(true);
@@ -1971,14 +2204,8 @@ function OverviewView({
     return () => {
       active = false;
     };
-  }, [weekStart]);
+  }, [fixedCostRefresh, weekStart]);
 
-  const maxCategory = Math.max(
-    1,
-    ...(overview?.categories.map((category) =>
-      Math.abs(category.amountCents),
-    ) ?? [1]),
-  );
   const firstMissingDate = overview?.missingAdEntries[0]?.businessDate ?? null;
   const headlineCards = overview
     ? [
@@ -2002,6 +2229,18 @@ function OverviewView({
           change: overview.priorWeekChange.operatingProfitPercent,
           state: overview.priorWeekChange.states.operatingProfit,
           unit: "%",
+          result:
+            overview.operatingProfitCents < 0
+              ? "Loss after tracked costs"
+              : overview.operatingProfitCents > 0
+                ? "Profit after tracked costs"
+                : "Break-even after tracked costs",
+          resultTone:
+            overview.operatingProfitCents < 0
+              ? "loss"
+              : overview.operatingProfitCents > 0
+                ? "profit"
+                : "neutral",
         },
         {
           label: "Expense ratio",
@@ -2012,6 +2251,21 @@ function OverviewView({
         },
       ]
     : [];
+
+  if (managingFixedCosts && canManageFixedCosts) {
+    return (
+      <MobileFixedCosts
+        employeeId={employeeId}
+        categories={categories}
+        onBack={() => {
+          restoreManageFixedCostsFocusRef.current = true;
+          setManagingFixedCosts(false);
+        }}
+        onChanged={() => setFixedCostRefresh((value) => value + 1)}
+      />
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className={cardClass}>
@@ -2058,6 +2312,33 @@ function OverviewView({
       >
         {loading ? "Loading weekly overview" : ""}
       </div>
+      {canManageFixedCosts ? (
+        <div className={`${cardClass} flex items-center gap-3`}>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-white">Fixed costs</p>
+            <p className="mt-1 text-xs leading-5 text-slate-400">
+              {overview
+                ? `${overview.fixedCosts.activeSeriesCount} active · ${formatExpenseMoney(overview.fixedCosts.amountCents)} accrued this week`
+                : "Monthly overhead, spread across each calendar day"}
+            </p>
+            {overview?.fixedCosts.coveredExpenseCount ? (
+              <p className="mt-1 text-xs leading-5 text-cyan-100">
+                {overview.fixedCosts.coveredExpenseCount} linked payment
+                {overview.fixedCosts.coveredExpenseCount === 1 ? "" : "s"}
+                {` totaling ${formatExpenseMoney(overview.fixedCosts.coveredExpenseAmountCents)} ${overview.fixedCosts.coveredExpenseCount === 1 ? "remains" : "remain"} in History and ${overview.fixedCosts.coveredExpenseCount === 1 ? "is" : "are"} excluded from ordinary expense totals.`}
+              </p>
+            ) : null}
+          </div>
+          <button
+            ref={manageFixedCostsButtonRef}
+            type="button"
+            onClick={() => setManagingFixedCosts(true)}
+            className={`${secondaryButton} shrink-0 px-3`}
+          >
+            Manage
+          </button>
+        </div>
+      ) : null}
       {error ? <StatusNotice tone="error" message={error} /> : null}
       {overview ? (
         <>
@@ -2130,7 +2411,20 @@ function OverviewView({
                   {card.label}
                 </p>
                 <p className="mt-1 text-lg font-bold">{card.value}</p>
-                <p className="mt-1 text-[11px] text-slate-500">
+                {"result" in card && card.result ? (
+                  <p
+                    className={`mt-1 text-xs font-semibold ${
+                      card.resultTone === "loss"
+                        ? "text-rose-200"
+                        : card.resultTone === "profit"
+                          ? "text-emerald-200"
+                          : "text-slate-300"
+                    }`}
+                  >
+                    {card.result}
+                  </p>
+                ) : null}
+                <p className="mt-1 text-[11px] text-slate-400">
                   {card.state === "incomplete"
                     ? "Comparison unavailable"
                     : card.state === "zero_baseline"
@@ -2144,58 +2438,10 @@ function OverviewView({
               </div>
             ))}
           </div>
-          <section
-            className={cardClass}
-            aria-labelledby="expense-category-heading"
-          >
-            <h2
-              id="expense-category-heading"
-              className="text-base font-semibold"
-            >
-              Expense categories
-            </h2>
-            <div className="mt-4 space-y-4">
-              {overview.categories.length ? (
-                overview.categories.map((category) => (
-                  <div key={category.id}>
-                    <div className="flex items-end justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold">
-                          {category.label}
-                          {!category.verified ? (
-                            <span className="ml-1 text-amber-200">
-                              • Needs review
-                            </span>
-                          ) : null}
-                        </p>
-                        <p className="mt-0.5 text-[11px] text-slate-400">
-                          {formatExpensePercent(category.percentOfExpenses)} of
-                          expenses ·{" "}
-                          {formatExpensePercent(category.percentOfRevenue)} of
-                          revenue
-                        </p>
-                      </div>
-                      <p className="shrink-0 text-sm font-bold">
-                        {formatExpenseMoney(category.amountCents)}
-                      </p>
-                    </div>
-                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
-                      <div
-                        className="h-full rounded-full bg-cyan-300"
-                        style={{
-                          width: `${Math.max(2, Math.min(100, (Math.abs(category.amountCents) / maxCategory) * 100))}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-slate-400">
-                  No verified expenses in this week.
-                </p>
-              )}
-            </div>
-          </section>
+          <MobileExpenseDonut
+            categories={overview.categories}
+            totalExpensesCents={overview.totalExpensesCents}
+          />
           <details className={cardClass}>
             <summary
               className={`${focusRing} flex min-h-11 cursor-pointer items-center text-sm font-semibold text-cyan-100`}
@@ -2451,6 +2697,7 @@ function HistoryView({
   canApprove,
   allowReimbursement,
   exactDuplicateReviewEnabled,
+  fixedCostCoverageEnabled,
   refreshToken,
 }: {
   employeeId: string;
@@ -2462,6 +2709,7 @@ function HistoryView({
   canApprove: boolean;
   allowReimbursement: boolean;
   exactDuplicateReviewEnabled: boolean;
+  fixedCostCoverageEnabled: boolean;
   refreshToken: number;
 }) {
   const [filter, setFilter] = React.useState("all");
@@ -2476,6 +2724,10 @@ function HistoryView({
   );
   const [reason, setReason] = React.useState("");
   const [reviewCategoryId, setReviewCategoryId] = React.useState("");
+  const [
+    reviewCoveredByFixedCostSeriesId,
+    setReviewCoveredByFixedCostSeriesId,
+  ] = React.useState("");
   const [lockVendorRule, setLockVendorRule] = React.useState(false);
   const [reviewBusy, setReviewBusy] = React.useState(false);
   const [reload, setReload] = React.useState(0);
@@ -2576,6 +2828,12 @@ function HistoryView({
         decision,
         reason: reason.trim() || null,
         ...(categoryChanged ? { categoryId: reviewCategoryId } : {}),
+        ...(decision === "approve"
+          ? {
+              coveredByFixedCostSeriesId:
+                reviewCoveredByFixedCostSeriesId || null,
+            }
+          : {}),
         ...(decision === "approve" && lockVendorRule
           ? { lockVendorRule: true }
           : {}),
@@ -2607,6 +2865,7 @@ function HistoryView({
       setReviewing(null);
       setReason("");
       setReviewCategoryId("");
+      setReviewCoveredByFixedCostSeriesId("");
       setLockVendorRule(false);
       setReload((value) => value + 1);
     } catch (reasonValue) {
@@ -2929,6 +3188,7 @@ function HistoryView({
           jobs={jobs}
           canApprove={canApprove}
           allowReimbursement={allowReimbursement}
+          fixedCostCoverageEnabled={fixedCostCoverageEnabled}
           initial={extracted.initial}
           attentionFields={extracted.attention}
           vendorPrimary
@@ -3086,18 +3346,32 @@ function HistoryView({
           >
             Approval preferences
           </summary>
-          <label className="mt-3 flex min-h-11 items-center gap-3 border-t border-white/10 pt-3 text-sm text-slate-200">
-            <input
-              type="checkbox"
-              checked={lockVendorRule}
-              disabled={!reviewing.vendor}
-              onChange={(event) => setLockVendorRule(event.target.checked)}
-              className={`${focusRing} size-5 rounded border-white/20 bg-slate-950`}
+          <div className="mt-3 space-y-3 border-t border-white/10 pt-3">
+            <FixedCostCoverageField
+              enabled={fixedCostCoverageEnabled}
+              purchaseDate={reviewing.purchaseDate}
+              amountCents={reviewing.amountCents}
+              categoryId={reviewCategoryId}
+              splitEnabled={
+                reviewing.allocations.length > 1 &&
+                reviewCategoryId === reviewing.categoryId
+              }
+              value={reviewCoveredByFixedCostSeriesId}
+              onChange={setReviewCoveredByFixedCostSeriesId}
             />
-            <span>
-              Remember this category for {reviewing.vendor ?? "this vendor"}
-            </span>
-          </label>
+            <label className="flex min-h-11 items-center gap-3 text-sm text-slate-200">
+              <input
+                type="checkbox"
+                checked={lockVendorRule}
+                disabled={!reviewing.vendor}
+                onChange={(event) => setLockVendorRule(event.target.checked)}
+                className={`${focusRing} size-5 rounded border-white/20 bg-slate-950`}
+              />
+              <span>
+                Remember this category for {reviewing.vendor ?? "this vendor"}
+              </span>
+            </label>
+          </div>
           {!reviewing.vendor ? (
             <p className="mt-1 text-xs text-slate-500">
               A vendor name is required before a category can be remembered.
@@ -3138,6 +3412,7 @@ function HistoryView({
             setReviewing(null);
             setReason("");
             setReviewCategoryId("");
+            setReviewCoveredByFixedCostSeriesId("");
             setLockVendorRule(false);
             setError(null);
           }}
@@ -3253,17 +3528,26 @@ function HistoryView({
           </div>
           <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
             <div>
-              <dt className="text-slate-500">Date</dt>
+              <dt className="text-slate-400">Date</dt>
               <dd className="mt-0.5 text-slate-300">{row.purchaseDate}</dd>
             </div>
             <div>
-              <dt className="text-slate-500">Submitted by</dt>
+              <dt className="text-slate-400">Submitted by</dt>
               <dd className="mt-0.5 truncate text-slate-300">
                 {row.submitter?.name ?? "Legacy entry"}
               </dd>
             </div>
+            {row.coveredByFixedCostSeriesId ? (
+              <div className="col-span-2">
+                <dt className="text-slate-400">Overview</dt>
+                <dd className="mt-0.5 font-semibold text-cyan-100">
+                  Excluded from Overview — covered by{" "}
+                  {row.coveredByFixedCostName ?? "a fixed monthly cost"}
+                </dd>
+              </div>
+            ) : null}
             <div>
-              <dt className="text-slate-500">Paid by</dt>
+              <dt className="text-slate-400">Paid by</dt>
               <dd className="mt-0.5 text-slate-300">
                 {row.payerType === "personal"
                   ? (row.paidByMember?.name ?? "Employee-paid")
@@ -3271,7 +3555,7 @@ function HistoryView({
               </dd>
             </div>
             <div>
-              <dt className="text-slate-500">Reimbursement</dt>
+              <dt className="text-slate-400">Reimbursement</dt>
               <dd className="mt-0.5 capitalize text-slate-300">
                 {row.reimbursement?.status?.replaceAll("_", " ") ?? "None"}
               </dd>
@@ -3303,6 +3587,9 @@ function HistoryView({
                 onClick={() => {
                   setReviewing(row);
                   setReviewCategoryId(row.categoryId ?? "");
+                  setReviewCoveredByFixedCostSeriesId(
+                    row.coveredByFixedCostSeriesId ?? "",
+                  );
                   setLockVendorRule(false);
                   setError(null);
                 }}
@@ -3387,6 +3674,9 @@ export function MobileSpendV2({
   const exactDuplicateReviewEnabled = Boolean(
     canApprove && capabilities?.exactDuplicateReview === true,
   );
+  const fixedCostsEnabled = Boolean(
+    canApprove && canViewOverview && capabilities?.fixedCosts === true,
+  );
 
   React.useEffect(() => {
     let active = true;
@@ -3419,6 +3709,7 @@ export function MobileSpendV2({
           dailyAdSpend: value["dailyAdSpend"] === true,
           overview: value["overview"] === true,
           exactDuplicateReview: value["exactDuplicateReview"] === true,
+          fixedCosts: value["fixedCosts"] === true,
         });
       })
       .catch(
@@ -3686,6 +3977,7 @@ export function MobileSpendV2({
             jobs={jobs}
             canApprove={canApprove}
             allowReimbursement={reimbursementEnabled}
+            fixedCostCoverageEnabled={fixedCostsEnabled}
             onRow={setActiveCapture}
             onDone={done}
             onBack={() => setWorkflow(null)}
@@ -3707,6 +3999,7 @@ export function MobileSpendV2({
               jobs={jobs}
               canApprove={canApprove}
               allowReimbursement={reimbursementEnabled}
+              fixedCostCoverageEnabled={fixedCostsEnabled}
               submitting={submitting}
               submitLabel={canApprove ? "Post expense" : "Submit for approval"}
               onBack={() => setWorkflow(null)}
@@ -3727,6 +4020,9 @@ export function MobileSpendV2({
           onWeekStart={setWeekStart}
           onMissingAd={openMissingAd}
           canEnterAdSpend={adSpendEnabled}
+          canManageFixedCosts={fixedCostsEnabled}
+          employeeId={employee.id}
+          categories={categories}
         />
       ) : view === "history" ? (
         <HistoryView
@@ -3739,6 +4035,7 @@ export function MobileSpendV2({
           canApprove={canApprove}
           allowReimbursement={reimbursementEnabled}
           exactDuplicateReviewEnabled={exactDuplicateReviewEnabled}
+          fixedCostCoverageEnabled={fixedCostsEnabled}
           refreshToken={historyRefresh}
         />
       ) : null}

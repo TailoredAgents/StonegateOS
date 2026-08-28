@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { and, asc, desc, sql } from "drizzle-orm";
 import {
   expenseAllocations,
+  expenseFixedCostVersions,
   expenseReceiptCaptures,
   expenses,
   getDb,
@@ -93,6 +94,15 @@ export async function GET(request: NextRequest): Promise<Response> {
         reversalOfExpenseId: expenses.reversalOfExpenseId,
         correctionOfExpenseId: expenses.correctionOfExpenseId,
         correctedByExpenseId: expenses.correctedByExpenseId,
+        coveredByFixedCostSeriesId: expenses.coveredByFixedCostSeriesId,
+        coveredByFixedCostName: sql<string | null>`(
+          SELECT ${expenseFixedCostVersions.name}
+          FROM ${expenseFixedCostVersions}
+          WHERE ${expenseFixedCostVersions.seriesId} = ${expenses.coveredByFixedCostSeriesId}
+            AND ${expenseFixedCostVersions.effectiveStartDate} <= (${expenses.paidAt} AT TIME ZONE 'America/New_York')::date
+          ORDER BY ${expenseFixedCostVersions.effectiveStartDate} DESC, ${expenseFixedCostVersions.version} DESC
+          LIMIT 1
+        )`.as("covered_by_fixed_cost_name"),
         createdAt: expenses.createdAt,
         updatedAt: expenses.updatedAt,
       })
@@ -153,6 +163,8 @@ export async function GET(request: NextRequest): Promise<Response> {
           reversalOfExpenseId: row.reversalOfExpenseId,
           correctionOfExpenseId: row.correctionOfExpenseId,
           correctedByExpenseId: row.correctedByExpenseId,
+          coveredByFixedCostSeriesId: row.coveredByFixedCostSeriesId,
+          coveredByFixedCostName: row.coveredByFixedCostName,
           externallyManaged: Boolean(
             row.bankTransactionId ||
               row.payoutRunId ||
