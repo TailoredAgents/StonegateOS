@@ -375,9 +375,13 @@ adapts its review to the document that was captured.
     advisory locks; owner overrides require a recorded reason.
 - [x] Add conditional mobile review, compact History access, owner approval
       edits, and accessible status/conversion copy without another primary action.
-  - Verification: `mobile-spend-v2.test.ts` passed 27/27 assertions for compact
+  - Verification: `mobile-spend-v2.test.ts` passed 28/28 assertions for compact
     review, false-positive dismissal, pending approval, dump-only History filter
     and details, receipt access, and owner Add/Correct/Remove scale-ticket facts.
+    Detected tickets default to Dump Fees even when the model suggests another
+    category, and the client blocks confirmed scale facts unless a positive Dump
+    Fees amount exists; category splitting and false-positive dismissal remain
+    available.
     `mobile-expense-v2.spec.ts` passed 6/6 scenarios across Chromium Pixel 7 and
     WebKit iPhone 13 emulation. This is browser emulation evidence, not a claim
     of physical-device or screen-reader coverage.
@@ -414,7 +418,12 @@ adapts its review to the document that was captured.
     not establish the production accuracy thresholds.
 - [ ] Deploy database -> API -> worker -> site, smoke both a normal receipt and
       a scale ticket, then monitor failures, correction rate, and missing weights.
-  - Verification: Pending production deployment and production smoke evidence.
+  - Verification: Database migration `0109`, API, mobile site, and worker code
+    are production-live with dump-ticket capture and receipt analysis enabled.
+    Both readiness endpoints are healthy and the replacement worker has fresh
+    heartbeats. A charged live normal/scale provider smoke remains deliberately
+    pending; no test receipt was submitted and no expense was posted during the
+    rollout.
 
 ## Explicit defaults
 
@@ -429,15 +438,15 @@ adapts its review to the document that was captured.
 
 ## Rollout record
 
-| Stage                       | Status                                   | Verification notes                                                                                                                                                     |
-| --------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Database expansion          | Production live                          | Migration `0108` applied and verified during API pre-deploy; final readiness reports `0108_expense_recurring_fixed_costs`.                                             |
-| API                         | Production live; all expense flags on    | Code deploy `dep-da8famht0dsc73c3b9n0` and flag deploy `dep-da8fdt0n74is73dq464g` are live; readiness is healthy.                                                      |
-| Receipt analysis worker     | Production live and enabled              | Code deploy `dep-da8famht0dsc73c3bb50` and worker-first flag deploy `dep-da8fd3cs728c73bjnqeg` are live with fresh heartbeats; the 100-receipt benchmark remains open. |
-| Mobile site                 | Production live; device validation open  | Deploy `dep-da8famht0dsc73c3bcfg` is live; build, 32 site tests, and dual-browser mobile specs passed; the physical accessibility/offline matrix remains open.         |
-| Owner receipt pilot         | Not completed                            | The owner-only 30–50 receipt pilot remains open. Crew access was enabled afterward only because explicit full-production enablement was requested.                     |
-| Owner ad spend and Overview | Production enabled                       | Manual ad spend, Overview, and fixed-cost setup flags are live. No ad or fixed-cost values were entered during deployment.                                             |
-| Crew submissions            | Enabled by explicit production direction | Crew receipt submission is live; benchmark thresholds, physical-device validation, and monitoring remain open rollout risks.                                           |
+| Stage                       | Status                                   | Verification notes                                                                                                                                                              |
+| --------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database expansion          | Production live                          | API pre-deploy `dep-da8sd1uq1p3s7380l8tg` applied migration `0109`; final readiness reports `0109_expense_dump_ticket_details`.                                                 |
+| API                         | Production live; all expense flags on    | Dump-ticket code deploy `dep-da8sd1uq1p3s7380l8tg` and flag deploy `dep-da8sfcqjnfac73bu73ng` are live; API and site readiness are healthy.                                     |
+| Receipt analysis worker     | Production live and enabled              | Code deploy `dep-da8sd26q1p3s7380ladg` and flag deploy `dep-da8shipf2nfc73dipdi0` are live with fresh heartbeats; the 100-receipt benchmark remains open.                       |
+| Mobile site                 | Production live; device validation open  | Deploy `dep-da8sd26q1p3s7380lbj0` is live; production build, 27 site tests, and 6 dual-browser mobile scenarios passed; the physical accessibility/offline matrix remains open. |
+| Owner receipt pilot         | Not completed                            | The owner-only 30–50 receipt pilot remains open. Crew access was enabled afterward only because explicit full-production enablement was requested.                              |
+| Owner ad spend and Overview | Production enabled                       | Manual ad spend, Overview, and fixed-cost setup flags are live. No ad or fixed-cost values were entered during deployment.                                                      |
+| Crew submissions            | Enabled by explicit production direction | Crew receipt submission is live; benchmark thresholds, physical-device validation, and monitoring remain open rollout risks.                                                    |
 
 ## Deferred/out of scope
 

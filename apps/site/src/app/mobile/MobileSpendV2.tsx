@@ -469,10 +469,8 @@ export function expenseConfirmationDuplicateKind(
     (status === 409 && /duplicate|already exist/iu.test(message));
   if (!duplicateResponse) return null;
   if (context.knownExactReceipt) return "exact_receipt";
-  return (
-    context.attemptedDumpDetails === true ||
+  return context.attemptedDumpDetails === true ||
     /facility|ticket number|scale[- ]ticket/iu.test(message)
-  )
     ? "scale_ticket"
     : "exact_receipt";
 }
@@ -739,6 +737,20 @@ export function expenseHistoryCanCorrectDumpWeight(
     exactExpenseIsoInstant(row.paidAt) &&
     validCoverage(row.coverageStartAt) &&
     validCoverage(row.coverageEndAt)
+  );
+}
+
+export function expenseDumpHasFundedCategory(input: {
+  categoryId: string;
+  amountCents: number;
+  allocations?: Array<{ categoryId: string; amountCents: number }>;
+}): boolean {
+  const allocations = input.allocations ?? [
+    { categoryId: input.categoryId, amountCents: input.amountCents },
+  ];
+  return allocations.some(
+    (allocation) =>
+      allocation.categoryId === "dump_fees" && allocation.amountCents > 0,
   );
 }
 
@@ -1701,6 +1713,15 @@ function ExpenseEditor({
         return;
       }
     }
+    if (
+      parsedDumpDetails.details &&
+      !expenseDumpHasFundedCategory({ categoryId, amountCents, allocations })
+    ) {
+      setError(
+        "Scale-ticket details require a positive Dump Fees amount. Choose Dump Fees or add it as a category split.",
+      );
+      return;
+    }
     if (coveredByFixedCostSeriesId) {
       if (splitEnabled) {
         setError("Use one category before linking this to a fixed cost.");
@@ -2234,8 +2255,9 @@ export function receiptExtractionFromCapture(
         typeof fieldValue("transactionDate") === "string"
           ? String(fieldValue("transactionDate"))
           : "",
-      categoryId:
-        typeof categorySuggestion?.["categoryId"] === "string"
+      categoryId: requiresScaleTicketReview
+        ? "dump_fees"
+        : typeof categorySuggestion?.["categoryId"] === "string"
           ? categorySuggestion["categoryId"]
           : typeof fieldValue("suggestedCategoryId") === "string"
             ? String(fieldValue("suggestedCategoryId"))
@@ -2525,8 +2547,7 @@ function ReceiptWorkflow({
           payload,
           {
             attemptedDumpDetails: body.dumpDetails !== undefined,
-            knownExactReceipt:
-              receiptExtraction(row).duplicateRisk === "exact",
+            knownExactReceipt: receiptExtraction(row).duplicateRisk === "exact",
           },
         );
         if (duplicateKind) setRuntimeDuplicateKind(duplicateKind);

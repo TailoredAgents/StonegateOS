@@ -12,6 +12,7 @@ import {
   expenseCaptureEvidenceHref,
   expenseConfirmationDuplicateKind,
   expenseDumpActivityValue,
+  expenseDumpHasFundedCategory,
   expenseHistoryCanCorrectDumpWeight,
   expenseHistoryCorrectionLabel,
   expenseHistoryDisplayStatus,
@@ -254,7 +255,7 @@ void test("scale-ticket review keeps low-confidence net blank without losing rea
         },
         fieldsToCheck: ["dumpTicket.netWeightPounds"],
       },
-      categorySuggestion: { categoryId: "dump_fees" },
+      categorySuggestion: { categoryId: "fuel" },
       duplicates: { highestRisk: null },
     },
   });
@@ -319,6 +320,42 @@ void test("scale-ticket review keeps low-confidence net blank without losing rea
     },
   });
   assert.equal(malformedFutureShape.initial?.requiresScaleTicketReview, true);
+});
+
+void test("scale-ticket facts require a positive Dump Fees allocation", () => {
+  assert.equal(
+    expenseDumpHasFundedCategory({
+      categoryId: "dump_fees",
+      amountCents: 9_141,
+    }),
+    true,
+  );
+  assert.equal(
+    expenseDumpHasFundedCategory({
+      categoryId: "fuel",
+      amountCents: 9_141,
+    }),
+    false,
+  );
+  assert.equal(
+    expenseDumpHasFundedCategory({
+      categoryId: "fuel",
+      amountCents: 9_141,
+      allocations: [
+        { categoryId: "fuel", amountCents: 7_141 },
+        { categoryId: "dump_fees", amountCents: 2_000 },
+      ],
+    }),
+    true,
+  );
+  assert.equal(
+    expenseDumpHasFundedCategory({
+      categoryId: "dump_fees",
+      amountCents: 9_141,
+      allocations: [{ categoryId: "dump_fees", amountCents: 0 }],
+    }),
+    false,
+  );
 });
 
 void test("rolling deploy defaults missing dump reporting data without crashing", () => {
