@@ -29,6 +29,15 @@ function normalizeError(error: unknown, fallback: string): Error {
   }
 }
 
+function ensureCalendarWatchInBackground(): void {
+  void ensureCalendarWatch().catch((error: unknown) => {
+    console.warn("[calendar] ensure_watch_failed", {
+      error: normalizeError(error, "Calendar watch registration failed")
+        .message,
+    });
+  });
+}
+
 async function withRetry<T>(
   operation: (attempt: number) => Promise<T>,
   shouldRetry: (result: T) => boolean,
@@ -83,7 +92,7 @@ export async function createCalendarEventWithRetry(
     );
 
     if (eventId) {
-      void ensureCalendarWatch();
+      ensureCalendarWatchInBackground();
       try {
         await recordProviderSuccess("calendar");
       } catch (error) {
@@ -126,7 +135,7 @@ export async function updateCalendarEventWithRetry(
     );
 
     if (updated) {
-      void ensureCalendarWatch();
+      ensureCalendarWatchInBackground();
       try {
         await recordProviderSuccess("calendar");
       } catch (error) {
@@ -151,6 +160,3 @@ export async function updateCalendarEventWithRetry(
     throw error;
   }
 }
-
-
-

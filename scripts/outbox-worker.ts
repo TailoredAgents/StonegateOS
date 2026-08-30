@@ -6,6 +6,7 @@ import {
   outboxWorkerErrorDetail,
   parseOutboxWorkerConfiguration,
   shouldLogOutboxBatch,
+  startOutboxWorkerHeartbeat,
 } from "../apps/api/src/lib/outbox-worker-runtime";
 
 type ModuleResolver = (
@@ -277,13 +278,6 @@ async function main() {
   let nextAppointmentMediaCleanupAt = Date.now();
   let nextSquareReconciliationAt = Date.now();
   let nextPartnerInviteRecoveryAt = Date.now();
-  let nextHeartbeatAt = Date.now();
-
-  const recordHeartbeatIfDue = async (): Promise<void> => {
-    if (Date.now() < nextHeartbeatAt) return;
-    await recordAndLogWorkerHeartbeat(true);
-    nextHeartbeatAt = Date.now() + heartbeatIntervalMs;
-  };
 
   logWorkerEvent("info", "outbox.worker.started", {
     ok: true,
@@ -294,141 +288,155 @@ async function main() {
   });
 
   if (pollIntervalMs > 0) {
-    // Continuous polling loop
-    while (true) {
-      const stats = await runOnce(batchSize);
-      await recordHeartbeatIfDue();
-      if (Date.now() >= nextSeoAt) {
-        try {
-          await runSeoOnce();
-        } catch (error) {
-          logWorkerEvent("warn", "seo.draft.loop_failed", {
-            ok: false,
-            detail: outboxWorkerErrorDetail(error),
-          });
+    const heartbeat = startOutboxWorkerHeartbeat({
+      intervalMs: heartbeatIntervalMs,
+      record: () => recordAndLogWorkerHeartbeat(true),
+      onError: (error) => {
+        logWorkerEvent("error", "outbox.worker.heartbeat_failed", {
+          ok: false,
+          detail: outboxWorkerErrorDetail(error),
+        });
+      },
+    });
+
+    try {
+      // Continuous polling loop
+      while (true) {
+        const stats = await runOnce(batchSize);
+        if (Date.now() >= nextSeoAt) {
+          try {
+            await runSeoOnce();
+          } catch (error) {
+            logWorkerEvent("warn", "seo.draft.loop_failed", {
+              ok: false,
+              detail: outboxWorkerErrorDetail(error),
+            });
+          }
+          nextSeoAt =
+            Date.now() +
+            (Number.isFinite(seoIntervalMs) && seoIntervalMs > 60_000
+              ? seoIntervalMs
+              : 6 * 60 * 60 * 1000);
         }
-        nextSeoAt =
-          Date.now() +
-          (Number.isFinite(seoIntervalMs) && seoIntervalMs > 60_000
-            ? seoIntervalMs
-            : 6 * 60 * 60 * 1000);
-      }
-      if (Date.now() >= nextGoogleAdsAt) {
-        try {
-          await runGoogleAdsQueueOnce();
-          await runGoogleAdsAnalystQueueOnce();
-        } catch (error) {
-          logWorkerEvent("warn", "google_ads.loop_failed", {
-            ok: false,
-            detail: outboxWorkerErrorDetail(error),
-          });
+        if (Date.now() >= nextGoogleAdsAt) {
+          try {
+            await runGoogleAdsQueueOnce();
+            await runGoogleAdsAnalystQueueOnce();
+          } catch (error) {
+            logWorkerEvent("warn", "google_ads.loop_failed", {
+              ok: false,
+              detail: outboxWorkerErrorDetail(error),
+            });
+          }
+          nextGoogleAdsAt =
+            Date.now() +
+            (Number.isFinite(googleAdsIntervalMs) &&
+            googleAdsIntervalMs > 60_000
+              ? googleAdsIntervalMs
+              : 24 * 60 * 60 * 1000);
         }
-        nextGoogleAdsAt =
-          Date.now() +
-          (Number.isFinite(googleAdsIntervalMs) && googleAdsIntervalMs > 60_000
-            ? googleAdsIntervalMs
-            : 24 * 60 * 60 * 1000);
-      }
-      if (Date.now() >= nextSalesDraftPrepAt) {
-        try {
-          await runSalesDraftPrepOnce();
-        } catch (error) {
-          logWorkerEvent("warn", "sales_draft_prep.loop_failed", {
-            ok: false,
-            detail: outboxWorkerErrorDetail(error),
-          });
+        if (Date.now() >= nextSalesDraftPrepAt) {
+          try {
+            await runSalesDraftPrepOnce();
+          } catch (error) {
+            logWorkerEvent("warn", "sales_draft_prep.loop_failed", {
+              ok: false,
+              detail: outboxWorkerErrorDetail(error),
+            });
+          }
+          nextSalesDraftPrepAt =
+            Date.now() +
+            (Number.isFinite(salesDraftPrepIntervalMs) &&
+            salesDraftPrepIntervalMs > 30_000
+              ? salesDraftPrepIntervalMs
+              : 3 * 60 * 1000);
         }
-        nextSalesDraftPrepAt =
-          Date.now() +
-          (Number.isFinite(salesDraftPrepIntervalMs) &&
-          salesDraftPrepIntervalMs > 30_000
-            ? salesDraftPrepIntervalMs
-            : 3 * 60 * 1000);
-      }
-      if (Date.now() >= nextFacebookDmNameBackfillAt) {
-        try {
-          await runFacebookDmNameBackfillOnce();
-        } catch (error) {
-          logWorkerEvent("warn", "facebook_dm_name_backfill.loop_failed", {
-            ok: false,
-            detail: outboxWorkerErrorDetail(error),
-          });
+        if (Date.now() >= nextFacebookDmNameBackfillAt) {
+          try {
+            await runFacebookDmNameBackfillOnce();
+          } catch (error) {
+            logWorkerEvent("warn", "facebook_dm_name_backfill.loop_failed", {
+              ok: false,
+              detail: outboxWorkerErrorDetail(error),
+            });
+          }
+          nextFacebookDmNameBackfillAt =
+            Date.now() +
+            (Number.isFinite(facebookDmNameBackfillIntervalMs) &&
+            facebookDmNameBackfillIntervalMs > 60_000
+              ? facebookDmNameBackfillIntervalMs
+              : 2 * 60 * 60 * 1000);
         }
-        nextFacebookDmNameBackfillAt =
-          Date.now() +
-          (Number.isFinite(facebookDmNameBackfillIntervalMs) &&
-          facebookDmNameBackfillIntervalMs > 60_000
-            ? facebookDmNameBackfillIntervalMs
-            : 2 * 60 * 60 * 1000);
-      }
-      if (Date.now() >= nextTraccarSyncAt) {
-        try {
-          await runTraccarSyncOnce();
-        } catch (error) {
-          logWorkerEvent("warn", "traccar.sync.loop_failed", {
-            ok: false,
-            detail: outboxWorkerErrorDetail(error),
-          });
+        if (Date.now() >= nextTraccarSyncAt) {
+          try {
+            await runTraccarSyncOnce();
+          } catch (error) {
+            logWorkerEvent("warn", "traccar.sync.loop_failed", {
+              ok: false,
+              detail: outboxWorkerErrorDetail(error),
+            });
+          }
+          nextTraccarSyncAt =
+            Date.now() +
+            (Number.isFinite(traccarSyncIntervalMs) &&
+            traccarSyncIntervalMs > 15_000
+              ? traccarSyncIntervalMs
+              : 60 * 1000);
         }
-        nextTraccarSyncAt =
-          Date.now() +
-          (Number.isFinite(traccarSyncIntervalMs) &&
-          traccarSyncIntervalMs > 15_000
-            ? traccarSyncIntervalMs
-            : 60 * 1000);
-      }
-      if (Date.now() >= nextAppointmentMediaCleanupAt) {
-        try {
-          await runAppointmentMediaCleanupOnce();
-        } catch (error) {
-          logWorkerEvent("warn", "appointment_media.cleanup.loop_failed", {
-            ok: false,
-            detail: outboxWorkerErrorDetail(error),
-          });
+        if (Date.now() >= nextAppointmentMediaCleanupAt) {
+          try {
+            await runAppointmentMediaCleanupOnce();
+          } catch (error) {
+            logWorkerEvent("warn", "appointment_media.cleanup.loop_failed", {
+              ok: false,
+              detail: outboxWorkerErrorDetail(error),
+            });
+          }
+          nextAppointmentMediaCleanupAt =
+            Date.now() +
+            (Number.isFinite(appointmentMediaCleanupIntervalMs) &&
+            appointmentMediaCleanupIntervalMs > 5 * 60_000
+              ? appointmentMediaCleanupIntervalMs
+              : 60 * 60 * 1000);
         }
-        nextAppointmentMediaCleanupAt =
-          Date.now() +
-          (Number.isFinite(appointmentMediaCleanupIntervalMs) &&
-          appointmentMediaCleanupIntervalMs > 5 * 60_000
-            ? appointmentMediaCleanupIntervalMs
-            : 60 * 60 * 1000);
-      }
-      if (Date.now() >= nextSquareReconciliationAt) {
-        try {
-          await runSquareReconciliationOnce();
-        } catch (error) {
-          logWorkerEvent("warn", "square.reconciliation.loop_failed", {
-            ok: false,
-            detail: outboxWorkerErrorDetail(error),
-          });
+        if (Date.now() >= nextSquareReconciliationAt) {
+          try {
+            await runSquareReconciliationOnce();
+          } catch (error) {
+            logWorkerEvent("warn", "square.reconciliation.loop_failed", {
+              ok: false,
+              detail: outboxWorkerErrorDetail(error),
+            });
+          }
+          nextSquareReconciliationAt =
+            Date.now() +
+            (Number.isFinite(squareReconciliationIntervalMs) &&
+            squareReconciliationIntervalMs > 30_000
+              ? squareReconciliationIntervalMs
+              : 2 * 60 * 1000);
         }
-        nextSquareReconciliationAt =
-          Date.now() +
-          (Number.isFinite(squareReconciliationIntervalMs) &&
-          squareReconciliationIntervalMs > 30_000
-            ? squareReconciliationIntervalMs
-            : 2 * 60 * 1000);
-      }
-      if (Date.now() >= nextPartnerInviteRecoveryAt) {
-        try {
-          await runPartnerInviteRecoveryOnce();
-        } catch (error) {
-          logWorkerEvent("warn", "partners.invite_recovery.loop_failed", {
-            ok: false,
-            detail: outboxWorkerErrorDetail(error),
-          });
+        if (Date.now() >= nextPartnerInviteRecoveryAt) {
+          try {
+            await runPartnerInviteRecoveryOnce();
+          } catch (error) {
+            logWorkerEvent("warn", "partners.invite_recovery.loop_failed", {
+              ok: false,
+              detail: outboxWorkerErrorDetail(error),
+            });
+          }
+          nextPartnerInviteRecoveryAt =
+            Date.now() +
+            (Number.isFinite(partnerInviteRecoveryIntervalMs) &&
+            partnerInviteRecoveryIntervalMs >= 30_000
+              ? partnerInviteRecoveryIntervalMs
+              : 60 * 1000);
         }
-        nextPartnerInviteRecoveryAt =
-          Date.now() +
-          (Number.isFinite(partnerInviteRecoveryIntervalMs) &&
-          partnerInviteRecoveryIntervalMs >= 30_000
-            ? partnerInviteRecoveryIntervalMs
-            : 60 * 1000);
+        if (stats.total === 0) {
+          await sleep(pollIntervalMs);
+        }
       }
-      await recordHeartbeatIfDue();
-      if (stats.total === 0) {
-        await sleep(pollIntervalMs);
-      }
+    } finally {
+      await heartbeat.stop();
     }
   } else {
     await runOnce(batchSize, { logIdle: true });

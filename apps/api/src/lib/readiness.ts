@@ -82,12 +82,13 @@ export function evaluateWorkerHeartbeat(input: {
 
 export function evaluateOutboxQueueReadiness(input: {
   count: number;
-  oldestAt: Date | null;
+  oldestDueAt: Date | null;
   now: Date;
   maxAgeMs: number;
 }): ReadinessCheck {
-  const oldestAt = input.oldestAt?.getTime() ?? 0;
-  const stale = oldestAt > 0 && input.now.getTime() - oldestAt > input.maxAgeMs;
+  const oldestDueAt = input.oldestDueAt?.getTime() ?? 0;
+  const stale =
+    oldestDueAt > 0 && input.now.getTime() - oldestDueAt > input.maxAgeMs;
   return stale
     ? {
         state: "failed",
@@ -247,9 +248,10 @@ export async function getApiReadinessSnapshot(
       const [queue] = await db
         .select({
           count: sql<number>`count(*)::int`.mapWith(Number),
-          oldest: sql<Date | null>`min(${outboxEvents.createdAt})`.mapWith(
-            (value) => (value ? new Date(value as Date | string) : null),
-          ),
+          oldestDueAt:
+            sql<Date | null>`min(coalesce(${outboxEvents.nextAttemptAt}, ${outboxEvents.createdAt}))`.mapWith(
+              (value) => (value ? new Date(value as Date | string) : null),
+            ),
         })
         .from(outboxEvents)
         .where(
@@ -270,7 +272,7 @@ export async function getApiReadinessSnapshot(
       );
       checks.outboxQueue = evaluateOutboxQueueReadiness({
         count: queue?.count ?? 0,
-        oldestAt: queue?.oldest ?? null,
+        oldestDueAt: queue?.oldestDueAt ?? null,
         now,
         maxAgeMs: maxQueueAgeMs,
       });

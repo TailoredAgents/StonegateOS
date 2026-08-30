@@ -25,6 +25,7 @@ export type GoogleAdsAnalystRunResult =
   | { ok: false; error: string; detail?: string | null };
 
 const DEFAULT_MODEL = "gpt-5-mini";
+export const GOOGLE_ADS_ANALYST_OPENAI_TIMEOUT_MS = 90_000;
 
 const AnalystReportSchema = z.object({
   summary: z.string().min(20).max(1600),
@@ -477,15 +478,17 @@ function normalizeStringArray(
   return out;
 }
 
-async function callOpenAIAnalystJson(input: {
+export async function callOpenAIAnalystJson(input: {
   apiKey: string;
   model: string;
   systemPrompt: string;
   userPrompt: string;
+  fetchImpl?: typeof fetch;
 }): Promise<
   | { ok: true; report: z.infer<typeof AnalystReportSchema> }
   | { ok: false; error: string; detail?: string | null }
 > {
+  const fetchImpl = input.fetchImpl ?? fetch;
   const basePayload: Record<string, unknown> = {
     model: input.model,
     input: [
@@ -559,17 +562,29 @@ async function callOpenAIAnalystJson(input: {
             ],
     };
 
-    const response = await fetch(
-      resolveOpenAiApiEndpoint("responses", process.env),
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${input.apiKey}`,
+    let response: Response;
+    try {
+      response = await fetchImpl(
+        resolveOpenAiApiEndpoint("responses", process.env),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${input.apiKey}`,
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(GOOGLE_ADS_ANALYST_OPENAI_TIMEOUT_MS),
         },
-        body: JSON.stringify(payload),
-      },
-    );
+      );
+    } catch (error) {
+      const failure =
+        error instanceof Error &&
+        (error.name === "TimeoutError" || error.name === "AbortError")
+          ? "openai_request_timeout"
+          : "openai_request_failed";
+      errorTrail.push(`attempt_${attempt}:${failure}`);
+      continue;
+    }
 
     if (!response.ok) {
       const bodyText = await response.text().catch(() => "");
@@ -648,9 +663,11 @@ async function callOpenAIAnalystJson(input: {
   // Prefer a stable error key so provider health is easy to interpret.
   return {
     ok: false,
-    error: detail.includes("openai_request_failed")
-      ? "openai_request_failed"
-      : "openai_parse_failed",
+    error: detail.includes("openai_request_timeout")
+      ? "openai_request_timeout"
+      : detail.includes("openai_request_failed")
+        ? "openai_request_failed"
+        : "openai_parse_failed",
     detail,
   };
 }

@@ -6,11 +6,16 @@ import {
   outboxWorkerErrorDetail,
   parseOutboxWorkerConfiguration,
   shouldLogOutboxBatch,
+  startOutboxWorkerHeartbeat,
 } from "@/lib/outbox-worker-runtime";
 
 const REPO_ROOT = path.resolve(__dirname, "../../../..");
 
 describe("outbox worker runtime", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it("uses bounded defaults and supports the explicit one-shot mode", () => {
     expect(parseOutboxWorkerConfiguration({})).toEqual({
       batchSize: 10,
@@ -102,18 +107,67 @@ describe("outbox worker runtime", () => {
     expect(detail).toBe("x".repeat(500));
   });
 
-  it("wires the worker to activity-only batch logs and rate-limited heartbeats", () => {
+  it("records heartbeats on an independent interval without overlapping writes", async () => {
+    jest.useFakeTimers();
+    let finishFirstWrite: (() => void) | null = null;
+    const record = jest
+      .fn<Promise<void>, []>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishFirstWrite = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
+    const onError = jest.fn();
+    const heartbeat = startOutboxWorkerHeartbeat({
+      intervalMs: 5_000,
+      record,
+      onError,
+    });
+
+    await Promise.resolve();
+    expect(record).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(15_000);
+    expect(record).toHaveBeenCalledTimes(1);
+
+    finishFirstWrite?.();
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(record).toHaveBeenCalledTimes(2);
+    expect(onError).not.toHaveBeenCalled();
+
+    await heartbeat.stop();
+    await jest.advanceTimersByTimeAsync(10_000);
+    expect(record).toHaveBeenCalledTimes(2);
+  });
+
+  it("handles heartbeat write and error-handler failures without leaking rejections", async () => {
+    jest.useFakeTimers();
+    const heartbeat = startOutboxWorkerHeartbeat({
+      intervalMs: 5_000,
+      record: jest.fn().mockRejectedValue(new Error("database unavailable")),
+      onError: () => {
+        throw new Error("logger unavailable");
+      },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await heartbeat.stop();
+  });
+
+  it("wires the worker to activity-only batch logs and independent heartbeats", () => {
     const worker = fs.readFileSync(
       path.resolve(REPO_ROOT, "scripts/outbox-worker.ts"),
       "utf8",
     );
 
     expect(worker).toContain("shouldLogOutboxBatch(stats)");
-    expect(worker).toContain("Date.now() < nextHeartbeatAt");
-    expect(worker).toContain(
-      "nextHeartbeatAt = Date.now() + heartbeatIntervalMs",
-    );
-    expect(worker.match(/await recordHeartbeatIfDue\(\)/gu)).toHaveLength(2);
+    expect(worker).toContain("startOutboxWorkerHeartbeat({");
+    expect(worker).toContain("await heartbeat.stop()");
+    expect(worker).not.toContain("recordHeartbeatIfDue");
     expect(worker).toContain('"outbox.worker.started"');
     expect(worker).toContain('"outbox.worker.heartbeat"');
     expect(worker).toContain('"outbox.worker.failed"');

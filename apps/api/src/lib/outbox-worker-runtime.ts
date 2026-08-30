@@ -11,6 +11,10 @@ export type OutboxWorkerConfiguration = {
   heartbeatIntervalMs: number;
 };
 
+export type OutboxWorkerHeartbeat = {
+  stop: () => Promise<void>;
+};
+
 const DEFAULT_BATCH_SIZE = 10;
 const MIN_BATCH_SIZE = 1;
 const MAX_BATCH_SIZE = 100;
@@ -123,4 +127,53 @@ export function formatOutboxWorkerLog(
 export function outboxWorkerErrorDetail(error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
   return detail.slice(0, MAX_ERROR_DETAIL_LENGTH);
+}
+
+/**
+ * Keep readiness current while a batch or a scheduled provider operation is
+ * awaiting I/O. Heartbeat writes never overlap, and stopping waits for the
+ * active write so a later fatal heartbeat cannot be overwritten by a race.
+ */
+export function startOutboxWorkerHeartbeat(input: {
+  intervalMs: number;
+  record: () => Promise<void>;
+  onError: (error: unknown) => void;
+}): OutboxWorkerHeartbeat {
+  let stopped = false;
+  let activeWrite: Promise<void> | null = null;
+
+  const record = (): Promise<void> => {
+    if (stopped) return Promise.resolve();
+    if (activeWrite) return activeWrite;
+
+    const write = Promise.resolve()
+      .then(input.record)
+      .catch((error: unknown) => {
+        try {
+          input.onError(error);
+        } catch {
+          // A logging failure must not turn the timer callback into an
+          // unhandled rejection.
+        }
+      })
+      .finally(() => {
+        if (activeWrite === write) activeWrite = null;
+      });
+    activeWrite = write;
+    return write;
+  };
+
+  const interval = setInterval(() => {
+    void record();
+  }, input.intervalMs);
+  void record();
+
+  return {
+    async stop(): Promise<void> {
+      stopped = true;
+      clearInterval(interval);
+      const pendingWrite = activeWrite;
+      if (pendingWrite) await pendingWrite;
+    },
+  };
 }

@@ -119,7 +119,7 @@ describe("deployment readiness", () => {
     expect(
       evaluateOutboxQueueReadiness({
         count: 2,
-        oldestAt: new Date("2026-08-08T11:55:00.000Z"),
+        oldestDueAt: new Date("2026-08-08T11:55:00.000Z"),
         now,
         maxAgeMs: 10 * 60_000,
       }),
@@ -127,14 +127,23 @@ describe("deployment readiness", () => {
     expect(
       evaluateOutboxQueueReadiness({
         count: 7,
-        oldestAt: new Date("2026-08-08T11:40:00.000Z"),
+        oldestDueAt: new Date("2026-08-08T11:40:00.000Z"),
         now,
         maxAgeMs: 10 * 60_000,
       }),
     ).toMatchObject({ state: "failed" });
   });
 
-  it("keeps liveness cheap and makes Render use dependency-aware readiness", () => {
+  it("measures dispatchable queue age from its effective due time", () => {
+    const readiness = apiSource("src/lib/readiness.ts");
+
+    expect(readiness).toMatch(
+      /min\(\s*coalesce\(\s*\$\{outboxEvents\.nextAttemptAt\},\s*\$\{outboxEvents\.createdAt\}\s*\)\s*\)/u,
+    );
+    expect(readiness).toContain("oldestDueAt: queue?.oldestDueAt ?? null");
+  });
+
+  it("keeps Render health checks cheap and retains deep readiness monitoring", () => {
     const apiLiveness = apiSource("app/api/healthz/route.ts");
     const siteLiveness = repoSource("apps/site/src/app/api/healthz/route.ts");
     const apiReadiness = apiSource("app/api/readyz/route.ts");
@@ -150,7 +159,8 @@ describe("deployment readiness", () => {
     expect(siteReadiness).toContain("status: ok ? 200 : 503");
     expect(worker).toContain("await recordAndLogWorkerHeartbeat(true)");
     expect(worker).toContain("await recordWorkerHeartbeat(");
-    expect(render.match(/healthCheckPath: \/api\/readyz/gu)).toHaveLength(2);
+    expect(render.match(/healthCheckPath: \/api\/healthz/gu)).toHaveLength(2);
+    expect(render).not.toContain("healthCheckPath: /api/readyz");
     expect(render).toContain("READINESS_REQUIRE_OUTBOX_WORKER");
   });
 });

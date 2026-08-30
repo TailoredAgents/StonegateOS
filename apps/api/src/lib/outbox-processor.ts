@@ -127,10 +127,15 @@ import {
 } from "@/lib/facebook-webhooks";
 import { recordInboundMessage } from "@/lib/inbox";
 import {
-  getOutboxRetryDelayMs,
   planContactScopedOutboxReconciliation,
   planOutboxOutcomeFinalization,
+  type OutboxFinalizationOutcome,
 } from "@/lib/outbox-finalization";
+import {
+  APPOINTMENT_MEDIA_MAX_ATTEMPTS,
+  GOOGLE_ADS_SYNC_MAX_ATTEMPTS,
+  isGoogleAdsInvalidResponseFailure,
+} from "@/lib/outbox-poison-policy";
 import {
   claimMessageDispatch,
   ensureMessageDispatchRequested,
@@ -187,10 +192,7 @@ export interface ProcessOutboxBatchOptions {
   limit?: number;
 }
 
-type OutboxOutcome = {
-  status: "processed" | "skipped" | "retry";
-  error?: string | null;
-  nextAttemptAt?: Date | null;
+type OutboxOutcome = OutboxFinalizationOutcome & {
   /** The dispatch state machine already deferred or quarantined this event. */
   skipFinalization?: boolean;
 };
@@ -307,9 +309,17 @@ function outcomeForOutboxHandlerError(
     type: event.type,
     error: message,
   });
+  const exhaustedHandlerBudget =
+    event.type === "message.send" || event.type.startsWith("facebook.");
   return canRetry
     ? { status: "retry", error: message }
-    : { status: "processed", error: message };
+    : {
+        status: "quarantined",
+        error: message,
+        quarantineReason: exhaustedHandlerBudget
+          ? "outbox_handler_retry_budget_exhausted"
+          : "outbox_handler_error_terminal",
+      };
 }
 
 async function finalizeOutboxEvent(
@@ -3716,9 +3726,9 @@ async function handleOutboxEvent(
     case "appointment_media.import_message": {
       if (!isMediaAutoImportEnabled()) {
         return {
-          status: "retry",
+          status: "quarantined",
           error: "media_auto_import_disabled",
-          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+          quarantineReason: "media_auto_import_disabled",
         };
       }
       const payload = isRecord(event.payload) ? event.payload : null;
@@ -3731,16 +3741,21 @@ async function handleOutboxEvent(
         const detail = error instanceof Error ? error.message : String(error);
         return error instanceof AppointmentMediaError && error.status < 500
           ? { status: "processed", error: detail }
-          : { status: "retry", error: detail };
+          : {
+              status: "retry",
+              error: detail,
+              maxAttempts: APPOINTMENT_MEDIA_MAX_ATTEMPTS,
+              quarantineReason: "appointment_media_retry_budget_exhausted",
+            };
       }
     }
 
     case "appointment_media.attach_appointment": {
       if (!isMediaAutoImportEnabled()) {
         return {
-          status: "retry",
+          status: "quarantined",
           error: "media_auto_import_disabled",
-          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+          quarantineReason: "media_auto_import_disabled",
         };
       }
       const payload = isRecord(event.payload) ? event.payload : null;
@@ -3753,7 +3768,12 @@ async function handleOutboxEvent(
         const detail = error instanceof Error ? error.message : String(error);
         return error instanceof AppointmentMediaError && error.status < 500
           ? { status: "processed", error: detail }
-          : { status: "retry", error: detail };
+          : {
+              status: "retry",
+              error: detail,
+              maxAttempts: APPOINTMENT_MEDIA_MAX_ATTEMPTS,
+              quarantineReason: "appointment_media_retry_budget_exhausted",
+            };
       }
     }
 
@@ -3905,21 +3925,23 @@ async function handleOutboxEvent(
       }
 
       const db = getDb();
-      const [existingMediaImport] = await db
-        .select({ id: outboxEvents.id })
-        .from(outboxEvents)
-        .where(
-          and(
-            eq(outboxEvents.type, "appointment_media.attach_appointment"),
-            sql`(${outboxEvents.payload} ->> 'appointmentId') = ${appointmentId}`,
-          ),
-        )
-        .limit(1);
-      if (!existingMediaImport) {
-        await db.insert(outboxEvents).values({
-          type: "appointment_media.attach_appointment",
-          payload: { appointmentId },
-        });
+      if (isMediaAutoImportEnabled()) {
+        const [existingMediaImport] = await db
+          .select({ id: outboxEvents.id })
+          .from(outboxEvents)
+          .where(
+            and(
+              eq(outboxEvents.type, "appointment_media.attach_appointment"),
+              sql`(${outboxEvents.payload} ->> 'appointmentId') = ${appointmentId}`,
+            ),
+          )
+          .limit(1);
+        if (!existingMediaImport) {
+          await db.insert(outboxEvents).values({
+            type: "appointment_media.attach_appointment",
+            payload: { appointmentId },
+          });
+        }
       }
 
       const services = coerceServices(payload?.["services"]);
@@ -5733,13 +5755,26 @@ async function handleOutboxEvent(
 
         await recordProviderFailureSafe("google_ads", detail);
 
+        if (isGoogleAdsInvalidResponseFailure(error)) {
+          return {
+            status: "quarantined",
+            error: detail,
+            quarantineReason: "google_ads_invalid_response",
+          };
+        }
+
         const retryable =
           error instanceof GoogleAdsApiError
             ? error.status === 429 || error.status >= 500
             : true;
 
         return retryable
-          ? { status: "retry", error: detail }
+          ? {
+              status: "retry",
+              error: detail,
+              maxAttempts: GOOGLE_ADS_SYNC_MAX_ATTEMPTS,
+              quarantineReason: "google_ads_retry_budget_exhausted",
+            }
           : { status: "processed", error: detail };
       }
     }
@@ -7067,7 +7102,6 @@ export async function processOutboxBatch(
         continue;
       }
     } catch (error) {
-      const attempt = (event.attempts ?? 0) + 1;
       const detail = `contact_dispatch_guard_failed:${String(error)}`;
       stats.errors += 1;
       console.warn("[outbox] contact_dispatch_guard_failed", {
@@ -7078,13 +7112,13 @@ export async function processOutboxBatch(
       try {
         await db
           .update(outboxEvents)
-          .set({
-            attempts: attempt,
-            nextAttemptAt: new Date(
-              Date.now() + getOutboxRetryDelayMs(attempt),
+          .set(
+            planOutboxOutcomeFinalization(
+              event,
+              { status: "retry", error: detail },
+              new Date(),
             ),
-            lastError: detail,
-          })
+          )
           .where(eq(outboxEvents.id, event.id));
       } catch (updateError) {
         console.warn("[outbox] contact_dispatch_guard_retry_failed", {
@@ -7130,7 +7164,6 @@ export async function processOutboxBatch(
       }
     } catch (error) {
       if (error instanceof ContactDispatchGuardFailure) {
-        const attempt = (event.attempts ?? 0) + 1;
         stats.errors += 1;
         console.warn("[outbox] contact_dispatch_guard_failed", {
           id: event.id,
@@ -7140,13 +7173,13 @@ export async function processOutboxBatch(
         try {
           await db
             .update(outboxEvents)
-            .set({
-              attempts: attempt,
-              nextAttemptAt: new Date(
-                Date.now() + getOutboxRetryDelayMs(attempt),
+            .set(
+              planOutboxOutcomeFinalization(
+                event,
+                { status: "retry", error: error.message },
+                new Date(),
               ),
-              lastError: error.message,
-            })
+            )
             .where(eq(outboxEvents.id, event.id));
         } catch (updateError) {
           console.warn("[outbox] contact_dispatch_guard_retry_failed", {
@@ -7214,7 +7247,10 @@ export async function processOutboxBatch(
 
     if (outcome.status === "processed") {
       stats.processed += 1;
-    } else if (outcome.status === "skipped") {
+    } else if (
+      outcome.status === "skipped" ||
+      outcome.status === "quarantined"
+    ) {
       stats.skipped += 1;
     } else {
       stats.errors += 1;

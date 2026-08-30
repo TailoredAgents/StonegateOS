@@ -14,6 +14,7 @@ import {
   outboxEvents
 } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
+import { isMediaAutoImportEnabled } from "@/lib/feature-flags";
 import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 
 export type InboundChannel = "sms" | "email" | "dm" | "call" | "web";
@@ -1111,7 +1112,11 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
       createdAt: now
     });
 
-    if (mediaUrls.length > 0 && channel !== "email") {
+    if (
+      isMediaAutoImportEnabled() &&
+      mediaUrls.length > 0 &&
+      channel !== "email"
+    ) {
       await tx.insert(outboxEvents).values({
         type: "appointment_media.import_message",
         payload: {
