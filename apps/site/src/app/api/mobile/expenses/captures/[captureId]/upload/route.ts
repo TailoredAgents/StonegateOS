@@ -10,6 +10,7 @@ import {
   receiptUploadAdmissionResponse,
   receiptUploadDeclaredLength,
 } from "@/app/api/mobile/expenses/lib/receipt-upload-admission";
+import { buildReceiptStorageUploadHeaders } from "@/app/api/mobile/expenses/lib/receipt-upload-headers";
 
 const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
 const ALLOWED_CONTENT_TYPES = new Set([
@@ -198,14 +199,7 @@ export async function PUT(
 
     const storageResponse = await fetch(parsedUploadUrl, {
       method: "PUT",
-      headers: {
-        "Content-Type": contentType,
-        ...Object.fromEntries(
-          Object.entries(uploadHeaders ?? {}).filter(
-            (entry): entry is [string, string] => typeof entry[1] === "string",
-          ),
-        ),
-      },
+      headers: buildReceiptStorageUploadHeaders(contentType, uploadHeaders),
       body: bytes,
       redirect: "error",
     });

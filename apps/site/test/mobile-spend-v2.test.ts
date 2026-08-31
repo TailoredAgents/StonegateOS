@@ -43,9 +43,9 @@ import {
 } from "../src/app/mobile/lib/expense-mutation-idempotency";
 import {
   addDateKeyDays,
+  detectExpenseReceiptContentType,
   easternDateKey,
   expenseAllocationTotal,
-  expenseReceiptContentType,
   mondayForDateKey,
   moneyInputToCents,
 } from "../src/app/mobile/spend-v2-utils";
@@ -641,17 +641,49 @@ void test("mobile dump correction proxy remains owner-only and version-bound", a
   assert.match(historyRoute, /"dump_tickets"/u);
 });
 
-void test("receipt type inference supports camera and plan-approved file types", () => {
+void test("receipt upload type follows verified bytes instead of allowed but wrong browser hints", () => {
+  const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xe1]);
+  assert.equal(detectExpenseReceiptContentType(jpeg), "image/jpeg");
+
+  const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  assert.equal(detectExpenseReceiptContentType(png), "image/png");
+});
+
+void test("receipt byte verification recognizes every supported container and rejects lookalikes", () => {
   assert.equal(
-    expenseReceiptContentType({ name: "receipt.HEIC", type: "" }),
-    "image/heic",
-  );
-  assert.equal(
-    expenseReceiptContentType({ name: "receipt.pdf", type: "application/pdf" }),
+    detectExpenseReceiptContentType(
+      Uint8Array.from(Buffer.from("%PDF-1.7\n", "ascii")),
+    ),
     "application/pdf",
   );
   assert.equal(
-    expenseReceiptContentType({ name: "receipt.gif", type: "image/gif" }),
+    detectExpenseReceiptContentType(
+      Uint8Array.from(Buffer.from("RIFF0000WEBP", "ascii")),
+    ),
+    "image/webp",
+  );
+
+  const isoContainer = (brand: string) => {
+    const bytes = new Uint8Array(24);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, bytes.byteLength);
+    bytes.set(Buffer.from("ftyp", "ascii"), 4);
+    bytes.set(Buffer.from(brand, "ascii"), 8);
+    return bytes;
+  };
+  assert.equal(
+    detectExpenseReceiptContentType(isoContainer("heic")),
+    "image/heic",
+  );
+  assert.equal(
+    detectExpenseReceiptContentType(isoContainer("mif1")),
+    "image/heif",
+  );
+  assert.equal(detectExpenseReceiptContentType(isoContainer("avif")), null);
+  assert.equal(
+    detectExpenseReceiptContentType(
+      Uint8Array.from(Buffer.from("GIF89a-not-a-receipt", "ascii")),
+    ),
     null,
   );
 });

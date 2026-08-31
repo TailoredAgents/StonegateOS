@@ -36,12 +36,11 @@ import {
 } from "@/lib/expense-receipt-openai";
 import {
   buildExpenseReceiptObjectKeys,
-  expenseReceiptContentTypesMatch,
   ExpenseReceiptUploadIntentSchema,
   normalizeDeclaredExpenseReceiptContentType,
   sanitizeExpenseReceiptFilename,
+  storedExpenseReceiptContentTypeMatches,
   verifyAndNormalizeExpenseReceiptUpload,
-  type ExpenseReceiptContentType,
   type ExpenseReceiptUploadIntentInput,
 } from "@/lib/expense-receipt-storage";
 import {
@@ -745,20 +744,14 @@ export async function finalizeExpenseReceiptUpload(input: {
   const declaredContentType = normalizeDeclaredExpenseReceiptContentType(
     capture.declaredContentType,
   );
-  if (head.contentType) {
-    let storedContentType: ExpenseReceiptContentType;
-    try {
-      storedContentType = normalizeDeclaredExpenseReceiptContentType(
-        head.contentType,
-      );
-    } catch {
-      throw new ExpenseReceiptCaptureError("receipt_upload_type_mismatch", 400);
-    }
-    if (
-      !expenseReceiptContentTypesMatch(declaredContentType, storedContentType)
-    ) {
-      throw new ExpenseReceiptCaptureError("receipt_upload_type_mismatch", 400);
-    }
+  if (
+    head.contentType &&
+    !storedExpenseReceiptContentTypeMatches(
+      declaredContentType,
+      head.contentType,
+    )
+  ) {
+    throw new ExpenseReceiptCaptureError("receipt_upload_type_mismatch", 400);
   }
 
   const bytes = await getMediaObject(capture.originalObjectKey);

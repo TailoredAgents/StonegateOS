@@ -1,6 +1,85 @@
 const EASTERN_TIME_ZONE = "America/New_York";
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
+export type ExpenseReceiptContentType =
+  | "image/jpeg"
+  | "image/png"
+  | "image/webp"
+  | "image/heic"
+  | "image/heif"
+  | "application/pdf";
+
+function receiptBytesAscii(
+  bytes: Uint8Array,
+  start: number,
+  length: number,
+): string {
+  let value = "";
+  for (let offset = start; offset < start + length; offset += 1) {
+    value += String.fromCharCode(bytes[offset] ?? 0);
+  }
+  return value;
+}
+
+function detectExpenseReceiptHeifType(
+  bytes: Uint8Array,
+): "image/heic" | "image/heif" | null {
+  if (bytes.length < 12 || receiptBytesAscii(bytes, 4, 4) !== "ftyp") {
+    return null;
+  }
+  const brands = new Set<string>([receiptBytesAscii(bytes, 8, 4)]);
+  for (let offset = 16; offset + 4 <= Math.min(bytes.length, 64); offset += 4) {
+    brands.add(receiptBytesAscii(bytes, offset, 4));
+  }
+  if (brands.has("avif") || brands.has("avis")) return null;
+  if (["heic", "heix", "hevc", "hevx"].some((brand) => brands.has(brand))) {
+    return "image/heic";
+  }
+  return ["mif1", "msf1"].some((brand) => brands.has(brand))
+    ? "image/heif"
+    : null;
+}
+
+/**
+ * Detect the receipt container from its immutable bytes. Browser File.type and
+ * filename extensions are only picker hints and are not authoritative.
+ */
+export function detectExpenseReceiptContentType(
+  input: ArrayBuffer | Uint8Array,
+): ExpenseReceiptContentType | null {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+  if (bytes.length >= 5 && receiptBytesAscii(bytes, 0, 5) === "%PDF-") {
+    return "application/pdf";
+  }
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
+    return "image/jpeg";
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    receiptBytesAscii(bytes, 1, 3) === "PNG" &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (
+    bytes.length >= 12 &&
+    receiptBytesAscii(bytes, 0, 4) === "RIFF" &&
+    receiptBytesAscii(bytes, 8, 4) === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return detectExpenseReceiptHeifType(bytes);
+}
+
 export function easternDateKey(value = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: EASTERN_TIME_ZONE,
@@ -89,31 +168,4 @@ export function expenseErrorMessage(
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return fallback;
-}
-
-export function expenseReceiptContentType(file: {
-  name: string;
-  type: string;
-}): string | null {
-  const declared = file.type.split(";")[0]?.trim().toLowerCase() ?? "";
-  if (
-    [
-      "image/jpeg",
-      "image/png",
-      "image/webp",
-      "image/heic",
-      "image/heif",
-      "application/pdf",
-    ].includes(declared)
-  ) {
-    return declared;
-  }
-  const extension = file.name.split(".").pop()?.toLowerCase();
-  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
-  if (extension === "png") return "image/png";
-  if (extension === "webp") return "image/webp";
-  if (extension === "heic") return "image/heic";
-  if (extension === "heif") return "image/heif";
-  if (extension === "pdf") return "application/pdf";
-  return null;
 }

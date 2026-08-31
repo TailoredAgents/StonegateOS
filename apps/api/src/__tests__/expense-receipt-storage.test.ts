@@ -7,6 +7,7 @@ import {
   ExpenseReceiptUploadIntentSchema,
   MAX_EXPENSE_RECEIPT_UPLOAD_BYTES,
   sanitizeExpenseReceiptFilename,
+  storedExpenseReceiptContentTypeMatches,
   verifyAndNormalizeExpenseReceiptUpload,
 } from "@/lib/expense-receipt-storage";
 
@@ -84,6 +85,49 @@ describe("expense receipt private-upload policy", () => {
     expect(expenseReceiptContentTypesMatch("image/jpeg", "image/png")).toBe(
       false,
     );
+  });
+
+  it("accepts only equivalent repeated object-storage content types", () => {
+    expect(
+      storedExpenseReceiptContentTypeMatches(
+        "image/jpeg",
+        "image/jpeg, image/jpeg",
+      ),
+    ).toBe(true);
+    expect(
+      storedExpenseReceiptContentTypeMatches(
+        "image/jpeg",
+        " IMAGE/JPEG; charset=binary, image/jpeg ",
+      ),
+    ).toBe(true);
+    expect(
+      storedExpenseReceiptContentTypeMatches(
+        "image/heic",
+        "image/heif, IMAGE/HEIC",
+      ),
+    ).toBe(true);
+
+    expect(
+      storedExpenseReceiptContentTypeMatches(
+        "image/jpeg",
+        "image/jpeg, image/png",
+      ),
+    ).toBe(false);
+    expect(
+      storedExpenseReceiptContentTypeMatches(
+        "application/pdf",
+        "application/pdf, image/jpeg",
+      ),
+    ).toBe(false);
+    expect(
+      storedExpenseReceiptContentTypeMatches(
+        "image/jpeg",
+        "image/jpeg, application/octet-stream",
+      ),
+    ).toBe(false);
+    expect(
+      storedExpenseReceiptContentTypeMatches("image/jpeg", "image/jpeg,"),
+    ).toBe(false);
   });
 
   it("verifies byte count, type, and SHA-256 before creating a normalized derivative", async () => {

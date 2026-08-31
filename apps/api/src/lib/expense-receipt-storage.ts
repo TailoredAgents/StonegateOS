@@ -102,6 +102,31 @@ export function expenseReceiptContentTypesMatch(
   );
 }
 
+/**
+ * Object storage can fold duplicate, differently-cased HTTP headers into a
+ * comma-separated metadata value. Accept that transport artifact only when
+ * every value is an allowed receipt MIME equivalent to the declared type.
+ * The downloaded bytes are still independently sniffed before finalization.
+ */
+export function storedExpenseReceiptContentTypeMatches(
+  declared: ExpenseReceiptContentType,
+  stored: string,
+): boolean {
+  const values = stored.split(",");
+  if (values.length < 1 || values.some((value) => !value.trim())) return false;
+
+  return values.every((value) => {
+    try {
+      return expenseReceiptContentTypesMatch(
+        declared,
+        normalizeDeclaredExpenseReceiptContentType(value),
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function buildExpenseReceiptObjectKeys(input: {
   memberId: string;
   captureId: string;

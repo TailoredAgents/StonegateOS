@@ -1,6 +1,6 @@
 import {
+  detectExpenseReceiptContentType,
   expenseErrorMessage,
-  expenseReceiptContentType,
 } from "../spend-v2-utils";
 import {
   readBinaryUploadFile,
@@ -243,9 +243,6 @@ export async function createExpenseCaptureDraft(
   employeeId: string,
   file: File,
 ): Promise<ExpenseCaptureQueueRow> {
-  const contentType = expenseReceiptContentType(file);
-  if (!contentType)
-    throw new Error("Use a JPEG, PNG, WebP, HEIC, or PDF receipt.");
   let prepared;
   try {
     prepared = await readBinaryUploadFile({
@@ -262,6 +259,12 @@ export async function createExpenseCaptureDraft(
     throw new Error("The receipt could not be read.");
   }
   const { bytes, checksumSha256 } = prepared;
+  const contentType = detectExpenseReceiptContentType(bytes);
+  if (!contentType) {
+    throw new Error(
+      "This receipt file could not be verified. Use a JPEG, PNG, WebP, HEIC, or PDF.",
+    );
+  }
   const now = Date.now();
   const row: ExpenseCaptureQueueRow = {
     clientCaptureId: crypto.randomUUID(),
