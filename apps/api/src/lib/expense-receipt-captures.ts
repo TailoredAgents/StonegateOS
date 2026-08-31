@@ -583,22 +583,23 @@ export async function createExpenseReceiptUploadIntent(input: {
     };
   }
 
+  // The capture identity, submitter, size, MIME declaration, digest, and
+  // write-once object key are already immutable. Refresh only the short-lived
+  // transport authorization so offline and interrupted uploads can resume
+  // without discarding their original evidence or changing its identity.
   const remainingSeconds = Math.floor(
     (existing.uploadExpiresAt.getTime() - Date.now()) / 1_000,
   );
-  if (remainingSeconds < 30) {
-    throw new ExpenseReceiptCaptureError(
-      "expense_receipt_upload_intent_expired",
-      409,
-      "Create a new receipt capture before retrying this upload.",
-    );
-  }
+  const retryLifetimeSeconds =
+    remainingSeconds < 30
+      ? UPLOAD_URL_LIFETIME_SECONDS
+      : Math.min(remainingSeconds, UPLOAD_URL_LIFETIME_SECONDS);
   const retrySigned = await createMediaUploadUrl({
     key: existing.originalObjectKey,
     contentType: existing.declaredContentType,
     byteLength: existing.byteLength ?? upload.byteLength,
     checksumSha256Hex: existing.sha256,
-    expiresInSeconds: Math.min(remainingSeconds, UPLOAD_URL_LIFETIME_SECONDS),
+    expiresInSeconds: retryLifetimeSeconds,
     writeOnce: true,
   });
   return {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const ROOT = path.resolve(__dirname, "../../../..");
+const ROOT = path.resolve(process.cwd(), "../..");
 const read = (relativePath: string): string =>
   fs.readFileSync(path.join(ROOT, relativePath), "utf8");
 
@@ -49,6 +49,9 @@ describe("expense receipt capture pipeline contract", () => {
     expect(duplicateLookupStart).toBeGreaterThan(intentStart);
     expect(uploadIntent.match(/createMediaUploadUrl\(\{/gu)).toHaveLength(2);
     expect(uploadIntent.match(/writeOnce: true/gu)).toHaveLength(2);
+    expect(uploadIntent).toContain("remainingSeconds < 30");
+    expect(uploadIntent).toContain("expiresInSeconds: retryLifetimeSeconds");
+    expect(uploadIntent).not.toContain("expense_receipt_upload_intent_expired");
     expect(service).toContain("putImmutableMediaObject");
   });
 
