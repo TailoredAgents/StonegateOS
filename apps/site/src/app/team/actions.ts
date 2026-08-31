@@ -8854,6 +8854,158 @@ export async function partnerLogReferralAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function partnerAccessApplicationDecisionAction(
+  formData: FormData,
+) {
+  const principal = await requireCurrentTeamPrincipal();
+  const applicationIdRaw = formData.get("applicationId");
+  const actionRaw = formData.get("decision");
+  const noteRaw = formData.get("note");
+  const confirmationRaw = formData.get("confirmation");
+  const expectedVersionRaw = formData.get("expectedVersion");
+  const idempotencyKey = formData.get("idempotencyKey");
+  const applicationId =
+    typeof applicationIdRaw === "string" ? applicationIdRaw.trim() : "";
+  const action =
+    actionRaw === "approve" ||
+    actionRaw === "decline" ||
+    actionRaw === "needs_information"
+      ? actionRaw
+      : null;
+  const note = typeof noteRaw === "string" ? noteRaw.trim() : "";
+  const confirmation =
+    typeof confirmationRaw === "string" ? confirmationRaw.trim() : "";
+  const expectedVersion =
+    typeof expectedVersionRaw === "string" ? expectedVersionRaw.trim() : "";
+  const expectedConfirmation =
+    action === "approve"
+      ? "APPROVE"
+      : action === "decline"
+        ? "DECLINE"
+        : action === "needs_information"
+          ? "REQUEST INFORMATION"
+          : "";
+
+  if (!hasTeamPermission(principal, "partners.invite")) {
+    await setMutationFlash({
+      ok: false,
+      message:
+        "You do not have permission to decide Partner Portal access applications.",
+    });
+    revalidatePath("/team");
+    return;
+  }
+  if (
+    !isUuid(applicationId) ||
+    !action ||
+    !/^\d{1,10}$/u.test(expectedVersion) ||
+    !isValidTeamIdempotencyKey(idempotencyKey) ||
+    confirmation !== expectedConfirmation ||
+    note.length > (action === "approve" ? 1_000 : 2_000) ||
+    (action !== "approve" && note.length < 2)
+  ) {
+    await setMutationFlash({
+      ok: false,
+      message:
+        "This access decision is incomplete, stale, or not confirmed. Refresh the partner queue and try again.",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  try {
+    const response = await callAdminMutationWithSafeReplay(
+      principal,
+      `/api/admin/partners/access-applications/${encodeURIComponent(applicationId)}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Idempotency-Key": idempotencyKey,
+          "If-Match": expectedVersion,
+        },
+        body: JSON.stringify({
+          action,
+          note: note || null,
+          confirmation,
+        }),
+      },
+    );
+    if (!response.ok) {
+      await setMutationFlash({
+        ok: false,
+        message: await readTeamMutationError(
+          response,
+          "Unable to save the access decision",
+        ),
+      });
+      revalidatePath("/team");
+      return;
+    }
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: unknown;
+      data?: {
+        application?: {
+          id?: unknown;
+          status?: unknown;
+          version?: unknown;
+        };
+        access?: { state?: unknown; roleKey?: unknown };
+      };
+      receipt?: {
+        actorId?: unknown;
+        entityType?: unknown;
+        entityId?: unknown;
+        version?: unknown;
+      };
+    } | null;
+    const expectedStatus =
+      action === "approve"
+        ? "approved"
+        : action === "decline"
+          ? "declined"
+          : "needs_information";
+    const application = payload?.data?.application;
+    const receipt = payload?.receipt;
+    if (
+      payload?.ok !== true ||
+      application?.id !== applicationId ||
+      application.status !== expectedStatus ||
+      typeof application.version !== "string" ||
+      receipt?.actorId !== principal.memberId ||
+      receipt.entityType !== "partner_access_application" ||
+      receipt.entityId !== applicationId ||
+      receipt.version !== application.version
+    ) {
+      await setMutationFlash({
+        ok: false,
+        message:
+          "The access service returned an unreadable receipt, so no success is being claimed. Refresh the queue before retrying.",
+      });
+      revalidatePath("/team");
+      return;
+    }
+    await setMutationFlash({
+      ok: true,
+      message:
+        action === "approve"
+          ? "Partner access approved. The applicant is now an account administrator and must complete MFA. Pricing and instant confirmation remain separately configured."
+          : action === "decline"
+            ? "Partner access declined and the generated limited workspace disabled."
+            : "The application now shows the information request for follow-up.",
+    });
+    revalidatePath("/team");
+  } catch (error) {
+    await setMutationFlash({
+      ok: false,
+      message: readTeamMutationException(
+        error,
+        "Unable to confirm the access decision",
+      ),
+    });
+    revalidatePath("/team");
+  }
+}
+
 export async function partnerPortalInviteUserAction(formData: FormData) {
   const principal = await requireCurrentTeamPrincipal();
   const jar = await cookies();

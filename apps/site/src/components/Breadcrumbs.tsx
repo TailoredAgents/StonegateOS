@@ -13,13 +13,23 @@ export function Breadcrumbs({ items }: { items: BreadcrumbItem[] }) {
           const isLast = idx === items.length - 1;
           return (
             <li key={`${item.href}-${idx}`} className="flex items-center gap-2">
-              {idx > 0 ? <span className="text-neutral-400">/</span> : null}
+              {idx > 0 ? (
+                <span className="text-neutral-400" aria-hidden="true">
+                  /
+                </span>
+              ) : null}
               {isLast ? (
-                <span className="font-medium text-neutral-800">
+                <span
+                  className="font-medium text-neutral-800"
+                  aria-current="page"
+                >
                   {item.label}
                 </span>
               ) : (
-                <Link href={item.href as Route} className="hover:underline">
+                <Link
+                  href={item.href as Route}
+                  className="rounded-sm underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
+                >
                   {item.label}
                 </Link>
               )}

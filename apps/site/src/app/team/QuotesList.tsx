@@ -399,7 +399,7 @@ export function QuotesList({
     <section className="rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 text-[color:var(--team-text)] shadow-[0_24px_56px_var(--team-card-shadow)] sm:p-6">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-600">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[color:var(--team-link)]">
             Quote Management
           </p>
           <h3 className="text-lg font-semibold text-[color:var(--team-text)]">

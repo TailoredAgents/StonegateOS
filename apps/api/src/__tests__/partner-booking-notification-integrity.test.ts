@@ -69,7 +69,12 @@ describe("partner booking handoff integrity", () => {
   it("moves a partner booking atomically instead of creating then canceling", () => {
     const route = source("app/api/portal/bookings/route.ts");
     const actions = source("../site/src/app/partners/actions.ts");
-    const bookingPage = source("../site/src/app/partners/book/page.tsx");
+    const bookingPage = source(
+      "../site/src/app/partners/(portal)/book/page.tsx",
+    );
+    const bookingWizard = source(
+      "../site/src/app/partners/components/PartnerBookingWizard.tsx",
+    );
     expect(route).toContain('"rescheduleFromAppointmentId"');
     expect(route).toContain('request.headers.get("if-match")');
     expect(route).toContain(
@@ -84,12 +89,24 @@ describe("partner booking handoff integrity", () => {
     expect(route).toContain("previousResultingVersion: sourceBookingVersion");
     expect(route).toContain("version: originalVersion");
     expect(route).toContain("status: originalStatus");
+    expect(route).toContain(
+      "const effectivePropertyId = sourceBooking?.propertyId ?? propertyId",
+    );
+    expect(route).toContain(
+      "const effectiveTierKey = sourceBooking ? sourceBooking.tierKey : tierKey",
+    );
+    expect(route).toContain("quotedTotalCents:");
+    expect(route).toContain("bookingDetails: sourceBooking?.bookingDetails");
+    expect(route).toContain("preservedSourceNotes.map");
     expect(actions).toContain('"If-Match": rescheduleFromVersion');
     expect(actions).toContain("rescheduleFromAppointmentId }");
     expect(actions).not.toContain("rescheduleCancelOperationKey");
     expect(actions).not.toContain("old_booking_cancel_failed");
-    expect(bookingPage).toContain("moves your booking in one step");
-    expect(bookingPage).toContain('name="rescheduleFrom"');
+    expect(bookingPage).toContain("PartnerBookingWizard");
+    expect(bookingWizard).toContain('"If-Match": current.etag');
+    expect(bookingWizard).toContain(
+      'createPortalOperationKey("booking-submit")',
+    );
   });
 
   it("queues creation, confirmation, audit, and staff work atomically", () => {
@@ -99,7 +116,11 @@ describe("partner booking handoff integrity", () => {
     expect(route).toContain("pg_advisory_xact_lock");
     expect(route).toContain("createOperationKeyHash: operationKeyHash");
     expect(route).toContain("createRequestHash: requestHash");
-    expect(route).toContain("countOverlappingAppointments({");
+    expect(route).toContain("acquireScheduleConflictLock(tx)");
+    expect(route).toContain("inspectScheduleConflicts(tx, {");
+    expect(route).toContain(
+      "travelBufferMinutes: effectiveTravelBufferMinutes",
+    );
     expect(route).toContain("queuePartnerBookingStaffAlert(tx");
     expect(route).toContain("queueSystemOutboundMessage({");
     expect(route).toContain("db: tx");
@@ -184,20 +205,31 @@ describe("partner booking handoff integrity", () => {
 
   it("sends stable browser operation/version evidence and validates receipts", () => {
     const actions = source("../site/src/app/partners/actions.ts");
-    const bookingPage = source("../site/src/app/partners/book/page.tsx");
-    const bookingsPage = source("../site/src/app/partners/bookings/page.tsx");
-    const cancelForm = source(
-      "../site/src/app/partners/bookings/CancelBookingForm.tsx",
+    const bookingPage = source(
+      "../site/src/app/partners/(portal)/book/page.tsx",
+    );
+    const bookingsPage = source(
+      "../site/src/app/partners/(portal)/bookings/page.tsx",
+    );
+    const bookingWizard = source(
+      "../site/src/app/partners/components/PartnerBookingWizard.tsx",
+    );
+    const jobActions = source(
+      "../site/src/app/partners/components/PartnerJobActions.tsx",
     );
     expect(actions).toContain('"Idempotency-Key": operationKey');
     expect(actions).toContain('"If-Match": version');
     expect(actions).toContain('"If-Match": rescheduleFromVersion');
     expect(actions).toContain("booking_confirmation_invalid");
     expect(actions).toContain("cancel_confirmation_invalid");
-    expect(bookingPage).toContain('name="operationKey"');
-    expect(bookingPage).toContain('name="rescheduleFromVersion"');
-    expect(bookingsPage).toContain("rescheduleVersion: String(b.version)");
-    expect(cancelForm).toContain('name="version"');
-    expect(cancelForm).toContain('pendingLabel="Canceling…"');
+    expect(bookingPage).toContain("PartnerBookingWizard");
+    expect(bookingWizard).toContain('"Idempotency-Key"');
+    expect(bookingWizard).toContain('"If-Match"');
+    expect(bookingsPage).toContain("/api/portal/v2/jobs");
+    expect(jobActions).toContain('createPortalOperationKey("job-cancel")');
+    expect(jobActions).toContain('"If-Match": etag');
+    expect(jobActions).toContain('name="reason"');
+    expect(jobActions).toContain("minLength={5}");
+    expect(jobActions).toContain('"Submitting…"');
   });
 });

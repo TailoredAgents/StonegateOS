@@ -242,6 +242,27 @@ async function runPartnerInviteRecoveryOnce() {
   }
 }
 
+async function runPartnerRecurringHorizonOnce() {
+  const { evaluateDuePartnerRecurringOccurrences } = await import(
+    "../apps/api/src/lib/partner-recurring-horizon-scheduler"
+  );
+  const result = await evaluateDuePartnerRecurringOccurrences({
+    limit: Number(process.env["PARTNER_RECURRING_HORIZON_BATCH_SIZE"] ?? 20),
+  });
+  if (
+    result.claimed > 0 ||
+    result.review > 0 ||
+    result.failed > 0 ||
+    result.staffTasksCreated > 0
+  ) {
+    logWorkerEvent(
+      result.failed > 0 ? "warn" : "info",
+      "partners.recurring_horizon.completed",
+      { ok: result.failed === 0, result },
+    );
+  }
+}
+
 async function main() {
   registerAliases();
   const { batchSize, pollIntervalMs, heartbeatIntervalMs } =
@@ -270,6 +291,9 @@ async function main() {
   const partnerInviteRecoveryIntervalMs = Number(
     process.env["PARTNER_INVITE_RECOVERY_INTERVAL_MS"] ?? 60 * 1000,
   );
+  const partnerRecurringHorizonIntervalMs = Number(
+    process.env["PARTNER_RECURRING_HORIZON_INTERVAL_MS"] ?? 5 * 60 * 1000,
+  );
   let nextSeoAt = Date.now();
   let nextGoogleAdsAt = Date.now();
   let nextSalesDraftPrepAt = Date.now();
@@ -278,6 +302,7 @@ async function main() {
   let nextAppointmentMediaCleanupAt = Date.now();
   let nextSquareReconciliationAt = Date.now();
   let nextPartnerInviteRecoveryAt = Date.now();
+  let nextPartnerRecurringHorizonAt = Date.now();
 
   logWorkerEvent("info", "outbox.worker.started", {
     ok: true,
@@ -431,6 +456,22 @@ async function main() {
               ? partnerInviteRecoveryIntervalMs
               : 60 * 1000);
         }
+        if (Date.now() >= nextPartnerRecurringHorizonAt) {
+          try {
+            await runPartnerRecurringHorizonOnce();
+          } catch (error) {
+            logWorkerEvent("warn", "partners.recurring_horizon.loop_failed", {
+              ok: false,
+              detail: outboxWorkerErrorDetail(error),
+            });
+          }
+          nextPartnerRecurringHorizonAt =
+            Date.now() +
+            (Number.isFinite(partnerRecurringHorizonIntervalMs) &&
+            partnerRecurringHorizonIntervalMs >= 60_000
+              ? partnerRecurringHorizonIntervalMs
+              : 5 * 60 * 1000);
+        }
         if (stats.total === 0) {
           await sleep(pollIntervalMs);
         }
@@ -448,6 +489,7 @@ async function main() {
     await runAppointmentMediaCleanupOnce();
     await runSquareReconciliationOnce();
     await runPartnerInviteRecoveryOnce();
+    await runPartnerRecurringHorizonOnce();
     await recordAndLogWorkerHeartbeat(true);
     logWorkerEvent("info", "outbox.worker.completed", { ok: true });
   }

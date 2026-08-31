@@ -43,6 +43,8 @@ describe("public quote mutation replay", () => {
       decision: "accepted" as const,
       reason: null,
       notes: "Looks good",
+      quoteId: "11111111-1111-4111-8111-111111111111",
+      expectedRevision: 3,
     };
     expect(publicQuoteMutationRequestHash(accepted)).toBe(
       publicQuoteMutationRequestHash({ ...accepted }),
@@ -51,6 +53,12 @@ describe("public quote mutation replay", () => {
       publicQuoteMutationRequestHash({
         ...accepted,
         decision: "declined",
+      }),
+    );
+    expect(publicQuoteMutationRequestHash(accepted)).not.toBe(
+      publicQuoteMutationRequestHash({
+        ...accepted,
+        expectedRevision: 4,
       }),
     );
   });

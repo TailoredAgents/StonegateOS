@@ -1,8 +1,17 @@
 import "dotenv/config";
 import Module from "node:module";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { parse } from "dotenv";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import {
+  assertPartnerPortalE2EMatrix,
+  partnerPortalFixtureEmails,
+  readPartnerPortalE2ESeedSummary,
+  seedPartnerPortalE2E,
+  type PartnerPortalE2ESeedSummary,
+} from "./seed-partner-portal-e2e";
 
 type DbModule = typeof import("../apps/api/src/db");
 type PropertyWriteModule = typeof import("../apps/api/src/lib/property-write");
@@ -51,7 +60,25 @@ type SeedSummary = {
   leadId: string;
   quoteId: string | null;
   appointmentId: string | null;
+  partnerPortal: PartnerPortalE2ESeedSummary;
 };
+
+function assertIsolatedE2ESeedTarget(): void {
+  const configured = process.env["DATABASE_URL"]?.trim();
+  const sentinel = parse(
+    readFileSync(path.resolve(".env.e2e")),
+  ).DATABASE_URL?.trim();
+  if (!configured || !sentinel || configured !== sentinel) {
+    throw new Error(
+      "Refusing Partner Portal fixture setup: DATABASE_URL must exactly match the disposable .env.e2e database sentinel.",
+    );
+  }
+  if (process.env["NODE_ENV"] === "production") {
+    throw new Error(
+      "Refusing Partner Portal fixture setup under NODE_ENV=production. These credentials and records are local E2E data only.",
+    );
+  }
+}
 
 function readSeedSummary(payload: unknown): SeedSummary | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -63,7 +90,8 @@ function readSeedSummary(payload: unknown): SeedSummary | null {
   const propertyId =
     typeof value["propertyId"] === "string" ? value["propertyId"] : null;
   const leadId = typeof value["leadId"] === "string" ? value["leadId"] : null;
-  if (!contactId || !propertyId || !leadId) return null;
+  const partnerPortal = readPartnerPortalE2ESeedSummary(value["partnerPortal"]);
+  if (!contactId || !propertyId || !leadId || !partnerPortal) return null;
 
   return {
     contactId,
@@ -74,6 +102,7 @@ function readSeedSummary(payload: unknown): SeedSummary | null {
       typeof value["appointmentId"] === "string"
         ? value["appointmentId"]
         : null,
+    partnerPortal,
   };
 }
 
@@ -84,18 +113,28 @@ async function findReusableBaseline(
   const database = db.getDb();
   const { contacts, outboxEvents } = db;
   const contactEmail = `e2e+contact-${runId}@mystos.test`;
+  const expectedEmails = new Set([
+    contactEmail,
+    ...partnerPortalFixtureEmails(runId),
+  ]);
 
   const activeContacts = await database
     .select({ id: contacts.id, email: contacts.email })
     .from(contacts)
     .where(isNull(contacts.deletedAt))
-    .limit(2);
+    .limit(expectedEmails.size + 1);
   if (activeContacts.length === 0) return null;
 
   const existingContact = activeContacts.find(
     (contact) => contact.email === contactEmail,
   );
-  if (!existingContact || activeContacts.length !== 1) {
+  if (
+    !existingContact ||
+    activeContacts.length !== expectedEmails.size ||
+    activeContacts.some(
+      (contact) => !contact.email || !expectedEmails.has(contact.email),
+    )
+  ) {
     throw new Error(
       "The E2E database contains active records outside the current deterministic baseline. Run the full e2e:prepare reset so the isolated PostgreSQL volume is recreated; fixture setup must never bypass contact recovery or append-only evidence controls.",
     );
@@ -119,6 +158,7 @@ async function findReusableBaseline(
       "The active E2E contact is missing its matching deterministic seed receipt. Run the full e2e:prepare reset; setup will not guess at or overwrite an unverified fixture.",
     );
   }
+  await assertPartnerPortalE2EMatrix(db, summary.partnerPortal);
   return summary;
 }
 
@@ -130,7 +170,7 @@ async function seedBaseline(
   runId: string,
 ) {
   const database = db.getDb();
-  const { contacts, leads, quotes, appointments, outboxEvents } = db;
+  const { contacts, leads, quotes, appointments } = db;
 
   const preferred = [
     "furniture",
@@ -258,18 +298,6 @@ async function seedBaseline(
       id: appointments.id,
     });
 
-  await database.insert(outboxEvents).values({
-    type: "seed.initialized",
-    payload: {
-      contactId: contact.id,
-      propertyId: property.id,
-      leadId: lead.id,
-      quoteId: quote?.id ?? null,
-      appointmentId: appointment?.id ?? null,
-      runId,
-    },
-  });
-
   return {
     contactId: contact.id,
     propertyId: property.id,
@@ -281,19 +309,35 @@ async function seedBaseline(
 
 async function main() {
   const start = Date.now();
+  assertIsolatedE2ESeedTarget();
   const modules = await loadModules();
   const runId = process.env["E2E_RUN_ID"] ?? `seed-${Date.now().toString(36)}`;
 
   const reusable = await findReusableBaseline(modules.db, runId);
-  const summary =
-    reusable ??
-    (await seedBaseline(
+  let summary = reusable;
+  if (!summary) {
+    const baseline = await seedBaseline(
       modules.db,
       modules.pricing,
       modules.pricingDefaults,
       modules.propertyWrite,
       runId,
-    ));
+    );
+    const partnerPortal = await seedPartnerPortalE2E(
+      modules.db,
+      modules.propertyWrite,
+      runId,
+    );
+    summary = { ...baseline, partnerPortal };
+    await modules.db
+      .getDb()
+      .insert(modules.db.outboxEvents)
+      .values({
+        type: "seed.initialized",
+        payload: { ...summary, runId },
+      });
+    await assertPartnerPortalE2EMatrix(modules.db, partnerPortal);
+  }
 
   console.log(
     JSON.stringify(

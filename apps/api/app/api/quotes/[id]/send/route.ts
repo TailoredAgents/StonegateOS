@@ -26,13 +26,16 @@ import {
 } from "@/lib/team-mutation";
 import { nanoid } from "nanoid";
 import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
+import {
+  LegacyQuoteExpiryError,
+  resolveLegacyQuoteSendTiming,
+} from "@/lib/quote-legacy-expiry";
 
 const SendQuoteSchema = z.object({
   confirmation: z.literal("send_quote"),
   expiresInDays: z.number().int().min(1).max(120).optional(),
   shareBaseUrl: z.string().url().optional(),
 });
-const DEFAULT_QUOTE_VALID_DAYS = 7;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -121,6 +124,7 @@ export async function POST(
 
   let db: ReturnType<typeof getDb> | null = null;
   let claim: TeamMutationIdempotencyClaim | null = null;
+  let failurePhase = "claim";
   try {
     db = getDb();
     const claimed = await claimTeamMutationIdempotency(db, mutation, {
@@ -129,8 +133,7 @@ export async function POST(
       entityId: quoteId,
       payload: {
         confirmation: parsedBody.data.confirmation,
-        expiresInDays:
-          parsedBody.data.expiresInDays ?? DEFAULT_QUOTE_VALID_DAYS,
+        expiresInDays: parsedBody.data.expiresInDays ?? null,
       },
     });
     if (claimed.kind === "replay") {
@@ -138,10 +141,19 @@ export async function POST(
         return teamMutationIdempotencyReplayResponse(claimed.replay);
       }
       const [replayQuote] = await db
-        .select({ shareToken: quotes.shareToken })
+        .select({
+          engineVersion: quotes.engineVersion,
+          shareToken: quotes.shareToken,
+        })
         .from(quotes)
         .where(eq(quotes.id, quoteId))
         .limit(1);
+      if (replayQuote?.engineVersion !== "legacy") {
+        throw new TeamMutationFailure(
+          "conflict",
+          "This versioned quote must be sent through its immutable version workflow.",
+        );
+      }
       const replayShareUrl = replayQuote?.shareToken
         ? buildShareUrl(replayQuote.shareToken, parsedBody.data.shareBaseUrl)
         : null;
@@ -171,14 +183,17 @@ export async function POST(
     claim = claimed.claim;
 
     const result = await db.transaction(async (tx) => {
+      failurePhase = "quote_lock";
       const [existing] = await tx
         .select({
           id: quotes.id,
+          engineVersion: quotes.engineVersion,
           status: quotes.status,
           shareToken: quotes.shareToken,
           contactId: quotes.contactId,
           revision: quotes.revision,
           sentAt: quotes.sentAt,
+          expiresAt: quotes.expiresAt,
         })
         .from(quotes)
         .where(eq(quotes.id, quoteId))
@@ -189,6 +204,12 @@ export async function POST(
           status: 404,
         });
       }
+      if (existing.engineVersion !== "legacy") {
+        throw new TeamMutationFailure(
+          "conflict",
+          "This versioned quote must be sent through its immutable version workflow.",
+        );
+      }
       assertTeamMutationExpectedVersion(mutation, existing.revision);
       if (existing.status === "accepted" || existing.status === "declined") {
         throw new TeamMutationFailure(
@@ -196,6 +217,7 @@ export async function POST(
           "This quote is already finalized and cannot be sent again.",
         );
       }
+      failurePhase = "contact_policy";
       const deliveryContact = await requireActiveContactForDirectOutbound(
         tx,
         existing.contactId,
@@ -216,11 +238,24 @@ export async function POST(
       }
 
       const shareToken = existing.shareToken ?? nanoid(24);
-      const expiresInDays =
-        parsedBody.data.expiresInDays ?? DEFAULT_QUOTE_VALID_DAYS;
-      const expiresAt = new Date(
-        Date.now() + expiresInDays * 24 * 60 * 60 * 1000,
-      );
+      const attemptAt = new Date();
+      let timing: ReturnType<typeof resolveLegacyQuoteSendTiming>;
+      failurePhase = "expiry_policy";
+      try {
+        timing = resolveLegacyQuoteSendTiming({
+          now: attemptAt,
+          sentAt: existing.sentAt,
+          expiresAt: existing.expiresAt,
+          requestedValidityDays: parsedBody.data.expiresInDays,
+        });
+      } catch (error) {
+        if (error instanceof LegacyQuoteExpiryError) {
+          throw new TeamMutationFailure("conflict", error.message, {
+            fieldErrors: { expiresInDays: error.message },
+          });
+        }
+        throw error;
+      }
       const shareUrl = buildShareUrl(shareToken, parsedBody.data.shareBaseUrl);
       if (!shareUrl) {
         throw new TeamMutationFailure(
@@ -229,8 +264,11 @@ export async function POST(
         );
       }
 
-      const sentAt = new Date();
+      const sentAt = timing.firstSentAt;
+      const expiresAt = timing.expiresAt;
+      const updatedAt = attemptAt;
       const nextRevision = existing.revision + 1;
+      failurePhase = "quote_update";
       const [updated] = await tx
         .update(quotes)
         .set({
@@ -240,10 +278,14 @@ export async function POST(
           status: "sent",
           refreshRequestedAt: null,
           revision: nextRevision,
-          updatedAt: sentAt,
+          updatedAt,
         })
         .where(
-          and(eq(quotes.id, quoteId), eq(quotes.revision, existing.revision)),
+          and(
+            eq(quotes.id, quoteId),
+            eq(quotes.engineVersion, "legacy"),
+            eq(quotes.revision, existing.revision),
+          ),
         )
         .returning({
           id: quotes.id,
@@ -262,6 +304,7 @@ export async function POST(
 
       const sendAttemptId = buildQuoteSendAttemptId(updated.revision);
 
+      failurePhase = "outbox_insert";
       const [outbox] = await tx
         .insert(outboxEvents)
         .values({
@@ -280,6 +323,7 @@ export async function POST(
         );
       }
 
+      failurePhase = "audit_insert";
       const audit = await mutation.audit.insertSuccess(tx, {
         entityType: "quote",
         entityId: updated.id,
@@ -303,7 +347,7 @@ export async function POST(
             email: Boolean(deliveryChannels.email),
           },
         },
-        committedAt: sentAt,
+        committedAt: updatedAt,
       });
       const mutationResult = teamMutationSuccessResult(
         mutation,
@@ -328,6 +372,7 @@ export async function POST(
         ...mutationResult,
         data: { ...mutationResult.data, shareUrl: null },
       };
+      failurePhase = "idempotency_complete";
       await completeTeamMutationIdempotency(
         tx,
         mutation,
@@ -353,7 +398,7 @@ export async function POST(
       entityId: quoteId,
       code: error instanceof TeamMutationFailure ? error.code : "internal",
       metadata: {
-        phase: "mutation",
+        phase: failurePhase,
         retryable:
           error instanceof TeamMutationFailure ? error.retryable : true,
       },

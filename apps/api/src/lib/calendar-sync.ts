@@ -1,13 +1,15 @@
-import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { createHash, randomUUID } from "node:crypto";
+import { and, eq, inArray, isNotNull, notInArray, or, sql } from "drizzle-orm";
+import { DateTime } from "luxon";
 import {
   parseGoogleCalendarEventListResponse,
   parseGoogleCalendarWatchResponse,
   resolveGoogleCalendarApiEndpoint,
   type GoogleCalendarApiEndpoint,
 } from "@myst-os/sdk";
-import { getDb, appointments, calendarSyncState } from "@/db";
+import { appointments, calendarSyncState, getDb, scheduleBlocks } from "@/db";
 import type { DatabaseClient } from "@/db";
+import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
 import type { CalendarConfig } from "./calendar";
 import {
   getCalendarConfig,
@@ -18,6 +20,11 @@ import {
 const WATCH_RENEW_BUFFER_MS = 10 * 60 * 1000;
 const WATCH_TTL_SECONDS = 7 * 24 * 60 * 60;
 const MAX_SYNC_ITERATIONS = 20;
+const EXTERNAL_BUSY_SOURCE = "google_calendar_external_busy";
+const EXTERNAL_BUSY_FUTURE_DAYS = 400;
+const EXTERNAL_BUSY_COVERAGE_VERSION = 1;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const DEFAULT_LOOKBACK_DAYS = (() => {
   const raw = Number.parseInt(
     process.env["GOOGLE_CALENDAR_SYNC_LOOKBACK_DAYS"] ?? "",
@@ -26,18 +33,60 @@ const DEFAULT_LOOKBACK_DAYS = (() => {
   return Number.isFinite(raw) && raw > 0 ? raw : 45;
 })();
 
-type CalendarSyncStateRow = typeof calendarSyncState.$inferSelect;
+function configuredExternalBusyPoolKey(): string {
+  const value = (
+    process.env["GOOGLE_CALENDAR_EXTERNAL_BUSY_CAPACITY_POOL_KEY"] ??
+    "field_service"
+  ).trim();
+  return /^[a-z][a-z0-9_-]{0,63}$/u.test(value) ? value : "field_service";
+}
 
-interface GoogleCalendarEvent {
+function configuredExternalBusyCapacityUnits(): number {
+  const value = Number.parseInt(
+    process.env["GOOGLE_CALENDAR_EXTERNAL_BUSY_CAPACITY_UNITS"] ?? "1",
+    10,
+  );
+  return Number.isSafeInteger(value) && value >= 1 && value <= 10_000
+    ? value
+    : 1;
+}
+
+type CalendarSyncStateRow = typeof calendarSyncState.$inferSelect;
+type CalendarTransaction = Parameters<
+  DatabaseClient["transaction"]
+>[0] extends (tx: infer Tx) => Promise<unknown>
+  ? Tx
+  : never;
+
+export type GoogleExternalBusyBlockPlan = Readonly<{
+  sourceKey: string;
+  startAt: Date;
+  endAt: Date;
+  capacityPoolKey: string;
+  capacityUnits: number;
+  metadata: Readonly<Record<string, unknown>>;
+}>;
+
+export type GoogleExternalBusyReconciliationPlan = Readonly<{
+  seenSourceKeys: readonly string[];
+  activeBlocks: readonly GoogleExternalBusyBlockPlan[];
+  invalidBusyEventCount: number;
+}>;
+
+export interface GoogleCalendarEvent {
   id: string;
   status?: string;
+  transparency?: string;
+  eventType?: string;
   start?: {
     dateTime?: string;
     date?: string;
+    timeZone?: string;
   };
   end?: {
     dateTime?: string;
     date?: string;
+    timeZone?: string;
   };
   updated?: string;
   summary?: string;
@@ -77,6 +126,9 @@ export interface CalendarSyncResult {
   ok: boolean;
   updated?: number;
   cancelled?: number;
+  externalBusyUpserted?: number;
+  externalBusyDeactivated?: number;
+  externalBusyCoverageSyncedAt?: string;
   pages?: number;
   resets?: number;
   reason?: string;
@@ -92,9 +144,99 @@ export interface CalendarNotificationMetadata {
 }
 
 let syncInFlight: Promise<CalendarSyncResult> | null = null;
+let syncFollowUpRequested = false;
 
 function errorName(error: unknown): string {
   return error instanceof Error ? error.name : "UnknownError";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined | null {
+  const value = record[key];
+  if (value === undefined) return undefined;
+  return typeof value === "string" ? value : null;
+}
+
+function parseEventEndpoint(
+  value: unknown,
+): GoogleCalendarEvent["start"] | null | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return null;
+  const dateTime = optionalString(value, "dateTime");
+  const date = optionalString(value, "date");
+  const timeZone = optionalString(value, "timeZone");
+  if (dateTime === null || date === null || timeZone === null) return null;
+  return {
+    ...(dateTime !== undefined ? { dateTime } : {}),
+    ...(date !== undefined ? { date } : {}),
+    ...(timeZone !== undefined ? { timeZone } : {}),
+  };
+}
+
+function parseGoogleCalendarEvents(
+  items: unknown[],
+): GoogleCalendarEvent[] | null {
+  const parsed: GoogleCalendarEvent[] = [];
+  for (const item of items) {
+    if (!isRecord(item)) return null;
+    const id = optionalString(item, "id");
+    const status = optionalString(item, "status");
+    const transparency = optionalString(item, "transparency");
+    const eventType = optionalString(item, "eventType");
+    const updated = optionalString(item, "updated");
+    const summary = optionalString(item, "summary");
+    const description = optionalString(item, "description");
+    const start = parseEventEndpoint(item["start"]);
+    const end = parseEventEndpoint(item["end"]);
+    if (
+      !id?.trim() ||
+      status === null ||
+      transparency === null ||
+      eventType === null ||
+      updated === null ||
+      summary === null ||
+      description === null ||
+      start === null ||
+      end === null
+    ) {
+      return null;
+    }
+    const rawExtendedProperties = item["extendedProperties"];
+    let privateProperties: Record<string, string | undefined> | undefined;
+    if (rawExtendedProperties !== undefined) {
+      if (!isRecord(rawExtendedProperties)) return null;
+      const rawPrivate = rawExtendedProperties["private"];
+      if (rawPrivate !== undefined) {
+        if (!isRecord(rawPrivate)) return null;
+        privateProperties = {};
+        for (const [key, value] of Object.entries(rawPrivate)) {
+          if (value !== undefined && typeof value !== "string") return null;
+          privateProperties[key] = value;
+        }
+      }
+    }
+    parsed.push({
+      id: id.trim(),
+      ...(status !== undefined ? { status } : {}),
+      ...(transparency !== undefined ? { transparency } : {}),
+      ...(eventType !== undefined ? { eventType } : {}),
+      ...(start !== undefined ? { start } : {}),
+      ...(end !== undefined ? { end } : {}),
+      ...(updated !== undefined ? { updated } : {}),
+      ...(summary !== undefined ? { summary } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ...(privateProperties
+        ? { extendedProperties: { private: privateProperties } }
+        : {}),
+    });
+  }
+  return parsed;
 }
 
 async function discardProviderBody(response: Response): Promise<void> {
@@ -137,10 +279,21 @@ export async function syncGoogleCalendar(
   }
 
   if (syncInFlight) {
+    // Webhook notifications can arrive while an earlier snapshot is still in
+    // flight. Coalesce them into one immediate follow-up instead of silently
+    // losing the newest invalidation signal.
+    syncFollowUpRequested = true;
     return syncInFlight;
   }
 
-  syncInFlight = performSync(options).finally(() => {
+  syncInFlight = (async () => {
+    let result = await performSync(options);
+    for (let attempt = 0; syncFollowUpRequested && attempt < 3; attempt += 1) {
+      syncFollowUpRequested = false;
+      result = await performSync({ reason: "coalesced_notification" });
+    }
+    return result;
+  })().finally(() => {
     syncInFlight = null;
   });
 
@@ -208,16 +361,30 @@ async function performSync(options: SyncOptions): Promise<CalendarSyncResult> {
   const watchResult = await ensureWatchForState(db, config, state, accessToken);
   state = watchResult.state;
 
-  let syncToken = options.forceResync ? null : state.syncToken;
-  let nextSyncToken: string | null = syncToken ?? null;
+  const syncStartedAt = new Date();
+  // A bounded authoritative snapshot is intentional. Incremental tokens bind
+  // to the original timeMin/timeMax and eventually leave a rolling booking
+  // horizon uncovered. Full snapshots keep recurring-event expansion and the
+  // supported 365-day booking horizon provable with one freshness watermark.
+  const fullSync = true;
+  let syncToken: string | null = null;
+  let nextSyncToken: string | null = null;
+  if (options.forceResync) {
+    console.info("[calendar-sync] authoritative_resync_requested", {
+      reason: options.reason ?? "manual",
+    });
+  }
   let pageToken: string | undefined;
   let pages = 0;
   let resets = 0;
-  let updated = 0;
-  let cancelled = 0;
+  let complete = false;
+  const events: GoogleCalendarEvent[] = [];
 
   const timeMin = new Date(
-    Date.now() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+    syncStartedAt.getTime() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const timeMax = new Date(
+    syncStartedAt.getTime() + EXTERNAL_BUSY_FUTURE_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString();
 
   while (pages < MAX_SYNC_ITERATIONS) {
@@ -225,16 +392,24 @@ async function performSync(options: SyncOptions): Promise<CalendarSyncResult> {
       syncToken,
       pageToken,
       timeMin: syncToken ? undefined : timeMin,
+      timeMax: syncToken ? undefined : timeMax,
     });
 
     if (result.kind === "reset") {
       syncToken = null;
       nextSyncToken = null;
       pageToken = undefined;
+      events.length = 0;
       resets += 1;
       console.info("[calendar-sync] sync_token_reset", { resets });
       if (resets > 1) {
-        break;
+        return {
+          ok: false,
+          reason: "sync_token_reset_exhausted",
+          pages,
+          resets,
+          watchRegistered: watchResult.registered,
+        };
       }
       continue;
     }
@@ -246,44 +421,128 @@ async function performSync(options: SyncOptions): Promise<CalendarSyncResult> {
         status: result.status,
         details: result.detail,
         pages,
-        updated,
-        cancelled,
         resets,
         watchRegistered: watchResult.registered,
       };
     }
 
-    if (result.items.length > 0) {
-      const changes = await applyEventsToAppointments(db, result.items);
-      updated += changes.updated;
-      cancelled += changes.cancelled;
-    }
+    events.push(...result.items);
 
     nextSyncToken = result.nextSyncToken ?? nextSyncToken ?? syncToken;
     pageToken = result.nextPageToken;
     pages += 1;
 
     if (!pageToken) {
+      complete = true;
       break;
     }
   }
 
-  await upsertState(db, config.calendarId, {
-    syncToken: nextSyncToken,
-    lastSyncedAt: new Date(),
-    channelId: state.channelId,
-    resourceId: state.resourceId,
-    channelExpiresAt: state.channelExpiresAt,
-  });
+  if (!complete) {
+    return {
+      ok: false,
+      reason: "page_limit_exceeded",
+      pages,
+      resets,
+      watchRegistered: watchResult.registered,
+    };
+  }
 
-  return {
-    ok: true,
-    updated,
-    cancelled,
-    pages,
-    resets,
-    watchRegistered: watchResult.registered,
-  };
+  try {
+    const persisted = await db.transaction(async (tx) => {
+      // Reconciliation mutates the same capacity domain used by every booking
+      // writer. This lock prevents a hold/submit from reading between block
+      // reconciliation and the coverage watermark commit.
+      await acquireScheduleConflictLock(tx);
+      const [currentState] = await tx
+        .select()
+        .from(calendarSyncState)
+        .where(eq(calendarSyncState.calendarId, config.calendarId))
+        .for("update")
+        .limit(1);
+      if (!currentState) {
+        throw new Error("calendar_sync_state_missing");
+      }
+      if (!calendarStateVersionMatches(currentState, state)) {
+        return { kind: "superseded" as const };
+      }
+
+      const appointmentChanges = await applyEventsToAppointments(tx, events);
+      const reconciliation = planGoogleExternalBusyBlocks({
+        events,
+        mirroredEventIds: appointmentChanges.mirroredEventIds,
+        calendarId: config.calendarId,
+        timeZone: config.timeZone,
+        capacityPoolKey: configuredExternalBusyPoolKey(),
+        capacityUnits: configuredExternalBusyCapacityUnits(),
+      });
+      if (reconciliation.invalidBusyEventCount > 0) {
+        throw new Error("calendar_external_busy_event_invalid");
+      }
+      const blockChanges = await reconcileExternalBusyBlocks(tx, {
+        plan: reconciliation,
+        fullSync,
+        now: syncStartedAt,
+      });
+      const externalBusyCoverageSyncedAt = syncStartedAt;
+      await tx
+        .update(calendarSyncState)
+        .set({
+          syncToken: nextSyncToken,
+          lastSyncedAt: syncStartedAt,
+          externalBusyCoverageSyncedAt,
+          channelId: currentState.channelId,
+          resourceId: currentState.resourceId,
+          channelExpiresAt: currentState.channelExpiresAt,
+          updatedAt: syncStartedAt,
+        })
+        .where(eq(calendarSyncState.calendarId, config.calendarId));
+      return {
+        kind: "persisted" as const,
+        appointmentChanges,
+        blockChanges,
+        externalBusyCoverageSyncedAt,
+      };
+    });
+
+    if (persisted.kind === "superseded") {
+      return {
+        ok: true,
+        reason: "superseded",
+        pages,
+        resets,
+        watchRegistered: watchResult.registered,
+      };
+    }
+
+    return {
+      ok: true,
+      updated: persisted.appointmentChanges.updated,
+      cancelled: persisted.appointmentChanges.cancelled,
+      externalBusyUpserted: persisted.blockChanges.upserted,
+      externalBusyDeactivated: persisted.blockChanges.deactivated,
+      externalBusyCoverageSyncedAt:
+        persisted.externalBusyCoverageSyncedAt.toISOString(),
+      pages,
+      resets,
+      watchRegistered: watchResult.registered,
+    };
+  } catch (error) {
+    console.warn("[calendar-sync] persistence_failed", {
+      errorName: errorName(error),
+    });
+    return {
+      ok: false,
+      reason:
+        error instanceof Error &&
+        error.message === "calendar_external_busy_event_invalid"
+          ? "invalid_external_busy_event"
+          : "persistence_error",
+      pages,
+      resets,
+      watchRegistered: watchResult.registered,
+    };
+  }
 }
 
 async function ensureWatchForState(
@@ -388,7 +647,12 @@ async function registerWatch(
 async function fetchEventPage(
   config: CalendarConfig,
   accessToken: string,
-  options: { syncToken: string | null; pageToken?: string; timeMin?: string },
+  options: {
+    syncToken: string | null;
+    pageToken?: string;
+    timeMin?: string;
+    timeMax?: string;
+  },
 ): Promise<FetchEventsResult> {
   const params = new URLSearchParams();
   params.set("maxResults", "250");
@@ -402,7 +666,10 @@ async function fetchEventPage(
     params.set("syncToken", options.syncToken);
   } else {
     params.set("timeMin", options.timeMin ?? new Date().toISOString());
-    params.set("singleEvents", "false");
+    if (options.timeMax) params.set("timeMax", options.timeMax);
+    // Expansion is required for recurring external busy events. The bounded
+    // coverage horizon prevents unbounded recurrence materialization.
+    params.set("singleEvents", "true");
     params.set("orderBy", "updated");
   }
 
@@ -446,18 +713,268 @@ async function fetchEventPage(
       detail: "malformed_response",
     };
   }
+  const items = parseGoogleCalendarEvents(data.items);
+  if (!items) {
+    console.warn("[calendar-sync] events_list_malformed_items", {
+      status: response.status,
+    });
+    return {
+      kind: "error",
+      status: 502,
+      detail: "malformed_response",
+    };
+  }
   return {
     kind: "ok",
-    items: data.items as GoogleCalendarEvent[],
+    items,
     nextPageToken: data.nextPageToken ?? undefined,
     nextSyncToken: data.nextSyncToken ?? null,
   };
 }
 
+function sameNullableDate(left: Date | null, right: Date | null): boolean {
+  return left?.getTime() === right?.getTime();
+}
+
+function calendarStateVersionMatches(
+  current: CalendarSyncStateRow,
+  expected: CalendarSyncStateRow,
+): boolean {
+  return (
+    current.syncToken === expected.syncToken &&
+    sameNullableDate(current.lastSyncedAt, expected.lastSyncedAt) &&
+    sameNullableDate(
+      current.externalBusyCoverageSyncedAt,
+      expected.externalBusyCoverageSyncedAt,
+    )
+  );
+}
+
+function externalBusySourceKey(calendarId: string, eventId: string): string {
+  return createHash("sha256")
+    .update("google-calendar-external-busy\0", "utf8")
+    .update(calendarId, "utf8")
+    .update("\0", "utf8")
+    .update(eventId, "utf8")
+    .digest("hex");
+}
+
+function eventEndpointDate(
+  endpoint: { dateTime?: string; date?: string; timeZone?: string } | undefined,
+  fallbackTimeZone: string,
+): Date | null {
+  if (endpoint?.dateTime) {
+    const dateTime = DateTime.fromISO(endpoint.dateTime, {
+      zone: endpoint.timeZone ?? fallbackTimeZone,
+      setZone: true,
+    });
+    return dateTime.isValid ? dateTime.toUTC().toJSDate() : null;
+  }
+  if (endpoint?.date) {
+    const dateTime = DateTime.fromISO(endpoint.date, {
+      zone: endpoint.timeZone ?? fallbackTimeZone,
+    }).startOf("day");
+    return dateTime.isValid ? dateTime.toUTC().toJSDate() : null;
+  }
+  return null;
+}
+
+function eventBusyInterval(
+  event: GoogleCalendarEvent,
+  timeZone: string,
+): { startAt: Date; endAt: Date } | null {
+  const startAt = eventEndpointDate(event.start, timeZone);
+  const endAt = eventEndpointDate(event.end, timeZone);
+  if (!startAt || !endAt || endAt.getTime() <= startAt.getTime()) return null;
+  return { startAt, endAt };
+}
+
+/**
+ * Produces a metadata-minimized, deterministic reconciliation plan. Events
+ * linked to Stonegate appointments are deliberately excluded so the same
+ * work never consumes capacity as both an appointment and an external block.
+ */
+export function planGoogleExternalBusyBlocks(input: {
+  events: readonly GoogleCalendarEvent[];
+  mirroredEventIds: ReadonlySet<string> | readonly string[];
+  calendarId: string;
+  timeZone: string;
+  capacityPoolKey: string;
+  capacityUnits: number;
+}): GoogleExternalBusyReconciliationPlan {
+  if (
+    !/^[a-z][a-z0-9_-]{0,63}$/u.test(input.capacityPoolKey) ||
+    !Number.isSafeInteger(input.capacityUnits) ||
+    input.capacityUnits < 1 ||
+    input.capacityUnits > 10_000 ||
+    !input.calendarId.trim() ||
+    !input.timeZone.trim()
+  ) {
+    throw new TypeError("Invalid Google Calendar busy-block configuration.");
+  }
+  const mirrored = new Set(input.mirroredEventIds);
+  const latestById = new Map<string, GoogleCalendarEvent>();
+  let invalidBusyEventCount = 0;
+  for (const event of input.events) {
+    const eventId = event.id.trim();
+    if (!eventId) {
+      invalidBusyEventCount += 1;
+      continue;
+    }
+    latestById.set(eventId, event);
+  }
+
+  const seenSourceKeys: string[] = [];
+  const activeBlocks: GoogleExternalBusyBlockPlan[] = [];
+  for (const [eventId, event] of latestById) {
+    const sourceKey = externalBusySourceKey(input.calendarId, eventId);
+    seenSourceKeys.push(sourceKey);
+    const inactive =
+      mirrored.has(eventId) ||
+      event.status === "cancelled" ||
+      event.transparency === "transparent" ||
+      event.eventType === "workingLocation";
+    if (inactive) continue;
+    const interval = eventBusyInterval(event, input.timeZone);
+    if (!interval) {
+      invalidBusyEventCount += 1;
+      continue;
+    }
+    activeBlocks.push(
+      Object.freeze({
+        sourceKey,
+        ...interval,
+        capacityPoolKey: input.capacityPoolKey,
+        capacityUnits: input.capacityUnits,
+        metadata: Object.freeze({
+          provider: "google_calendar",
+          coverageVersion: EXTERNAL_BUSY_COVERAGE_VERSION,
+          allDay: Boolean(event.start?.date),
+          eventUpdatedAt:
+            typeof event.updated === "string"
+              ? event.updated.slice(0, 64)
+              : null,
+        }),
+      }),
+    );
+  }
+  return Object.freeze({
+    seenSourceKeys: Object.freeze(seenSourceKeys.sort()),
+    activeBlocks: Object.freeze(
+      activeBlocks.sort((left, right) =>
+        left.sourceKey.localeCompare(right.sourceKey),
+      ),
+    ),
+    invalidBusyEventCount,
+  });
+}
+
+function chunks<T>(values: readonly T[], maximum: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += maximum) {
+    result.push(values.slice(index, index + maximum));
+  }
+  return result;
+}
+
+async function reconcileExternalBusyBlocks(
+  tx: CalendarTransaction,
+  input: {
+    plan: GoogleExternalBusyReconciliationPlan;
+    fullSync: boolean;
+    now: Date;
+  },
+): Promise<{ upserted: number; deactivated: number }> {
+  const activeKeys = input.plan.activeBlocks.map((block) => block.sourceKey);
+  let deactivated = 0;
+  if (input.fullSync) {
+    const rows = await tx
+      .update(scheduleBlocks)
+      .set({ active: false, updatedAt: input.now })
+      .where(
+        and(
+          eq(scheduleBlocks.source, EXTERNAL_BUSY_SOURCE),
+          eq(scheduleBlocks.active, true),
+          ...(activeKeys.length > 0
+            ? [
+                isNotNull(scheduleBlocks.sourceKey),
+                notInArray(scheduleBlocks.sourceKey, activeKeys),
+              ]
+            : []),
+        ),
+      )
+      .returning({ id: scheduleBlocks.id });
+    deactivated += rows.length;
+  } else {
+    const activeSet = new Set(activeKeys);
+    const inactiveKeys = input.plan.seenSourceKeys.filter(
+      (sourceKey) => !activeSet.has(sourceKey),
+    );
+    for (const keyChunk of chunks(inactiveKeys, 500)) {
+      const rows = await tx
+        .update(scheduleBlocks)
+        .set({ active: false, updatedAt: input.now })
+        .where(
+          and(
+            eq(scheduleBlocks.source, EXTERNAL_BUSY_SOURCE),
+            eq(scheduleBlocks.active, true),
+            inArray(scheduleBlocks.sourceKey, keyChunk),
+          ),
+        )
+        .returning({ id: scheduleBlocks.id });
+      deactivated += rows.length;
+    }
+  }
+
+  let upserted = 0;
+  for (const blockChunk of chunks(input.plan.activeBlocks, 500)) {
+    const rows = await tx
+      .insert(scheduleBlocks)
+      .values(
+        blockChunk.map((block) => ({
+          kind: "external_busy",
+          source: EXTERNAL_BUSY_SOURCE,
+          sourceKey: block.sourceKey,
+          capacityPoolKey: block.capacityPoolKey,
+          capacityUnits: block.capacityUnits,
+          startAt: block.startAt,
+          endAt: block.endAt,
+          active: true,
+          mirroredAppointmentId: null,
+          metadata: { ...block.metadata },
+          createdAt: input.now,
+          updatedAt: input.now,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: [scheduleBlocks.source, scheduleBlocks.sourceKey],
+        targetWhere: sql`${scheduleBlocks.sourceKey} IS NOT NULL`,
+        set: {
+          kind: sql`excluded."kind"`,
+          capacityPoolKey: sql`excluded."capacity_pool_key"`,
+          capacityUnits: sql`excluded."capacity_units"`,
+          startAt: sql`excluded."start_at"`,
+          endAt: sql`excluded."end_at"`,
+          active: true,
+          mirroredAppointmentId: null,
+          metadata: sql`excluded."metadata"`,
+          updatedAt: input.now,
+        },
+      })
+      .returning({ id: scheduleBlocks.id });
+    upserted += rows.length;
+  }
+  return { upserted, deactivated };
+}
+
 async function applyEventsToAppointments(
-  db: DatabaseClient,
+  db: CalendarTransaction,
   events: GoogleCalendarEvent[],
-): Promise<{ updated: number; cancelled: number }> {
+): Promise<{
+  updated: number;
+  cancelled: number;
+  mirroredEventIds: ReadonlySet<string>;
+}> {
   const appointmentIds = Array.from(
     new Set(
       events
@@ -465,9 +982,13 @@ async function applyEventsToAppointments(
         .filter((id): id is string => Boolean(id)),
     ),
   );
+  const eventIds = Array.from(
+    new Set(events.map((event) => event.id.trim()).filter(Boolean)),
+  );
+  const mirroredEventIds = new Set<string>();
 
-  if (appointmentIds.length === 0) {
-    return { updated: 0, cancelled: 0 };
+  if (appointmentIds.length === 0 && eventIds.length === 0) {
+    return { updated: 0, cancelled: 0, mirroredEventIds };
   }
 
   const rows = await db
@@ -480,23 +1001,36 @@ async function applyEventsToAppointments(
       calendarEventId: appointments.calendarEventId,
     })
     .from(appointments)
-    .where(inArray(appointments.id, appointmentIds));
+    .where(
+      appointmentIds.length > 0 && eventIds.length > 0
+        ? or(
+            inArray(appointments.id, appointmentIds),
+            inArray(appointments.calendarEventId, eventIds),
+          )
+        : appointmentIds.length > 0
+          ? inArray(appointments.id, appointmentIds)
+          : inArray(appointments.calendarEventId, eventIds),
+    );
 
-  const map = new Map(rows.map((row) => [row.id, row]));
+  const byAppointmentId = new Map(rows.map((row) => [row.id, row]));
+  const byCalendarEventId = new Map(
+    rows.flatMap((row) =>
+      row.calendarEventId ? ([[row.calendarEventId, row]] as const) : [],
+    ),
+  );
 
   let updated = 0;
   let cancelled = 0;
 
   for (const event of events) {
     const appointmentId = resolveAppointmentId(event);
-    if (!appointmentId) {
-      continue;
-    }
-
-    const existing = map.get(appointmentId);
+    const existing =
+      (appointmentId ? byAppointmentId.get(appointmentId) : undefined) ??
+      byCalendarEventId.get(event.id);
     if (!existing) {
       continue;
     }
+    if (event.id.trim()) mirroredEventIds.add(event.id.trim());
 
     if (event.status === "cancelled") {
       const updates: Partial<typeof appointments.$inferInsert> = {};
@@ -511,7 +1045,7 @@ async function applyEventsToAppointments(
         await db
           .update(appointments)
           .set(updates)
-          .where(eq(appointments.id, appointmentId));
+          .where(eq(appointments.id, existing.id));
         cancelled += 1;
       }
 
@@ -586,12 +1120,12 @@ async function applyEventsToAppointments(
       await db
         .update(appointments)
         .set(updates)
-        .where(eq(appointments.id, appointmentId));
+        .where(eq(appointments.id, existing.id));
       updated += 1;
     }
   }
 
-  return { updated, cancelled };
+  return { updated, cancelled, mirroredEventIds };
 }
 
 async function calendarFetch(
@@ -650,14 +1184,18 @@ function resolveAppointmentId(event: GoogleCalendarEvent): string | null {
       privateProps?.["AppointmentId"] ??
       privateProps?.["appointment_id"];
 
-    if (typeof direct === "string" && direct.trim().length > 0) {
+    if (typeof direct === "string" && UUID_PATTERN.test(direct.trim())) {
       return direct.trim();
     }
   }
 
   if (typeof event.description === "string") {
     const match = event.description.match(/Appointment ID:\s*([A-Za-z0-9-]+)/);
-    if (match && typeof match[1] === "string") {
+    if (
+      match &&
+      typeof match[1] === "string" &&
+      UUID_PATTERN.test(match[1].trim())
+    ) {
       return match[1].trim();
     }
   }

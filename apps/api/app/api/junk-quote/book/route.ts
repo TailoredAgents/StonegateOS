@@ -45,6 +45,7 @@ import {
   DEFAULT_TRAVEL_BUFFER_MIN,
 } from "../../web/scheduling";
 import { normalizeName, normalizePhone } from "../../web/utils";
+import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
 
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ??
@@ -326,11 +327,7 @@ export async function POST(request: NextRequest) {
     const { firstName, lastName } = normalizeName(body.name);
 
     const leadResult = await db.transaction(async (tx) => {
-      const bookingDayKey = startLocal.toFormat("yyyyLLdd");
-      const bookingLockKey = Number(bookingDayKey);
-      if (Number.isFinite(bookingLockKey) && bookingLockKey > 0) {
-        await tx.execute(sql`select pg_advisory_xact_lock(${bookingLockKey})`);
-      }
+      await acquireScheduleConflictLock(tx);
 
       const now = new Date();
       if (holdId) {
@@ -341,9 +338,12 @@ export async function POST(request: NextRequest) {
             expiresAt: appointmentHolds.expiresAt,
             status: appointmentHolds.status,
             instantQuoteId: appointmentHolds.instantQuoteId,
+            durationMinutes: appointmentHolds.durationMinutes,
+            travelBufferMinutes: appointmentHolds.travelBufferMinutes,
           })
           .from(appointmentHolds)
           .where(eq(appointmentHolds.id, holdId))
+          .for("update")
           .limit(1);
 
         if (!hold) {
@@ -352,10 +352,14 @@ export async function POST(request: NextRequest) {
         if (hold.status !== "active" || hold.expiresAt <= now) {
           throw new BookingError("hold_expired", 409);
         }
-        if (hold.instantQuoteId && hold.instantQuoteId !== quote.id) {
+        if (hold.instantQuoteId !== quote.id) {
           throw new BookingError("hold_mismatch", 409);
         }
-        if (hold.startAt.getTime() !== startAt.getTime()) {
+        if (
+          hold.startAt.getTime() !== startAt.getTime() ||
+          hold.durationMinutes !== durationMinutes ||
+          hold.travelBufferMinutes !== travelBufferMinutes
+        ) {
           throw new BookingError("hold_mismatch", 409);
         }
       }
@@ -598,7 +602,10 @@ export async function POST(request: NextRequest) {
         },
       );
 
-      const slotEnd = new Date(startAt.getTime() + durationMinutes * 60_000);
+      const slotEnd = new Date(
+        startAt.getTime() +
+          (durationMinutes + travelBufferMinutes) * 60_000,
+      );
       const lookbackStart = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
       const lookaheadEnd = new Date(slotEnd.getTime() + 24 * 60 * 60 * 1000);
 

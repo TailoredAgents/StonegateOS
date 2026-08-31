@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "professional_quotes_v2_release_performance",
+  "reviewStatus": "reviewed",
+  "evidenceScope": "local",
+  "ciStatus": "awaiting_ci",
+  "localDate": "2026-08-31",
+  "timezone": "America/New_York",
+  "report": "professional-quotes-v2-performance-2026-08-31.json",
+  "reportSha256": "d89f2c8b1ab73f7226bce4bdd6287f55ef9e234316676e42567a2d805b17b2e7",
+  "runner": {
+    "class": "local_developer_workstation_with_disposable_postgresql",
+    "node": "v20.20.2",
+    "platform": "darwin",
+    "architecture": "arm64"
+  },
+  "database": {
+    "engine": "PostgreSQL",
+    "version": "16.14",
+    "disposable": true,
+    "fullyMigrated": true,
+    "urlRecorded": false
+  },
+  "source": {
+    "commitSha": "2f0e92d417d3e0b0f36693c918999da4152d15a7",
+    "worktreeStatus": "dirty",
+    "worktreeMarker": "uncommitted-local-quote-v2-implementation"
+  },
+  "invocation": {
+    "workingDirectory": "repository_root",
+    "environment": {
+      "DATABASE_URL": "redacted_disposable_database_url",
+      "NODE_ENV": "test"
+    },
+    "command": "DATABASE_URL='<redacted-disposable-database-url>' NODE_ENV=test corepack pnpm --filter api exec tsx scripts/quote-v2-performance.ts --mode=release --execute --confirm=QUOTE_V2_PERFORMANCE_10000_ROLLBACK"
+  },
+  "verification": {
+    "nativeReportOk": true,
+    "allFiveGatesPassed": true,
+    "databaseQueryFanOutPassed": true,
+    "transactionRolledBack": true,
+    "postRunCounts": {
+      "contacts": 0,
+      "properties": 0,
+      "opportunities": 0,
+      "quotes": 0,
+      "versions": 0
+    }
+  },
+  "privacy": {
+    "containsDatabaseUrl": false,
+    "containsCredentials": false,
+    "containsCustomerData": false
+  },
+  "releaseQualification": "Local performance evidence only; CI and production-like concurrency gates remain pending."
+}

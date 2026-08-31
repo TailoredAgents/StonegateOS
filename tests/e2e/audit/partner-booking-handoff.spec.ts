@@ -1,24 +1,17 @@
-import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+import { expect, test, type Page, type Request } from "@playwright/test";
 import { PARTNER_SESSION_COOKIE } from "../../../apps/site/src/lib/partner-session";
 import {
-  getAuditActor,
-  restoreSettings,
-  setSalesDefaultAssignee,
-  type SettingSnapshot,
-} from "./journey-fixtures";
-import {
+  cleanupPartnerApprovalFixture,
   cleanupPartnerBookingFixture,
   closePartnerBookingFixtures,
+  configurePartnerApprovalFixture,
   createPartnerBookingFixture,
-  findPartnerBookingByAppointmentId,
   findPartnerBookingForFixture,
-  getPartnerBookingIntegritySnapshot,
+  getPartnerApprovalLifecycleSnapshot,
+  getPartnerPortalV2IntegritySnapshot,
+  getPartnerReviewRequestSnapshot,
 } from "./partner-booking-fixtures";
-import {
-  clearTwilioMessages,
-  setTwilioFakeScenario,
-  waitForTwilioMessage,
-} from "../support/twilio";
 
 test.use({ storageState: "tests/e2e/storage/visitor.json" });
 
@@ -27,26 +20,63 @@ test.beforeEach(({ page: _page }, testInfo) => {
     testInfo.project.name !== "chromium-1440-light",
     "The state-changing partner handoff runs once against its disposable fixture.",
   );
-  testInfo.setTimeout(120_000);
+  testInfo.setTimeout(180_000);
 });
 
 test.afterAll(async () => {
   await closePartnerBookingFixtures();
 });
 
-test("partner booking handoff is replay-safe, atomically rescheduled, audited, and cancelable", async ({
+async function replayMutation(
+  page: Page,
+  request: Request,
+  origin: string,
+  bodyOverride?: Record<string, unknown>,
+) {
+  const idempotencyKey = await request.headerValue("idempotency-key");
+  const ifMatch = await request.headerValue("if-match");
+  if (!idempotencyKey || !ifMatch) {
+    throw new Error("Captured portal mutation omitted its safety headers.");
+  }
+  const originalBody = request.postDataJSON() as Record<string, unknown>;
+  return page.request.post(request.url(), {
+    headers: {
+      Origin: origin,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+      "If-Match": ifMatch,
+    },
+    data: bodyOverride ?? originalBody,
+  });
+}
+
+async function usePartnerSession(
+  page: Page,
+  baseURL: string,
+  token: string,
+): Promise<void> {
+  const siteUrl = new URL(baseURL);
+  await page.context().addCookies([
+    {
+      name: PARTNER_SESSION_COOKIE,
+      value: token,
+      domain: siteUrl.hostname,
+      path: "/",
+      httpOnly: true,
+      secure: siteUrl.protocol === "https:",
+      sameSite: "Lax",
+    },
+  ]);
+}
+
+test("Partner Portal V2 books, replays safely, reschedules atomically, and cancels with audit evidence", async ({
   page,
-  request,
   baseURL,
 }) => {
   if (!baseURL) throw new Error("The audit Site base URL is required.");
   const fixture = await createPartnerBookingFixture();
-  const owner = await getAuditActor();
-  let salesSetting: SettingSnapshot | null = null;
+  const origin = new URL(baseURL).origin;
   try {
-    salesSetting = await setSalesDefaultAssignee(owner.memberId);
-    await clearTwilioMessages();
-    await setTwilioFakeScenario("success");
     const siteUrl = new URL(baseURL);
     await page.context().addCookies([
       {
@@ -61,299 +91,431 @@ test("partner booking handoff is replay-safe, atomically rescheduled, audited, a
     ]);
 
     await page.goto(
-      `/partners/book?propertyId=${fixture.propertyId}&serviceKey=junk-removal`,
+      `/partners/book?locationId=${fixture.locationId}&serviceKey=junk-removal`,
     );
     await expect(
-      page.getByRole("heading", { name: "Book service" }),
+      page.getByRole("heading", { name: "Schedule a job", level: 1 }),
     ).toBeVisible();
-    const bookingForm = page
-      .locator(
-        'form:has(input[name="operationKey"]):has(input[name="preferredDate"])',
-      )
-      .last();
-    const operationKey = await bookingForm
-      .locator('input[name="operationKey"]')
-      .inputValue();
-    const dateInput = bookingForm.locator('input[name="preferredDate"]');
-    const preferredDate = await dateInput.getAttribute("min");
-    if (!preferredDate)
-      throw new Error("Partner booking minimum date missing.");
-    const timeWindowId = await bookingForm
-      .locator('select[name="timeWindowId"]')
-      .inputValue();
-    await bookingForm.locator('select[name="tierKey"]').selectOption("quarter");
-    await dateInput.fill(preferredDate);
-    await bookingForm
-      .getByLabel("Notes (optional)")
-      .fill(`E2E handoff ${fixture.marker}`);
-    await bookingForm.getByRole("button", { name: "Confirm booking" }).click();
-    await expect(page).toHaveURL(/\/partners\/bookings\?created=1/u);
-    await expect(page.getByText("Booking created.")).toBeVisible();
+    await expect(page.getByText("All changes saved")).toBeVisible();
 
-    const booking = await expect
-      .poll(() => findPartnerBookingForFixture(fixture), { timeout: 15_000 })
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Service & scope" }),
+    ).toBeVisible();
+    await page
+      .getByLabel("What needs to be done?")
+      .fill(
+        `Remove staged office furniture and boxed material. E2E ${fixture.marker}`,
+      );
+    await page.getByLabel("PO / work order (optional)").fill("PO-E2E-1042");
+    await page.getByLabel("Cost center (optional)").fill("TURN-OPS");
+    await page.getByRole("button", { name: "Continue" }).click();
+
+    await expect(
+      page.getByRole("heading", { name: "Contact & access" }),
+    ).toBeVisible();
+    await page.getByLabel("On-site contact name").fill("E2E Site Lead");
+    await page.getByLabel("Mobile phone").fill(fixture.partnerPhoneE164);
+    await page
+      .getByLabel("Access, parking, gate, or loading details (optional)")
+      .fill("Use the marked loading area; call the site lead on arrival.");
+    await page.getByRole("button", { name: "Continue" }).click();
+
+    await expect(
+      page.getByRole("heading", { name: "Photos & proof" }),
+    ).toBeVisible();
+    await page.getByLabel("Formal proof package").check();
+    await page.getByRole("button", { name: "Continue" }).click();
+
+    await expect(
+      page.getByRole("heading", { name: "Choose an arrival window" }),
+    ).toBeVisible();
+    const arrivalWindowButtons = page.locator("fieldset button[aria-pressed]");
+    await expect(arrivalWindowButtons.first()).toBeVisible();
+    // Use a later date so the 24-hour cancellation cutoff is unambiguous.
+    await arrivalWindowButtons.last().click();
+    await expect(page.getByText(/Arrival window held:/u)).toBeVisible();
+    await page.getByRole("button", { name: "Continue" }).click();
+
+    await expect(
+      page.getByRole("heading", { name: "Review & send" }),
+    ).toBeVisible();
+    await expect(page.getByText("PO-E2E-1042")).toBeVisible();
+    const submitRequestPromise = page.waitForRequest(
+      (request) =>
+        request.method() === "POST" &&
+        /\/api\/partners\/portal\/booking-drafts\/[0-9a-f-]+\/submit$/iu.test(
+          new URL(request.url()).pathname,
+        ),
+    );
+    await page.getByRole("button", { name: "Send service request" }).click();
+    const submitRequest = await submitRequestPromise;
+    await expect(page).toHaveURL(
+      /\/partners\/bookings\/[0-9a-f-]+\?created=1$/iu,
+    );
+
+    const jobId = new URL(page.url()).pathname.split("/").at(-1);
+    if (!jobId) throw new Error("Partner job identifier missing after submit.");
+    await expect(
+      page.getByText("Confirmed", { exact: true }).first(),
+    ).toBeVisible();
+    await expect(page.getByText("PO-E2E-1042")).toBeVisible();
+    const calendarDownloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Add to calendar" }).click();
+    const calendarDownload = await calendarDownloadPromise;
+    expect(calendarDownload.suggestedFilename()).toBe(
+      `stonegate-job-${jobId.slice(0, 8)}.ics`,
+    );
+    const calendarPath = await calendarDownload.path();
+    if (!calendarPath) throw new Error("Calendar receipt download is missing.");
+    const calendarContent = await readFile(calendarPath, "utf8");
+    expect(calendarContent).toContain("STATUS:CONFIRMED");
+    expect(calendarContent).toContain("Confirmed two-hour arrival window");
+    expect(calendarContent).not.toContain("?created=1");
+
+    const initialBooking = await expect
+      .poll(() => findPartnerBookingForFixture(fixture), { timeout: 20_000 })
       .not.toBeNull()
       .then(() => findPartnerBookingForFixture(fixture));
-    if (!booking) throw new Error("Partner booking was not persisted.");
-    expect(["confirmed", "requested"]).toContain(booking.status);
-    expect(booking.version).toBe(1);
-
-    const apiBase = process.env["API_BASE_URL"] ?? "http://localhost:3001";
-    const createBody = {
-      propertyId: fixture.propertyId,
-      serviceKey: "junk-removal",
-      tierKey: "quarter",
-      preferredDate,
-      timeWindowId,
-      notes: `E2E handoff ${fixture.marker}`,
-    };
-    const replay = await request.post(`${apiBase}/api/portal/bookings`, {
-      headers: {
-        Authorization: `Bearer ${fixture.sessionToken}`,
-        "Content-Type": "application/json",
-        "Idempotency-Key": operationKey,
-      },
-      data: createBody,
-    });
-    expect(replay.status()).toBe(200);
-    await expect(replay.json()).resolves.toMatchObject({
-      ok: true,
-      appointmentId: booking.appointmentId,
+    if (!initialBooking) throw new Error("Partner booking was not persisted.");
+    expect(initialBooking).toMatchObject({
+      bookingId: jobId,
+      status: "confirmed",
       version: 1,
-      receipt: { replay: true },
     });
-    const conflict = await request.post(`${apiBase}/api/portal/bookings`, {
-      headers: {
-        Authorization: `Bearer ${fixture.sessionToken}`,
-        "Content-Type": "application/json",
-        "Idempotency-Key": operationKey,
-      },
-      data: { ...createBody, notes: "Conflicting replay" },
-    });
-    expect(conflict.status()).toBe(409);
-
-    await expect
-      .poll(
-        async () =>
-          (await findPartnerBookingForFixture(fixture))?.calendarEventId,
-        {
-          timeout: 20_000,
-        },
-      )
-      .not.toBeNull();
-    await expect
-      .poll(
-        async () =>
-          (
-            await getPartnerBookingIntegritySnapshot(
-              fixture,
-              booking.appointmentId,
-            )
-          ).createdAlertState,
-        { timeout: 20_000 },
-      )
-      .toBe("succeeded");
-    const staffCreateMessage = await waitForTwilioMessage(
-      (message) =>
-        message.to === "+14045551001" &&
-        message.body.includes("New partner booking"),
+    await expect(page.locator("body")).not.toContainText(
+      initialBooking.appointmentId,
     );
-    expect(staffCreateMessage.body).toContain(fixture.marker);
 
-    await page.reload();
-    await page.getByRole("link", { name: "Reschedule" }).click();
+    const submitReplay = await replayMutation(page, submitRequest, origin);
+    expect(submitReplay.status()).toBe(200);
+    const submitReplayBody = await submitReplay.json();
+    expect(submitReplayBody).toMatchObject({
+      ok: true,
+      replayed: true,
+      booking: { id: jobId, publicStatus: "confirmed" },
+    });
+    expect(JSON.stringify(submitReplayBody)).not.toContain(
+      initialBooking.appointmentId,
+    );
+    expect(submitReplayBody.booking).not.toHaveProperty("appointmentId");
+    expect(submitReplayBody.booking).not.toHaveProperty("startAt");
+    const submitBody = submitRequest.postDataJSON() as Record<string, unknown>;
+    const submitConflict = await replayMutation(page, submitRequest, origin, {
+      ...submitBody,
+      holdId: "00000000-0000-4000-8000-000000000099",
+    });
+    expect(submitConflict.status()).toBe(409);
+
+    await page.getByRole("link", { name: "Change schedule" }).click();
     await expect(
-      page.getByText(/moves your booking in one step/u),
+      page.getByRole("heading", { name: "Change arrival window", level: 1 }),
     ).toBeVisible();
-    const rescheduleForm = page
-      .locator(
-        'form:has(input[name="operationKey"]):has(input[name="rescheduleFromAppointmentId"])',
-      )
-      .last();
-    const rescheduleOperationKey = await rescheduleForm
-      .locator('input[name="operationKey"]')
-      .inputValue();
-    const rescheduleVersion = await rescheduleForm
-      .locator('input[name="rescheduleFromVersion"]')
-      .inputValue();
-    await rescheduleForm
-      .locator('select[name="tierKey"]')
-      .selectOption("quarter");
-    await rescheduleForm
-      .locator('input[name="preferredDate"]')
-      .fill(preferredDate);
-    await rescheduleForm
-      .getByLabel("Notes (optional)")
-      .fill(`E2E atomic reschedule ${fixture.marker}`);
-    await rescheduleForm
-      .getByRole("button", { name: "Confirm reschedule" })
-      .click();
-    await expect(page).toHaveURL(/\/partners\/bookings\?rescheduled=1/u);
-    await expect(page.getByText("Booking rescheduled.")).toBeVisible();
+    const arrivalWindows = page.locator("button[aria-pressed]");
+    await expect(arrivalWindows.first()).toBeVisible();
+    await arrivalWindows.last().click();
+    await expect(page.getByText("Selected arrival window")).toBeVisible();
+    const rescheduleRequestPromise = page.waitForRequest(
+      (request) =>
+        request.method() === "POST" &&
+        new URL(request.url()).pathname.endsWith(`/jobs/${jobId}/reschedule`),
+    );
+    await page.getByRole("button", { name: "Confirm schedule change" }).click();
+    const rescheduleRequest = await rescheduleRequestPromise;
+    await expect(
+      page.getByRole("heading", { name: "New schedule confirmed" }),
+    ).toBeVisible();
 
-    await expect
-      .poll(
-        async () =>
-          (await findPartnerBookingForFixture(fixture))?.appointmentId ?? null,
-        { timeout: 15_000 },
-      )
-      .not.toBe(booking.appointmentId);
-    const replacement = await findPartnerBookingForFixture(fixture);
-    if (!replacement) throw new Error("Replacement booking was not persisted.");
-    expect(replacement.version).toBe(1);
-    await expect
-      .poll(
-        () => findPartnerBookingByAppointmentId(fixture, booking.appointmentId),
-        { timeout: 15_000 },
-      )
-      .toMatchObject({ status: "canceled", version: 2 });
+    const rescheduled = await expect
+      .poll(() => findPartnerBookingForFixture(fixture), { timeout: 20_000 })
+      .toMatchObject({ bookingId: jobId, status: "confirmed", version: 2 })
+      .then(() => findPartnerBookingForFixture(fixture));
+    if (!rescheduled) throw new Error("Rescheduled booking was not persisted.");
+    expect(rescheduled.appointmentId).toBe(initialBooking.appointmentId);
 
-    const rescheduleBody = {
-      ...createBody,
-      notes: `E2E atomic reschedule ${fixture.marker}`,
-      rescheduleFromAppointmentId: booking.appointmentId,
-    };
-    const rescheduleReplay = await request.post(
-      `${apiBase}/api/portal/bookings`,
-      {
-        headers: {
-          Authorization: `Bearer ${fixture.sessionToken}`,
-          "Content-Type": "application/json",
-          "Idempotency-Key": rescheduleOperationKey,
-          "If-Match": rescheduleVersion,
-        },
-        data: rescheduleBody,
-      },
+    const rescheduleReplay = await replayMutation(
+      page,
+      rescheduleRequest,
+      origin,
     );
     expect(rescheduleReplay.status()).toBe(200);
-    await expect(rescheduleReplay.json()).resolves.toMatchObject({
+    const rescheduleReplayBody = await rescheduleReplay.json();
+    expect(rescheduleReplayBody).toMatchObject({
       ok: true,
-      appointmentId: replacement.appointmentId,
-      rescheduledFromAppointmentId: booking.appointmentId,
-      rescheduledFromVersion: 1,
-      receipt: { replay: true },
+      reschedule: { mode: "instant", jobId },
     });
-    const rescheduleConflict = await request.post(
-      `${apiBase}/api/portal/bookings`,
-      {
-        headers: {
-          Authorization: `Bearer ${fixture.sessionToken}`,
-          "Content-Type": "application/json",
-          "Idempotency-Key": rescheduleOperationKey,
-          "If-Match": rescheduleVersion,
-        },
-        data: { ...rescheduleBody, notes: "Conflicting reschedule replay" },
-      },
+    expect(JSON.stringify(rescheduleReplayBody)).not.toContain(
+      rescheduled.appointmentId,
     );
-    expect(rescheduleConflict.status()).toBe(409);
-    await waitForTwilioMessage(
-      (message) =>
-        message.to === "+14045551001" &&
-        message.body.includes("Partner booking rescheduled"),
-    );
+    expect(rescheduleReplayBody.reschedule).not.toHaveProperty("appointmentId");
+    expect(rescheduleReplayBody.reschedule).not.toHaveProperty("startAt");
 
+    await page.getByRole("link", { name: "View updated job" }).click();
+    await page.getByText("Cancel this job", { exact: true }).click();
+    await page
+      .getByLabel("Reason for cancellation")
+      .fill("Project schedule changed after the site walkthrough.");
+    const cancelRequestPromise = page.waitForRequest(
+      (request) =>
+        request.method() === "POST" &&
+        new URL(request.url()).pathname.endsWith(`/jobs/${jobId}/cancel`),
+    );
+    await page.getByRole("button", { name: "Confirm cancellation" }).click();
+    const cancelRequest = await cancelRequestPromise;
+    await expect(page.getByText("The job was canceled.")).toBeVisible();
     await page.reload();
-    const cancelForm = page
-      .locator(
-        `form:has(input[name="appointmentId"][value="${replacement.appointmentId}"])`,
-      )
-      .first();
-    const cancelOperationKey = await cancelForm
-      .locator('input[name="operationKey"]')
-      .inputValue();
-    const cancelVersion = await cancelForm
-      .locator('input[name="version"]')
-      .inputValue();
-    page.once("dialog", (dialog) => dialog.accept());
-    await cancelForm.getByRole("button", { name: "Cancel booking" }).click();
-    await expect(page).toHaveURL(/\/partners\/bookings\?canceled=1/u);
-    await expect(page.getByText("Booking canceled.")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Add to calendar" }),
+    ).toHaveCount(0);
 
-    const cancelReplay = await request.post(
-      `${apiBase}/api/portal/bookings/${replacement.appointmentId}/cancel`,
-      {
-        headers: {
-          Authorization: `Bearer ${fixture.sessionToken}`,
-          "Content-Type": "application/json",
-          "Idempotency-Key": cancelOperationKey,
-          "If-Match": cancelVersion,
-        },
-        data: {},
-      },
-    );
-    expect(cancelReplay.status()).toBe(200);
-    await expect(cancelReplay.json()).resolves.toMatchObject({
-      ok: true,
-      status: "canceled",
-      version: 2,
-      receipt: { replay: true },
-    });
-
-    const lateRescheduleReplay = await request.post(
-      `${apiBase}/api/portal/bookings`,
-      {
-        headers: {
-          Authorization: `Bearer ${fixture.sessionToken}`,
-          "Content-Type": "application/json",
-          "Idempotency-Key": rescheduleOperationKey,
-          "If-Match": rescheduleVersion,
-        },
-        data: rescheduleBody,
-      },
-    );
-    expect(lateRescheduleReplay.status()).toBe(200);
-    await expect(lateRescheduleReplay.json()).resolves.toMatchObject({
-      ok: true,
-      appointmentId: replacement.appointmentId,
-      status: replacement.status,
-      version: 1,
-      receipt: { replay: true },
-    });
-
-    await expect
-      .poll(
-        async () =>
-          (
-            await getPartnerBookingIntegritySnapshot(
-              fixture,
-              replacement.appointmentId,
-            )
-          ).canceledAlertState,
-        { timeout: 20_000 },
-      )
-      .toBe("succeeded");
-    await waitForTwilioMessage(
-      (message) =>
-        message.to === "+14045551001" &&
-        message.body.includes("Partner booking canceled"),
-    );
     await expect
       .poll(() => findPartnerBookingForFixture(fixture), { timeout: 20_000 })
       .toMatchObject({
-        appointmentId: replacement.appointmentId,
+        bookingId: jobId,
+        appointmentId: initialBooking.appointmentId,
         status: "canceled",
-        version: 2,
-        calendarEventId: null,
+        version: 3,
       });
-    const integrity = await getPartnerBookingIntegritySnapshot(
-      fixture,
-      replacement.appointmentId,
+    const cancelReplay = await replayMutation(page, cancelRequest, origin);
+    expect(cancelReplay.status()).toBe(200);
+    await expect(cancelReplay.json()).resolves.toMatchObject({
+      ok: true,
+      cancellation: { outcome: "canceled" },
+      job: { id: jobId, status: "canceled", revision: 3 },
+    });
+    expect(cancelReplay.headers()["idempotency-replayed"]).toBe("true");
+
+    await expect
+      .poll(() => getPartnerPortalV2IntegritySnapshot(fixture, jobId), {
+        timeout: 20_000,
+      })
+      .toMatchObject({
+        submittedAudits: 1,
+        rescheduledAudits: 1,
+        canceledAudits: 1,
+        submittedEvents: 1,
+        rescheduledEvents: 1,
+        canceledEvents: 1,
+      });
+    const integrity = await getPartnerPortalV2IntegritySnapshot(fixture, jobId);
+    expect(integrity.scheduleOutboxEvents).toBeGreaterThanOrEqual(2);
+
+    await page.goto(
+      `/partners/book?locationId=${fixture.locationId}&serviceKey=junk_removal_primary`,
     );
-    expect(integrity).toMatchObject({
-      bookingCount: 2,
-      createdAuditCount: 0,
-      rescheduledAuditCount: 1,
-      canceledAuditCount: 1,
-      createdAlertState: "succeeded",
-      canceledAlertState: "succeeded",
-      createdAlertAttempts: 1,
-      canceledAlertAttempts: 1,
-      confirmationMessages: 2,
-      rescheduleMessages: 2,
-      cancellationMessages: 2,
+    await expect(page.getByText("All changes saved")).toBeVisible();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Service & scope" }),
+    ).toBeVisible();
+    await page
+      .getByLabel("What needs to be done?")
+      .fill(`Reviewed demo haul-off request. E2E ${fixture.marker}`);
+    await page
+      .getByRole("checkbox", {
+        name: /Potentially restricted or special-handling material/iu,
+      })
+      .check();
+    await page
+      .locator("#partner-book-billing-name")
+      .fill("E2E Accounts Payable");
+    await page
+      .locator("#partner-book-billing-email")
+      .fill(`billing+${fixture.marker}@mystos.test`);
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page.getByLabel("On-site contact name").fill("E2E Review Lead");
+    await page.getByLabel("Mobile phone").fill(fixture.partnerPhoneE164);
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Photos & proof" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Choose an arrival window" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Request a reviewed schedule" }),
+    ).toBeVisible();
+    const preferredDate = new Date(Date.now() + 5 * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+    await page.getByLabel("First choice").fill(preferredDate);
+    await page.getByLabel("General time preference").selectOption("morning");
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Review & send" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/review request only.*without reserving capacity/iu),
+    ).toBeVisible();
+    await expect(page.getByText("E2E Accounts Payable")).toBeVisible();
+    const reviewSubmitRequestPromise = page.waitForRequest(
+      (request) =>
+        request.method() === "POST" &&
+        /\/api\/partners\/portal\/booking-drafts\/[0-9a-f-]+\/submit$/iu.test(
+          new URL(request.url()).pathname,
+        ),
+    );
+    await page.getByRole("button", { name: "Send service request" }).click();
+    const reviewSubmitRequest = await reviewSubmitRequestPromise;
+    await expect(page).toHaveURL(
+      /\/partners\/bookings\/[0-9a-f-]+\?created=1$/iu,
+    );
+    const reviewJobId = new URL(page.url()).pathname.split("/").at(-1);
+    if (!reviewJobId) throw new Error("Review job identifier is missing.");
+    await expect(
+      page.getByText("Under Review", { exact: true }).first(),
+    ).toBeVisible();
+    await expect(page.getByText(/Morning.*Not reserved/iu)).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Add to calendar" }),
+    ).toHaveCount(0);
+
+    const reviewSnapshot = await expect
+      .poll(() => getPartnerReviewRequestSnapshot(fixture, reviewJobId), {
+        timeout: 20_000,
+      })
+      .toMatchObject({
+        publicStatus: "under_review",
+        confirmationMode: "review",
+        appointmentStartAt: null,
+        promisedArrivalStartAt: null,
+        promisedArrivalEndAt: null,
+        bookingArrivalStartAt: null,
+        bookingArrivalEndAt: null,
+        reviewAuditCount: 1,
+        calendarOutboxCount: 0,
+      })
+      .then(() => getPartnerReviewRequestSnapshot(fixture, reviewJobId));
+    expect(reviewSnapshot.preferredWindows).toEqual([
+      {
+        localDate: preferredDate,
+        timeOfDay: "morning",
+        timezone: "America/New_York",
+      },
+    ]);
+    const reviewReplay = await replayMutation(
+      page,
+      reviewSubmitRequest,
+      origin,
+    );
+    expect(reviewReplay.status()).toBe(200);
+    await expect(reviewReplay.json()).resolves.toMatchObject({
+      ok: true,
+      replayed: true,
+      booking: {
+        id: reviewJobId,
+        publicStatus: "under_review",
+        arrivalWindowStartAt: null,
+        arrivalWindowEndAt: null,
+      },
     });
   } finally {
-    if (salesSetting) await restoreSettings([salesSetting]);
     await cleanupPartnerBookingFixture(fixture);
+  }
+});
+
+test("account rules override client approval hints and a valid approval hold confirms atomically", async ({
+  page,
+  baseURL,
+}) => {
+  if (!baseURL) throw new Error("The audit Site base URL is required.");
+  const requester = await createPartnerBookingFixture();
+  const fixture = await configurePartnerApprovalFixture(requester);
+  try {
+    await usePartnerSession(page, baseURL, requester.sessionToken);
+    await page.goto(
+      `/partners/book?locationId=${requester.locationId}&serviceKey=junk-removal`,
+    );
+    await expect(page.getByText("All changes saved")).toBeVisible();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page
+      .getByLabel("What needs to be done?")
+      .fill(`Approval-controlled removal. E2E ${requester.marker}`);
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page.getByLabel("On-site contact name").fill("Approval Site Lead");
+    await page.getByLabel("Mobile phone").fill(requester.partnerPhoneE164);
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Photos & proof" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Choose an arrival window" }),
+    ).toBeVisible();
+    const arrivalWindows = page.locator("fieldset button[aria-pressed]");
+    await expect(arrivalWindows.first()).toBeVisible();
+    await arrivalWindows.last().click();
+    await expect(page.getByText(/Arrival window held:/u)).toBeVisible();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page.getByRole("button", { name: "Send service request" }).click();
+    await expect(page).toHaveURL(
+      /\/partners\/bookings\/[0-9a-f-]+\?created=1$/iu,
+    );
+    const jobId = new URL(page.url()).pathname.split("/").at(-1);
+    if (!jobId) throw new Error("Approval-controlled job ID is missing.");
+    await expect(
+      page.getByText("Approval Needed", { exact: true }),
+    ).toBeVisible();
+
+    const pending = await expect
+      .poll(() => getPartnerApprovalLifecycleSnapshot(fixture, jobId), {
+        timeout: 20_000,
+      })
+      .toMatchObject({
+        requestState: "pending",
+        holdStatus: "active",
+        bookingStatus: "approval_needed",
+        confirmationMode: "approval",
+        appointmentStatus: "requested",
+        appointmentStartAt: null,
+        promisedArrivalStartAt: null,
+        promisedArrivalEndAt: null,
+        decisionCount: 0,
+      })
+      .then(() => getPartnerApprovalLifecycleSnapshot(fixture, jobId));
+    expect(new Date(pending.holdExpiresAt ?? 0).getTime()).toBeGreaterThan(
+      Date.now() + 20 * 60_000,
+    );
+
+    await usePartnerSession(page, baseURL, fixture.approverSessionToken);
+    await page.goto("/partners/approvals");
+    await expect(
+      page.getByRole("heading", { name: "Approvals", level: 1 }),
+    ).toBeVisible();
+    await page.getByRole("link", { name: "Review request" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Approve or decline this request" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Record approval" }).click();
+    await expect(page.getByText("The request was approved.")).toBeVisible();
+
+    await expect
+      .poll(() => getPartnerApprovalLifecycleSnapshot(fixture, jobId), {
+        timeout: 20_000,
+      })
+      .toMatchObject({
+        requestState: "approved",
+        requestRevision: 2,
+        holdStatus: "consumed",
+        bookingStatus: "confirmed",
+        appointmentStatus: "confirmed",
+        decisionCount: 1,
+        decisionAuditCount: 1,
+        approvalCalendarOutboxCount: 1,
+      });
+    const approved = await getPartnerApprovalLifecycleSnapshot(fixture, jobId);
+    expect(approved.appointmentStartAt).not.toBeNull();
+    expect(approved.promisedArrivalStartAt).not.toBeNull();
+    expect(approved.promisedArrivalEndAt).not.toBeNull();
+
+    await usePartnerSession(page, baseURL, requester.sessionToken);
+    await page.goto(`/partners/bookings/${jobId}`);
+    await expect(page.getByText("Confirmed", { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Add to calendar" }),
+    ).toBeVisible();
+  } finally {
+    await cleanupPartnerApprovalFixture(fixture);
   }
 });

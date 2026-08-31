@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   buildTeamRouteSecurityContract,
   routeIsInTeamSecurityScope,
@@ -17,7 +18,10 @@ type RouteMethodSource = {
   methodSource: string;
 };
 
-const API_ROOT = path.resolve(__dirname, "../..");
+const API_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../..",
+);
 const ROUTE_EXPORT_PATTERN = new RegExp(
   `export\\s+async\\s+function\\s+(${TEAM_ROUTE_HTTP_METHODS.join("|")})\\s*\\(`,
   "gu",
@@ -155,7 +159,12 @@ function findEffectiveGuard(routeMethod: RouteMethodSource): {
   helperSource: string | null;
 } | null {
   const directIndex = routeMethod.methodSource.indexOf("requirePermission(");
-  if (directIndex >= 0) {
+  const mutationBoundaryIndex =
+    routeMethod.methodSource.indexOf("beginTeamMutation(");
+  if (
+    directIndex >= 0 &&
+    (mutationBoundaryIndex < 0 || directIndex < mutationBoundaryIndex)
+  ) {
     return {
       index: directIndex,
       permissions: permissionLiterals(routeMethod.methodSource),
@@ -163,8 +172,6 @@ function findEffectiveGuard(routeMethod: RouteMethodSource): {
     };
   }
 
-  const mutationBoundaryIndex =
-    routeMethod.methodSource.indexOf("beginTeamMutation(");
   if (mutationBoundaryIndex >= 0) {
     return {
       index: mutationBoundaryIndex,

@@ -127,8 +127,8 @@
     --team-focus-ring: #5eead4;
     --team-focus-offset: #020617;
     --team-link: #5eead4;
-    --team-action-primary: #0d9488;
-    --team-action-primary-hover: #14b8a6;
+    --team-action-primary: #0f766e;
+    --team-action-primary-hover: #115e59;
     --team-action-primary-text: #ffffff;
     --team-action-shadow: rgba(20, 184, 166, 0.28);
     --team-skeleton: #334155;
@@ -239,6 +239,14 @@
   .team-theme-dark .text-slate-400,
   .team-theme-dark .text-slate-300 {
     color: var(--team-text-soft) !important;
+  }
+
+  .team-theme-dark .text-primary-950,
+  .team-theme-dark .text-primary-900,
+  .team-theme-dark .text-primary-800,
+  .team-theme-dark .text-primary-700,
+  .team-theme-dark .text-primary-600 {
+    color: var(--team-link) !important;
   }
 
   .team-theme-dark .text-amber-950,

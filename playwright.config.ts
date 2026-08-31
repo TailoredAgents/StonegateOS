@@ -34,6 +34,9 @@ export default defineConfig({
   projects: [
     {
       name: "chromium-desktop",
+      // The visual lane has its own deterministic, single-worker config and
+      // blocking CI command; do not duplicate it in the broad parallel suite.
+      testIgnore: /(?:^|\/)quote-v2-(?:(?:staff-)?visual|zoom)\.spec\.ts$/u,
       use: {
         ...devices["Desktop Chrome"],
       },
@@ -52,6 +55,24 @@ export default defineConfig({
       use: {
         ...devices["iPhone 13"],
         isMobile: true,
+      },
+    },
+    {
+      name: "firefox-quote-desktop",
+      testMatch: /(?:^|\/)quote-v2-release\.spec\.ts$/u,
+      use: {
+        ...devices["Desktop Firefox"],
+      },
+    },
+    {
+      name: "chromium-quote-zoom-200",
+      testMatch: /(?:^|\/)quote-v2-zoom\.spec\.ts$/u,
+      use: {
+        ...devices["Desktop Chrome"],
+        // A 640 CSS-pixel viewport at 2x density is the deterministic
+        // equivalent of viewing a 1280px desktop page at 200% zoom.
+        viewport: { width: 640, height: 900 },
+        deviceScaleFactor: 2,
       },
     },
   ],

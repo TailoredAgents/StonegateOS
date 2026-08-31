@@ -8,7 +8,8 @@ export type PublicQuoteMutationAction =
   | "decision"
   | "refresh"
   | "hold"
-  | "book";
+  | "book"
+  | "change";
 
 export function normalizePublicQuoteIdempotencyKey(
   value: string | null,

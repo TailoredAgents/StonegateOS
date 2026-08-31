@@ -8,11 +8,32 @@ const API_BASE_URL =
 
 type CallApiInit = RequestInit & { timeoutMs?: number };
 
-export async function callPartnerPublicApi(path: string, init?: CallApiInit): Promise<Response> {
+function mergeHeaders(
+  defaults: HeadersInit,
+  incoming?: HeadersInit,
+  overrides?: HeadersInit,
+): Headers {
+  const headers = new Headers(defaults);
+  if (incoming) {
+    new Headers(incoming).forEach((value, key) => headers.set(key, value));
+  }
+  if (overrides) {
+    new Headers(overrides).forEach((value, key) => headers.set(key, value));
+  }
+  return headers;
+}
+
+export async function callPartnerPublicApi(
+  path: string,
+  init?: CallApiInit,
+): Promise<Response> {
   const base = API_BASE_URL.replace(/\/$/, "");
   const { timeoutMs = 25_000, ...requestInit } = init ?? {};
-  const isFormDataBody = typeof FormData !== "undefined" && requestInit?.body instanceof FormData;
-  const defaultHeaders: Record<string, string> = isFormDataBody ? {} : { "Content-Type": "application/json" };
+  const isFormDataBody =
+    typeof FormData !== "undefined" && requestInit?.body instanceof FormData;
+  const defaultHeaders: Record<string, string> = isFormDataBody
+    ? {}
+    : { "Content-Type": "application/json" };
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -21,30 +42,31 @@ export async function callPartnerPublicApi(path: string, init?: CallApiInit): Pr
     return await fetch(`${base}${path}`, {
       ...requestInit,
       signal: controller.signal,
-      headers: { ...defaultHeaders, ...(requestInit?.headers ?? {}) },
-      cache: "no-store"
+      headers: mergeHeaders(defaultHeaders, requestInit.headers),
+      cache: "no-store",
     });
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-export async function callPartnerApi(path: string, init?: CallApiInit): Promise<Response> {
+export async function callPartnerApi(
+  path: string,
+  init?: CallApiInit,
+): Promise<Response> {
   const jar = await cookies();
   const token = jar.get(PARTNER_SESSION_COOKIE)?.value ?? "";
   if (!token) {
     return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), {
       status: 401,
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json" },
     });
   }
 
   return callPartnerPublicApi(path, {
     ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      Authorization: `Bearer ${token}`
-    }
+    headers: mergeHeaders({}, init?.headers, {
+      Authorization: `Bearer ${token}`,
+    }),
   });
 }
-

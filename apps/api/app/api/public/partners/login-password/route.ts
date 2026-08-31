@@ -29,7 +29,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     !payload ||
     typeof payload !== "object" ||
     Array.isArray(payload) ||
-    Object.keys(payload).sort().join(",") !== "email,password"
+    Object.keys(payload).some(
+      (key) => !["email", "password", "rememberMe"].includes(key),
+    )
   ) {
     return NextResponse.json(
       { ok: false, error: "invalid_credentials" },
@@ -40,6 +42,16 @@ export async function POST(request: NextRequest): Promise<Response> {
   const email = normalizeEmail(record["email"]);
   const password =
     typeof record["password"] === "string" ? record["password"] : null;
+  const rememberMe = record["rememberMe"] === true;
+  if (
+    record["rememberMe"] !== undefined &&
+    typeof record["rememberMe"] !== "boolean"
+  ) {
+    return NextResponse.json(
+      { ok: false, error: "invalid_credentials" },
+      { status: 401, headers: { "Cache-Control": "no-store" } },
+    );
+  }
   if (!email || email.length > 320 || !password || password.length > 256) {
     return NextResponse.json(
       { ok: false, error: "invalid_credentials" },
@@ -78,7 +90,12 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   let session: Awaited<ReturnType<typeof loginWithPassword>>;
   try {
-    session = await loginWithPassword(email, password, request, 30);
+    session = await loginWithPassword(
+      email,
+      password,
+      request,
+      rememberMe ? 30 : 0.5,
+    );
   } catch {
     return NextResponse.json(
       { ok: false, error: "temporarily_unavailable" },
@@ -93,7 +110,12 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   return NextResponse.json(
-    { ok: true, sessionToken: session.sessionToken },
+    {
+      ok: true,
+      sessionToken: session.sessionToken,
+      expiresAt: session.expiresAt.toISOString(),
+      persistent: rememberMe,
+    },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

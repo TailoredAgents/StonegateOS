@@ -9,6 +9,8 @@ export type SquareApiEndpoint = {
     kind: "refund";
     refundId: string;
 } | {
+    kind: "paymentLinks";
+} | {
     kind: "payments";
 } | {
     kind: "refunds";

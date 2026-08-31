@@ -183,6 +183,26 @@ describe("deterministic email fake runtime", () => {
     expect((await send()).deliveryCertainty).toBe("accepted");
   });
 
+  it("accepts a bounded PDF proposal and branded HTML alternative", async () => {
+    const pdf = Buffer.from("%PDF-1.7\nquote proposal\n%%EOF", "utf8");
+    await expect(
+      send({
+        html: "<main><h1>Your proposal</h1></main>",
+        attachments: [
+          {
+            filename: "Q-20260830-TEST-v1.pdf",
+            content: pdf.toString("base64"),
+            contentType: "application/pdf",
+            encoding: "base64",
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      deliveryCertainty: "accepted",
+    });
+  });
+
   it("reset destroys and generation-isolates in-flight SMTP work", async () => {
     await setScenario("timeout", { delayMs: 300 });
     const inFlight = send({}, { SMTP_TIMEOUT_MS: "1000" });
@@ -298,6 +318,16 @@ describe("deterministic email fake runtime", () => {
             filename: "../../secret.txt",
             content: "secret",
             contentType: "text/plain",
+          },
+        ],
+      },
+      {
+        attachments: [
+          {
+            filename: "proposal.pdf",
+            content: "not-base64!",
+            contentType: "application/pdf",
+            encoding: "base64" as const,
           },
         ],
       },

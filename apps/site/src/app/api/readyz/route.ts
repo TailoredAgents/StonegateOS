@@ -6,12 +6,30 @@ const API_BASE_URL =
   process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"] ?? "";
 
 function siteConfigurationReady(): boolean {
-  return [
+  const requiredValuesReady = [
     API_BASE_URL,
     process.env["ADMIN_API_KEY"],
     process.env["ADMIN_SESSION_SECRET"],
     process.env["NEXT_PUBLIC_SITE_URL"],
   ].every((value) => Boolean(value?.trim()));
+  const quoteSecretsReady = [
+    process.env["QUOTE_RATE_LIMIT_HMAC_SECRET"],
+    process.env["QUOTE_PUBLIC_PROXY_SHARED_SECRET"],
+  ].every((value) => (value?.trim().length ?? 0) >= 32);
+  const quoteSecretsDiffer =
+    process.env["QUOTE_RATE_LIMIT_HMAC_SECRET"]?.trim() !==
+    process.env["QUOTE_PUBLIC_PROXY_SHARED_SECRET"]?.trim();
+  const proxyHops = Number(
+    process.env["QUOTE_PUBLIC_TRUSTED_PROXY_HOPS"]?.trim(),
+  );
+  return (
+    requiredValuesReady &&
+    quoteSecretsReady &&
+    quoteSecretsDiffer &&
+    Number.isInteger(proxyHops) &&
+    proxyHops >= 1 &&
+    proxyHops <= 10
+  );
 }
 
 export async function GET(): Promise<Response> {

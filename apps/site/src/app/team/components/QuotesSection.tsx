@@ -7,6 +7,11 @@ import { callAdminApiAs } from "../lib/api";
 import { quoteWorkspaceHref } from "../quotes-workspace";
 import { teamButtonClass } from "./team-ui";
 import {
+  isQuoteV2SenderFeatureEnabled,
+  isQuoteV2StaffFeatureEnabled,
+} from "../lib/quote-v2-staff-feature";
+import { normalizeQuoteV2ManagePage } from "../lib/quote-v2-management-model";
+import {
   deleteQuoteAction,
   quoteDecisionAction,
   sendQuoteAction,
@@ -141,6 +146,49 @@ function QuotesUnavailable({ detail }: { detail: string }): ReactElement {
 
 export async function QuotesSection(): Promise<ReactElement> {
   const principal = await requireCurrentTeamPrincipal();
+  if (isQuoteV2StaffFeatureEnabled()) {
+    let response: Response;
+    try {
+      response = await callAdminApiAs(
+        principal,
+        "/api/quotes?engine=v2&limit=40&sort=next_action",
+      );
+    } catch {
+      return (
+        <QuotesUnavailable detail="The versioned quote service could not be reached." />
+      );
+    }
+    const page = normalizeQuoteV2ManagePage(
+      await response.json().catch(() => null),
+    );
+    if (!response.ok || !page) {
+      return (
+        <QuotesUnavailable
+          detail={
+            response.ok
+              ? "The versioned quote service returned an unreadable response."
+              : `The versioned quote service returned HTTP ${response.status}.`
+          }
+        />
+      );
+    }
+    const { default: QuoteV2ManageClient } = await import(
+      "./QuoteV2ManageClient"
+    );
+    return (
+      <QuoteV2ManageClient
+        initialPage={page}
+        canSend={
+          isQuoteV2SenderFeatureEnabled() &&
+          hasTeamPermissionValue(principal.permissions, "quotes.send")
+        }
+        canUpdate={hasTeamPermissionValue(
+          principal.permissions,
+          "quotes.update",
+        )}
+      />
+    );
+  }
   let res: Response;
   try {
     res = await callAdminApiAs(principal, "/api/quotes");

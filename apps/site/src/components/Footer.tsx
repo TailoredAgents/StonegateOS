@@ -31,7 +31,7 @@ export function Footer() {
             </Button>
           }
         />
-        <div className="mt-12 grid gap-6 text-sm text-neutral-500 md:grid-cols-3">
+        <div className="mt-12 grid gap-6 text-sm text-neutral-500 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <p className="font-semibold text-neutral-800">{company.name}</p>
             <p className="mt-2">
@@ -72,6 +72,27 @@ export function Footer() {
           <div>
             <p className="font-semibold text-neutral-800">Hours</p>
             <p className="mt-2">{company.hoursSummary}</p>
+          </div>
+          <div>
+            <p className="font-semibold text-neutral-800">For partners</p>
+            <ul className="mt-2 space-y-1">
+              <li>
+                <Link
+                  href="/partners/login"
+                  className="text-neutral-700 hover:text-primary-700"
+                >
+                  Partner Portal
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/partners/request-access"
+                  className="text-neutral-700 hover:text-primary-700"
+                >
+                  Request partner access
+                </Link>
+              </li>
+            </ul>
           </div>
         </div>
         <p className="mt-12 text-xs text-neutral-600">

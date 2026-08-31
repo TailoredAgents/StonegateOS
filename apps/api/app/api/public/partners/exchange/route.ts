@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { exchangePartnerLoginToken } from "@/lib/partner-portal-auth";
+import { markPartnerEmailVerified } from "@/lib/partner-portal-onboarding";
 import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
@@ -60,6 +61,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       { status: 401, headers: { "Cache-Control": "no-store" } },
     );
   }
+
+  await markPartnerEmailVerified(result.partnerUserId).catch(() => undefined);
 
   return NextResponse.json(
     {

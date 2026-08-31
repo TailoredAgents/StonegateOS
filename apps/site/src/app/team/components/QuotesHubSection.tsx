@@ -46,11 +46,11 @@ export async function QuotesHubSection({
       workspace = (
         <div className="space-y-6">
           <InstantQuoteDetail quoteId={instantQuoteId} />
-          {await InstantQuotesSection()}
+          {await InstantQuotesSection({ compact: true })}
         </div>
       );
     } else {
-      workspace = await InstantQuotesSection();
+      workspace = await InstantQuotesSection({ compact: true });
     }
   } else {
     const { QuotesSection } = await import("./QuotesSection");
@@ -62,7 +62,7 @@ export async function QuotesHubSection({
       <header className={TEAM_CARD_PADDED}>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-3xl">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-600">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[color:var(--team-link)]">
               Quote Workspace
             </p>
             <h2 className={TEAM_SECTION_TITLE}>

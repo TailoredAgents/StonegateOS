@@ -1,12 +1,29 @@
 import { randomUUID } from "node:crypto";
+import { Suspense } from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { headers as requestHeaders } from "next/headers";
 import { getPublicCompanyProfile } from "@/lib/company";
+import { quotePublicProxyNetworkHeaders } from "@/lib/quote-public-proxy-network";
+import {
+  PublicQuoteSubmitButton,
+  QuoteChangeRequestForm,
+  type QuoteChangeRequestActionState,
+} from "./PublicQuoteForms";
+import { QuoteV2CustomerProposal } from "./QuoteV2CustomerProposal";
+import {
+  normalizeQuoteV2PublicPayload,
+  type QuoteV2PublicEnvelope,
+} from "./quote-v2-customer-model";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export const metadata = {
   title: "Quote",
   robots: { index: false, follow: false },
+  referrer: "no-referrer" as const,
 };
 
 const API_BASE_URL =
@@ -51,6 +68,10 @@ interface PublicQuoteResponse {
   };
 }
 
+type PublicQuoteLoadResult =
+  | { kind: "legacy"; quote: PublicQuoteResponse["quote"] }
+  | { kind: "v2"; envelope: QuoteV2PublicEnvelope };
+
 interface QuoteSlot {
   startAt: string;
   endAt: string;
@@ -58,16 +79,42 @@ interface QuoteSlot {
 }
 
 interface AvailabilityResponse {
-  ok?: boolean;
-  booked?: boolean;
-  appointmentId?: string;
-  suggestions?: QuoteSlot[];
-  days?: Array<{ date: string; slots: QuoteSlot[] }>;
+  ok: true;
+  suggestions: QuoteSlot[];
+  days: Array<{ date: string; slots: QuoteSlot[] }>;
   durationMinutes?: number;
   timezone?: string;
 }
 
+type AvailabilityLoadResult =
+  | { kind: "available"; availability: AvailabilityResponse }
+  | { kind: "confirmed-empty"; availability: AvailabilityResponse }
+  | { kind: "unavailable" };
+
 const PUBLIC_IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,199}$/u;
+
+function quoteApiUrl(token: string, segment = ""): URL {
+  const suffix = segment ? `/${segment}` : "";
+  return new URL(
+    `/api/public/quotes/${encodeURIComponent(token)}${suffix}`,
+    API_BASE_URL.replace(/\/$/u, ""),
+  );
+}
+
+async function quoteApiHeaders(
+  method: "GET" | "POST",
+  target: URL,
+  initial?: HeadersInit,
+): Promise<Headers> {
+  const incoming = await requestHeaders();
+  const result = new Headers(initial);
+  for (const [name, value] of Object.entries(
+    quotePublicProxyNetworkHeaders({ headers: incoming, method }, target),
+  )) {
+    result.set(name, value);
+  }
+  return result;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -101,18 +148,16 @@ async function postPublicQuoteAction(input: {
   requireRefreshTimestamp?: boolean;
 }): Promise<boolean> {
   try {
-    const response = await fetch(
-      `${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${encodeURIComponent(input.token)}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key": input.idempotencyKey,
-          "x-correlation-id": randomUUID(),
-        },
-        body: JSON.stringify(input.body),
-      },
-    );
+    const target = quoteApiUrl(input.token);
+    const response = await fetch(target, {
+      method: "POST",
+      headers: await quoteApiHeaders("POST", target, {
+        "Content-Type": "application/json",
+        "Idempotency-Key": input.idempotencyKey,
+        "x-correlation-id": randomUUID(),
+      }),
+      body: JSON.stringify(input.body),
+    });
     const payload = (await response.json().catch(() => null)) as unknown;
     if (
       !response.ok ||
@@ -139,18 +184,21 @@ async function postPublicQuoteAction(input: {
 async function fetchQuote(
   token: string,
   preview: boolean,
-): Promise<PublicQuoteResponse["quote"] | null> {
-  const url = new URL(
-    `${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${token}`,
-  );
+): Promise<PublicQuoteLoadResult | null> {
+  const url = quoteApiUrl(token);
   if (preview) url.searchParams.set("preview", "1");
-  const response = await fetch(url.toString(), { cache: "no-store" });
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: await quoteApiHeaders("GET", url),
+  });
 
   if (!response.ok) {
     return null;
   }
 
   const data = (await response.json()) as unknown;
+  const v2Envelope = normalizeQuoteV2PublicPayload(data);
+  if (v2Envelope) return { kind: "v2", envelope: v2Envelope };
   if (
     !data ||
     typeof data !== "object" ||
@@ -160,22 +208,71 @@ async function fetchQuote(
     return null;
   }
 
-  return (data as PublicQuoteResponse).quote;
+  return { kind: "legacy", quote: (data as PublicQuoteResponse).quote };
+}
+
+function isQuoteSlot(value: unknown): value is QuoteSlot {
+  return (
+    isRecord(value) &&
+    typeof value["startAt"] === "string" &&
+    typeof value["endAt"] === "string" &&
+    typeof value["label"] === "string"
+  );
+}
+
+function parseAvailability(value: unknown): AvailabilityResponse | null {
+  if (!isRecord(value) || value["ok"] !== true) return null;
+  const rawDays = value["days"];
+  const rawSuggestions = value["suggestions"];
+  if (!Array.isArray(rawDays) || !Array.isArray(rawSuggestions)) return null;
+  if (!rawSuggestions.every(isQuoteSlot)) return null;
+
+  const days: AvailabilityResponse["days"] = [];
+  for (const rawDay of rawDays) {
+    if (
+      !isRecord(rawDay) ||
+      typeof rawDay["date"] !== "string" ||
+      !Array.isArray(rawDay["slots"]) ||
+      !rawDay["slots"].every(isQuoteSlot)
+    ) {
+      return null;
+    }
+    days.push({ date: rawDay["date"], slots: rawDay["slots"] });
+  }
+
+  return {
+    ok: true,
+    suggestions: rawSuggestions,
+    days,
+    durationMinutes:
+      typeof value["durationMinutes"] === "number"
+        ? value["durationMinutes"]
+        : undefined,
+    timezone:
+      typeof value["timezone"] === "string" ? value["timezone"] : undefined,
+  };
 }
 
 async function fetchAvailability(
   token: string,
-): Promise<AvailabilityResponse | null> {
-  const response = await fetch(
-    `${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${token}/availability`,
-    {
+): Promise<AvailabilityLoadResult> {
+  try {
+    const target = quoteApiUrl(token, "availability");
+    const response = await fetch(target, {
       cache: "no-store",
-    },
-  );
-  if (!response.ok) return null;
-  return (await response
-    .json()
-    .catch(() => null)) as AvailabilityResponse | null;
+      headers: await quoteApiHeaders("GET", target),
+    });
+    if (!response.ok) return { kind: "unavailable" };
+    const availability = parseAvailability(
+      await response.json().catch(() => null),
+    );
+    if (!availability) return { kind: "unavailable" };
+    return availability.days.some((day) => day.slots.length > 0)
+      ? { kind: "available", availability }
+      : { kind: "confirmed-empty", availability };
+  } catch {
+    return { kind: "unavailable" };
+  }
 }
 
 function formatCurrency(value: number) {
@@ -259,6 +356,7 @@ export async function acceptQuoteAction(formData: FormData) {
 
   const token = formData.get("token");
   const quoteId = formData.get("quoteId");
+  const expectedRevisionRaw = formData.get("expectedRevision");
   const idempotencyKey = formData.get("idempotencyKey");
   const notes = formData.get("customerNote");
   if (
@@ -266,11 +364,14 @@ export async function acceptQuoteAction(formData: FormData) {
     token.trim().length === 0 ||
     typeof quoteId !== "string" ||
     quoteId.trim().length === 0 ||
+    typeof expectedRevisionRaw !== "string" ||
     typeof idempotencyKey !== "string" ||
     !PUBLIC_IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)
   ) {
     return;
   }
+  const expectedRevision = Number(expectedRevisionRaw);
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) return;
 
   const succeeded = await postPublicQuoteAction({
     token,
@@ -278,6 +379,8 @@ export async function acceptQuoteAction(formData: FormData) {
     idempotencyKey,
     expectedStatus: "accepted",
     body: {
+      quoteId: quoteId.trim(),
+      expectedRevision,
       decision: "accepted",
       notes:
         typeof notes === "string" && notes.trim().length > 0
@@ -296,6 +399,7 @@ export async function declineQuoteAction(formData: FormData) {
 
   const token = formData.get("token");
   const quoteId = formData.get("quoteId");
+  const expectedRevisionRaw = formData.get("expectedRevision");
   const idempotencyKey = formData.get("idempotencyKey");
   const reason = formData.get("reason");
   const notes = formData.get("notes");
@@ -304,11 +408,14 @@ export async function declineQuoteAction(formData: FormData) {
     token.trim().length === 0 ||
     typeof quoteId !== "string" ||
     quoteId.trim().length === 0 ||
+    typeof expectedRevisionRaw !== "string" ||
     typeof idempotencyKey !== "string" ||
     !PUBLIC_IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)
   ) {
     return;
   }
+  const expectedRevision = Number(expectedRevisionRaw);
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) return;
 
   const succeeded = await postPublicQuoteAction({
     token,
@@ -316,6 +423,8 @@ export async function declineQuoteAction(formData: FormData) {
     idempotencyKey,
     expectedStatus: "declined",
     body: {
+      quoteId: quoteId.trim(),
+      expectedRevision,
       decision: "declined",
       reason:
         typeof reason === "string" && reason.trim().length > 0
@@ -363,7 +472,9 @@ export async function refreshQuoteAction(formData: FormData) {
   redirect(`/quote/${token}`);
 }
 
-export async function requestQuoteChangesAction(formData: FormData) {
+export async function requestQuoteChangesAction(
+  formData: FormData,
+): Promise<QuoteChangeRequestActionState> {
   "use server";
 
   const token = formData.get("token");
@@ -372,6 +483,16 @@ export async function requestQuoteChangesAction(formData: FormData) {
   const idempotencyKey = formData.get("idempotencyKey");
   const reason = formData.get("reason");
   const message = formData.get("message");
+  const reasonValue = typeof reason === "string" ? reason.trim() : "";
+  const messageValue = typeof message === "string" ? message.trim() : "";
+  const allowedReasons = new Set([
+    "Scope changed",
+    "Price question",
+    "Timing issue",
+    "Address issue",
+    "Need to add/remove items",
+    "Other",
+  ]);
   if (
     typeof token !== "string" ||
     token.trim().length === 0 ||
@@ -381,43 +502,74 @@ export async function requestQuoteChangesAction(formData: FormData) {
     typeof idempotencyKey !== "string" ||
     !PUBLIC_IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)
   ) {
-    return;
+    return {
+      ok: false,
+      message:
+        "We could not validate this request. Refresh the quote and try again.",
+    };
   }
   const expectedRevision = Number(expectedRevisionRaw);
-  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) return;
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+    return {
+      ok: false,
+      message:
+        "This quote version is no longer valid. Refresh before requesting changes.",
+    };
+  }
+  if (!allowedReasons.has(reasonValue)) {
+    return { ok: false, message: "Choose a valid reason for the change." };
+  }
+  if (messageValue.length > 1500) {
+    return {
+      ok: false,
+      message: "Change-request details must be 1,500 characters or fewer.",
+    };
+  }
 
-  const response = await fetch(
-    `${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${token}/changes`,
-    {
+  let response: Response;
+  try {
+    const target = quoteApiUrl(token, "changes");
+    response = await fetch(target, {
       method: "POST",
-      headers: {
+      headers: await quoteApiHeaders("POST", target, {
         "Content-Type": "application/json",
         "Idempotency-Key": idempotencyKey,
-      },
-      body: JSON.stringify({
-        reason:
-          typeof reason === "string" && reason.trim().length > 0
-            ? reason.trim()
-            : "Other",
-        message:
-          typeof message === "string" && message.trim().length > 0
-            ? message.trim()
-            : undefined,
+        "x-correlation-id": randomUUID(),
       }),
-    },
-  );
+      body: JSON.stringify({
+        quoteId: quoteId.trim(),
+        expectedRevision,
+        reason: reasonValue,
+        message: messageValue || undefined,
+      }),
+    });
+  } catch {
+    return {
+      ok: false,
+      message:
+        "We could not send your change request. Your text is still here; try again or contact Stonegate.",
+    };
+  }
   const payload = (await response.json().catch(() => null)) as unknown;
   if (
     !response.ok ||
     !isRecord(payload) ||
     payload["ok"] !== true ||
+    payload["quoteId"] !== quoteId.trim() ||
+    payload["revision"] !== expectedRevision ||
     typeof payload["changeRequestId"] !== "string"
   ) {
-    redirect(`/quote/${token}?changes=failed`);
+    return {
+      ok: false,
+      message:
+        "We could not confirm your change request. Your text is still here; try again or contact Stonegate.",
+    };
   }
-
   revalidatePath(`/quote/${token}`);
-  redirect(`/quote/${token}?changes=sent`);
+  return {
+    ok: true,
+    message: "Change request received. Stonegate will review it and follow up.",
+  };
 }
 
 export async function bookQuoteAction(formData: FormData) {
@@ -445,21 +597,24 @@ export async function bookQuoteAction(formData: FormData) {
   const expectedRevision = Number(expectedRevisionRaw);
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) return;
 
-  const holdResponse = await fetch(
-    `${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${token}/hold`,
-    {
+  let holdResponse: Response;
+  try {
+    const target = quoteApiUrl(token, "hold");
+    holdResponse = await fetch(target, {
       method: "POST",
-      headers: {
+      headers: await quoteApiHeaders("POST", target, {
         "Content-Type": "application/json",
         "Idempotency-Key": `${idempotencyKey}:hold`,
-      },
+      }),
       body: JSON.stringify({
         quoteId,
         expectedRevision,
         startAt,
       }),
-    },
-  );
+    });
+  } catch {
+    redirect(`/quote/${token}?booking=failed#quote-actions`);
+  }
   const hold = (await holdResponse.json().catch(() => null)) as unknown;
   if (
     !holdResponse.ok ||
@@ -471,17 +626,18 @@ export async function bookQuoteAction(formData: FormData) {
     typeof hold["expiresAt"] !== "string" ||
     typeof hold["auditEventId"] !== "string"
   ) {
-    redirect(`/quote/${token}?booking=failed`);
+    redirect(`/quote/${token}?booking=failed#quote-actions`);
   }
 
-  const bookResponse = await fetch(
-    `${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${token}/book`,
-    {
+  let bookResponse: Response;
+  try {
+    const target = quoteApiUrl(token, "book");
+    bookResponse = await fetch(target, {
       method: "POST",
-      headers: {
+      headers: await quoteApiHeaders("POST", target, {
         "Content-Type": "application/json",
         "Idempotency-Key": `${idempotencyKey}:book`,
-      },
+      }),
       body: JSON.stringify({
         quoteId,
         expectedRevision,
@@ -492,8 +648,10 @@ export async function bookQuoteAction(formData: FormData) {
             ? customerNote.trim()
             : undefined,
       }),
-    },
-  );
+    });
+  } catch {
+    redirect(`/quote/${token}?booking=failed#quote-actions`);
+  }
   const booking = (await bookResponse.json().catch(() => null)) as unknown;
   if (
     !bookResponse.ok ||
@@ -507,11 +665,272 @@ export async function bookQuoteAction(formData: FormData) {
     typeof booking["startAt"] !== "string" ||
     typeof booking["auditEventId"] !== "string"
   ) {
-    redirect(`/quote/${token}?booking=failed`);
+    redirect(`/quote/${token}?booking=failed#quote-actions`);
   }
 
   revalidatePath(`/quote/${token}`);
   redirect(`/quote/${token}?booking=confirmed`);
+}
+
+function AvailabilityLoadingState() {
+  return (
+    <div
+      className="mt-5 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900"
+      role="status"
+      aria-live="polite"
+      data-availability-state="loading"
+    >
+      <p className="font-semibold">Checking appointment availability…</p>
+      <p className="mt-1 leading-6">
+        We are loading current service windows before showing booking options.
+      </p>
+    </div>
+  );
+}
+
+async function QuoteDecisionControls({
+  token,
+  quote,
+  preview,
+  company,
+}: {
+  token: string;
+  quote: PublicQuoteResponse["quote"];
+  preview: boolean;
+  company: ReturnType<typeof getPublicCompanyProfile>;
+}) {
+  if (preview) {
+    return (
+      <div className="mt-5 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-900">
+        Read-only staff preview. Approval, booking, decline, refresh, and
+        change-request controls are disabled here.
+      </div>
+    );
+  }
+
+  const showRefreshForm =
+    quote.expired || quote.displayStatus === "refresh_requested";
+  if (showRefreshForm) {
+    return (
+      <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+        {quote.refreshRequestedAt ? (
+          <p role="status">
+            Refresh requested. Stonegate will follow up with updated pricing or
+            availability.
+          </p>
+        ) : (
+          <form action={refreshQuoteAction} className="space-y-3">
+            <p>
+              This quote has expired. Request a refreshed quote and Stonegate
+              will follow up.
+            </p>
+            <input type="hidden" name="token" value={token} />
+            <input type="hidden" name="quoteId" value={quote.id} />
+            <input type="hidden" name="idempotencyKey" value={randomUUID()} />
+            <PublicQuoteSubmitButton
+              className="min-h-11 w-full rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-wait disabled:opacity-70"
+              pendingLabel="Requesting refresh…"
+            >
+              Request refresh
+            </PublicQuoteSubmitButton>
+          </form>
+        )}
+      </div>
+    );
+  }
+
+  if (quote.acceptedAppointmentId) {
+    return (
+      <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+        This quote is booked. Stonegate will see it on the calendar and follow
+        up as needed.
+      </div>
+    );
+  }
+
+  const canSchedule =
+    (quote.status === "sent" || quote.status === "accepted") && !quote.expired;
+  if (!canSchedule) {
+    return (
+      <div className="mt-5 rounded-2xl border border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-600">
+        This quote is no longer open for online approval.
+      </div>
+    );
+  }
+
+  const availabilityResult = await fetchAvailability(token);
+  if (availabilityResult.kind === "unavailable") {
+    return (
+      <div
+        className="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"
+        role="status"
+        aria-live="polite"
+        data-availability-state="unavailable"
+      >
+        <p className="font-semibold">Scheduling is temporarily unavailable.</p>
+        <p className="mt-2 leading-6">
+          We could not check the calendar, which does not mean appointment
+          windows are full. Retry or contact Stonegate for help scheduling.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <a
+            href={`/quote/${encodeURIComponent(token)}?availabilityRetry=1#quote-actions`}
+            className="inline-flex min-h-11 items-center justify-center rounded-xl border border-amber-400 bg-white px-4 py-2 font-semibold text-amber-950 hover:bg-amber-100"
+          >
+            Retry availability
+          </a>
+          <a
+            href={`tel:${company.phoneE164}`}
+            className="inline-flex min-h-11 items-center justify-center rounded-xl border border-amber-400 bg-white px-4 py-2 font-semibold text-amber-950 hover:bg-amber-100"
+          >
+            Call {company.phoneDisplay}
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  const { availability } = availabilityResult;
+  if (availabilityResult.kind === "available") {
+    const timezoneLabel = availability.timezone
+      ? availability.timezone.replaceAll("_", " ")
+      : "Stonegate’s service timezone";
+    return (
+      <div className="mt-5 space-y-5" data-availability-state="available">
+        <p className="sr-only" role="status" aria-live="polite">
+          Current appointment windows loaded.
+        </p>
+        <form action={bookQuoteAction} className="space-y-4">
+          <input type="hidden" name="token" value={token} />
+          <input type="hidden" name="quoteId" value={quote.id} />
+          <input
+            type="hidden"
+            name="expectedRevision"
+            value={String(quote.revision)}
+          />
+          <input type="hidden" name="idempotencyKey" value={randomUUID()} />
+          <label
+            htmlFor={`quote-scheduling-note-${quote.id}`}
+            className="block text-sm font-semibold text-neutral-700"
+          >
+            Optional note for scheduling
+          </label>
+          <textarea
+            id={`quote-scheduling-note-${quote.id}`}
+            name="customerNote"
+            rows={3}
+            maxLength={1000}
+            className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900 focus-visible:border-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-200"
+            placeholder="Gate code, access notes, timing preference, or anything we should know."
+          />
+          <p className="text-xs text-neutral-500">
+            Times shown in {timezoneLabel}.
+          </p>
+          {availability.days.map((day) =>
+            day.slots.length ? (
+              <fieldset key={day.date}>
+                <legend className="text-sm font-semibold text-neutral-700">
+                  {formatDay(day.date)}
+                </legend>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {day.slots.slice(0, 4).map((slot) => (
+                    <PublicQuoteSubmitButton
+                      key={slot.startAt}
+                      name="startAt"
+                      value={slot.startAt}
+                      trackSelection
+                      pendingLabel="Booking…"
+                      className="min-h-11 rounded-xl border border-primary-200 bg-primary-50 px-3 py-3 text-sm font-semibold text-primary-900 hover:bg-primary-100 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {quote.status === "sent" ? "Approve and book" : "Book"}{" "}
+                      {slot.label}
+                    </PublicQuoteSubmitButton>
+                  ))}
+                </div>
+              </fieldset>
+            ) : null,
+          )}
+          <p className="text-xs leading-5 text-neutral-500">
+            By booking, you agree to our{" "}
+            <Link
+              href="/service-agreement"
+              className="font-semibold text-primary-700 hover:underline"
+            >
+              Service Agreement and Cancellation Policy
+            </Link>
+            .
+          </p>
+        </form>
+      </div>
+    );
+  }
+
+  if (quote.status === "accepted") {
+    return (
+      <div
+        className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900"
+        role="status"
+        data-availability-state="confirmed-empty"
+      >
+        We checked current online availability and no windows are open. Your
+        quote is already approved, so Stonegate will contact you to schedule.
+      </div>
+    );
+  }
+
+  return (
+    <form
+      action={acceptQuoteAction}
+      className="mt-5 space-y-3"
+      data-availability-state="confirmed-empty"
+    >
+      <input type="hidden" name="token" value={token} />
+      <input type="hidden" name="quoteId" value={quote.id} />
+      <input
+        type="hidden"
+        name="expectedRevision"
+        value={String(quote.revision)}
+      />
+      <input type="hidden" name="idempotencyKey" value={randomUUID()} />
+      <label
+        htmlFor={`quote-approval-note-${quote.id}`}
+        className="block text-sm font-semibold text-neutral-700"
+      >
+        Optional note for scheduling
+      </label>
+      <textarea
+        id={`quote-approval-note-${quote.id}`}
+        name="customerNote"
+        rows={3}
+        maxLength={1000}
+        className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900 focus-visible:border-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-200"
+        placeholder="Gate code, access notes, timing preference, or anything we should know."
+      />
+      <p
+        className="rounded-2xl border border-dashed border-neutral-300 bg-neutral-50 p-4 text-sm text-neutral-600"
+        role="status"
+      >
+        We checked current online availability and no windows are open. You can
+        still approve the quote and Stonegate will schedule with you directly.
+      </p>
+      <PublicQuoteSubmitButton
+        className="min-h-11 w-full rounded-xl bg-primary-900 px-4 py-3 text-sm font-semibold text-white hover:bg-primary-800 disabled:cursor-wait disabled:opacity-70"
+        pendingLabel="Approving quote…"
+      >
+        Approve quote and have Stonegate schedule me
+      </PublicQuoteSubmitButton>
+      <p className="text-xs leading-5 text-neutral-500">
+        By approving this quote, you agree to our{" "}
+        <Link
+          href="/service-agreement"
+          className="font-semibold text-primary-700 hover:underline"
+        >
+          Service Agreement and Cancellation Policy
+        </Link>
+        .
+      </p>
+    </form>
+  );
 }
 
 export default async function PublicQuotePage({
@@ -536,30 +955,26 @@ export default async function PublicQuotePage({
     typeof query["refresh"] === "string" ? query["refresh"] : null;
   const changesFlag =
     typeof query["changes"] === "string" ? query["changes"] : null;
-  const quote = await fetchQuote(token, preview);
-  if (!quote) notFound();
+  const loadedQuote = await fetchQuote(token, preview);
+  if (!loadedQuote) notFound();
 
-  const availability =
-    (quote.status === "sent" || quote.status === "accepted") &&
-    !quote.acceptedAppointmentId &&
-    !quote.expired
-      ? await fetchAvailability(token)
-      : null;
-  const showApproveAndBook =
-    (quote.status === "sent" || quote.status === "accepted") &&
-    !quote.acceptedAppointmentId &&
-    !quote.expired;
-  const showRefreshForm =
-    quote.expired || quote.displayStatus === "refresh_requested";
+  if (loadedQuote.kind === "v2") {
+    return (
+      <QuoteV2CustomerProposal
+        token={token}
+        envelope={loadedQuote.envelope}
+        pdfHref={`/quote/${encodeURIComponent(token)}/pdf`}
+        acceptedResponseId={loadedQuote.envelope.acceptedResponseId}
+      />
+    );
+  }
+
+  const quote = loadedQuote.quote;
+
   const company = getPublicCompanyProfile();
-  const hasAvailableSlots = (availability?.days ?? []).some(
-    (day) => day.slots.length > 0,
-  );
   const smsHref = `sms:${company.phoneE164}`;
   const mailHref = `mailto:${company.email}?subject=${encodeURIComponent(`Question about quote ${quote.quoteNumber}`)}`;
-  const acceptIdempotencyKey = randomUUID();
   const declineIdempotencyKey = randomUUID();
-  const refreshIdempotencyKey = randomUUID();
   const changesIdempotencyKey = randomUUID();
 
   return (
@@ -571,7 +986,7 @@ export default async function PublicQuotePage({
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary-700">
                 {company.name} | Licensed and insured | Make-It-Right Guarantee
               </p>
-              <h1 className="mt-4 text-4xl font-semibold tracking-tight text-primary-950 sm:text-5xl">
+              <h1 className="mt-4 text-4xl font-semibold tracking-tight text-primary-900 sm:text-5xl">
                 Your junk removal proposal
               </h1>
               <p className="mt-3 text-base leading-7 text-neutral-600">
@@ -596,7 +1011,7 @@ export default async function PublicQuotePage({
                   Valid until
                 </div>
                 <div
-                  className={`mt-1 text-lg font-semibold ${quote.expired ? "text-rose-700" : "text-primary-950"}`}
+                  className={`mt-1 text-lg font-semibold ${quote.expired ? "text-rose-700" : "text-primary-900"}`}
                 >
                   {formatDate(quote.expiresAt)}
                 </div>
@@ -636,19 +1051,31 @@ export default async function PublicQuotePage({
       <div className="mx-auto grid max-w-6xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-8">
         <div className="space-y-6">
           {bookingFlag === "confirmed" && quote.acceptedAppointmentId ? (
-            <section className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm font-medium text-emerald-900">
+            <section
+              className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm font-medium text-emerald-900"
+              role="status"
+              aria-live="polite"
+            >
               Your service window is booked. Stonegate will send a confirmation
               and follow up if anything needs clarification.
             </section>
           ) : null}
           {bookingFlag === "failed" ? (
-            <section className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-sm font-medium text-rose-800">
-              That time was no longer available. Please pick another service
-              window.
+            <section
+              className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-sm font-medium text-rose-800"
+              role="alert"
+            >
+              We could not complete online booking, and no appointment was
+              confirmed. Refresh availability and try again, or contact
+              Stonegate for help.
             </section>
           ) : null}
           {approvalFlag === "received" && quote.status === "accepted" ? (
-            <section className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm font-medium text-emerald-900">
+            <section
+              className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm font-medium text-emerald-900"
+              role="status"
+              aria-live="polite"
+            >
               Quote approved. Stonegate will follow up to schedule the job.
             </section>
           ) : null}
@@ -663,7 +1090,11 @@ export default async function PublicQuotePage({
           ) : null}
           {decisionFlag === "received" &&
           (quote.status === "accepted" || quote.status === "declined") ? (
-            <section className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm font-medium text-emerald-900">
+            <section
+              className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm font-medium text-emerald-900"
+              role="status"
+              aria-live="polite"
+            >
               Your quote decision was recorded.
             </section>
           ) : null}
@@ -686,7 +1117,11 @@ export default async function PublicQuotePage({
             </section>
           ) : null}
           {changesFlag === "sent" ? (
-            <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm font-medium text-amber-900">
+            <section
+              className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm font-medium text-amber-900"
+              role="status"
+              aria-live="polite"
+            >
               Change request received. Your quote is still available to approve
               while Stonegate reviews your request.
             </section>
@@ -707,7 +1142,7 @@ export default async function PublicQuotePage({
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-neutral-500">
                   Proposal total
                 </p>
-                <div className="mt-2 text-5xl font-semibold tracking-tight text-primary-950">
+                <div className="mt-2 text-5xl font-semibold tracking-tight text-primary-900">
                   {formatCurrency(quote.total)}
                 </div>
                 <p className="mt-2 text-sm text-neutral-600">
@@ -715,7 +1150,7 @@ export default async function PublicQuotePage({
                 </p>
               </div>
               <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-700 sm:min-w-64">
-                <div className="font-semibold text-primary-950">
+                <div className="font-semibold text-primary-900">
                   Service property
                 </div>
                 <div className="mt-2">
@@ -723,7 +1158,7 @@ export default async function PublicQuotePage({
                     .filter(Boolean)
                     .join(", ")}
                 </div>
-                <div className="mt-4 font-semibold text-primary-950">
+                <div className="mt-4 font-semibold text-primary-900">
                   Estimated duration
                 </div>
                 <div className="mt-1">
@@ -739,7 +1174,7 @@ export default async function PublicQuotePage({
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-700">
                   Scope
                 </p>
-                <h2 className="mt-1 text-2xl font-semibold text-primary-950">
+                <h2 className="mt-1 text-2xl font-semibold text-primary-900">
                   What this quote includes
                 </h2>
               </div>
@@ -776,16 +1211,25 @@ export default async function PublicQuotePage({
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-700">
               Pricing
             </p>
-            <h2 className="mt-1 text-2xl font-semibold text-primary-950">
+            <h2 className="mt-1 text-2xl font-semibold text-primary-900">
               Line-item quote
             </h2>
             <div className="mt-5 overflow-hidden rounded-2xl border border-neutral-200">
               <table className="min-w-full divide-y divide-neutral-200">
+                <caption className="sr-only">
+                  Quoted services and prices
+                </caption>
+                <thead className="sr-only">
+                  <tr>
+                    <th scope="col">Service</th>
+                    <th scope="col">Price</th>
+                  </tr>
+                </thead>
                 <tbody className="divide-y divide-neutral-200 text-sm text-neutral-700">
                   {quote.lineItems.map((item) => (
                     <tr key={item.id}>
-                      <td className="px-4 py-4">
-                        <div className="font-semibold text-primary-950">
+                      <th scope="row" className="px-4 py-4 text-left">
+                        <div className="font-semibold text-primary-900">
                           {item.label}
                         </div>
                         {item.category ? (
@@ -793,22 +1237,30 @@ export default async function PublicQuotePage({
                             {item.category}
                           </div>
                         ) : null}
-                      </td>
+                      </th>
                       <td className="whitespace-nowrap px-4 py-4 text-right font-semibold">
                         {formatCurrency(item.amount)}
                       </td>
                     </tr>
                   ))}
                   <tr className="bg-neutral-50">
-                    <td className="px-4 py-4 font-semibold text-primary-950">
+                    <th
+                      scope="row"
+                      className="px-4 py-4 text-left font-semibold text-primary-900"
+                    >
                       Subtotal
-                    </td>
-                    <td className="px-4 py-4 text-right font-semibold text-primary-950">
+                    </th>
+                    <td className="px-4 py-4 text-right font-semibold text-primary-900">
                       {formatCurrency(quote.subtotal)}
                     </td>
                   </tr>
-                  <tr className="bg-primary-950 text-white">
-                    <td className="px-4 py-4 text-base font-semibold">Total</td>
+                  <tr className="bg-primary-900 text-white">
+                    <th
+                      scope="row"
+                      className="px-4 py-4 text-left text-base font-semibold"
+                    >
+                      Total
+                    </th>
                     <td className="px-4 py-4 text-right text-base font-semibold">
                       {formatCurrency(quote.total)}
                     </td>
@@ -822,7 +1274,7 @@ export default async function PublicQuotePage({
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-700">
               Next steps
             </p>
-            <h2 className="mt-1 text-2xl font-semibold text-primary-950">
+            <h2 className="mt-1 text-2xl font-semibold text-primary-900">
               What happens after approval
             </h2>
             <div className="mt-5 grid gap-4 sm:grid-cols-4">
@@ -836,10 +1288,10 @@ export default async function PublicQuotePage({
                   key={step}
                   className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 text-sm"
                 >
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-950 text-sm font-semibold text-white">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-900 text-sm font-semibold text-white">
                     {index + 1}
                   </div>
-                  <div className="mt-3 font-semibold text-primary-950">
+                  <div className="mt-3 font-semibold text-primary-900">
                     {step}
                   </div>
                 </div>
@@ -850,58 +1302,27 @@ export default async function PublicQuotePage({
           {!preview ? (
             <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm sm:p-8">
               <details>
-                <summary className="cursor-pointer list-none text-lg font-semibold text-primary-950">
-                  Request changes to this quote
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-lg font-semibold text-primary-900">
+                  <span>Request changes to this quote</span>
+                  <span aria-hidden="true">⌄</span>
                 </summary>
                 <p className="mt-2 text-sm text-neutral-600">
                   Send a structured request to Stonegate. The quote stays
                   available to approve while the team reviews it.
                 </p>
-                <form
+                <QuoteChangeRequestForm
                   action={requestQuoteChangesAction}
-                  className="mt-5 space-y-4"
-                >
-                  <input type="hidden" name="token" value={token} />
-                  <input
-                    type="hidden"
-                    name="idempotencyKey"
-                    value={changesIdempotencyKey}
-                  />
-                  <label className="block text-sm font-semibold text-neutral-700">
-                    What needs to change?
-                    <select
-                      name="reason"
-                      className="mt-2 w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
-                    >
-                      <option value="Scope changed">Scope changed</option>
-                      <option value="Price question">Price question</option>
-                      <option value="Timing issue">Timing issue</option>
-                      <option value="Address issue">Address issue</option>
-                      <option value="Need to add/remove items">
-                        Need to add/remove items
-                      </option>
-                      <option value="Other">Other</option>
-                    </select>
-                  </label>
-                  <label className="block text-sm font-semibold text-neutral-700">
-                    Details
-                    <textarea
-                      name="message"
-                      rows={4}
-                      className="mt-2 w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
-                      placeholder="Tell us what should change."
-                    />
-                  </label>
-                  <button className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 hover:bg-amber-100">
-                    Send change request
-                  </button>
-                </form>
+                  token={token}
+                  quoteId={quote.id}
+                  expectedRevision={quote.revision}
+                  idempotencyKey={changesIdempotencyKey}
+                />
               </details>
             </section>
           ) : null}
 
           <section className="rounded-3xl border border-neutral-200 bg-white p-6 text-sm text-neutral-700 shadow-sm sm:p-8">
-            <h2 className="text-lg font-semibold text-primary-950">
+            <h2 className="text-lg font-semibold text-primary-900">
               Terms and assumptions
             </h2>
             <p className="mt-3 leading-7">
@@ -913,162 +1334,28 @@ export default async function PublicQuotePage({
         </div>
 
         <aside className="space-y-6 lg:sticky lg:top-6 lg:self-start">
-          <section className="rounded-3xl border border-primary-200 bg-white p-6 shadow-lg shadow-neutral-200/70">
+          <section
+            id="quote-actions"
+            className="scroll-mt-6 rounded-3xl border border-primary-200 bg-white p-6 shadow-lg shadow-neutral-200/70"
+          >
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-700">
               Approve and schedule
             </p>
-            <h2 className="mt-2 text-2xl font-semibold text-primary-950">
+            <h2 className="mt-2 text-2xl font-semibold text-primary-900">
               Ready to move forward?
             </h2>
-            {preview ? (
-              <div className="mt-5 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-900">
-                Read-only staff preview. Approval, booking, decline, refresh,
-                and change-request controls are disabled here.
-              </div>
-            ) : showRefreshForm ? (
-              <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-                {quote.refreshRequestedAt ? (
-                  <p>
-                    Refresh requested. Stonegate will follow up with updated
-                    pricing or availability.
-                  </p>
-                ) : (
-                  <form action={refreshQuoteAction} className="space-y-3">
-                    <p>
-                      This quote has expired. Request a refreshed quote and
-                      Stonegate will follow up.
-                    </p>
-                    <input type="hidden" name="token" value={token} />
-                    <input type="hidden" name="quoteId" value={quote.id} />
-                    <input
-                      type="hidden"
-                      name="idempotencyKey"
-                      value={refreshIdempotencyKey}
-                    />
-                    <button className="w-full rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">
-                      Request refresh
-                    </button>
-                  </form>
-                )}
-              </div>
-            ) : showApproveAndBook ? (
-              <div className="mt-5 space-y-5">
-                {hasAvailableSlots ? (
-                  <form action={bookQuoteAction} className="space-y-4">
-                    <input type="hidden" name="token" value={token} />
-                    <input type="hidden" name="quoteId" value={quote.id} />
-                    <input
-                      type="hidden"
-                      name="expectedRevision"
-                      value={String(quote.revision)}
-                    />
-                    <input
-                      type="hidden"
-                      name="idempotencyKey"
-                      value={acceptIdempotencyKey}
-                    />
-                    <label className="block text-sm font-semibold text-neutral-700">
-                      Optional note for scheduling
-                      <textarea
-                        name="customerNote"
-                        rows={3}
-                        className="mt-2 w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
-                        placeholder="Gate code, access notes, timing preference, or anything we should know."
-                      />
-                    </label>
-                    {availability?.days?.map((day) =>
-                      day.slots.length ? (
-                        <div key={day.date}>
-                          <div className="text-sm font-semibold text-neutral-700">
-                            {formatDay(day.date)}
-                          </div>
-                          <div className="mt-2 grid grid-cols-2 gap-2">
-                            {day.slots.slice(0, 4).map((slot) => (
-                              <button
-                                key={slot.startAt}
-                                name="startAt"
-                                value={slot.startAt}
-                                className="rounded-xl border border-primary-200 bg-primary-50 px-3 py-3 text-sm font-semibold text-primary-900 hover:bg-primary-100"
-                              >
-                                {quote.status === "sent"
-                                  ? "Approve and book"
-                                  : "Book"}{" "}
-                                {slot.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null,
-                    )}
-                    <p className="text-xs leading-5 text-neutral-500">
-                      By booking, you agree to our{" "}
-                      <Link
-                        href="/service-agreement"
-                        className="font-semibold text-primary-700 hover:underline"
-                      >
-                        Service Agreement and Cancellation Policy
-                      </Link>
-                      .
-                    </p>
-                  </form>
-                ) : quote.status === "sent" ? (
-                  <form action={acceptQuoteAction} className="space-y-3">
-                    <input type="hidden" name="token" value={token} />
-                    <input type="hidden" name="quoteId" value={quote.id} />
-                    <input
-                      type="hidden"
-                      name="idempotencyKey"
-                      value={acceptIdempotencyKey}
-                    />
-                    <label className="block text-sm font-semibold text-neutral-700">
-                      Optional note for scheduling
-                      <textarea
-                        name="customerNote"
-                        rows={3}
-                        className="mt-2 w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
-                        placeholder="Gate code, access notes, timing preference, or anything we should know."
-                      />
-                    </label>
-                    <p className="rounded-2xl border border-dashed border-neutral-300 bg-neutral-50 p-4 text-sm text-neutral-600">
-                      No online windows are available right now. Approve the
-                      quote and Stonegate will schedule with you directly.
-                    </p>
-                    <button className="w-full rounded-xl bg-primary-950 px-4 py-3 text-sm font-semibold text-white hover:bg-primary-900">
-                      Approve quote and have Stonegate schedule me
-                    </button>
-                    <p className="text-xs leading-5 text-neutral-500">
-                      By approving this quote, you agree to our{" "}
-                      <Link
-                        href="/service-agreement"
-                        className="font-semibold text-primary-700 hover:underline"
-                      >
-                        Service Agreement and Cancellation Policy
-                      </Link>
-                      .
-                    </p>
-                  </form>
-                ) : (
-                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900">
-                    This quote is already approved. No online windows are
-                    available right now, so Stonegate will contact you to
-                    schedule the service.
-                  </div>
-                )}
-              </div>
-            ) : quote.acceptedAppointmentId ? (
-              <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-                This quote is booked. Stonegate will see it on the calendar and
-                follow up as needed.
-              </div>
-            ) : (
-              <div className="mt-5 rounded-2xl border border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-600">
-                This quote is no longer open for online approval.
-              </div>
-            )}
+            <Suspense fallback={<AvailabilityLoadingState />}>
+              <QuoteDecisionControls
+                token={token}
+                quote={quote}
+                preview={preview}
+                company={company}
+              />
+            </Suspense>
           </section>
 
           <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-primary-950">
+            <h2 className="text-lg font-semibold text-primary-900">
               Need help?
             </h2>
             <div className="mt-4 space-y-2 text-sm">
@@ -1099,20 +1386,33 @@ export default async function PublicQuotePage({
           !quote.acceptedAppointmentId ? (
             <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm">
               <details>
-                <summary className="cursor-pointer list-none text-sm font-semibold text-neutral-700">
-                  Decline quote
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-neutral-700">
+                  <span>Decline quote</span>
+                  <span aria-hidden="true">⌄</span>
                 </summary>
                 <form action={declineQuoteAction} className="mt-4 space-y-3">
                   <input type="hidden" name="token" value={token} />
                   <input type="hidden" name="quoteId" value={quote.id} />
                   <input
                     type="hidden"
+                    name="expectedRevision"
+                    value={String(quote.revision)}
+                  />
+                  <input
+                    type="hidden"
                     name="idempotencyKey"
                     value={declineIdempotencyKey}
                   />
+                  <label
+                    htmlFor={`quote-decline-reason-${quote.id}`}
+                    className="block text-sm font-semibold text-neutral-700"
+                  >
+                    Reason for declining
+                  </label>
                   <select
+                    id={`quote-decline-reason-${quote.id}`}
                     name="reason"
-                    className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
+                    className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900 focus-visible:border-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-200"
                   >
                     <option value="">Prefer not to say</option>
                     <option value="Price">Price</option>
@@ -1122,15 +1422,26 @@ export default async function PublicQuotePage({
                       Chose another provider
                     </option>
                   </select>
+                  <label
+                    htmlFor={`quote-decline-notes-${quote.id}`}
+                    className="block text-sm font-semibold text-neutral-700"
+                  >
+                    Optional note
+                  </label>
                   <textarea
+                    id={`quote-decline-notes-${quote.id}`}
                     name="notes"
                     rows={3}
-                    className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900"
+                    maxLength={1000}
+                    className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-sm text-neutral-900 focus-visible:border-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-200"
                     placeholder="Optional note"
                   />
-                  <button className="w-full rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 hover:bg-rose-100">
+                  <PublicQuoteSubmitButton
+                    className="min-h-11 w-full rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-wait disabled:opacity-70"
+                    pendingLabel="Sending decision…"
+                  >
                     Send rejection
-                  </button>
+                  </PublicQuoteSubmitButton>
                 </form>
               </details>
             </section>

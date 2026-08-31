@@ -2728,7 +2728,7 @@ export function LeadForm({
                   {quoteState.reason}
                 </div>
                 {!isDemo && junkEstimateDisclaimer ? (
-                  <div className="flex gap-2 rounded-md border border-primary-100 bg-primary-50/70 px-3 py-2 text-xs leading-relaxed text-primary-950">
+                  <div className="flex gap-2 rounded-md border border-primary-100 bg-primary-50/70 px-3 py-2 text-xs leading-relaxed text-primary-900">
                     <ShieldCheck
                       className="mt-0.5 h-4 w-4 shrink-0 text-primary-700"
                       aria-hidden="true"
@@ -3327,7 +3327,7 @@ function QuoteResult({
         {quoteState.reason}
       </div>
       {!isDemo && junkEstimateDisclaimer ? (
-        <div className="flex gap-2 rounded-md border border-primary-100 bg-primary-50/70 px-3 py-2 text-xs leading-relaxed text-primary-950">
+        <div className="flex gap-2 rounded-md border border-primary-100 bg-primary-50/70 px-3 py-2 text-xs leading-relaxed text-primary-900">
           <ShieldCheck
             className="mt-0.5 h-4 w-4 shrink-0 text-primary-700"
             aria-hidden="true"

@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "professional_quotes_v2_visual_regression_and_automated_accessibility",
+  "reviewStatus": "locally_verified",
+  "evidenceScope": "local",
+  "localDate": "2026-08-31",
+  "timezone": "America/New_York",
+  "generatedAt": "2026-08-31T06:55:22Z",
+  "source": {
+    "commitSha": "2f0e92d417d3e0b0f36693c918999da4152d15a7",
+    "worktreeStatus": "dirty_shared_worktree",
+    "worktreeMarker": "2f0e92d417d3e0b0f36693c918999da4152d15a7+dirty-shared-430-entries",
+    "note": "The run exercised the current shared working tree. File hashes identify the exact visual harness used without recording unrelated paths or contents.",
+    "visualHarnessSha256": {
+      "playwright.quote-v2-visual.config.ts": "afadb82a04d300ac62deab7cad0bff1f671b1d03bbdd374d2dd742f75f31d3f2",
+      "tests/e2e/specs/quote-v2-visual.spec.ts": "fefb45c7c6e97fdd5e7e742dfa7e4bba9e5b8e319911b00b26fe06bb5c5370b4",
+      "tests/e2e/specs/quote-v2-staff-visual.spec.ts": "762434637cff4a4f8e81aba2f1c567108af97b556856843acf986c3b1094bbc1"
+    }
+  },
+  "runner": {
+    "class": "local_developer_workstation",
+    "platform": "darwin",
+    "architecture": "arm64",
+    "node": "v20.20.2",
+    "pnpm": "9.15.9",
+    "playwright": "1.56.1",
+    "browser": {
+      "name": "chromium",
+      "version": "141.0.7390.37",
+      "headless": true
+    }
+  },
+  "configuration": {
+    "path": "playwright.quote-v2-visual.config.ts",
+    "projects": ["quote-v2-visual-chromium"],
+    "workers": 1,
+    "retries": 0,
+    "snapshotPathIncludesOperatingSystem": false,
+    "snapshotSuffixForcedEmpty": true,
+    "platformSuffixedSnapshotCount": 0,
+    "embeddedFonts": [
+      "Noto Sans Latin 400 normal",
+      "Noto Sans Latin 600 normal",
+      "Noto Sans Latin 700 normal"
+    ],
+    "fixedBrowserTime": "2026-08-31T16:00:00.000Z",
+    "reducedMotion": true,
+    "serviceWorkers": "blocked",
+    "maximumFullPageDiffPixelRatio": 0.002
+  },
+  "commands": {
+    "discovery": "corepack pnpm exec playwright test --config=playwright.quote-v2-visual.config.ts --list",
+    "successfulStaffBaselineRefresh": "corepack pnpm exec playwright test --config=playwright.quote-v2-visual.config.ts --grep 'staff (Create|Manage)' --update-snapshots",
+    "releaseComparison": "corepack pnpm exec playwright test --config=playwright.quote-v2-visual.config.ts",
+    "e2eTypecheck": "corepack pnpm typecheck:e2e:team-audit",
+    "siteTypecheck": "corepack pnpm --filter site exec tsc --project tsconfig.typecheck.json --pretty false"
+  },
+  "coverage": {
+    "publicProposal": {
+      "states": [
+        "populated",
+        "loading",
+        "genuine_empty",
+        "provider_error",
+        "expired",
+        "superseded",
+        "declined",
+        "current_revised_proposal",
+        "changes_requested",
+        "accepted",
+        "deposit_due",
+        "booked"
+      ],
+      "stateCount": 12,
+      "baselineCount": 48
+    },
+    "staffWorkspace": {
+      "states": ["populated_create", "populated_manage"],
+      "stateCount": 2,
+      "baselineCount": 8,
+      "axeContext": "full_document_including_team_shell",
+      "fixtureModel": "Authenticated server-rendered team shell with deterministic browser-routed Quote API responses; no database reset, broad seed, provider call, or Partner state mutation. This is visual and automated-accessibility evidence, not a substitute for the separate real-stack functional journeys."
+    },
+    "surfaceMatrix": {
+      "publicProposal": [
+        "1280x900_light",
+        "1280x900_dark",
+        "375x844_light",
+        "375x844_dark"
+      ],
+      "staffWorkspace": [
+        "1440x1000_light",
+        "1440x1000_dark",
+        "375x844_light",
+        "375x844_dark"
+      ]
+    },
+    "surfaceCountPerState": 4,
+    "totalBaselineCount": 56,
+    "totalScreenshotComparisons": 56,
+    "totalAutomatedAxeScans": 56,
+    "axe": {
+      "version": "4.11.0",
+      "standard": "WCAG 2.2 AA automated rules",
+      "seriousOrCriticalFindings": 0,
+      "manualCertificationStillRequired": true
+    }
+  },
+  "localResult": {
+    "status": "passed",
+    "playwrightTestsPassed": 14,
+    "playwrightTestsFailed": 0,
+    "comparisonRunDurationSeconds": 47.1,
+    "snapshotUpdatesDuringReleaseComparison": 0,
+    "snapshotCountOnDisk": 56,
+    "e2eTypecheckPassed": true,
+    "siteTypecheckPassed": true
+  },
+  "ci": {
+    "status": "awaiting_ci",
+    "platform": "ubuntu",
+    "blockingWorkflow": ".github/workflows/e2e.yml",
+    "command": "pnpm test:e2e:quote-v2-visual",
+    "note": "The blocking workflow invocation is configured, but this manifest records no Ubuntu CI execution. Linux comparison remains a release-evidence requirement."
+  },
+  "privacy": {
+    "containsSecrets": false,
+    "containsCredentials": false,
+    "containsCapabilityTokens": false,
+    "containsRealCustomerData": false,
+    "usesSyntheticVisualIdentities": true
+  },
+  "releaseQualification": "All 56 local Chromium visual comparisons and all 56 automated WCAG scans passed on the recorded shared worktree. Ubuntu CI and manual accessibility review remain pending and are not claimed by this evidence."
+}

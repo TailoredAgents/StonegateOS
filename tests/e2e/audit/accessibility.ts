@@ -134,8 +134,9 @@ function safePageLocation(page: Page): {
   queryKeys: string[];
 } {
   const url = new URL(page.url());
+  const pathname = url.pathname.replace(/^(\/quote\/)[^/]+/u, "$1[capability]");
   return {
-    pathname: url.pathname,
+    pathname,
     queryKeys: [...url.searchParams.keys()].sort(),
   };
 }

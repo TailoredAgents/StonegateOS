@@ -16,6 +16,7 @@ const OPERATIONS = Object.freeze([
   "retrieve_refund",
   "list_payments",
   "list_refunds",
+  "create_payment_link",
 ]);
 const SCENARIO_NAMES = new Set([
   "success",
@@ -104,6 +105,12 @@ function authorizationKind(value) {
 }
 
 function classifyRoute(request, url) {
+  if (
+    request.method === "POST" &&
+    url.pathname === "/v2/online-checkout/payment-links"
+  ) {
+    return { operation: "create_payment_link", resourceId: null };
+  }
   if (request.method !== "GET") return null;
   if (url.pathname === "/v2/payments") {
     return { operation: "list_payments", resourceId: null };
@@ -127,6 +134,14 @@ function classifyRoute(request, url) {
 }
 
 function captureMetadata(request, route, url, body) {
+  const parsedBody = parseJson(body);
+  const paymentLinkBody =
+    route.operation === "create_payment_link" && isRecord(parsedBody)
+      ? parsedBody
+      : null;
+  const serializedPaymentLinkBody = paymentLinkBody
+    ? JSON.stringify(paymentLinkBody).toLowerCase()
+    : "";
   const metadata = {
     id: randomUUID(),
     operation: route.operation,
@@ -140,6 +155,17 @@ function captureMetadata(request, route, url, body) {
     timeWindowPresent:
       url.searchParams.has("begin_time") && url.searchParams.has("end_time"),
     cursorPresent: url.searchParams.has("cursor"),
+    idempotencyKeyPresent:
+      typeof paymentLinkBody?.idempotency_key === "string" &&
+      paymentLinkBody.idempotency_key.length > 0,
+    quickPayPresent: isRecord(paymentLinkBody?.quick_pay),
+    paymentNotePresent:
+      typeof paymentLinkBody?.payment_note === "string" &&
+      paymentLinkBody.payment_note.length > 0,
+    rawPaymentSourcePresent:
+      serializedPaymentLinkBody.includes('"source_id"') ||
+      serializedPaymentLinkBody.includes('"card"') ||
+      serializedPaymentLinkBody.includes('"bank_account"'),
   };
   capturedRequests.unshift(metadata);
   if (capturedRequests.length > MAX_CAPTURED_REQUESTS) {
@@ -242,6 +268,16 @@ function refund(resourceId = FIXTURE.refundId) {
 }
 
 function invalidSuccess(response, operation) {
+  if (operation === "create_payment_link") {
+    sendJson(response, 200, {
+      payment_link: {
+        id: 123,
+        order_id: null,
+        url: "javascript:unsafe",
+      },
+    });
+    return;
+  }
   if (operation === "retrieve_order") {
     sendJson(response, 200, { order: { id: 123 } });
     return;
@@ -262,6 +298,19 @@ function invalidSuccess(response, operation) {
 }
 
 function successResponse(response, route, url) {
+  if (route.operation === "create_payment_link") {
+    sendJson(response, 200, {
+      payment_link: {
+        id: "payment-link-e2e-0001",
+        version: 1,
+        order_id: FIXTURE.orderId,
+        url: "https://sandbox.square.link/u/e2e-checkout",
+        long_url: "https://checkout.square.site/e2e-checkout",
+        created_at: "2026-08-30T12:00:01.000Z",
+      },
+    });
+    return;
+  }
   if (route.operation === "retrieve_order") {
     sendJson(response, 200, { order: order(route.resourceId) });
     return;

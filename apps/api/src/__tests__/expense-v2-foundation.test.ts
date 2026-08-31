@@ -27,7 +27,12 @@ describe("Expense Tracking V2 database foundation", () => {
     ) as { entries?: Array<{ idx?: number; tag?: string }> };
     const entries = journal.entries ?? [];
 
-    expect(entries.slice(-9)).toEqual([
+    const firstExpenseMigration = entries.findIndex(
+      (entry) => entry.tag === "0101_online_booking_quote_range_backfill",
+    );
+    expect(
+      entries.slice(firstExpenseMigration, firstExpenseMigration + 9),
+    ).toEqual([
       expect.objectContaining({
         idx: 98,
         tag: "0101_online_booking_quote_range_backfill",

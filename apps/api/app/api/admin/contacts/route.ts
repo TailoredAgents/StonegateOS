@@ -188,6 +188,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       ilike(contacts.email, likePattern),
       ilike(contacts.phone, likePattern),
       ilike(contacts.phoneE164, likePattern),
+      ilike(contacts.company, likePattern),
     ];
     if (propertyContactIds.length > 0) {
       searchFilters.push(inArray(contacts.id, propertyContactIds));
@@ -224,6 +225,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     id: contacts.id,
     firstName: contacts.firstName,
     lastName: contacts.lastName,
+    company: contacts.company,
     email: contacts.email,
     phone: contacts.phone,
     phoneE164: contacts.phoneE164,
@@ -239,6 +241,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     id: contacts.id,
     firstName: contacts.firstName,
     lastName: contacts.lastName,
+    company: contacts.company,
     email: contacts.email,
     phone: contacts.phone,
     phoneE164: contacts.phoneE164,
@@ -253,6 +256,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     id: string;
     firstName: string;
     lastName: string;
+    company: string | null;
     email: string | null;
     phone: string | null;
     phoneE164: string | null;
@@ -518,6 +522,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       name: fullName,
       firstName: contact.firstName,
       lastName: contact.lastName,
+      companyName: contact.company,
       email: contact.email,
       phone: contact.phone,
       phoneE164: contact.phoneE164,

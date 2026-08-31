@@ -31,6 +31,8 @@ const navItems = [
   { href: "/blog", label: "Blog" },
   { href: "/about", label: "About" },
   { href: "/contact", label: "Contact" },
+  { href: "/partners/login", label: "Partner Portal" },
+  { href: "/partners/request-access", label: "Request Access" },
 ] satisfies Array<{ href: Route; label: string }>;
 
 export function Header() {
@@ -83,7 +85,7 @@ export function Header() {
           <span className="sr-only">{companyName}</span>
         </Link>
         {!isBookingLanding ? (
-          <nav className="hidden items-center gap-6 md:flex">
+          <nav className="hidden items-center gap-4 lg:flex">
             {navItems.map((item) => (
               <Link
                 key={item.href}
@@ -95,7 +97,7 @@ export function Header() {
             ))}
           </nav>
         ) : null}
-        <div className="hidden items-center gap-3 md:flex">
+        <div className="hidden items-center gap-3 lg:flex">
           {!isBookingLanding ? (
             <Suspense
               fallback={
@@ -124,7 +126,7 @@ export function Header() {
           <Button
             asChild
             variant="ghost"
-            className="border border-neutral-300/70 text-primary-800 hover:border-primary-300 md:hidden"
+            className="border border-neutral-300/70 text-primary-800 hover:border-primary-300 lg:hidden"
           >
             <a
               href={`tel:${phoneE164}`}
@@ -137,7 +139,7 @@ export function Header() {
           <button
             type="button"
             onClick={toggleMenu}
-            className="inline-flex items-center gap-2 rounded-md border border-neutral-300/60 px-4 py-2 text-sm font-semibold text-neutral-700 shadow-soft transition hover:border-primary-300 hover:text-primary-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 md:hidden"
+            className="inline-flex items-center gap-2 rounded-md border border-neutral-300/60 px-4 py-2 text-sm font-semibold text-neutral-700 shadow-soft transition hover:border-primary-300 hover:text-primary-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 lg:hidden"
             aria-controls="mobile-navigation"
             aria-expanded={isMenuOpen}
           >
@@ -148,7 +150,7 @@ export function Header() {
       {!isBookingLanding ? (
         <div
           className={cn(
-            "md:hidden",
+            "lg:hidden",
             isMenuOpen ? "pointer-events-auto" : "pointer-events-none",
           )}
         >
@@ -182,7 +184,7 @@ export function Header() {
                 ×
               </button>
             </div>
-            <nav className="flex flex-1 flex-col gap-3 text-base">
+            <nav className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto text-base">
               {navItems.map((item) => (
                 <Link
                   key={item.href}

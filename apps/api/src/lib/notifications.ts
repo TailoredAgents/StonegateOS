@@ -783,7 +783,7 @@ export async function sendQuoteSentNotification(
       `Services: ${servicesSummary(payload.services)}`,
       `Total: ${formatCurrency(payload.total)}`,
       paymentTerms,
-      `Share link: ${payload.shareUrl}`,
+      `Quote ID: ${payload.quoteId}`,
       expiresIso ? `Expires: ${expiresIso}` : null,
       payload.notes ? `Notes: ${payload.notes}` : null,
     ]
@@ -928,7 +928,7 @@ export async function sendQuoteDecisionNotification(
       `Decision: ${payload.decision.toUpperCase()} (source: ${payload.source})`,
       `Total: ${formatCurrency(payload.total)}`,
       paymentTerms,
-      `Quote link: ${payload.shareUrl}`,
+      `Quote ID: ${payload.quoteId}`,
       payload.notes ? `Notes: ${payload.notes}` : null,
     ]
       .filter((line): line is string => Boolean(line))

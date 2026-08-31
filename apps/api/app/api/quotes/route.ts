@@ -37,9 +37,20 @@ import {
   teamMutationSuccessResult,
 } from "@/lib/team-mutation";
 import { isAdminRequest } from "../web/admin";
-import { eq, desc, sql } from "drizzle-orm";
+import { and, eq, desc, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
+import { handleCreateQuoteV2 } from "@/lib/quote-v2-create-route";
+import { isQuoteV2FeatureEnabled } from "@/lib/feature-flags";
+import {
+  listQuoteV2Staff,
+  parseQuoteV2ListQuery,
+} from "@/lib/quote-v2-management";
+import {
+  quoteV2CorrelationId,
+  quoteV2ErrorResponse,
+  quoteV2PublicJson,
+} from "@/lib/quote-v2-http";
 
 const STATUS_FILTERS = ["pending", "sent", "accepted", "declined"] as const;
 type QuoteStatusFilter = (typeof STATUS_FILTERS)[number];
@@ -196,7 +207,7 @@ function formatQuoteResponse(row: {
   decisionNotes: string | null;
   refreshRequestedAt: Date | string | null;
   acceptedAppointmentId: string | null;
-  shareToken: string | null;
+  customerVisible: boolean;
   contactName: string | null;
   contactEmail: string | null;
   contactPhone: string | null;
@@ -244,7 +255,8 @@ function formatQuoteResponse(row: {
     decisionNotes: row.decisionNotes,
     refreshRequestedAt: toIsoTimestamp(row.refreshRequestedAt),
     acceptedAppointmentId: row.acceptedAppointmentId,
-    shareToken: row.shareToken,
+    customerVisible: row.customerVisible,
+    shareToken: null,
     pdfDownloadCount: Number(row.pdfDownloadCount ?? 0),
     lastPdfDownloadedAt: toIsoTimestamp(row.lastPdfDownloadedAt),
     changeRequestCount: Number(row.changeRequestCount ?? 0),
@@ -278,6 +290,35 @@ export async function GET(request: NextRequest): Promise<Response> {
   const permissionError = await requirePermission(request, "quotes.read");
   if (permissionError) return permissionError;
 
+  if (request.nextUrl.searchParams.get("engine") === "v2") {
+    const correlationId = quoteV2CorrelationId(request);
+    if (!isQuoteV2FeatureEnabled("staff")) {
+      return quoteV2ErrorResponse(
+        "not_found",
+        "The versioned quote workspace is not enabled for this cohort.",
+        { correlationId },
+      );
+    }
+    const parsedQuery = parseQuoteV2ListQuery(request.nextUrl.searchParams);
+    if (!parsedQuery.ok) {
+      return quoteV2ErrorResponse(
+        "invalid",
+        "Review the quote filters and return to the first page.",
+        { correlationId, fieldErrors: parsedQuery.fieldErrors },
+      );
+    }
+    try {
+      const page = await listQuoteV2Staff(getDb(), parsedQuery);
+      return quoteV2PublicJson({ ok: true, ...page }, { correlationId });
+    } catch {
+      return quoteV2ErrorResponse(
+        "internal",
+        "The quote workspace could not be loaded. Try again shortly.",
+        { correlationId, retryable: true },
+      );
+    }
+  }
+
   const statusParam = request.nextUrl.searchParams.get("status");
   const statusFilter: QuoteStatusFilter | null = STATUS_FILTERS.includes(
     statusParam as QuoteStatusFilter,
@@ -310,7 +351,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       decisionNotes: quotes.decisionNotes,
       refreshRequestedAt: quotes.refreshRequestedAt,
       acceptedAppointmentId: quotes.acceptedAppointmentId,
-      shareToken: quotes.shareToken,
+      customerVisible: sql<boolean>`${quotes.shareToken} IS NOT NULL`,
       pdfDownloadCount: sql<number>`(
         select count(*)::int
         from ${quotePdfDownloads}
@@ -423,8 +464,13 @@ export async function GET(request: NextRequest): Promise<Response> {
     .leftJoin(properties, eq(quotes.propertyId, properties.id));
 
   const filteredQuery = statusFilter
-    ? baseQuery.where(eq(quotes.status, statusFilter))
-    : baseQuery;
+    ? baseQuery.where(
+        and(
+          eq(quotes.engineVersion, "legacy"),
+          eq(quotes.status, statusFilter),
+        ),
+      )
+    : baseQuery.where(eq(quotes.engineVersion, "legacy"));
 
   const rows = await filteredQuery.orderBy(desc(quotes.updatedAt));
 
@@ -444,9 +490,17 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!boundary.ok) return boundary.response;
   const { mutation } = boundary;
 
-  const parsedBody = CreateQuoteSchema.safeParse(
-    await request.json().catch(() => null),
-  );
+  const requestBody: unknown = await request.json().catch(() => null);
+  if (
+    requestBody &&
+    typeof requestBody === "object" &&
+    !Array.isArray(requestBody) &&
+    (requestBody as Record<string, unknown>)["confirmation"] ===
+      "create_quote_v2"
+  ) {
+    return handleCreateQuoteV2({ body: requestBody, mutation });
+  }
+  const parsedBody = CreateQuoteSchema.safeParse(requestBody);
   if (!parsedBody.success) {
     await recordTeamMutationFailure(mutation, {
       entityType: "quote",
@@ -544,20 +598,6 @@ export async function POST(request: NextRequest): Promise<Response> {
     claim = claimed.claim;
 
     const selectedServices = body.selectedServices;
-    const sanitizedOverrides: Partial<Record<ServiceCategory, number>> = {};
-    if (body.serviceOverrides) {
-      for (const [serviceId, amount] of Object.entries(body.serviceOverrides)) {
-        if (
-          SERVICE_ID_SET.has(serviceId as ServiceCategory) &&
-          serviceId !== "driveway" &&
-          selectedServices.includes(serviceId as ServiceCategory) &&
-          typeof amount === "number" &&
-          amount > 0
-        ) {
-          sanitizedOverrides[serviceId as ServiceCategory] = amount;
-        }
-      }
-    }
 
     let breakdown: ReturnType<typeof calculateQuoteBreakdown>;
     try {
@@ -568,7 +608,9 @@ export async function POST(request: NextRequest): Promise<Response> {
         surfaceArea: body.surfaceArea,
         applyBundles: body.applyBundles,
         depositRate: body.depositRate,
-        serviceOverrides: sanitizedOverrides,
+        serviceOverrides: body.serviceOverrides as Partial<
+          Record<ServiceCategory, number>
+        >,
         concreteSurfaces: (body.concreteSurfaces ??
           []) as ConcreteSurfaceInput[],
       });

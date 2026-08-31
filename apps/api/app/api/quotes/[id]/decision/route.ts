@@ -118,6 +118,7 @@ export async function POST(
       const [existing] = await tx
         .select({
           id: quotes.id,
+          engineVersion: quotes.engineVersion,
           contactId: quotes.contactId,
           status: quotes.status,
           sentAt: quotes.sentAt,
@@ -133,6 +134,12 @@ export async function POST(
         throw new TeamMutationFailure("invalid", "The quote was not found.", {
           status: 404,
         });
+      }
+      if (existing.engineVersion !== "legacy") {
+        throw new TeamMutationFailure(
+          "conflict",
+          "This versioned quote must be decided through its evidence-bound lifecycle workflow.",
+        );
       }
       assertTeamMutationExpectedVersion(mutation, existing.revision);
       if (existing.status === "accepted" || existing.status === "declined") {
@@ -169,7 +176,11 @@ export async function POST(
           updatedAt: decisionAt,
         })
         .where(
-          and(eq(quotes.id, quoteId), eq(quotes.revision, existing.revision)),
+          and(
+            eq(quotes.id, quoteId),
+            eq(quotes.engineVersion, "legacy"),
+            eq(quotes.revision, existing.revision),
+          ),
         )
         .returning({
           id: quotes.id,

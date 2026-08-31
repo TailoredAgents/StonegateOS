@@ -14,6 +14,7 @@ import {
   partnerLoginTokens,
   partnerSessions,
   partnerUsers,
+  quoteCapabilities,
   salesEscalationCallOperations,
 } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
@@ -524,6 +525,31 @@ export async function DELETE(
         );
       }
 
+      // Customer proposal capabilities are bearer credentials. Revoke them in
+      // the same transaction that makes the contact inactive so a restored
+      // contact can never reactivate an old customer link.
+      const revokedQuoteCapabilities = await tx
+        .update(quoteCapabilities)
+        .set({
+          status: "revoked",
+          revokedAt: deletedAt,
+          revokedByTeamMemberId: actorId,
+          revocationReason: "contact_inactive",
+          updatedAt: deletedAt,
+        })
+        .where(
+          and(
+            sql`${quoteCapabilities.status} <> 'revoked'`,
+            sql`EXISTS (
+              SELECT 1
+              FROM "quotes" AS deletion_quote_capability
+              WHERE deletion_quote_capability."id" = ${quoteCapabilities.quoteId}
+                AND deletion_quote_capability."contact_id" = ${targetContactId}
+            )`,
+          ),
+        )
+        .returning({ id: quoteCapabilities.id });
+
       let quarantinedPartnerInviteCount = 0;
       for (const operation of requestedPartnerInvites) {
         const terminalAuditEventId = randomUUID();
@@ -767,6 +793,7 @@ export async function DELETE(
             quarantinedPartnerInviteCount,
           partnerPortalSessionsRevokedCount: revokedPortalSessions.length,
           partnerPortalTokensInvalidatedCount: invalidatedPortalTokens.length,
+          quoteCapabilitiesRevokedCount: revokedQuoteCapabilities.length,
           inFlightDispatchPolicy: "fail_closed",
           restoreRequiresAutomationReview: true,
         },
@@ -786,6 +813,7 @@ export async function DELETE(
           quarantinedRequestedPartnerInviteCount: quarantinedPartnerInviteCount,
           revokedPartnerPortalSessionCount: revokedPortalSessions.length,
           invalidatedPartnerPortalTokenCount: invalidatedPortalTokens.length,
+          revokedQuoteCapabilityCount: revokedQuoteCapabilities.length,
           automationRequiresReviewAfterRestore: true,
         },
         {

@@ -613,6 +613,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       const scheduleDecision = await inspectScheduleConflicts(tx, {
         startAt,
         durationMinutes,
+        travelBufferMinutes,
         capacity: getAppointmentCapacity(),
         excludeHoldInstantQuoteId: instantQuoteId,
         now,

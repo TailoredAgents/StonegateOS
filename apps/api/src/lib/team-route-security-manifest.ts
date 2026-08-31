@@ -43,6 +43,7 @@ export const TEAM_ROUTE_SECURITY_ROOTS = [
   "app/api/calendar/status",
   "app/api/payments",
   "app/api/quotes",
+  "app/api/quote-versions",
   "app/api/revenue",
   "app/api/mobile/offline-media-queue-health",
   "app/api/web/appointments/[id]/reschedule",

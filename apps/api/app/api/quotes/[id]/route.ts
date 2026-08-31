@@ -10,7 +10,7 @@ import type {
 import { getDb, quotes, contacts, properties } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../web/admin";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   claimTeamMutationIdempotency,
   completeTeamMutationIdempotency,
@@ -28,6 +28,13 @@ import {
   teamMutationResultResponse,
   teamMutationSuccessResult,
 } from "@/lib/team-mutation";
+import { isQuoteV2FeatureEnabled } from "@/lib/feature-flags";
+import { getQuoteV2StaffDetail } from "@/lib/quote-v2-management";
+import {
+  quoteV2CorrelationId,
+  quoteV2ErrorResponse,
+  quoteV2PublicJson,
+} from "@/lib/quote-v2-http";
 
 const SERVICE_ID_SET = new Set<ServiceCategory>(
   serviceRates.map((rate) => rate.service),
@@ -118,6 +125,31 @@ export async function GET(
   }
 
   const db = getDb();
+  if (UUID_PATTERN.test(id)) {
+    try {
+      const detail = await getQuoteV2StaffDetail(db, id);
+      if (detail) {
+        const correlationId = quoteV2CorrelationId(request);
+        if (!isQuoteV2FeatureEnabled("staff")) {
+          return quoteV2ErrorResponse(
+            "not_found",
+            "The versioned quote workspace is not enabled for this cohort.",
+            { correlationId },
+          );
+        }
+        return quoteV2PublicJson(
+          { ok: true, quote: detail },
+          { correlationId },
+        );
+      }
+    } catch {
+      return quoteV2ErrorResponse(
+        "internal",
+        "The quote detail could not be loaded. Try again shortly.",
+        { correlationId: quoteV2CorrelationId(request), retryable: true },
+      );
+    }
+  }
   const rows = await db
     .select({
       id: quotes.id,
@@ -140,7 +172,6 @@ export async function GET(
       jobDurationMinutes: quotes.jobDurationMinutes,
       clientScope: quotes.clientScope,
       revision: quotes.revision,
-      shareToken: quotes.shareToken,
       sentAt: quotes.sentAt,
       expiresAt: quotes.expiresAt,
       viewedAt: quotes.viewedAt,
@@ -150,6 +181,7 @@ export async function GET(
       decisionNotes: quotes.decisionNotes,
       refreshRequestedAt: quotes.refreshRequestedAt,
       acceptedAppointmentId: quotes.acceptedAppointmentId,
+      customerVisible: sql<boolean>`${quotes.shareToken} IS NOT NULL`,
       createdAt: quotes.createdAt,
       updatedAt: quotes.updatedAt,
       contactName: contacts.firstName,
@@ -162,7 +194,7 @@ export async function GET(
     .from(quotes)
     .leftJoin(contacts, eq(quotes.contactId, contacts.id))
     .leftJoin(properties, eq(quotes.propertyId, properties.id))
-    .where(eq(quotes.id, id))
+    .where(and(eq(quotes.id, id), eq(quotes.engineVersion, "legacy")))
     .limit(1);
 
   const quote = rows[0];
@@ -193,7 +225,6 @@ export async function GET(
       clientScope: quote.clientScope,
       revision: quote.revision,
       displayStatus: displayStatus(quote),
-      shareToken: quote.shareToken,
       sentAt: quote.sentAt ? quote.sentAt.toISOString() : null,
       expiresAt: quote.expiresAt ? quote.expiresAt.toISOString() : null,
       viewedAt: quote.viewedAt ? quote.viewedAt.toISOString() : null,
@@ -207,6 +238,8 @@ export async function GET(
         ? quote.refreshRequestedAt.toISOString()
         : null,
       acceptedAppointmentId: quote.acceptedAppointmentId,
+      customerVisible: quote.customerVisible,
+      shareToken: null,
       createdAt: quote.createdAt.toISOString(),
       updatedAt: quote.updatedAt.toISOString(),
       contact: {
@@ -304,20 +337,6 @@ export async function PATCH(
     claim = claimed.claim;
 
     const selectedServices = body.selectedServices;
-    const sanitizedOverrides: Partial<Record<ServiceCategory, number>> = {};
-    if (body.serviceOverrides) {
-      for (const [serviceId, amount] of Object.entries(body.serviceOverrides)) {
-        if (
-          SERVICE_ID_SET.has(serviceId as ServiceCategory) &&
-          serviceId !== "driveway" &&
-          selectedServices.includes(serviceId as ServiceCategory) &&
-          typeof amount === "number" &&
-          amount > 0
-        ) {
-          sanitizedOverrides[serviceId as ServiceCategory] = amount;
-        }
-      }
-    }
 
     let breakdown: ReturnType<typeof calculateQuoteBreakdown>;
     try {
@@ -328,7 +347,9 @@ export async function PATCH(
         surfaceArea: body.surfaceArea,
         applyBundles: body.applyBundles,
         depositRate: body.depositRate,
-        serviceOverrides: sanitizedOverrides,
+        serviceOverrides: body.serviceOverrides as Partial<
+          Record<ServiceCategory, number>
+        >,
         concreteSurfaces: (body.concreteSurfaces ??
           []) as ConcreteSurfaceInput[],
       });
@@ -344,6 +365,7 @@ export async function PATCH(
       const [existing] = await tx
         .select({
           id: quotes.id,
+          engineVersion: quotes.engineVersion,
           status: quotes.status,
           shareToken: quotes.shareToken,
           sentAt: quotes.sentAt,
@@ -363,6 +385,12 @@ export async function PATCH(
         throw new TeamMutationFailure("invalid", "The quote was not found.", {
           status: 404,
         });
+      }
+      if (existing.engineVersion !== "legacy") {
+        throw new TeamMutationFailure(
+          "conflict",
+          "This versioned quote must be changed through its draft or lifecycle workflow.",
+        );
       }
       assertTeamMutationExpectedVersion(mutation, existing.revision);
       if (existing.status === "accepted" || existing.status === "declined") {
@@ -420,7 +448,11 @@ export async function PATCH(
           updatedAt: now,
         })
         .where(
-          and(eq(quotes.id, quoteId), eq(quotes.revision, existing.revision)),
+          and(
+            eq(quotes.id, quoteId),
+            eq(quotes.engineVersion, "legacy"),
+            eq(quotes.revision, existing.revision),
+          ),
         )
         .returning();
       if (!updated) {
@@ -608,6 +640,7 @@ export async function DELETE(
       const [existing] = await tx
         .select({
           id: quotes.id,
+          engineVersion: quotes.engineVersion,
           status: quotes.status,
           revision: quotes.revision,
           shareToken: quotes.shareToken,
@@ -622,6 +655,12 @@ export async function DELETE(
         throw new TeamMutationFailure("invalid", "The quote was not found.", {
           status: 404,
         });
+      }
+      if (existing.engineVersion !== "legacy") {
+        throw new TeamMutationFailure(
+          "conflict",
+          "This versioned quote must be changed through its draft or lifecycle workflow.",
+        );
       }
       assertTeamMutationExpectedVersion(mutation, existing.revision);
       if (
@@ -639,7 +678,11 @@ export async function DELETE(
       const [deleted] = await tx
         .delete(quotes)
         .where(
-          and(eq(quotes.id, quoteId), eq(quotes.revision, existing.revision)),
+          and(
+            eq(quotes.id, quoteId),
+            eq(quotes.engineVersion, "legacy"),
+            eq(quotes.revision, existing.revision),
+          ),
         )
         .returning({ id: quotes.id });
       if (!deleted?.id) {

@@ -489,6 +489,7 @@ export async function getAppointmentPaymentSummaryMap(
     Array<{ id: string; status: string; expiresAt: Date }>
   >();
   for (const attempt of attempts) {
+    if (!attempt.appointmentId) continue;
     const appointmentAttempts =
       attemptsByAppointment.get(attempt.appointmentId) ?? [];
     appointmentAttempts.push(attempt);

@@ -2,10 +2,10 @@
   "cookies": [
     {
       "name": "myst-admin-session",
-      "value": "e2e-admin-key",
+      "value": "e2e-admin-session-secret",
       "domain": "localhost",
       "path": "/",
-      "expires": 1761606447,
+      "expires": 1788178871,
       "httpOnly": true,
       "secure": false,
       "sameSite": "Lax"

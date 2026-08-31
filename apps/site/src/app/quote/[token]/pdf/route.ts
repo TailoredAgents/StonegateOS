@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { quotePublicProxyNetworkHeaders } from "@/lib/quote-public-proxy-network";
 
 const API_BASE_URL =
   process.env["API_BASE_URL"] ??
@@ -15,17 +16,33 @@ export async function GET(
     return NextResponse.json({ error: "missing_token" }, { status: 400 });
   }
 
-  const response = await fetch(`${API_BASE_URL.replace(/\/$/, "")}/api/public/quotes/${encodeURIComponent(token)}/pdf`, {
+  const target = new URL(
+    `/api/public/quotes/${encodeURIComponent(token)}/pdf`,
+    API_BASE_URL.replace(/\/$/u, ""),
+  );
+  let upstreamHeaders: Record<string, string>;
+  try {
+    upstreamHeaders = quotePublicProxyNetworkHeaders(request, target);
+  } catch {
+    return NextResponse.json(
+      { error: "pdf_unavailable" },
+      { status: 503, headers: { "cache-control": "no-store" } },
+    );
+  }
+  const response = await fetch(target, {
     method: "GET",
-    headers: {
-      "user-agent": request.headers.get("user-agent") ?? "",
-      "x-forwarded-for": request.headers.get("x-forwarded-for") ?? "",
-    },
+    headers: upstreamHeaders,
     cache: "no-store",
   });
 
   if (!response.ok) {
-    return NextResponse.json({ error: "pdf_unavailable" }, { status: response.status });
+    const headers = new Headers({ "cache-control": "no-store" });
+    const retryAfter = response.headers.get("retry-after");
+    if (retryAfter) headers.set("retry-after", retryAfter);
+    return NextResponse.json(
+      { error: "pdf_unavailable" },
+      { status: response.status, headers },
+    );
   }
 
   const body = await response.arrayBuffer();
@@ -33,7 +50,9 @@ export async function GET(
     status: 200,
     headers: {
       "content-type": response.headers.get("content-type") ?? "application/pdf",
-      "content-disposition": response.headers.get("content-disposition") ?? `attachment; filename="stonegate-quote.pdf"`,
+      "content-disposition":
+        response.headers.get("content-disposition") ??
+        `attachment; filename="stonegate-quote.pdf"`,
       "cache-control": "no-store",
     },
   });

@@ -48,6 +48,11 @@ export type ResolveContactPropertyResult = {
   associationCreated: boolean;
 };
 
+export type ResolveStandalonePropertyInput = Omit<
+  ResolveContactPropertyInput,
+  "contactId" | "relationship"
+>;
+
 export type ContactPropertyLink = {
   contactId: string;
   property: PropertyRecord;
@@ -330,6 +335,54 @@ export async function resolveOrCreateContactProperty(
     propertyCreated,
     associationCreated,
   };
+}
+
+/**
+ * Resolves the canonical physical address without assigning a compatibility
+ * contact owner. Account-owned portal locations use this during the brief
+ * onboarding window before their legacy operational contact is provisioned.
+ */
+export async function resolveOrCreateStandaloneProperty(
+  db: PropertyWriteExecutor,
+  input: ResolveStandalonePropertyInput,
+): Promise<{ property: PropertyRecord; propertyCreated: boolean }> {
+  const normalized = normalizePropertyAddress(input);
+  const now = input.now ?? new Date();
+  let [property] = await db
+    .select()
+    .from(properties)
+    .where(eq(properties.addressKey, normalized.addressKey))
+    .limit(1);
+  let propertyCreated = false;
+  if (!property) {
+    [property] = await db
+      .insert(properties)
+      .values({
+        addressKey: normalized.addressKey,
+        addressLine1: normalized.addressLine1,
+        addressLine2: normalized.addressLine2,
+        city: normalized.city,
+        state: normalized.state,
+        postalCode: normalized.postalCode,
+        gated: input.gated ?? false,
+        lat: input.lat ?? null,
+        lng: input.lng ?? null,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoNothing()
+      .returning();
+    propertyCreated = Boolean(property);
+  }
+  if (!property) {
+    [property] = await db
+      .select()
+      .from(properties)
+      .where(eq(properties.addressKey, normalized.addressKey))
+      .limit(1);
+  }
+  if (!property) throw new Error("property_resolve_failed");
+  return { property, propertyCreated };
 }
 
 type PostgresErrorMeta = {

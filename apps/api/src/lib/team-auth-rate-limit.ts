@@ -8,9 +8,25 @@ export type TeamAuthRateLimitAction =
   | "password_login"
   | "break_glass_exchange"
   | "partner_request_link"
-  | "partner_password_login";
+  | "partner_password_login"
+  | "partner_magic_link_exchange"
+  | "partner_access_application"
+  | "partner_application_mutation"
+  | "partner_join_request"
+  | "partner_session_revoke"
+  | "partner_notification_preferences"
+  | "partner_mfa_enrollment"
+  | "partner_mfa_verification"
+  | "partner_approval_decision"
+  | "partner_document_download"
+  | "partner_payment_checkout"
+  | "partner_member_management"
+  | "partner_invitation_management"
+  | "partner_invitation_accept"
+  | "partner_join_decision"
+  | "partner_password_change";
 export type TeamAuthRateLimitIdentity = {
-  kind: "email" | "phone" | "break_glass";
+  kind: "email" | "phone" | "break_glass" | "token" | "partner_user";
   value: string;
 };
 
@@ -46,6 +62,70 @@ export const TEAM_AUTH_RATE_LIMIT_POLICIES: Record<
   },
   partner_password_login: {
     ip: { limit: 30, windowMs: 15 * 60 * 1_000 },
+    identity: { limit: 5, windowMs: 15 * 60 * 1_000 },
+  },
+  partner_magic_link_exchange: {
+    ip: { limit: 30, windowMs: 15 * 60 * 1_000 },
+    identity: { limit: 8, windowMs: 15 * 60 * 1_000 },
+  },
+  partner_access_application: {
+    ip: { limit: 10, windowMs: 60 * 60 * 1_000 },
+    identity: { limit: 3, windowMs: 24 * 60 * 60 * 1_000 },
+  },
+  partner_application_mutation: {
+    ip: { limit: 60, windowMs: 60 * 60 * 1_000 },
+    identity: { limit: 20, windowMs: 60 * 60 * 1_000 },
+  },
+  partner_join_request: {
+    ip: { limit: 30, windowMs: 60 * 60 * 1_000 },
+    identity: { limit: 10, windowMs: 60 * 60 * 1_000 },
+  },
+  partner_session_revoke: {
+    ip: { limit: 60, windowMs: 15 * 60 * 1_000 },
+    identity: { limit: 20, windowMs: 15 * 60 * 1_000 },
+  },
+  partner_notification_preferences: {
+    ip: { limit: 120, windowMs: 15 * 60 * 1_000 },
+    identity: { limit: 60, windowMs: 15 * 60 * 1_000 },
+  },
+  partner_mfa_enrollment: {
+    ip: { limit: 20, windowMs: 60 * 60 * 1_000 },
+    identity: { limit: 5, windowMs: 60 * 60 * 1_000 },
+  },
+  partner_mfa_verification: {
+    ip: { limit: 30, windowMs: 15 * 60 * 1_000 },
+    identity: { limit: 10, windowMs: 15 * 60 * 1_000 },
+  },
+  partner_approval_decision: {
+    ip: { limit: 60, windowMs: 60 * 60 * 1_000 },
+    identity: { limit: 30, windowMs: 60 * 60 * 1_000 },
+  },
+  partner_document_download: {
+    ip: { limit: 240, windowMs: 60 * 60 * 1_000 },
+    identity: { limit: 120, windowMs: 60 * 60 * 1_000 },
+  },
+  partner_payment_checkout: {
+    ip: { limit: 60, windowMs: 60 * 60 * 1_000 },
+    identity: { limit: 12, windowMs: 60 * 60 * 1_000 },
+  },
+  partner_member_management: {
+    ip: { limit: 120, windowMs: 60 * 60 * 1_000 },
+    identity: { limit: 40, windowMs: 60 * 60 * 1_000 },
+  },
+  partner_invitation_management: {
+    ip: { limit: 60, windowMs: 60 * 60 * 1_000 },
+    identity: { limit: 20, windowMs: 60 * 60 * 1_000 },
+  },
+  partner_invitation_accept: {
+    ip: { limit: 30, windowMs: 15 * 60 * 1_000 },
+    identity: { limit: 8, windowMs: 15 * 60 * 1_000 },
+  },
+  partner_join_decision: {
+    ip: { limit: 60, windowMs: 60 * 60 * 1_000 },
+    identity: { limit: 30, windowMs: 60 * 60 * 1_000 },
+  },
+  partner_password_change: {
+    ip: { limit: 15, windowMs: 15 * 60 * 1_000 },
     identity: { limit: 5, windowMs: 15 * 60 * 1_000 },
   },
 };

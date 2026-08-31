@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   acquireScheduleConflictLock,
+  buildScheduleOccupancyInterval,
   buildScheduleInterval,
   decideScheduleConflictOverride,
   scheduleIntervalsOverlap,
@@ -62,6 +63,26 @@ describe("Calendar half-open schedule intervals", () => {
     expect(scheduleIntervalsOverlap(nineToTen, tenToEleven)).toBe(false);
     expect(scheduleIntervalsOverlap(nineToTen, nineThirty)).toBe(true);
     expect(nineToTen.endAt.toISOString()).toBe("2026-07-15T14:00:00.000Z");
+  });
+
+  it("treats the post-service travel buffer as occupied capacity", () => {
+    const buffered = buildScheduleOccupancyInterval(
+      new Date("2026-07-15T13:00:00.000Z"),
+      60,
+      30,
+    );
+    const duringBuffer = buildScheduleInterval(
+      new Date("2026-07-15T14:15:00.000Z"),
+      30,
+    );
+    const exactBufferBoundary = buildScheduleInterval(
+      new Date("2026-07-15T14:30:00.000Z"),
+      30,
+    );
+
+    expect(buffered.endAt.toISOString()).toBe("2026-07-15T14:30:00.000Z");
+    expect(scheduleIntervalsOverlap(buffered, duringBuffer)).toBe(true);
+    expect(scheduleIntervalsOverlap(buffered, exactBufferBoundary)).toBe(false);
   });
 
   it("takes a transaction-scoped advisory lock for concurrent decisions", async () => {

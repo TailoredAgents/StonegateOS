@@ -7,6 +7,73 @@ on:
     branches: ["main"]
 
 jobs:
+  quote-v2-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgres://myst:myst@localhost:5432/mystos
+      NODE_ENV: test
+      QUOTE_RATE_LIMIT_HMAC_SECRET: ci-quote-rate-limit-secret-at-least-32-characters
+      QUOTE_PUBLIC_PROXY_SHARED_SECRET: ci-quote-proxy-secret-at-least-32-characters
+      QUOTE_PUBLIC_TRUSTED_PROXY_HOPS: "1"
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mystos
+          POSTGRES_USER: myst
+          POSTGRES_PASSWORD: myst
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U myst -d mystos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply every production migration
+        run: pnpm db:migrate
+
+      - name: Typecheck Quote V2 applications
+        run: |
+          pnpm --filter api typecheck
+          pnpm --filter site exec tsc --project tsconfig.typecheck.json --pretty false
+
+      - name: Run mandatory database quote lifecycle test
+        run: >-
+          pnpm --filter api test -- --runInBand
+          src/__tests__/quote-lifecycle.test.ts
+
+      - name: Run complete Quote V2 confidence suite
+        run: >-
+          pnpm --filter api test -- --runInBand
+          --testPathPattern=quote-v2
+
+      - name: Validate Quote chat action normalization
+        run: >-
+          pnpm --filter site exec tsx --test
+          test/quote-action-services.test.ts
+
   expense-v2-postgres:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -120,6 +187,9 @@ jobs:
       - name: Run API unit tests
         run: pnpm test
 
+      - name: Run Partner Portal release lane
+        run: pnpm test:partner-portal
+
       - name: Run mobile expense contract tests
         working-directory: apps/site
         run: >-
@@ -164,6 +234,8 @@ jobs:
             exit 1
           fi
           pnpm test:e2e
+          pnpm test:e2e:quote-v2-visual
+          pnpm test:e2e:partner-portal
 
       - name: Upload artifacts
         if: always()

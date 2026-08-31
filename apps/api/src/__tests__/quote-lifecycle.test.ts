@@ -1,6 +1,6 @@
-jest.mock("nanoid", () => ({ nanoid: jest.fn(() => "test-share-token") }));
 import { createHash, randomUUID } from "node:crypto";
-import type { NextRequest } from "next/server";
+import { jest as esmJest } from "@jest/globals";
+import { NextRequest } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import {
   closeDbForTests,
@@ -18,12 +18,9 @@ import {
   teamSessions,
 } from "@/db";
 import type { DatabaseClient } from "@/db";
-import {
-  processOutboxBatch,
-  type OutboxBatchStats,
-} from "@/lib/outbox-processor";
-import * as notifications from "@/lib/notifications";
+import type { OutboxBatchStats } from "@/lib/outbox-processor";
 import type { QuoteNotificationPayload } from "@/lib/notifications";
+import { LEGACY_RESIDENTIAL_VALIDITY_DAYS } from "@/lib/quote-legacy-expiry";
 import { queueSystemOutboundMessage } from "@/lib/system-outbound";
 import {
   claimMessageDispatch,
@@ -37,11 +34,48 @@ import {
   POST as publicDecision,
 } from "../../app/api/public/quotes/[token]/route";
 
+type JestWithEsmMocks = typeof jest & {
+  unstable_mockModule: (
+    moduleName: string,
+    moduleFactory: () => unknown,
+  ) => typeof jest;
+};
+
+const jestApi = esmJest as unknown as JestWithEsmMocks;
+type SentQuoteNotificationPayload = QuoteNotificationPayload & {
+  sendAttemptId: string;
+};
+type DecisionQuoteNotificationPayload = QuoteNotificationPayload & {
+  decision: "accepted" | "declined";
+  source: "customer";
+};
+
+const sentNotificationMock = jestApi.fn<
+  Promise<void>,
+  [SentQuoteNotificationPayload]
+>(() => Promise.resolve());
+const decisionNotificationMock = jestApi.fn<
+  Promise<void>,
+  [DecisionQuoteNotificationPayload]
+>(() => Promise.resolve());
+jestApi.unstable_mockModule("@/lib/notifications", () => ({
+  sendEstimateCancellation: jestApi.fn(() => Promise.resolve()),
+  sendEstimateConfirmation: jestApi.fn(() => Promise.resolve()),
+  sendEstimateReminder: jestApi.fn(() => Promise.resolve()),
+  sendQuoteDecisionNotification: decisionNotificationMock,
+  sendQuoteSentNotification: sentNotificationMock,
+}));
+const { processOutboxBatch } = await import("@/lib/outbox-processor");
+
 const hasDatabase = Boolean(process.env["DATABASE_URL"]);
 const describeOrSkip = hasDatabase ? describe : describe.skip;
 
 function restoreEnvironmentValue(
-  name: "ADMIN_API_KEY" | "QUOTE_ALERT_EMAIL" | "SITE_URL",
+  name:
+    | "ADMIN_API_KEY"
+    | "QUOTE_ALERT_EMAIL"
+    | "QUOTE_RATE_LIMIT_HMAC_SECRET"
+    | "SITE_URL",
   value: string | undefined,
 ): void {
   if (value === undefined) {
@@ -107,11 +141,14 @@ describeOrSkip("Quote lifecycle integration", () => {
 
   const originalAdminKey = process.env["ADMIN_API_KEY"];
   const originalAlertEmail = process.env["QUOTE_ALERT_EMAIL"];
+  const originalRateLimitSecret = process.env["QUOTE_RATE_LIMIT_HMAC_SECRET"];
   const originalSiteUrl = process.env["SITE_URL"];
 
   beforeAll(async () => {
     process.env["ADMIN_API_KEY"] = ADMIN_KEY;
     process.env["QUOTE_ALERT_EMAIL"] = "";
+    process.env["QUOTE_RATE_LIMIT_HMAC_SECRET"] =
+      "quote-lifecycle-integration-rate-limit-secret";
     process.env["SITE_URL"] = "https://example.com";
     db = getDb();
 
@@ -229,6 +266,10 @@ describeOrSkip("Quote lifecycle integration", () => {
     } finally {
       restoreEnvironmentValue("ADMIN_API_KEY", originalAdminKey);
       restoreEnvironmentValue("QUOTE_ALERT_EMAIL", originalAlertEmail);
+      restoreEnvironmentValue(
+        "QUOTE_RATE_LIMIT_HMAC_SECRET",
+        originalRateLimitSecret,
+      );
       restoreEnvironmentValue("SITE_URL", originalSiteUrl);
       await closeDbForTests();
     }
@@ -391,13 +432,11 @@ describeOrSkip("Quote lifecycle integration", () => {
       (quoteRecord[0].expiresAt.getTime() - quoteRecord[0].sentAt.getTime()) /
         (24 * 60 * 60 * 1000),
     );
-    expect(validDays).toBe(7);
+    expect(validDays).toBe(LEGACY_RESIDENTIAL_VALIDITY_DAYS);
 
-    const previewRequest = {
-      nextUrl: new URL(
-        `https://example.com/api/public/quotes/${shareToken}?preview=1`,
-      ),
-    } as unknown as NextRequest;
+    const previewRequest = new NextRequest(
+      `https://example.com/api/public/quotes/${shareToken}?preview=1`,
+    );
     const previewResponse = await publicQuote(previewRequest, {
       params: Promise.resolve({ token: shareToken }),
     });
@@ -411,9 +450,9 @@ describeOrSkip("Quote lifecycle integration", () => {
     expect(afterPreview[0]?.viewCount).toBe(0);
     expect(afterPreview[0]?.viewedAt).toBeNull();
 
-    const viewRequest = {
-      nextUrl: new URL(`https://example.com/api/public/quotes/${shareToken}`),
-    } as unknown as NextRequest;
+    const viewRequest = new NextRequest(
+      `https://example.com/api/public/quotes/${shareToken}`,
+    );
     const viewResponse = await publicQuote(viewRequest, {
       params: Promise.resolve({ token: shareToken }),
     });
@@ -432,17 +471,17 @@ describeOrSkip("Quote lifecycle integration", () => {
     expect(afterView[0]?.viewedAt).not.toBeNull();
     expect(afterView[0]?.lastViewedAt).not.toBeNull();
 
-    const sentSpy = jest
-      .spyOn(notifications, "sendQuoteSentNotification")
-      .mockResolvedValue(undefined);
-    const decisionSpy = jest
-      .spyOn(notifications, "sendQuoteDecisionNotification")
-      .mockResolvedValue(undefined);
+    sentNotificationMock.mockClear();
+    decisionNotificationMock.mockClear();
 
     const statsAfterSend = await runOutboxBatch(5);
-    expect(statsAfterSend.processed).toBeGreaterThanOrEqual(1);
-    expect(sentSpy).toHaveBeenCalled();
-    const sentPayload: unknown = sentSpy.mock.calls.at(-1)?.[0];
+    if (statsAfterSend.processed < 1) {
+      throw new Error(
+        `Quote send outbox batch made no progress: ${JSON.stringify(statsAfterSend)}`,
+      );
+    }
+    expect(sentNotificationMock).toHaveBeenCalled();
+    const sentPayload: unknown = sentNotificationMock.mock.calls.at(-1)?.[0];
     if (!isQuoteSentNotificationPayload(sentPayload)) {
       throw new Error("Expected quote sent notification payload");
     }
@@ -451,29 +490,43 @@ describeOrSkip("Quote lifecycle integration", () => {
       expect.arrayContaining<string>(["furniture"]),
     );
     const publicDecisionKey = `quote-public-decision:${randomUUID()}`;
-    const decisionRequest = {
-      json: () => Promise.resolve({ decision: "accepted" }),
-      headers: new Headers({ "idempotency-key": publicDecisionKey }),
-    } as unknown as NextRequest;
+    const decisionRequest = (
+      decision: "accepted" | "declined",
+      idempotencyKey: string,
+      expectedRevision: number,
+    ) =>
+      new NextRequest(`https://example.com/api/public/quotes/${shareToken}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+        },
+        body: JSON.stringify({
+          quoteId,
+          expectedRevision,
+          decision,
+        }),
+      });
 
-    const decisionResponse = await publicDecision(decisionRequest, {
-      params: Promise.resolve({ token: shareToken }),
-    });
+    const decisionResponse = await publicDecision(
+      decisionRequest("accepted", publicDecisionKey, 4),
+      {
+        params: Promise.resolve({ token: shareToken }),
+      },
+    );
     expect(decisionResponse.ok).toBe(true);
 
-    const decisionReplayResponse = await publicDecision(decisionRequest, {
-      params: Promise.resolve({ token: shareToken }),
-    });
+    const decisionReplayResponse = await publicDecision(
+      decisionRequest("accepted", publicDecisionKey, 4),
+      { params: Promise.resolve({ token: shareToken }) },
+    );
     expect(decisionReplayResponse.ok).toBe(true);
     expect(decisionReplayResponse.headers.get("idempotency-replayed")).toBe(
       "true",
     );
 
     const changedReplayResponse = await publicDecision(
-      {
-        json: () => Promise.resolve({ decision: "declined" }),
-        headers: new Headers({ "idempotency-key": publicDecisionKey }),
-      } as unknown as NextRequest,
+      decisionRequest("declined", publicDecisionKey, 4),
       { params: Promise.resolve({ token: shareToken }) },
     );
     expect(changedReplayResponse.status).toBe(409);
@@ -482,12 +535,7 @@ describeOrSkip("Quote lifecycle integration", () => {
     });
 
     const repeatDecisionResponse = await publicDecision(
-      {
-        json: () => Promise.resolve({ decision: "declined" }),
-        headers: new Headers({
-          "idempotency-key": `quote-public-decision:${randomUUID()}`,
-        }),
-      } as unknown as NextRequest,
+      decisionRequest("declined", `quote-public-decision:${randomUUID()}`, 5),
       { params: Promise.resolve({ token: shareToken }) },
     );
     expect(repeatDecisionResponse.status).toBe(409);
@@ -527,7 +575,7 @@ describeOrSkip("Quote lifecycle integration", () => {
 
     const statsAfterDecision = await runOutboxBatch(5);
     expect(statsAfterDecision.processed).toBeGreaterThanOrEqual(1);
-    expect(decisionSpy).toHaveBeenCalledWith(
+    expect(decisionNotificationMock).toHaveBeenCalledWith(
       expect.objectContaining({
         quoteId,
         decision: "accepted",
@@ -545,9 +593,6 @@ describeOrSkip("Quote lifecycle integration", () => {
 
     expect(finalQuote[0]?.status).toBe("accepted");
     expect(finalQuote[0]?.decisionAt).not.toBeNull();
-
-    sentSpy.mockRestore();
-    decisionSpy.mockRestore();
   });
 
   it("quarantines already-queued quote messages when the contact becomes DNC before dispatch", async () => {

@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull } from "drizzle-orm";
 import {
   contacts,
   getDb,
+  partnerAccountMemberships,
+  partnerAccounts,
   partnerLoginTokens,
   partnerSessions,
   partnerUsers,
@@ -11,6 +13,44 @@ import {
 import { normalizePhone } from "../../app/api/web/utils";
 import { resolvePublicSiteBaseUrl as resolvePublicSiteBaseUrlInternal } from "@/lib/public-site-url";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
+
+const PARTNER_SESSION_LAST_SEEN_TOUCH_MS = 5 * 60 * 1000;
+
+async function findInitialPartnerAccountBinding(
+  tx: TeamMutationTransaction,
+  partnerUserId: string,
+): Promise<{ accountId: string; membershipId: string } | null> {
+  const [membership] = await tx
+    .select({
+      accountId: partnerAccountMemberships.partnerAccountId,
+      membershipId: partnerAccountMemberships.id,
+    })
+    .from(partnerAccountMemberships)
+    .innerJoin(
+      partnerAccounts,
+      eq(partnerAccountMemberships.partnerAccountId, partnerAccounts.id),
+    )
+    .where(
+      and(
+        eq(partnerAccountMemberships.partnerUserId, partnerUserId),
+        eq(partnerAccountMemberships.status, "active"),
+        eq(partnerAccounts.portalAccessEnabled, true),
+      ),
+    )
+    .orderBy(
+      desc(partnerAccountMemberships.isDefault),
+      asc(partnerAccountMemberships.createdAt),
+      asc(partnerAccountMemberships.id),
+    )
+    .limit(1);
+
+  return membership?.accountId && membership.membershipId
+    ? {
+        accountId: membership.accountId,
+        membershipId: membership.membershipId,
+      }
+    : null;
+}
 
 function readString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -30,6 +70,17 @@ export function normalizePhoneE164(value: unknown): string | null {
   try {
     return normalizePhone(raw).e164;
   } catch {
+    // Keep authentication/onboarding available if the optional phone library
+    // cannot load its metadata in a constrained runtime. This is intentionally
+    // conservative and follows the launch assumption of US phone numbers while
+    // retaining already-E.164 international input.
+    if (!/^\+?[0-9().\-\s]+$/u.test(raw)) return null;
+    const digits = raw.replace(/\D/gu, "");
+    if (raw.startsWith("+") && /^\d{8,15}$/u.test(digits)) {
+      return `+${digits}`;
+    }
+    if (/^\d{10}$/u.test(digits)) return `+1${digits}`;
+    if (/^1\d{10}$/u.test(digits)) return `+${digits}`;
     return null;
   }
 }
@@ -250,6 +301,7 @@ export async function exchangePartnerLoginToken(
   partnerUserId: string;
   orgContactId: string;
   needsPasswordSetup: boolean;
+  expiresAt: Date;
 } | null> {
   const db = getDb();
   const tokenHash = sha256Base64Url(rawToken);
@@ -278,6 +330,7 @@ export async function exchangePartnerLoginToken(
         orgContactId: partnerUsers.orgContactId,
         active: partnerUsers.active,
         passwordHash: partnerUsers.passwordHash,
+        securityVersion: partnerUsers.securityVersion,
         partnerStatus: contacts.partnerStatus,
         orgDeletedAt: contacts.deletedAt,
       })
@@ -322,9 +375,19 @@ export async function exchangePartnerLoginToken(
     const expiresAt = new Date(
       now.getTime() + sessionDays * 24 * 60 * 60 * 1000,
     );
+    const accountBinding = await findInitialPartnerAccountBinding(
+      tx,
+      userRow.id,
+    );
     await tx.insert(partnerSessions).values({
       partnerUserId: userRow.id,
+      activePartnerAccountId: accountBinding?.accountId ?? null,
+      activeMembershipId: accountBinding?.membershipId ?? null,
       sessionHash,
+      authMethod: "magic_link",
+      assuranceLevel: "aal1",
+      securityVersion: userRow.securityVersion,
+      accountSelectedAt: accountBinding ? now : null,
       ip: getClientIp(request),
       userAgent: getUserAgent(request),
       expiresAt,
@@ -337,6 +400,7 @@ export async function exchangePartnerLoginToken(
       partnerUserId: userRow.id,
       orgContactId: userRow.orgContactId,
       needsPasswordSetup: !userRow.passwordHash,
+      expiresAt,
     };
   });
 }
@@ -363,6 +427,26 @@ export async function requirePartnerSession(request: NextRequest): Promise<
         email: string;
         name: string;
         passwordSet: boolean;
+        mfaRequired: boolean;
+        mfaEnrolledAt: Date | null;
+      };
+      session: {
+        id: string;
+        activePartnerAccountId: string | null;
+        activeMembershipId: string | null;
+        authMethod:
+          | "legacy"
+          | "magic_link"
+          | "password"
+          | "passkey"
+          | "mfa_step_up";
+        assuranceLevel: "aal1" | "aal2";
+        mfaVerifiedAt: Date | null;
+        securityVersion: number;
+        deviceName: string | null;
+        createdAt: Date;
+        lastSeenAt: Date;
+        expiresAt: Date;
       };
     }
 > {
@@ -382,6 +466,15 @@ export async function requirePartnerSession(request: NextRequest): Promise<
       .select({
         id: partnerSessions.id,
         partnerUserId: partnerSessions.partnerUserId,
+        activePartnerAccountId: partnerSessions.activePartnerAccountId,
+        activeMembershipId: partnerSessions.activeMembershipId,
+        authMethod: partnerSessions.authMethod,
+        assuranceLevel: partnerSessions.assuranceLevel,
+        mfaVerifiedAt: partnerSessions.mfaVerifiedAt,
+        securityVersion: partnerSessions.securityVersion,
+        deviceName: partnerSessions.deviceName,
+        createdAt: partnerSessions.createdAt,
+        lastSeenAt: partnerSessions.lastSeenAt,
         expiresAt: partnerSessions.expiresAt,
         revokedAt: partnerSessions.revokedAt,
       })
@@ -399,8 +492,9 @@ export async function requirePartnerSession(request: NextRequest): Promise<
       return { ok: false as const, status: 401, error: "session_expired" };
     }
 
-    // User/contact precedes session in every state-changing lock order. The
-    // final conditional session update detects a concurrent revoke/expiry.
+    // A session read must revalidate the user and organization, but it does not
+    // need to lock the identity row. Security-version changes are checked again
+    // against the session below before returning the principal.
     const [userRow] = await tx
       .select({
         id: partnerUsers.id,
@@ -409,13 +503,15 @@ export async function requirePartnerSession(request: NextRequest): Promise<
         name: partnerUsers.name,
         active: partnerUsers.active,
         passwordHash: partnerUsers.passwordHash,
+        mfaRequired: partnerUsers.mfaRequired,
+        mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
+        securityVersion: partnerUsers.securityVersion,
         partnerStatus: contacts.partnerStatus,
         orgDeletedAt: contacts.deletedAt,
       })
       .from(partnerUsers)
       .innerJoin(contacts, eq(partnerUsers.orgContactId, contacts.id))
       .where(eq(partnerUsers.id, sessionHint.partnerUserId))
-      .for("update")
       .limit(1);
 
     if (
@@ -436,19 +532,45 @@ export async function requirePartnerSession(request: NextRequest): Promise<
       return { ok: false as const, status: 401, error: "unauthorized" };
     }
 
-    const [touched] = await tx
-      .update(partnerSessions)
-      .set({ lastSeenAt: now })
-      .where(
-        and(
-          eq(partnerSessions.id, sessionHint.id),
-          eq(partnerSessions.sessionHash, sessionHash),
-          isNull(partnerSessions.revokedAt),
-          gt(partnerSessions.expiresAt, now),
-        ),
-      )
-      .returning({ id: partnerSessions.id });
-    if (!touched?.id) {
+    if (sessionHint.securityVersion !== userRow.securityVersion) {
+      await tx
+        .update(partnerSessions)
+        .set({ revokedAt: now })
+        .where(
+          and(
+            eq(partnerSessions.id, sessionHint.id),
+            isNull(partnerSessions.revokedAt),
+          ),
+        );
+      return { ok: false as const, status: 401, error: "session_revoked" };
+    }
+
+    const sessionStillActive = and(
+      eq(partnerSessions.id, sessionHint.id),
+      eq(partnerSessions.sessionHash, sessionHash),
+      eq(partnerSessions.securityVersion, userRow.securityVersion),
+      isNull(partnerSessions.revokedAt),
+      gt(partnerSessions.expiresAt, now),
+    );
+    const shouldTouchLastSeen =
+      now.getTime() - sessionHint.lastSeenAt.getTime() >=
+      PARTNER_SESSION_LAST_SEEN_TOUCH_MS;
+    const [validatedSession] = shouldTouchLastSeen
+      ? await tx
+          .update(partnerSessions)
+          .set({ lastSeenAt: now })
+          .where(sessionStillActive)
+          .returning({ id: partnerSessions.id })
+      : await tx
+          .select({ id: partnerSessions.id })
+          .from(partnerSessions)
+          .where(sessionStillActive)
+          // Concurrent reads may share this lock, while revocation/security
+          // mutations remain linearizable without forcing a last-seen write on
+          // every portal request.
+          .for("share")
+          .limit(1);
+    if (!validatedSession?.id) {
       return { ok: false as const, status: 401, error: "session_revoked" };
     }
 
@@ -461,6 +583,21 @@ export async function requirePartnerSession(request: NextRequest): Promise<
         email: userRow.email,
         name: userRow.name,
         passwordSet: Boolean(userRow.passwordHash),
+        mfaRequired: userRow.mfaRequired,
+        mfaEnrolledAt: userRow.mfaEnrolledAt ?? null,
+      },
+      session: {
+        id: sessionHint.id,
+        activePartnerAccountId: sessionHint.activePartnerAccountId ?? null,
+        activeMembershipId: sessionHint.activeMembershipId ?? null,
+        authMethod: sessionHint.authMethod,
+        assuranceLevel: sessionHint.assuranceLevel,
+        mfaVerifiedAt: sessionHint.mfaVerifiedAt ?? null,
+        securityVersion: sessionHint.securityVersion,
+        deviceName: sessionHint.deviceName ?? null,
+        createdAt: sessionHint.createdAt,
+        lastSeenAt: shouldTouchLastSeen ? now : sessionHint.lastSeenAt,
+        expiresAt: sessionHint.expiresAt,
       },
     };
   });
@@ -484,7 +621,7 @@ export function verifyPassword(password: string, encoded: string): boolean {
   if (parts.length !== 3) return false;
   const salt = Buffer.from(parts[1] ?? "", "base64url");
   const stored = Buffer.from(parts[2] ?? "", "base64url");
-  if (!salt.length || !stored.length) return false;
+  if (!salt.length || stored.length !== SCRYPT_KEYLEN) return false;
   const derived = scryptHash(password, salt);
   return crypto.timingSafeEqual(stored, derived);
 }
@@ -532,6 +669,7 @@ export async function loginWithPassword(
   sessionToken: string;
   partnerUserId: string;
   orgContactId: string;
+  expiresAt: Date;
 } | null> {
   const db = getDb();
   return db.transaction(async (tx) => {
@@ -541,6 +679,7 @@ export async function loginWithPassword(
         orgContactId: partnerUsers.orgContactId,
         active: partnerUsers.active,
         passwordHash: partnerUsers.passwordHash,
+        securityVersion: partnerUsers.securityVersion,
         partnerStatus: contacts.partnerStatus,
         orgDeletedAt: contacts.deletedAt,
       })
@@ -567,9 +706,19 @@ export async function loginWithPassword(
     const expiresAt = new Date(
       now.getTime() + sessionDays * 24 * 60 * 60 * 1000,
     );
+    const accountBinding = await findInitialPartnerAccountBinding(
+      tx,
+      userRow.id,
+    );
     await tx.insert(partnerSessions).values({
       partnerUserId: userRow.id,
+      activePartnerAccountId: accountBinding?.accountId ?? null,
+      activeMembershipId: accountBinding?.membershipId ?? null,
       sessionHash,
+      authMethod: "password",
+      assuranceLevel: "aal1",
+      securityVersion: userRow.securityVersion,
+      accountSelectedAt: accountBinding ? now : null,
       ip: getClientIp(request),
       userAgent: getUserAgent(request),
       expiresAt,
@@ -581,6 +730,7 @@ export async function loginWithPassword(
       sessionToken,
       partnerUserId: userRow.id,
       orgContactId: userRow.orgContactId,
+      expiresAt,
     };
   });
 }

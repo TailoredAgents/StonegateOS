@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import {
   isExactAgentRecordVersion,
+  parseAgentActionPayload,
   resolveOpenAiApiEndpoint,
 } from "@myst-os/sdk";
 import { formatServiceLabel } from "@/lib/service-labels";
@@ -16,6 +17,10 @@ import {
   type JarvisReadToolResult,
   type JarvisReadToolName,
 } from "./jarvis-read-tools";
+import {
+  areCanonicalQuoteServicesActionable,
+  deriveCanonicalQuoteServices,
+} from "./quote-action-services";
 
 const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const PUBLIC_VOICE_MODEL = "gpt-4.1-mini";
@@ -3533,14 +3538,15 @@ function extractQuoteSuggestion(
   }
   if (!ctx.contactId || !ctx.propertyId) return null;
 
-  const services = deriveServicesFromMessage(message, servicesHint);
+  const services = deriveCanonicalQuoteServices(message, servicesHint);
+  if (!areCanonicalQuoteServicesActionable(services)) return null;
   const propertyLabel = ctx.property
     ? [ctx.property.addressLine1, ctx.property.city]
         .filter((part) => part && part.length)
         .join(", ")
     : null;
 
-  return {
+  const action: CreateQuoteAction = {
     id: newActionId(),
     type: "create_quote",
     summary: `Create quote (${services.map(formatServiceLabel).join(", ")})${propertyLabel ? ` at ${propertyLabel}` : ""}`,
@@ -3554,77 +3560,9 @@ function extractQuoteSuggestion(
     },
     ...(note ? { note } : {}),
   };
-}
-
-const SERVICE_KEYWORDS: Array<{ id: string; patterns: RegExp[] }> = [
-  {
-    id: "single-item",
-    patterns: [
-      /rubbish/i,
-      /trash/i,
-      /garbage/i,
-      /household/i,
-      /single/i,
-      /item/i,
-      /tv/i,
-      /mattress/i,
-    ],
-  },
-  {
-    id: "furniture",
-    patterns: [/furniture/i, /sofa/i, /couch/i, /dresser/i, /bed/i],
-  },
-  {
-    id: "appliances",
-    patterns: [/appliance/i, /fridge/i, /washer/i, /dryer/i, /stove/i, /oven/i],
-  },
-  {
-    id: "construction-debris",
-    patterns: [
-      /construction/i,
-      /debris/i,
-      /demo/i,
-      /renovation/i,
-      /junk/i,
-      /load/i,
-    ],
-  },
-  { id: "hot-tub", patterns: [/hot[ -]?tub/i, /spa/i, /jacuzzi/i] },
-  { id: "driveway", patterns: [/driveway/i, /concrete/i] },
-  { id: "roof", patterns: [/roof/i] },
-  { id: "deck", patterns: [/deck/i, /patio/i, /porch/i] },
-  { id: "gutter", patterns: [/gutter/i] },
-  { id: "commercial", patterns: [/commercial/i, /store/i, /office/i] },
-  { id: "other", patterns: [/quote/i, /estimate/i] },
-];
-
-function deriveServicesFromMessage(
-  message: string,
-  hints?: string[] | null,
-): string[] {
-  const services: string[] = [];
-  if (Array.isArray(hints)) {
-    for (const hint of hints) {
-      if (
-        typeof hint === "string" &&
-        hint.trim().length &&
-        !services.includes(hint.trim())
-      ) {
-        services.push(hint.trim());
-      }
-    }
-  }
-  for (const entry of SERVICE_KEYWORDS) {
-    if (entry.patterns.some((pattern) => pattern.test(message))) {
-      if (!services.includes(entry.id)) {
-        services.push(entry.id);
-      }
-    }
-  }
-  if (!services.length) {
-    services.push("other");
-  }
-  return services.slice(0, 3);
+  return parseAgentActionPayload("create_quote", action.payload).ok
+    ? action
+    : null;
 }
 
 function buildBookingActions(

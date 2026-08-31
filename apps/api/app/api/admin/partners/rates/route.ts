@@ -2,7 +2,14 @@ import type { MutationResult } from "@myst-os/sdk";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
-import { contacts, getDb, partnerRateCards, partnerRateItems } from "@/db";
+import {
+  contacts,
+  getDb,
+  partnerAccounts,
+  partnerRateAddOnItems,
+  partnerRateCards,
+  partnerRateItems,
+} from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { readBoundedPartnerJson } from "@/lib/partner-operations";
 import {
@@ -23,6 +30,7 @@ import {
   teamMutationSuccessResult,
 } from "@/lib/team-mutation";
 import {
+  getPartnerAddOnKeyForLegacyTier,
   isPartnerAllowedServiceKey,
   isPartnerTierKeyForService,
 } from "@myst-os/pricing";
@@ -249,6 +257,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       const [card] = await tx
         .select({
           id: partnerRateCards.id,
+          partnerAccountId: partnerRateCards.partnerAccountId,
           currency: partnerRateCards.currency,
           active: partnerRateCards.active,
           updatedAt: partnerRateCards.updatedAt,
@@ -422,9 +431,16 @@ export async function POST(request: NextRequest): Promise<Response> {
         );
       }
 
+      const [portalAccount] = await tx
+        .select({ id: partnerAccounts.id })
+        .from(partnerAccounts)
+        .where(eq(partnerAccounts.portalContactId, input.orgContactId))
+        .limit(1);
+
       const [existing] = await tx
         .select({
           id: partnerRateCards.id,
+          partnerAccountId: partnerRateCards.partnerAccountId,
           currency: partnerRateCards.currency,
           active: partnerRateCards.active,
           updatedAt: partnerRateCards.updatedAt,
@@ -454,7 +470,13 @@ export async function POST(request: NextRequest): Promise<Response> {
       const [card] = existing
         ? await tx
             .update(partnerRateCards)
-            .set({ currency: "USD", active: true, updatedAt: now })
+            .set({
+              partnerAccountId:
+                portalAccount?.id ?? existing.partnerAccountId ?? null,
+              currency: "USD",
+              active: true,
+              updatedAt: now,
+            })
             .where(
               and(
                 eq(partnerRateCards.id, existing.id),
@@ -466,6 +488,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             .insert(partnerRateCards)
             .values({
               orgContactId: input.orgContactId,
+              partnerAccountId: portalAccount?.id ?? null,
               currency: "USD",
               active: true,
               createdAt: now,
@@ -490,6 +513,29 @@ export async function POST(request: NextRequest): Promise<Response> {
           createdAt: now,
         })),
       );
+      await tx
+        .delete(partnerRateAddOnItems)
+        .where(eq(partnerRateAddOnItems.rateCardId, card.id));
+      const addOnItems = input.items.flatMap((item) => {
+        const addOnKey = getPartnerAddOnKeyForLegacyTier(
+          item.serviceKey,
+          item.tierKey,
+        );
+        return addOnKey
+          ? [
+              {
+                rateCardId: card.id,
+                serviceKey: item.serviceKey,
+                addOnKey,
+                unitAmountCents: item.amountCents,
+                createdAt: now,
+              },
+            ]
+          : [];
+      });
+      if (addOnItems.length > 0) {
+        await tx.insert(partnerRateAddOnItems).values(addOnItems);
+      }
 
       const beforeTotalCents = beforeItems.reduce(
         (sum, item) => sum + item.amountCents,

@@ -150,7 +150,9 @@ type AttemptRow = {
 
 const ATTEMPT_SELECTION = {
   id: paymentAttempts.id,
-  appointmentId: paymentAttempts.appointmentId,
+  // This staff POS return route handles appointment attempts only. Quote
+  // deposits use the capability-scoped checkout reconciliation path.
+  appointmentId: sql<string>`${paymentAttempts.appointmentId}`,
   status: paymentAttempts.status,
   clientRequestId: paymentAttempts.clientRequestId,
   requestedJobAmountCents: paymentAttempts.requestedJobAmountCents,
@@ -899,6 +901,26 @@ export async function POST(request: NextRequest): Promise<Response> {
                 retryable: false,
               },
               status: 404,
+            },
+          );
+          return { kind: "response", ...completed, replayed: false };
+        }
+        if (!attempt.appointmentId) {
+          const completed = await completeClaimedFailure(
+            tx,
+            mutation,
+            claimed.claim,
+            {
+              attemptId: attempt.id,
+              result: {
+                ok: false,
+                code: "conflict",
+                message:
+                  "Quote deposits must be reconciled through the quote checkout flow.",
+                retryable: false,
+              },
+              status: 409,
+              metadata: { boundary: "payment_attempt_purpose" },
             },
           );
           return { kind: "response", ...completed, replayed: false };

@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, contacts, properties, quotePdfDownloads, quotes } from "@/db";
 import { eq } from "drizzle-orm";
+import { maybeHandleQuoteV2PublicPdf } from "@/lib/quote-v2-public-route";
 
 type PdfLine = {
   text: string;
@@ -20,7 +21,10 @@ type LineItemRecord = {
 function currency(value: unknown): string {
   const numeric = Number(value ?? 0);
   try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(numeric);
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+    }).format(numeric);
   } catch {
     return `$${numeric.toFixed(2)}`;
   }
@@ -28,11 +32,16 @@ function currency(value: unknown): string {
 
 function dateLabel(value: Date | null): string {
   if (!value) return "-";
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(value);
+  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(
+    value,
+  );
 }
 
 function escapePdf(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
 }
 
 function wrapText(value: string, max = 86): string[] {
@@ -86,14 +95,20 @@ function generatePdf(lines: PdfLine[]): Buffer {
   objects.push("<< /Type /Catalog /Pages 2 0 R >>");
 
   const pageObjectIds = pageStreams.map((_, index) => 5 + index * 2);
-  objects.push(`<< /Type /Pages /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageObjectIds.length} >>`);
+  objects.push(
+    `<< /Type /Pages /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageObjectIds.length} >>`,
+  );
   objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
   objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
 
   pageStreams.forEach((stream, index) => {
     const contentId = 6 + index * 2;
-    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentId} 0 R >>`);
-    objects.push(`<< /Length ${Buffer.byteLength(stream, "utf8")} >>\nstream\n${stream}\nendstream`);
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentId} 0 R >>`,
+    );
+    objects.push(
+      `<< /Length ${Buffer.byteLength(stream, "utf8")} >>\nstream\n${stream}\nendstream`,
+    );
   });
 
   const chunks = ["%PDF-1.4\n"];
@@ -108,7 +123,9 @@ function generatePdf(lines: PdfLine[]): Buffer {
   offsets.slice(1).forEach((offset) => {
     chunks.push(`${String(offset).padStart(10, "0")} 00000 n \n`);
   });
-  chunks.push(`trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`);
+  chunks.push(
+    `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`,
+  );
   return Buffer.from(chunks.join(""), "utf8");
 }
 
@@ -120,7 +137,14 @@ function lineItems(value: unknown): LineItemRecord[] {
     const label = typeof record["label"] === "string" ? record["label"] : null;
     const amount = Number(record["amount"] ?? 0);
     if (!label || !Number.isFinite(amount)) return [];
-    return [{ label, amount, category: typeof record["category"] === "string" ? record["category"] : null }];
+    return [
+      {
+        label,
+        amount,
+        category:
+          typeof record["category"] === "string" ? record["category"] : null,
+      },
+    ];
   });
 }
 
@@ -132,6 +156,9 @@ export async function GET(
   if (!token) {
     return NextResponse.json({ error: "missing_token" }, { status: 400 });
   }
+
+  const quoteV2 = await maybeHandleQuoteV2PublicPdf(request, token);
+  if (quoteV2.handled) return quoteV2.response;
 
   const db = getDb();
   const [quote] = await db
@@ -164,23 +191,37 @@ export async function GET(
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
-  const ipAddress = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
   await db.insert(quotePdfDownloads).values({
     quoteId: quote.id,
-    userAgent: request.headers.get("user-agent"),
-    ipAddress,
   });
 
-  const customerName = [quote.customerFirstName, quote.customerLastName].filter(Boolean).join(" ").trim() || "Customer";
-  const address = [quote.addressLine1, quote.city, quote.state, quote.postalCode].filter(Boolean).join(", ");
+  const customerName =
+    [quote.customerFirstName, quote.customerLastName]
+      .filter(Boolean)
+      .join(" ")
+      .trim() || "Customer";
+  const address = [
+    quote.addressLine1,
+    quote.city,
+    quote.state,
+    quote.postalCode,
+  ]
+    .filter(Boolean)
+    .join(", ");
   const items = lineItems(quote.lineItems);
   const lines: PdfLine[] = [
     { text: "Stonegate Junk Removal", size: 18, bold: true, gap: 24 },
     { text: "Formal Quote Proposal", size: 14, bold: true, gap: 22 },
-    { text: `Quote: ${quote.quoteNumber ?? quote.id.slice(0, 8).toUpperCase()}`, bold: true },
+    {
+      text: `Quote: ${quote.quoteNumber ?? quote.id.slice(0, 8).toUpperCase()}`,
+      bold: true,
+    },
     { text: `Prepared for: ${customerName}` },
     { text: `Property: ${address}` },
-    { text: `Sent: ${dateLabel(quote.sentAt)}    Valid until: ${dateLabel(quote.expiresAt)}`, gap: 22 },
+    {
+      text: `Sent: ${dateLabel(quote.sentAt)}    Valid until: ${dateLabel(quote.expiresAt)}`,
+      gap: 22,
+    },
     { text: "Scope of Work", size: 13, bold: true, gap: 18 },
     {
       text:
@@ -189,7 +230,10 @@ export async function GET(
       gap: 16,
     },
     { text: "Line Items", size: 13, bold: true, gap: 18 },
-    ...items.map((item) => ({ text: `${item.label}: ${currency(item.amount)}`, gap: 14 })),
+    ...items.map((item) => ({
+      text: `${item.label}: ${currency(item.amount)}`,
+      gap: 14,
+    })),
     { text: `Subtotal: ${currency(quote.subtotal)}`, bold: true },
     { text: `Total: ${currency(quote.total)}`, size: 14, bold: true, gap: 20 },
     { text: "Payment Terms", size: 13, bold: true, gap: 18 },
@@ -202,12 +246,14 @@ export async function GET(
     },
     { text: "Terms", size: 13, bold: true, gap: 18 },
     {
-      text:
-        "This quote assumes the listed scope, normal access, and non-hazardous materials. Pricing may change if volume, weight, access, disposal requirements, or item conditions differ on site.",
+      text: "This quote assumes the listed scope, normal access, and non-hazardous materials. Pricing may change if volume, weight, access, disposal requirements, or item conditions differ on site.",
     },
   ];
 
-  const filename = `${quote.quoteNumber ?? "stonegate-quote"}.pdf`.replace(/[^a-z0-9_.-]/gi, "_");
+  const filename = `${quote.quoteNumber ?? "stonegate-quote"}.pdf`.replace(
+    /[^a-z0-9_.-]/gi,
+    "_",
+  );
   const pdf = generatePdf(lines);
   return new NextResponse(new Uint8Array(pdf), {
     status: 200,

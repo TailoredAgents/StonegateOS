@@ -34,6 +34,24 @@ export type StoredObjectHead = {
   checksumSha256: string | null;
 };
 
+export function isMissingMediaObjectError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as {
+    name?: unknown;
+    Code?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+  };
+  if (value.name === "NoSuchBucket" || value.Code === "NoSuchBucket") {
+    return false;
+  }
+  return (
+    value.name === "NotFound" ||
+    value.name === "NoSuchKey" ||
+    value.Code === "NoSuchKey" ||
+    value.$metadata?.httpStatusCode === 404
+  );
+}
+
 let cached:
   | {
       signature: string;
@@ -406,6 +424,34 @@ export async function headMediaObject(key: string): Promise<StoredObjectHead> {
     contentType: result.ContentType ?? null,
     checksumSha256: result.ChecksumSHA256 ?? null,
   };
+}
+
+/**
+ * Checks whether an upload reached private storage without treating an
+ * expected missing write-once object as a provider outage. Non-404 storage
+ * failures still update provider health and fail closed.
+ */
+export async function tryHeadMediaObject(
+  key: string,
+): Promise<StoredObjectHead | null> {
+  await ensureBucket();
+  const storage = getStorage();
+  try {
+    const result = await storage.client.send(
+      new HeadObjectCommand({ Bucket: storage.config.bucket, Key: key }),
+    );
+    await recordStorageSuccess();
+    return {
+      byteLength:
+        typeof result.ContentLength === "number" ? result.ContentLength : null,
+      contentType: result.ContentType ?? null,
+      checksumSha256: result.ChecksumSHA256 ?? null,
+    };
+  } catch (error) {
+    if (isMissingMediaObjectError(error)) return null;
+    await recordStorageFailure("head_object", error);
+    throw error;
+  }
 }
 
 export async function getMediaObject(

@@ -991,7 +991,11 @@ function InstantQuotesUnavailable({ detail }: { detail: string }) {
   );
 }
 
-export async function InstantQuotesSection(): Promise<React.ReactElement> {
+export async function InstantQuotesSection({
+  compact = false,
+}: {
+  compact?: boolean;
+} = {}): Promise<React.ReactElement> {
   const principal = await requireCurrentTeamPrincipal();
   let res: Response;
   try {
@@ -1050,6 +1054,90 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const quoteCloseSummary = data.quoteCloseSummary;
   const followupSummary = data.followupSummary;
   const reactivationSummary = data.reactivationSummary;
+
+  if (compact) {
+    return (
+      <section className="space-y-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-[color:var(--team-text)]">
+              Instant quote handoffs
+            </h3>
+            <p className="text-xs text-[color:var(--team-text-soft)]">
+              Review only the newest photo/AI estimates that may need a
+              professional proposal or booking follow-up.
+            </p>
+          </div>
+          <a
+            href="/team/sales/hq#instant-quote-learning"
+            className={teamButtonClass("secondary", "sm")}
+          >
+            View learning in Sales HQ
+          </a>
+        </div>
+        <div className="grid gap-2">
+          {quotes.map((quote) => {
+            const low =
+              quote.aiResult.priceLowDiscounted ?? quote.aiResult.priceLow;
+            const high =
+              quote.aiResult.priceHighDiscounted ?? quote.aiResult.priceHigh;
+            return (
+              <article
+                key={quote.id}
+                className="grid gap-3 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="font-semibold text-[color:var(--team-text)]">
+                      {quote.contactName}
+                    </h4>
+                    {quote.aiResult.needsInPersonEstimate ? (
+                      <span className="rounded-full bg-[color:var(--team-warning-surface)] px-2 py-1 text-[10px] font-semibold text-[color:var(--team-warning-text)]">
+                        Needs review
+                      </span>
+                    ) : null}
+                    {quote.hasBookedAppointment ? (
+                      <span className="rounded-full bg-[color:var(--team-success-surface)] px-2 py-1 text-[10px] font-semibold text-[color:var(--team-success-text)]">
+                        Booked
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-xs text-[color:var(--team-text-muted)]">
+                    {quote.zip} · {quote.timeframe} · ${low}–${high} · {quote.photoCount}{" "}
+                    photo{quote.photoCount === 1 ? "" : "s"}
+                  </p>
+                  <p className="mt-1 line-clamp-2 text-xs text-[color:var(--team-text-soft)]">
+                    {quote.aiResult.reasonSummary}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  <Link
+                    href={`/team/instant-quotes/${quote.id}`}
+                    className={teamButtonClass("primary", "sm")}
+                  >
+                    Review handoff
+                  </Link>
+                  {canDelete ? (
+                    <DeleteInstantQuoteForm
+                      instantQuoteId={quote.id}
+                      expectedVersion={quote.createdAt}
+                      idempotencyKey={`instant-quote-delete:${randomUUID()}`}
+                      action={deleteInstantQuoteAction}
+                    />
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+          {quotes.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-[color:var(--team-border)] p-5 text-sm text-[color:var(--team-text-soft)]">
+              No instant quote handoffs need review.
+            </div>
+          ) : null}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="space-y-4 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">

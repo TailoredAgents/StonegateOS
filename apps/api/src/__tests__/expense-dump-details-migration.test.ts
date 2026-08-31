@@ -27,8 +27,12 @@ describe("expense dump-ticket details migration contract", () => {
         tag: "0109_expense_dump_ticket_details",
       }),
     ]);
-    expect(entries.at(-2)?.tag).toBe("0108_expense_recurring_fixed_costs");
-    expect(entries.at(-1)?.tag).toBe("0109_expense_dump_ticket_details");
+    const migrationIndex = entries.findIndex(
+      (entry) => entry.tag === "0109_expense_dump_ticket_details",
+    );
+    expect(entries[migrationIndex - 1]?.tag).toBe(
+      "0108_expense_recurring_fixed_costs",
+    );
   });
 
   it("stores one reviewed scale-ticket fact set per expense with exact units", () => {

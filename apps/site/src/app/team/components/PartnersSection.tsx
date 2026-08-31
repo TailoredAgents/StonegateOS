@@ -39,6 +39,8 @@ import {
   teamButtonClass,
 } from "./team-ui";
 import { PartnerRatesEditor } from "./PartnerRatesEditor";
+import { PartnerAccessApplicationsQueue } from "./PartnerAccessApplicationsQueue";
+import { PartnerPortalReadOnlyPreview } from "./PartnerPortalReadOnlyPreview";
 
 type TeamMember = { id: string; name: string; active?: boolean };
 
@@ -49,6 +51,8 @@ type PartnerFilters = {
   q?: string;
   cursor?: string;
   selectedId?: string;
+  preview?: string;
+  previewJobId?: string;
   outboundReturn?: string;
 };
 
@@ -102,6 +106,8 @@ function buildPartnersHref(args: {
   setIf("p_q", merged.q);
   setIf("p_cursor", merged.cursor);
   setIf("p_selected", merged.selectedId);
+  setIf("p_preview", merged.preview);
+  setIf("p_preview_job", merged.previewJobId);
   const outboundReturn = parseOutboundReturnHref(merged.outboundReturn);
   if (outboundReturn) {
     setIf(
@@ -129,6 +135,19 @@ export async function PartnersSection({
   const canInvitePartners = hasTeamPermission(principal, "partners.invite");
   const canManagePartnerRates = hasTeamPermission(principal, "partners.rates");
   const resolvedFilters: PartnerFilters = filters ?? {};
+  const selectedId = normalizeFilter(resolvedFilters.selectedId);
+  const previewMode = normalizeFilter(resolvedFilters.preview) === "1";
+  const previewJobId = normalizeFilter(resolvedFilters.previewJobId);
+
+  if (previewMode && selectedId) {
+    return (
+      <PartnerPortalReadOnlyPreview
+        principal={principal}
+        orgContactId={selectedId}
+        selectedJobId={previewJobId || null}
+      />
+    );
+  }
 
   let members: TeamMember[] = [];
   let directoryUnavailable = false;
@@ -153,7 +172,6 @@ export async function PartnersSection({
   const type = normalizeFilter(resolvedFilters.type);
   const q = normalizeFilter(resolvedFilters.q);
   const cursor = normalizeFilter(resolvedFilters.cursor);
-  const selectedId = normalizeFilter(resolvedFilters.selectedId);
   const outboundReturnLocation = parseOutboundReturnHref(
     resolvedFilters.outboundReturn,
   );
@@ -323,6 +341,11 @@ export async function PartnersSection({
         </div>
       </header>
 
+      <PartnerAccessApplicationsQueue
+        principal={principal}
+        canDecide={canInvitePartners}
+      />
+
       {directoryUnavailable ? (
         <div
           role="status"
@@ -369,15 +392,34 @@ export async function PartnersSection({
                 partner.
               </p>
             </div>
-            <Link
-              className={teamButtonClass("secondary", "sm")}
-              href={buildPartnersHref({
-                filters: resolvedFilters,
-                patch: { selectedId: "" },
-              })}
-            >
-              Close
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                className={teamButtonClass("secondary", "sm")}
+                href={buildPartnersHref({
+                  filters: resolvedFilters,
+                  patch: {
+                    selectedId,
+                    preview: "1",
+                    previewJobId: "",
+                  },
+                })}
+              >
+                Read-only portal preview
+              </Link>
+              <Link
+                className={teamButtonClass("secondary", "sm")}
+                href={buildPartnersHref({
+                  filters: resolvedFilters,
+                  patch: {
+                    selectedId: "",
+                    preview: "",
+                    previewJobId: "",
+                  },
+                })}
+              >
+                Close
+              </Link>
+            </div>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">

@@ -61,13 +61,13 @@ const ROUTE_CONTRACTS: RouteContract[] = [
   {
     route: "tools/quote/route.ts",
     permission: "quotes.write",
-    firstSensitiveOperation: ".json()",
+    firstSensitiveOperation: "readBoundedJsonRequest(",
   },
 ];
 
 function readAdminRoute(route: string): string {
   return fs.readFileSync(
-    path.resolve(__dirname, "../../app/api/admin", route),
+    path.resolve(process.cwd(), "app/api/admin", route),
     "utf8",
   );
 }

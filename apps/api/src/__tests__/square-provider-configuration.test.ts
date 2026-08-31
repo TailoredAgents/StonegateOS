@@ -46,6 +46,9 @@ describe("Square provider endpoint safety", () => {
     expect(
       resolveSquareApiEndpoint({ kind: "refunds" }, loopbackEnvironment),
     ).toBe("http://127.0.0.1:4015/v2/refunds");
+    expect(
+      resolveSquareApiEndpoint({ kind: "paymentLinks" }, loopbackEnvironment),
+    ).toBe("http://127.0.0.1:4015/v2/online-checkout/payment-links");
   });
 
   it("preserves a configured gateway base path", () => {

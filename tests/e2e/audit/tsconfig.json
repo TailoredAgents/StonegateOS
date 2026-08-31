@@ -1,8 +1,16 @@
 {
   "extends": "../tsconfig.json",
   "include": [
+    "../../../playwright.quote-v2-visual.config.ts",
+    "../../../playwright.quote-v2-release.config.ts",
+    "../../../playwright.quote-v2-real-composer.config.ts",
     "../../../playwright.team-audit.config.ts",
     "./**/*.ts",
+    "../specs/quote-v2-staff-visual.spec.ts",
+    "../specs/quote-v2-real-composer.spec.ts",
+    "../specs/quote-v2-visual.spec.ts",
+    "../support/quote-v2-staff-visual-setup.ts",
+    "../support/quote-v2.ts",
     "../support/team-auth.ts"
   ]
 }

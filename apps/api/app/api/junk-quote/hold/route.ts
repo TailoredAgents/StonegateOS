@@ -16,6 +16,7 @@ import {
 import { getAutonomousBookingDurationMinutes, validateAutonomousBookingStart } from "@/lib/after-hours-autonomy";
 import { buildStandardJobMessage, evaluateStandardJob } from "@/lib/standard-job";
 import { APPOINTMENT_TIME_ZONE, DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
+import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
 
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
@@ -241,11 +242,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       .limit(1);
 
     const holdResult = await db.transaction(async (tx) => {
-      const bookingDayKey = startLocal.toFormat("yyyyLLdd");
-      const bookingLockKey = Number(bookingDayKey);
-      if (Number.isFinite(bookingLockKey) && bookingLockKey > 0) {
-        await tx.execute(sql`select pg_advisory_xact_lock(${bookingLockKey})`);
-      }
+      await acquireScheduleConflictLock(tx);
 
       const now = new Date();
 
@@ -288,7 +285,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         }
       }
 
-      const slotEnd = new Date(startAt.getTime() + durationMinutes * 60_000);
+      const slotEnd = new Date(
+        startAt.getTime() +
+          (durationMinutes + travelBufferMinutes) * 60_000,
+      );
       const lookbackStart = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
       const lookaheadEnd = new Date(slotEnd.getTime() + 24 * 60 * 60 * 1000);
 

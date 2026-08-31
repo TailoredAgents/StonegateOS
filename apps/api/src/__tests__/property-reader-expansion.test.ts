@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { jest } from "@jest/globals";
 import {
   loadContactPropertiesForContacts,
   loadContactPropertyById,
@@ -9,7 +10,7 @@ import {
   type PropertyWriteExecutor,
 } from "@/lib/property-write";
 
-const API_ROOT = path.resolve(__dirname, "../..");
+const API_ROOT = path.resolve(process.cwd());
 const REPO_ROOT = path.resolve(API_ROOT, "../..");
 const CONTACT_A = "11111111-1111-4111-8111-111111111111";
 const CONTACT_B = "22222222-2222-4222-8222-222222222222";

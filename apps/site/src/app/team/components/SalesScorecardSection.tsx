@@ -6,6 +6,7 @@ import {
 import { callAdminApiAs } from "../lib/api";
 import { teamSurfaceHref } from "../surface-registry";
 import { SalesHqClient } from "./SalesHqClient";
+import { InstantQuotesSection } from "./InstantQuotesSection";
 import {
   CallReconciliationPanel,
   isCallReconciliationPayload,
@@ -183,6 +184,9 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
     callReconciliation = reconciliationResult.data;
     callReconciliationError = reconciliationResult.error;
   }
+  const instantQuoteLearning = hasTeamPermission(principal, "quotes.read")
+    ? await InstantQuotesSection()
+    : null;
 
   return (
     <section className="space-y-4">
@@ -228,6 +232,17 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
         isOwnerSession={isOwnerSession}
         canPlaceCalls={canPlaceCalls}
       />
+      {instantQuoteLearning ? (
+        <details
+          id="instant-quote-learning"
+          className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4"
+        >
+          <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-[color:var(--team-text)]">
+            Instant quote learning and performance
+          </summary>
+          <div className="mt-4">{instantQuoteLearning}</div>
+        </details>
+      ) : null}
     </section>
   );
 }

@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { jest } from "@jest/globals";
 
 const mockRequirePermission = jest.fn();
 const mockIsAdminRequest = jest.fn();
@@ -76,9 +77,15 @@ const mockTables = {
     contactId: "sales_escalation_call_operations.contact_id",
     guardReleasedAt: "sales_escalation_call_operations.guard_released_at",
   },
+  quoteCapabilities: {
+    name: "quote_capabilities",
+    id: "quote_capabilities.id",
+    quoteId: "quote_capabilities.quote_id",
+    status: "quote_capabilities.status",
+  },
 };
 
-jest.mock("drizzle-orm", () => ({
+jest.unstable_mockModule("drizzle-orm", () => ({
   and: jest.fn((...values: unknown[]) => ({ kind: "and", values })),
   eq: jest.fn((...values: unknown[]) => ({ kind: "eq", values })),
   ilike: jest.fn((...values: unknown[]) => ({ kind: "ilike", values })),
@@ -222,7 +229,7 @@ const mockGetDb = jest.fn(() => ({
   transaction: mockTransaction,
 }));
 
-jest.mock("@/db", () => ({
+jest.unstable_mockModule("@/db", () => ({
   auditLogs: mockTables.auditLogs,
   contacts: mockTables.contacts,
   crmTasks: mockTables.crmTasks,
@@ -235,14 +242,17 @@ jest.mock("@/db", () => ({
   partnerInviteOperations: mockTables.partnerInviteOperations,
   partnerSessions: mockTables.partnerSessions,
   partnerUsers: mockTables.partnerUsers,
+  quoteCapabilities: mockTables.quoteCapabilities,
   salesEscalationCallOperations: mockTables.salesEscalationCallOperations,
 }));
-jest.mock("@/lib/audit", () => ({
+jest.unstable_mockModule("@/lib/audit", () => ({
   getAuditActorFromRequest: mockGetAuditActorFromRequest,
   recordAuditEvent: mockRecordAuditEvent,
 }));
-jest.mock("@/lib/contact-assignees", () => ({ setContactAssignee: jest.fn() }));
-jest.mock("@/lib/verified-actor-context", () => ({
+jest.unstable_mockModule("@/lib/contact-assignees", () => ({
+  setContactAssignee: jest.fn(),
+}));
+jest.unstable_mockModule("@/lib/verified-actor-context", () => ({
   getVerifiedRequestActor: jest.fn(() => ({
     type: "human",
     id: "7d363f33-b87b-42f9-93ba-514189f3a174",
@@ -252,7 +262,7 @@ jest.mock("@/lib/verified-actor-context", () => ({
     authMethod: "team_session",
   })),
 }));
-jest.mock("@/lib/team-mutation-idempotency", () => ({
+jest.unstable_mockModule("@/lib/team-mutation-idempotency", () => ({
   claimTeamMutationIdempotency: mockClaimTeamMutationIdempotency,
   completeTeamMutationIdempotency: mockCompleteTeamMutationIdempotency,
   settleTeamMutationIdempotencyFailure:
@@ -273,16 +283,22 @@ jest.mock("@/lib/team-mutation-idempotency", () => ({
       }),
   ),
 }));
-jest.mock("@/lib/permissions", () => ({
+jest.unstable_mockModule("@/lib/permissions", () => ({
   requirePermission: mockRequirePermission,
 }));
-jest.mock("../../app/api/web/admin", () => ({
+jest.unstable_mockModule("../../app/api/web/admin", () => ({
   isAdminRequest: mockIsAdminRequest,
 }));
 
-import { DELETE } from "../../app/api/admin/contacts/[contactId]/route";
-import { POST as RESTORE } from "../../app/api/admin/contacts/[contactId]/restore/route";
-import { requireActiveContactForDirectOutbound } from "@/lib/contact-outbound-safety";
+const { DELETE } = await import(
+  "../../app/api/admin/contacts/[contactId]/route"
+);
+const { POST: RESTORE } = await import(
+  "../../app/api/admin/contacts/[contactId]/restore/route"
+);
+const { requireActiveContactForDirectOutbound } = await import(
+  "@/lib/contact-outbound-safety"
+);
 
 function mutationRequest(input: { version: string; key: string }): NextRequest {
   return {

@@ -12,6 +12,7 @@ import {
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
 import { normalizePublicQuoteIdempotencyKey } from "@/lib/public-quote-mutation";
+import { maybeHandleQuoteV2Book } from "@/lib/quote-v2-scheduling-route";
 
 const BookSchema = z
   .object({
@@ -57,6 +58,8 @@ export async function POST(
       { status: 400, headers: { "x-correlation-id": correlationId } },
     );
   }
+  const quoteV2 = await maybeHandleQuoteV2Book(request, token);
+  if (quoteV2.handled) return quoteV2.response;
   const idempotencyKey = normalizePublicQuoteIdempotencyKey(
     request.headers.get("idempotency-key"),
   );

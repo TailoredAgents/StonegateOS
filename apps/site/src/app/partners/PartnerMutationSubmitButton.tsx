@@ -18,9 +18,12 @@ export function PartnerMutationSubmitButton({
       type="submit"
       disabled={pending}
       aria-disabled={pending}
+      aria-busy={pending}
       className={className}
     >
-      {pending ? pendingLabel : children}
+      <span className="contents" aria-live="polite" aria-atomic="true">
+        {pending ? pendingLabel : children}
+      </span>
     </button>
   );
 }

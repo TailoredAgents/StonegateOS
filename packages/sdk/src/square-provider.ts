@@ -8,6 +8,7 @@ export type SquareApiEndpoint =
   | { kind: "order"; orderId: string }
   | { kind: "payment"; paymentId: string }
   | { kind: "refund"; refundId: string }
+  | { kind: "paymentLinks" }
   | { kind: "payments" }
   | { kind: "refunds" };
 
@@ -123,6 +124,9 @@ export function resolveSquareApiEndpoint(
       suffix = `/v2/refunds/${encodeURIComponent(
         safeProviderId(endpoint.refundId, "refundId"),
       )}`;
+      break;
+    case "paymentLinks":
+      suffix = "/v2/online-checkout/payment-links";
       break;
     case "payments":
       suffix = "/v2/payments";

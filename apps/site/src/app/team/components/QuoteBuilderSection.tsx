@@ -17,6 +17,7 @@ import {
   type InstantQuoteHandoff,
 } from "../lib/instant-quote-handoff";
 import { teamButtonClass } from "./team-ui";
+import { isQuoteV2StaffFeatureEnabled } from "../lib/quote-v2-staff-feature";
 
 type ContactsResponse = {
   contacts: ContactSummary[];
@@ -99,6 +100,17 @@ export async function QuoteBuilderSection({
         detail="You can review quotes, but your current access does not allow creating or editing them."
       />
     );
+  }
+
+  // Instant-quote conversion remains on the compatibility adapter until the
+  // verified handoff can create a V2 opportunity and immutable draft.
+  if (isQuoteV2StaffFeatureEnabled() && !instantQuoteId) {
+    const { QuoteV2BuilderSection } = await import("./QuoteV2BuilderSection");
+    return QuoteV2BuilderSection({
+      principal,
+      initialContactId,
+      initialPropertyId,
+    });
   }
 
   const retryHref = quoteWorkspaceHref("create", {

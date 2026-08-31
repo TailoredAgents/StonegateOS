@@ -17,28 +17,41 @@ import {
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 import {
+  BoundedJsonRequestError,
+  readBoundedJsonRequest,
+} from "@/lib/bounded-json-request";
+import {
   isPublicQuoteMutationSuccessBody,
   normalizePublicQuoteIdempotencyKey,
   PUBLIC_QUOTE_MUTATION_RECEIPT_TTL_MS,
   publicQuoteMutationKeyHash,
   publicQuoteMutationRequestHash,
 } from "@/lib/public-quote-mutation";
+import {
+  maybeHandleQuoteV2PublicDecision,
+  maybeHandleQuoteV2PublicGet,
+} from "@/lib/quote-v2-public-route";
 
-const PublicQuoteActionSchema = z
+const PublicQuoteDecisionSchema = z
   .object({
-    decision: z.enum(["accepted", "declined"]).optional(),
-    action: z.enum(["refresh"]).optional(),
+    quoteId: z.string().uuid(),
+    expectedRevision: z.number().int().positive(),
+    decision: z.enum(["accepted", "declined"]),
     reason: z.string().trim().max(120).optional(),
     notes: z.string().trim().max(1000).optional(),
   })
-  .superRefine((value, context) => {
-    if (Boolean(value.decision) === Boolean(value.action)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "exactly_one_quote_action_required",
-      });
-    }
-  });
+  .strict();
+
+const PublicQuoteRefreshSchema = z
+  .object({
+    action: z.literal("refresh"),
+  })
+  .strict();
+
+const PublicQuoteActionSchema = z.union([
+  PublicQuoteDecisionSchema,
+  PublicQuoteRefreshSchema,
+]);
 
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
 
@@ -156,6 +169,9 @@ export async function GET(
     return NextResponse.json({ error: "missing_token" }, { status: 400 });
   }
 
+  const quoteV2 = await maybeHandleQuoteV2PublicGet(request, token);
+  if (quoteV2.handled) return quoteV2.response;
+
   const db = getDb();
   const rows = await db
     .select({
@@ -240,6 +256,9 @@ export async function POST(
     return NextResponse.json({ error: "missing_token" }, { status: 400 });
   }
 
+  const quoteV2 = await maybeHandleQuoteV2PublicDecision(request, token);
+  if (quoteV2.handled) return quoteV2.response;
+
   const idempotencyKey = normalizePublicQuoteIdempotencyKey(
     request.headers.get("idempotency-key"),
   );
@@ -254,25 +273,53 @@ export async function POST(
     );
   }
 
-  const parsedBody = PublicQuoteActionSchema.safeParse(
-    await request.json().catch(() => ({})),
-  );
-  if (!parsedBody.success) {
+  let body: unknown;
+  try {
+    body = await readBoundedJsonRequest(request, {
+      maximumBytes: 4 * 1024,
+      rejectDuplicateObjectKeys: true,
+    });
+  } catch (error) {
+    const failure =
+      error instanceof BoundedJsonRequestError
+        ? error
+        : new BoundedJsonRequestError(
+            "invalid_body",
+            "The request body could not be read.",
+            400,
+          );
     return NextResponse.json(
-      { error: "invalid_payload", details: parsedBody.error.flatten() },
-      { status: 400 },
+      { ok: false, error: failure.code, message: failure.message },
+      { status: failure.status },
     );
   }
 
-  const action = parsedBody.data.decision ? "decision" : "refresh";
-  const normalizedReason = parsedBody.data.reason || null;
-  const normalizedNotes = parsedBody.data.notes || null;
+  const parsedBody = PublicQuoteActionSchema.safeParse(body);
+  if (!parsedBody.success) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "invalid_payload",
+        message:
+          "The quote action is incomplete. Refresh the quote before trying again.",
+        details: parsedBody.error.flatten(),
+      },
+      { status: 422 },
+    );
+  }
+
+  const decisionInput = "decision" in parsedBody.data ? parsedBody.data : null;
+  const action = decisionInput ? "decision" : "refresh";
+  const normalizedReason = decisionInput?.reason || null;
+  const normalizedNotes = decisionInput?.notes || null;
   const keyHash = publicQuoteMutationKeyHash(idempotencyKey);
   const requestHash = publicQuoteMutationRequestHash({
     action,
-    decision: parsedBody.data.decision,
+    decision: decisionInput?.decision,
     reason: normalizedReason,
     notes: normalizedNotes,
+    quoteId: decisionInput?.quoteId,
+    expectedRevision: decisionInput?.expectedRevision,
   });
   const correlationId = publicCorrelationId(request);
   const db = getDb();
@@ -293,6 +340,25 @@ export async function POST(
         .limit(1);
 
       if (!quote) return { kind: "not_found" as const };
+      if (decisionInput && quote.id !== decisionInput.quoteId) {
+        await tx.insert(auditLogs).values({
+          actorType: "system",
+          actorLabel: "public-quote-capability",
+          correlationId,
+          outcome: "failed",
+          surface: "/quote/[token]",
+          idempotencyKeyHash: keyHash,
+          action: "quote.public_decision",
+          entityType: "quote",
+          entityId: quote.id,
+          meta: sanitizeAuditMetadata({
+            reason: "quote_binding_mismatch",
+            source: "customer",
+            capabilityTokenStored: false,
+          }),
+        });
+        return { kind: "not_found" as const };
+      }
 
       const [receipt] = await tx
         .select({
@@ -359,7 +425,34 @@ export async function POST(
         };
       }
 
-      if (parsedBody.data.action === "refresh") {
+      if (decisionInput && quote.revision !== decisionInput.expectedRevision) {
+        await tx.insert(auditLogs).values({
+          actorType: "system",
+          actorLabel: "public-quote-capability",
+          correlationId,
+          outcome: "failed",
+          surface: "/quote/[token]",
+          idempotencyKeyHash: keyHash,
+          action: "quote.public_decision",
+          entityType: "quote",
+          entityId: quote.id,
+          meta: sanitizeAuditMetadata({
+            reason: "stale_quote_revision",
+            source: "customer",
+            expectedRevision: decisionInput.expectedRevision,
+            currentRevision: quote.revision,
+            capabilityTokenStored: false,
+          }),
+        });
+        return {
+          kind: "stale" as const,
+          quoteId: quote.id,
+          expectedRevision: decisionInput.expectedRevision,
+          currentRevision: quote.revision,
+        };
+      }
+
+      if (!decisionInput) {
         const refreshAllowed =
           quote.status === "sent" &&
           quote.expiresAt !== null &&
@@ -465,8 +558,7 @@ export async function POST(
         return { kind: "refreshed" as const, body: responseBody };
       }
 
-      const decision = parsedBody.data.decision;
-      if (!decision) return { kind: "missing_decision" as const };
+      const decision = decisionInput.decision;
       if (quote.status === "accepted" || quote.status === "declined") {
         await tx.insert(auditLogs).values({
           actorType: "system",
@@ -681,11 +773,6 @@ export async function POST(
     switch (result.kind) {
       case "not_found":
         return NextResponse.json({ error: "not_found" }, { status: 404 });
-      case "missing_decision":
-        return NextResponse.json(
-          { error: "missing_decision" },
-          { status: 400 },
-        );
       case "idempotency_conflict":
         return NextResponse.json(
           {
@@ -733,6 +820,20 @@ export async function POST(
         );
       case "expired":
         return NextResponse.json({ error: "expired" }, { status: 410 });
+      case "stale":
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "stale_quote",
+            message:
+              "This quote changed after the page loaded. Refresh before responding.",
+            retryable: true,
+            quoteId: result.quoteId,
+            expectedRevision: result.expectedRevision,
+            currentRevision: result.currentRevision,
+          },
+          { status: 409, headers: { "x-correlation-id": correlationId } },
+        );
       case "conflict":
         return NextResponse.json(
           { error: "quote_changed", retryable: true },

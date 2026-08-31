@@ -302,6 +302,7 @@ export async function POST(
       const scheduleDecision = await inspectScheduleConflicts(tx, {
         startAt,
         durationMinutes: effectiveDurationMinutes,
+        travelBufferMinutes: effectiveTravelBufferMinutes,
         capacity: getAppointmentCapacity(),
         excludeAppointmentId: appointmentId,
       });

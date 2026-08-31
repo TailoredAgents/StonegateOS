@@ -23,6 +23,25 @@ export type QuoteDeliveryChannels = {
 
 const DeliverableEmailSchema = z.string().trim().email();
 
+function normalizeOutboundPhone(value: string): string | null {
+  try {
+    const parsed = parsePhoneNumberFromString(value, "US");
+    if (parsed?.isValid() === true) return parsed.number;
+  } catch {
+    // Some constrained ESM/test runtimes cannot load the optional package
+    // metadata. Fail over to a narrow syntax-only normalizer so a valid email
+    // channel is never blocked by a malformed secondary phone field.
+  }
+  if (!/^\+?[0-9().\-\s]+$/u.test(value)) return null;
+  const digits = value.replace(/\D/gu, "");
+  if (value.startsWith("+") && /^\d{8,15}$/u.test(digits)) {
+    return `+${digits}`;
+  }
+  if (/^\d{10}$/u.test(digits)) return `+1${digits}`;
+  if (/^1\d{10}$/u.test(digits)) return `+${digits}`;
+  return null;
+}
+
 /**
  * Return only provider-usable quote destinations. A malformed secondary
  * destination must not be queued merely because the contact has another
@@ -37,12 +56,12 @@ export function resolveUsableQuoteDeliveryChannels(input: {
   const phone = [input.phoneE164, input.phone]
     .map((candidate) => candidate?.trim() ?? "")
     .filter(Boolean)
-    .map((candidate) => parsePhoneNumberFromString(candidate, "US"))
-    .find((candidate) => candidate?.isValid() === true);
+    .map(normalizeOutboundPhone)
+    .find((candidate): candidate is string => candidate !== null);
 
   return {
     email: parsedEmail.success ? parsedEmail.data.toLowerCase() : null,
-    phone: phone?.number ?? null,
+    phone: phone ?? null,
   };
 }
 

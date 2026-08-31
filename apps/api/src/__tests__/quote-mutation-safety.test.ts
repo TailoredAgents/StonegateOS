@@ -21,6 +21,16 @@ function functionSlice(source: string, start: string, end?: string): string {
 
 describe("quote lifecycle mutation safety", () => {
   const quoteCollectionRoute = apiSource("app/api/quotes/route.ts");
+  const quoteCollectionFormatter = functionSlice(
+    quoteCollectionRoute,
+    "function formatQuoteResponse",
+    "export async function GET",
+  );
+  const quoteCollectionRead = functionSlice(
+    quoteCollectionRoute,
+    "export async function GET",
+    "export async function POST",
+  );
   const creation = functionSlice(
     quoteCollectionRoute,
     "export async function POST",
@@ -29,6 +39,11 @@ describe("quote lifecycle mutation safety", () => {
   const decision = apiSource("app/api/quotes/[id]/decision/route.ts");
   const publicQuote = apiSource("app/api/public/quotes/[token]/route.ts");
   const quoteRoute = apiSource("app/api/quotes/[id]/route.ts");
+  const quoteDetailRead = functionSlice(
+    quoteRoute,
+    "export async function GET",
+    "export async function PATCH",
+  );
   const update = functionSlice(
     quoteRoute,
     "export async function PATCH",
@@ -101,8 +116,15 @@ describe("quote lifecycle mutation safety", () => {
   ])("%s records privacy-safe failed mutation evidence", (_name, source) => {
     expect(source).toContain("recordTeamMutationFailure");
     expect(source).toContain('phase: "request_validation"');
-    expect(source).toContain('phase: "mutation"');
+    expect(source).toMatch(/phase: (?:"mutation"|failurePhase)/u);
     expect(source).not.toContain("metadata: parsedBody.data");
+  });
+
+  it("send records bounded step-level failure phases without customer data", () => {
+    expect(send).toContain('let failurePhase = "claim"');
+    expect(send).toContain('failurePhase = "contact_policy"');
+    expect(send).toContain('failurePhase = "idempotency_complete"');
+    expect(send).toContain("phase: failurePhase");
   });
 
   it.each([
@@ -192,6 +214,15 @@ describe("quote lifecycle mutation safety", () => {
     expect(updateAudit).not.toContain("shareToken");
   });
 
+  it("does not expose the bearer share token through quotes.read responses", () => {
+    expect(quoteCollectionRead).not.toContain("shareToken: quotes.shareToken");
+    expect(quoteDetailRead).not.toContain("shareToken: quotes.shareToken");
+    expect(quoteCollectionFormatter).toContain("shareToken: null");
+    expect(quoteDetailRead).toContain("shareToken: null");
+    expect(quoteCollectionRead).toContain("customerVisible:");
+    expect(quoteDetailRead).toContain("customerVisible:");
+  });
+
   it("co-commits send work and internal decision workflow evidence without leaking the share token", () => {
     expect(send).toContain(".insert(outboxEvents)");
     expect(decision).toContain(".insert(outboxEvents)");
@@ -226,6 +257,7 @@ describe("quote lifecycle mutation safety", () => {
     expect(notifications).toContain("QUOTE_LINK_AI_PLACEHOLDER");
     expect(notifications).toContain("materializeGeneratedQuoteCopy(");
     expect(notifications).not.toContain("shareUrl: payload.shareUrl");
+    expect(notifications).not.toContain("`Share link: ${payload.shareUrl}`");
     expect(notifications).toContain(
       "!generated.emailSubject.includes(QUOTE_LINK_AI_PLACEHOLDER)",
     );

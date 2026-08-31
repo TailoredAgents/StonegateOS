@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "professional_quotes_v2_real_stack_staff_composer",
+  "reviewStatus": "locally_verified",
+  "evidenceScope": "local",
+  "ciStatus": "awaiting_ci",
+  "localDate": "2026-08-31",
+  "timezone": "America/New_York",
+  "generatedAt": "2026-08-31T07:35:24Z",
+  "source": {
+    "commitSha": "2f0e92d417d3e0b0f36693c918999da4152d15a7",
+    "worktreeStatus": "dirty_shared_worktree",
+    "worktreeMarker": "uncommitted-local-quote-v2-implementation",
+    "harnessSha256": {
+      "playwright.quote-v2-real-composer.config.ts": "bf12c5ed83798ff5096452736f208c3ecd28af832d5cb47f69f9cd443e4cd126",
+      "tests/e2e/specs/quote-v2-real-composer.spec.ts": "52ea78620843c80ee610ed6fb54700d24d790d87f0d8ebd6ce4a083d6ef5338f"
+    }
+  },
+  "runner": {
+    "class": "local_developer_workstation_with_e2e_provider_fakes",
+    "platform": "darwin",
+    "architecture": "arm64",
+    "node": "v20.20.2",
+    "pnpm": "9.15.9",
+    "playwright": "1.56.1",
+    "browser": {
+      "name": "chromium",
+      "version": "141.0.7390.37",
+      "headless": true
+    },
+    "database": {
+      "engine": "PostgreSQL",
+      "version": "16.14",
+      "urlRecorded": false
+    }
+  },
+  "invocation": {
+    "workingDirectory": "repository_root",
+    "command": "corepack pnpm exec playwright test --config=playwright.quote-v2-real-composer.config.ts",
+    "workers": 1,
+    "retries": 0,
+    "quoteRouteInterception": false,
+    "broadSeedOrReset": false
+  },
+  "coverage": {
+    "presentation": "commercial",
+    "staffJourney": [
+      "remote company search and exact contact selection",
+      "explicit property and service-zone confirmation",
+      "project metadata",
+      "custom line item and customer-facing scope",
+      "fixed-quote terms and 30-day validity",
+      "authoritative 125000-cent total and 8-of-8 readiness",
+      "server draft autosave",
+      "finalize to ready",
+      "issue immutable version",
+      "Manage search by quote number"
+    ],
+    "databaseAssertions": {
+      "quotesCreated": 1,
+      "versionsCreated": 1,
+      "issuedVersionIsCurrentAndPublished": true,
+      "versionState": "issued",
+      "aggregateState": "open"
+    },
+    "mutationAssertions": {
+      "createCount": 1,
+      "draftAutosaveMinimumCount": 1,
+      "finalizeCount": 1,
+      "issueCount": 1
+    }
+  },
+  "localResult": {
+    "status": "passed",
+    "playwrightTestsPassed": 1,
+    "playwrightTestsFailed": 0,
+    "journeyDurationSeconds": 12.2,
+    "runDurationSeconds": 12.5,
+    "fixtureCleanup": {
+      "quoteVoidedThenArchived": true,
+      "capabilitiesRevoked": true,
+      "contactAnonymized": true,
+      "activeSyntheticContactsRemaining": 0,
+      "unarchivedSyntheticQuotesRemaining": 0
+    }
+  },
+  "privacy": {
+    "containsDatabaseUrl": false,
+    "containsCredentials": false,
+    "containsCapabilityTokens": false,
+    "containsRealCustomerData": false,
+    "usesUniqueSyntheticIdentities": true
+  },
+  "releaseQualification": "Local isolated proof of the real staff Create-to-Manage path only. It does not prove provider delivery, customer approval, deposit/webhook/booking conversion, the complete Manage action matrix, mobile staff completion, or production canary behavior. CI and those release gates remain pending."
+}

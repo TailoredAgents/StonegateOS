@@ -5,15 +5,19 @@ import {
   loadPublicQuoteForScheduling,
   quoteIsExpired,
 } from "@/lib/quote-scheduling";
+import { maybeHandleQuoteV2Availability } from "@/lib/quote-v2-scheduling-route";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ token: string }> },
 ): Promise<Response> {
   const { token } = await context.params;
   if (!token) {
     return NextResponse.json({ error: "missing_token" }, { status: 400 });
   }
+
+  const quoteV2 = await maybeHandleQuoteV2Availability(request, token);
+  if (quoteV2.handled) return quoteV2.response;
 
   const quote = await loadPublicQuoteForScheduling(token);
   if (!quote) {

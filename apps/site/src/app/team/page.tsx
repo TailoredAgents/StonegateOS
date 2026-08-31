@@ -115,6 +115,8 @@ export default async function TeamPage({
     p_q?: string;
     p_cursor?: string;
     p_selected?: string;
+    p_preview?: string;
+    p_preview_job?: string;
     quoteMode?: string;
     view?: string;
     subview?: string;
@@ -430,6 +432,12 @@ export default async function TeamPage({
     cursor: typeof params?.p_cursor === "string" ? params.p_cursor : undefined,
     selectedId:
       typeof params?.p_selected === "string" ? params.p_selected : undefined,
+    preview:
+      typeof params?.p_preview === "string" ? params.p_preview : undefined,
+    previewJobId:
+      typeof params?.p_preview_job === "string"
+        ? params.p_preview_job
+        : undefined,
     outboundReturn:
       typeof params?.out_return === "string" ? params.out_return : undefined,
   };

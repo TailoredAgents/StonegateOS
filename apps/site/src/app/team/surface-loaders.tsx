@@ -82,6 +82,8 @@ export type TeamSurfaceLoaderContext = {
       q?: string;
       cursor?: string;
       selectedId?: string;
+      preview?: string;
+      previewJobId?: string;
       outboundReturn?: string;
     };
   };

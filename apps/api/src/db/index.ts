@@ -1,5 +1,6 @@
 ﻿import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { resolveDatabaseSslOptions } from "./ssl";
 
 declare global {
   var __mystDbClient: ReturnType<typeof postgres> | undefined;
@@ -15,10 +16,7 @@ export function getDb() {
     throw new Error("DATABASE_URL is not set");
   }
 
-  const shouldUseSsl =
-    process.env["DATABASE_SSL"] === "true" ||
-    /render\.com/.test(connectionString) ||
-    /sslmode=require/.test(connectionString);
+  const ssl = resolveDatabaseSslOptions(connectionString);
 
   const client =
     globalThis.__mystDbClient ??
@@ -26,7 +24,7 @@ export function getDb() {
       prepare: false,
       max: 5,
       idle_timeout: 20,
-      ...(shouldUseSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+      ...(ssl ? { ssl } : {}),
     });
 
   if (process.env["NODE_ENV"] !== "production") {

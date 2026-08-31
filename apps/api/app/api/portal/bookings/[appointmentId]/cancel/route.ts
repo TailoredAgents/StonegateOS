@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { queueSystemOutboundMessage } from "@/lib/system-outbound";
 import {
   appointmentNotes,
@@ -15,6 +15,7 @@ import {
   partnerUsers,
   properties,
 } from "@/db";
+import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
 import {
   requirePartnerSession,
   resolvePublicSiteBaseUrl,
@@ -31,6 +32,7 @@ import {
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
+import { arePartnerPortalOutboundNotificationsEnabled } from "@/lib/partner-portal-feature-flags";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -128,12 +130,11 @@ export async function POST(
   const now = new Date();
   const db = getDb();
   const result = await db.transaction(async (tx) => {
-    await tx.execute(
-      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`partner-booking-cancel:${appointmentId}`}, 0))`,
-    );
+    await acquireScheduleConflictLock(tx);
     const [row] = await tx
       .select({
         bookingId: partnerBookings.id,
+        partnerAccountId: partnerBookings.partnerAccountId,
         bookingVersion: partnerBookings.version,
         cancelOperationKeyHash: partnerBookings.cancelOperationKeyHash,
         appointmentId: appointments.id,
@@ -305,7 +306,11 @@ export async function POST(
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
-    const staffRecipient = await resolvePartnerBookingStaffRecipient(tx);
+    const outboundNotificationsEnabled =
+      arePartnerPortalOutboundNotificationsEnabled(row.partnerAccountId);
+    const staffRecipient = outboundNotificationsEnabled
+      ? await resolvePartnerBookingStaffRecipient(tx)
+      : null;
     const staffAlert = staffRecipient
       ? await queuePartnerBookingStaffAlert(tx, {
           appointmentId,
@@ -323,18 +328,19 @@ export async function POST(
         })
       : null;
 
-    const [partnerUser] = row.partnerUserId
-      ? await tx
-          .select({
-            id: partnerUsers.id,
-            name: partnerUsers.name,
-            email: partnerUsers.email,
-            phoneE164: partnerUsers.phoneE164,
-          })
-          .from(partnerUsers)
-          .where(eq(partnerUsers.id, row.partnerUserId))
-          .limit(1)
-      : [];
+    const [partnerUser] =
+      outboundNotificationsEnabled && row.partnerUserId
+        ? await tx
+            .select({
+              id: partnerUsers.id,
+              name: partnerUsers.name,
+              email: partnerUsers.email,
+              phoneE164: partnerUsers.phoneE164,
+            })
+            .from(partnerUsers)
+            .where(eq(partnerUsers.id, row.partnerUserId))
+            .limit(1)
+        : [];
     const portalLink = (() => {
       const base = resolvePublicSiteBaseUrl();
       if (!base) return null;
@@ -358,41 +364,43 @@ export async function POST(
       .filter((line): line is string => Boolean(line))
       .join("\n");
 
-    const emailMessageId = partnerUser?.email
-      ? await queueSystemOutboundMessage({
-          db: tx,
-          contactId: auth.partnerUser.orgContactId,
-          channel: "email",
-          toAddress: partnerUser.email,
-          subject: "Stonegate Partner booking canceled",
-          body: emailBody,
-          metadata: {
-            confirmationLoop: true,
-            partnerPortal: true,
-            kind: "partner.booking.canceled",
-            appointmentId,
-            partnerUserId: partnerUser.id,
-          },
-          dedupeKey: `partner.booking.canceled:${appointmentId}:${partnerUser.id}:email`,
-        })
-      : null;
-    const smsMessageId = partnerUser?.phoneE164
-      ? await queueSystemOutboundMessage({
-          db: tx,
-          contactId: auth.partnerUser.orgContactId,
-          channel: "sms",
-          toAddress: partnerUser.phoneE164,
-          body: smsBody,
-          metadata: {
-            confirmationLoop: true,
-            partnerPortal: true,
-            kind: "partner.booking.canceled",
-            appointmentId,
-            partnerUserId: partnerUser.id,
-          },
-          dedupeKey: `partner.booking.canceled:${appointmentId}:${partnerUser.id}:sms`,
-        })
-      : null;
+    const emailMessageId =
+      outboundNotificationsEnabled && partnerUser?.email
+        ? await queueSystemOutboundMessage({
+            db: tx,
+            contactId: auth.partnerUser.orgContactId,
+            channel: "email",
+            toAddress: partnerUser.email,
+            subject: "Stonegate Partner booking canceled",
+            body: emailBody,
+            metadata: {
+              confirmationLoop: true,
+              partnerPortal: true,
+              kind: "partner.booking.canceled",
+              appointmentId,
+              partnerUserId: partnerUser.id,
+            },
+            dedupeKey: `partner.booking.canceled:${appointmentId}:${partnerUser.id}:email`,
+          })
+        : null;
+    const smsMessageId =
+      outboundNotificationsEnabled && partnerUser?.phoneE164
+        ? await queueSystemOutboundMessage({
+            db: tx,
+            contactId: auth.partnerUser.orgContactId,
+            channel: "sms",
+            toAddress: partnerUser.phoneE164,
+            body: smsBody,
+            metadata: {
+              confirmationLoop: true,
+              partnerPortal: true,
+              kind: "partner.booking.canceled",
+              appointmentId,
+              partnerUserId: partnerUser.id,
+            },
+            dedupeKey: `partner.booking.canceled:${appointmentId}:${partnerUser.id}:sms`,
+          })
+        : null;
 
     const auditEventId = randomUUID();
     const statusOutboxEventId = randomUUID();
@@ -418,7 +426,12 @@ export async function POST(
         operationId: cancelOperationId,
         bookingId: row.bookingId,
         staffAlertOperationId: staffAlert?.operationId ?? null,
-        staffAlertState: staffAlert ? "requested" : "recipient_unavailable",
+        staffAlertState: !outboundNotificationsEnabled
+          ? "disabled"
+          : staffAlert
+            ? "requested"
+            : "recipient_unavailable",
+        outboundNotificationsEnabled,
         customerEmailMessageId: emailMessageId,
         customerSmsMessageId: smsMessageId,
         statusOutboxEventId,

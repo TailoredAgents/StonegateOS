@@ -67,6 +67,7 @@ export type ScheduleConflictOverrideDecision =
 type InspectScheduleInput = {
   startAt: Date;
   durationMinutes: number;
+  travelBufferMinutes?: number;
   capacity: number;
   excludeAppointmentId?: string | null;
   excludeHoldInstantQuoteId?: string | null;
@@ -93,6 +94,18 @@ export function buildScheduleInterval(
     startAt,
     endAt: new Date(startAt.getTime() + safeDuration * 60_000),
   };
+}
+
+export function buildScheduleOccupancyInterval(
+  startAt: Date,
+  durationMinutes: number,
+  travelBufferMinutes = 0,
+): ScheduleInterval {
+  const safeBuffer =
+    Number.isFinite(travelBufferMinutes) && travelBufferMinutes >= 0
+      ? Math.floor(travelBufferMinutes)
+      : 0;
+  return buildScheduleInterval(startAt, durationMinutes + safeBuffer);
 }
 
 export async function acquireScheduleConflictLock(
@@ -213,7 +226,11 @@ export async function inspectScheduleConflicts(
   tx: TeamMutationTransaction,
   input: InspectScheduleInput,
 ): Promise<ScheduleConflictDecision> {
-  const interval = buildScheduleInterval(input.startAt, input.durationMinutes);
+  const interval = buildScheduleOccupancyInterval(
+    input.startAt,
+    input.durationMinutes,
+    input.travelBufferMinutes,
+  );
   const capacity =
     Number.isFinite(input.capacity) && input.capacity > 0
       ? Math.floor(input.capacity)
@@ -226,6 +243,7 @@ export async function inspectScheduleConflicts(
       type: appointments.type,
       startAt: appointments.startAt,
       durationMinutes: appointments.durationMinutes,
+      travelBufferMinutes: appointments.travelBufferMinutes,
       firstName: contacts.firstName,
       lastName: contacts.lastName,
     })
@@ -236,7 +254,7 @@ export async function inspectScheduleConflicts(
         isNotNull(appointments.startAt),
         notInArray(appointments.status, [...NON_BLOCKING_APPOINTMENT_STATUSES]),
         lt(appointments.startAt, interval.endAt),
-        sql`${appointments.startAt} + (${appointments.durationMinutes} * interval '1 minute') > ${sql.param(
+        sql`${appointments.startAt} + ((${appointments.durationMinutes} + ${appointments.travelBufferMinutes}) * interval '1 minute') > ${sql.param(
           interval.startAt,
           appointments.startAt,
         )}`,
@@ -255,6 +273,7 @@ export async function inspectScheduleConflicts(
             id: appointmentHolds.id,
             startAt: appointmentHolds.startAt,
             durationMinutes: appointmentHolds.durationMinutes,
+            travelBufferMinutes: appointmentHolds.travelBufferMinutes,
           })
           .from(appointmentHolds)
           .where(
@@ -262,7 +281,7 @@ export async function inspectScheduleConflicts(
               eq(appointmentHolds.status, "active"),
               gt(appointmentHolds.expiresAt, now),
               lt(appointmentHolds.startAt, interval.endAt),
-              sql`${appointmentHolds.startAt} + (${appointmentHolds.durationMinutes} * interval '1 minute') > ${sql.param(
+              sql`${appointmentHolds.startAt} + ((${appointmentHolds.durationMinutes} + ${appointmentHolds.travelBufferMinutes}) * interval '1 minute') > ${sql.param(
                 interval.startAt,
                 appointmentHolds.startAt,
               )}`,
@@ -282,9 +301,10 @@ export async function inspectScheduleConflicts(
   const allOverlaps: ScheduleConflict[] = [
     ...appointmentRows.flatMap((row) => {
       if (!(row.startAt instanceof Date)) return [];
-      const rowInterval = buildScheduleInterval(
+      const rowInterval = buildScheduleOccupancyInterval(
         row.startAt,
         row.durationMinutes ?? 60,
+        row.travelBufferMinutes ?? 0,
       );
       if (!scheduleIntervalsOverlap(interval, rowInterval)) return [];
       return [
@@ -300,9 +320,10 @@ export async function inspectScheduleConflicts(
     }),
     ...holdRows.flatMap((row) => {
       if (!(row.startAt instanceof Date)) return [];
-      const rowInterval = buildScheduleInterval(
+      const rowInterval = buildScheduleOccupancyInterval(
         row.startAt,
         row.durationMinutes ?? 60,
+        row.travelBufferMinutes ?? 0,
       );
       if (!scheduleIntervalsOverlap(interval, rowInterval)) return [];
       return [

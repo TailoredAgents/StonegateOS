@@ -28,6 +28,9 @@ export type WebEventName =
   | "book_booking_attempt"
   | "book_booking_success"
   | "book_booking_fail"
+  | "partner_page_view"
+  | "partner_action"
+  | "partner_form_submit"
   | "web_vital";
 
 export type WebAnalyticsEvent = {
@@ -38,6 +41,8 @@ export type WebAnalyticsEvent = {
   meta?: Record<string, unknown>;
   value?: number;
   referrer?: string;
+  /** Product mode excludes campaign/referrer/location context. */
+  privacyMode?: "product";
 };
 
 type UTM = {
@@ -299,10 +304,15 @@ export function trackWebEvent(input: WebAnalyticsEvent): void {
     event: input.event,
     path,
     key: input.key?.trim() ? input.key.trim().slice(0, 120) : undefined,
-    referrer: input.referrer,
-    utm: getOrCreateUtm(),
+    referrer: input.privacyMode === "product" ? undefined : input.referrer,
+    utm: input.privacyMode === "product" ? undefined : getOrCreateUtm(),
     device,
-    zip: input.zip?.trim() ? input.zip.trim().slice(0, 32) : undefined,
+    zip:
+      input.privacyMode === "product"
+        ? undefined
+        : input.zip?.trim()
+          ? input.zip.trim().slice(0, 32)
+          : undefined,
     meta: input.meta,
     value:
       typeof input.value === "number" && Number.isFinite(input.value)

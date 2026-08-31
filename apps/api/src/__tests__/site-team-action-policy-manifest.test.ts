@@ -104,6 +104,7 @@ const DESTRUCTIVE_ACTIONS = new Set([
   "deleteTaskAction",
   "deleteTeamMemberAction",
   "manualMergeContactsAction",
+  "partnerAccessApplicationDecisionAction",
   "resetSalesHqAction",
   "updateTeamMemberAction",
   "partnerPortalSetUserActiveAction",

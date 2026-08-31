@@ -1,0 +1,255 @@
+import type { Metadata, Route } from "next";
+import Link from "next/link";
+import {
+  ArrowRight,
+  BriefcaseBusiness,
+  CalendarPlus2,
+  Clock3,
+  MapPin,
+  Search,
+} from "lucide-react";
+import { callPartnerApi } from "@/app/partners/lib/api";
+import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
+import type { PartnerJobSummary } from "@/app/partners/lib/portal-v2";
+import {
+  PartnerEmptyState,
+  PartnerErrorState,
+  PartnerNotice,
+  PartnerPageHeader,
+  PartnerPanel,
+  PartnerStatusBadge,
+  partnerFieldClass,
+  partnerPrimaryButtonClass,
+  partnerSecondaryButtonClass,
+} from "@/app/partners/components/PartnerPortalUi";
+
+export const metadata: Metadata = { title: "Jobs" };
+
+const JOB_STATUS_OPTIONS = [
+  ["", "All statuses"],
+  ["requested", "Requested"],
+  ["approval_needed", "Approval needed"],
+  ["under_review", "Under review"],
+  ["confirmed", "Confirmed"],
+  ["en_route", "En route"],
+  ["in_progress", "In progress"],
+  ["completed", "Completed"],
+  ["canceled", "Canceled"],
+  ["declined", "Declined"],
+] as const;
+
+function formatDateTime(value: string | null, timezone = "America/New_York"): string {
+  if (!value) return "Scheduling pending";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "Scheduling pending";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function humanize(value: string | null | undefined): string {
+  if (!value) return "Service";
+  return value.replace(/[-_]+/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
+}
+
+function locationLabel(job: PartnerJobSummary): string {
+  if (job.location.name?.trim()) return job.location.name;
+  const address = job.location.address;
+  return address ? `${address.line1}, ${address.city}` : "Service location";
+}
+
+function formatMoney(job: PartnerJobSummary): string | null {
+  if (!job.financial) return null;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: job.financial.currency || "USD",
+  }).format(job.financial.amountMinor / 10 ** job.financial.minorUnit);
+}
+
+function isJobSummary(value: unknown): value is PartnerJobSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record["id"] === "string" &&
+    typeof record["status"] === "string" &&
+    typeof record["service"] === "object" &&
+    typeof record["schedule"] === "object" &&
+    typeof record["location"] === "object"
+  );
+}
+
+export default async function PartnerBookingsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{
+    created?: string;
+    status?: string;
+    search?: string;
+    cursor?: string;
+  }>;
+}) {
+  const params = (await searchParams) ?? {};
+  const status = JOB_STATUS_OPTIONS.some(([value]) => value === params.status)
+    ? params.status?.trim() ?? ""
+    : "";
+  const search = typeof params.search === "string" ? params.search.trim().slice(0, 100) : "";
+  const cursor = typeof params.cursor === "string" ? params.cursor.trim() : "";
+  const query = new URLSearchParams({ limit: "25" });
+  if (status) query.set("status", status);
+  if (search) query.set("search", search);
+  if (cursor) query.set("cursor", cursor);
+
+  const [response, context] = await Promise.all([
+    callPartnerApi(`/api/portal/v2/jobs?${query.toString()}`).catch(() => null),
+    getPartnerPortalContext(),
+  ]);
+  const permissions = context.status === "authenticated" ? context.permissions : null;
+
+  if (!response?.ok) {
+    const unavailable = [404, 409, 501, 503].includes(response?.status ?? 503);
+    return (
+      <div className="space-y-5 sm:space-y-6">
+        <PartnerPageHeader
+          eyebrow="Service workspace"
+          title="Jobs"
+          description="Track requests, active work, completion records, and account references."
+          breadcrumbs={[
+            { label: "Overview", href: "/partners" },
+            { label: "Jobs", href: "/partners/bookings" },
+          ]}
+        />
+        {unavailable ? (
+          <PartnerPanel>
+            <PartnerEmptyState
+              title="The upgraded job workspace is not available for this account yet"
+              description="No job data has been changed. Contact Stonegate if you need an immediate status update or service record."
+              action={{ href: "/partners/help", label: "Contact Stonegate" }}
+              icon={<BriefcaseBusiness className="h-6 w-6" aria-hidden="true" />}
+            />
+          </PartnerPanel>
+        ) : (
+          <PartnerErrorState
+            title="We couldn’t load your jobs"
+            description="Your job records are unchanged. Try again in a moment."
+            retryHref="/partners/bookings"
+          />
+        )}
+      </div>
+    );
+  }
+
+  const payload = (await response.json().catch(() => null)) as {
+    jobs?: unknown[];
+    page?: { nextCursor?: string | null; hasMore?: boolean };
+  } | null;
+  const jobs = (payload?.jobs ?? []).filter(isJobSummary);
+  const nextCursor = payload?.page?.hasMore ? payload.page.nextCursor ?? null : null;
+
+  return (
+    <div className="space-y-5 sm:space-y-6">
+      <PartnerPageHeader
+        eyebrow="Service workspace"
+        title="Jobs"
+        description="Open a job to review its request, live status, timeline, proof, documents, and billing context."
+        breadcrumbs={[
+          { label: "Overview", href: "/partners" },
+          { label: "Jobs", href: "/partners/bookings" },
+        ]}
+        actions={permissions?.scheduleJobs ? (
+          <Link href="/partners/book" className={partnerPrimaryButtonClass}>
+            <CalendarPlus2 className="h-4 w-4" aria-hidden="true" />
+            Schedule job
+          </Link>
+        ) : undefined}
+      >
+        {params.created === "1" ? (
+          <PartnerNotice tone="success">
+            Your request was sent. Open the job below to see whether it was confirmed instantly or needs review.
+          </PartnerNotice>
+        ) : null}
+      </PartnerPageHeader>
+
+      <PartnerPanel>
+        <form method="get" className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_13rem_auto] sm:items-end" role="search">
+          <label htmlFor="partner-job-search">
+            <span className="text-sm font-semibold text-slate-700">Search jobs</span>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+              <input id="partner-job-search" name="search" type="search" defaultValue={search} maxLength={100} className={`${partnerFieldClass} pl-10`} placeholder="Location, PO, or project" />
+            </div>
+          </label>
+          <label htmlFor="partner-job-status">
+            <span className="text-sm font-semibold text-slate-700">Status</span>
+            <select id="partner-job-status" name="status" defaultValue={status} className={partnerFieldClass}>
+              {JOB_STATUS_OPTIONS.map(([value, label]) => <option key={value || "all"} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <button type="submit" className={partnerSecondaryButtonClass}>Apply filters</button>
+        </form>
+      </PartnerPanel>
+
+      {jobs.length === 0 ? (
+        <PartnerPanel>
+          <PartnerEmptyState
+            title={status || search ? "No jobs match these filters" : "No jobs yet"}
+            description={status || search ? "Try a different status or search term." : "Schedule your first service request and it will stay organized here."}
+            action={status || search ? { href: "/partners/bookings", label: "Clear filters" } : permissions?.scheduleJobs ? { href: "/partners/book", label: "Schedule a job" } : undefined}
+            icon={<BriefcaseBusiness className="h-6 w-6" aria-hidden="true" />}
+          />
+        </PartnerPanel>
+      ) : (
+        <ol className="grid gap-3" aria-label="Jobs">
+          {jobs.map((job) => {
+            const window = job.schedule.arrivalWindow;
+            const detailHref = `/partners/bookings/${encodeURIComponent(job.id)}` as Route;
+            return (
+              <li key={job.id}>
+                <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-primary-200 hover:shadow-md sm:p-5">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-base font-semibold text-slate-950 sm:text-lg">
+                          <Link href={detailHref} className="rounded underline-offset-4 hover:text-primary-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+                            {locationLabel(job)}
+                          </Link>
+                        </h2>
+                        <PartnerStatusBadge status={job.status} />
+                      </div>
+                      <p className="mt-1 text-sm font-medium text-slate-700">{humanize(job.service.key)}</p>
+                      <div className="mt-3 flex flex-col gap-2 text-sm text-slate-600 sm:flex-row sm:flex-wrap sm:gap-x-5">
+                        <span className="inline-flex items-center gap-2"><Clock3 className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" /><time dateTime={window?.startAt}>{formatDateTime(window?.startAt ?? null, window?.timezone)}</time></span>
+                        {job.location.address ? <span className="inline-flex items-center gap-2"><MapPin className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />{job.location.address.line1}, {job.location.address.city}</span> : null}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                        {job.references.poNumber ? <span>PO: {job.references.poNumber}</span> : null}
+                        {job.references.costCenter ? <span>Cost center: {job.references.costCenter}</span> : null}
+                        {job.references.project ? <span>Project: {job.references.project}</span> : null}
+                        {formatMoney(job) ? <span>{formatMoney(job)}</span> : null}
+                      </div>
+                    </div>
+                    <Link href={detailHref} className={`${partnerSecondaryButtonClass} w-full shrink-0 sm:w-auto`}>
+                      View job <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                    </Link>
+                  </div>
+                </article>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+
+      {nextCursor ? (
+        <div className="flex justify-center">
+          <Link
+            href={`/partners/bookings?${new URLSearchParams({ ...(status ? { status } : {}), ...(search ? { search } : {}), cursor: nextCursor }).toString()}` as Route}
+            className={partnerSecondaryButtonClass}
+          >
+            Load older jobs
+          </Link>
+        </div>
+      ) : null}
+    </div>
+  );
+}

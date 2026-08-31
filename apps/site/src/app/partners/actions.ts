@@ -1,9 +1,11 @@
 "use server";
 
+import type { Route } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { PARTNER_SESSION_COOKIE } from "@/lib/partner-session";
 import { callPartnerApi, callPartnerPublicApi } from "./lib/api";
+import { normalizePartnerReturnTo } from "./lib/safe-return";
 
 async function readErrorMessage(
   response: Response,
@@ -36,15 +38,37 @@ export async function requestPartnerMagicLinkAction(formData: FormData) {
 
   const isEmail = identifier.includes("@");
 
-  await callPartnerPublicApi("/api/public/partners/request-link", {
-    method: "POST",
-    body: JSON.stringify({
-      email: isEmail ? identifier : undefined,
-      phone: isEmail ? undefined : identifier,
-    }),
-  });
+  const rememberMe = formData.get("rememberMe") === "on";
+  const returnTo = normalizePartnerReturnTo(formData.get("returnTo"));
 
-  redirect("/partners/login?sent=1");
+  const response = await callPartnerPublicApi(
+    "/api/public/partners/request-link",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        email: isEmail ? identifier : undefined,
+        phone: isEmail ? undefined : identifier,
+        rememberMe,
+        ...(returnTo !== "/partners" ? { returnTo } : {}),
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const error =
+      response.status === 429
+        ? "rate_limited"
+        : response.status >= 500
+          ? "temporarily_unavailable"
+          : "request_failed";
+    const query = new URLSearchParams({ error });
+    if (returnTo !== "/partners") query.set("returnTo", returnTo);
+    redirect(`/partners/login?${query.toString()}`);
+  }
+
+  const query = new URLSearchParams({ sent: "1" });
+  if (returnTo !== "/partners") query.set("returnTo", returnTo);
+  redirect(`/partners/login?${query.toString()}`);
 }
 
 export async function partnerPasswordLoginAction(formData: FormData) {
@@ -56,11 +80,14 @@ export async function partnerPasswordLoginAction(formData: FormData) {
     redirect("/partners/login?error=missing_credentials");
   }
 
+  const rememberMe = formData.get("rememberMe") === "on";
+  const returnTo = normalizePartnerReturnTo(formData.get("returnTo"));
+
   const res = await callPartnerPublicApi(
     "/api/public/partners/login-password",
     {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, rememberMe }),
     },
   );
 
@@ -71,10 +98,18 @@ export async function partnerPasswordLoginAction(formData: FormData) {
 
   const payload = (await res.json().catch(() => ({}))) as {
     sessionToken?: string;
+    expiresAt?: string;
   };
   const token =
     typeof payload.sessionToken === "string" ? payload.sessionToken : "";
   if (!token) {
+    redirect("/partners/login?error=login_failed");
+  }
+  const expiresAt = new Date(payload.expiresAt ?? "");
+  if (
+    !Number.isFinite(expiresAt.getTime()) ||
+    expiresAt.getTime() <= Date.now()
+  ) {
     redirect("/partners/login?error=login_failed");
   }
 
@@ -86,15 +121,10 @@ export async function partnerPasswordLoginAction(formData: FormData) {
     secure: process.env["NODE_ENV"] === "production",
     sameSite: "lax",
     path: "/",
+    expires: expiresAt,
   });
 
-  redirect("/partners");
-}
-
-export async function partnerLogoutAction() {
-  const jar = await cookies();
-  jar.delete(PARTNER_SESSION_COOKIE);
-  redirect("/partners/login");
+  redirect(returnTo as Route);
 }
 
 function readFormString(formData: FormData, key: string): string {
@@ -103,22 +133,66 @@ function readFormString(formData: FormData, key: string): string {
 }
 
 export async function partnerSetPasswordAction(formData: FormData) {
-  const passwordRaw = formData.get("password");
-  const password = typeof passwordRaw === "string" ? passwordRaw : "";
-  if (!password || password.length < 10) {
+  const currentPasswordRaw = formData.get("currentPassword");
+  const currentPassword =
+    typeof currentPasswordRaw === "string" ? currentPasswordRaw : "";
+  const newPasswordRaw = formData.get("newPassword");
+  const newPassword = typeof newPasswordRaw === "string" ? newPasswordRaw : "";
+  const confirmPasswordRaw = formData.get("confirmPassword");
+  const confirmPassword =
+    typeof confirmPasswordRaw === "string" ? confirmPasswordRaw : "";
+  if (newPassword.length < 12 || newPassword.length > 128) {
     redirect("/partners/settings?error=password_too_short");
   }
-
-  const res = await callPartnerApi("/api/portal/password", {
-    method: "POST",
-    body: JSON.stringify({ password }),
-  });
-  if (!res.ok) {
-    const msg = await readErrorMessage(res, "save_failed");
-    redirect(`/partners/settings?error=${encodeURIComponent(msg)}`);
+  if (newPassword !== confirmPassword) {
+    redirect("/partners/settings?error=password_confirmation_mismatch");
   }
 
-  redirect("/partners/settings?saved=1");
+  const res = await callPartnerApi("/api/portal/v2/security/password", {
+    method: "POST",
+    body: JSON.stringify({
+      ...(currentPassword ? { currentPassword } : {}),
+      newPassword,
+      confirmPassword,
+    }),
+  });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => null)) as {
+      error?: string;
+      fieldErrors?: Record<string, string>;
+    } | null;
+    const code = payload?.fieldErrors?.["currentPassword"]
+      ? payload.fieldErrors["currentPassword"]
+          .toLowerCase()
+          .includes("incorrect")
+        ? "current_password_incorrect"
+        : "current_password_required"
+      : payload?.fieldErrors?.["confirmPassword"]
+        ? "password_confirmation_mismatch"
+        : payload?.fieldErrors?.["newPassword"]
+          ? payload.fieldErrors["newPassword"].toLowerCase().includes("already")
+            ? "password_reused"
+            : "password_too_short"
+          : payload?.error === "mfa_step_up_required"
+            ? "recent_authentication_required"
+            : payload?.error === "rate_limited"
+              ? "rate_limited"
+              : "save_failed";
+    redirect(`/partners/settings?error=${encodeURIComponent(code)}`);
+  }
+
+  const saved = (await res.json().catch(() => null)) as {
+    otherSessionsRevoked?: number;
+  } | null;
+  const query = new URLSearchParams({ saved: "1" });
+  if (
+    typeof saved?.otherSessionsRevoked === "number" &&
+    Number.isInteger(saved.otherSessionsRevoked) &&
+    saved.otherSessionsRevoked > 0
+  ) {
+    query.set("sessionsRevoked", String(saved.otherSessionsRevoked));
+  }
+  redirect(`/partners/settings?${query.toString()}`);
 }
 
 export async function partnerCreatePropertyAction(formData: FormData) {
@@ -171,7 +245,7 @@ export async function partnerCreateBookingAction(formData: FormData) {
   }
   if (rescheduleFromAppointmentId && !rescheduleFromVersion) {
     redirect(
-      "/partners/bookings?error=The%20booking%20changed%20before%20it%20could%20be%20rescheduled.%20Refresh%20and%20try%20again.",
+      "/partners/bookings?error=The%20job%20changed%20before%20it%20could%20be%20rescheduled.%20Refresh%20and%20try%20again.",
     );
   }
 
@@ -197,8 +271,8 @@ export async function partnerCreateBookingAction(formData: FormData) {
   if (!res) {
     redirect(
       rescheduleFromAppointmentId
-        ? "/partners/bookings?error=We%20could%20not%20confirm%20the%20reschedule.%20Check%20the%20booking%20list%20before%20trying%20again."
-        : "/partners/book?error=We%20could%20not%20confirm%20the%20booking.%20Check%20your%20booking%20list%20before%20trying%20again.",
+        ? "/partners/bookings?error=We%20could%20not%20confirm%20the%20reschedule.%20Check%20the%20job%20list%20before%20trying%20again."
+        : "/partners/book?error=We%20could%20not%20confirm%20the%20job.%20Check%20your%20job%20list%20before%20trying%20again.",
     );
   }
   if (!res.ok) {
@@ -209,7 +283,7 @@ export async function partnerCreateBookingAction(formData: FormData) {
     if (rescheduleFromAppointmentId) {
       redirect(
         `/partners/bookings?error=${encodeURIComponent(
-          `The reschedule was not completed; your original booking remains in place (${msg}).`,
+          `The reschedule was not completed; your original job remains in place (${msg}).`,
         )}`,
       );
     }
@@ -240,7 +314,7 @@ export async function partnerCreateBookingAction(formData: FormData) {
   ) {
     redirect(
       rescheduleFromAppointmentId
-        ? "/partners/bookings?error=The%20server%20did%20not%20return%20a%20complete%20reschedule%20receipt.%20Refresh%20the%20list%20before%20retrying."
+        ? "/partners/bookings?error=The%20server%20did%20not%20return%20a%20complete%20reschedule%20receipt.%20Refresh%20the%20job%20list%20before%20retrying."
         : "/partners/book?error=booking_confirmation_invalid",
     );
   }
@@ -251,7 +325,7 @@ export async function partnerCreateBookingAction(formData: FormData) {
       created.rescheduledFromVersion !== Number(rescheduleFromVersion)
     ) {
       redirect(
-        "/partners/bookings?error=The%20server%20receipt%20did%20not%20match%20the%20booking%20you%20rescheduled.%20Refresh%20the%20list%20before%20retrying.",
+        "/partners/bookings?error=The%20server%20receipt%20did%20not%20match%20the%20job%20you%20rescheduled.%20Refresh%20the%20list%20before%20retrying.",
       );
     }
     redirect("/partners/bookings?rescheduled=1");

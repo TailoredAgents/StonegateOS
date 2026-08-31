@@ -10,14 +10,35 @@ import type {
 
 const CONCRETE_RATE = 0.14;
 
+const knownZoneIds = new Set(zones.map((zone) => zone.id));
+// Validation starts from untrusted JSON strings, so the membership set must
+// accept strings even though the catalog itself is narrowed to ServiceCategory.
+const knownServiceIds: ReadonlySet<string> = new Set(
+  serviceRates.map((rate) => rate.service),
+);
+const knownAddOnIds = new Set(addOns.map((addOn) => addOn.id));
+
 const quoteInputSchema = z.object({
-  zoneId: z.string(),
+  zoneId: z.string().refine((value) => knownZoneIds.has(value), "invalid_zone"),
   surfaceArea: z.number().positive().optional(),
-  selectedServices: z.array(z.string()).min(1),
-  selectedAddOns: z.array(z.string()).optional(),
+  selectedServices: z
+    .array(z.string().refine((value) => knownServiceIds.has(value), "invalid_service"))
+    .min(1)
+    .max(50)
+    .refine((values) => new Set(values).size === values.length, "duplicate_service"),
+  selectedAddOns: z
+    .array(z.string().refine((value) => knownAddOnIds.has(value), "invalid_add_on"))
+    .max(50)
+    .refine((values) => new Set(values).size === values.length, "duplicate_add_on")
+    .optional(),
   applyBundles: z.boolean().optional(),
   depositRate: z.number().positive().max(1).optional(),
-  serviceOverrides: z.record(z.string(), z.number().positive()).optional(),
+  serviceOverrides: z
+    .record(
+      z.string().refine((value) => knownServiceIds.has(value), "invalid_override_service"),
+      z.number().positive(),
+    )
+    .optional(),
   concreteSurfaces: z
     .array(
       z.object({
@@ -27,11 +48,41 @@ const quoteInputSchema = z.object({
     )
     .max(3)
     .optional()
+}).superRefine((input, context) => {
+  const overrideKeys = Object.keys(input.serviceOverrides ?? {});
+  if (overrideKeys.length > 50) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["serviceOverrides"],
+      message: "too_many_overrides",
+    });
+  }
+  for (const serviceId of overrideKeys) {
+    if (!input.selectedServices.includes(serviceId)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["serviceOverrides", serviceId],
+        message: "override_service_not_selected",
+      });
+    }
+  }
+  if (
+    input.concreteSurfaces &&
+    input.concreteSurfaces.length > 0 &&
+    input.serviceOverrides?.["driveway"] !== undefined
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["serviceOverrides", "driveway"],
+      message: "driveway_override_conflicts_with_surfaces",
+    });
+  }
 });
 
 function resolveZone(zoneId: string): ZoneConfig {
   const found = zones.find((zone) => zone.id === zoneId);
-  return found ?? defaultPricingContext.zone;
+  if (!found) throw new Error(`Unknown service zone: ${zoneId}`);
+  return found;
 }
 
 function resolveServiceRate(serviceId: string): ServiceBaseRate | undefined {
@@ -43,7 +94,10 @@ function computeServiceAmount(rate: ServiceBaseRate, surfaceArea?: number): numb
     return rate.flatRate;
   }
 
-  const area = surfaceArea ?? rate.minimumSquareFootage ?? 0;
+  const area = Math.max(
+    surfaceArea ?? rate.minimumSquareFootage ?? 0,
+    rate.minimumSquareFootage ?? 0,
+  );
   const variable = rate.pricePerSquareFoot ? area * rate.pricePerSquareFoot : 0;
   const base = rate.basePrice ?? 0;
 
@@ -63,7 +117,7 @@ function computeBundleDiscount(serviceIds: string[], applyBundles: boolean | und
     return 0;
   }
 
-  const discount = eligibleBundles.reduce((acc, bundle) => {
+  const discounts = eligibleBundles.map((bundle) => {
     const bundleTotal = bundle.services.reduce((total, serviceId) => {
       const rate = resolveServiceRate(serviceId);
       if (!rate) {
@@ -72,10 +126,11 @@ function computeBundleDiscount(serviceIds: string[], applyBundles: boolean | und
       return total + computeServiceAmount(rate);
     }, 0);
 
-    return acc + (bundleTotal * bundle.discountPercentage) / 100;
-  }, 0);
+    return (bundleTotal * bundle.discountPercentage) / 100;
+  });
 
-  return discount;
+  // Bundle savings are explicit alternatives, not silently stackable coupons.
+  return Math.max(...discounts);
 }
 
 export function calculateQuoteBreakdown(
@@ -144,9 +199,14 @@ export function calculateQuoteBreakdown(
 
     const overrideAmount = overrides[serviceId];
     const amount =
-      typeof overrideAmount === "number" && serviceId !== "driveway"
+      typeof overrideAmount === "number"
         ? overrideAmount
         : computeServiceAmount(rate, surfaceArea);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error(
+        `${rate.label} requires a positive staff-reviewed price.`,
+      );
+    }
     lineItems.push({
       id: `service-${serviceId}`,
       label: rate.label,
@@ -209,7 +269,7 @@ export function calculateQuoteBreakdown(
   const balanceDue = Math.max(total - depositDue, 0);
 
   return {
-    subtotal: servicesSubtotal,
+    subtotal,
     travelFee,
     discounts,
     addOnsTotal,
@@ -220,4 +280,3 @@ export function calculateQuoteBreakdown(
     lineItems
   };
 }
-

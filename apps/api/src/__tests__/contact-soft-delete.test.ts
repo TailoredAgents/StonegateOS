@@ -12,7 +12,7 @@ import {
   planOutboxOutcomeFinalization,
 } from "@/lib/outbox-finalization";
 
-const API_ROOT = path.resolve(__dirname, "../..");
+const API_ROOT = path.resolve(process.cwd());
 
 function source(relativePath: string): string {
   return fs.readFileSync(path.resolve(API_ROOT, relativePath), "utf8");

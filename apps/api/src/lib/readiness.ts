@@ -132,6 +132,30 @@ export function evaluateRequiredConfiguration(
     environment["SITE_URL"] ?? environment["NEXT_PUBLIC_SITE_URL"],
   ];
   let missingCount = values.filter((value) => !value?.trim()).length;
+  const quoteSecrets = [
+    "QUOTE_RATE_LIMIT_HMAC_SECRET",
+    "QUOTE_PUBLIC_PROXY_SHARED_SECRET",
+  ] as const;
+  for (const name of quoteSecrets) {
+    if ((environment[name]?.trim().length ?? 0) < 32) missingCount += 1;
+  }
+  if (
+    environment[quoteSecrets[0]]?.trim() &&
+    environment[quoteSecrets[0]]?.trim() ===
+      environment[quoteSecrets[1]]?.trim()
+  ) {
+    missingCount += 1;
+  }
+  const quoteTrustedProxyHops = Number(
+    environment["QUOTE_PUBLIC_TRUSTED_PROXY_HOPS"]?.trim(),
+  );
+  if (
+    !Number.isInteger(quoteTrustedProxyHops) ||
+    quoteTrustedProxyHops < 1 ||
+    quoteTrustedProxyHops > 10
+  ) {
+    missingCount += 1;
+  }
   const twilio = inspectTwilioProviderConfiguration(environment);
   if (!twilio.ok) missingCount += 1;
   try {

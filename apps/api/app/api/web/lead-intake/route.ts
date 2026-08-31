@@ -14,6 +14,11 @@ import {
   outboxEvents,
 } from "@/db";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
+import { getAppointmentCapacity } from "@/lib/appointment-capacity";
+import {
+  acquireScheduleConflictLock,
+  inspectScheduleConflicts,
+} from "@/lib/appointment-schedule-conflicts";
 import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
@@ -51,6 +56,8 @@ type LeadIntakeResponse = {
   travelBufferMinutes: number | null;
   timeWindow: string | null;
   preferredDate: string | null;
+  /** Absent only on a receipt written before schedule admission was unified. */
+  schedulingReviewRequired?: boolean;
   auditEventId: string;
 };
 
@@ -97,7 +104,9 @@ function isLeadIntakeResponse(value: unknown): value is LeadIntakeResponse {
     nullablePositiveInteger(candidate["durationMinutes"]) &&
     nullablePositiveInteger(candidate["travelBufferMinutes"]) &&
     nullableString(candidate["timeWindow"]) &&
-    nullableString(candidate["preferredDate"])
+    nullableString(candidate["preferredDate"]) &&
+    (candidate["schedulingReviewRequired"] === undefined ||
+      typeof candidate["schedulingReviewRequired"] === "boolean")
   );
 }
 
@@ -392,6 +401,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const leadResult = await db.transaction(async (tx) => {
+      // All channels that can claim operational capacity share this lock. It
+      // closes the race where two otherwise-independent intake surfaces both
+      // observe the final free unit before either transaction commits.
+      await acquireScheduleConflictLock(tx);
       await tx.execute(
         sql`SELECT pg_advisory_xact_lock(hashtextextended(${`lead-intake:${operationKeyHash}`}, 0))`,
       );
@@ -447,6 +460,16 @@ export async function POST(request: NextRequest) {
         postalCode,
         gated: false,
       });
+      const scheduleDecision =
+        appointmentType === "in_person_estimate" && timing.startAt
+          ? await inspectScheduleConflicts(tx, {
+              startAt: timing.startAt,
+              durationMinutes: timing.durationMinutes,
+              travelBufferMinutes,
+              capacity: getAppointmentCapacity(),
+            })
+          : null;
+      const schedulingReviewRequired = scheduleDecision?.conflict === true;
       const utm = payload.utm ?? {};
       const [lead] = await tx
         .insert(leads)
@@ -456,7 +479,10 @@ export async function POST(request: NextRequest) {
           servicesRequested,
           notes: payload.notes,
           status:
-            appointmentType === "in_person_estimate" ? "scheduled" : "new",
+            appointmentType === "in_person_estimate" &&
+            !schedulingReviewRequired
+              ? "scheduled"
+              : "new",
           source: "web",
           utmSource: utm.source,
           utmMedium: utm.medium,
@@ -498,7 +524,10 @@ export async function POST(request: NextRequest) {
         rescheduleToken: string;
         calendarEventId: string | null;
       } | null = null;
-      if (appointmentType === "in_person_estimate") {
+      if (
+        appointmentType === "in_person_estimate" &&
+        !schedulingReviewRequired
+      ) {
         const token = rescheduleToken ?? nanoid(12);
         const [appointment] = await tx
           .insert(appointments)
@@ -526,10 +555,9 @@ export async function POST(request: NextRequest) {
           : null;
       }
 
-      const eventType =
-        appointmentType === "in_person_estimate"
-          ? "estimate.requested"
-          : "lead.created";
+      const eventType = appointmentRecord
+        ? "estimate.requested"
+        : "lead.created";
       await tx.insert(outboxEvents).values({
         type: eventType,
         payload: {
@@ -539,6 +567,7 @@ export async function POST(request: NextRequest) {
           scheduling,
           source: "web",
           appointmentId: appointmentRecord?.id ?? null,
+          schedulingReviewRequired,
         },
       });
 
@@ -564,6 +593,8 @@ export async function POST(request: NextRequest) {
           appointmentType,
           services: servicesRequested,
           durableOutbox: true,
+          schedulingReviewRequired,
+          scheduleConflictFingerprint: scheduleDecision?.fingerprint ?? null,
         }),
       });
       const response: LeadIntakeResponse = {
@@ -576,6 +607,7 @@ export async function POST(request: NextRequest) {
         travelBufferMinutes: appointmentRecord?.travelBufferMinutes ?? null,
         timeWindow: scheduling.timeWindow ?? null,
         preferredDate: scheduling.preferredDate ?? null,
+        schedulingReviewRequired,
         auditEventId,
       };
       const [storedReceipt] = await tx

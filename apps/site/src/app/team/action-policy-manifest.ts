@@ -667,6 +667,12 @@ export const TEAM_SERVER_ACTION_POLICIES = {
     true,
     "team_action.partnerLogReferralAction",
   ),
+  partnerAccessApplicationDecisionAction: humanAction(
+    ["partners.invite"],
+    "destructive",
+    true,
+    "team_action.partnerAccessApplicationDecisionAction",
+  ),
   partnerPortalInviteUserAction: humanAction(
     ["partners.invite"],
     "external",

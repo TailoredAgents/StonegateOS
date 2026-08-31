@@ -37,6 +37,7 @@ import {
   syncAppointmentCardTipCents,
 } from "@/lib/payment-ledger";
 import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
+import { finalizePartnerPortalPaymentReconciliation } from "@/lib/partner-portal-v2-payments";
 import {
   recordProviderFailure,
   recordProviderSuccess,
@@ -330,7 +331,9 @@ export async function reconcileSquareAttempt(input: {
   const db = getDb();
   const selectAttempt = {
     id: paymentAttempts.id,
-    appointmentId: paymentAttempts.appointmentId,
+    // This reconciler is the appointment-POS path. Quote deposits have their
+    // own exact-version/order verifier and may not have an appointment yet.
+    appointmentId: sql<string>`${paymentAttempts.appointmentId}`,
     status: paymentAttempts.status,
     requestedJobAmountCents: paymentAttempts.requestedJobAmountCents,
     currency: paymentAttempts.currency,
@@ -351,6 +354,9 @@ export async function reconcileSquareAttempt(input: {
     )
     .limit(1);
   if (!attempt) throw new Error("payment_attempt_not_found");
+  if (!attempt.appointmentId) {
+    throw new Error("quote_deposit_requires_quote_reconciliation");
+  }
 
   const requestedOrderId = input.orderId?.trim() || null;
   const storedOrderId = attempt.providerOrderId?.trim() || null;
@@ -901,12 +907,28 @@ async function reconcileSquarePayment(payment: SquarePayment): Promise<{
   const [completedAttempt] = await db
     .select({
       status: paymentAttempts.status,
+      quoteResponseId: paymentAttempts.quoteResponseId,
       providerOrderId: paymentAttempts.providerOrderId,
       providerPaymentId: paymentAttempts.providerPaymentId,
     })
     .from(paymentAttempts)
     .where(eq(paymentAttempts.id, attemptId))
     .limit(1);
+  if (completedAttempt?.quoteResponseId) {
+    const { reconcileQuoteV2DepositAttempt } = await import(
+      "@/lib/quote-v2-deposit-service"
+    );
+    const quoteDeposit = await reconcileQuoteV2DepositAttempt({ attemptId });
+    return {
+      paymentId: quoteDeposit.paymentId,
+      paymentAttemptId: attemptId,
+      status:
+        quoteDeposit.receipt.requiresRefundReview ||
+        quoteDeposit.receipt.requiresSchedulingConfirmation
+          ? "needs_review"
+          : "processed",
+    };
+  }
   if (completedAttempt?.status === "completed") {
     const [linkedPayment] = await db
       .select({
@@ -950,6 +972,7 @@ async function reconcileSquarePayment(payment: SquarePayment): Promise<{
   const reconciled = await reconcileSquareAttempt({
     attemptId,
     orderId: payment.order_id,
+    finalize: finalizePartnerPortalPaymentReconciliation,
   });
   if (reconciled.status === "verified") {
     return {
@@ -1467,6 +1490,7 @@ export async function reconcilePendingSquareAttempts(input?: {
     const result = await reconcileSquareAttempt({
       attemptId: attempt.id,
       orderId: attempt.providerOrderId,
+      finalize: finalizePartnerPortalPaymentReconciliation,
     });
     if (result.status === "verified") verified += 1;
     else if (result.status === "pending_verification") pending += 1;

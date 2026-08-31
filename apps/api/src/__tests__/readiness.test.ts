@@ -8,7 +8,7 @@ import {
   evaluateWorkerHeartbeat,
 } from "@/lib/readiness";
 
-const API_ROOT = path.resolve(__dirname, "../..");
+const API_ROOT = process.cwd();
 const REPO_ROOT = path.resolve(API_ROOT, "../..");
 
 function apiSource(relativePath: string): string {
@@ -24,6 +24,11 @@ describe("deployment readiness", () => {
     DATABASE_URL: "postgres://synthetic.invalid/db",
     ADMIN_API_KEY: "synthetic-admin-key",
     TEAM_AUTH_RATE_LIMIT_SECRET: "synthetic-rate-limit-key",
+    QUOTE_RATE_LIMIT_HMAC_SECRET:
+      "synthetic-quote-rate-limit-key-at-least-32-bytes",
+    QUOTE_PUBLIC_PROXY_SHARED_SECRET:
+      "synthetic-quote-proxy-shared-key-at-least-32-bytes",
+    QUOTE_PUBLIC_TRUSTED_PROXY_HOPS: "1",
     SITE_URL: "https://site.example.test",
     TWILIO_ACCOUNT_SID: `AC${"0".repeat(32)}`,
     TWILIO_AUTH_TOKEN: "synthetic-twilio-token",
@@ -44,6 +49,23 @@ describe("deployment readiness", () => {
         NODE_ENV: "production",
         E2E_RUN_ID: "partial-sentinel",
       },
+    ]) {
+      expect(
+        evaluateRequiredConfiguration({
+          ...validConfiguration,
+          ...override,
+        }),
+      ).toMatchObject({ state: "failed" });
+    }
+    for (const override of [
+      { QUOTE_RATE_LIMIT_HMAC_SECRET: "short" },
+      { QUOTE_PUBLIC_PROXY_SHARED_SECRET: "short" },
+      {
+        QUOTE_PUBLIC_PROXY_SHARED_SECRET:
+          validConfiguration.QUOTE_RATE_LIMIT_HMAC_SECRET,
+      },
+      { QUOTE_PUBLIC_TRUSTED_PROXY_HOPS: "0" },
+      { QUOTE_PUBLIC_TRUSTED_PROXY_HOPS: "not-a-number" },
     ]) {
       expect(
         evaluateRequiredConfiguration({

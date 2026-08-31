@@ -384,7 +384,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     !payload ||
     typeof payload !== "object" ||
     Array.isArray(payload) ||
-    Object.keys(payload).some((key) => key !== "email" && key !== "phone")
+    Object.keys(payload).some(
+      (key) => !["email", "phone", "rememberMe", "returnTo"].includes(key),
+    )
   ) {
     return NextResponse.json(
       { ok: false, error: "invalid_request" },
@@ -392,6 +394,28 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
   const record = payload as Record<string, unknown>;
+
+  const rememberMe = record["rememberMe"] === true;
+  const rawReturnTo =
+    typeof record["returnTo"] === "string" ? record["returnTo"].trim() : "";
+  const returnTo =
+    rawReturnTo.length <= 1_024 &&
+    /^\/partners(?:\/|$|\?)/u.test(rawReturnTo) &&
+    !rawReturnTo.startsWith("//") &&
+    !rawReturnTo.includes("\\") &&
+    !/^\/partners\/(?:auth|logout|login)(?:\/|$|\?)/u.test(rawReturnTo)
+      ? rawReturnTo
+      : null;
+  if (
+    (record["rememberMe"] !== undefined &&
+      typeof record["rememberMe"] !== "boolean") ||
+    (record["returnTo"] !== undefined && !returnTo)
+  ) {
+    return NextResponse.json(
+      { ok: false, error: "invalid_request" },
+      { status: 400, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 
   const email = normalizeEmail(record["email"]);
   const phoneE164 = normalizePhoneE164(record["phone"]);
@@ -610,6 +634,8 @@ export async function POST(request: NextRequest): Promise<Response> {
 
           const url = new URL("/partners/auth", siteBaseUrl);
           url.searchParams.set("token", prepared.rawToken);
+          if (rememberMe) url.searchParams.set("remember", "1");
+          if (returnTo) url.searchParams.set("returnTo", returnTo);
           const subject = "Your Stonegate Partner Portal login link";
           const body = [
             `Hi ${prepared.user.name},`,

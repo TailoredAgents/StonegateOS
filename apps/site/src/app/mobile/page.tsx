@@ -62,6 +62,8 @@ import {
   type MobileOwnerSummary,
 } from "./lib/owner-summary";
 import type { AppointmentBookingDetails } from "../team/lib/booking-details";
+import { isQuoteV2StaffFeatureEnabled } from "../team/lib/quote-v2-staff-feature";
+import { quoteWorkspaceHref } from "../team/quotes-workspace";
 
 const navItems: Array<{
   id: string;
@@ -1918,6 +1920,9 @@ export default async function MobileHomePage({
   const activeScreen = session.allowedScreens.includes(requestedScreen)
     ? requestedScreen
     : "inbox";
+  if (activeScreen === "quotes" && isQuoteV2StaffFeatureEnabled()) {
+    redirect(quoteWorkspaceHref("manage"));
+  }
   const visibleNav = navItems.filter((item) =>
     session.allowedScreens.includes(item.id),
   );

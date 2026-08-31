@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
+import { createSquarePartnerHostedCheckoutProvider } from "@/lib/partner-hosted-checkout-provider";
 
 const REPOSITORY_ROOT = resolve(process.cwd(), "../..");
 const port = 49_200 + (process.pid % 1_000);
@@ -82,6 +83,85 @@ beforeEach(async () => {
 });
 
 describe("local Square fake runtime", () => {
+  it("creates a hosted payment link without capturing credentials or payment data", async () => {
+    const privateAccessToken =
+      "private-square-token-for-hosted-checkout-must-not-be-captured";
+    const privateIntentId = "22222222-2222-4222-8222-222222222222";
+    const privateInvoiceId = "33333333-3333-4333-8333-333333333333";
+    const provider = createSquarePartnerHostedCheckoutProvider({
+      accessToken: privateAccessToken,
+      locationId: "location-e2e-0001",
+      environment: {
+        NODE_ENV: "test",
+        E2E_RUN_ID: "partner-hosted-checkout",
+        SQUARE_ENVIRONMENT: "sandbox",
+        SQUARE_API_BASE_URL: origin,
+      },
+    });
+
+    await expect(
+      provider.createHostedCheckout({
+        intentId: privateIntentId,
+        invoiceId: privateInvoiceId,
+        invoiceNumber: "INV-E2E-001",
+        amountMinor: 12_500,
+        currency: "USD",
+        redirectUrl:
+          "https://partners.example.test/partners/billing?payment=return",
+      }),
+    ).resolves.toEqual({
+      provider: "square",
+      providerLinkId: "payment-link-e2e-0001",
+      providerOrderId: "order-e2e-0001",
+      url: "https://sandbox.square.link/u/e2e-checkout",
+      createdAt: "2026-08-30T12:00:01.000Z",
+    });
+
+    const evidence = await fetch(`${origin}/__control/requests`).then(
+      (response) =>
+        response.json() as Promise<{
+          requests: Array<Record<string, unknown>>;
+        }>,
+    );
+    expect(evidence.requests[0]).toEqual(
+      expect.objectContaining({
+        operation: "create_payment_link",
+        method: "POST",
+        authorization: "bearer",
+        squareVersion: "present",
+        idempotencyKeyPresent: true,
+        quickPayPresent: true,
+        paymentNotePresent: true,
+        rawPaymentSourcePresent: false,
+      }),
+    );
+    const retainedEvidence = `${JSON.stringify(evidence)}${stdout}${stderr}`;
+    expect(retainedEvidence).not.toContain(privateAccessToken);
+    expect(retainedEvidence).not.toContain(privateIntentId);
+    expect(retainedEvidence).not.toContain(privateInvoiceId);
+
+    expect(
+      (
+        await setScenario("create_payment_link", "invalid_success", {
+          repeat: 1,
+        })
+      ).ok,
+    ).toBe(true);
+    await expect(
+      provider.createHostedCheckout({
+        intentId: "44444444-4444-4444-8444-444444444444",
+        invoiceId: privateInvoiceId,
+        invoiceNumber: "INV-E2E-002",
+        amountMinor: 5_000,
+        currency: "USD",
+        redirectUrl: "https://partners.example.test/partners/billing",
+      }),
+    ).rejects.toMatchObject({
+      code: "provider_invalid_response",
+      retryable: true,
+    });
+  });
+
   it("implements all five active provider reads with metadata-only evidence", async () => {
     const privateOrderId = "private-order-id-must-not-be-captured";
     const privatePaymentId = "private-payment-id-must-not-be-captured";

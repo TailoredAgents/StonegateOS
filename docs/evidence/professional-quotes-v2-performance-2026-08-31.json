@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "mode": "release",
+  "rowCount": 10000,
+  "seedSha256": "ede5dda48f40c1c912b41c3a490f1c9a628c89b04ffe319bacc8ae9b0d09a5fb",
+  "startedAt": "2026-08-31T06:17:44.178Z",
+  "completedAt": "2026-08-31T06:17:50.325Z",
+  "durationMs": 6147,
+  "runtime": {
+    "node": "v20.20.2",
+    "platform": "darwin",
+    "architecture": "arm64"
+  },
+  "metrics": [
+    {
+      "name": "quote_list_first_page",
+      "samples": 30,
+      "warmups": 5,
+      "thresholdMs": 500,
+      "p50Ms": 11.282,
+      "p95Ms": 13.277,
+      "maximumMs": 14.196,
+      "passed": true,
+      "maximumQueriesPerSample": 1,
+      "observedMaximumQueriesPerSample": 1,
+      "queryCountPassed": true
+    },
+    {
+      "name": "quote_list_cursor_page",
+      "samples": 30,
+      "warmups": 5,
+      "thresholdMs": 500,
+      "p50Ms": 11.262,
+      "p95Ms": 12.304,
+      "maximumMs": 12.786,
+      "passed": true,
+      "maximumQueriesPerSample": 1,
+      "observedMaximumQueriesPerSample": 1,
+      "queryCountPassed": true
+    },
+    {
+      "name": "quote_contact_project_search",
+      "samples": 30,
+      "warmups": 5,
+      "thresholdMs": 300,
+      "p50Ms": 38.253,
+      "p95Ms": 46.03,
+      "maximumMs": 65.627,
+      "passed": true,
+      "maximumQueriesPerSample": 1,
+      "observedMaximumQueriesPerSample": 1,
+      "queryCountPassed": true
+    },
+    {
+      "name": "canonical_public_proposal_render",
+      "samples": 200,
+      "warmups": 20,
+      "thresholdMs": 100,
+      "p50Ms": 0.174,
+      "p95Ms": 0.894,
+      "maximumMs": 2.181,
+      "passed": true
+    },
+    {
+      "name": "standard_proposal_pdf",
+      "samples": 20,
+      "warmups": 2,
+      "thresholdMs": 3000,
+      "p50Ms": 69.599,
+      "p95Ms": 76.821,
+      "maximumMs": 77.863,
+      "passed": true
+    }
+  ],
+  "database": {
+    "metrics": [
+      {
+        "name": "quote_list_first_page",
+        "samples": 30,
+        "warmups": 5,
+        "thresholdMs": 500,
+        "p50Ms": 11.282,
+        "p95Ms": 13.277,
+        "maximumMs": 14.196,
+        "passed": true,
+        "maximumQueriesPerSample": 1,
+        "observedMaximumQueriesPerSample": 1,
+        "queryCountPassed": true
+      },
+      {
+        "name": "quote_list_cursor_page",
+        "samples": 30,
+        "warmups": 5,
+        "thresholdMs": 500,
+        "p50Ms": 11.262,
+        "p95Ms": 12.304,
+        "maximumMs": 12.786,
+        "passed": true,
+        "maximumQueriesPerSample": 1,
+        "observedMaximumQueriesPerSample": 1,
+        "queryCountPassed": true
+      },
+      {
+        "name": "quote_contact_project_search",
+        "samples": 30,
+        "warmups": 5,
+        "thresholdMs": 300,
+        "p50Ms": 38.253,
+        "p95Ms": 46.03,
+        "maximumMs": 65.627,
+        "passed": true,
+        "maximumQueriesPerSample": 1,
+        "observedMaximumQueriesPerSample": 1,
+        "queryCountPassed": true
+      }
+    ],
+    "transactionRolledBack": true,
+    "seeded": {
+      "contacts": 10000,
+      "properties": 10000,
+      "opportunities": 10000,
+      "quotes": 10000,
+      "versions": 10000
+    }
+  },
+  "render": {
+    "standardPdfBytes": 15475,
+    "canonicalPublicBytes": 8003
+  },
+  "limitations": [
+    "This Node harness does not measure browser LCP, INP, CLS, zoom, or network conditions.",
+    "Database timings exclude HTTP authentication, BFF transport, and JSON transfer time.",
+    "PDF timings exclude object-storage upload and use the standard proposal without a remote logo."
+  ]
+}

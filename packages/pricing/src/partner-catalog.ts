@@ -1,7 +1,7 @@
 export const PARTNER_ALLOWED_SERVICE_KEYS = [
   "junk-removal",
   "demo-hauloff",
-  "land-clearing"
+  "land-clearing",
 ] as const;
 
 export type PartnerServiceKey = (typeof PARTNER_ALLOWED_SERVICE_KEYS)[number];
@@ -9,18 +9,78 @@ export type PartnerServiceKey = (typeof PARTNER_ALLOWED_SERVICE_KEYS)[number];
 export const PARTNER_SERVICE_LABELS: Record<PartnerServiceKey, string> = {
   "junk-removal": "Junk removal",
   "demo-hauloff": "Demo + haul-off",
-  "land-clearing": "Land clearing"
+  "land-clearing": "Land clearing",
 };
 
-export const PARTNER_JUNK_BASE_TIER_KEYS = ["quarter", "half", "three_quarter", "full"] as const;
-export type PartnerJunkBaseTierKey = (typeof PARTNER_JUNK_BASE_TIER_KEYS)[number];
+export const PARTNER_JUNK_BASE_TIER_KEYS = [
+  "quarter",
+  "half",
+  "three_quarter",
+  "full",
+] as const;
+export type PartnerJunkBaseTierKey =
+  (typeof PARTNER_JUNK_BASE_TIER_KEYS)[number];
 
-export const PARTNER_JUNK_ADDON_TIER_KEYS = ["mattress_fee", "paint_fee", "tire_fee"] as const;
-export type PartnerJunkAddonTierKey = (typeof PARTNER_JUNK_ADDON_TIER_KEYS)[number];
+export const PARTNER_JUNK_ADDON_TIER_KEYS = [
+  "mattress_fee",
+  "paint_fee",
+  "tire_fee",
+] as const;
+export type PartnerJunkAddonTierKey =
+  (typeof PARTNER_JUNK_ADDON_TIER_KEYS)[number];
+
+export const PARTNER_JUNK_ADDON_CATALOG = [
+  {
+    tierKey: "mattress_fee",
+    addOnKey: "mattress_disposal",
+    label: "Mattress disposal",
+    description:
+      "Additional disposal handling for each mattress or box spring.",
+    unitLabel: "mattress",
+  },
+  {
+    tierKey: "paint_fee",
+    addOnKey: "paint_can_disposal",
+    label: "Paint can disposal",
+    description: "Additional handling for each accepted paint can.",
+    unitLabel: "can",
+  },
+  {
+    tierKey: "tire_fee",
+    addOnKey: "tire_disposal",
+    label: "Tire disposal",
+    description: "Additional disposal handling for each accepted tire.",
+    unitLabel: "tire",
+  },
+] as const satisfies readonly {
+  tierKey: PartnerJunkAddonTierKey;
+  addOnKey: string;
+  label: string;
+  description: string;
+  unitLabel: string;
+}[];
+
+export function getPartnerAddOnKeyForLegacyTier(
+  serviceKey: string,
+  tierKey: string,
+): string | null {
+  if (serviceKey.trim().toLowerCase() !== "junk-removal") return null;
+  return (
+    PARTNER_JUNK_ADDON_CATALOG.find((addOn) => addOn.tierKey === tierKey.trim())
+      ?.addOnKey ?? null
+  );
+}
+
+export function isPartnerAddOnTierKey(
+  serviceKey: string,
+  tierKey: string,
+): boolean {
+  return getPartnerAddOnKeyForLegacyTier(serviceKey, tierKey) !== null;
+}
 
 export const PARTNER_JUNK_TIER_KEYS = [
   ...PARTNER_JUNK_BASE_TIER_KEYS,
-  ...PARTNER_JUNK_ADDON_TIER_KEYS
+  ...PARTNER_JUNK_ADDON_TIER_KEYS,
 ] as const;
 export type PartnerJunkTierKey = (typeof PARTNER_JUNK_TIER_KEYS)[number];
 
@@ -32,27 +92,38 @@ export const PARTNER_LAND_CLEARING_TIER_KEYS = [
   "yard_section",
   "most_of_yard",
   "full_lot",
-  "not_sure"
+  "not_sure",
 ] as const;
-export type PartnerLandClearingTierKey = (typeof PARTNER_LAND_CLEARING_TIER_KEYS)[number];
+export type PartnerLandClearingTierKey =
+  (typeof PARTNER_LAND_CLEARING_TIER_KEYS)[number];
 
-export function isPartnerAllowedServiceKey(value: string): value is PartnerServiceKey {
+export function isPartnerAllowedServiceKey(
+  value: string,
+): value is PartnerServiceKey {
   return (PARTNER_ALLOWED_SERVICE_KEYS as readonly string[]).includes(value);
 }
 
-export function isPartnerJunkTierKey(value: string): value is PartnerJunkTierKey {
+export function isPartnerJunkTierKey(
+  value: string,
+): value is PartnerJunkTierKey {
   return (PARTNER_JUNK_TIER_KEYS as readonly string[]).includes(value);
 }
 
-export function isPartnerJunkBaseTierKey(value: string): value is PartnerJunkBaseTierKey {
+export function isPartnerJunkBaseTierKey(
+  value: string,
+): value is PartnerJunkBaseTierKey {
   return (PARTNER_JUNK_BASE_TIER_KEYS as readonly string[]).includes(value);
 }
 
-export function isPartnerDemoTierKey(value: string): value is PartnerDemoTierKey {
+export function isPartnerDemoTierKey(
+  value: string,
+): value is PartnerDemoTierKey {
   return (PARTNER_DEMO_TIER_KEYS as readonly string[]).includes(value);
 }
 
-export function isPartnerLandClearingTierKey(value: string): value is PartnerLandClearingTierKey {
+export function isPartnerLandClearingTierKey(
+  value: string,
+): value is PartnerLandClearingTierKey {
   return (PARTNER_LAND_CLEARING_TIER_KEYS as readonly string[]).includes(value);
 }
 
@@ -78,37 +149,55 @@ export function getPartnerServiceLabel(serviceKey: string): string {
 const PARTNER_DEMO_TIER_LABELS: Record<PartnerDemoTierKey, string> = {
   small: "Small demo",
   medium: "Medium demo",
-  large: "Large demo"
+  large: "Large demo",
 };
 
-const PARTNER_LAND_CLEARING_TIER_LABELS: Record<PartnerLandClearingTierKey, string> = {
+const PARTNER_LAND_CLEARING_TIER_LABELS: Record<
+  PartnerLandClearingTierKey,
+  string
+> = {
   small_patch: "Small patch",
   yard_section: "Yard section",
   most_of_yard: "Most of a yard",
   full_lot: "Full lot (starting)",
-  not_sure: "Not sure"
+  not_sure: "Not sure",
 };
 
-export function getPartnerTierLabel(serviceKey: string, tierKey: string): string {
+export function getPartnerTierLabel(
+  serviceKey: string,
+  tierKey: string,
+): string {
   const normalizedService = serviceKey.trim().toLowerCase();
   const normalizedTier = tierKey.trim();
   if (normalizedService === "junk-removal") {
     return titleCaseFromKey(normalizedTier || "tier");
   }
-  if (normalizedService === "demo-hauloff" && isPartnerDemoTierKey(normalizedTier)) {
+  if (
+    normalizedService === "demo-hauloff" &&
+    isPartnerDemoTierKey(normalizedTier)
+  ) {
     return PARTNER_DEMO_TIER_LABELS[normalizedTier];
   }
-  if (normalizedService === "land-clearing" && isPartnerLandClearingTierKey(normalizedTier)) {
+  if (
+    normalizedService === "land-clearing" &&
+    isPartnerLandClearingTierKey(normalizedTier)
+  ) {
     return PARTNER_LAND_CLEARING_TIER_LABELS[normalizedTier];
   }
   return titleCaseFromKey(normalizedTier || "tier");
 }
 
-export function isPartnerTierKeyForService(serviceKey: string, tierKey: string): boolean {
+export function isPartnerTierKeyForService(
+  serviceKey: string,
+  tierKey: string,
+): boolean {
   const normalizedService = serviceKey.trim().toLowerCase();
   const normalizedTier = tierKey.trim();
-  if (normalizedService === "junk-removal") return isPartnerJunkTierKey(normalizedTier);
-  if (normalizedService === "demo-hauloff") return isPartnerDemoTierKey(normalizedTier);
-  if (normalizedService === "land-clearing") return isPartnerLandClearingTierKey(normalizedTier);
+  if (normalizedService === "junk-removal")
+    return isPartnerJunkTierKey(normalizedTier);
+  if (normalizedService === "demo-hauloff")
+    return isPartnerDemoTierKey(normalizedTier);
+  if (normalizedService === "land-clearing")
+    return isPartnerLandClearingTierKey(normalizedTier);
   return false;
 }

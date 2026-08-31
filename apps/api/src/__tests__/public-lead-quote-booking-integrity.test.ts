@@ -129,6 +129,17 @@ describe("public lead and quote booking integrity", () => {
     expect(intake).toContain("intakeResponse: response");
   });
 
+  it("routes conflicting public intake through the shared schedule lock and review path", () => {
+    const intake = source("apps/api/app/api/web/lead-intake/route.ts");
+    expect(intake).toContain("await acquireScheduleConflictLock(tx)");
+    expect(intake).toContain("await inspectScheduleConflicts(tx");
+    expect(intake).toContain(
+      "const schedulingReviewRequired = scheduleDecision?.conflict === true",
+    );
+    expect(intake).toContain("!schedulingReviewRequired");
+    expect(intake).toContain("schedulingReviewRequired,");
+  });
+
   it("binds quote, revision, hold, pipeline, audit, and replay evidence", () => {
     const scheduling = source("apps/api/src/lib/quote-scheduling.ts");
     const publicPage = source("apps/site/src/app/quote/[token]/page.tsx");

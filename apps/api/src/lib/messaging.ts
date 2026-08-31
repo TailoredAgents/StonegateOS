@@ -23,7 +23,9 @@ export type SendRequestOptions = {
     filename: string;
     content: string;
     contentType: string;
+    encoding?: "base64";
   }>;
+  emailHtml?: string | null;
 };
 
 type FacebookPageTokenResponse = {
@@ -109,6 +111,7 @@ export async function sendEmailMessage(
     to,
     subject,
     text: textBody,
+    html: options.emailHtml,
     idempotencyKey: options.idempotencyKey,
     attachments: options.emailAttachments,
   });

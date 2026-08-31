@@ -37,6 +37,9 @@ import {
   conversationThreads,
   leadAutomationStates,
   messageDeliveryEvents,
+  appointmentTasks,
+  partnerBookings,
+  partnerJobEvents,
 } from "@/db";
 import {
   getBusinessHoursPolicy,
@@ -147,6 +150,10 @@ import {
   resolveQuoteSendAttemptId,
   shouldNotifyCustomerForQuoteDecision,
 } from "@/lib/quote-outbox-contract";
+import { isQuoteEventType } from "@/lib/quote-v2-outbox-contract";
+import { processQuoteV2SendRequestedOutbox } from "@/lib/quote-v2-send-worker";
+import { processQuoteV2WorkflowOutbox } from "@/lib/quote-v2-outbox-worker";
+import { canAutomaticallyTransitionPipeline } from "@/lib/pipeline-monotonicity";
 import { resolveUsableQuoteDeliveryChannels } from "@/lib/contact-outbound-safety";
 import {
   buildTwilioWebhookUrl,
@@ -174,10 +181,12 @@ import {
   getTeamOperationKillSwitch,
   getTeamOperationKillSwitchForRisk,
 } from "@/lib/team-operation-kill-switch";
+import { getOutboxDispatchBlock } from "@/lib/outbox-dispatch-policy";
 import {
   finalizeStaffNotificationDispatch,
   prepareStaffNotificationDispatch,
 } from "@/lib/staff-notification-operations";
+import { processPartnerAccountInvitationEmail } from "@/lib/partner-account-invitation-delivery";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -221,6 +230,16 @@ const CONTACT_MESSAGE_ENQUEUE_EVENT_TYPES = new Set([
   "review.request",
   "quote.sent",
   "quote.decision",
+  // Quote V2 uses an encrypted per-delivery ledger and pre-dispatch markers;
+  // it must own provider calls outside the contact-scoped transaction.
+  "quote.send_requested.v2",
+  // Quote V2 workflow handlers own idempotent activity checkpoints. The
+  // accepted/booked handler also queues a deduplicated customer message using
+  // its own contact lock, so these must not nest under the generic lock.
+  "quote.change_requested.v2",
+  "quote.response_recorded.v2",
+  "quote.deposit_checkout_requested.v2",
+  "quote.accepted_and_booked.v2",
   // This handler owns a separate durable provider ledger and must not execute
   // inside the contact-scoped transaction that surrounds ordinary handlers.
   "sales.escalation.call",
@@ -294,6 +313,7 @@ function outcomeForOutboxHandlerError(
     // before the provider could be called again.
     event.type === "sales.escalation.call" ||
     event.type === "staff_notification.dispatch" ||
+    event.type === "partner.account_invitation.email" ||
     // Calendar creates use a deterministic provider ID, while updates always
     // target the already-persisted ID. Both operations therefore converge on
     // retry instead of treating an ambiguous provider response as success.
@@ -303,6 +323,7 @@ function outcomeForOutboxHandlerError(
     // retryable or a queued/polling client would be orphaned permanently.
     event.type === "expense.receipt.analyze" ||
     (event.type.startsWith("facebook.") && attempt < 5) ||
+    (isQuoteEventType(event.type) && attempt < 8) ||
     event.type.startsWith("call.recording.");
   console.warn("[outbox] handler_error", {
     id: event.id,
@@ -2596,48 +2617,42 @@ async function updatePipelineStageForContact(
     return;
   }
 
-  try {
-    const db = getDb();
-    const [existing] = await db
-      .select({ stage: crmPipeline.stage })
-      .from(crmPipeline)
-      .where(eq(crmPipeline.contactId, contactId))
-      .limit(1);
+  const db = getDb();
+  const [existing] = await db
+    .select({ stage: crmPipeline.stage })
+    .from(crmPipeline)
+    .where(eq(crmPipeline.contactId, contactId))
+    .limit(1);
 
-    const previousStage = (existing?.stage ?? null) as PipelineStage | null;
-    if (previousStage === targetStage) {
-      return;
-    }
-
-    await db
-      .insert(crmPipeline)
-      .values({ contactId, stage: targetStage })
-      .onConflictDoUpdate({
-        target: crmPipeline.contactId,
-        set: {
-          stage: targetStage,
-          updatedAt: new Date(),
-        },
-      });
-
-    await db.insert(outboxEvents).values({
-      type: "pipeline.auto_stage_change",
-      payload: {
-        contactId,
-        fromStage: previousStage,
-        toStage: targetStage,
-        reason,
-        meta,
-      },
-    });
-  } catch (error) {
-    console.warn("[pipeline] auto_update_failed", {
-      contactId,
-      targetStage,
-      reason,
-      error: String(error),
-    });
+  const previousStage = (existing?.stage ?? null) as PipelineStage | null;
+  if (!canAutomaticallyTransitionPipeline(previousStage, targetStage)) {
+    return;
   }
+
+  const [updated] = await db
+    .insert(crmPipeline)
+    .values({ contactId, stage: targetStage })
+    .onConflictDoUpdate({
+      target: crmPipeline.contactId,
+      set: {
+        stage: targetStage,
+        updatedAt: new Date(),
+      },
+      setWhere: sql`${crmPipeline.stage} NOT IN ('won', 'lost')`,
+    })
+    .returning({ stage: crmPipeline.stage });
+  if (!updated) return;
+
+  await db.insert(outboxEvents).values({
+    type: "pipeline.auto_stage_change",
+    payload: {
+      contactId,
+      fromStage: previousStage,
+      toStage: targetStage,
+      reason,
+      meta,
+    },
+  });
 }
 
 function mapAppointmentStatusToStage(status: string): PipelineStage {
@@ -3641,6 +3656,37 @@ async function handleOutboxEvent(
   event: OutboxEventRecord,
 ): Promise<OutboxOutcome> {
   switch (event.type) {
+    case "partner.account_invitation.email": {
+      if (getTeamOperationKillSwitchForRisk("external") === "external_sends") {
+        return {
+          status: "retry",
+          error: "partner_invitation_external_sends_disabled",
+          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+        };
+      }
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const invitationId = readStringValue(payload?.["invitationId"]);
+      const deliveryUrl = readStringValue(payload?.["deliveryUrl"]);
+      const correlationId = readStringValue(payload?.["correlationId"]);
+      const generation = payload?.["generation"];
+      if (
+        !invitationId ||
+        !deliveryUrl ||
+        typeof generation !== "number" ||
+        !Number.isSafeInteger(generation) ||
+        generation < 1
+      ) {
+        return { status: "skipped", error: "partner_invitation_payload_invalid" };
+      }
+      return processPartnerAccountInvitationEmail({
+        invitationId,
+        generation,
+        outboxEventId: event.id,
+        deliveryUrl,
+        correlationId,
+      });
+    }
+
     case "expense.receipt.analyze": {
       const payload = isRecord(event.payload) ? event.payload : null;
       const captureId = readStringValue(payload?.["captureId"]);
@@ -3716,6 +3762,107 @@ async function handleOutboxEvent(
           error: finalized.error,
           nextAttemptAt: finalized.retryAt,
         };
+      }
+      return { status: "processed" };
+    }
+
+    case "partner.cancellation_review_requested": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const partnerAccountId = readStringValue(payload?.["partnerAccountId"]);
+      const partnerBookingId = readStringValue(payload?.["partnerBookingId"]);
+      const appointmentId = readStringValue(payload?.["appointmentId"]);
+      const partnerJobEventId = readStringValue(payload?.["partnerJobEventId"]);
+      if (
+        !partnerAccountId ||
+        !partnerBookingId ||
+        !appointmentId ||
+        !partnerJobEventId
+      ) {
+        return {
+          status: "skipped",
+          error: "partner_cancellation_review_context_missing",
+        };
+      }
+
+      const db = getDb();
+      const result = await db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({
+            bookingId: partnerBookings.id,
+            appointmentId: partnerBookings.appointmentId,
+          })
+          .from(partnerBookings)
+          .innerJoin(
+            partnerJobEvents,
+            and(
+              eq(partnerJobEvents.id, partnerJobEventId),
+              eq(
+                partnerJobEvents.partnerAccountId,
+                partnerBookings.partnerAccountId,
+              ),
+              eq(partnerJobEvents.partnerBookingId, partnerBookings.id),
+              eq(
+                partnerJobEvents.eventType,
+                "job.cancellation_review_requested",
+              ),
+            ),
+          )
+          .where(
+            and(
+              eq(partnerBookings.id, partnerBookingId),
+              eq(partnerBookings.partnerAccountId, partnerAccountId),
+              eq(partnerBookings.appointmentId, appointmentId),
+              ne(partnerBookings.publicStatus, "canceled"),
+              isNotNull(partnerBookings.cancelOperationKeyHash),
+              isNotNull(partnerBookings.cancelRequestHash),
+            ),
+          )
+          .limit(1);
+        if (!request) return { kind: "unavailable" as const };
+
+        const title = `Review partner cancellation request · job ${partnerBookingId
+          .slice(0, 8)
+          .toUpperCase()}`;
+        const [existing] = await tx
+          .select({ id: appointmentTasks.id })
+          .from(appointmentTasks)
+          .where(
+            and(
+              eq(appointmentTasks.appointmentId, appointmentId),
+              eq(appointmentTasks.status, "open"),
+              eq(appointmentTasks.title, title),
+            ),
+          )
+          .limit(1);
+        if (existing) return { kind: "existing" as const };
+
+        await tx.insert(appointmentTasks).values({
+          appointmentId,
+          title,
+          status: "open",
+        });
+        return { kind: "created" as const };
+      });
+
+      if (result.kind === "unavailable") {
+        return {
+          status: "skipped",
+          error: "partner_cancellation_review_no_longer_pending",
+        };
+      }
+      if (result.kind === "created") {
+        await recordAuditEvent({
+          actor: { type: "worker", label: "outbox" },
+          action: "partner.booking.cancellation_review_task_created",
+          entityType: "partner_booking",
+          entityId: partnerBookingId,
+          meta: {
+            partnerAccountId,
+            appointmentId,
+            partnerJobEventId,
+            outboxEventId: event.id,
+          },
+        });
       }
       return { status: "processed" };
     }
@@ -4202,6 +4349,15 @@ async function handleOutboxEvent(
       }
       return { status: "processed" };
     }
+
+    case "quote.send_requested.v2":
+      return processQuoteV2SendRequestedOutbox(event);
+
+    case "quote.change_requested.v2":
+    case "quote.response_recorded.v2":
+    case "quote.deposit_checkout_requested.v2":
+    case "quote.accepted_and_booked.v2":
+      return processQuoteV2WorkflowOutbox(event);
 
     case "quote.decision": {
       const decisionPayload = parseQuoteDecisionOutboxPayload(event.payload);
@@ -7052,6 +7208,13 @@ async function handleOutboxEvent(
     }
 
     default:
+      if (isQuoteEventType(event.type)) {
+        return {
+          status: "quarantined",
+          error: "unknown_quote_event",
+          quarantineReason: "unknown_quote_event",
+        };
+      }
       return { status: "skipped" };
   }
 }
@@ -7087,6 +7250,22 @@ export async function processOutboxBatch(
   };
 
   for (const event of events) {
+    const dispatchBlock = getOutboxDispatchBlock(event.type);
+    if (dispatchBlock) {
+      // Operational containment must not consume the event's retry budget.
+      // Leave it durable and periodically recheck the switch without entering
+      // any handler that could cross a provider boundary.
+      await db
+        .update(outboxEvents)
+        .set({
+          nextAttemptAt: new Date(Date.now() + dispatchBlock.retryAfterMs),
+          lastError: dispatchBlock.reason,
+        })
+        .where(eq(outboxEvents.id, event.id));
+      stats.skipped += 1;
+      continue;
+    }
+
     let contactScope: OutboxContactScope | null = null;
     // Fail closed before any handler can call a provider. Delete-time
     // quarantine catches already queued rows; this guard catches events

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
-import { and, asc, eq, gt, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, or, sql } from "drizzle-orm";
 import {
   availabilityWindows,
   isPartnerAllowedServiceKey,
@@ -14,7 +14,6 @@ import { queueSystemOutboundMessage } from "@/lib/system-outbound";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { resolveAutomaticAppointmentStatusForMedia } from "@/lib/appointment-media";
 import {
-  appointmentHolds,
   appointmentNotes,
   appointments,
   auditLogs,
@@ -48,7 +47,10 @@ import {
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
-import type { TeamMutationTransaction } from "@/lib/team-mutation";
+import {
+  acquireScheduleConflictLock,
+  inspectScheduleConflicts,
+} from "@/lib/appointment-schedule-conflicts";
 
 const WEEKDAY_KEYS = [
   "monday",
@@ -92,59 +94,6 @@ function formatLocalDateTime(date: Date): string {
   return DateTime.fromJSDate(date, { zone: "utc" })
     .setZone(APPOINTMENT_TIME_ZONE)
     .toLocaleString(DateTime.DATETIME_MED);
-}
-
-async function countOverlappingAppointments(input: {
-  db: TeamMutationTransaction;
-  startAtUtc: Date;
-  durationMinutes: number;
-  excludeAppointmentId?: string | null;
-}): Promise<number> {
-  const endAtUtc = new Date(
-    input.startAtUtc.getTime() + input.durationMinutes * 60 * 1000,
-  );
-  const startAtIso = input.startAtUtc.toISOString();
-  const endAtIso = endAtUtc.toISOString();
-  const nowIso = new Date().toISOString();
-  const startAtTz = sql`${startAtIso}::timestamptz`;
-  const endAtTz = sql`${endAtIso}::timestamptz`;
-  const nowTz = sql`${nowIso}::timestamptz`;
-
-  const [apptRow] = await input.db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(appointments)
-    .where(
-      and(
-        eq(appointments.status, "confirmed"),
-        isNull(appointments.completedAt),
-        input.excludeAppointmentId
-          ? ne(appointments.id, input.excludeAppointmentId)
-          : undefined,
-        // startAt < end && (startAt + duration) > start
-        lt(appointments.startAt, endAtTz),
-        gt(
-          sql`${appointments.startAt} + (${appointments.durationMinutes} * interval '1 minute')`,
-          startAtTz,
-        ),
-      ),
-    );
-
-  const [holdRow] = await input.db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(appointmentHolds)
-    .where(
-      and(
-        eq(appointmentHolds.status, "active"),
-        gt(appointmentHolds.expiresAt, nowTz),
-        lt(appointmentHolds.startAt, endAtTz),
-        gt(
-          sql`${appointmentHolds.startAt} + (${appointmentHolds.durationMinutes} * interval '1 minute')`,
-          startAtTz,
-        ),
-      ),
-    );
-
-  return (apptRow?.count ?? 0) + (holdRow?.count ?? 0);
 }
 
 function parseExpectedVersion(value: string | null): number | null {
@@ -395,6 +344,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const correlationId = randomUUID();
   const db = getDb();
   const result = await db.transaction(async (tx) => {
+    await acquireScheduleConflictLock(tx);
     await tx.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${`partner-booking-operation:${operationKeyHash}`}, 0))`,
     );
@@ -481,8 +431,17 @@ export async function POST(request: NextRequest): Promise<Response> {
       bookingId: string;
       bookingVersion: number;
       appointmentId: string;
+      propertyId: string;
+      serviceKey: string | null;
+      tierKey: string | null;
+      amountCents: number | null;
       status: "requested" | "confirmed";
       startAt: Date | null;
+      durationMinutes: number;
+      travelBufferMinutes: number;
+      quotedTotalCents: number | null;
+      quotedScopeText: string | null;
+      bookingDetails: (typeof appointments.$inferSelect)["bookingDetails"];
       calendarEventId: string | null;
     } | null = null;
     if (rescheduleFromAppointmentId && rescheduleFromVersion) {
@@ -496,8 +455,17 @@ export async function POST(request: NextRequest): Promise<Response> {
           bookingId: partnerBookings.id,
           bookingVersion: partnerBookings.version,
           appointmentId: appointments.id,
+          propertyId: appointments.propertyId,
+          serviceKey: partnerBookings.serviceKey,
+          tierKey: partnerBookings.tierKey,
+          amountCents: partnerBookings.amountCents,
           status: appointments.status,
           startAt: appointments.startAt,
+          durationMinutes: appointments.durationMinutes,
+          travelBufferMinutes: appointments.travelBufferMinutes,
+          quotedTotalCents: appointments.quotedTotalCents,
+          quotedScopeText: appointments.quotedScopeText,
+          bookingDetails: appointments.bookingDetails,
           calendarEventId: appointments.calendarEventId,
         })
         .from(partnerBookings)
@@ -536,11 +504,26 @@ export async function POST(request: NextRequest): Promise<Response> {
       };
     }
 
-    // Serialize every partner booking that can consume capacity on this local
-    // service date, then recount while holding the transaction lock.
-    await tx.execute(
-      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`partner-booking-capacity:${preferredDate}`}, 0))`,
-    );
+    // A reschedule changes only the schedule. The source appointment remains
+    // authoritative for property, scope, service, pricing, duration, buffer,
+    // and structured booking metadata so a sparse reschedule form cannot
+    // silently rewrite or discard job truth.
+    const effectivePropertyId = sourceBooking?.propertyId ?? propertyId;
+    const effectiveServiceKey = sourceBooking?.serviceKey ?? serviceKey;
+    const effectiveTierKey = sourceBooking ? sourceBooking.tierKey : tierKey;
+    const effectiveNotes = sourceBooking?.quotedScopeText ?? notes;
+    const effectiveDurationMinutes =
+      sourceBooking?.durationMinutes ?? durationMinutes;
+    const effectiveTravelBufferMinutes =
+      sourceBooking?.travelBufferMinutes ?? 30;
+    const preservedSourceNotes = sourceBooking
+      ? await tx
+          .select({ body: appointmentNotes.body })
+          .from(appointmentNotes)
+          .where(eq(appointmentNotes.appointmentId, sourceBooking.appointmentId))
+          .orderBy(asc(appointmentNotes.createdAt))
+          .limit(100)
+      : [];
 
     const [property] = await tx
       .select({
@@ -560,7 +543,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       )
       .where(
         and(
-          eq(properties.id, propertyId),
+            eq(properties.id, effectivePropertyId),
           or(
             eq(properties.contactId, auth.partnerUser.orgContactId),
             eq(contactProperties.contactId, auth.partnerUser.orgContactId),
@@ -570,18 +553,20 @@ export async function POST(request: NextRequest): Promise<Response> {
       .limit(1);
     if (!property?.id) return { kind: "property_not_found" as const };
 
-    const overlaps = await countOverlappingAppointments({
-      db: tx,
-      startAtUtc: startAt,
-      durationMinutes,
+    const scheduleDecision = await inspectScheduleConflicts(tx, {
+      startAt,
+      durationMinutes: effectiveDurationMinutes,
+      travelBufferMinutes: effectiveTravelBufferMinutes,
+      capacity: getAppointmentCapacity(),
       excludeAppointmentId: sourceBooking?.appointmentId ?? null,
+      now,
     });
-    if (overlaps >= getAppointmentCapacity()) {
+    if (scheduleDecision.conflict) {
       return { kind: "slot_full" as const };
     }
 
-    let amountCents: number | null = null;
-    if (tierKey) {
+    let amountCents: number | null = sourceBooking?.amountCents ?? null;
+    if (!sourceBooking && effectiveTierKey) {
       const [rateRow] = await tx
         .select({ amountCents: partnerRateItems.amountCents })
         .from(partnerRateItems)
@@ -592,8 +577,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         .where(
           and(
             eq(partnerRateCards.orgContactId, auth.partnerUser.orgContactId),
-            eq(partnerRateItems.serviceKey, serviceKey),
-            eq(partnerRateItems.tierKey, tierKey),
+            eq(partnerRateItems.serviceKey, effectiveServiceKey),
+            eq(partnerRateItems.tierKey, effectiveTierKey),
           ),
         )
         .limit(1);
@@ -626,8 +611,10 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     const appointmentStatus = await resolveAutomaticAppointmentStatusForMedia({
       proposedStatus: "confirmed",
-      quotedScopeText: null,
-      contactId: auth.partnerUser.orgContactId,
+      quotedScopeText: effectiveNotes,
+      // Partner uploads must be explicitly attached to their draft/job. Never
+      // infer eligibility from another unassigned photo on the shared contact.
+      contactId: null,
       database: tx,
       now,
     });
@@ -639,10 +626,14 @@ export async function POST(request: NextRequest): Promise<Response> {
         leadId: null,
         type: "partner",
         startAt,
-        durationMinutes,
+        durationMinutes: effectiveDurationMinutes,
         status: appointmentStatus,
+        quotedTotalCents:
+          sourceBooking?.quotedTotalCents ?? amountCents,
+        quotedScopeText: effectiveNotes,
+        bookingDetails: sourceBooking?.bookingDetails ?? null,
         rescheduleToken: nanoid(24),
-        travelBufferMinutes: 30,
+        travelBufferMinutes: effectiveTravelBufferMinutes,
         createdAt: now,
         updatedAt: now,
       })
@@ -661,8 +652,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         partnerUserId: auth.partnerUser.id,
         propertyId: property.id,
         appointmentId: created.id,
-        serviceKey,
-        tierKey,
+        serviceKey: effectiveServiceKey,
+        tierKey: effectiveTierKey,
         amountCents,
         createOperationKeyHash: operationKeyHash,
         createRequestHash: requestHash,
@@ -761,14 +752,6 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
     }
 
-    const [mediaEvent] = await tx
-      .insert(outboxEvents)
-      .values({
-        type: "appointment_media.attach_appointment",
-        payload: { appointmentId: created.id },
-        createdAt: now,
-      })
-      .returning({ id: outboxEvents.id });
     const [calendarEvent] = await tx
       .insert(outboxEvents)
       .values({
@@ -790,10 +773,10 @@ export async function POST(request: NextRequest): Promise<Response> {
       sourceBooking
         ? `Previous appointment: ${sourceBooking.appointmentId}`
         : null,
-      `Service: ${serviceKey}`,
-      tierKey ? `Tier: ${tierKey}` : null,
+      `Service: ${effectiveServiceKey}`,
+      effectiveTierKey ? `Tier: ${effectiveTierKey}` : null,
       amountCents !== null ? `Rate: $${(amountCents / 100).toFixed(2)}` : null,
-      notes ? `Notes: ${notes}` : null,
+      effectiveNotes ? `Notes: ${effectiveNotes}` : null,
     ].filter((line): line is string => Boolean(line));
 
     await tx.insert(appointmentNotes).values({
@@ -801,6 +784,18 @@ export async function POST(request: NextRequest): Promise<Response> {
       body: noteLines.join("\n"),
       createdAt: now,
     });
+    if (preservedSourceNotes.length > 0) {
+      await tx.insert(appointmentNotes).values(
+        preservedSourceNotes.map((sourceNote) => ({
+          appointmentId: created.id,
+          body: [
+            `[preserved-from-appointment:${sourceBooking?.appointmentId ?? "unknown"}]`,
+            sourceNote.body,
+          ].join("\n"),
+          createdAt: now,
+        })),
+      );
+    }
 
     const orgLabel = orgContact?.company?.trim().length
       ? orgContact.company.trim()
@@ -825,8 +820,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         : null,
       `${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}`,
       `${formatLocalDateTime(startAt)} (${windowLabel})`,
-      tierKey ? `${serviceKey} (${tierKey})` : serviceKey,
-      notes ? `Notes: ${notes}` : null,
+      effectiveTierKey
+        ? `${effectiveServiceKey} (${effectiveTierKey})`
+        : effectiveServiceKey,
+      effectiveNotes ? `Notes: ${effectiveNotes}` : null,
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
@@ -890,8 +887,8 @@ export async function POST(request: NextRequest): Promise<Response> {
           : "Your booking is confirmed:",
       when,
       address,
-      `Service: ${serviceKey}${tierKey ? ` (${tierKey})` : ""}`,
-      notes ? `Notes: ${notes}` : null,
+      `Service: ${effectiveServiceKey}${effectiveTierKey ? ` (${effectiveTierKey})` : ""}`,
+      effectiveNotes ? `Notes: ${effectiveNotes}` : null,
       portalLink ? "" : null,
       portalLink ? `View bookings: ${portalLink}` : null,
       "",
@@ -968,15 +965,15 @@ export async function POST(request: NextRequest): Promise<Response> {
         previousBookingId: sourceBooking?.bookingId ?? null,
         previousAppointmentId: sourceBooking?.appointmentId ?? null,
         propertyId: property.id,
-        serviceKey,
-        tierKey,
+        serviceKey: effectiveServiceKey,
+        tierKey: effectiveTierKey,
         amountCents,
         status: created.status,
         version: booking.version,
         previousVersion: sourceBooking?.bookingVersion ?? null,
         previousResultingVersion: sourceBookingVersion,
         committedAt: now,
-        mediaOutboxEventId: mediaEvent?.id ?? null,
+        mediaAssociation: "explicit_draft_or_job_only",
         calendarOutboxEventId: calendarEvent?.id ?? null,
         previousStatusOutboxEventId: sourceStatusOutboxEventId,
         previousCalendarOutboxEventId: sourceCalendarOutboxEventId,

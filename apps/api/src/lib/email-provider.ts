@@ -9,12 +9,14 @@ export type EmailProviderAttachment = {
   filename: string;
   content: string;
   contentType: string;
+  encoding?: "base64";
 };
 
 export type EmailProviderMessage = {
   to: string | readonly string[];
   subject: string;
   text: string;
+  html?: string | null;
   idempotencyKey?: string | null;
   attachments?: readonly EmailProviderAttachment[];
 };
@@ -46,8 +48,9 @@ const MAX_RECIPIENT_LENGTH = 320;
 const MAX_SUBJECT_BYTES = 998;
 const MAX_TEXT_BYTES = 256 * 1024;
 const MAX_ATTACHMENT_COUNT = 4;
-const MAX_ATTACHMENT_BYTES = 250_000;
-const MAX_ESTIMATED_WIRE_BYTES = 512 * 1024;
+const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024;
+const MAX_BASE_MESSAGE_WIRE_BYTES = 512 * 1024;
+const MAX_ESTIMATED_WIRE_BYTES = 3 * 1024 * 1024;
 const MIME_BASE_OVERHEAD_BYTES = 8 * 1024;
 const MIME_ATTACHMENT_OVERHEAD_BYTES = 2 * 1024;
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -247,19 +250,41 @@ function checkedMessage(input: EmailProviderMessage): {
   }
   const subjectBytes = Buffer.byteLength(input.subject, "utf8");
   const textBytes = Buffer.byteLength(input.text, "utf8");
+  const htmlBytes = input.html ? Buffer.byteLength(input.html, "utf8") : 0;
+  if (htmlBytes > MAX_TEXT_BYTES) {
+    throw new Error("email html is invalid or too large.");
+  }
   // Text may be quoted-printable (up to 3x) and attachments are base64
   // encoded (4/3), so raw content bytes cannot be compared to SMTP SIZE.
   let estimatedWireBytes =
-    MIME_BASE_OVERHEAD_BYTES + subjectBytes * 3 + textBytes * 3;
+    MIME_BASE_OVERHEAD_BYTES + subjectBytes * 3 + textBytes * 3 + htmlBytes * 3;
+  if (estimatedWireBytes > MAX_BASE_MESSAGE_WIRE_BYTES) {
+    throw new Error("email message is too large.");
+  }
   for (const attachment of attachments) {
-    const contentBytes = Buffer.byteLength(attachment.content, "utf8");
+    const isPdf = /^application\/pdf(?:;|$)/iu.test(attachment.contentType);
+    const isCalendar = /^text\/calendar(?:;|$)/iu.test(
+      attachment.contentType,
+    );
+    const validBase64 =
+      attachment.encoding === "base64" &&
+      attachment.content.length > 0 &&
+      attachment.content.length % 4 === 0 &&
+      /^[A-Za-z0-9+/]+={0,2}$/u.test(attachment.content);
+    const contentBytes = isPdf
+      ? validBase64
+        ? Buffer.from(attachment.content, "base64").byteLength
+        : MAX_ATTACHMENT_BYTES + 1
+      : Buffer.byteLength(attachment.content, "utf8");
     estimatedWireBytes +=
       Math.ceil(contentBytes / 3) * 4 + MIME_ATTACHMENT_OVERHEAD_BYTES;
     if (
       !attachment.filename ||
       attachment.filename.length > 160 ||
       /[\r\n\0/\\]/u.test(attachment.filename) ||
-      !/^text\/calendar(?:;|$)/iu.test(attachment.contentType) ||
+      (!isCalendar && !isPdf) ||
+      (isPdf && !validBase64) ||
+      (isCalendar && attachment.encoding !== undefined) ||
       contentBytes > MAX_ATTACHMENT_BYTES
     ) {
       throw new Error("email attachment is invalid or too large.");
@@ -385,6 +410,7 @@ export async function sendEmailThroughProvider(
       to: message.recipients,
       subject: input.subject,
       text: input.text,
+      ...(input.html ? { html: input.html } : {}),
       attachments: message.attachments,
       disableFileAccess: true,
       disableUrlAccess: true,
