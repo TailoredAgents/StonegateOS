@@ -102,7 +102,7 @@ services:
       export PATH="$PNPM_HOME:$PATH"
       export HUSKY=0
       npx -y pnpm@9.15.9 install --frozen-lockfile --prod=false
-      npx -y pnpm@9.15.9 --filter api build
+      NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=4096" npx -y pnpm@9.15.9 --filter api build
     startCommand: |
       set -eux
       export PNPM_HOME="$HOME/.local/share/pnpm"
