@@ -1,4 +1,3 @@
-import { jest } from "@jest/globals";
 import {
   buildPartnerApprovalRequestInsert,
   parsePartnerApprovalRuleConditions,
@@ -11,6 +10,8 @@ import {
   type PartnerApprovalRuleResolutionError,
   type PartnerApprovalTransaction,
 } from "@/lib/partner-portal-v2-approvals";
+
+const jest = import.meta.jest;
 
 const ACCOUNT_ID = "10000000-0000-4000-8000-000000000001";
 const OTHER_ACCOUNT_ID = "10000000-0000-4000-8000-000000000002";
@@ -31,6 +32,7 @@ function approvalRule(
     partnerAccountId: ACCOUNT_ID,
     name: `Rule ${idSuffix}`,
     conditions: {},
+    requiredApproverCapabilities: ["approvals.decide"],
     requiredApproverRoleKeys: ["approver"],
     requiredDecisionCount: 1,
     active: true,
@@ -233,7 +235,7 @@ describe("partner approval request rule resolution", () => {
       capturedErrorCode(() =>
         resolvePartnerApprovalRequirementFromRules({
           context: context(),
-          rules: [approvalRule(1, { requiredApproverRoleKeys: [] })],
+          rules: [approvalRule(1, { requiredApproverCapabilities: [] })],
         }),
       ),
     ).toBe("malformed_active_rule");

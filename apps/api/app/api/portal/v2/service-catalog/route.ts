@@ -7,6 +7,7 @@ import {
   createPartnerPortalV2UnexpectedResponse,
 } from "@/lib/partner-portal-v2-response";
 import { listPartnerServiceCatalog } from "@/lib/partner-portal-v2-service-catalog";
+import { loadPartnerAgreementPresentation } from "@/lib/partner-account-service-agreement-service";
 import { readPortalV2CorrelationId } from "@/lib/portal-v2-contract";
 
 /**
@@ -31,7 +32,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     const canSchedule =
       authorization.principal.capabilities.includes("bookings.create");
     const canReadRates =
-      authorization.principal.capabilities.includes("rates.read");
+      (authorization.principal.capabilities.includes("bookings.pricing.read") ||
+        authorization.principal.capabilities.includes("rates.read"));
     if (!canSchedule && !canReadRates) {
       return createPartnerPortalV2ErrorResponse(
         "forbidden",
@@ -55,13 +57,16 @@ export async function GET(request: NextRequest): Promise<Response> {
       );
     }
 
-    const services = await listPartnerServiceCatalog({
-      accountId,
-      revealPrices: canReadRates,
-    });
+    const [services, agreement] = await Promise.all([
+      listPartnerServiceCatalog({
+        accountId,
+        revealPrices: canReadRates,
+      }),
+      loadPartnerAgreementPresentation({ accountId }),
+    ]);
 
     return createPartnerPortalV2SuccessResponse(
-      { ok: true, services },
+      { ok: true, services, agreement },
       correlationId,
     );
   } catch (error) {

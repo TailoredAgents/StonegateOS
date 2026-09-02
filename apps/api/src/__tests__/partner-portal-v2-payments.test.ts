@@ -51,7 +51,7 @@ describe("partner portal V2 hosted payment contracts", () => {
     ).toBe(false);
   });
 
-  it("accepts ACH as a recognized request value so routes can reject it explicitly", () => {
+  it("accepts ACH as a recognized request value for gated embedded checkout", () => {
     expect(
       PartnerPaymentIntentRequestSchema.safeParse({
         invoiceId: INVOICE_ID,
@@ -63,9 +63,15 @@ describe("partner portal V2 hosted payment contracts", () => {
   });
 
   it("accepts only a bounded opaque completion token and rejects card fields", () => {
+    const card = PartnerEmbeddedPaymentCompletionSchema.safeParse({
+      sourceToken: "cnon:single-use-square-token",
+    });
+    expect(card.success).toBe(true);
+    if (card.success) expect(card.data.paymentMethod).toBe("card");
     expect(
       PartnerEmbeddedPaymentCompletionSchema.safeParse({
-        sourceToken: "cnon:single-use-square-token",
+        sourceToken: "bauth:single-use-square-token",
+        paymentMethod: "ach",
       }).success,
     ).toBe(true);
     expect(
@@ -177,7 +183,7 @@ describe("partner portal V2 hosted payment contracts", () => {
     ).toBe("pending");
   });
 
-  it("parses only bounded, card-hosted attempt metadata", () => {
+  it("parses only bounded, method-consistent attempt metadata", () => {
     const metadata = {
       partnerPortalPayment: {
         schemaVersion: 1,
@@ -235,6 +241,22 @@ describe("partner portal V2 hosted payment contracts", () => {
       completionIdempotencyKeyHash: "b".repeat(64),
       providerPaymentLinkId: null,
       checkoutUrl: null,
+    });
+    expect(
+      parsePartnerPaymentAttemptMetadata({
+        partnerPortalPayment: {
+          ...metadata.partnerPortalPayment,
+          paymentMethod: "ach",
+          checkoutMode: "embedded_ach",
+          providerPaymentLinkId: null,
+          checkoutUrl: null,
+          providerCreatedAt: null,
+          completionIdempotencyKeyHash: "c".repeat(64),
+        },
+      }),
+    ).toMatchObject({
+      paymentMethod: "ach",
+      checkoutMode: "embedded_ach",
     });
   });
 

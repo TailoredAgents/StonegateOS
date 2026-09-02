@@ -12,6 +12,8 @@ type TeamSessionApiResponse = {
   ok?: boolean;
   sessionId?: unknown;
   authMethod?: unknown;
+  assuranceLevel?: unknown;
+  mfaVerifiedAt?: unknown;
   teamMember?: {
     id?: unknown;
     name?: unknown;
@@ -84,6 +86,12 @@ function parseVerifiedPrincipal(
       ? payload.teamMember.name.trim()
       : "";
   if (!sessionId || !authMethod || !memberId || !name) return null;
+  const assuranceLevel = payload.assuranceLevel === "aal2" ? "aal2" : "aal1";
+  const mfaVerifiedAt =
+    typeof payload.mfaVerifiedAt === "string" &&
+    Number.isFinite(Date.parse(payload.mfaVerifiedAt))
+      ? payload.mfaVerifiedAt
+      : null;
 
   const roleSlug =
     typeof payload.teamMember.roleSlug === "string" &&
@@ -104,6 +112,8 @@ function parseVerifiedPrincipal(
     email,
     roleSlug,
     authMethod,
+    assuranceLevel,
+    mfaVerifiedAt,
     passwordSet: payload.teamMember.passwordSet === true,
     permissions: normalizePermissions(payload.teamMember.permissions),
   };

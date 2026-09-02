@@ -31,6 +31,7 @@ describe("partner approval all-matching-rule semantics", () => {
       id: "amount-threshold",
       name: "Amount threshold",
       version: 2,
+      requiredApproverCapabilities: ["approvals.decide"],
       requiredApproverRoleKeys: ["approver", "owner"],
       requiredDecisionCount: 2,
     },
@@ -38,6 +39,7 @@ describe("partner approval all-matching-rule semantics", () => {
       id: "billing-review",
       name: "Billing review",
       version: 1,
+      requiredApproverCapabilities: ["approvals.decide"],
       requiredApproverRoleKeys: ["billing", "owner"],
       requiredDecisionCount: 1,
     },
@@ -51,22 +53,24 @@ describe("partner approval all-matching-rule semantics", () => {
         {
           membershipId: APPROVER_ONE,
           roleKey: "approver",
+          capabilities: ["approvals.decide"],
           decision: "approved",
         },
         {
           membershipId: APPROVER_TWO,
           roleKey: "billing",
+          capabilities: ["approvals.decide"],
           decision: "approved",
         },
       ],
     });
     expect(result).toMatchObject({
       ok: true,
-      approved: false,
+      approved: true,
       declined: false,
       approvedDecisionCount: 2,
       rules: [
-        { id: "amount-threshold", satisfied: false },
+        { id: "amount-threshold", satisfied: true },
         { id: "billing-review", satisfied: true },
       ],
     });
@@ -88,7 +92,7 @@ describe("partner approval all-matching-rule semantics", () => {
           decision: "approved",
         },
       ],
-      actorRoleKey: "owner",
+      actorCapabilities: ["approvals.decide"],
     });
     expect(result).toMatchObject({
       ok: true,

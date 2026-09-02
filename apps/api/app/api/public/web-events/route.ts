@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
@@ -6,6 +7,11 @@ import { z } from "zod";
 import { lt, sql } from "drizzle-orm";
 import { getDb, webEventCountsDaily, webEvents, webVitals } from "@/db";
 import { sanitizeFirstPartyAnalyticsMeta } from "@/lib/analytics-privacy";
+import {
+  isPartnerAnalyticsSurface,
+  normalizePartnerProductEvent,
+  sanitizePartnerAnalyticsPath,
+} from "@/lib/partner-product-analytics";
 import {
   getServiceAreaPolicy,
   isGeorgiaPostalCode,
@@ -23,6 +29,8 @@ const MAX_EVENTS_PER_REQUEST = 50;
 const MAX_META_KEYS = 24;
 const RETAIN_DAYS = 30;
 const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const DEVELOPMENT_ANALYTICS_ID_SECRET =
+  "stonegate-development-partner-analytics-id-secret-v1";
 
 const rateLimiter = new LRUCache<string, { count: number }>({
   max: 2000,
@@ -137,6 +145,24 @@ function normalizeUtmField(value: unknown): string | null {
   return trimmed.slice(0, 120);
 }
 
+function pseudonymizePartnerAnalyticsId(value: string): string | null {
+  const configuredSecret =
+    process.env["WEB_ANALYTICS_ID_HMAC_SECRET"]?.trim() ??
+    process.env["QUOTE_RATE_LIMIT_HMAC_SECRET"]?.trim();
+  const secret =
+    configuredSecret && configuredSecret.length >= 32
+      ? configuredSecret
+      : process.env["NODE_ENV"] === "production"
+        ? null
+        : DEVELOPMENT_ANALYTICS_ID_SECRET;
+  if (!secret) return null;
+
+  return `pa_${createHmac("sha256", secret)
+    .update("partner-analytics-id-v1\0", "utf8")
+    .update(value, "utf8")
+    .digest("base64url")}`;
+}
+
 let lastPruneAtMs = 0;
 async function maybePruneOldRows(db = getDb()): Promise<void> {
   const now = Date.now();
@@ -236,36 +262,78 @@ export async function POST(request: NextRequest): Promise<Response> {
   const db = getDb();
   await maybePruneOldRows(db);
 
-  const serviceAreaPolicyPromise = getServiceAreaPolicy();
+  let serviceAreaPolicyPromise: ReturnType<typeof getServiceAreaPolicy> | null =
+    null;
 
   const inserts: Array<typeof webEvents.$inferInsert> = [];
   const vitalsInserts: Array<typeof webVitals.$inferInsert> = [];
   const countUpserts: Array<typeof webEventCountsDaily.$inferInsert> = [];
 
   for (const evt of events) {
-    const path = normalizePath(evt.path);
-    const referrerDomain = normalizeReferrerDomain(evt.referrer) ?? null;
-    const meta = sanitizeFirstPartyAnalyticsMeta(evt.meta, MAX_META_KEYS);
-    const utm = evt.utm ?? {};
+    const rawPath = normalizePath(evt.path);
+    const protectsPartnerData = isPartnerAnalyticsSurface(evt.event, rawPath);
+    const partnerProductEvent = protectsPartnerData
+      ? normalizePartnerProductEvent({
+          event: evt.event,
+          path: rawPath,
+          key: evt.key,
+          meta: evt.meta,
+        })
+      : null;
+    // Unknown or malformed Partner events are ignored instead of allowing a
+    // stale or hostile client to expand the product telemetry schema.
+    if (protectsPartnerData && !partnerProductEvent) continue;
 
-    const normalizedZip = evt.zip ? normalizePostalCode(evt.zip) : null;
-    const policy = await serviceAreaPolicyPromise;
-    const inAreaBucket =
-      normalizedZip && isGeorgiaPostalCode(normalizedZip)
+    const sessionId = protectsPartnerData
+      ? pseudonymizePartnerAnalyticsId(evt.sessionId)
+      : evt.sessionId;
+    const visitId = protectsPartnerData
+      ? pseudonymizePartnerAnalyticsId(evt.visitId)
+      : evt.visitId;
+    // Partner telemetry fails closed when its server-side pseudonymization
+    // key is unavailable. Raw client identifiers must never reach storage.
+    if (!sessionId || !visitId) continue;
+
+    const event = partnerProductEvent?.event ?? evt.event;
+    const path = partnerProductEvent
+      ? partnerProductEvent.path
+      : protectsPartnerData
+        ? sanitizePartnerAnalyticsPath(rawPath)
+        : rawPath;
+    const referrerDomain = protectsPartnerData
+      ? null
+      : (normalizeReferrerDomain(evt.referrer) ?? null);
+    const meta = partnerProductEvent
+      ? partnerProductEvent.meta
+      : sanitizeFirstPartyAnalyticsMeta(evt.meta, MAX_META_KEYS);
+    const utm: NonNullable<typeof evt.utm> = protectsPartnerData
+      ? {}
+      : (evt.utm ?? {});
+
+    const normalizedZip =
+      !protectsPartnerData && evt.zip ? normalizePostalCode(evt.zip) : null;
+    let inAreaBucket: "in_area" | "borderline" | "out_of_area" | null = null;
+    if (normalizedZip) {
+      const policy = await (serviceAreaPolicyPromise ??=
+        getServiceAreaPolicy());
+      inAreaBucket = isGeorgiaPostalCode(normalizedZip)
         ? isPostalCodeAllowed(normalizedZip, policy)
           ? "in_area"
           : "borderline"
-        : normalizedZip
-          ? "out_of_area"
-          : null;
+        : "out_of_area";
+    }
 
     const device = evt.device ?? null;
-    const key = evt.key?.trim() ? evt.key.trim().slice(0, 120) : null;
+    const key = partnerProductEvent
+      ? partnerProductEvent.key
+      : evt.key?.trim()
+        ? evt.key.trim().slice(0, 120)
+        : null;
 
     inserts.push({
-      sessionId: evt.sessionId,
-      visitId: evt.visitId,
-      event: evt.event,
+      sessionId,
+      visitId,
+      event,
       path,
       key,
       referrerDomain,
@@ -280,13 +348,13 @@ export async function POST(request: NextRequest): Promise<Response> {
     });
 
     if (
-      evt.event === "web_vital" &&
+      event === "web_vital" &&
       typeof evt.value === "number" &&
       Number.isFinite(evt.value)
     ) {
       vitalsInserts.push({
-        sessionId: evt.sessionId,
-        visitId: evt.visitId,
+        sessionId,
+        visitId,
         path,
         metric: key ?? "unknown",
         value: evt.value,
@@ -300,7 +368,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     countUpserts.push({
       dateStart,
-      event: evt.event,
+      event,
       path,
       key: key ?? "",
       device: device ?? "",

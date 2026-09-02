@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { conversationMessages, getDb } from "@/db";
+import { and, eq } from "drizzle-orm";
+import { conversationMessages, conversationThreads, getDb } from "@/db";
 import { isAdminRequest } from "../../../../../../web/admin";
 import {
   BrowserMediaError,
@@ -9,6 +9,7 @@ import {
   readBoundedBrowserMedia,
 } from "@/lib/browser-media";
 import { requirePermission } from "@/lib/permissions";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import { fetchTwilioProviderMedia } from "@/lib/twilio-provider";
 
 type RouteContext = {
@@ -105,7 +106,16 @@ async function resolveMedia(
       mediaUrls: conversationMessages.mediaUrls,
     })
     .from(conversationMessages)
-    .where(eq(conversationMessages.id, messageId))
+    .innerJoin(
+      conversationThreads,
+      eq(conversationMessages.threadId, conversationThreads.id),
+    )
+    .where(
+      and(
+        eq(conversationMessages.id, messageId),
+        genericInboxThreadScopeCondition(),
+      ),
+    )
     .limit(1);
   if (!row) {
     return NextResponse.json({ error: "message_not_found" }, { status: 404 });

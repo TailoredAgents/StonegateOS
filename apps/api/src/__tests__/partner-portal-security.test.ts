@@ -8,19 +8,22 @@ function read(relativePath: string): string {
 }
 
 describe("partner portal authorization and token containment", () => {
-  it("binds every login and session path to an active partner organization", () => {
+  it("binds login and sessions to active canonical account memberships", () => {
     const source = read("apps/api/src/lib/partner-portal-auth.ts");
     expect(
-      source.match(/innerJoin\(contacts/gu)?.length,
-    ).toBeGreaterThanOrEqual(4);
+      source.match(/innerJoin\(\s*partnerAccountMemberships/gu)?.length,
+    ).toBeGreaterThanOrEqual(1);
     expect(
-      source.match(/eq\(contacts\.partnerStatus, "partner"\)/gu)?.length,
+      source.match(/eq\(partnerAccountMemberships\.status, "active"\)/gu)
+        ?.length,
     ).toBeGreaterThanOrEqual(2);
     expect(
-      source.match(/isNull\(contacts\.deletedAt\)/gu)?.length,
+      source.match(/eq\(partnerAccounts\.portalAccessEnabled, true\)/gu)
+        ?.length,
     ).toBeGreaterThanOrEqual(2);
-    expect(source).toContain('userRow.partnerStatus !== "partner"');
-    expect(source).toContain("userRow.orgDeletedAt");
+    expect(source).toContain('eq(partnerUsers.identityStatus, "active")');
+    expect(source).not.toContain("findActivePartnerUserByPhone");
+    expect(source).not.toContain("innerJoin(contacts");
     expect(source).toContain(".set({ revokedAt: now })");
   });
 

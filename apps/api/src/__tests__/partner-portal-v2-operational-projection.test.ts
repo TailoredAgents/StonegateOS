@@ -42,14 +42,14 @@ function queryResult<T>(rows: readonly T[]) {
     from: () => query,
     where: () => query,
     for: () => query,
-    limit: async () => [...rows],
+    limit: () => Promise.resolve([...rows]),
   };
   return query;
 }
 
 function awaitableMutation<T>(returningRows: readonly T[] = []) {
   const mutation = {
-    returning: async () => [...returningRows],
+    returning: () => Promise.resolve([...returningRows]),
     then: <R1 = void, R2 = never>(
       resolve?: ((value: void) => R1 | PromiseLike<R1>) | null,
       reject?: ((reason: unknown) => R2 | PromiseLike<R2>) | null,

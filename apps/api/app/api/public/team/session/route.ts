@@ -15,6 +15,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     ok: true,
     sessionId: session.sessionId,
     authMethod: session.authMethod,
+    assuranceLevel: session.assuranceLevel,
+    mfaVerifiedAt: session.mfaVerifiedAt?.toISOString() ?? null,
     teamMember: session.teamMember,
   });
 }

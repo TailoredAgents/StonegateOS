@@ -1,37 +1,25 @@
-import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import {
-  requirePartnerSession,
-  setPartnerPassword,
-} from "@/lib/partner-portal-auth";
 
-export async function POST(request: NextRequest): Promise<Response> {
-  const auth = await requirePartnerSession(request);
-  if (!auth.ok) {
-    return NextResponse.json(
-      { ok: false, error: auth.error },
-      { status: auth.status },
-    );
-  }
-
-  const payload = (await request.json().catch(() => null)) as {
-    password?: unknown;
-  } | null;
-  const password =
-    typeof payload?.password === "string" ? payload.password : null;
-  if (!password || password.length < 10) {
-    return NextResponse.json(
-      { ok: false, error: "password_too_short" },
-      { status: 400 },
-    );
-  }
-
-  const updated = await setPartnerPassword(auth.partnerUser.id, password);
-  if (!updated) {
-    return NextResponse.json(
-      { ok: false, error: "partner_access_unavailable" },
-      { status: 401 },
-    );
-  }
-  return NextResponse.json({ ok: true });
+/**
+ * The contact-authorized V1 password writer is permanently retired. Password
+ * changes use the revision-safe V2 security route, which requires canonical
+ * membership authority, current-password/recent-auth proof, bounded input,
+ * session revocation, and an audit receipt.
+ */
+export function POST(): Response {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: "legacy_route_retired",
+      replacement: "/api/portal/v2/security/password",
+    },
+    {
+      status: 410,
+      headers: {
+        "Cache-Control": "no-store",
+        Deprecation: "true",
+        Link: '</api/portal/v2/security/password>; rel="successor-version"',
+      },
+    },
+  );
 }

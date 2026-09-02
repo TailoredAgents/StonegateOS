@@ -1,12 +1,18 @@
 import { createHash } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { and, asc, eq, gt, ilike, or } from "drizzle-orm";
-import { auditLogs, getDb, partnerAccountLocations } from "@/db";
+import {
+  auditLogs,
+  getDb,
+  partnerAccountLocations,
+  partnerAccounts,
+  partnerLocationAddressReviews,
+} from "@/db";
 import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
-import { forwardGeocode } from "@/lib/geocode";
+import { verifyAddress } from "@/lib/geocode";
 import {
   encryptPartnerLocationSecret,
   PartnerLocationSecretConfigurationError,
@@ -16,6 +22,13 @@ import {
   arePartnerPortalV2ReadsEnabled,
   arePartnerPortalV2WritesEnabled,
 } from "@/lib/partner-portal-feature-flags";
+import {
+  findPartnerLocationDuplicates,
+  getPartnerLocationPortfolioMetadata,
+  incrementPartnerLocationDirectory,
+  lockPartnerLocationDirectory,
+  partnerLocationDirectoryEtag,
+} from "@/lib/partner-location-portfolio";
 import {
   createPartnerLocationDto,
   PartnerLocationCreateSchema,
@@ -33,7 +46,6 @@ import {
 } from "@/lib/policy";
 import {
   getPostgresErrorMeta,
-  resolveOrCreateContactProperty,
   resolveOrCreateStandaloneProperty,
 } from "@/lib/property-write";
 import {
@@ -82,10 +94,7 @@ function isLocationCursorPayload(
   );
 }
 
-function singleQueryValue(
-  params: URLSearchParams,
-  key: string,
-): string | null | "duplicate" {
+function singleQueryValue(params: URLSearchParams, key: string): string | null {
   const values = params.getAll(key);
   if (values.length > 1) return "duplicate";
   return values[0]?.trim() || null;
@@ -105,7 +114,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     );
   }
   const { principal } = authorization;
-  if (!principal.accountId) {
+  if (!principal.accountId || !principal.membershipId) {
     return createPartnerPortalV2ErrorResponse(
       "legacy_scope_unavailable",
       409,
@@ -216,7 +225,28 @@ export async function GET(request: NextRequest): Promise<Response> {
     const hasMore = rows.length > pagination.limit;
     const pageRows = hasMore ? rows.slice(0, pagination.limit) : rows;
     const last = pageRows.at(-1);
-    const locations = pageRows.map(createPartnerLocationDto);
+    const portfolio = await getPartnerLocationPortfolioMetadata({
+      accountId: principal.accountId,
+      membershipId: principal.membershipId,
+      locationIds: pageRows.map((row) => row.id),
+    });
+    if (!portfolio) {
+      return createPartnerPortalV2ErrorResponse(
+        "not_found",
+        404,
+        correlationId,
+      );
+    }
+    const accountWide = principal.accessLevel === "account";
+    const locations = pageRows.map((row) =>
+      createPartnerLocationDto(row, {
+        defaultLocationId: portfolio.defaultLocationId,
+        favoriteLocationIds: portfolio.favoriteLocationIds,
+        childCount: accountWide ? (portfolio.childCounts.get(row.id) ?? 0) : 0,
+        directoryVersion: portfolio.directoryVersion,
+        includeHierarchy: accountWide,
+      }),
+    );
     const nextCursor =
       hasMore && last
         ? encodePortalV2Cursor({
@@ -235,9 +265,26 @@ export async function GET(request: NextRequest): Promise<Response> {
         ok: true,
         data: locations,
         locations,
+        directory: {
+          version: portfolio.directoryVersion,
+          defaultLocationId: accountWide ? portfolio.defaultLocationId : null,
+          canManagePortfolio:
+            accountWide && principal.capabilities.includes("properties.manage"),
+          etag: partnerLocationDirectoryEtag({
+            accountId: principal.accountId,
+            version: portfolio.directoryVersion,
+          }),
+        },
         page: { limit: pagination.limit, nextCursor, hasMore },
       },
       correlationId,
+      200,
+      {
+        "X-Location-Directory-ETag": partnerLocationDirectoryEtag({
+          accountId: principal.accountId,
+          version: portfolio.directoryVersion,
+        }),
+      },
     );
   } catch (error) {
     console.error("[partner-portal-v2] locations list failed", {
@@ -321,7 +368,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   try {
     const input = parsed.data;
-    const geocode = await forwardGeocode({
+    const verification = await verifyAddress({
       addressLine1: input.address.line1,
       addressLine2: input.address.line2,
       city: input.address.city,
@@ -347,35 +394,72 @@ export async function POST(request: NextRequest): Promise<Response> {
       execute: async () => {
         try {
           const db = getDb();
-          const location = await db.transaction(async (tx) => {
+          const locationResult = await db.transaction(async (tx) => {
+            const account = await lockPartnerLocationDirectory(
+              tx,
+              principal.accountId!,
+            );
+            if (!account) return { kind: "not_found" as const };
+            const duplicates = await findPartnerLocationDuplicates(tx, {
+              accountId: principal.accountId!,
+              externalPropertyId: input.externalPropertyId ?? null,
+              address: {
+                addressLine1: input.address.line1,
+                addressLine2: input.address.line2,
+                city: input.address.city,
+                state: input.address.state,
+                postalCode: input.address.postalCode,
+              },
+            });
+            const exactDuplicates = duplicates.filter(
+              (candidate) => candidate.confidence === 100,
+            );
+            if (exactDuplicates.length > 0) {
+              return {
+                kind: "duplicate" as const,
+                duplicates: exactDuplicates,
+              };
+            }
+            if (input.parentLocationId) {
+              const [parent] = await tx
+                .select({ id: partnerAccountLocations.id })
+                .from(partnerAccountLocations)
+                .where(
+                  and(
+                    eq(partnerAccountLocations.id, input.parentLocationId),
+                    eq(
+                      partnerAccountLocations.partnerAccountId,
+                      principal.accountId!,
+                    ),
+                    eq(partnerAccountLocations.active, true),
+                  ),
+                )
+                .limit(1);
+              if (!parent) return { kind: "parent_not_found" as const };
+            }
             const now = new Date();
-            const property = principal.legacyOrgContactId
-              ? (
-                  await resolveOrCreateContactProperty(tx, {
-                    contactId: principal.legacyOrgContactId,
-                    addressLine1: input.address.line1,
-                    addressLine2: input.address.line2,
-                    city: input.address.city,
-                    state: input.address.state,
-                    postalCode: input.address.postalCode,
-                    lat: geocode ? String(geocode.lat) : null,
-                    lng: geocode ? String(geocode.lng) : null,
-                    relationship: "partner_account",
-                    now,
-                  })
-                ).property
-              : (
-                  await resolveOrCreateStandaloneProperty(tx, {
-                    addressLine1: input.address.line1,
-                    addressLine2: input.address.line2 ?? null,
-                    city: input.address.city,
-                    state: input.address.state,
-                    postalCode: input.address.postalCode,
-                    lat: geocode ? String(geocode.lat) : null,
-                    lng: geocode ? String(geocode.lng) : null,
-                    now,
-                  })
-                ).property;
+            const probableDuplicates = duplicates.filter(
+              (candidate) => candidate.confidence >= 86,
+            );
+            const reviewRequired =
+              Boolean(input.requestAddressReview) ||
+              verification.status !== "verified" ||
+              probableDuplicates.length > 0;
+            const trustedCoordinates = reviewRequired
+              ? null
+              : verification.coordinates;
+            const property = (
+              await resolveOrCreateStandaloneProperty(tx, {
+                addressLine1: input.address.line1,
+                addressLine2: input.address.line2 ?? null,
+                city: input.address.city,
+                state: input.address.state,
+                postalCode: input.address.postalCode,
+                lat: trustedCoordinates ? String(trustedCoordinates.lat) : null,
+                lng: trustedCoordinates ? String(trustedCoordinates.lng) : null,
+                now,
+              })
+            ).property;
             const [created] = await tx
               .insert(partnerAccountLocations)
               .values({
@@ -390,26 +474,90 @@ export async function POST(request: NextRequest): Promise<Response> {
                 postalCode: property.postalCode,
                 timezone: input.timezone ?? "America/New_York",
                 locale: input.locale ?? "en-US",
-                latitude: property.lat,
-                longitude: property.lng,
-                geocodeStatus: geocode ? "verified" : "failed",
-                serviceAreaStatus: geocode
+                latitude: trustedCoordinates
+                  ? String(trustedCoordinates.lat)
+                  : null,
+                longitude: trustedCoordinates
+                  ? String(trustedCoordinates.lng)
+                  : null,
+                geocodeStatus: reviewRequired
+                  ? verification.coordinates
+                    ? "pending"
+                    : "failed"
+                  : "verified",
+                serviceAreaStatus: reviewRequired
+                  ? "review"
+                  : trustedCoordinates
                   ? eligible
                     ? "eligible"
                     : "outside"
                   : "review",
+                addressVerificationStatus: reviewRequired
+                  ? verification.status === "suggested_correction"
+                    ? "suggested_correction"
+                    : "review_required"
+                  : "verified",
+                addressVerificationProvider: verification.provider,
+                addressVerificationConfidence: verification.confidence,
+                addressVerificationFeatureId: verification.featureId,
+                addressVerificationSuggestion:
+                  verification.suggestedAddress ?? null,
+                addressVerifiedAt: reviewRequired ? null : now,
                 accessInstructions: input.access?.details ?? null,
                 parkingInstructions: input.access?.parking ?? null,
                 loadingInstructions: input.access?.loading ?? null,
                 accessSecretCiphertext: encryptedSecret?.ciphertext ?? null,
                 accessSecretKeyVersion: encryptedSecret?.keyVersion ?? null,
                 onSiteContact: input.onSiteContact ?? null,
+                parentLocationId: input.parentLocationId ?? null,
                 createdByMembershipId: principal.membershipId,
                 createdAt: now,
                 updatedAt: now,
               })
               .returning();
             if (!created) throw new Error("partner_location_create_failed");
+            if (reviewRequired) {
+              await tx.insert(partnerLocationAddressReviews).values({
+                partnerAccountId: principal.accountId!,
+                locationId: created.id,
+                requestedByMembershipId: principal.membershipId!,
+                reasonCode: input.requestAddressReview
+                  ? "partner_requested"
+                  : probableDuplicates.length > 0
+                    ? "possible_duplicate"
+                    : verification.reasonCode === "suggested_correction"
+                      ? "suggested_correction"
+                      : verification.reasonCode === "low_confidence"
+                        ? "low_confidence"
+                        : "provider_unavailable",
+                enteredAddress: {
+                  addressLine1: input.address.line1,
+                  addressLine2: input.address.line2 ?? null,
+                  city: input.address.city,
+                  state: input.address.state,
+                  postalCode: input.address.postalCode,
+                },
+                providerSuggestion: verification.suggestedAddress ?? null,
+                providerConfidence: verification.confidence,
+                duplicateCandidates: probableDuplicates.slice(0, 20),
+                createdAt: now,
+                updatedAt: now,
+              });
+            }
+            if (input.makeDefault) {
+              await tx
+                .update(partnerAccounts)
+                .set({
+                  defaultPartnerLocationId: created.id,
+                  updatedAt: now,
+                })
+                .where(eq(partnerAccounts.id, principal.accountId!));
+            }
+            const updatedAccount = await incrementPartnerLocationDirectory(
+              tx,
+              principal.accountId!,
+              account.version,
+            );
             await tx.insert(auditLogs).values({
               actorType: "human",
               actorId: principal.partnerUserId,
@@ -428,23 +576,64 @@ export async function POST(request: NextRequest): Promise<Response> {
                 partnerAccountId: principal.accountId,
                 geocodeStatus: created.geocodeStatus,
                 serviceAreaStatus: created.serviceAreaStatus,
+                addressVerificationStatus:
+                  created.addressVerificationStatus,
+                addressReviewQueued: reviewRequired,
+                duplicateCandidateCount: probableDuplicates.length,
                 hasAccessSecret: Boolean(created.accessSecretCiphertext),
+                parentLocationId: created.parentLocationId,
+                isDefault: updatedAccount.defaultLocationId === created.id,
+                directoryVersion: updatedAccount.version,
               },
             });
-            return created;
+            return {
+              kind: "success" as const,
+              location: created,
+              account: updatedAccount,
+            };
           });
-          const dto = createPartnerLocationDto(location);
+          if (locationResult.kind === "not_found") {
+            return { status: 404, body: { ok: false, error: "not_found" } };
+          }
+          if (locationResult.kind === "duplicate") {
+            return {
+              status: 409,
+              body: {
+                ok: false,
+                error: "conflict",
+                duplicateCandidates: locationResult.duplicates,
+              },
+            };
+          }
+          if (locationResult.kind === "parent_not_found") {
+            return {
+              status: 404,
+              body: { ok: false, error: "not_found" },
+            };
+          }
+          const dto = createPartnerLocationDto(locationResult.location, {
+            defaultLocationId: locationResult.account.defaultLocationId,
+            favoriteLocationIds: new Set(),
+            childCount: 0,
+            directoryVersion: locationResult.account.version,
+            includeHierarchy: true,
+          });
+          const directoryEtag = partnerLocationDirectoryEtag({
+            accountId: principal.accountId!,
+            version: locationResult.account.version,
+          });
           return {
             status: 201,
             body: { ok: true, location: dto },
             headers: {
               ETag: dto.etag,
-              Location: `/api/portal/v2/locations/${location.id}`,
+              "X-Location-Directory-ETag": directoryEtag,
+              Location: `/api/portal/v2/locations/${locationResult.location.id}`,
             },
           };
         } catch (error) {
           const metadata = getPostgresErrorMeta(error);
-          if (metadata.code === "23505") {
+          if (metadata.code === "23505" || metadata.code === "23514") {
             return {
               status: 409,
               body: { ok: false, error: "conflict" },

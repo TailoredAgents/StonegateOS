@@ -16,6 +16,7 @@ type Props = {
   canUpdateAppointments?: boolean;
   canCollectPayments?: boolean;
   canSendCustomerMessages?: boolean;
+  canManageAppointmentMedia?: boolean;
   canOverrideScheduleConflicts?: boolean;
   onClose?: () => void;
   variant?: "standalone" | "embedded";
@@ -28,6 +29,7 @@ export function CalendarEventDetail({
   canUpdateAppointments = false,
   canCollectPayments = false,
   canSendCustomerMessages = false,
+  canManageAppointmentMedia = false,
   canOverrideScheduleConflicts = false,
   onClose,
   variant = "standalone",
@@ -196,6 +198,7 @@ export function CalendarEventDetail({
             canUpdateAppointments={canUpdateAppointments}
             canCollectPayments={canCollectPayments}
             canSendCustomerMessages={canSendCustomerMessages}
+            canManageAppointmentMedia={canManageAppointmentMedia}
             canOverrideScheduleConflicts={canOverrideScheduleConflicts}
             teamMembers={teamMembers}
           />

@@ -57,6 +57,7 @@ export type SchedulePolicySnapshot = Readonly<{
   bookingWindowDays: number;
   defaultTravelBufferMinutes: number;
   maxJobsPerDay: number;
+  maxJobsPerCrew: number;
   weeklyHours: Readonly<
     Record<SchedulingWeekday, readonly LocalMinuteWindow[]>
   >;

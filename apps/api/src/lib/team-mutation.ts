@@ -111,6 +111,32 @@ const HIGH_RISK_ACTIONS = new Set<ActionPolicy["risk"]>([
   "financial",
   "destructive",
 ]);
+export const TEAM_RECENT_MFA_MAX_AGE_SECONDS = 15 * 60;
+const MFA_PROTECTED_PERMISSION_PREFIXES = [
+  "partners.",
+  "payments.",
+  "finance.",
+  "financials.",
+] as const;
+const MFA_PROTECTED_PERMISSIONS = new Set<string>([
+  "access.manage",
+  "commissions.manage",
+  "commissions.pay",
+  "expenses.approve",
+  "outbox.dispatch",
+  "messages.send",
+  "quotes.send",
+  "marketing.apply",
+  "marketing.publish",
+  "calls.place",
+  "contacts.delete",
+  "contacts.purge",
+  "contacts.merge",
+  "properties.delete",
+  "messages.delete",
+  "quotes.delete",
+  "sales.reset",
+]);
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,199}$/u;
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
 
@@ -330,6 +356,10 @@ function validateSameOrigin(
   return null;
 }
 
+export function isAllowedTeamMutationOrigin(request: NextRequest): boolean {
+  return validateSameOrigin(request, "human") === null;
+}
+
 function normalizeIdempotencyKey(rawValue: string | null): string | null {
   if (rawValue === null) return null;
   const value = rawValue.normalize("NFKC").trim();
@@ -435,6 +465,8 @@ function createAuditWriter(
         authMethod: mutation.actor.authMethod,
         requiredPermissions: mutation.policy.requiredPermissions,
         risk: mutation.policy.risk,
+        maxAuthenticationAgeSeconds:
+          mutation.policy.maxAuthenticationAgeSeconds ?? null,
         outcome: "succeeded",
         idempotencyKeyHash: mutation.idempotencyKeyHash,
         providerOperationId: input.providerOperationId ?? null,
@@ -496,6 +528,8 @@ function failureAuditEvent(
     authMethod: mutation.actor.authMethod,
     requiredPermissions: mutation.policy.requiredPermissions,
     risk: mutation.policy.risk,
+    maxAuthenticationAgeSeconds:
+      mutation.policy.maxAuthenticationAgeSeconds ?? null,
     outcome,
     failureCode: input.code,
     idempotencyKeyHash: mutation.idempotencyKeyHash,
@@ -597,7 +631,12 @@ export async function beginTeamMutation(
   if (
     policy.requiredPermissions.length === 0 ||
     policy.principalTypes.length === 0 ||
-    policy.auditAction.trim().length === 0
+    policy.auditAction.trim().length === 0 ||
+    (policy.maxAuthenticationAgeSeconds !== undefined &&
+      (!Number.isInteger(policy.maxAuthenticationAgeSeconds) ||
+        policy.maxAuthenticationAgeSeconds < 60 ||
+        policy.maxAuthenticationAgeSeconds > 86_400 ||
+        policy.principalTypes.some((type) => type !== "human")))
   ) {
     return {
       ok: false,
@@ -742,6 +781,53 @@ export async function beginTeamMutation(
     };
   }
 
+  try {
+    assertRecentMfaForPolicy(policy, actor);
+  } catch (error) {
+    if (!(error instanceof TeamMutationFailure)) throw error;
+    await recordTeamMutationFailure(boundaryAuditMutation, {
+      outcome: "denied",
+      entityType: "team_mutation",
+      code: "forbidden",
+      metadata: {
+        boundary: "recent_mfa",
+        maximumAgeSeconds: TEAM_RECENT_MFA_MAX_AGE_SECONDS,
+      },
+    });
+    return {
+      ok: false,
+      response: mutationErrorResponse(
+        error,
+        boundaryAuditMutation.correlationId,
+      ),
+    };
+  }
+
+  if (policy.maxAuthenticationAgeSeconds !== undefined) {
+    const authenticationIsRecent = isTeamAuthenticationRecent(
+      actor,
+      policy.maxAuthenticationAgeSeconds,
+    );
+    if (!authenticationIsRecent) {
+      await recordTeamMutationFailure(boundaryAuditMutation, {
+        outcome: "denied",
+        entityType: "team_mutation",
+        code: "forbidden",
+        metadata: {
+          boundary: "recent_authentication",
+          maxAuthenticationAgeSeconds: policy.maxAuthenticationAgeSeconds,
+        },
+      });
+      return {
+        ok: false,
+        response: teamMutationErrorResponse(
+          "forbidden",
+          "Sign in again before performing this sensitive action.",
+        ),
+      };
+    }
+  }
+
   const originError = validateSameOrigin(request, principalType);
   if (originError) {
     await recordTeamMutationFailure(boundaryAuditMutation, {
@@ -828,6 +914,83 @@ export async function beginTeamMutation(
   return { ok: true, mutation };
 }
 
+function mutationAuthenticationTime(
+  actor: VerifiedRequestActor,
+): number | null {
+  if (actor.authMethod === "service" || !actor.authenticatedAt) return null;
+  const value = Date.parse(actor.authenticatedAt);
+  return Number.isFinite(value) ? value : null;
+}
+
+export function isTeamAuthenticationRecent(
+  actor: VerifiedRequestActor,
+  maximumAgeSeconds: number,
+  now = Date.now(),
+): boolean {
+  if (
+    !Number.isInteger(maximumAgeSeconds) ||
+    maximumAgeSeconds < 60 ||
+    maximumAgeSeconds > 86_400
+  ) {
+    return false;
+  }
+  const authenticatedAt = mutationAuthenticationTime(actor);
+  return (
+    authenticatedAt !== null &&
+    authenticatedAt <= now + 60_000 &&
+    now - authenticatedAt <= maximumAgeSeconds * 1_000
+  );
+}
+
+export function teamMutationRequiresRecentMfa(
+  policy: Pick<ActionPolicy, "requiredPermissions" | "risk">,
+  actor: Pick<VerifiedRequestActor, "type" | "role" | "authMethod">,
+): boolean {
+  if (actor.type !== "human" || actor.authMethod === "service") return false;
+  // Break-glass remains the separately controlled, short-lived recovery path.
+  // It is never relabelled as MFA and cannot enroll or step up a Team method.
+  if (actor.authMethod === "break_glass") return false;
+  if (actor.role?.trim().toLowerCase() === "owner") return true;
+  if (HIGH_RISK_ACTIONS.has(policy.risk)) return true;
+  return policy.requiredPermissions.some(
+    (permission) =>
+      MFA_PROTECTED_PERMISSIONS.has(permission) ||
+      MFA_PROTECTED_PERMISSION_PREFIXES.some((prefix) =>
+        permission.startsWith(prefix),
+      ),
+  );
+}
+
+export function isTeamMfaRecent(
+  actor: Pick<VerifiedRequestActor, "assuranceLevel" | "mfaVerifiedAt">,
+  now = Date.now(),
+): boolean {
+  if (actor.assuranceLevel !== "aal2" || !actor.mfaVerifiedAt) return false;
+  const verifiedAt = Date.parse(actor.mfaVerifiedAt);
+  return (
+    Number.isFinite(verifiedAt) &&
+    verifiedAt <= now + 60_000 &&
+    now - verifiedAt <= TEAM_RECENT_MFA_MAX_AGE_SECONDS * 1_000
+  );
+}
+
+function assertRecentMfaForPolicy(
+  policy: Pick<ActionPolicy, "requiredPermissions" | "risk">,
+  actor: VerifiedRequestActor,
+): void {
+  if (teamMutationRequiresRecentMfa(policy, actor) && !isTeamMfaRecent(actor)) {
+    throw new TeamMutationFailure(
+      "forbidden",
+      "Verify your authenticator before performing this sensitive action.",
+      {
+        fieldErrors: {
+          mfa: "Open Team settings and complete multi-factor verification.",
+        },
+      },
+    );
+  }
+}
+
 /**
  * Rebind an established mutation to additional permissions already verified
  * from the same request/session. This preserves the operation, correlation,
@@ -848,6 +1011,7 @@ export function strengthenTeamMutationPolicy(
     ...mutation.policy,
     requiredPermissions,
   };
+  assertRecentMfaForPolicy(policy, mutation.actor);
   const mutationWithoutAudit: Omit<TeamMutationContext, "audit"> = {
     ...mutation,
     policy,

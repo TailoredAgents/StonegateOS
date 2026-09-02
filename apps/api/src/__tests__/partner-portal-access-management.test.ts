@@ -33,7 +33,9 @@ describe("partner portal access management", () => {
     expect(patchSource.indexOf("beginTeamMutation(request")).toBeLessThan(
       patchSource.indexOf("readBoundedJsonRequest(request"),
     );
-    expect(patchSource).toContain('requiredPermissions: ["partners.invite"]');
+    expect(patchSource).toContain(
+      'requiredPermissions: ["partners.identities.disable"]',
+    );
     expect(patchSource).toContain('risk: "destructive"');
     expect(patchSource).toContain(
       'ignoredPermissionKillSwitches: ["external_sends"]',

@@ -3,8 +3,11 @@ import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
-import { requirePartnerCapability } from "@/lib/partner-account-authorization";
-import { arePartnerPortalEmbeddedPaymentsEnabled } from "@/lib/partner-portal-feature-flags";
+import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
+import {
+  arePartnerPortalEmbeddedAchPaymentsEnabled,
+  arePartnerPortalEmbeddedPaymentsEnabled,
+} from "@/lib/partner-portal-feature-flags";
 import { runPortalV2IdempotentMutation } from "@/lib/partner-portal-v2-idempotency";
 import { isSecurePartnerPaymentRequest } from "@/lib/partner-portal-v2-payment-security";
 import {
@@ -34,9 +37,9 @@ export async function POST(request: NextRequest): Promise<Response> {
   ) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
-  const authorization = await requirePartnerCapability(
+  const authorization = await requireRecentPartnerMfaCapability(
     request,
-    "payments.manage",
+    "payments.initiate",
   );
   if (!authorization.ok) {
     return createPartnerPortalV2ErrorResponse(
@@ -46,13 +49,6 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
   const { principal } = authorization;
-  if (principal.session.assuranceLevel !== "aal2") {
-    return createPartnerPortalV2ErrorResponse(
-      "mfa_step_up_required",
-      403,
-      correlationId,
-    );
-  }
   if (!principal.accountId || !principal.membershipId) {
     return createPartnerPortalV2ErrorResponse(
       "account_access_required",
@@ -106,21 +102,23 @@ export async function POST(request: NextRequest): Promise<Response> {
         fieldErrors: {
           invoiceId: "Choose an invoice from this account.",
           purpose: "Choose deposit or one_off.",
-          paymentMethod: "Only card is available for secure portal checkout.",
+          paymentMethod: "Choose card or ACH for secure portal checkout.",
           amount: "Provide a positive USD amount in integer minor units.",
         },
       }),
     );
   }
   if (payload.data.paymentMethod === "ach") {
-    return createPartnerPortalV2DescriptorResponse(
-      createPortalV2ErrorResponse("invalid_fields", correlationId, {
-        fieldErrors: {
-          paymentMethod:
-            "ACH is not enabled for portal checkout. Choose card or contact Stonegate.",
-        },
-      }),
-    );
+    if (!arePartnerPortalEmbeddedAchPaymentsEnabled(principal.accountId)) {
+      return createPartnerPortalV2DescriptorResponse(
+        createPortalV2ErrorResponse("invalid_fields", correlationId, {
+          fieldErrors: {
+            paymentMethod:
+              "ACH bank transfer is not enabled for this account. Choose card or contact Stonegate.",
+          },
+        }),
+      );
+    }
   }
 
   try {
@@ -162,7 +160,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           purpose: payload.data.purpose,
           amountMinor: payload.data.amount.amountMinor,
           currency: payload.data.amount.currency,
-          paymentMethod: "card",
+          paymentMethod: payload.data.paymentMethod,
         });
       },
     });

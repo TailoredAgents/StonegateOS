@@ -1,9 +1,24 @@
 import type { NextRequest } from "next/server";
-import { and, asc, desc, eq, gt, isNull, or } from "drizzle-orm";
 import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
+import {
+  auditLogs,
   getDb,
+  partnerAccountLocations,
   partnerAccountMemberships,
   partnerAccounts,
+  partnerMembershipCostCenterScopes,
+  partnerMembershipLocationScopes,
   partnerRoleTemplates,
   partnerSessions,
 } from "@/db";
@@ -14,6 +29,7 @@ import type {
   PartnerPersona,
 } from "@/db";
 import { requirePartnerSession } from "@/lib/partner-portal-auth";
+import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 
 export const PARTNER_CAPABILITY_CATALOG = [
   "portal.session.read",
@@ -28,7 +44,9 @@ export const PARTNER_CAPABILITY_CATALOG = [
   "bookings.create",
   "bookings.update",
   "bookings.cancel",
-  "bookings.approve",
+  "bookings.pricing.read",
+  "approvals.read",
+  "approvals.decide",
   "properties.read",
   "properties.manage",
   "jobs.read",
@@ -38,14 +56,22 @@ export const PARTNER_CAPABILITY_CATALOG = [
   "proof.read",
   "proof.request",
   "rates.read",
+  "quotes.read",
+  "quotes.respond",
+  "commercial.edit",
   "invoices.read",
-  "payments.manage",
-  "documents.read",
-  "documents.manage",
+  "invoices.disputes.request",
+  "payments.initiate",
+  "documents.operational.read",
+  "documents.operational.manage",
+  "documents.financial.read",
+  "documents.financial.manage",
   "messages.read",
   "messages.send",
-  "reports.read",
-  "reports.export",
+  "reports.operational.read",
+  "reports.operational.export",
+  "reports.financial.read",
+  "reports.financial.export",
 ] as const;
 
 export type PartnerCapability = (typeof PARTNER_CAPABILITY_CATALOG)[number];
@@ -55,24 +81,36 @@ export const PARTNER_INTRINSIC_CAPABILITIES = [
   "portal.session.switch_account",
 ] as const satisfies readonly PartnerCapability[];
 
-const OWNER_CAPABILITIES = [...PARTNER_CAPABILITY_CATALOG];
+export const PARTNER_LAUNCH_ROLE_KEYS = [
+  "administrator",
+  "operations",
+  "billing_approver",
+  "viewer",
+] as const;
+
+export type PartnerLaunchRoleKey = (typeof PARTNER_LAUNCH_ROLE_KEYS)[number];
+
+const PARTNER_LAUNCH_ROLE_KEY_SET = new Set<string>(PARTNER_LAUNCH_ROLE_KEYS);
+
+export function isPartnerLaunchRoleKey(
+  value: string,
+): value is PartnerLaunchRoleKey {
+  return PARTNER_LAUNCH_ROLE_KEY_SET.has(value);
+}
+
+const ADMINISTRATOR_CAPABILITIES = [...PARTNER_CAPABILITY_CATALOG];
 
 export const PARTNER_SYSTEM_ROLE_TEMPLATES = {
-  owner: OWNER_CAPABILITIES,
-  admin: OWNER_CAPABILITIES.filter(
-    (capability) =>
-      capability !== "account.security.manage" &&
-      capability !== "payments.manage",
-  ),
-  scheduler: [
+  administrator: ADMINISTRATOR_CAPABILITIES,
+  operations: [
     "portal.session.read",
     "portal.session.switch_account",
     "account.read",
-    "account.members.read",
     "bookings.read",
     "bookings.create",
     "bookings.update",
     "bookings.cancel",
+    "bookings.pricing.read",
     "properties.read",
     "properties.manage",
     "jobs.read",
@@ -81,47 +119,35 @@ export const PARTNER_SYSTEM_ROLE_TEMPLATES = {
     "media.upload",
     "proof.read",
     "proof.request",
-    "rates.read",
-    "documents.read",
+    "documents.operational.read",
+    "documents.operational.manage",
     "messages.read",
     "messages.send",
-    "reports.read",
+    "reports.operational.read",
+    "reports.operational.export",
   ],
-  approver: [
+  billing_approver: [
     "portal.session.read",
     "portal.session.switch_account",
     "account.read",
     "bookings.read",
-    "bookings.update",
-    "bookings.approve",
-    "properties.read",
-    "jobs.read",
-    "jobs.change_request",
-    "media.read",
-    "proof.read",
-    "proof.request",
-    "rates.read",
-    "invoices.read",
-    "documents.read",
-    "messages.read",
-    "messages.send",
-    "reports.read",
-  ],
-  billing: [
-    "portal.session.read",
-    "portal.session.switch_account",
-    "account.read",
-    "bookings.read",
+    "bookings.pricing.read",
+    "approvals.read",
+    "approvals.decide",
     "properties.read",
     "jobs.read",
     "proof.read",
     "rates.read",
+    "quotes.read",
+    "quotes.respond",
+    "commercial.edit",
     "invoices.read",
-    "payments.manage",
-    "documents.read",
-    "messages.read",
-    "reports.read",
-    "reports.export",
+    "invoices.disputes.request",
+    "payments.initiate",
+    "documents.financial.read",
+    "documents.financial.manage",
+    "reports.financial.read",
+    "reports.financial.export",
   ],
   viewer: [
     "portal.session.read",
@@ -132,27 +158,23 @@ export const PARTNER_SYSTEM_ROLE_TEMPLATES = {
     "jobs.read",
     "media.read",
     "proof.read",
-    "rates.read",
-    "invoices.read",
-    "documents.read",
+    "documents.operational.read",
     "messages.read",
-    "reports.read",
+    "reports.operational.read",
   ],
 } as const satisfies Record<string, readonly PartnerCapability[]>;
 
 const CAPABILITY_SET = new Set<string>(PARTNER_CAPABILITY_CATALOG);
 const INTRINSIC_SET = new Set<string>(PARTNER_INTRINSIC_CAPABILITIES);
-const MFA_REQUIRED_ROLE_KEYS = new Set([
-  "owner",
-  "admin",
-  "approver",
-  "billing",
-]);
+const MFA_REQUIRED_ROLE_KEYS = new Set(["administrator", "billing_approver"]);
 const MFA_REQUIRED_CAPABILITIES = new Set<PartnerCapability>([
   "account.members.manage",
   "account.security.manage",
-  "bookings.approve",
-  "payments.manage",
+  "approvals.decide",
+  "quotes.respond",
+  "commercial.edit",
+  "invoices.disputes.request",
+  "payments.initiate",
 ]);
 
 export function partnerAccessRequiresMfa(input: {
@@ -337,6 +359,7 @@ export function isPartnerV2MembershipEligible(input: {
 
 function membershipAccess(
   row: MembershipAccessRow,
+  relationalScope: PartnerMembershipAccessScope,
 ): PartnerAccountAccess | null {
   if (!isPartnerV2MembershipEligible(row)) return null;
   const roleCapabilities =
@@ -352,7 +375,9 @@ function membershipAccess(
     roleKey: row.roleKey,
     persona: row.persona,
     accessLevel: row.accessLevel,
-    accessScope: row.accessScope,
+    // Relational scope rows are the authority. The JSON column remains only a
+    // migration/display projection and is deliberately ignored here.
+    accessScope: row.accessLevel === "account" ? {} : relationalScope,
     preferences: row.preferences,
     capabilities: computePartnerCapabilities({
       roleCapabilities,
@@ -363,6 +388,66 @@ function membershipAccess(
     legacyOrgContactId: row.portalContactId,
     source: "membership",
   };
+}
+
+async function loadRelationalMembershipScopes(
+  membershipIds: readonly string[],
+): Promise<Map<string, PartnerMembershipAccessScope>> {
+  const result = new Map<string, PartnerMembershipAccessScope>();
+  if (membershipIds.length === 0) return result;
+  const db = getDb();
+  const [locations, costCenters] = await Promise.all([
+    db
+      .select({
+        membershipId: partnerMembershipLocationScopes.membershipId,
+        locationId: partnerMembershipLocationScopes.locationId,
+        propertyId: partnerAccountLocations.propertyId,
+      })
+      .from(partnerMembershipLocationScopes)
+      .innerJoin(
+        partnerAccountLocations,
+        and(
+          eq(
+            partnerAccountLocations.partnerAccountId,
+            partnerMembershipLocationScopes.partnerAccountId,
+          ),
+          eq(
+            partnerAccountLocations.id,
+            partnerMembershipLocationScopes.locationId,
+          ),
+        ),
+      )
+      .where(
+        inArray(partnerMembershipLocationScopes.membershipId, [
+          ...membershipIds,
+        ]),
+      ),
+    db
+      .select({
+        membershipId: partnerMembershipCostCenterScopes.membershipId,
+        costCenterId: partnerMembershipCostCenterScopes.costCenterId,
+      })
+      .from(partnerMembershipCostCenterScopes)
+      .where(
+        inArray(partnerMembershipCostCenterScopes.membershipId, [
+          ...membershipIds,
+        ]),
+      ),
+  ]);
+  for (const row of locations) {
+    const scope = result.get(row.membershipId) ?? {};
+    scope.locationIds = [...(scope.locationIds ?? []), row.locationId];
+    if (row.propertyId) {
+      scope.propertyIds = [...(scope.propertyIds ?? []), row.propertyId];
+    }
+    result.set(row.membershipId, scope);
+  }
+  for (const row of costCenters) {
+    const scope = result.get(row.membershipId) ?? {};
+    scope.costCenterIds = [...(scope.costCenterIds ?? []), row.costCenterId];
+    result.set(row.membershipId, scope);
+  }
+  return result;
 }
 
 async function loadActiveMembershipAccesses(
@@ -421,8 +506,12 @@ async function loadActiveMembershipAccesses(
       asc(partnerAccountMemberships.id),
     );
 
+  const scopes = await loadRelationalMembershipScopes(
+    rows.map((row) => row.membershipId),
+  );
+
   return rows.flatMap((row) => {
-    const access = membershipAccess(row);
+    const access = membershipAccess(row, scopes.get(row.membershipId) ?? {});
     return access ? [access] : [];
   });
 }
@@ -581,7 +670,12 @@ export function adaptPartnerPrincipalToLegacySession(
 }
 
 export type SwitchPartnerAccountResult =
-  | { ok: true; accountId: string; membershipId: string }
+  | {
+      ok: true;
+      accountId: string;
+      membershipId: string;
+      defaultAccount: boolean;
+    }
   | { ok: false; status: 401 | 403; error: string };
 
 export async function switchPartnerSessionAccount(
@@ -590,9 +684,15 @@ export async function switchPartnerSessionAccount(
     { ok: true }
   >,
   accountId: string,
+  options: { makeDefault?: boolean; correlationId?: string | null } = {},
 ): Promise<SwitchPartnerAccountResult> {
   const db = getDb();
   return db.transaction(async (tx) => {
+    if (options.makeDefault === true) {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${`partner-default-account:${authentication.partnerUser.id}`}, 0))`,
+      );
+    }
     const [account] = await tx
       .select({ id: partnerAccounts.id })
       .from(partnerAccounts)
@@ -612,6 +712,7 @@ export async function switchPartnerSessionAccount(
       .select({
         id: partnerAccountMemberships.id,
         accountId: partnerAccountMemberships.partnerAccountId,
+        isDefault: partnerAccountMemberships.isDefault,
       })
       .from(partnerAccountMemberships)
       .where(
@@ -660,10 +761,73 @@ export async function switchPartnerSessionAccount(
       };
     }
 
+    if (options.makeDefault === true && !membership.isDefault) {
+      await tx
+        .update(partnerAccountMemberships)
+        .set({ isDefault: false, updatedAt: now })
+        .where(
+          and(
+            eq(
+              partnerAccountMemberships.partnerUserId,
+              authentication.partnerUser.id,
+            ),
+            ne(partnerAccountMemberships.id, membership.id),
+            eq(partnerAccountMemberships.isDefault, true),
+          ),
+        );
+      const [defaulted] = await tx
+        .update(partnerAccountMemberships)
+        .set({ isDefault: true, updatedAt: now })
+        .where(
+          and(
+            eq(partnerAccountMemberships.id, membership.id),
+            eq(
+              partnerAccountMemberships.partnerUserId,
+              authentication.partnerUser.id,
+            ),
+            eq(partnerAccountMemberships.partnerAccountId, account.id),
+            eq(partnerAccountMemberships.status, "active"),
+          ),
+        )
+        .returning({ id: partnerAccountMemberships.id });
+      if (!defaulted?.id) {
+        throw new Error("partner_default_account_update_failed");
+      }
+    }
+
+    await tx.insert(auditLogs).values({
+      actorType: "human",
+      actorId: authentication.partnerUser.id,
+      actorRole: "partner",
+      actorLabel: authentication.partnerUser.email,
+      sessionId: authentication.session.id,
+      authMethod: "partner_session",
+      correlationId: options.correlationId ?? null,
+      requiredPermissions: ["portal.session.switch_account"],
+      outcome: "succeeded",
+      surface: "/partners",
+      action:
+        options.makeDefault === true
+          ? "partner.portal.account_switched_and_defaulted"
+          : "partner.portal.account_switched",
+      entityType: "partner_session",
+      entityId: authentication.session.id,
+      meta: sanitizeAuditMetadata({
+        previousPartnerAccountId: authentication.session.activePartnerAccountId,
+        partnerAccountId: membership.accountId,
+        membershipId: membership.id,
+        defaultAccount:
+          options.makeDefault === true || membership.isDefault === true,
+      }),
+      createdAt: now,
+    });
+
     return {
       ok: true as const,
       accountId: membership.accountId,
       membershipId: membership.id,
+      defaultAccount:
+        options.makeDefault === true || membership.isDefault === true,
     };
   });
 }

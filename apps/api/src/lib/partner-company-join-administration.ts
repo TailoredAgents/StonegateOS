@@ -14,6 +14,8 @@ import {
 } from "@/db";
 import {
   computePartnerCapabilities,
+  isPartnerLaunchRoleKey,
+  PARTNER_LAUNCH_ROLE_KEYS,
   type PartnerPrincipal,
 } from "@/lib/partner-account-authorization";
 import { mayAssignInvitationRole } from "@/lib/partner-account-invitations";
@@ -42,7 +44,7 @@ const PUBLIC_DOMAINS = new Set([
 export const PartnerJoinDecisionSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("approve"),
-    roleKey: z.string().trim().min(2).max(64).regex(/^[a-z][a-z0-9_]{1,63}$/u),
+    roleKey: z.enum(PARTNER_LAUNCH_ROLE_KEYS),
     persona: z.enum(["contractor", "real_estate_agent", "property_manager", "commercial_client", "other"]),
     note: z.string().trim().max(500).nullable().optional(),
   }).strict(),
@@ -191,7 +193,7 @@ async function queueJoinDecisionNotifications(input: {
   accountName: string;
   userName: string;
   userEmail: string;
-  userContactId: string;
+  userContactId: string | null;
   target: JoinNotificationTarget | null;
   now: Date;
 }): Promise<JoinNotificationOutcome> {
@@ -248,6 +250,12 @@ async function queueJoinDecisionNotifications(input: {
   if (!arePartnerPortalOutboundNotificationsEnabled(input.decisionAccountId)) {
     return { inApp, email: "feature_disabled" };
   }
+  // The system-outbound compatibility projection is contact-scoped. Joining
+  // and in-app notification remain account/membership-native, while email is
+  // safely suppressed when this identity has no optional CRM projection.
+  if (!input.userContactId) {
+    return { inApp, email: "recipient_suppressed" };
+  }
   const nextAttemptAt = preference.quietHoursStart && preference.quietHoursEnd
     ? nextQuietHoursEnd(input.now, "email", {
         channels: { email: { start: preference.quietHoursStart, end: preference.quietHoursEnd } },
@@ -287,7 +295,7 @@ type JoinRow = {
   updatedAt: Date;
   userName: string;
   userEmail: string;
-  userContactId: string;
+  userContactId: string | null;
   userActive: boolean;
 };
 
@@ -536,6 +544,16 @@ export async function decideAccountJoinRequest(input: {
     if (!verifiedJoinDomain(account.domain, request.userEmail)) {
       return { status: 409, body: { ok: false, error: "conflict", reason: "domain_no_longer_verified" } };
     }
+    if (!isPartnerLaunchRoleKey(input.decision.roleKey)) {
+      return {
+        status: 422,
+        body: {
+          ok: false,
+          error: "invalid_fields",
+          fieldErrors: { roleKey: "Choose one of the four account roles." },
+        },
+      };
+    }
     const [existingMembership] = await tx.select({ id: partnerAccountMemberships.id, status: partnerAccountMemberships.status })
       .from(partnerAccountMemberships).where(and(
         eq(partnerAccountMemberships.partnerAccountId, accountId),
@@ -551,7 +569,7 @@ export async function decideAccountJoinRequest(input: {
     }).from(partnerRoleTemplates).where(and(
       eq(partnerRoleTemplates.key, input.decision.roleKey),
       eq(partnerRoleTemplates.active, true),
-      or(isNull(partnerRoleTemplates.partnerAccountId), eq(partnerRoleTemplates.partnerAccountId, accountId)),
+      isNull(partnerRoleTemplates.partnerAccountId),
     )).orderBy(partnerRoleTemplates.partnerAccountId).limit(1);
     if (!role || !mayAssignInvitationRole({ actorCapabilities, roleCapabilities: role.capabilities })) {
       return { status: 403, body: { ok: false, error: "forbidden" } };

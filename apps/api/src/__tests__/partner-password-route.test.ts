@@ -14,12 +14,13 @@ mockModule("@/lib/partner-account-authorization", () => ({
   requirePartnerCapability: mockRequirePartnerCapability,
 }));
 mockModule("@/lib/partner-password-management", () => ({
-  PARTNER_PASSWORD_MIN_LENGTH: 12,
+  PARTNER_PASSWORD_MIN_LENGTH: 15,
   PARTNER_PASSWORD_MAX_LENGTH: 128,
   changePartnerPassword: mockChangePartnerPassword,
 }));
 mockModule("@/lib/partner-portal-feature-flags", () => ({
   arePartnerPortalV2WritesEnabled: () => true,
+  isPartnerRoutineMagicLinkLoginEnabled: () => false,
 }));
 mockModule("@/lib/team-auth-rate-limit", () => ({
   consumeTeamAuthRateLimit: mockConsumeRateLimit,
@@ -86,7 +87,7 @@ describe("partner V2 password route", () => {
         newPassword: "new-secure-password",
       }),
     );
-    const body = await response.json();
+    const body: unknown = await response.json();
     expect(body).toEqual(
       expect.objectContaining({
         ok: true,
@@ -106,12 +107,13 @@ describe("partner V2 password route", () => {
     );
     expect(response.status).toBe(422);
     expect(mockChangePartnerPassword).not.toHaveBeenCalled();
-    await expect(response.json()).resolves.toEqual(
+    const body: unknown = await response.json();
+    expect(body).toEqual(
       expect.objectContaining({
         error: "invalid_fields",
-        fieldErrors: expect.objectContaining({
-          confirmPassword: expect.any(String),
-        }),
+        fieldErrors: {
+          confirmPassword: "Enter the same new password again.",
+        },
       }),
     );
   });
@@ -147,11 +149,20 @@ describe("partner V2 password route", () => {
       }),
     );
     expect(response.status).toBe(403);
-    const body = await response.json();
+    const body: unknown = await response.json();
     expect(body).toEqual(
       expect.objectContaining({ error: "mfa_step_up_required" }),
     );
-    expect(Array.isArray(body.alternatives)).toBe(true);
+    expect(body).toEqual(
+      expect.objectContaining({
+        alternatives: [
+          expect.objectContaining({
+            action: "reauthenticate",
+            label: "Sign in again with your password",
+          }),
+        ],
+      }),
+    );
   });
 
   it("rate-limits before reading or changing credentials", async () => {

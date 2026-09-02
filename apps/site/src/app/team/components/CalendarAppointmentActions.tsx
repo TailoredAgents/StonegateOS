@@ -23,6 +23,7 @@ type Props = {
   canUpdateAppointments: boolean;
   canCollectPayments: boolean;
   canSendCustomerMessages: boolean;
+  canManageAppointmentMedia: boolean;
   canOverrideScheduleConflicts: boolean;
   teamMembers: Array<{ id: string; name: string }>;
 };
@@ -155,6 +156,7 @@ export function CalendarAppointmentActions({
   canUpdateAppointments,
   canCollectPayments,
   canSendCustomerMessages,
+  canManageAppointmentMedia,
   canOverrideScheduleConflicts,
   teamMembers,
 }: Props): React.ReactElement {
@@ -459,6 +461,29 @@ export function CalendarAppointmentActions({
                 showSplitPercentages={false}
                 stacked
               />
+
+              {canManageAppointmentMedia ? (
+                <details className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                  <summary className="min-h-11 cursor-pointer py-2 font-semibold">
+                    Missing-proof exception
+                  </summary>
+                  <label className="mt-2 block" htmlFor="calendar-proof-override-reason">
+                    <span className="block text-sm leading-6">
+                      Use only when required partner proof cannot be captured.
+                      The reason is audited and requires a recent MFA check.
+                    </span>
+                    <textarea
+                      id="calendar-proof-override-reason"
+                      name="proofOverrideReason"
+                      minLength={10}
+                      maxLength={500}
+                      rows={3}
+                      className={`${TEAM_INPUT_COMPACT} mt-2 w-full`}
+                      placeholder="Explain why the required proof cannot be provided"
+                    />
+                  </label>
+                </details>
+              ) : null}
 
               <label
                 htmlFor={crewConfirmationFieldId}

@@ -1,6 +1,10 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { loginWithPassword, normalizeEmail } from "@/lib/partner-portal-auth";
+import {
+  loginWithPassword,
+  normalizeEmail,
+  resolvePartnerAuthCorrelationId,
+} from "@/lib/partner-portal-auth";
 import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
@@ -88,33 +92,63 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  let session: Awaited<ReturnType<typeof loginWithPassword>>;
+  const correlationId = resolvePartnerAuthCorrelationId(request);
+  let result: Awaited<ReturnType<typeof loginWithPassword>>;
   try {
-    session = await loginWithPassword(
-      email,
-      password,
-      request,
-      rememberMe ? 30 : 0.5,
-    );
+    result = await loginWithPassword(email, password, request, {
+      rememberMe,
+      correlationId,
+    });
   } catch {
     return NextResponse.json(
       { ok: false, error: "temporarily_unavailable" },
       { status: 503, headers: { "Cache-Control": "no-store" } },
     );
   }
-  if (!session) {
+  if (!result) {
     return NextResponse.json(
       { ok: false, error: "invalid_credentials" },
       { status: 401, headers: { "Cache-Control": "no-store" } },
     );
   }
 
+  if (result.kind === "mfa_enrollment_required") {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "mfa_enrollment_required",
+        message:
+          "This account requires an authenticator but setup is incomplete. Contact Stonegate support to recover access.",
+        recovery: "contact_support",
+        correlationId,
+      },
+      { status: 409, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  if (result.kind === "mfa_required") {
+    return NextResponse.json(
+      {
+        ok: true,
+        status: "mfa_required",
+        transactionToken: result.transactionToken,
+        expiresAt: result.expiresAt.toISOString(),
+        methods: { totp: true, recoveryCode: true },
+        correlationId,
+      },
+      { status: 202, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
   return NextResponse.json(
     {
       ok: true,
-      sessionToken: session.sessionToken,
-      expiresAt: session.expiresAt.toISOString(),
+      status: "authenticated",
+      sessionToken: result.sessionToken,
+      expiresAt: result.expiresAt.toISOString(),
       persistent: rememberMe,
+      mfaRequired: false,
+      correlationId,
     },
     { headers: { "Cache-Control": "no-store" } },
   );

@@ -1068,12 +1068,12 @@ export async function InstantQuotesSection({
               professional proposal or booking follow-up.
             </p>
           </div>
-          <a
+          <Link
             href="/team/sales/hq#instant-quote-learning"
             className={teamButtonClass("secondary", "sm")}
           >
             View learning in Sales HQ
-          </a>
+          </Link>
         </div>
         <div className="grid gap-2">
           {quotes.map((quote) => {

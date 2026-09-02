@@ -121,7 +121,7 @@ export function PartnerNotificationList({
       </div>
       <ul className="space-y-2">
         {notifications.map((notification) => {
-          const href = (notification.actionPath ?? "/partners") as Route;
+          const href = (notification.actionPath ?? "/partners/overview") as Route;
           const pending = pendingId === notification.id;
           return (
             <li

@@ -122,17 +122,17 @@ describe("Quote V2 public route boundary", () => {
 
   it("creates the owner task first and never mutates frozen accepted options", () => {
     const service = source("src/lib/quote-v2-public-service.ts");
+    const terminal = source("src/lib/quote-v2-terminal-decision.ts");
     const changeStart = service.indexOf("recordQuoteV2ChangeRequest");
     expect(service.indexOf(".insert(crmTasks)", changeStart)).toBeLessThan(
       service.indexOf(".insert(quoteChangeRequests)", changeStart),
     );
-    const decisionStart = service.indexOf("recordQuoteV2Decision");
-    const decisionBranch = service.slice(decisionStart);
-    const versionUpdate = decisionBranch.slice(
-      decisionBranch.indexOf(".update(quoteVersions)"),
-      decisionBranch.indexOf(".update(quotes)"),
+    expect(service).toContain("persistQuoteV2TerminalDecision");
+    const versionUpdate = terminal.slice(
+      terminal.indexOf(".update(quoteVersions)"),
+      terminal.indexOf(".update(quotes)"),
     );
-    expect(versionUpdate).toContain("state: responseType");
+    expect(versionUpdate).toContain("state: input.decision");
     expect(versionUpdate).not.toContain("selectedOptionIds");
   });
 

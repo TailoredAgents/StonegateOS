@@ -177,6 +177,11 @@ export async function updateApptStatus(formData: FormData) {
     formData,
     "sendReviewRequest",
   );
+  const proofOverrideReasonRaw = formData.get("proofOverrideReason");
+  const proofOverrideReason =
+    typeof proofOverrideReasonRaw === "string"
+      ? proofOverrideReasonRaw.trim()
+      : "";
   if (
     typeof id !== "string" ||
     id.trim().length === 0 ||
@@ -192,6 +197,29 @@ export async function updateApptStatus(formData: FormData) {
       ok: false,
       message:
         "The appointment, status, current version, and retry key are required. Refresh and try again.",
+    });
+    revalidatePath("/team");
+    return;
+  }
+  if (
+    proofOverrideReason &&
+    (proofOverrideReason.length < 10 || proofOverrideReason.length > 500)
+  ) {
+    await setMutationFlash({
+      ok: false,
+      message:
+        "A proof exception reason must be between 10 and 500 characters.",
+    });
+    revalidatePath("/team");
+    return;
+  }
+  if (
+    proofOverrideReason &&
+    !hasTeamPermission(principal, "appointment_media.manage")
+  ) {
+    await setMutationFlash({
+      ok: false,
+      message: "You do not have permission to record a proof exception.",
     });
     revalidatePath("/team");
     return;
@@ -214,6 +242,7 @@ export async function updateApptStatus(formData: FormData) {
     sendCustomerNotification,
     sendReviewRequest,
   };
+  if (proofOverrideReason) payload["proofOverrideReason"] = proofOverrideReason;
   if (typeof crew === "string") payload["crew"] = crew.length ? crew : null;
   if (typeof owner === "string") payload["owner"] = owner.length ? owner : null;
 
@@ -8862,6 +8891,10 @@ export async function partnerAccessApplicationDecisionAction(
   const actionRaw = formData.get("decision");
   const noteRaw = formData.get("note");
   const confirmationRaw = formData.get("confirmation");
+  const roleKeyRaw = formData.get("roleKey");
+  const accessLevelRaw = formData.get("accessLevel");
+  const locationIdsRaw = formData.get("locationIds");
+  const costCenterIdsRaw = formData.get("costCenterIds");
   const expectedVersionRaw = formData.get("expectedVersion");
   const idempotencyKey = formData.get("idempotencyKey");
   const applicationId =
@@ -8875,6 +8908,31 @@ export async function partnerAccessApplicationDecisionAction(
   const note = typeof noteRaw === "string" ? noteRaw.trim() : "";
   const confirmation =
     typeof confirmationRaw === "string" ? confirmationRaw.trim() : "";
+  const roleKey =
+    typeof roleKeyRaw === "string" &&
+    ["administrator", "operations", "billing_approver", "viewer"].includes(
+      roleKeyRaw,
+    )
+      ? roleKeyRaw
+      : null;
+  const accessLevel =
+    accessLevelRaw === "account" || accessLevelRaw === "scoped"
+      ? accessLevelRaw
+      : null;
+  const parseScopeIds = (raw: FormDataEntryValue | null): string[] | null => {
+    if (typeof raw !== "string" || raw.length > 9_000) return null;
+    const values = raw
+      .split(/[\s,]+/u)
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean);
+    return values.length <= 250 &&
+      values.every(isUuid) &&
+      new Set(values).size === values.length
+      ? values
+      : null;
+  };
+  const locationIds = parseScopeIds(locationIdsRaw);
+  const costCenterIds = parseScopeIds(costCenterIdsRaw);
   const expectedVersion =
     typeof expectedVersionRaw === "string" ? expectedVersionRaw.trim() : "";
   const expectedConfirmation =
@@ -8886,11 +8944,17 @@ export async function partnerAccessApplicationDecisionAction(
           ? "REQUEST INFORMATION"
           : "";
 
-  if (!hasTeamPermission(principal, "partners.invite")) {
+  const requiredPermission =
+    action === "approve"
+      ? "partners.applications.approve"
+      : action === "decline"
+        ? "partners.applications.decline"
+        : "partners.applications.review";
+  if (!hasTeamPermission(principal, requiredPermission)) {
     await setMutationFlash({
       ok: false,
       message:
-        "You do not have permission to decide Partner Portal access applications.",
+        "You do not have permission to make this Partner Portal application decision.",
     });
     revalidatePath("/team");
     return;
@@ -8901,6 +8965,16 @@ export async function partnerAccessApplicationDecisionAction(
     !/^\d{1,10}$/u.test(expectedVersion) ||
     !isValidTeamIdempotencyKey(idempotencyKey) ||
     confirmation !== expectedConfirmation ||
+    (action === "approve" &&
+      (!roleKey ||
+        !accessLevel ||
+        locationIds === null ||
+        costCenterIds === null ||
+        (roleKey === "administrator" && accessLevel !== "account") ||
+        (accessLevel === "account" &&
+          locationIds.length + costCenterIds.length !== 0) ||
+        (accessLevel === "scoped" &&
+          locationIds.length + costCenterIds.length === 0))) ||
     note.length > (action === "approve" ? 1_000 : 2_000) ||
     (action !== "approve" && note.length < 2)
   ) {
@@ -8927,6 +9001,14 @@ export async function partnerAccessApplicationDecisionAction(
           action,
           note: note || null,
           confirmation,
+          ...(action === "approve"
+            ? {
+                roleKey,
+                accessLevel,
+                locationIds,
+                costCenterIds,
+              }
+            : {}),
         }),
       },
     );
@@ -8988,12 +9070,13 @@ export async function partnerAccessApplicationDecisionAction(
       ok: true,
       message:
         action === "approve"
-          ? "Partner access approved. The applicant is now an account administrator and must complete MFA. Pricing and instant confirmation remain separately configured."
+          ? "Partner access approved with the selected role and scope. The applicant must complete activation before signing in. Pricing and instant confirmation remain separately configured."
           : action === "decline"
             ? "Partner access declined and the generated limited workspace disabled."
             : "The application now shows the information request for follow-up.",
     });
     revalidatePath("/team");
+    revalidatePath("/team/partners");
   } catch (error) {
     await setMutationFlash({
       ok: false,
@@ -9143,6 +9226,100 @@ export async function partnerPortalInviteUserAction(formData: FormData) {
     });
     revalidatePath("/team");
   }
+}
+
+export async function partnerMembershipLifecycleAction(formData: FormData) {
+  const principal = await requireCurrentTeamPrincipal();
+  const membershipId = readFormString(formData, "membershipId");
+  const accountId = readFormString(formData, "accountId");
+  const action = readFormString(formData, "membershipAction");
+  const confirmation = readFormString(formData, "confirmation");
+  const expectedVersion = readFormString(formData, "expectedVersion");
+  const idempotencyKey = formData.get("idempotencyKey");
+  const expectedConfirmation =
+    action === "suspend"
+      ? "SUSPEND MEMBERSHIP"
+      : action === "reactivate"
+        ? "REACTIVATE MEMBERSHIP"
+        : "";
+  if (
+    !isUuid(membershipId) ||
+    !isUuid(accountId) ||
+    !expectedConfirmation ||
+    confirmation !== expectedConfirmation ||
+    !isValidTeamIdempotencyKey(idempotencyKey) ||
+    Number.isNaN(new Date(expectedVersion).getTime()) ||
+    new Date(expectedVersion).toISOString() !== expectedVersion
+  ) {
+    await setMutationFlash({
+      ok: false,
+      message:
+        "This membership request is incomplete, stale, or not confirmed. Refresh Partner administration and try again.",
+    });
+    revalidatePath("/team/partners");
+    return;
+  }
+
+  try {
+    const response = await callAdminApiAs(
+      principal,
+      `/api/admin/partner-management/v1/memberships/${encodeURIComponent(membershipId)}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Idempotency-Key": String(idempotencyKey),
+          "If-Match": expectedVersion,
+        },
+        body: JSON.stringify({ accountId, action, confirmation }),
+      },
+    );
+    if (!response.ok) {
+      await setMutationFlash({
+        ok: false,
+        message: await readTeamMutationError(
+          response,
+          "Unable to change the partner membership",
+        ),
+      });
+      revalidatePath("/team/partners");
+      return;
+    }
+    const success = await readTeamMutationSuccess<{
+      membershipId?: unknown;
+      partnerAccountId?: unknown;
+      status?: unknown;
+    }>(response);
+    if (
+      !success ||
+      success.data.membershipId !== membershipId ||
+      success.data.partnerAccountId !== accountId ||
+      success.data.status !== (action === "suspend" ? "suspended" : "active")
+    ) {
+      await setMutationFlash({
+        ok: false,
+        message:
+          "The membership service returned an unreadable success receipt. Refresh before retrying; no additional change is being claimed.",
+      });
+      revalidatePath("/team/partners");
+      return;
+    }
+    await setMutationFlash({
+      ok: true,
+      message:
+        action === "suspend"
+          ? "Company membership suspended and account-bound sessions revoked. Other company memberships were not changed."
+          : "Company membership reactivated. Previously revoked sessions remain revoked.",
+    });
+  } catch (error) {
+    await setMutationFlash({
+      ok: false,
+      message: readTeamMutationException(
+        error,
+        "Unable to confirm the membership change",
+      ),
+    });
+  }
+  revalidatePath("/team/partners");
 }
 
 export async function partnerPortalSetUserActiveAction(formData: FormData) {

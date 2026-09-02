@@ -1,5 +1,17 @@
 import type { NextRequest } from "next/server";
-import { jest } from "@jest/globals";
+import { jest as esmJest } from "@jest/globals";
+
+type JestWithEsmMocks = Pick<
+  typeof globalThis.jest,
+  "clearAllMocks" | "fn"
+> & {
+  unstable_mockModule: (
+    moduleName: string,
+    moduleFactory: () => unknown,
+  ) => typeof globalThis.jest;
+};
+
+const jest = esmJest as unknown as JestWithEsmMocks;
 
 const mockRequirePermission = jest.fn();
 const mockIsAdminRequest = jest.fn();
@@ -260,6 +272,8 @@ jest.unstable_mockModule("@/lib/verified-actor-context", () => ({
     label: "Owner",
     sessionId: "contact-safety-session",
     authMethod: "team_session",
+    assuranceLevel: "aal2",
+    mfaVerifiedAt: new Date().toISOString(),
   })),
 }));
 jest.unstable_mockModule("@/lib/team-mutation-idempotency", () => ({

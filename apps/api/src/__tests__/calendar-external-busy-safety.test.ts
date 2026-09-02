@@ -121,18 +121,17 @@ describe("Google Calendar external-busy safety", () => {
     expect(migration).toContain('"external_busy_coverage_synced_at"');
   });
 
-  it("serializes legacy cancellation and gates every outbound notification", () => {
-    const route = source(
+  it("retires raw-appointment cancellation and serializes V2 job cancellation", () => {
+    const legacyRoute = source(
       "apps/api/app/api/portal/bookings/[appointmentId]/cancel/route.ts",
     );
+    const route = source(
+      "apps/api/app/api/portal/v2/jobs/[jobId]/cancel/route.ts",
+    );
+    expect(legacyRoute).toContain('error: "legacy_route_retired"');
+    expect(legacyRoute).not.toContain("partnerUsers.phoneE164");
     expect(route).toContain("acquireScheduleConflictLock(tx)");
-    expect(route).not.toContain("partner-booking-cancel:${appointmentId}");
-    expect(route).toContain("arePartnerPortalOutboundNotificationsEnabled(");
-    expect(route).toContain(
-      "outboundNotificationsEnabled && partnerUser?.email",
-    );
-    expect(route).toContain(
-      "outboundNotificationsEnabled && partnerUser?.phoneE164",
-    );
+    expect(route).toContain("createPartnerJobAccessCondition(principal, jobId)");
+    expect(route).toContain('type: "appointment.calendar_sync_requested"');
   });
 });

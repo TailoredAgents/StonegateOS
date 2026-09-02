@@ -23,11 +23,17 @@ export async function QuotesHubSection({
   contactId,
   propertyId,
   instantQuoteId,
+  partnerAccountId,
+  partnerTargetType,
+  partnerTargetId,
 }: {
   quoteMode?: string | null;
   contactId?: string;
   propertyId?: string;
   instantQuoteId?: string;
+  partnerAccountId?: string;
+  partnerTargetType?: string;
+  partnerTargetId?: string;
   memberId?: string;
 }): Promise<ReactElement> {
   const activeMode = normalizeQuoteWorkspaceMode(quoteMode);
@@ -38,6 +44,9 @@ export async function QuotesHubSection({
       initialContactId: contactId,
       initialPropertyId: propertyId,
       instantQuoteId,
+      partnerAccountId,
+      partnerTargetType,
+      partnerTargetId,
     });
   } else if (activeMode === "instant") {
     const { InstantQuotesSection } = await import("./InstantQuotesSection");

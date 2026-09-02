@@ -36,14 +36,37 @@ describe("staff Partner Portal access-application inputs", () => {
     ).toThrow("filters are invalid");
   });
 
-  it("requires exact, bounded decision confirmations and accepts no role/rate override", () => {
+  it("requires exact, bounded decisions with one explicit launch role and scope", () => {
     expect(
       parseStaffAccessApplicationDecision({
         action: "approve",
         note: null,
         confirmation: "APPROVE",
+        roleKey: "administrator",
+        accessLevel: "account",
+        locationIds: [],
+        costCenterIds: [],
       }),
-    ).toEqual({ action: "approve", note: null, confirmation: "APPROVE" });
+    ).toEqual({
+      action: "approve",
+      note: null,
+      confirmation: "APPROVE",
+      roleKey: "administrator",
+      accessLevel: "account",
+      locationIds: [],
+      costCenterIds: [],
+    });
+    expect(
+      parseStaffAccessApplicationDecision({
+        action: "approve",
+        note: "Limit to the assigned property.",
+        confirmation: "APPROVE",
+        roleKey: "operations",
+        accessLevel: "scoped",
+        locationIds: ["11111111-1111-4111-8111-111111111111"],
+        costCenterIds: [],
+      }).roleKey,
+    ).toBe("operations");
     expect(
       parseStaffAccessApplicationDecision({
         action: "needs_information",
@@ -64,6 +87,21 @@ describe("staff Partner Portal access-application inputs", () => {
         action: "approve",
         note: null,
         confirmation: "approve",
+        roleKey: "administrator",
+        accessLevel: "account",
+        locationIds: [],
+        costCenterIds: [],
+      }),
+    ).toThrow("Confirm this approval");
+    expect(() =>
+      parseStaffAccessApplicationDecision({
+        action: "approve",
+        note: null,
+        confirmation: "APPROVE",
+        roleKey: "administrator",
+        accessLevel: "scoped",
+        locationIds: ["11111111-1111-4111-8111-111111111111"],
+        costCenterIds: [],
       }),
     ).toThrow("Confirm this approval");
   });
@@ -120,8 +158,13 @@ describe("staff access-application persistence and route contract", () => {
   });
 
   it("uses staff permission, origin, exact version, durable idempotency, and co-committed audit controls", () => {
-    expect(listRoute).toContain('requirePermission(request, "partners.read")');
-    expect(itemRoute).toContain('requiredPermissions: ["partners.invite"]');
+    expect(listRoute).toContain('"partners.applications.read"');
+    expect(itemRoute).toContain(
+      'requiredPermissions: ["partners.applications.read"]',
+    );
+    expect(itemRoute).toContain('"partners.applications.approve"');
+    expect(itemRoute).toContain('"partners.applications.decline"');
+    expect(itemRoute).toContain('"partners.applications.review"');
     expect(itemRoute).toContain('risk: "destructive"');
     expect(itemRoute).toContain("beginTeamMutation(");
     expect(itemRoute).toContain("mutation.expectedVersion === null");
@@ -156,7 +199,20 @@ describe("staff access-application persistence and route contract", () => {
     );
   });
 
-  it("promotes only to fixed Administrator with MFA and never creates pricing or direct instant-confirmation state", () => {
+  it("requires an explicit launch role for joins and a fixed Administrator for new companies", () => {
+    const verificationOnboarding = source(
+      "apps/api/src/lib/partner-verification-onboarding.ts",
+    );
+    expect(itemRoute).toContain("decision.roleKey");
+    expect(itemRoute).toContain("decision.accessLevel");
+    expect(itemRoute).toContain(
+      'application.companyResolutionChoice !== "join_existing"',
+    );
+    expect(verificationOnboarding).toContain("partnerMembershipLocationScopes");
+    expect(verificationOnboarding).toContain(
+      "partnerMembershipCostCenterScopes",
+    );
+    expect(verificationOnboarding).not.toContain(".insert(contacts)");
     expect(itemRoute).toContain('eq(partnerRoleTemplates.key, "admin")');
     expect(itemRoute).toContain(
       "isNull(partnerRoleTemplates.partnerAccountId)",
@@ -193,7 +249,9 @@ describe("staff access-application persistence and route contract", () => {
     expect(queue).toContain("Partner Portal access applications");
     expect(queue).toContain("Type APPROVE");
     expect(queue).toContain("Type DECLINE");
-    expect(queue).toContain("pricing and instant confirmation remain separate");
+    expect(queue).toContain("Pricing and instant confirmation remain separate");
+    expect(queue).toContain("Choose one role");
+    expect(queue).toContain('name="accessLevel"');
     expect(queue).toContain("partnerAccessApplicationDecisionAction");
   });
 });

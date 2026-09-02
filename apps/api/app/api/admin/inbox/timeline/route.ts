@@ -9,6 +9,7 @@ import {
   getDb,
 } from "@/db";
 import { buildInboxSnapshotSignature } from "@/lib/inbox-snapshot";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import { toInboxIso } from "@/lib/inbox-timestamp";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
@@ -69,6 +70,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       and(
         eq(conversationMessages.threadId, conversationThreads.id),
         eq(conversationThreads.contactId, contactId),
+        genericInboxThreadScopeCondition(),
       ),
     );
   const latestMessagePromise = db
@@ -82,6 +84,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       and(
         eq(conversationMessages.threadId, conversationThreads.id),
         eq(conversationThreads.contactId, contactId),
+        genericInboxThreadScopeCondition(),
       ),
     )
     .orderBy(desc(messageActivityAt), desc(conversationMessages.id))
@@ -147,7 +150,12 @@ export async function GET(request: NextRequest): Promise<Response> {
       )`,
     })
     .from(conversationThreads)
-    .where(eq(conversationThreads.contactId, contactId))
+    .where(
+      and(
+        eq(conversationThreads.contactId, contactId),
+        genericInboxThreadScopeCondition(),
+      ),
+    )
     .orderBy(
       desc(conversationThreads.lastMessageAt),
       desc(conversationThreads.updatedAt),
@@ -175,6 +183,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       and(
         eq(conversationMessages.threadId, conversationThreads.id),
         eq(conversationThreads.contactId, contactId),
+        genericInboxThreadScopeCondition(),
       ),
     )
     .leftJoin(

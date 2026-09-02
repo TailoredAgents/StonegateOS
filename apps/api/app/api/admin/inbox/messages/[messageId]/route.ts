@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb, conversationMessages, conversationThreads } from "@/db";
 import { requirePermission } from "@/lib/permissions";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import { isAdminRequest } from "../../../../web/admin";
 
 export async function DELETE(
@@ -29,7 +30,16 @@ export async function DELETE(
           threadId: conversationMessages.threadId
         })
         .from(conversationMessages)
-        .where(eq(conversationMessages.id, messageId))
+        .innerJoin(
+          conversationThreads,
+          eq(conversationMessages.threadId, conversationThreads.id),
+        )
+        .where(
+          and(
+            eq(conversationMessages.id, messageId),
+            genericInboxThreadScopeCondition(),
+          ),
+        )
         .limit(1);
 
       if (!message) {
@@ -63,7 +73,12 @@ export async function DELETE(
           lastMessageAt: lastAt,
           updatedAt: new Date()
         })
-        .where(eq(conversationThreads.id, message.threadId));
+        .where(
+          and(
+            eq(conversationThreads.id, message.threadId),
+            genericInboxThreadScopeCondition(),
+          ),
+        );
     });
   } catch (error) {
     const message = error instanceof Error && error.message === "not_found" ? "message_not_found" : "delete_failed";

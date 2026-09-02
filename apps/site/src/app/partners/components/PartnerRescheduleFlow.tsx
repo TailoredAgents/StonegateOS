@@ -28,6 +28,7 @@ import {
   partnerPrimaryButtonClass,
   partnerSecondaryButtonClass,
 } from "./PartnerPortalUi";
+import type { PartnerCancellationDecision } from "./PartnerJobActions";
 
 type RescheduleOutcome = PartnerRescheduleResult;
 
@@ -77,10 +78,14 @@ export function PartnerRescheduleFlow({
   jobId,
   jobEtag,
   currentWindow,
+  cancellation,
+  scheduleChangeRequiresReview,
 }: {
   jobId: string;
   jobEtag: string;
   currentWindow: { startAt: string; endAt: string; timezone: string };
+  cancellation: PartnerCancellationDecision;
+  scheduleChangeRequiresReview: boolean;
 }) {
   const router = useRouter();
   const [draft, setDraft] = React.useState<PartnerDraft | null>(null);
@@ -235,9 +240,10 @@ export function PartnerRescheduleFlow({
 
   const timezone = availability?.timezone ?? currentWindow.timezone;
   const willRequireReview = Boolean(
-    availability &&
-      (!availability.instantConfirmationEligible ||
-        availability.reviewReasons.length > 0),
+    scheduleChangeRequiresReview ||
+      (availability &&
+        (!availability.instantConfirmationEligible ||
+          availability.reviewReasons.length > 0)),
   );
   const holdWindow = hold
     ? formatWindow(hold.arrivalWindowStartAt, hold.arrivalWindowEndAt, timezone)
@@ -381,8 +387,8 @@ export function PartnerRescheduleFlow({
         </p>
         {outcome.mode === "review" ? (
           <PartnerNotice tone="warning" className="mt-4">
-            Your existing arrival window remains scheduled until Stonegate
-            approves this request. We’ll notify you when the review is complete.
+            {outcome.consequence.label} We’ll notify you when the review is
+            complete.
           </PartnerNotice>
         ) : (
           <PartnerNotice tone="success" className="mt-4">
@@ -403,6 +409,26 @@ export function PartnerRescheduleFlow({
   return (
     <div className="space-y-5">
       <PartnerPanel>
+        <section
+          id="partner-reschedule-policy"
+          aria-labelledby="partner-reschedule-policy-title"
+          className="mb-5 rounded-xl border border-slate-200 bg-slate-50 p-4"
+        >
+          <h2
+            id="partner-reschedule-policy-title"
+            className="font-semibold text-slate-950"
+          >
+            Schedule-change consequence
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-slate-700">
+            {scheduleChangeRequiresReview
+              ? "This request is at or after the account cutoff, or the account requires staff review. Your current arrival window will stay scheduled while Stonegate reviews the replacement window."
+              : `This request is before the account’s ${cancellation.cutoffMinutes / 60}-hour cutoff and can update immediately if every live scheduling gate still passes.`}
+          </p>
+          <p className="mt-1 text-sm font-medium leading-6 text-slate-800">
+            No fee is applied automatically for requesting this schedule change.
+          </p>
+        </section>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-slate-950">
@@ -533,13 +559,16 @@ export function PartnerRescheduleFlow({
             </div>
             <div
               className="inline-flex min-h-11 items-center gap-2 self-start rounded-xl bg-slate-100 px-3 font-semibold tabular-nums text-slate-800 sm:self-center"
-              role="status"
-              aria-live="polite"
+              aria-hidden="true"
             >
               <Clock3 className="h-4 w-4" aria-hidden="true" />
               {Math.floor(holdSeconds / 60)}:
               {String(holdSeconds % 60).padStart(2, "0")}
             </div>
+            <p className="sr-only">
+              This temporary hold expires at{" "}
+              {formatTime(hold.expiresAt, timezone)}.
+            </p>
           </div>
           {willRequireReview ? (
             <PartnerNotice tone="warning" className="mt-4">
@@ -561,6 +590,7 @@ export function PartnerRescheduleFlow({
               disabled={submitting || holding || holdSeconds <= 0}
               className={partnerPrimaryButtonClass}
               data-partner-analytics="job_reschedule_submit"
+              aria-describedby="partner-reschedule-policy"
             >
               {submitting ? (
                 <LoaderCircle

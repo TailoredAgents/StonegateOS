@@ -6,6 +6,7 @@ import type {
   PartnerInvoice,
   PartnerMoney,
   PartnerQuote,
+  PartnerQuoteDetail,
   PartnerReportSummary,
   PartnerStatement,
 } from "./portal-v2";
@@ -38,13 +39,179 @@ function hasAmounts(value: unknown, keys: readonly string[]): boolean {
   return keys.every((key) => isMoney(value[key]));
 }
 
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function isStringArray(value: unknown, maximum = 100): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maximum &&
+    value.every((item) => typeof item === "string")
+  );
+}
+
+function isPartnerQuoteAmounts(value: unknown): boolean {
+  return (
+    value === null ||
+    hasAmounts(value, ["subtotal", "tax", "discount", "total"]) ||
+    hasAmounts(value, [
+      "subtotalMin",
+      "subtotalMax",
+      "discountMin",
+      "discountMax",
+      "totalMin",
+      "totalMax",
+      "deposit",
+    ])
+  );
+}
+
 export function isPartnerQuote(value: unknown): value is PartnerQuote {
   if (!isRecord(value)) return false;
   return (
     typeof value["id"] === "string" &&
+    (value["authority"] === "legacy_snapshot" ||
+      value["authority"] === "quote_v2") &&
+    typeof value["actionable"] === "boolean" &&
+    isNullableString(value["notice"]) &&
+    isNullableString(value["quoteNumber"]) &&
     typeof value["status"] === "string" &&
-    typeof value["version"] === "number" &&
-    hasAmounts(value["amounts"], ["subtotal", "tax", "discount", "total"])
+    Number.isSafeInteger(value["version"]) &&
+    isNullableString(value["projectName"]) &&
+    isNullableString(value["bookingId"]) &&
+    isNullableString(value["bookingDraftId"]) &&
+    isNullableString(value["locationId"]) &&
+    isPartnerQuoteAmounts(value["amounts"]) &&
+    (value["lineCount"] === null || Number.isSafeInteger(value["lineCount"])) &&
+    isNullableString(value["expiresAt"]) &&
+    isNullableString(value["issuedAt"]) &&
+    isNullableString(value["documentId"]) &&
+    isStringArray(value["allowedActions"], 20) &&
+    isNullableString(value["etag"]) &&
+    typeof value["createdAt"] === "string" &&
+    typeof value["updatedAt"] === "string"
+  );
+}
+
+function isQuoteDocument(value: unknown): boolean {
+  if (value === null) return true;
+  if (!isRecord(value)) return false;
+  const parties = value["parties"];
+  const issuer = value["issuer"];
+  const pricing = value["pricing"];
+  const terms = value["terms"];
+  if (
+    !isRecord(parties) ||
+    !isRecord(issuer) ||
+    !isRecord(pricing) ||
+    !isRecord(terms) ||
+    typeof value["documentType"] !== "string" ||
+    typeof value["schedulingMode"] !== "string" ||
+    typeof value["scope"] !== "string" ||
+    !isStringArray(value["inclusions"], 50) ||
+    !isStringArray(value["exclusions"], 50) ||
+    !isStringArray(value["assumptions"], 50) ||
+    !Number.isSafeInteger(value["estimatedDurationMinutes"]) ||
+    typeof parties["customerName"] !== "string" ||
+    !isNullableString(parties["companyName"]) ||
+    typeof parties["serviceAddress"] !== "string" ||
+    !isNullableString(parties["projectName"]) ||
+    !isNullableString(parties["purchaseOrder"]) ||
+    !isNullableString(parties["reference"]) ||
+    typeof issuer["displayName"] !== "string" ||
+    typeof issuer["email"] !== "string" ||
+    typeof issuer["phoneE164"] !== "string" ||
+    typeof pricing["currency"] !== "string" ||
+    !Array.isArray(pricing["lineItems"]) ||
+    pricing["lineItems"].length > 100 ||
+    !Array.isArray(pricing["optionGroups"]) ||
+    pricing["optionGroups"].length > 20 ||
+    typeof terms["terms"] !== "string" ||
+    typeof terms["paymentTerms"] !== "string" ||
+    typeof terms["changeOrderRules"] !== "string" ||
+    typeof terms["consentVersion"] !== "string"
+  ) {
+    return false;
+  }
+  const lineIds = new Set<string>();
+  for (const item of pricing["lineItems"]) {
+    if (!isRecord(item)) return false;
+    const id = item["id"];
+    if (
+      typeof id !== "string" ||
+      !id ||
+      lineIds.has(id) ||
+      typeof item["name"] !== "string" ||
+      !isNullableString(item["description"]) ||
+      typeof item["quantity"] !== "number" ||
+      !Number.isFinite(item["quantity"]) ||
+      typeof item["unit"] !== "string" ||
+      !Number.isSafeInteger(item["unitPriceMinCents"]) ||
+      (item["unitPriceMaxCents"] !== null &&
+        !Number.isSafeInteger(item["unitPriceMaxCents"])) ||
+      !isNullableString(item["optionGroupId"]) ||
+      typeof item["selectedByDefault"] !== "boolean"
+    ) {
+      return false;
+    }
+    lineIds.add(id);
+  }
+  const groupIds = new Set<string>();
+  for (const item of pricing["optionGroups"]) {
+    if (!isRecord(item)) return false;
+    const id = item["id"];
+    if (
+      typeof id !== "string" ||
+      !id ||
+      groupIds.has(id) ||
+      typeof item["label"] !== "string" ||
+      (item["mode"] !== "single" && item["mode"] !== "multiple") ||
+      !Number.isSafeInteger(item["minimumSelections"]) ||
+      !Number.isSafeInteger(item["maximumSelections"])
+    ) {
+      return false;
+    }
+    groupIds.add(id);
+  }
+  return true;
+}
+
+export function isPartnerQuoteDetail(
+  value: unknown,
+): value is PartnerQuoteDetail {
+  if (!isPartnerQuote(value)) return false;
+  const detail = value as Record<string, unknown>;
+  const proposal = detail["proposalDocument"];
+  const response = detail["response"];
+  const history = detail["history"];
+  return (
+    isNullableString(detail["legacyTerms"]) &&
+    isQuoteDocument(detail["document"]) &&
+    (proposal === null ||
+      (isRecord(proposal) &&
+        typeof proposal["id"] === "string" &&
+        isNullableString(proposal["filename"]) &&
+        Number.isSafeInteger(proposal["byteSize"]) &&
+        typeof proposal["sha256"] === "string")) &&
+    (response === null ||
+      (isRecord(response) &&
+        typeof response["id"] === "string" &&
+        (response["decision"] === "accepted" ||
+          response["decision"] === "declined") &&
+        typeof response["respondedAt"] === "string")) &&
+    Array.isArray(history) &&
+    history.length <= 100 &&
+    history.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item["id"] === "string" &&
+        Number.isSafeInteger(item["version"]) &&
+        typeof item["state"] === "string" &&
+        isNullableString(item["issuedAt"]) &&
+        isNullableString(item["expiresAt"]) &&
+        typeof item["current"] === "boolean",
+    )
   );
 }
 

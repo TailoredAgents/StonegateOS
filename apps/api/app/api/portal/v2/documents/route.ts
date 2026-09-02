@@ -5,7 +5,7 @@ import { handlePartnerCommercialList } from "@/lib/partner-portal-v2-commercial-
 export async function GET(request: NextRequest): Promise<Response> {
   return handlePartnerCommercialList({
     request,
-    capability: "documents.read",
+    capability: "documents.financial.read",
     loader: listPartnerDocuments,
     csvFilename: "documents.csv",
   });

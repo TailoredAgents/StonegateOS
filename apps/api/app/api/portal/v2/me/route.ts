@@ -62,6 +62,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           current:
             access.accountId === principal.accountId &&
             access.membershipId === principal.membershipId,
+          defaultAccount: access.isDefault,
         })),
       },
       correlationId,

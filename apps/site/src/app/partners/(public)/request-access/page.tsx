@@ -1,50 +1,37 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { PartnerAccessRequestForm } from "@/app/partners/components/PartnerAccessRequestForm";
-import { PartnerErrorState } from "@/app/partners/components/PartnerPortalUi";
-import { callPartnerPublicApi } from "@/app/partners/lib/api";
+import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
+import { PARTNER_APPLICATION_SESSION_COOKIE } from "@/lib/partner-application-session";
+import { PARTNER_SESSION_COOKIE } from "@/lib/partner-session";
 
 export const metadata: Metadata = {
-  title: "Request access",
-  description: "Request a Stonegate Partner Portal account for your company.",
+  title: "Request partner access",
+  description:
+    "Verify your work email to request a Stonegate Partner Portal account.",
+  robots: { index: false, follow: false, nocache: true },
 };
 
-export default async function PartnerRequestAccessPage() {
-  const response = await callPartnerPublicApi(
-    "/api/portal/v2/access-applications/requirements",
-    { timeoutMs: 12_000 },
-  ).catch(() => null);
-  if (!response?.ok) {
-    return (
-      <div className="mx-auto max-w-2xl">
-        <PartnerErrorState
-          title="Access requests are temporarily unavailable"
-          description="No information has been submitted. Try again shortly or call Stonegate for partner onboarding help."
-          retryHref="/partners/request-access"
-        />
-      </div>
-    );
+export default async function PartnerRequestAccessPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ error?: string }>;
+}) {
+  const jar = await cookies();
+  if (jar.get(PARTNER_APPLICATION_SESSION_COOKIE)?.value) {
+    redirect("/partners/application" as Route);
   }
-  const payload = (await response.json().catch(() => null)) as {
-    termsVersion?: string;
-    privacyVersion?: string;
-    partnerTypes?: string[];
-  } | null;
-  if (!payload?.termsVersion || !payload.privacyVersion || !Array.isArray(payload.partnerTypes)) {
-    return (
-      <div className="mx-auto max-w-2xl">
-        <PartnerErrorState
-          title="Access requirements could not be verified"
-          description="No information has been submitted. Refresh before accepting any account terms."
-          retryHref="/partners/request-access"
-        />
-      </div>
-    );
+  if (jar.get(PARTNER_SESSION_COOKIE)?.value) {
+    const context = await getPartnerPortalContext();
+    if (context.status === "authenticated") {
+      redirect("/partners/overview" as Route);
+    }
   }
-  return (
-    <PartnerAccessRequestForm
-      termsVersion={payload.termsVersion}
-      privacyVersion={payload.privacyVersion}
-      partnerTypes={payload.partnerTypes}
-    />
-  );
+  const error = (await searchParams)?.error;
+  const initialError =
+    error === "invalid_or_expired" || error === "temporarily_unavailable"
+      ? error
+      : null;
+  return <PartnerAccessRequestForm initialError={initialError} />;
 }

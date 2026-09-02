@@ -3,9 +3,11 @@ export const PORTAL_V2_CURRENCY_MINOR_UNIT = 2 as const;
 
 export type PortalV2MoneyDto = Readonly<{
   amountMinor: number;
-  currency: typeof PORTAL_V2_CURRENCY;
+  currency: string;
   minorUnit: typeof PORTAL_V2_CURRENCY_MINOR_UNIT;
 }>;
+
+const ISO_CURRENCY_PATTERN = /^[A-Z]{3}$/u;
 
 const RFC3339_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,9}))?(Z|([+-])([01]\d|2[0-3]):([0-5]\d))$/u;
@@ -97,15 +99,25 @@ export function normalizePortalV2Timezone(value: unknown): string | null {
   }
 }
 
-export function createPortalV2MoneyDto(amountMinor: unknown): PortalV2MoneyDto {
+export function createPortalV2MoneyDto(
+  amountMinor: unknown,
+  currencyValue: unknown = PORTAL_V2_CURRENCY,
+): PortalV2MoneyDto {
   if (typeof amountMinor !== "number" || !Number.isSafeInteger(amountMinor)) {
     throw new TypeError(
       "The portal money amount must use integer minor units.",
     );
   }
+  const currency =
+    typeof currencyValue === "string"
+      ? currencyValue.trim().toUpperCase()
+      : "";
+  if (!ISO_CURRENCY_PATTERN.test(currency)) {
+    throw new TypeError("The portal money currency must be an ISO 4217 code.");
+  }
   return Object.freeze({
     amountMinor,
-    currency: PORTAL_V2_CURRENCY,
+    currency,
     minorUnit: PORTAL_V2_CURRENCY_MINOR_UNIT,
   });
 }
@@ -115,12 +127,13 @@ export function parsePortalV2MoneyDto(value: unknown): PortalV2MoneyDto | null {
   const record = value as Record<string, unknown>;
   if (
     Object.keys(record).sort().join(",") !== "amountMinor,currency,minorUnit" ||
-    record["currency"] !== PORTAL_V2_CURRENCY ||
+    typeof record["currency"] !== "string" ||
+    !ISO_CURRENCY_PATTERN.test(record["currency"]) ||
     record["minorUnit"] !== PORTAL_V2_CURRENCY_MINOR_UNIT ||
     typeof record["amountMinor"] !== "number" ||
     !Number.isSafeInteger(record["amountMinor"])
   ) {
     return null;
   }
-  return createPortalV2MoneyDto(record["amountMinor"]);
+  return createPortalV2MoneyDto(record["amountMinor"], record["currency"]);
 }

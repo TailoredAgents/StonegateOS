@@ -18,11 +18,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseLocations(payload: unknown): PartnerLocation[] | null {
+type ParsedLocationDirectory = {
+  locations: PartnerLocation[];
+  nextCursor: string | null;
+  directoryEtag: string;
+  canManagePortfolio: boolean;
+};
+
+function parseLocations(payload: unknown): ParsedLocationDirectory | null {
   if (
     !isRecord(payload) ||
     payload["ok"] !== true ||
-    !Array.isArray(payload["locations"])
+    !Array.isArray(payload["locations"]) ||
+    !isRecord(payload["page"]) ||
+    !isRecord(payload["directory"])
   ) {
     return null;
   }
@@ -42,7 +51,15 @@ function parseLocations(payload: unknown): PartnerLocation[] | null {
       typeof value["etag"] === "string"
     );
   });
-  return valid ? locations : null;
+  const nextCursor = payload["page"]["nextCursor"];
+  const directoryEtag = payload["directory"]["etag"];
+  const canManagePortfolio = payload["directory"]["canManagePortfolio"];
+  return valid &&
+    (nextCursor === null || typeof nextCursor === "string") &&
+    typeof directoryEtag === "string" &&
+    typeof canManagePortfolio === "boolean"
+    ? { locations, nextCursor, directoryEtag, canManagePortfolio }
+    : null;
 }
 
 export default async function PartnerPropertiesPage() {
@@ -57,9 +74,9 @@ export default async function PartnerPropertiesPage() {
       ).catch(() => null)
     : null;
 
-  let locations: PartnerLocation[] | null = null;
+  let directory: ParsedLocationDirectory | null = null;
   if (response?.ok) {
-    locations = parseLocations(
+    directory = parseLocations(
       (await response.json().catch(() => null)) as unknown,
     );
   }
@@ -71,7 +88,7 @@ export default async function PartnerPropertiesPage() {
         title="Locations"
         description="Manage jobsites, listings, properties, contacts, public access instructions, and encrypted gate details."
         breadcrumbs={[
-          { label: "Overview", href: "/partners" },
+          { label: "Overview", href: "/partners/overview" },
           { label: "Locations", href: "/partners/properties" },
         ]}
       >
@@ -94,7 +111,7 @@ export default async function PartnerPropertiesPage() {
             icon={<MapPin className="h-6 w-6" aria-hidden="true" />}
           />
         </PartnerPanel>
-      ) : locations ? (
+      ) : directory ? (
         <PartnerPanel>
           {!canManage ? (
             <PartnerNotice tone="info" className="mb-5">
@@ -103,8 +120,15 @@ export default async function PartnerPropertiesPage() {
             </PartnerNotice>
           ) : null}
           <PartnerLocationManager
-            initialLocations={locations}
+            initialLocations={directory.locations}
+            initialNextCursor={directory.nextCursor}
+            initialDirectoryEtag={directory.directoryEtag}
             canManage={canManage}
+            canManagePortfolio={directory.canManagePortfolio}
+            canExport={
+              context.status === "authenticated" &&
+              context.permissions.exportOperationalReports
+            }
           />
         </PartnerPanel>
       ) : (

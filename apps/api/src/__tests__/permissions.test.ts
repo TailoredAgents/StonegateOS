@@ -46,13 +46,68 @@ describe("team role permissions", () => {
   });
 
   it("keeps owner as full access", () => {
-    expect(getDefaultPermissionsForRole("owner")).toEqual([
-      "*",
-      "contacts.purge",
-      "expenses.approve",
-      "financials.read",
-      "ad_spend.write",
-    ]);
+    expect(getDefaultPermissionsForRole("owner")).toEqual(
+      expect.arrayContaining([
+        "*",
+        "contacts.purge",
+        "expenses.approve",
+        "financials.read",
+        "ad_spend.write",
+        "partners.identities.disable",
+        "partners.security.mfa.reset",
+        "partners.memberships.recover_admin",
+        "partners.accounts.close",
+      ]),
+    );
+  });
+
+  it("expands broad legacy partner grants and denies into the granular catalog", () => {
+    const read = computeEffectivePermissions({
+      rolePermissions: ["partners.read"],
+      grant: [],
+      deny: [],
+    });
+    expect(read).toEqual(
+      expect.arrayContaining([
+        "partners.read",
+        "partners.accounts.read",
+        "partners.applications.read",
+        "partners.people.read",
+        "partners.memberships.read",
+        "partners.invitations.read",
+        "partners.joins.read",
+      ]),
+    );
+
+    const denied = computeEffectivePermissions({
+      rolePermissions: ["partners.read", "contacts.read"],
+      grant: [],
+      deny: ["partners.read"],
+    });
+    expect(denied).toContain("contacts.read");
+    expect(denied).not.toContain("partners.read");
+    expect(denied).not.toContain("partners.accounts.read");
+    expect(denied).not.toContain("partners.people.read");
+  });
+
+  it("never gives a non-owner global partner identity controls through wildcards", () => {
+    const nonOwner = restrictOwnerOnlyPermissionsForRole(
+      "office",
+      computeEffectivePermissions({
+        rolePermissions: ["*"],
+        grant: ["partners.*"],
+        deny: [],
+      }),
+    );
+    expect(nonOwner).not.toEqual(
+      expect.arrayContaining([
+        "partners.identities.disable",
+        "partners.security.mfa.reset",
+        "partners.memberships.recover_admin",
+        "partners.accounts.close",
+      ]),
+    );
+    expect(nonOwner).toContain("partners.memberships.suspend");
   });
 
   it("scopes the Expense Tracking V2 permissions to submitters and full-access owners", () => {
@@ -289,6 +344,14 @@ describe("team role permissions", () => {
         "partners.write",
         "partners.invite",
         "partners.rates",
+        "partners.accounts.read",
+        "partners.applications.read",
+        "partners.people.read",
+        "partners.memberships.read",
+        "partners.invitations.read",
+        "partners.joins.read",
+        "partners.memberships.suspend",
+        "partners.identities.disable",
         "finance.read",
         "financials.read",
         "ad_spend.write",

@@ -47,9 +47,15 @@ import {
   type TeamMutationTransaction,
 } from "@/lib/team-mutation";
 import { resolvePublicSiteBaseUrl } from "@/lib/partner-portal-auth";
-import { arePartnerPortalOutboundNotificationsEnabled } from "@/lib/partner-portal-feature-flags";
+import {
+  arePartnerPortalApplicantNotificationsEnabled,
+  arePartnerPortalOutboundNotificationsEnabled,
+} from "@/lib/partner-portal-feature-flags";
+import { queuePartnerAccessApplicationDecisionEmail } from "@/lib/partner-access-application-email-delivery";
+import { provisionVerificationFirstPartnerApplication } from "@/lib/partner-verification-onboarding";
 import { nextQuietHoursEnd } from "@/lib/policy";
 import { queueSystemOutboundMessage } from "@/lib/system-outbound";
+import type { PartnerLaunchRoleKey } from "@/lib/partner-account-authorization";
 
 const BODY_MAXIMUM_BYTES = 8 * 1024;
 const BODY_DEADLINE_MS = 5_000;
@@ -65,8 +71,13 @@ type ApplicationDecisionData = {
     reviewedAt: string;
   };
   access: {
-    state: "limited" | "administrator_mfa_required" | "disabled";
-    roleKey: "applicant" | "admin" | null;
+    state:
+      | "limited"
+      | "activation_required"
+      | "privileged_activation_required"
+      | "administrator_mfa_required"
+      | "disabled";
+    roleKey: "applicant" | "admin" | PartnerLaunchRoleKey | null;
   };
 };
 
@@ -77,7 +88,7 @@ type AccessNotificationTarget = {
   membershipId: string | null;
   userName: string;
   userEmail: string;
-  userContactId: string;
+  userContactId: string | null;
   inAppAccessible: boolean;
 };
 type AccessNotificationOutcome = {
@@ -87,6 +98,7 @@ type AccessNotificationOutcome = {
     | "preference_suppressed"
     | "feature_disabled"
     | "recipient_suppressed";
+  outboxEventId?: string;
 };
 
 function safeDisplayText(
@@ -170,36 +182,33 @@ async function loadAccessNotificationTarget(
       id: partnerAccounts.id,
       name: partnerAccounts.name,
       portalAccessEnabled: partnerAccounts.portalAccessEnabled,
-      portalContactId: partnerAccounts.portalContactId,
     })
     .from(partnerAccounts)
     .where(eq(partnerAccounts.id, application.bootstrapPartnerAccountId))
     .limit(1);
-  if (!account || account.portalContactId !== user.orgContactId) return null;
-  const [membership] = account
-    ? await tx
-        .select({
-          id: partnerAccountMemberships.id,
-          status: partnerAccountMemberships.status,
-        })
-        .from(partnerAccountMemberships)
-        .where(
-          and(
-            eq(partnerAccountMemberships.partnerAccountId, account.id),
-            eq(partnerAccountMemberships.partnerUserId, user.id),
-          ),
-        )
-        .limit(1)
-    : [];
+  if (!account) return null;
+  const [membership] = await tx
+    .select({
+      id: partnerAccountMemberships.id,
+      status: partnerAccountMemberships.status,
+    })
+    .from(partnerAccountMemberships)
+    .where(
+      and(
+        eq(partnerAccountMemberships.partnerAccountId, account.id),
+        eq(partnerAccountMemberships.partnerUserId, user.id),
+      ),
+    )
+    .limit(1);
   return {
-    accountId: account?.id ?? null,
-    accountName: account?.name ?? application.companyName,
+    accountId: account.id,
+    accountName: account.name,
     membershipId: membership?.id ?? null,
     userName: user.name,
     userEmail: user.email,
     userContactId: user.orgContactId,
     inAppAccessible:
-      Boolean(account?.portalAccessEnabled) && membership?.status === "active",
+      account.portalAccessEnabled && membership?.status === "active",
   };
 }
 
@@ -259,7 +268,7 @@ async function queueAccessDecisionNotifications(input: {
     input.status === "approved"
       ? {
           title: "Partner access approved",
-          body: `Stonegate approved your company workspace for ${companyName}. Administrator access now requires MFA.`,
+          body: `Stonegate approved your company workspace for ${companyName}. Complete account activation before signing in.`,
           subject: "Your Stonegate Partner Portal access was approved",
         }
       : input.status === "declined"
@@ -579,6 +588,16 @@ async function applyDecision(
       normalizedEmail: partnerAccessApplications.normalizedEmail,
       companyName: partnerAccessApplications.companyName,
       emailVerifiedAt: partnerAccessApplications.emailVerifiedAt,
+      flowVersion: partnerAccessApplications.flowVersion,
+      name: partnerAccessApplications.name,
+      phone: partnerAccessApplications.phone,
+      phoneE164: partnerAccessApplications.phoneE164,
+      website: partnerAccessApplications.website,
+      partnerType: partnerAccessApplications.partnerType,
+      companyResolutionChoice:
+        partnerAccessApplications.companyResolutionChoice,
+      requestedPartnerAccountId:
+        partnerAccessApplications.requestedPartnerAccountId,
     })
     .from(partnerAccessApplications)
     .where(eq(partnerAccessApplications.id, applicationId))
@@ -654,6 +673,130 @@ async function applyDecision(
         "The application changed while the decision was being saved.",
         { retryable: true },
       );
+    }
+  } else if (application.flowVersion === 2) {
+    if (decision.action === "approve") {
+      if (!application.emailVerifiedAt) {
+        throw new TeamMutationFailure(
+          "conflict",
+          "The applicant must verify their email before approval.",
+        );
+      }
+      let provisioned: Awaited<
+        ReturnType<typeof provisionVerificationFirstPartnerApplication>
+      >;
+      if (
+        application.companyResolutionChoice !== "join_existing" &&
+        (decision.roleKey !== "administrator" ||
+          decision.accessLevel !== "account" ||
+          decision.locationIds.length > 0 ||
+          decision.costCenterIds.length > 0)
+      ) {
+        throw new TeamMutationFailure(
+          "invalid",
+          "A newly created company must begin with one account-wide Administrator.",
+          {
+            fieldErrors: {
+              roleKey: "Choose Administrator for a new company.",
+              accessLevel: "Choose account-wide access for a new company.",
+            },
+          },
+        );
+      }
+      try {
+        provisioned = await provisionVerificationFirstPartnerApplication(tx, {
+          application,
+          correlationId: mutation.correlationId,
+          now,
+          access: {
+            roleKey: decision.roleKey,
+            accessLevel: decision.accessLevel,
+            locationIds: decision.locationIds,
+            costCenterIds: decision.costCenterIds,
+          },
+        });
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "unknown";
+        if (code === "partner_role_unavailable") {
+          throw new TeamMutationFailure(
+            "internal",
+            "The selected partner role is unavailable. No approval was saved.",
+          );
+        }
+        throw new TeamMutationFailure(
+          "conflict",
+          "The verified application could not be provisioned safely. Review its company and identity match before approving it.",
+        );
+      }
+      accountId = provisioned.accountId;
+      membershipId = provisioned.membershipId;
+      const [applicationUpdated] = await tx
+        .update(partnerAccessApplications)
+        .set({
+          status: "approved",
+          approvedPartnerAccountId: provisioned.accountId,
+          applicantPartnerUserId: provisioned.userId,
+          reviewNote: decision.note,
+          reviewedByMemberId: mutation.actor.id,
+          reviewedAt: now,
+          version: nextVersion,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(partnerAccessApplications.id, application.id),
+            eq(partnerAccessApplications.flowVersion, 2),
+            eq(partnerAccessApplications.status, application.status),
+            eq(partnerAccessApplications.version, application.version),
+          ),
+        )
+        .returning({ id: partnerAccessApplications.id });
+      if (!applicationUpdated) {
+        throw new TeamMutationFailure(
+          "conflict",
+          "The application changed while approval was being saved.",
+          { retryable: true },
+        );
+      }
+      access = {
+        state:
+          provisioned.roleKey === "administrator" ||
+          provisioned.roleKey === "billing_approver"
+            ? "privileged_activation_required"
+            : "activation_required",
+        roleKey: provisioned.roleKey,
+      };
+    } else {
+      const [applicationUpdated] = await tx
+        .update(partnerAccessApplications)
+        .set({
+          status: "declined",
+          approvedPartnerAccountId: null,
+          reviewNote: decision.note,
+          reviewedByMemberId: mutation.actor.id,
+          reviewedAt: now,
+          version: nextVersion,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(partnerAccessApplications.id, application.id),
+            eq(partnerAccessApplications.flowVersion, 2),
+            eq(partnerAccessApplications.status, application.status),
+            eq(partnerAccessApplications.version, application.version),
+          ),
+        )
+        .returning({ id: partnerAccessApplications.id });
+      if (!applicationUpdated) {
+        throw new TeamMutationFailure(
+          "conflict",
+          "The application changed while the decision was being saved.",
+          { retryable: true },
+        );
+      }
+      access = { state: "disabled", roleKey: null };
+      accountId = null;
+      membershipId = null;
     }
   } else {
     const tenant = await loadGeneratedTenantContext(tx, application);
@@ -869,16 +1012,37 @@ async function applyDecision(
       : decision.action === "decline"
         ? "declined"
         : "needs_information";
-  const notification = await queueAccessDecisionNotifications({
-    tx,
-    applicationId: application.id,
-    status,
-    version: nextVersion,
-    target: notificationTarget,
-    informationRequest:
-      decision.action === "needs_information" ? decision.note : null,
-    now,
-  });
+  const notification =
+    application.flowVersion === 2 &&
+    (status === "needs_information" || status === "declined")
+      ? arePartnerPortalApplicantNotificationsEnabled()
+        ? await queuePartnerAccessApplicationDecisionEmail(tx, {
+            applicationId: application.id,
+            status,
+            version: nextVersion,
+            correlationId: mutation.correlationId,
+            now,
+          }).then(
+            ({ outboxEventId }): AccessNotificationOutcome => ({
+              inApp: "membership_unavailable",
+              email: "queued",
+              outboxEventId,
+            }),
+          )
+        : {
+            inApp: "membership_unavailable",
+            email: "feature_disabled",
+          }
+      : await queueAccessDecisionNotifications({
+          tx,
+          applicationId: application.id,
+          status,
+          version: nextVersion,
+          target: notificationTarget,
+          informationRequest:
+            decision.action === "needs_information" ? decision.note : null,
+          now,
+        });
   const audit = await mutation.audit.insertSuccess(tx, {
     entityType: "partner_access_application",
     entityId: application.id,
@@ -899,12 +1063,33 @@ async function applyDecision(
             ? "not_a_fit"
             : null,
       roleKey: access.roleKey,
-      mfaRequired: decision.action === "approve" ? true : null,
+      accessLevel:
+        decision.action === "approve" && application.flowVersion === 2
+          ? decision.accessLevel
+          : null,
+      locationScopeCount:
+        decision.action === "approve" && application.flowVersion === 2
+          ? decision.locationIds.length
+          : 0,
+      costCenterScopeCount:
+        decision.action === "approve" && application.flowVersion === 2
+          ? decision.costCenterIds.length
+          : 0,
+      mfaRequired:
+        decision.action === "approve"
+          ? access.state === "privileged_activation_required" ||
+            access.state === "administrator_mfa_required"
+          : null,
     },
     metadata: {
       decision: decision.action,
+      flowVersion: application.flowVersion,
       partnerAccountId: accountId,
       membershipId,
+      tenantProvisionedAtApproval:
+        application.flowVersion === 2 && decision.action === "approve",
+      activationRequired:
+        application.flowVersion === 2 && decision.action === "approve",
       commercialConfigurationChanged: false,
       rateCardCreated: false,
       instantConfirmationGrantedDirectly: false,
@@ -937,7 +1122,10 @@ export async function GET(
       { status: 401, headers: NO_STORE_HEADERS },
     );
   }
-  const permissionError = await requirePermission(request, "partners.read");
+  const permissionError = await requirePermission(
+    request,
+    "partners.applications.read",
+  );
   if (permissionError) return permissionError;
   const { applicationId } = await params;
   if (
@@ -986,7 +1174,7 @@ export async function PATCH(
     request,
     {
       principalTypes: ["human"],
-      requiredPermissions: ["partners.invite"],
+      requiredPermissions: ["partners.applications.read"],
       risk: "destructive",
       requiresIdempotency: true,
       auditAction: "partner.access_application.decision",
@@ -1047,6 +1235,22 @@ export async function PATCH(
       applicationId,
       "input",
     );
+  }
+
+  const decisionPermission =
+    decision.action === "approve"
+      ? "partners.applications.approve"
+      : decision.action === "decline"
+        ? "partners.applications.decline"
+        : "partners.applications.review";
+  const decisionPermissionError = await requirePermission(
+    request,
+    decisionPermission,
+    { ignoredKillSwitches: ["external_sends"] },
+  );
+  if (decisionPermissionError) {
+    decisionPermissionError.headers.set("Cache-Control", "private, no-store");
+    return decisionPermissionError;
   }
 
   let db: ReturnType<typeof getDb> | null = null;

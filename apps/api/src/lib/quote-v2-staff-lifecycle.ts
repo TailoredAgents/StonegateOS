@@ -1,20 +1,21 @@
-import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { z } from "zod";
+import type { quoteResponses } from "@/db";
 import {
   appointmentHolds,
   contacts,
   crmTasks,
-  outboxEvents,
+  partnerQuotes,
   quoteActivityEvents,
   quoteCapabilities,
   quoteChangeRequests,
-  quoteResponses,
   quoteVersionDocuments,
   quoteVersions,
   quotes,
   salesOpportunities,
 } from "@/db";
+import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
+import { partnerQuoteApprovalAllowsAcceptance } from "@/lib/partner-quote-v2-approval";
 import {
   QuoteV2ArchiveCommandSchema,
   QuoteV2ChangeResolutionCommandSchema,
@@ -28,7 +29,10 @@ import {
   SalesOpportunityStateSchema,
   type SalesOpportunityState,
 } from "@/lib/quote-v2-domain";
-import { parseQuoteV2OutboxEvent } from "@/lib/quote-v2-outbox-contract";
+import {
+  persistQuoteV2TerminalDecision,
+  QuoteV2TerminalDecisionConflict,
+} from "@/lib/quote-v2-terminal-decision";
 import {
   prepareQuoteV2AcceptanceEvidence,
   QuoteV2PublicStateError,
@@ -52,6 +56,7 @@ type LockedQuote = {
   id: string;
   quoteNumber: string;
   contactId: string;
+  partnerAccountId: string | null;
   opportunityId: string;
   aggregateState: string;
   aggregateRevision: number;
@@ -112,10 +117,6 @@ export function quoteV2LifecycleOpportunityTarget(input: {
     : { status: "lost", pipelineStage: "lost", closes: true };
 }
 
-function centsToLegacyNumeric(cents: number): string {
-  return (cents / 100).toFixed(2);
-}
-
 async function lockQuote(
   tx: TeamMutationTransaction,
   quoteId: string,
@@ -126,6 +127,7 @@ async function lockQuote(
       id: quotes.id,
       quoteNumber: quotes.quoteNumber,
       contactId: quotes.contactId,
+      partnerAccountId: quotes.partnerAccountId,
       opportunityId: quotes.salesOpportunityId,
       engineVersion: quotes.engineVersion,
       aggregateState: quotes.aggregateState,
@@ -166,6 +168,7 @@ async function lockQuote(
     id: row.id,
     quoteNumber: row.quoteNumber,
     contactId: row.contactId,
+    partnerAccountId: row.partnerAccountId,
     opportunityId: row.opportunityId,
     aggregateState: row.aggregateState,
     aggregateRevision: row.aggregateRevision,
@@ -460,40 +463,6 @@ async function queueLifecycleNotification(
   return messageId;
 }
 
-async function insertResponseOutboxEvent(
-  tx: TeamMutationTransaction,
-  input: {
-    quoteId: string;
-    versionId: string;
-    responseId: string;
-    correlationId: string;
-    occurredAt: Date;
-  },
-): Promise<string> {
-  const eventId = randomUUID();
-  const payload = {
-    schemaVersion: 2 as const,
-    eventId,
-    quoteId: input.quoteId,
-    versionId: input.versionId,
-    responseId: input.responseId,
-    correlationId: input.correlationId,
-    occurredAt: input.occurredAt.toISOString(),
-  };
-  parseQuoteV2OutboxEvent({
-    type: "quote.response_recorded.v2",
-    payload,
-  });
-  await tx.insert(outboxEvents).values({
-    id: eventId,
-    type: "quote.response_recorded.v2",
-    payload,
-    attempts: 0,
-    createdAt: input.occurredAt,
-  });
-  return eventId;
-}
-
 async function insertActivity(
   tx: TeamMutationTransaction,
   input: {
@@ -544,6 +513,7 @@ export type QuoteV2StaffDecisionReceipt = {
   outboxEventId: string;
   notificationMessageId: string | null;
   respondedAt: string;
+  certificateState?: "ready" | "pending";
 };
 
 export async function recordQuoteV2StaffDecision(
@@ -646,6 +616,48 @@ export async function recordQuoteV2StaffDecision(
         "The exact acceptance evidence could not be prepared.",
       );
     }
+    if (quote.partnerAccountId) {
+      const [binding] = await tx
+        .select({
+          accountId: partnerQuotes.partnerAccountId,
+          bookingId: partnerQuotes.partnerBookingId,
+          bookingDraftId: partnerQuotes.bookingDraftId,
+        })
+        .from(partnerQuotes)
+        .where(
+          and(
+            eq(partnerQuotes.quoteId, quote.id),
+            eq(partnerQuotes.partnerAccountId, quote.partnerAccountId),
+            eq(partnerQuotes.authority, "quote_v2"),
+          ),
+        )
+        .limit(1);
+      if (!binding) {
+        throw new TeamMutationFailure(
+          "conflict",
+          "The Partner account binding for this quote is unavailable.",
+        );
+      }
+      const approvalAllowed = await partnerQuoteApprovalAllowsAcceptance(tx, {
+        accountId: binding.accountId,
+        bookingId: binding.bookingId,
+        bookingDraftId: binding.bookingDraftId,
+        totalMinCents: acceptedEvidence.totals.totalMinCents,
+        totalMaxCents: acceptedEvidence.totals.totalMaxCents,
+        currency: acceptedEvidence.document.pricing.currency,
+      });
+      if (!approvalAllowed) {
+        throw new TeamMutationFailure(
+          "invalid",
+          "This Partner account requires an approved request for the exact proposal amount before acceptance.",
+          {
+            fieldErrors: {
+              decision: "Record the required account approval first.",
+            },
+          },
+        );
+      }
+    }
     responseValues = {
       quoteId: quote.id,
       quoteVersionId: version.id,
@@ -673,6 +685,11 @@ export async function recordQuoteV2StaffDecision(
         interactionSource: command.source,
         evidenceQuality: "exact",
         customerNotificationRequested: command.notifyCustomer,
+        certificateIntent: {
+          schemaVersion: 1,
+          state: "pending",
+          source: "immutable_quote_response",
+        },
       },
       respondedAt: now,
       createdAt: now,
@@ -697,136 +714,38 @@ export async function recordQuoteV2StaffDecision(
       createdAt: now,
     };
   }
-  const [response] = await tx
-    .insert(quoteResponses)
-    .values(responseValues)
-    .returning({ id: quoteResponses.id });
-  if (!response) {
-    throw new TeamMutationFailure(
-      "internal",
-      "The staff decision evidence could not be stored.",
-    );
-  }
-
-  const [updatedVersion] = await tx
-    .update(quoteVersions)
-    .set({ state: command.decision, updatedAt: now })
-    .where(
-      and(
-        eq(quoteVersions.id, version.id),
-        eq(quoteVersions.quoteId, quote.id),
-        eq(quoteVersions.state, "issued"),
-      ),
-    )
-    .returning({ id: quoteVersions.id });
-  if (!updatedVersion) {
-    throw new TeamMutationFailure(
-      "conflict",
-      "The proposal changed while the decision was recorded.",
-      { retryable: true },
-    );
-  }
-
-  const nextQuoteRevision = quote.aggregateRevision + 1;
-  const [updatedQuote] = await tx
-    .update(quotes)
-    .set({
-      aggregateState: command.decision,
-      aggregateRevision: nextQuoteRevision,
-      status: command.decision,
-      decisionAt: now,
+  let terminal;
+  try {
+    terminal = await persistQuoteV2TerminalDecision(tx, {
+      context: {
+        quoteId: quote.id,
+        quoteNumber: quote.quoteNumber,
+        versionId: version.id,
+        versionNumber: version.versionNumber,
+        contactId: quote.contactId,
+        opportunityId: quote.opportunityId,
+        opportunityStatus: opportunity.status,
+        opportunityRevision: opportunity.revision,
+        quoteRevision: quote.aggregateRevision,
+      },
+      decision: command.decision,
+      responseValues,
+      acceptedTotals: acceptedEvidence?.totals ?? null,
       decisionNotes: command.notes,
-      revision: nextQuoteRevision,
-      ...(acceptedEvidence
-        ? {
-            subtotal: centsToLegacyNumeric(
-              acceptedEvidence.totals.subtotalMinCents,
-            ),
-            discounts: centsToLegacyNumeric(
-              acceptedEvidence.totals.discountMinCents,
-            ),
-            total: centsToLegacyNumeric(acceptedEvidence.totals.totalMinCents),
-            depositDue: centsToLegacyNumeric(
-              acceptedEvidence.totals.depositCents,
-            ),
-            balanceDue: centsToLegacyNumeric(
-              acceptedEvidence.totals.balanceMinCents,
-            ),
-          }
-        : {}),
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(quotes.id, quote.id),
-        eq(quotes.engineVersion, "v2"),
-        eq(quotes.aggregateState, "open"),
-        eq(quotes.aggregateRevision, quote.aggregateRevision),
-        eq(quotes.currentVersionId, version.id),
-        eq(quotes.publishedVersionId, version.id),
-      ),
-    )
-    .returning({ id: quotes.id });
-  if (!updatedQuote) {
-    throw new TeamMutationFailure(
-      "conflict",
-      "The quote changed while the decision was recorded.",
-      { retryable: true },
-    );
+      correlationId: input.correlationId,
+      now,
+    });
+  } catch (error) {
+    if (
+      error instanceof QuoteV2TerminalDecisionConflict ||
+      error instanceof QuoteDomainError
+    ) {
+      throw new TeamMutationFailure("conflict", error.message, {
+        retryable: true,
+      });
+    }
+    throw error;
   }
-
-  const readExpiresAt = quoteCapabilityReadExpiry({
-    at: now,
-    outcome: command.decision,
-  });
-  const acceptedActionUntil = new Date(
-    now.getTime() + 30 * 24 * 60 * 60 * 1_000,
-  );
-  await tx
-    .update(quoteCapabilities)
-    .set({
-      readExpiresAt: sql`greatest(${quoteCapabilities.readExpiresAt}, ${readExpiresAt.toISOString()}::timestamptz)`,
-      actionExpiresAt:
-        command.decision === "accepted"
-          ? sql`greatest(${quoteCapabilities.actionExpiresAt}, ${acceptedActionUntil.toISOString()}::timestamptz)`
-          : null,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(quoteCapabilities.quoteVersionId, version.id),
-        ne(quoteCapabilities.status, "revoked"),
-      ),
-    );
-
-  const otherActionable =
-    command.decision === "declined"
-      ? await hasOtherQuote(tx, {
-          opportunityId: quote.opportunityId,
-          quoteId: quote.id,
-          mode: "actionable",
-        })
-      : false;
-  const opportunityTarget = quoteV2LifecycleOpportunityTarget({
-    operation: command.decision === "accepted" ? "accept" : "decline",
-    currentStatus: opportunity.status,
-    hasOtherRelevantQuote: otherActionable,
-  });
-  const opportunityRevision = await updateOpportunity(tx, {
-    opportunity,
-    target: opportunityTarget,
-    ...(acceptedEvidence
-      ? { estimatedValueCents: acceptedEvidence.totals.totalMinCents }
-      : {}),
-    now,
-  });
-  const outboxEventId = await insertResponseOutboxEvent(tx, {
-    quoteId: quote.id,
-    versionId: version.id,
-    responseId: response.id,
-    correlationId: input.correlationId,
-    occurredAt: now,
-  });
   const notificationMessageId = await queueLifecycleNotification(tx, {
     requested: command.notifyCustomer,
     contactId: quote.contactId,
@@ -835,7 +754,7 @@ export async function recordQuoteV2StaffDecision(
     quoteNumber: quote.quoteNumber,
     versionNumber: version.versionNumber,
     kind: command.decision === "accepted" ? "staff_accepted" : "staff_declined",
-    dedupeId: response.id,
+    dedupeId: terminal.responseId,
   });
   await insertActivity(tx, {
     quoteId: quote.id,
@@ -843,10 +762,10 @@ export async function recordQuoteV2StaffDecision(
     eventType: `quote.staff_${command.decision}`,
     actorTeamMemberId: input.actorTeamMemberId,
     correlationId: input.correlationId,
-    outboxEventId,
-    causationId: response.id,
+    outboxEventId: terminal.outboxEventId,
+    causationId: terminal.responseId,
     metadata: {
-      responseId: response.id,
+      responseId: terminal.responseId,
       interactionSource: command.source,
       customerNotificationRequested: command.notifyCustomer,
       notificationMessageId,
@@ -856,13 +775,16 @@ export async function recordQuoteV2StaffDecision(
   return {
     quoteId: quote.id,
     versionId: version.id,
-    responseId: response.id,
+    responseId: terminal.responseId,
     decision: command.decision,
-    quoteRevision: nextQuoteRevision,
-    opportunityRevision,
-    outboxEventId,
+    quoteRevision: terminal.quoteRevision,
+    opportunityRevision: terminal.opportunityRevision,
+    outboxEventId: terminal.outboxEventId,
     notificationMessageId,
     respondedAt: now.toISOString(),
+    ...(command.decision === "accepted"
+      ? { certificateState: "pending" as const }
+      : {}),
   };
 }
 
@@ -1190,6 +1112,9 @@ export async function voidQuoteV2(
 ): Promise<QuoteV2TerminalLifecycleReceipt> {
   const command = QuoteV2VoidCommandSchema.parse(input.command);
   const now = input.now ?? new Date();
+  // Voiding releases any still-active scheduling hold. Acquire the global
+  // schedule lock before quote/hold row locks to preserve the shared ordering.
+  await acquireScheduleConflictLock(tx);
   const quote = await lockQuote(tx, input.quoteId, input.expectedQuoteRevision);
   if (
     quote.aggregateRevision !== command.quoteRevision ||

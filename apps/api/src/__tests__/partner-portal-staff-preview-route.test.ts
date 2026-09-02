@@ -7,7 +7,10 @@ const mockModule = jest.unstable_mockModule as unknown as (
 ) => void;
 
 const mockIsAdminRequest = jest.fn<boolean, [unknown]>();
-const mockRequirePermission = jest.fn<Promise<Response | null>, [unknown, string]>();
+const mockRequirePermission = jest.fn<
+  Promise<Response | null>,
+  [unknown, string]
+>();
 const mockLoadPartnerStaffPreview = jest.fn<Promise<unknown>, [unknown]>();
 const mockRecordAuditEvent = jest.fn<Promise<void>, [unknown]>();
 const mockGetAuditActorFromRequest = jest.fn(() => ({
@@ -100,7 +103,7 @@ describe("staff Partner Portal read-only preview route", () => {
     expect(response.headers.get("cache-control")).toContain("no-store");
   });
 
-  it("requires partners.read, audits an authenticated denial, and never loads data", async () => {
+  it("requires preview-specific access, audits an authenticated denial, and never loads data", async () => {
     mockRequirePermission.mockResolvedValue(
       Response.json({ error: "forbidden" }, { status: 403 }),
     );
@@ -110,14 +113,14 @@ describe("staff Partner Portal read-only preview route", () => {
     expect(response.status).toBe(403);
     expect(mockRequirePermission).toHaveBeenCalledWith(
       expect.any(NextRequest),
-      "partners.read",
+      "partners.preview.read",
     );
     expect(mockLoadPartnerStaffPreview).not.toHaveBeenCalled();
     expect(mockRecordAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "partner_portal.staff_preview.denied",
         outcome: "denied",
-        requiredPermissions: ["partners.read"],
+        requiredPermissions: ["partners.preview.read"],
       }),
     );
   });
@@ -131,20 +134,19 @@ describe("staff Partner Portal read-only preview route", () => {
       orgContactId: ORG_CONTACT_ID,
       jobId: JOB_ID,
     });
-    expect(mockRecordAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "partner_portal.staff_preview.viewed",
-        entityType: "partner_account",
-        entityId: ACCOUNT_ID,
-        outcome: "succeeded",
-        requiredPermissions: ["partners.read"],
-        meta: expect.objectContaining({
-          previewMode: "read_only",
-          orgContactId: ORG_CONTACT_ID,
-          jobId: JOB_ID,
-        }),
-      }),
-    );
+    expect(mockRecordAuditEvent).toHaveBeenCalledTimes(1);
+    expect(mockRecordAuditEvent.mock.calls[0]?.[0]).toMatchObject({
+      action: "partner_portal.staff_preview.viewed",
+      entityType: "partner_account",
+      entityId: ACCOUNT_ID,
+      outcome: "succeeded",
+      requiredPermissions: ["partners.preview.read"],
+      meta: {
+        previewMode: "read_only",
+        orgContactId: ORG_CONTACT_ID,
+        jobId: JOB_ID,
+      },
+    });
     expect(body).toEqual(
       expect.objectContaining({
         ok: true,
@@ -156,10 +158,7 @@ describe("staff Partner Portal read-only preview route", () => {
   });
 
   it("returns the same tenant-safe 404 for malformed and account-invalid resources", async () => {
-    const malformed = await GET(
-      request("?jobId=not-a-job"),
-      context(),
-    );
+    const malformed = await GET(request("?jobId=not-a-job"), context());
     expect(malformed.status).toBe(404);
     await expect(malformed.json()).resolves.toEqual({
       ok: false,

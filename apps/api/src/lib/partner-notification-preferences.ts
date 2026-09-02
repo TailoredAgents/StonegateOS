@@ -1,5 +1,10 @@
 import { and, eq } from "drizzle-orm";
-import { auditLogs, getDb, partnerNotificationPreferences } from "@/db";
+import {
+  auditLogs,
+  getDb,
+  partnerNotificationEndpoints,
+  partnerNotificationPreferences,
+} from "@/db";
 
 export const PARTNER_NOTIFICATION_EVENT_KEYS = [
   "booking_created",
@@ -26,6 +31,10 @@ export type PartnerNotificationPreference = {
   emailEnabled: boolean;
   smsEnabled: boolean;
   smsVerifiedOptInAt: Date | null;
+  smsVerifiedEndpointId: string | null;
+  smsVerifiedPhoneE164: string | null;
+  smsOptInSource: string | null;
+  smsConsentVersion: string | null;
   quietHoursStart: string | null;
   quietHoursEnd: string | null;
   timezone: string;
@@ -34,7 +43,13 @@ export type PartnerNotificationPreference = {
 
 export type PartnerNotificationPreferenceInput = Omit<
   PartnerNotificationPreference,
-  "id" | "smsVerifiedOptInAt" | "updatedAt"
+  | "id"
+  | "smsVerifiedOptInAt"
+  | "smsVerifiedEndpointId"
+  | "smsVerifiedPhoneE164"
+  | "smsOptInSource"
+  | "smsConsentVersion"
+  | "updatedAt"
 >;
 
 function validTimezone(timezone: string): boolean {
@@ -107,6 +122,11 @@ export async function listPartnerNotificationPreferences(input: {
       emailEnabled: partnerNotificationPreferences.emailEnabled,
       smsEnabled: partnerNotificationPreferences.smsEnabled,
       smsVerifiedOptInAt: partnerNotificationPreferences.smsVerifiedOptInAt,
+      smsVerifiedEndpointId:
+        partnerNotificationPreferences.smsVerifiedEndpointId,
+      smsVerifiedPhoneE164: partnerNotificationPreferences.smsVerifiedPhoneE164,
+      smsOptInSource: partnerNotificationPreferences.smsOptInSource,
+      smsConsentVersion: partnerNotificationPreferences.smsConsentVersion,
       quietHoursStart: partnerNotificationPreferences.quietHoursStart,
       quietHoursEnd: partnerNotificationPreferences.quietHoursEnd,
       timezone: partnerNotificationPreferences.timezone,
@@ -131,6 +151,10 @@ export async function listPartnerNotificationPreferences(input: {
           emailEnabled: true,
           smsEnabled: false,
           smsVerifiedOptInAt: null,
+          smsVerifiedEndpointId: null,
+          smsVerifiedPhoneE164: null,
+          smsOptInSource: null,
+          smsConsentVersion: null,
           quietHoursStart: null,
           quietHoursEnd: null,
           timezone: "America/New_York",
@@ -152,6 +176,9 @@ export function partnerNotificationPreferenceRevision(input: {
     row.emailEnabled,
     row.smsEnabled,
     row.smsVerifiedOptInAt?.toISOString() ?? null,
+    row.smsVerifiedEndpointId,
+    row.smsOptInSource,
+    row.smsConsentVersion,
     row.quietHoursStart,
     row.quietHoursEnd,
     row.timezone,
@@ -165,16 +192,53 @@ export async function savePartnerNotificationPreference(input: {
   partnerUserId: string;
   sessionId: string;
   preference: PartnerNotificationPreferenceInput;
-  existing: PartnerNotificationPreference;
   correlationId: string;
   idempotencyKeyHash: string;
 }): Promise<PartnerNotificationPreference | "sms_opt_in_required"> {
-  if (input.preference.smsEnabled && !input.existing.smsVerifiedOptInAt) {
-    return "sms_opt_in_required";
-  }
   const db = getDb();
   const now = new Date();
   return db.transaction(async (tx) => {
+    const [verifiedSmsEndpoint] = input.preference.smsEnabled
+      ? await tx
+          .select({
+            id: partnerNotificationEndpoints.id,
+            destination: partnerNotificationEndpoints.normalizedDestination,
+            consentAt: partnerNotificationEndpoints.consentAt,
+            consentSource: partnerNotificationEndpoints.consentSource,
+            consentVersion: partnerNotificationEndpoints.consentVersion,
+          })
+          .from(partnerNotificationEndpoints)
+          .where(
+            and(
+              eq(
+                partnerNotificationEndpoints.partnerUserId,
+                input.partnerUserId,
+              ),
+              eq(partnerNotificationEndpoints.channel, "sms"),
+              eq(partnerNotificationEndpoints.status, "verified"),
+            ),
+          )
+          .for("update")
+          .limit(1)
+      : [];
+    if (
+      input.preference.smsEnabled &&
+      (!verifiedSmsEndpoint?.id ||
+        !verifiedSmsEndpoint.consentAt ||
+        !verifiedSmsEndpoint.consentSource ||
+        !verifiedSmsEndpoint.consentVersion)
+    ) {
+      return "sms_opt_in_required" as const;
+    }
+    const smsSnapshot = verifiedSmsEndpoint
+      ? {
+          smsVerifiedOptInAt: verifiedSmsEndpoint.consentAt,
+          smsVerifiedPhoneE164: verifiedSmsEndpoint.destination,
+          smsVerifiedEndpointId: verifiedSmsEndpoint.id,
+          smsOptInSource: verifiedSmsEndpoint.consentSource,
+          smsConsentVersion: verifiedSmsEndpoint.consentVersion,
+        }
+      : null;
     const [saved] = await tx
       .insert(partnerNotificationPreferences)
       .values({
@@ -184,7 +248,13 @@ export async function savePartnerNotificationPreference(input: {
         inAppEnabled: input.preference.inAppEnabled,
         emailEnabled: input.preference.emailEnabled,
         smsEnabled: input.preference.smsEnabled,
-        smsVerifiedOptInAt: input.existing.smsVerifiedOptInAt,
+        ...(smsSnapshot ?? {
+          smsVerifiedOptInAt: null,
+          smsVerifiedPhoneE164: null,
+          smsVerifiedEndpointId: null,
+          smsOptInSource: null,
+          smsConsentVersion: null,
+        }),
         quietHoursStart: input.preference.quietHoursStart,
         quietHoursEnd: input.preference.quietHoursEnd,
         timezone: input.preference.timezone,
@@ -200,6 +270,7 @@ export async function savePartnerNotificationPreference(input: {
           inAppEnabled: input.preference.inAppEnabled,
           emailEnabled: input.preference.emailEnabled,
           smsEnabled: input.preference.smsEnabled,
+          ...(smsSnapshot ?? {}),
           quietHoursStart: input.preference.quietHoursStart,
           quietHoursEnd: input.preference.quietHoursEnd,
           timezone: input.preference.timezone,
@@ -213,6 +284,12 @@ export async function savePartnerNotificationPreference(input: {
         emailEnabled: partnerNotificationPreferences.emailEnabled,
         smsEnabled: partnerNotificationPreferences.smsEnabled,
         smsVerifiedOptInAt: partnerNotificationPreferences.smsVerifiedOptInAt,
+        smsVerifiedEndpointId:
+          partnerNotificationPreferences.smsVerifiedEndpointId,
+        smsVerifiedPhoneE164:
+          partnerNotificationPreferences.smsVerifiedPhoneE164,
+        smsOptInSource: partnerNotificationPreferences.smsOptInSource,
+        smsConsentVersion: partnerNotificationPreferences.smsConsentVersion,
         quietHoursStart: partnerNotificationPreferences.quietHoursStart,
         quietHoursEnd: partnerNotificationPreferences.quietHoursEnd,
         timezone: partnerNotificationPreferences.timezone,

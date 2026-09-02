@@ -864,6 +864,7 @@ function MobileCompleteAppointmentForm({
   canCollectPayments,
   canManagePayments,
   canManageCommissions,
+  canManageMedia,
   canOverrideAppointmentConflicts,
   canSendCustomerMessages,
 }: {
@@ -877,6 +878,7 @@ function MobileCompleteAppointmentForm({
   canCollectPayments: boolean;
   canManagePayments: boolean;
   canManageCommissions: boolean;
+  canManageMedia: boolean;
   canOverrideAppointmentConflicts: boolean;
   canSendCustomerMessages: boolean;
 }) {
@@ -1213,6 +1215,27 @@ function MobileCompleteAppointmentForm({
             )}
           </div>
         </div>
+        {canManageMedia && status !== "completed" ? (
+          <details className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">
+            <summary className="min-h-11 cursor-pointer py-2 font-semibold">
+              Missing-proof exception
+            </summary>
+            <label className="mt-2 block">
+              <span className="block text-xs leading-5">
+                Use only if required partner proof cannot be captured. This is
+                audited and requires recent MFA.
+              </span>
+              <textarea
+                name="proofOverrideReason"
+                minLength={10}
+                maxLength={500}
+                rows={3}
+                className="mt-2 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-amber-300"
+                placeholder="Explain why proof cannot be provided"
+              />
+            </label>
+          </details>
+        ) : null}
         {canSendCustomerMessages ? (
           <label className="flex cursor-pointer items-start gap-3 rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-3 text-sm text-cyan-100">
             <input
@@ -1534,6 +1557,7 @@ function MobileWeekAgenda({
                               canCollectPayments={canCollectPayments}
                               canManagePayments={canManagePayments}
                               canManageCommissions={canManageCommissions}
+                              canManageMedia={canManageMedia}
                               canOverrideAppointmentConflicts={
                                 canOverrideAppointmentConflicts
                               }
@@ -3475,6 +3499,7 @@ export default async function MobileHomePage({
                                 canCollectPayments={canCollectPayments}
                                 canManagePayments={canManagePayments}
                                 canManageCommissions={canManageCommissions}
+                                canManageMedia={canManageMedia}
                                 canOverrideAppointmentConflicts={
                                   canOverrideAppointmentConflicts
                                 }

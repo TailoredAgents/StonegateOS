@@ -16,22 +16,32 @@ describe("partner portal V2 payment route guards", () => {
   const invoiceLink =
     "app/api/portal/v2/invoices/[invoiceId]/payment-link/route.ts";
 
-  it.each([createIntent, getIntent, completeIntent])(
-    "requires billing authority, AAL2, embedded rollout eligibility, and HTTPS in %s",
+  it.each([createIntent, completeIntent])(
+    "requires billing authority, recent MFA, embedded rollout eligibility, and HTTPS in %s",
     (relativePath) => {
       const route = source(relativePath);
-      expect(route).toContain('"payments.manage"');
-      expect(route).toContain('assuranceLevel !== "aal2"');
+      expect(route).toContain('"payments.initiate"');
+      expect(route).toContain("requireRecentPartnerMfaCapability");
       expect(route).toContain("arePartnerPortalEmbeddedPaymentsEnabled");
       expect(route).toContain("isSecurePartnerPaymentRequest");
       expect(route).toContain('accessLevel !== "account"');
     },
   );
 
+  it("keeps the read-only payment-intent route on ordinary AAL2", () => {
+    const route = source(getIntent);
+    expect(route).toContain('"payments.initiate"');
+    expect(route).toContain('assuranceLevel !== "aal2"');
+    expect(route).toContain('"mfa_step_up_required"');
+    expect(route).toContain("arePartnerPortalEmbeddedPaymentsEnabled");
+    expect(route).toContain("isSecurePartnerPaymentRequest");
+    expect(route).toContain('accessLevel !== "account"');
+  });
+
   it("uses the independent hosted-payment rollout for invoice links", () => {
     const route = source(invoiceLink);
-    expect(route).toContain('"payments.manage"');
-    expect(route).toContain('assuranceLevel !== "aal2"');
+    expect(route).toContain('"payments.initiate"');
+    expect(route).toContain("requireRecentPartnerMfaCapability");
     expect(route).toContain("arePartnerPortalHostedPaymentsEnabled");
     expect(route).toContain("isSecurePartnerPaymentRequest");
   });
@@ -56,6 +66,8 @@ describe("partner portal V2 payment route guards", () => {
     expect(route).toContain('action: "partner_payment_checkout"');
     expect(route).toContain("sourceTokenHash");
     expect(route).toContain("tokenFingerprint");
+    expect(route).toContain("payload.data.paymentMethod");
+    expect(route).toContain("arePartnerPortalEmbeddedAchPaymentsEnabled");
     expect(route).not.toContain("payload: payload.data");
   });
 
@@ -71,11 +83,13 @@ describe("partner portal V2 payment route guards", () => {
     expect(domain).toContain('checkoutMode: "hosted_redirect"');
     expect(domain).toContain('mode: "hosted_redirect" as const');
     expect(domain).toContain("embedded: false");
-    expect(domain).toContain('mode: "embedded_card" as const');
+    expect(domain).toContain('"embedded_card" | "embedded_ach"');
     expect(domain).toContain("hosted_invoice_required");
     expect(hostedProvider).not.toContain("source_id");
     expect(embeddedProvider).toContain("source_id: sourceToken");
     expect(embeddedProvider).toContain("autocomplete: true");
+    expect(embeddedProvider).toContain("expectedSourceType =");
+    expect(embeddedProvider).toContain('"BANK_ACCOUNT"');
     expect(embeddedProvider).toContain("squareAttemptNote");
   });
 
@@ -91,6 +105,11 @@ describe("partner portal V2 payment route guards", () => {
     expect(domain).toContain("invoice_payment_binding_mismatch");
     expect(webhook).toContain("verifySquareWebhookSignature");
     expect(webhook).toContain("reserveSquareProviderEvent");
+    expect(squarePayments).toContain("expectedSourceType,");
+    expect(squarePayments).toContain(
+      'partnerPaymentMetadata?.paymentMethod === "ach"',
+    );
+    expect(domain).toContain('prepared.paymentMethod === "card"');
   });
 
   it("keeps the hosted rollout behind the global financial kill switch", () => {

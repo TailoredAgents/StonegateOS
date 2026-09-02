@@ -52,7 +52,8 @@ export function PartnerApprovalMfaGate({
   ): Promise<void> {
     event.preventDefault();
     const form = event.currentTarget;
-    const value = String(new FormData(form).get("verification") ?? "").trim();
+    const rawValue = new FormData(form).get("verification");
+    const value = typeof rawValue === "string" ? rawValue.trim() : "";
     setBusy(true);
     setMessage(null);
     const result = await partnerPortalFetch<{

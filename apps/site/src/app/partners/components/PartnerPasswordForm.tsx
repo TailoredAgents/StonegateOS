@@ -45,7 +45,7 @@ export function PartnerPasswordForm({ passwordSet }: { passwordSet: boolean }) {
           id="partner-password-requirements"
           className="text-xs leading-5 text-slate-500"
         >
-          Use 12–128 characters. A long, unique passphrase is easiest to
+          Use 15–128 characters. A long, unique passphrase is easiest to
           remember.
         </p>
         <button
@@ -89,7 +89,7 @@ export function PartnerPasswordForm({ passwordSet }: { passwordSet: boolean }) {
           name="newPassword"
           type={inputType}
           required
-          minLength={12}
+          minLength={15}
           maxLength={128}
           autoComplete="new-password"
           aria-describedby="partner-password-requirements"
@@ -108,7 +108,7 @@ export function PartnerPasswordForm({ passwordSet }: { passwordSet: boolean }) {
           name="confirmPassword"
           type={inputType}
           required
-          minLength={12}
+          minLength={15}
           maxLength={128}
           autoComplete="new-password"
           aria-describedby="partner-password-requirements"

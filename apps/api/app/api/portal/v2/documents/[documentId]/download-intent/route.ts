@@ -28,7 +28,7 @@ export async function POST(
   }
   const authorization = await requirePartnerCapability(
     request,
-    "documents.read",
+    "documents.financial.read",
   );
   if (!authorization.ok) {
     return createPartnerPortalV2ErrorResponse(
@@ -45,9 +45,6 @@ export async function POST(
     !isPortalV2Uuid(documentId)
   ) {
     return createPartnerPortalV2ErrorResponse("not_found", 404, correlationId);
-  }
-  if (principal.accessLevel !== "account") {
-    return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
   if (!arePartnerPortalV2ReadsEnabled(principal.accountId)) {
     return createPartnerPortalV2ErrorResponse(

@@ -9,9 +9,12 @@ import {
   FileSpreadsheet,
   LoaderCircle,
   RefreshCw,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
 import { createPortalOperationKey, partnerPortalFetch } from "../lib/portal-v2";
+import { getPartnerPersonaPresentation } from "../lib/persona-presentation";
 import {
   PartnerNotice,
   PartnerPanel,
@@ -41,6 +44,13 @@ type RecurringSeries = {
   id: string;
   name: string;
   state: string;
+  revision: number;
+  etag: string;
+  lifecycle: {
+    action: "pause" | "resume" | "cancel";
+    reason: string;
+    changedAt: string;
+  } | null;
   occurrences: RecurringOccurrence[];
 };
 
@@ -67,6 +77,11 @@ function humanize(value: string): string {
     .replace(/\b\w/gu, (letter) => letter.toUpperCase());
 }
 
+function formString(form: FormData, key: string, fallback = ""): string {
+  const value = form.get(key);
+  return typeof value === "string" ? value : fallback;
+}
+
 function downloadText(filename: string, value: string): void {
   const url = URL.createObjectURL(
     new Blob([value], { type: "text/csv;charset=utf-8" }),
@@ -78,8 +93,15 @@ function downloadText(filename: string, value: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
-export function PartnerRepeatWorkManager() {
+export function PartnerRepeatWorkManager({
+  canManageSeries,
+  persona,
+}: {
+  canManageSeries: boolean;
+  persona: string | null;
+}) {
   const router = useRouter();
+  const personaPresentation = getPartnerPersonaPresentation(persona);
   const [templates, setTemplates] = React.useState<ServiceTemplate[]>([]);
   const [series, setSeries] = React.useState<RecurringSeries[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -91,6 +113,15 @@ export function PartnerRepeatWorkManager() {
   const [csvFile, setCsvFile] = React.useState<File | null>(null);
   const [csvText, setCsvText] = React.useState<string | null>(null);
   const [bulkResult, setBulkResult] = React.useState<BulkResult | null>(null);
+  const [lifecycleReasons, setLifecycleReasons] = React.useState<
+    Record<string, string>
+  >({});
+  const [showStarterSuggestions, setShowStarterSuggestions] =
+    React.useState(true);
+
+  React.useEffect(() => {
+    setShowStarterSuggestions(true);
+  }, [personaPresentation.key]);
 
   const load = React.useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -117,7 +148,7 @@ export function PartnerRepeatWorkManager() {
     void load();
   }, [load]);
 
-  const useTemplate = async (templateId: string): Promise<void> => {
+  const applyTemplate = async (templateId: string): Promise<void> => {
     setBusy(`template:${templateId}`);
     setMessage(null);
     const result = await partnerPortalFetch<{
@@ -148,14 +179,17 @@ export function PartnerRepeatWorkManager() {
   ): Promise<void> => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const occurrenceCount = Number.parseInt(
+      formString(form, "occurrenceCount", "2"),
+      10,
+    );
     const payload = {
-      templateId: String(form.get("templateId") ?? ""),
-      name: String(form.get("name") ?? ""),
-      frequency: String(form.get("frequency") ?? "weekly"),
-      startsOn: String(form.get("startsOn") ?? ""),
-      occurrenceCount: Number(form.get("occurrenceCount") ?? 2),
-      preferredWindowStart:
-        String(form.get("preferredWindowStart") ?? "") || null,
+      templateId: formString(form, "templateId"),
+      name: formString(form, "name"),
+      frequency: formString(form, "frequency", "weekly"),
+      startsOn: formString(form, "startsOn"),
+      occurrenceCount: Number.isFinite(occurrenceCount) ? occurrenceCount : 2,
+      preferredWindowStart: formString(form, "preferredWindowStart") || null,
     };
     setBusy("recurring");
     setMessage(null);
@@ -183,6 +217,77 @@ export function PartnerRepeatWorkManager() {
       text: "Recurring schedule created. Work inside the 30-day horizon was checked through live scheduling; later occurrences remain tentative.",
     });
     await load();
+  };
+
+  const changeSeriesLifecycle = async (
+    item: RecurringSeries,
+    action: "pause" | "resume" | "cancel",
+  ): Promise<void> => {
+    const reason = (lifecycleReasons[item.id] ?? "").trim();
+    if (reason.length < 2 || reason.length > 300) {
+      setMessage({
+        tone: "error",
+        text: "Add a reason between 2 and 300 characters before changing this schedule.",
+      });
+      return;
+    }
+    const busyKey = `series:${item.id}:${action}`;
+    setBusy(busyKey);
+    setMessage(null);
+    const result = await partnerPortalFetch<{
+      ok: true;
+      series: RecurringSeries;
+      transition: {
+        action: typeof action;
+        changedOccurrences: number;
+        preservedOccurrences: number;
+      };
+    }>(`recurring-series/${encodeURIComponent(item.id)}`, {
+      method: "PATCH",
+      headers: {
+        "Idempotency-Key": createPortalOperationKey(
+          `recurring-series-${action}`,
+        ),
+        "If-Match": item.etag,
+      },
+      body: JSON.stringify({ action, reason }),
+    }).catch(() => null);
+    setBusy(null);
+    if (!result?.ok) {
+      if (result?.response.status === 412) {
+        setMessage({
+          tone: "warning",
+          text: "This recurring schedule changed while you were viewing it. The latest version has been loaded; review it before trying again.",
+        });
+        await load();
+        return;
+      }
+      setMessage({
+        tone: result?.error.retryable ? "warning" : "error",
+        text:
+          result?.error.message ??
+          "The recurring schedule could not be changed. No existing job was altered.",
+      });
+      return;
+    }
+    const responseEtag = result.response.headers.get("etag");
+    const updated = responseEtag
+      ? { ...result.data.series, etag: responseEtag }
+      : result.data.series;
+    setSeries((current) =>
+      current.map((entry) => (entry.id === updated.id ? updated : entry)),
+    );
+    setLifecycleReasons((current) => ({ ...current, [item.id]: "" }));
+    const actionLabel =
+      action === "pause"
+        ? "paused"
+        : action === "resume"
+          ? "resumed"
+          : "canceled";
+    setMessage({
+      tone: "success",
+      text: `Recurring schedule ${actionLabel}. ${result.data.transition.changedOccurrences} future tentative occurrence${result.data.transition.changedOccurrences === 1 ? "" : "s"} updated; ${result.data.transition.preservedOccurrences} existing or ineligible occurrence${result.data.transition.preservedOccurrences === 1 ? " was" : "s were"} left unchanged.`,
+    });
   };
 
   const readCsv = async (file: File | null): Promise<void> => {
@@ -244,10 +349,10 @@ export function PartnerRepeatWorkManager() {
               id="partner-repeat-work-title"
               className="text-lg font-semibold text-slate-950"
             >
-              Repeat and bulk work
+              {personaPresentation.taskLabels.repeat_work}
             </h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-              Reuse safe job details, set a recurring cadence, or validate up to
+              {personaPresentation.repeatWork.lead} You can also validate up to
               100 CSV rows before anything is submitted.
             </p>
           </div>
@@ -272,6 +377,62 @@ export function PartnerRepeatWorkManager() {
           <PartnerNotice tone={message.tone} className="mt-4">
             {message.text}
           </PartnerNotice>
+        ) : null}
+
+        {showStarterSuggestions ? (
+          <aside
+            aria-labelledby="partner-starter-templates-heading"
+            className="mt-5 rounded-2xl border border-primary-100 bg-primary-50/70 p-4 sm:p-5"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="max-w-3xl">
+                <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-primary-700">
+                  <Sparkles className="h-4 w-4" aria-hidden="true" />
+                  Safe starter ideas
+                </p>
+                <h3
+                  id="partner-starter-templates-heading"
+                  className="mt-2 font-semibold text-slate-950"
+                >
+                  {personaPresentation.repeatWork.title}
+                </h3>
+                <p className="mt-1 text-sm leading-6 text-slate-700">
+                  These ideas do not create a template or select a service. Open
+                  a reviewed job and save it explicitly only when its details
+                  are safe to reuse.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowStarterSuggestions(false)}
+                className={cn(partnerSecondaryButtonClass, "min-h-11 px-3")}
+                aria-label="Dismiss starter template suggestions"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+                Dismiss
+              </button>
+            </div>
+            <ul className="mt-4 grid gap-3 sm:grid-cols-2">
+              {personaPresentation.repeatWork.starterTemplates.map(
+                (suggestion) => (
+                  <li
+                    key={suggestion.name}
+                    className="rounded-xl border border-white bg-white p-4 shadow-sm"
+                  >
+                    <p className="font-semibold text-slate-950">
+                      {suggestion.name}
+                    </p>
+                    <p className="mt-1 text-sm leading-5 text-slate-600">
+                      {suggestion.description}
+                    </p>
+                    <p className="mt-2 text-xs font-medium leading-5 text-slate-600">
+                      Capture: {suggestion.checklist.join(" · ")}
+                    </p>
+                  </li>
+                ),
+              )}
+            </ul>
+          </aside>
         ) : null}
 
         <div className="mt-5 grid gap-4 xl:grid-cols-3">
@@ -314,7 +475,7 @@ export function PartnerRepeatWorkManager() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => void useTemplate(template.id)}
+                      onClick={() => void applyTemplate(template.id)}
                       disabled={busy === `template:${template.id}`}
                       className={partnerSecondaryButtonClass}
                     >
@@ -375,7 +536,10 @@ export function PartnerRepeatWorkManager() {
                   minLength={2}
                   maxLength={120}
                   className={partnerFieldClass}
-                  placeholder="Weekly turnover pickup"
+                  placeholder={
+                    personaPresentation.repeatWork.starterTemplates[0]?.name ??
+                    "Recurring service"
+                  }
                 />
               </label>
               <div className="grid grid-cols-2 gap-3">
@@ -444,48 +608,168 @@ export function PartnerRepeatWorkManager() {
             </form>
             {series.length ? (
               <ul className="mt-4 space-y-2" aria-label="Recurring schedules">
-                {series.slice(0, 5).map((item) => (
-                  <li
-                    key={item.id}
-                    className="rounded-lg bg-slate-50 p-3 text-sm"
-                  >
-                    <p className="font-semibold text-slate-900">{item.name}</p>
-                    <p className="mt-1 text-slate-600">
-                      {
-                        item.occurrences.filter(
-                          (entry) => entry.state === "confirmed",
-                        ).length
-                      }{" "}
-                      confirmed ·{" "}
-                      {
-                        item.occurrences.filter(
-                          (entry) => entry.state === "tentative",
-                        ).length
-                      }{" "}
-                      tentative ·{" "}
-                      {
-                        item.occurrences.filter(
-                          (entry) => entry.state === "review",
-                        ).length
-                      }{" "}
-                      need attention
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {item.occurrences
-                        .filter((entry) => entry.draftId && !entry.jobId)
-                        .slice(0, 3)
-                        .map((entry) => (
-                          <a
-                            key={entry.id}
-                            href={`/partners/book?draftId=${encodeURIComponent(entry.draftId!)}`}
-                            className="font-semibold text-primary-800 underline-offset-4 hover:underline"
+                {series.map((item) => {
+                  const reasonId = `recurring-series-reason-${item.id}`;
+                  const helpId = `recurring-series-help-${item.id}`;
+                  const itemBusy = busy?.startsWith(`series:${item.id}:`);
+                  return (
+                    <li
+                      key={item.id}
+                      className="rounded-lg bg-slate-50 p-3 text-sm"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-semibold text-slate-900">
+                          {item.name}
+                        </p>
+                        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
+                          {humanize(item.state)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-slate-600">
+                        {
+                          item.occurrences.filter(
+                            (entry) => entry.state === "confirmed",
+                          ).length
+                        }{" "}
+                        confirmed ·{" "}
+                        {
+                          item.occurrences.filter(
+                            (entry) => entry.state === "tentative",
+                          ).length
+                        }{" "}
+                        tentative ·{" "}
+                        {
+                          item.occurrences.filter(
+                            (entry) => entry.state === "review",
+                          ).length
+                        }{" "}
+                        need attention ·{" "}
+                        {
+                          item.occurrences.filter(
+                            (entry) =>
+                              entry.state === "canceled" ||
+                              (entry.state === "skipped" &&
+                                entry.reason === "series_paused"),
+                          ).length
+                        }{" "}
+                        paused or canceled
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {item.occurrences
+                          .filter((entry) => entry.draftId && !entry.jobId)
+                          .slice(0, 3)
+                          .map((entry) => (
+                            <a
+                              key={entry.id}
+                              href={`/partners/book?draftId=${encodeURIComponent(entry.draftId!)}`}
+                              className="inline-flex min-h-11 items-center font-semibold text-primary-800 underline-offset-4 hover:underline"
+                            >
+                              Review {entry.localDate}
+                            </a>
+                          ))}
+                      </div>
+                      {item.lifecycle ? (
+                        <p className="mt-2 text-xs leading-5 text-slate-600">
+                          Last change: {humanize(item.lifecycle.action)} —{" "}
+                          {item.lifecycle.reason}
+                        </p>
+                      ) : null}
+                      {canManageSeries &&
+                      (item.state === "active" || item.state === "paused") ? (
+                        <div className="mt-3 border-t border-slate-200 pt-3">
+                          <label
+                            htmlFor={reasonId}
+                            className="block text-sm font-semibold text-slate-700"
                           >
-                            Review {entry.localDate}
-                          </a>
-                        ))}
-                    </div>
-                  </li>
-                ))}
+                            Reason for schedule change
+                          </label>
+                          <input
+                            id={reasonId}
+                            value={lifecycleReasons[item.id] ?? ""}
+                            onChange={(event) =>
+                              setLifecycleReasons((current) => ({
+                                ...current,
+                                [item.id]: event.currentTarget.value,
+                              }))
+                            }
+                            minLength={2}
+                            maxLength={300}
+                            disabled={Boolean(itemBusy)}
+                            aria-describedby={helpId}
+                            className={partnerFieldClass}
+                            placeholder="Example: Work is on hold until the next turnover"
+                          />
+                          <p
+                            id={helpId}
+                            className="mt-1 text-xs leading-5 text-slate-600"
+                          >
+                            Only future tentative occurrences change. Existing
+                            jobs and review drafts remain unchanged. Resuming
+                            does not reserve capacity outside the 30-day
+                            horizon.
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {item.state === "active" ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void changeSeriesLifecycle(item, "pause")
+                                }
+                                disabled={Boolean(itemBusy)}
+                                aria-describedby={helpId}
+                                className={partnerSecondaryButtonClass}
+                              >
+                                {busy === `series:${item.id}:pause`
+                                  ? "Pausing…"
+                                  : "Pause future work"}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void changeSeriesLifecycle(item, "resume")
+                                }
+                                disabled={Boolean(itemBusy)}
+                                aria-describedby={helpId}
+                                className={partnerPrimaryButtonClass}
+                              >
+                                {busy === `series:${item.id}:resume`
+                                  ? "Resuming…"
+                                  : "Resume future work"}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void changeSeriesLifecycle(item, "cancel")
+                              }
+                              disabled={Boolean(itemBusy)}
+                              aria-describedby={helpId}
+                              className={partnerSecondaryButtonClass}
+                            >
+                              {busy === `series:${item.id}:cancel`
+                                ? "Canceling…"
+                                : "Cancel future work"}
+                            </button>
+                          </div>
+                          {itemBusy ? (
+                            <p
+                              className="mt-2 inline-flex items-center gap-2 text-xs text-slate-600"
+                              role="status"
+                              aria-live="polite"
+                            >
+                              <LoaderCircle
+                                className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                                aria-hidden="true"
+                              />
+                              Updating the recurring schedule…
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
             ) : null}
           </section>
@@ -555,11 +839,8 @@ export function PartnerRepeatWorkManager() {
               </button>
             </div>
             {bulkResult ? (
-              <div
-                className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-700"
-                aria-live="polite"
-              >
-                <p>
+              <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+                <p role="status" aria-live="polite">
                   <strong>{bulkResult.validCount}</strong> valid ·{" "}
                   <strong>{bulkResult.errorCount}</strong> with errors ·{" "}
                   <strong>0</strong> capacity reservations
@@ -585,7 +866,7 @@ export function PartnerRepeatWorkManager() {
                       .map((row) => (
                         <li key={row.rowNumber}>
                           <a
-                            className="font-semibold text-primary-800 underline-offset-4 hover:underline"
+                            className="inline-flex min-h-11 items-center font-semibold text-primary-800 underline-offset-4 hover:underline"
                             href={`/partners/book?draftId=${encodeURIComponent(row.draftId!)}`}
                           >
                             Open row {row.rowNumber} draft

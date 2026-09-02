@@ -38,7 +38,9 @@ function RequestCard({
   onUpdated: (request: PartnerAdminJoinRequest) => void;
 }) {
   const requestedRoleAvailable = roles.some((role) => role.key === request.requestedRoleKey);
-  const [roleKey, setRoleKey] = React.useState(requestedRoleAvailable ? request.requestedRoleKey : roles[0]?.key ?? "");
+  const [roleKey, setRoleKey] = React.useState(
+    requestedRoleAvailable ? request.requestedRoleKey : "",
+  );
   const [persona, setPersona] = React.useState("other");
   const [note, setNote] = React.useState("");
   const [busy, setBusy] = React.useState<"approve" | "needs_information" | "decline" | null>(null);

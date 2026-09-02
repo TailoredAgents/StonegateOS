@@ -84,6 +84,8 @@ const mockKillSwitch = jest.fn();
 const mockResolveConfiguredCrewPayout = jest.fn();
 const mockLockCompletedPayoutPeriod = jest.fn();
 const mockRecalculateCommissions = jest.fn();
+const mockEvaluatePartnerProofCompletion = jest.fn();
+const mockRecordPartnerProofCompletionOverride = jest.fn();
 
 function selectBuilder() {
   return {
@@ -303,6 +305,13 @@ jest.mock("@/lib/payment-ledger", () => ({
     mockValidateFinalTotalChange(...args) as unknown,
 }));
 
+jest.mock("@/lib/partner-proof-completion", () => ({
+  evaluatePartnerProofCompletion: (...args: unknown[]): unknown =>
+    mockEvaluatePartnerProofCompletion(...args) as unknown,
+  recordPartnerProofCompletionOverride: (...args: unknown[]): unknown =>
+    mockRecordPartnerProofCompletionOverride(...args) as unknown,
+}));
+
 jest.mock("@/lib/team-mutation-idempotency", () => ({
   claimTeamMutationIdempotency: (...args: unknown[]): unknown =>
     mockClaim(...args) as unknown,
@@ -433,6 +442,10 @@ describe("appointment status mutation integrity", () => {
     });
     mockRequiresSquareAttemptReconciliation.mockReturnValue(false);
     mockValidateFinalTotalChange.mockReturnValue({ ok: true });
+    mockEvaluatePartnerProofCompletion.mockResolvedValue({
+      kind: "not_partner_job",
+    });
+    mockRecordPartnerProofCompletionOverride.mockResolvedValue(undefined);
     mockKillSwitch.mockReturnValue(null);
     mockResolveConfiguredCrewPayout.mockImplementation(
       (_database: unknown, memberIds: string[]) =>

@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import { and, asc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, lte, or } from "drizzle-orm";
 import {
   getDb,
   partnerAccountMemberships,
@@ -8,19 +8,21 @@ import {
   partnerUsers,
 } from "@/db";
 import { isOperationalFeatureEnabled } from "@/lib/feature-flags";
-import { arePartnerPortalV2WritesEnabled } from "@/lib/partner-portal-feature-flags";
+import {
+  arePartnerPortalV2WritesEnabled,
+  configuredPartnerPortalInternalAccountIds,
+} from "@/lib/partner-portal-feature-flags";
 import {
   evaluateClaimedPartnerRecurringOccurrence,
   recordRecurringOccurrenceMaintenanceFailure,
 } from "@/lib/partner-repeat-work";
 import type { PartnerSchedulingActor } from "@/lib/partner-portal-v2-scheduling";
+import { acquirePartnerRecurringHorizonClaimLock } from "@/lib/partner-recurring-coordination";
 
 const DEFAULT_BATCH_LIMIT = 20;
 const MAX_BATCH_LIMIT = 100;
 const HORIZON_DAYS = 30;
 const EVALUATION_LEASE_MINUTES = 15;
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 export type RecurringHorizonPosition =
   | "elapsed"
@@ -52,15 +54,6 @@ export function normalizeRecurringHorizonBatchLimit(value: unknown): number {
     : DEFAULT_BATCH_LIMIT;
 }
 
-function configuredCanaryAccountIds(): readonly string[] {
-  return Object.freeze(
-    (process.env["PARTNER_PORTAL_V2_CANARY_ACCOUNT_IDS"] ?? "")
-      .split(",")
-      .map((value) => value.trim().toLowerCase())
-      .filter((value) => UUID_PATTERN.test(value)),
-  );
-}
-
 type ClaimedOccurrence = Readonly<{
   id: string;
   partnerAccountId: string;
@@ -86,11 +79,9 @@ async function claimDueOccurrences(input: {
   const staleBefore = new Date(
     input.now.getTime() - EVALUATION_LEASE_MINUTES * 60_000,
   );
-  const canaryAccountIds = configuredCanaryAccountIds();
+  const internalAccountIds = [...configuredPartnerPortalInternalAccountIds()];
   return getDb().transaction(async (tx) => {
-    await tx.execute(
-      sql`select pg_advisory_xact_lock(hashtext('partner_recurring_horizon_claim_v1'))`,
-    );
+    await acquirePartnerRecurringHorizonClaimLock(tx);
     const candidates = await tx
       .select({
         id: partnerRecurringOccurrences.id,
@@ -118,10 +109,10 @@ async function claimDueOccurrences(input: {
       .where(
         and(
           eq(partnerRecurringSeries.state, "active"),
-          canaryAccountIds.length > 0
+          internalAccountIds.length > 0
             ? inArray(
                 partnerRecurringOccurrences.partnerAccountId,
-                canaryAccountIds,
+                internalAccountIds,
               )
             : undefined,
           lte(partnerRecurringOccurrences.localDate, candidateUpperDate),

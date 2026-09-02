@@ -16,6 +16,7 @@ import {
   salesOpportunities,
 } from "@/db";
 import { requireActiveQuoteV2ContactForCapabilityMint } from "@/lib/quote-v2-contact-access";
+import { lockPartnerQuoteLocationForCommercialAction } from "@/lib/partner-quote-location-safety";
 import type { PreparedQuoteVersionIssue } from "@/lib/quote-v2-issue";
 import { parseQuoteV2OutboxEvent } from "@/lib/quote-v2-outbox-contract";
 import { TeamMutationFailure } from "@/lib/team-mutation";
@@ -36,6 +37,7 @@ export type QuoteV2ReadyIssueSource = {
   draftRevision: number;
   quoteRevision: number;
   aggregateState: string;
+  partnerAccountId: string | null;
   previousPublishedVersionId: string | null;
   opportunityId: string;
   documentSnapshot: Record<string, unknown>;
@@ -65,6 +67,7 @@ export async function loadQuoteV2ReadyIssueSource(
       engineVersion: quotes.engineVersion,
       aggregateState: quotes.aggregateState,
       aggregateRevision: quotes.aggregateRevision,
+      partnerAccountId: quotes.partnerAccountId,
       currentVersionId: quotes.currentVersionId,
       publishedVersionId: quotes.publishedVersionId,
       opportunityId: quotes.salesOpportunityId,
@@ -96,6 +99,19 @@ export async function loadQuoteV2ReadyIssueSource(
     throw new TeamMutationFailure(
       "conflict",
       "This quote version is not ready to issue. Refresh the proposal.",
+    );
+  }
+  if (
+    row.partnerAccountId &&
+    !(await lockPartnerQuoteLocationForCommercialAction(db, {
+      quoteId: row.quoteId,
+      accountId: row.partnerAccountId,
+    }))
+  ) {
+    throw new TeamMutationFailure(
+      "conflict",
+      "The Partner location for this proposal is archived. Choose an active location before issuing.",
+      { fieldErrors: { partnerContext: "Choose an active Partner location." } },
     );
   }
 
@@ -153,6 +169,7 @@ export async function loadQuoteV2ReadyIssueSource(
     draftRevision: row.draftRevision,
     quoteRevision: row.aggregateRevision,
     aggregateState: row.aggregateState!,
+    partnerAccountId: row.partnerAccountId,
     previousPublishedVersionId: row.publishedVersionId,
     opportunityId: row.opportunityId,
     documentSnapshot: row.documentSnapshot,
@@ -191,6 +208,19 @@ export async function persistPreparedQuoteVersionIssue(
   oneTimeLinks: PreparedQuoteVersionIssue["oneTimeLinks"];
 }> {
   const { source, prepared } = input;
+  if (
+    source.partnerAccountId &&
+    !(await lockPartnerQuoteLocationForCommercialAction(tx, {
+      quoteId: source.quoteId,
+      accountId: source.partnerAccountId,
+    }))
+  ) {
+    throw new TeamMutationFailure(
+      "conflict",
+      "The Partner location was archived before this proposal could be issued.",
+      { fieldErrors: { partnerContext: "Choose an active Partner location." } },
+    );
+  }
   await requireActiveQuoteV2ContactForCapabilityMint(tx, {
     quoteId: source.quoteId,
   });

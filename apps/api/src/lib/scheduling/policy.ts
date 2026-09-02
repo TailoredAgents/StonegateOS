@@ -292,6 +292,12 @@ export function createSchedulePolicySnapshot(
       10_000,
       "The maximum daily job count is invalid.",
     ),
+    maxJobsPerCrew: requireInteger(
+      input.maxJobsPerCrew,
+      0,
+      10_000,
+      "The maximum daily job count per crew is invalid.",
+    ),
     weeklyHours: normalizeWeeklyHours(input.weeklyHours),
     dateOverrides: normalizeDateOverrides(input.dateOverrides, capacityPools),
     capacityPools,
@@ -312,8 +318,8 @@ function localTimeToMinute(value: string): number {
 /**
  * Compatibility adapter for the existing policy center. It is type-only
  * coupled to `policy.ts`, so importing this pure domain does not initialize a
- * database client. `maxJobsPerCrew` is intentionally not translated because
- * the current data model has no pre-booking crew availability primitive.
+ * database client. Named resource assignment consumes `maxJobsPerCrew` as a
+ * conservative per-crew daily ceiling.
  */
 export function createSchedulePolicySnapshotFromLegacy(input: {
   revision: string;
@@ -353,6 +359,7 @@ export function createSchedulePolicySnapshotFromLegacy(input: {
     bookingWindowDays: input.bookingRules.bookingWindowDays,
     defaultTravelBufferMinutes: input.bookingRules.bufferMinutes,
     maxJobsPerDay: input.bookingRules.maxJobsPerDay,
+    maxJobsPerCrew: input.bookingRules.maxJobsPerCrew,
     weeklyHours,
     dateOverrides: input.dateOverrides ?? [],
     capacityPools: {

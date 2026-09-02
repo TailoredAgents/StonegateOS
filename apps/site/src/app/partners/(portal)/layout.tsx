@@ -1,3 +1,5 @@
+import type { Metadata, Route } from "next";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getPublicCompanyProfile } from "@/lib/company";
 import { PartnerAppShell } from "../components/PartnerAppShell";
@@ -5,6 +7,11 @@ import { PartnerProductAnalyticsClient } from "../components/PartnerProductAnaly
 import { PartnerPublicShell } from "../components/PartnerPublicShell";
 import { PartnerErrorState } from "../components/PartnerPortalUi";
 import { getPartnerPortalContext } from "../lib/portal-context";
+import { partnerLoginHref } from "../lib/safe-return";
+
+export const metadata: Metadata = {
+  robots: { index: false, follow: false, nocache: true },
+};
 
 export default async function PartnerAuthenticatedLayout({
   children,
@@ -15,7 +22,8 @@ export default async function PartnerAuthenticatedLayout({
   ]);
 
   if (context.status === "unauthenticated") {
-    redirect("/partners/login");
+    const returnTo = (await headers()).get("x-partner-return-to");
+    redirect(partnerLoginHref(returnTo) as Route);
   }
 
   if (context.status === "unavailable") {
@@ -25,7 +33,7 @@ export default async function PartnerAuthenticatedLayout({
           <PartnerErrorState
             title="The partner portal is temporarily unavailable"
             description="We couldn’t verify your portal session right now. Your account and jobs are unchanged. Try again in a moment or call Stonegate for immediate help."
-            retryHref="/partners"
+            retryHref="/partners/overview"
           />
         </div>
       </PartnerPublicShell>
@@ -39,6 +47,7 @@ export default async function PartnerAuthenticatedLayout({
         companyName={company.name}
         logoPath={company.logoPath}
         accountLabel={context.accountLabel}
+        accounts={context.accounts}
         userName={context.user.name}
         userEmail={context.user.email}
         capabilities={context.capabilities}

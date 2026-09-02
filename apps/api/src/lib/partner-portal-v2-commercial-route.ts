@@ -4,6 +4,7 @@ import {
   hasPartnerCapability,
   requirePartnerCapability,
   type PartnerCapability,
+  type PartnerPrincipal,
 } from "@/lib/partner-account-authorization";
 import { arePartnerPortalV2ReadsEnabled } from "@/lib/partner-portal-feature-flags";
 import type { PartnerCommercialListResult } from "@/lib/partner-portal-v2-commercial";
@@ -21,6 +22,7 @@ import {
 type CommercialLoader = (input: {
   accountId: string;
   params: URLSearchParams;
+  access: Pick<PartnerPrincipal, "accountId" | "accessLevel" | "accessScope">;
 }) => Promise<PartnerCommercialListResult>;
 
 export async function handlePartnerCommercialList(input: {
@@ -49,12 +51,6 @@ export async function handlePartnerCommercialList(input: {
       correlationId,
     );
   }
-  // Commercial rows do not yet carry a property/location scope on every
-  // record. Failing closed prevents a scoped membership from seeing account-
-  // wide financial information until that relationship is enforceable.
-  if (principal.accessLevel !== "account") {
-    return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
-  }
   if (!arePartnerPortalV2ReadsEnabled(principal.accountId)) {
     return createPartnerPortalV2ErrorResponse(
       "service_unavailable",
@@ -66,7 +62,7 @@ export async function handlePartnerCommercialList(input: {
   if (
     requestedFormats.length === 1 &&
     requestedFormats[0] === "csv" &&
-    !hasPartnerCapability(principal, "reports.export")
+    !hasPartnerCapability(principal, "reports.financial.export")
   ) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
@@ -75,6 +71,7 @@ export async function handlePartnerCommercialList(input: {
     const result = await input.loader({
       accountId: principal.accountId,
       params: input.request.nextUrl.searchParams,
+      access: principal,
     });
     if (!result.ok) {
       return createPartnerPortalV2DescriptorResponse(
@@ -86,7 +83,7 @@ export async function handlePartnerCommercialList(input: {
     }
     if (
       result.format === "csv" &&
-      !hasPartnerCapability(principal, "reports.export")
+      !hasPartnerCapability(principal, "reports.financial.export")
     ) {
       return createPartnerPortalV2ErrorResponse(
         "forbidden",

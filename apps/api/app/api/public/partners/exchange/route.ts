@@ -6,8 +6,15 @@ import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
+import { isPartnerRoutineMagicLinkLoginEnabled } from "@/lib/partner-portal-feature-flags";
 
 export async function POST(request: NextRequest): Promise<Response> {
+  if (!isPartnerRoutineMagicLinkLoginEnabled()) {
+    return NextResponse.json(
+      { ok: false, error: "not_found" },
+      { status: 404, headers: { "Cache-Control": "no-store" } },
+    );
+  }
   let payload: unknown;
   try {
     payload = await readBoundedJsonRequest(request, { maximumBytes: 1024 });

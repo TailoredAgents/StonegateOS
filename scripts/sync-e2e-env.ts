@@ -12,7 +12,9 @@ const copies: Mapping[] = [
   { src: "apps/api/.env.e2e.local", dest: "apps/api/.env.local" },
 ];
 
-const quoteV2E2EEnv: Record<string, string> = {
+const e2eEnvOverrides: Record<string, string> = {
+  PARTNER_MFA_SECRET_KEY_BASE64: "ERERERERERERERERERERERERERERERERERERERERERE=",
+  PARTNER_MFA_SECRET_KEY_VERSION: "1",
   QUOTE_DELIVERY_ADDRESS_HMAC_KEY_BASE64:
     "c3RvbmVnYXRlLXF1b3RlLXYyLWhtYWMta2V5LTAwMSE=",
   QUOTE_DELIVERY_ENCRYPTION_KEY_ID: "e2e-primary",
@@ -64,9 +66,9 @@ async function upsertEnvValues(
 async function main() {
   await Promise.all(copies.map(copy));
   await Promise.all([
-    upsertEnvValues(".env", quoteV2E2EEnv),
-    upsertEnvValues("apps/site/.env.local", quoteV2E2EEnv),
-    upsertEnvValues("apps/api/.env.local", quoteV2E2EEnv),
+    upsertEnvValues(".env", e2eEnvOverrides),
+    upsertEnvValues("apps/site/.env.local", e2eEnvOverrides),
+    upsertEnvValues("apps/api/.env.local", e2eEnvOverrides),
   ]);
 }
 

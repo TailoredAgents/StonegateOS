@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import {
   contacts,
   leads,
+  partnerAccountLocations,
+  partnerAccounts,
+  partnerBookingDrafts,
+  partnerBookings,
+  partnerQuotes,
   quoteActivityEvents,
   quoteVersionAdjustments,
   quoteVersionLineItems,
@@ -59,6 +64,7 @@ export type QuoteV2DraftReceipt = {
   draftRevision: number;
   state: "draft" | "ready";
   totals: QuoteTotals | null;
+  partnerQuoteId?: string | null;
 };
 
 function addressLabel(property: {
@@ -121,6 +127,7 @@ async function insertV2QuoteWithUniqueNumber(
     opportunityId: string;
     contactId: string;
     propertyId: string;
+    partnerAccountId: string | null;
     now: Date;
   },
 ): Promise<{ id: string; quoteNumber: string }> {
@@ -135,6 +142,7 @@ async function insertV2QuoteWithUniqueNumber(
         aggregateRevision: 1,
         contactId: input.contactId,
         propertyId: input.propertyId,
+        partnerAccountId: input.partnerAccountId,
         status: "pending",
         services: [],
         addOns: [],
@@ -167,6 +175,118 @@ async function insertV2QuoteWithUniqueNumber(
   );
 }
 
+type ValidatedPartnerQuoteContext = Readonly<{
+  accountId: string;
+  target: NonNullable<QuoteV2CreateCommand["partnerContext"]>["target"];
+}>;
+
+async function validatePartnerQuoteContext(
+  tx: TeamMutationTransaction,
+  input: {
+    context: NonNullable<QuoteV2CreateCommand["partnerContext"]>;
+    contactPartnerAccountId: string | null;
+    propertyId: string;
+  },
+): Promise<ValidatedPartnerQuoteContext> {
+  const [account] = await tx
+    .select({ id: partnerAccounts.id })
+    .from(partnerAccounts)
+    .where(
+      and(
+        eq(partnerAccounts.id, input.context.accountId),
+        inArray(partnerAccounts.status, [
+          "active_partner",
+          "portal_partner",
+          "managed_partner",
+        ]),
+        eq(partnerAccounts.portalAccessEnabled, true),
+      ),
+    )
+    .limit(1);
+  if (!account || input.contactPartnerAccountId !== account.id) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "The Partner account and client projection do not match.",
+      {
+        status: 404,
+        fieldErrors: {
+          partnerContext: "Choose this client's active Partner account.",
+        },
+      },
+    );
+  }
+
+  const target = input.context.target;
+  let targetPropertyId: string | null = null;
+  if (target.type === "location") {
+    const [location] = await tx
+      .select({ propertyId: partnerAccountLocations.propertyId })
+      .from(partnerAccountLocations)
+      .where(
+        and(
+          eq(partnerAccountLocations.partnerAccountId, account.id),
+          eq(partnerAccountLocations.id, target.id),
+          eq(partnerAccountLocations.active, true),
+        ),
+      )
+      .limit(1);
+    targetPropertyId = location?.propertyId ?? null;
+  } else if (target.type === "booking") {
+    const [booking] = await tx
+      .select({ propertyId: partnerBookings.propertyId })
+      .from(partnerBookings)
+      .where(
+        and(
+          eq(partnerBookings.partnerAccountId, account.id),
+          eq(partnerBookings.id, target.id),
+          notInArray(partnerBookings.publicStatus, [
+            "completed",
+            "canceled",
+            "declined",
+          ]),
+        ),
+      )
+      .limit(1);
+    targetPropertyId = booking?.propertyId ?? null;
+  } else {
+    const [draft] = await tx
+      .select({ propertyId: partnerAccountLocations.propertyId })
+      .from(partnerBookingDrafts)
+      .innerJoin(
+        partnerAccountLocations,
+        and(
+          eq(
+            partnerAccountLocations.partnerAccountId,
+            partnerBookingDrafts.partnerAccountId,
+          ),
+          eq(partnerAccountLocations.id, partnerBookingDrafts.locationId),
+        ),
+      )
+      .where(
+        and(
+          eq(partnerBookingDrafts.partnerAccountId, account.id),
+          eq(partnerBookingDrafts.id, target.id),
+          eq(partnerAccountLocations.active, true),
+        ),
+      )
+      .limit(1);
+    targetPropertyId = draft?.propertyId ?? null;
+  }
+  if (targetPropertyId !== input.propertyId) {
+    throw new TeamMutationFailure(
+      "invalid",
+      "The Partner quote target does not match the selected service property.",
+      {
+        status: 404,
+        fieldErrors: {
+          partnerContext: "Choose a job, draft, or location for this property.",
+        },
+      },
+    );
+  }
+  return Object.freeze({ accountId: account.id, target });
+}
+
 export async function createQuoteV2Draft(
   tx: TeamMutationTransaction,
   input: {
@@ -188,6 +308,7 @@ export async function createQuoteV2Draft(
       phone: contacts.phone,
       phoneE164: contacts.phoneE164,
       salespersonMemberId: contacts.salespersonMemberId,
+      partnerAccountId: contacts.partnerAccountId,
       deletedAt: contacts.deletedAt,
     })
     .from(contacts)
@@ -213,6 +334,14 @@ export async function createQuoteV2Draft(
       },
     );
   }
+
+  const partnerContext = command.partnerContext
+    ? await validatePartnerQuoteContext(tx, {
+        context: command.partnerContext,
+        contactPartnerAccountId: contact.partnerAccountId,
+        propertyId: property.id,
+      })
+    : null;
 
   if (command.leadId) {
     const [lead] = await tx
@@ -270,6 +399,7 @@ export async function createQuoteV2Draft(
     opportunityId: opportunity.id,
     contactId: contact.id,
     propertyId: property.id,
+    partnerAccountId: partnerContext?.accountId ?? null,
     now,
   });
   const [actor] = await tx
@@ -360,6 +490,47 @@ export async function createQuoteV2Draft(
       "The quote version could not be linked to its aggregate.",
     );
   }
+  const [partnerProjection] = partnerContext
+    ? await tx
+        .insert(partnerQuotes)
+        .values({
+          authority: "quote_v2",
+          partnerAccountId: partnerContext.accountId,
+          quoteId: quote.id,
+          partnerBookingId:
+            partnerContext.target.type === "booking"
+              ? partnerContext.target.id
+              : null,
+          bookingDraftId:
+            partnerContext.target.type === "draft"
+              ? partnerContext.target.id
+              : null,
+          partnerAccountLocationId:
+            partnerContext.target.type === "location"
+              ? partnerContext.target.id
+              : null,
+          quoteNumber: null,
+          version: null,
+          status: null,
+          currency: null,
+          subtotalCents: null,
+          taxCents: null,
+          discountCents: null,
+          totalCents: null,
+          lines: null,
+          terms: null,
+          createdByTeamMemberId: input.actorTeamMemberId,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .returning({ id: partnerQuotes.id })
+    : [];
+  if (partnerContext && !partnerProjection) {
+    throw new TeamMutationFailure(
+      "internal",
+      "The Partner quote binding could not be created.",
+    );
+  }
   if (command.leadId) {
     const [linkedLead] = await tx
       .update(leads)
@@ -391,7 +562,12 @@ export async function createQuoteV2Draft(
     actorType: "team_member",
     actorTeamMemberId: input.actorTeamMemberId,
     correlationId: input.correlationId,
-    metadata: { opportunityId: opportunity.id },
+    metadata: {
+      opportunityId: opportunity.id,
+      partnerAccountId: partnerContext?.accountId ?? null,
+      partnerQuoteId: partnerProjection?.id ?? null,
+      partnerTargetType: partnerContext?.target.type ?? null,
+    },
     occurredAt: now,
     createdAt: now,
   });
@@ -404,6 +580,7 @@ export async function createQuoteV2Draft(
     draftRevision: 1,
     state: "draft",
     totals: null,
+    partnerQuoteId: partnerProjection?.id ?? null,
   };
 }
 

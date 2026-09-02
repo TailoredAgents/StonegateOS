@@ -47,6 +47,7 @@ export type PartnerApprovalRule = {
   id: string;
   name: string;
   version: number;
+  requiredApproverCapabilities: string[];
   requiredApproverRoleKeys: string[];
   requiredDecisionCount: number;
 };
@@ -97,6 +98,7 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
 const ROLE_KEY_PATTERN = /^[a-z][a-z0-9_]{1,63}$/u;
+const CAPABILITY_PATTERN = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -187,11 +189,22 @@ function isApprovalRule(value: unknown): value is PartnerApprovalRule {
     value["name"].length > 0 &&
     value["name"].length <= 160 &&
     isPositiveInteger(value["version"]) &&
+    Array.isArray(value["requiredApproverCapabilities"]) &&
+    value["requiredApproverCapabilities"].length > 0 &&
+    value["requiredApproverCapabilities"].length <= 20 &&
+    value["requiredApproverCapabilities"].every(
+      (capability) =>
+        typeof capability === "string" && CAPABILITY_PATTERN.test(capability),
+    ) &&
+    new Set(value["requiredApproverCapabilities"]).size ===
+      value["requiredApproverCapabilities"].length &&
     Array.isArray(value["requiredApproverRoleKeys"]) &&
-    value["requiredApproverRoleKeys"].length > 0 &&
+    value["requiredApproverRoleKeys"].length <= 20 &&
     value["requiredApproverRoleKeys"].every(
       (role) => typeof role === "string" && ROLE_KEY_PATTERN.test(role),
     ) &&
+    new Set(value["requiredApproverRoleKeys"]).size ===
+      value["requiredApproverRoleKeys"].length &&
     isPositiveInteger(value["requiredDecisionCount"])
   );
 }

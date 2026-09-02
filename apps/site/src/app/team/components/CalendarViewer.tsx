@@ -41,6 +41,7 @@ type Props = {
   canUpdateAppointments: boolean;
   canCollectPayments: boolean;
   canSendCustomerMessages: boolean;
+  canManageAppointmentMedia: boolean;
   canOverrideScheduleConflicts: boolean;
   googleCalendarState: "disabled" | "loaded" | "unavailable";
 };
@@ -54,6 +55,7 @@ export function CalendarViewer({
   canUpdateAppointments,
   canCollectPayments,
   canSendCustomerMessages,
+  canManageAppointmentMedia,
   canOverrideScheduleConflicts,
   googleCalendarState,
 }: Props) {
@@ -810,6 +812,7 @@ export function CalendarViewer({
                   canUpdateAppointments={canUpdateAppointments}
                   canCollectPayments={canCollectPayments}
                   canSendCustomerMessages={canSendCustomerMessages}
+                  canManageAppointmentMedia={canManageAppointmentMedia}
                   canOverrideScheduleConflicts={canOverrideScheduleConflicts}
                   onClose={closeEventDetail}
                   variant="embedded"

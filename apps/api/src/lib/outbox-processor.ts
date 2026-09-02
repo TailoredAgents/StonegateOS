@@ -5,6 +5,7 @@ import {
   eq,
   gte,
   ilike,
+  inArray,
   isNotNull,
   isNull,
   lte,
@@ -39,6 +40,9 @@ import {
   messageDeliveryEvents,
   appointmentTasks,
   partnerBookings,
+  partnerBillingDisputeRequests,
+  partnerCancellationRequests,
+  partnerJobChangeRequests,
   partnerJobEvents,
 } from "@/db";
 import {
@@ -79,6 +83,7 @@ import type { AppointmentCalendarPayload } from "@/lib/calendar";
 import {
   buildGoogleCalendarEventId,
   deleteCalendarEvent,
+  resolveAppointmentCalendarContent,
 } from "@/lib/calendar";
 import {
   createCalendarEventWithRetry,
@@ -187,6 +192,21 @@ import {
   prepareStaffNotificationDispatch,
 } from "@/lib/staff-notification-operations";
 import { processPartnerAccountInvitationEmail } from "@/lib/partner-account-invitation-delivery";
+import {
+  PARTNER_ACCESS_APPLICATION_EMAIL_EVENT,
+  processPartnerAccessApplicationDecisionEmail,
+} from "@/lib/partner-access-application-email-delivery";
+import { processPartnerAuthEmail } from "@/lib/partner-auth-email-delivery";
+import {
+  PARTNER_NOTIFICATION_SMS_CODE_EVENT,
+  processPartnerNotificationSmsCode,
+} from "@/lib/partner-notification-endpoints";
+import {
+  PARTNER_NOTIFICATION_DELIVERY_EVENT,
+  processPartnerNotificationDelivery,
+  queuePartnerBillingDisputeNotification,
+} from "@/lib/partner-notification-delivery";
+import { arePartnerPortalApplicantNotificationsEnabled } from "@/lib/partner-portal-feature-flags";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -199,6 +219,8 @@ export interface OutboxBatchStats {
 
 export interface ProcessOutboxBatchOptions {
   limit?: number;
+  /** Optional internal worker/test scope; an explicit empty scope processes nothing. */
+  eventTypes?: readonly string[];
 }
 
 type OutboxOutcome = OutboxFinalizationOutcome & {
@@ -221,6 +243,8 @@ class OutboxFinalizationFailure extends Error {
 }
 
 const MAX_MESSAGE_SEND_ATTEMPTS = 3;
+const OUTBOX_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CONTACT_MESSAGE_ENQUEUE_EVENT_TYPES = new Set([
   "estimate.requested",
   "estimate.rescheduled",
@@ -314,6 +338,10 @@ function outcomeForOutboxHandlerError(
     event.type === "sales.escalation.call" ||
     event.type === "staff_notification.dispatch" ||
     event.type === "partner.account_invitation.email" ||
+    event.type === PARTNER_ACCESS_APPLICATION_EMAIL_EVENT ||
+    event.type === "partner.auth.email" ||
+    event.type === PARTNER_NOTIFICATION_DELIVERY_EVENT ||
+    event.type === PARTNER_NOTIFICATION_SMS_CODE_EVENT ||
     // Calendar creates use a deterministic provider ID, while updates always
     // target the already-persisted ID. Both operations therefore converge on
     // retry instead of treating an ambiguous provider response as success.
@@ -3424,11 +3452,17 @@ async function handleAppointmentCalendarSyncRequested(
       propertyPostalCode: properties.postalCode,
       leadServices: leads.servicesRequested,
       leadNotes: leads.notes,
+      partnerServiceKey: partnerBookings.serviceKey,
+      quotedScopeText: appointments.quotedScopeText,
     })
     .from(appointments)
     .leftJoin(contacts, eq(appointments.contactId, contacts.id))
     .leftJoin(properties, eq(appointments.propertyId, properties.id))
     .leftJoin(leads, eq(appointments.leadId, leads.id))
+    .leftJoin(
+      partnerBookings,
+      eq(partnerBookings.appointmentId, appointments.id),
+    )
     .where(eq(appointments.id, appointmentId))
     .limit(1);
   if (!appointment) {
@@ -3552,14 +3586,19 @@ async function handleAppointmentCalendarSyncRequested(
     ? (buildRescheduleUrlForAppointment(appointmentId, rescheduleToken) ??
       undefined)
     : undefined;
+  const calendarContent = resolveAppointmentCalendarContent({
+    leadServices: appointment.leadServices,
+    leadNotes: appointment.leadNotes,
+    partnerServiceKey: appointment.partnerServiceKey,
+    quotedScopeText: appointment.quotedScopeText,
+  });
   const calendarPayload: AppointmentCalendarPayload = {
     appointmentId,
     startAt: appointment.startAt,
     durationMinutes: appointment.durationMinutes,
     travelBufferMinutes: appointment.travelBufferMinutes,
-    services: coerceServices(appointment.leadServices),
-    notes:
-      typeof appointment.leadNotes === "string" ? appointment.leadNotes : null,
+    services: [...calendarContent.services],
+    notes: calendarContent.notes,
     contact: {
       name: contactName || "Stonegate Customer",
       email: readStringValue(appointment.contactEmail),
@@ -3676,7 +3715,10 @@ async function handleOutboxEvent(
         !Number.isSafeInteger(generation) ||
         generation < 1
       ) {
-        return { status: "skipped", error: "partner_invitation_payload_invalid" };
+        return {
+          status: "skipped",
+          error: "partner_invitation_payload_invalid",
+        };
       }
       return processPartnerAccountInvitationEmail({
         invitationId,
@@ -3684,6 +3726,158 @@ async function handleOutboxEvent(
         outboxEventId: event.id,
         deliveryUrl,
         correlationId,
+      });
+    }
+
+    case "partner.auth.email": {
+      if (getTeamOperationKillSwitchForRisk("external") === "external_sends") {
+        return {
+          status: "retry",
+          error: "partner_auth_external_sends_disabled",
+          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+        };
+      }
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const challengeId = readStringValue(payload?.["challengeId"]);
+      const purpose = readStringValue(payload?.["purpose"]);
+      const deliveryUrl = readStringValue(payload?.["deliveryUrl"]);
+      const correlationId = readStringValue(payload?.["correlationId"]);
+      const generation = payload?.["generation"];
+      if (
+        !challengeId ||
+        !deliveryUrl ||
+        ![
+          "email_verification",
+          "account_activation",
+          "password_reset",
+          "email_change",
+        ].includes(purpose ?? "") ||
+        typeof generation !== "number" ||
+        !Number.isSafeInteger(generation) ||
+        generation < 1
+      ) {
+        return {
+          status: "skipped",
+          error: "partner_auth_email_payload_invalid",
+        };
+      }
+      return processPartnerAuthEmail({
+        challengeId,
+        purpose: purpose as
+          | "email_verification"
+          | "account_activation"
+          | "password_reset"
+          | "email_change",
+        generation,
+        outboxEventId: event.id,
+        deliveryUrl,
+        correlationId,
+      });
+    }
+
+    case PARTNER_ACCESS_APPLICATION_EMAIL_EVENT: {
+      if (getTeamOperationKillSwitchForRisk("external") === "external_sends") {
+        return {
+          status: "retry",
+          error: "partner_application_email_external_sends_disabled",
+          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+        };
+      }
+      if (!arePartnerPortalApplicantNotificationsEnabled()) {
+        return {
+          status: "retry",
+          error: "partner_application_email_feature_disabled",
+          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+        };
+      }
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const applicationId = readStringValue(payload?.["applicationId"]);
+      const status = readStringValue(payload?.["status"]);
+      const correlationId = readStringValue(payload?.["correlationId"]);
+      const version = payload?.["version"];
+      if (
+        !applicationId ||
+        (status !== "needs_information" && status !== "declined") ||
+        typeof version !== "number" ||
+        !Number.isSafeInteger(version) ||
+        version < 1
+      ) {
+        return {
+          status: "skipped",
+          error: "partner_application_email_payload_invalid",
+        };
+      }
+      return processPartnerAccessApplicationDecisionEmail({
+        applicationId,
+        status,
+        version,
+        outboxEventId: event.id,
+        correlationId,
+      });
+    }
+
+    case PARTNER_NOTIFICATION_SMS_CODE_EVENT: {
+      if (getTeamOperationKillSwitchForRisk("external") === "external_sends") {
+        return {
+          status: "retry",
+          error: "partner_sms_code_external_sends_disabled",
+          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+        };
+      }
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const challengeId = readStringValue(payload?.["challengeId"]);
+      const endpointId = readStringValue(payload?.["endpointId"]);
+      const codeCiphertext = readStringValue(payload?.["codeCiphertext"]);
+      const correlationId = readStringValue(payload?.["correlationId"]);
+      const generation = payload?.["generation"];
+      if (
+        !challengeId ||
+        !OUTBOX_UUID_PATTERN.test(challengeId) ||
+        !endpointId ||
+        !OUTBOX_UUID_PATTERN.test(endpointId) ||
+        !codeCiphertext ||
+        codeCiphertext.length > 256 ||
+        !/^v1(?:\.[A-Za-z0-9_-]+){3}$/u.test(codeCiphertext) ||
+        typeof generation !== "number" ||
+        !Number.isSafeInteger(generation) ||
+        generation < 1 ||
+        (correlationId !== null &&
+          !/^[A-Za-z0-9._:-]{1,128}$/u.test(correlationId))
+      ) {
+        return {
+          status: "skipped",
+          error: "partner_sms_code_payload_invalid",
+        };
+      }
+      return processPartnerNotificationSmsCode({
+        challengeId,
+        endpointId,
+        generation,
+        codeCiphertext,
+        outboxEventId: event.id,
+        correlationId,
+      });
+    }
+
+    case PARTNER_NOTIFICATION_DELIVERY_EVENT: {
+      if (getTeamOperationKillSwitchForRisk("external") === "external_sends") {
+        return {
+          status: "retry",
+          error: "partner_notification_external_sends_disabled",
+          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+        };
+      }
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const deliveryId = readStringValue(payload?.["deliveryId"]);
+      if (!deliveryId || !OUTBOX_UUID_PATTERN.test(deliveryId)) {
+        return {
+          status: "skipped",
+          error: "partner_notification_payload_invalid",
+        };
+      }
+      return processPartnerNotificationDelivery({
+        deliveryId,
+        outboxEventId: event.id,
       });
     }
 
@@ -3766,17 +3960,179 @@ async function handleOutboxEvent(
       return { status: "processed" };
     }
 
+    case "partner.billing_dispute.requested": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const partnerAccountId = readStringValue(payload?.["partnerAccountId"]);
+      const partnerInvoiceId = readStringValue(payload?.["partnerInvoiceId"]);
+      const billingDisputeRequestId = readStringValue(
+        payload?.["billingDisputeRequestId"],
+      );
+      const correlationId = readStringValue(payload?.["correlationId"]);
+      const revision = payload?.["revision"];
+      if (
+        !partnerAccountId ||
+        !OUTBOX_UUID_PATTERN.test(partnerAccountId) ||
+        !partnerInvoiceId ||
+        !OUTBOX_UUID_PATTERN.test(partnerInvoiceId) ||
+        !billingDisputeRequestId ||
+        !OUTBOX_UUID_PATTERN.test(billingDisputeRequestId) ||
+        revision !== 1
+      ) {
+        return {
+          status: "skipped",
+          error: "partner_billing_dispute_requested_payload_invalid",
+        };
+      }
+      const db = getDb();
+      const queued = await db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({
+            accountId: partnerBillingDisputeRequests.partnerAccountId,
+            invoiceId: partnerBillingDisputeRequests.partnerInvoiceId,
+            membershipId: partnerBillingDisputeRequests.requestedByMembershipId,
+            createdAt: partnerBillingDisputeRequests.createdAt,
+          })
+          .from(partnerBillingDisputeRequests)
+          .where(
+            and(
+              eq(partnerBillingDisputeRequests.id, billingDisputeRequestId),
+              eq(
+                partnerBillingDisputeRequests.partnerAccountId,
+                partnerAccountId,
+              ),
+              eq(
+                partnerBillingDisputeRequests.partnerInvoiceId,
+                partnerInvoiceId,
+              ),
+              eq(partnerBillingDisputeRequests.state, "pending"),
+              eq(partnerBillingDisputeRequests.revision, 1),
+            ),
+          )
+          .limit(1);
+        if (!request) return false;
+        await queuePartnerBillingDisputeNotification({
+          tx,
+          accountId: request.accountId,
+          membershipId: request.membershipId,
+          billingDisputeRequestId,
+          eventType: "billing.dispute_requested",
+          dedupeKey: `${billingDisputeRequestId}:requested:1`,
+          correlationId,
+          occurredAt: request.createdAt,
+        });
+        return true;
+      });
+      return queued
+        ? { status: "processed" }
+        : {
+            status: "skipped",
+            error: "partner_billing_dispute_requested_not_canonical",
+          };
+    }
+
+    case "partner.billing_dispute.resolved": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const partnerAccountId = readStringValue(payload?.["partnerAccountId"]);
+      const partnerInvoiceId = readStringValue(payload?.["partnerInvoiceId"]);
+      const billingDisputeRequestId = readStringValue(
+        payload?.["billingDisputeRequestId"],
+      );
+      const correlationId = readStringValue(payload?.["correlationId"]);
+      const state = readStringValue(payload?.["state"]);
+      const revision = payload?.["revision"];
+      if (
+        !partnerAccountId ||
+        !OUTBOX_UUID_PATTERN.test(partnerAccountId) ||
+        !partnerInvoiceId ||
+        !OUTBOX_UUID_PATTERN.test(partnerInvoiceId) ||
+        !billingDisputeRequestId ||
+        !OUTBOX_UUID_PATTERN.test(billingDisputeRequestId) ||
+        ![
+          "information_provided",
+          "adjustment_required",
+          "refund_review",
+          "declined",
+        ].includes(state ?? "") ||
+        typeof revision !== "number" ||
+        !Number.isSafeInteger(revision) ||
+        revision < 2
+      ) {
+        return {
+          status: "skipped",
+          error: "partner_billing_dispute_resolved_payload_invalid",
+        };
+      }
+      const db = getDb();
+      const queued = await db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({
+            accountId: partnerBillingDisputeRequests.partnerAccountId,
+            invoiceId: partnerBillingDisputeRequests.partnerInvoiceId,
+            membershipId: partnerBillingDisputeRequests.requestedByMembershipId,
+            state: partnerBillingDisputeRequests.state,
+            revision: partnerBillingDisputeRequests.revision,
+            resolvedAt: partnerBillingDisputeRequests.resolvedAt,
+          })
+          .from(partnerBillingDisputeRequests)
+          .where(
+            and(
+              eq(partnerBillingDisputeRequests.id, billingDisputeRequestId),
+              eq(
+                partnerBillingDisputeRequests.partnerAccountId,
+                partnerAccountId,
+              ),
+              eq(
+                partnerBillingDisputeRequests.partnerInvoiceId,
+                partnerInvoiceId,
+              ),
+              eq(
+                partnerBillingDisputeRequests.state,
+                state as
+                  | "information_provided"
+                  | "adjustment_required"
+                  | "refund_review"
+                  | "declined",
+              ),
+              eq(partnerBillingDisputeRequests.revision, revision),
+            ),
+          )
+          .limit(1);
+        if (!request?.resolvedAt) return false;
+        await queuePartnerBillingDisputeNotification({
+          tx,
+          accountId: request.accountId,
+          membershipId: request.membershipId,
+          billingDisputeRequestId,
+          eventType: "billing.dispute_resolved",
+          dedupeKey: `${billingDisputeRequestId}:${request.state}:${request.revision}`,
+          correlationId,
+          occurredAt: request.resolvedAt,
+        });
+        return true;
+      });
+      return queued
+        ? { status: "processed" }
+        : {
+            status: "skipped",
+            error: "partner_billing_dispute_resolved_not_canonical",
+          };
+    }
+
     case "partner.cancellation_review_requested": {
       const payload = isRecord(event.payload) ? event.payload : null;
       const partnerAccountId = readStringValue(payload?.["partnerAccountId"]);
       const partnerBookingId = readStringValue(payload?.["partnerBookingId"]);
       const appointmentId = readStringValue(payload?.["appointmentId"]);
       const partnerJobEventId = readStringValue(payload?.["partnerJobEventId"]);
+      const cancellationRequestId = readStringValue(
+        payload?.["cancellationRequestId"],
+      );
       if (
         !partnerAccountId ||
         !partnerBookingId ||
         !appointmentId ||
-        !partnerJobEventId
+        !partnerJobEventId ||
+        !cancellationRequestId
       ) {
         return {
           status: "skipped",
@@ -3791,7 +4147,20 @@ async function handleOutboxEvent(
             bookingId: partnerBookings.id,
             appointmentId: partnerBookings.appointmentId,
           })
-          .from(partnerBookings)
+          .from(partnerCancellationRequests)
+          .innerJoin(
+            partnerBookings,
+            and(
+              eq(
+                partnerBookings.partnerAccountId,
+                partnerCancellationRequests.partnerAccountId,
+              ),
+              eq(
+                partnerBookings.id,
+                partnerCancellationRequests.partnerBookingId,
+              ),
+            ),
+          )
           .innerJoin(
             partnerJobEvents,
             and(
@@ -3812,17 +4181,17 @@ async function handleOutboxEvent(
               eq(partnerBookings.id, partnerBookingId),
               eq(partnerBookings.partnerAccountId, partnerAccountId),
               eq(partnerBookings.appointmentId, appointmentId),
+              eq(partnerCancellationRequests.id, cancellationRequestId),
+              eq(partnerCancellationRequests.state, "pending"),
               ne(partnerBookings.publicStatus, "canceled"),
-              isNotNull(partnerBookings.cancelOperationKeyHash),
-              isNotNull(partnerBookings.cancelRequestHash),
             ),
           )
           .limit(1);
         if (!request) return { kind: "unavailable" as const };
 
-        const title = `Review partner cancellation request · job ${partnerBookingId
+        const title = `Review partner cancellation request ${cancellationRequestId
           .slice(0, 8)
-          .toUpperCase()}`;
+          .toUpperCase()} · job ${partnerBookingId.slice(0, 8).toUpperCase()}`;
         const [existing] = await tx
           .select({ id: appointmentTasks.id })
           .from(appointmentTasks)
@@ -3860,11 +4229,209 @@ async function handleOutboxEvent(
             partnerAccountId,
             appointmentId,
             partnerJobEventId,
+            cancellationRequestId,
             outboxEventId: event.id,
           },
         });
       }
       return { status: "processed" };
+    }
+
+    case "partner.cancellation_request.resolved": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const partnerAccountId = readStringValue(payload?.["partnerAccountId"]);
+      const partnerBookingId = readStringValue(payload?.["partnerBookingId"]);
+      const cancellationRequestId = readStringValue(
+        payload?.["cancellationRequestId"],
+      );
+      const state = readStringValue(payload?.["state"]);
+      const revision = payload?.["revision"];
+      if (
+        !partnerAccountId ||
+        !partnerBookingId ||
+        !cancellationRequestId ||
+        !["approved", "declined"].includes(state ?? "") ||
+        typeof revision !== "number" ||
+        !Number.isSafeInteger(revision) ||
+        revision < 2
+      ) {
+        return {
+          status: "skipped",
+          error: "partner_cancellation_resolution_context_missing",
+        };
+      }
+      const db = getDb();
+      const [resolved] = await db
+        .select({ id: partnerCancellationRequests.id })
+        .from(partnerCancellationRequests)
+        .where(
+          and(
+            eq(partnerCancellationRequests.id, cancellationRequestId),
+            eq(partnerCancellationRequests.partnerAccountId, partnerAccountId),
+            eq(partnerCancellationRequests.partnerBookingId, partnerBookingId),
+            eq(
+              partnerCancellationRequests.state,
+              state as "approved" | "declined",
+            ),
+            eq(partnerCancellationRequests.revision, revision),
+          ),
+        )
+        .limit(1);
+      return resolved
+        ? { status: "processed" }
+        : {
+            status: "skipped",
+            error: "partner_cancellation_resolution_not_canonical",
+          };
+    }
+
+    case "partner.job_change_request.requested": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const partnerAccountId = readStringValue(payload?.["partnerAccountId"]);
+      const partnerBookingId = readStringValue(payload?.["partnerBookingId"]);
+      const changeRequestId = readStringValue(payload?.["changeRequestId"]);
+      const partnerJobEventId = readStringValue(payload?.["partnerJobEventId"]);
+      if (
+        !partnerAccountId ||
+        !partnerBookingId ||
+        !changeRequestId ||
+        !partnerJobEventId
+      ) {
+        return {
+          status: "skipped",
+          error: "partner_job_change_request_context_missing",
+        };
+      }
+      const db = getDb();
+      const [pending] = await db
+        .select({ id: partnerJobChangeRequests.id })
+        .from(partnerJobChangeRequests)
+        .innerJoin(
+          partnerJobEvents,
+          and(
+            eq(partnerJobEvents.id, partnerJobEventId),
+            eq(partnerJobEvents.partnerAccountId, partnerAccountId),
+            eq(partnerJobEvents.partnerBookingId, partnerBookingId),
+            eq(partnerJobEvents.eventType, "job.change_requested"),
+          ),
+        )
+        .where(
+          and(
+            eq(partnerJobChangeRequests.id, changeRequestId),
+            eq(partnerJobChangeRequests.partnerAccountId, partnerAccountId),
+            eq(partnerJobChangeRequests.partnerBookingId, partnerBookingId),
+          ),
+        )
+        .limit(1);
+      return pending
+        ? { status: "processed" }
+        : {
+            status: "skipped",
+            error: "partner_job_change_request_not_canonical",
+          };
+    }
+
+    case "partner.job_change_request.resolved": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const partnerAccountId = readStringValue(payload?.["partnerAccountId"]);
+      const partnerBookingId = readStringValue(payload?.["partnerBookingId"]);
+      const changeRequestId = readStringValue(payload?.["changeRequestId"]);
+      const state = readStringValue(payload?.["state"]);
+      const revision = payload?.["revision"];
+      if (
+        !partnerAccountId ||
+        !partnerBookingId ||
+        !changeRequestId ||
+        ![
+          "approved",
+          "declined",
+          "change_order_required",
+          "superseded",
+        ].includes(state ?? "") ||
+        typeof revision !== "number" ||
+        !Number.isSafeInteger(revision) ||
+        revision < 2
+      ) {
+        return {
+          status: "skipped",
+          error: "partner_job_change_resolution_context_missing",
+        };
+      }
+      const db = getDb();
+      const [resolved] = await db
+        .select({ id: partnerJobChangeRequests.id })
+        .from(partnerJobChangeRequests)
+        .where(
+          and(
+            eq(partnerJobChangeRequests.id, changeRequestId),
+            eq(partnerJobChangeRequests.partnerAccountId, partnerAccountId),
+            eq(partnerJobChangeRequests.partnerBookingId, partnerBookingId),
+            eq(
+              partnerJobChangeRequests.state,
+              state as
+                | "approved"
+                | "declined"
+                | "change_order_required"
+                | "superseded",
+            ),
+            eq(partnerJobChangeRequests.revision, revision),
+          ),
+        )
+        .limit(1);
+      return resolved
+        ? { status: "processed" }
+        : {
+            status: "skipped",
+            error: "partner_job_change_resolution_not_canonical",
+          };
+    }
+
+    case "partner.job_references.updated": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const partnerAccountId = readStringValue(payload?.["partnerAccountId"]);
+      const partnerBookingId = readStringValue(payload?.["partnerBookingId"]);
+      const partnerJobEventId = readStringValue(payload?.["partnerJobEventId"]);
+      const revision = payload?.["revision"];
+      if (
+        !partnerAccountId ||
+        !partnerBookingId ||
+        !partnerJobEventId ||
+        typeof revision !== "number" ||
+        !Number.isSafeInteger(revision) ||
+        revision < 2
+      ) {
+        return {
+          status: "skipped",
+          error: "partner_job_reference_update_context_missing",
+        };
+      }
+      const db = getDb();
+      const [booking] = await db
+        .select({ id: partnerBookings.id })
+        .from(partnerBookings)
+        .innerJoin(
+          partnerJobEvents,
+          and(
+            eq(partnerJobEvents.id, partnerJobEventId),
+            eq(partnerJobEvents.partnerAccountId, partnerAccountId),
+            eq(partnerJobEvents.partnerBookingId, partnerBookingId),
+            eq(partnerJobEvents.eventType, "job.references_updated"),
+          ),
+        )
+        .where(
+          and(
+            eq(partnerBookings.id, partnerBookingId),
+            eq(partnerBookings.partnerAccountId, partnerAccountId),
+            sql`${partnerBookings.version} >= ${revision}`,
+          ),
+        )
+        .limit(1);
+      return booking
+        ? { status: "processed" }
+        : {
+            status: "skipped",
+            error: "partner_job_reference_update_not_canonical",
+          };
     }
 
     case "appointment.calendar_sync_requested":
@@ -7225,6 +7792,9 @@ export async function processOutboxBatch(
   const db = getDb();
   const { limit = 10 } = options;
   const now = new Date();
+  const eventTypes = options.eventTypes
+    ?.filter((type) => type.length > 0 && type.length <= 120)
+    .slice(0, 20);
 
   const events = await db
     .select()
@@ -7233,6 +7803,11 @@ export async function processOutboxBatch(
       and(
         isNull(outboxEvents.processedAt),
         isNull(outboxEvents.quarantinedAt),
+        options.eventTypes
+          ? eventTypes && eventTypes.length > 0
+            ? inArray(outboxEvents.type, [...eventTypes])
+            : sql`false`
+          : undefined,
         or(
           isNull(outboxEvents.nextAttemptAt),
           lte(outboxEvents.nextAttemptAt, now),

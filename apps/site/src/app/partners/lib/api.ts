@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { PARTNER_SESSION_COOKIE } from "@/lib/partner-session";
+import { PARTNER_APPLICATION_SESSION_COOKIE } from "@/lib/partner-application-session";
 
 const API_BASE_URL =
   process.env["API_BASE_URL"] ??
@@ -56,6 +57,27 @@ export async function callPartnerApi(
 ): Promise<Response> {
   const jar = await cookies();
   const token = jar.get(PARTNER_SESSION_COOKIE)?.value ?? "";
+  if (!token) {
+    return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  return callPartnerPublicApi(path, {
+    ...init,
+    headers: mergeHeaders({}, init?.headers, {
+      Authorization: `Bearer ${token}`,
+    }),
+  });
+}
+
+export async function callPartnerApplicantApi(
+  path: string,
+  init?: CallApiInit,
+): Promise<Response> {
+  const jar = await cookies();
+  const token = jar.get(PARTNER_APPLICATION_SESSION_COOKIE)?.value ?? "";
   if (!token) {
     return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), {
       status: 401,

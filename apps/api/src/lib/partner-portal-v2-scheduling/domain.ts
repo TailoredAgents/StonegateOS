@@ -5,7 +5,12 @@ import {
   evaluateWeightedScheduleCapacity,
   groupThirtyMinutePartnerWindows,
   normalizeSchedulingReviewReasons,
+  assignNamedScheduleResources,
   type PartnerAvailabilityWindow,
+  type NamedScheduleResource,
+  type NamedScheduleResourceAssignment,
+  type NamedScheduleResourceBlock,
+  type NamedScheduleResourceRequirement,
   type ScheduleCapacityBlock,
   type ScheduleCandidateSlot,
   type ScheduleDemand,
@@ -45,6 +50,7 @@ const DRAFT_KEYS = new Set([
   "proofRequirements",
   "commercial",
   "preferredWindows",
+  "scheduleAssistancePreference",
 ]);
 const PARTNER_COMMERCIAL_KEYS = new Set([
   "poNumber",
@@ -56,6 +62,27 @@ const PARTNER_BILLING_CONTACT_KEYS = new Set(["name", "email"]);
 const MAX_PARTNER_COMMERCIAL_REFERENCE_LENGTH = 500;
 const MAX_PARTNER_BILLING_NAME_LENGTH = 200;
 const MAX_PARTNER_BILLING_EMAIL_LENGTH = 320;
+const PARTNER_HAZARD_KEYS = new Set([
+  "chemicals",
+  "paint",
+  "fuel_oil",
+  "batteries",
+  "pressurized",
+  "biohazard",
+  "asbestos_lead",
+  "unknown",
+]);
+const PARTNER_EQUIPMENT_KEYS = new Set([
+  "stairs",
+  "elevator",
+  "loading_dock",
+  "lift_gate",
+  "heavy_lift",
+  "disassembly",
+  "demolition",
+]);
+const PARTNER_ALTERNATE_CONTACT_KEYS = new Set(["name", "phone", "email"]);
+const PARTNER_REQUIRED_COMPLETION_KEYS = new Set(["localDate", "localTime"]);
 
 export type PartnerDraftMutation = Readonly<{
   locationId?: string | null;
@@ -70,6 +97,7 @@ export type PartnerDraftMutation = Readonly<{
   proofRequirements?: Record<string, unknown>;
   commercial?: Record<string, unknown>;
   preferredWindows?: PartnerPreferredWindow[];
+  scheduleAssistancePreference?: "none" | "waitlist" | "callback";
 }>;
 
 export type PartnerPreferredWindow = Readonly<{
@@ -120,7 +148,13 @@ export type PartnerAvailabilityCandidate = ScheduleCandidateSlot &
   Readonly<{
     localDate: string;
     remainingCapacityUnits: number;
-    reason: "available" | "outside_hours" | "daily_limit" | "capacity";
+    reason:
+      | "available"
+      | "outside_hours"
+      | "daily_limit"
+      | "capacity"
+      | "resource";
+    resourceAssignments: readonly NamedScheduleResourceAssignment[];
   }>;
 
 export type PartnerAvailabilityResult = Readonly<{
@@ -136,6 +170,12 @@ export type PartnerArrivalWindowDto = Readonly<{
   label: string;
   available: boolean;
 }>;
+
+export type PartnerRankedAlternativeWindowDto = PartnerArrivalWindowDto &
+  Readonly<{
+    rank: number;
+    reason: "preferred_date" | "soonest_available" | "more_capacity";
+  }>;
 
 /**
  * The public availability projection deliberately ends at the two-hour
@@ -179,13 +219,61 @@ export type PartnerAvailabilityScheduleDto = Readonly<{
   reviewReasons: readonly SchedulingReviewReasonCode[];
   instantConfirmationEligible: boolean;
   windows: readonly PartnerArrivalWindowDto[];
+  rankedAlternatives: readonly PartnerRankedAlternativeWindowDto[];
 }>;
+
+export function rankPartnerAlternativeWindows(input: {
+  windows: readonly PartnerAvailabilityWindow<PartnerAvailabilityCandidate>[];
+  preferredLocalDates?: readonly string[];
+  limit?: number;
+}): readonly PartnerRankedAlternativeWindowDto[] {
+  const limit = input.limit ?? 6;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 12) {
+    throw new TypeError("Invalid partner alternative-window limit.");
+  }
+  const preferredDates = new Set(input.preferredLocalDates ?? []);
+  const ranked = input.windows
+    .filter((window) => window.available)
+    .map((window) => ({
+      window,
+      preferred: preferredDates.has(window.localDate),
+      remainingCapacityUnits: Math.max(
+        0,
+        ...window.availableCandidates.map(
+          (candidate) => candidate.remainingCapacityUnits,
+        ),
+      ),
+    }))
+    .sort(
+      (left, right) =>
+        Number(right.preferred) - Number(left.preferred) ||
+        left.window.startAt.getTime() - right.window.startAt.getTime() ||
+        right.remainingCapacityUnits - left.remainingCapacityUnits ||
+        left.window.id.localeCompare(right.window.id),
+    )
+    .slice(0, limit);
+  const earliestNonPreferred = ranked.findIndex((entry) => !entry.preferred);
+  return Object.freeze(
+    ranked.map((entry, index) =>
+      Object.freeze({
+        ...createPartnerArrivalWindowDto(entry.window),
+        rank: index + 1,
+        reason: entry.preferred
+          ? ("preferred_date" as const)
+          : index === earliestNonPreferred
+            ? ("soonest_available" as const)
+            : ("more_capacity" as const),
+      }),
+    ),
+  );
+}
 
 export function createPartnerAvailabilityScheduleDto(input: {
   timezone: string;
   calendarState: "current" | "stale" | "unconfigured";
   reviewReasons: readonly SchedulingReviewReasonCode[];
   instantConfirmationEligible: boolean;
+  rankedAlternatives?: readonly PartnerRankedAlternativeWindowDto[];
   windows: readonly {
     id: string;
     localDate: string;
@@ -201,6 +289,7 @@ export function createPartnerAvailabilityScheduleDto(input: {
     reviewReasons: normalizeSchedulingReviewReasons(input.reviewReasons),
     instantConfirmationEligible: input.instantConfirmationEligible,
     windows: Object.freeze(input.windows.map(createPartnerArrivalWindowDto)),
+    rankedAlternatives: Object.freeze([...(input.rankedAlternatives ?? [])]),
   });
 }
 
@@ -563,6 +652,161 @@ function cloneJsonRecord(
   }
 }
 
+function parseKnownScopeStringArray(input: {
+  value: unknown;
+  field: string;
+  allowed: ReadonlySet<string>;
+  maximum: number;
+}): string[] {
+  if (
+    !Array.isArray(input.value) ||
+    input.value.length > input.maximum ||
+    !input.value.every(
+      (entry): entry is string =>
+        typeof entry === "string" && input.allowed.has(entry),
+    ) ||
+    new Set(input.value).size !== input.value.length
+  ) {
+    throw schedulingFieldError({
+      [input.field]: "Choose valid, non-duplicate options.",
+    });
+  }
+  return [...input.value].sort();
+}
+
+function parsePartnerScope(value: unknown): Record<string, unknown> {
+  const scope = cloneJsonRecord(value, "scope");
+  for (const key of ["restrictedItems", "nonStandard", "multiStop"] as const) {
+    if (key in scope && typeof scope[key] !== "boolean") {
+      throw schedulingFieldError({
+        [`scope.${key}`]: "Choose yes or no for this job detail.",
+      });
+    }
+  }
+  for (const key of ["itemCount", "volumeCubicYards"] as const) {
+    if (
+      key in scope &&
+      (typeof scope[key] !== "number" ||
+        !Number.isFinite(scope[key]) ||
+        Number(scope[key]) < 0)
+    ) {
+      throw schedulingFieldError({
+        [`scope.${key}`]: "Enter a non-negative number.",
+      });
+    }
+  }
+  if ("hazardCategories" in scope) {
+    scope["hazardCategories"] = parseKnownScopeStringArray({
+      value: scope["hazardCategories"],
+      field: "scope.hazardCategories",
+      allowed: PARTNER_HAZARD_KEYS,
+      maximum: PARTNER_HAZARD_KEYS.size,
+    });
+  }
+  if ("equipmentNeeds" in scope) {
+    scope["equipmentNeeds"] = parseKnownScopeStringArray({
+      value: scope["equipmentNeeds"],
+      field: "scope.equipmentNeeds",
+      allowed: PARTNER_EQUIPMENT_KEYS,
+      maximum: PARTNER_EQUIPMENT_KEYS.size,
+    });
+  }
+  if ("requiredCompletion" in scope) {
+    const completion = scope["requiredCompletion"];
+    if (!isRecord(completion)) {
+      throw schedulingFieldError({
+        "scope.requiredCompletion": "Choose a valid completion deadline.",
+      });
+    }
+    const unsupported = Object.keys(completion).filter(
+      (key) => !PARTNER_REQUIRED_COMPLETION_KEYS.has(key),
+    );
+    const localDate = completion["localDate"];
+    const localTime = completion["localTime"];
+    const parsedDate =
+      typeof localDate === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(localDate)
+        ? DateTime.fromISO(localDate, { zone: "utc" })
+        : null;
+    if (
+      unsupported.length > 0 ||
+      !parsedDate?.isValid ||
+      parsedDate.toISODate() !== localDate ||
+      (localTime !== undefined &&
+        (typeof localTime !== "string" ||
+          !/^([01]\d|2[0-3]):[0-5]\d$/u.test(localTime)))
+    ) {
+      throw schedulingFieldError({
+        "scope.requiredCompletion": "Choose a valid completion date and time.",
+      });
+    }
+    scope["requiredCompletion"] = {
+      localDate,
+      ...(typeof localTime === "string" ? { localTime } : {}),
+    };
+  }
+  if ("multiStopDetails" in scope) {
+    const details = boundedDraftText(
+      scope["multiStopDetails"],
+      "scope.multiStopDetails",
+      1_000,
+    );
+    if (scope["multiStop"] !== true || !details) {
+      throw schedulingFieldError({
+        "scope.multiStopDetails":
+          "Select multi-stop work and describe every service location.",
+      });
+    }
+    scope["multiStopDetails"] = details;
+  } else if (scope["multiStop"] === true) {
+    throw schedulingFieldError({
+      "scope.multiStopDetails": "Describe every service location.",
+    });
+  }
+  if ("alternateContact" in scope) {
+    const contact = scope["alternateContact"];
+    if (!isRecord(contact)) {
+      throw schedulingFieldError({
+        "scope.alternateContact": "Enter a valid alternate contact.",
+      });
+    }
+    const unsupported = Object.keys(contact).filter(
+      (key) => !PARTNER_ALTERNATE_CONTACT_KEYS.has(key),
+    );
+    const name = boundedDraftText(
+      contact["name"],
+      "scope.alternateContact.name",
+      200,
+    );
+    const phone = boundedDraftText(
+      contact["phone"],
+      "scope.alternateContact.phone",
+      50,
+    );
+    const email = boundedDraftText(
+      contact["email"],
+      "scope.alternateContact.email",
+      320,
+    );
+    if (
+      unsupported.length > 0 ||
+      !name ||
+      (!phone && !email) ||
+      (email !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email))
+    ) {
+      throw schedulingFieldError({
+        "scope.alternateContact":
+          "Add a name and at least one valid phone number or email.",
+      });
+    }
+    scope["alternateContact"] = {
+      name,
+      ...(phone ? { phone } : {}),
+      ...(email ? { email: email.toLowerCase() } : {}),
+    };
+  }
+  return scope;
+}
+
 function optionalText(value: unknown, field: string): string | null {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value !== "string") {
@@ -801,8 +1045,12 @@ export function parsePartnerDraftMutation(
   ] as const) {
     if (key in value) result[key] = optionalText(value[key], key);
   }
-  for (const key of ["scope", "proofRequirements"] as const) {
-    if (key in value) result[key] = cloneJsonRecord(value[key], key);
+  if ("scope" in value) result["scope"] = parsePartnerScope(value["scope"]);
+  if ("proofRequirements" in value) {
+    result["proofRequirements"] = cloneJsonRecord(
+      value["proofRequirements"],
+      "proofRequirements",
+    );
   }
   if ("commercial" in value) {
     result["commercial"] = parsePartnerCommercial(value["commercial"]);
@@ -867,6 +1115,20 @@ export function parsePartnerDraftMutation(
       });
     });
   }
+  if ("scheduleAssistancePreference" in value) {
+    const preference = value["scheduleAssistancePreference"];
+    if (
+      !["none", "waitlist", "callback"].includes(
+        typeof preference === "string" ? preference : "",
+      )
+    ) {
+      throw schedulingFieldError({
+        scheduleAssistancePreference:
+          "Choose waitlist, scheduling callback, or no additional assistance.",
+      });
+    }
+    result["scheduleAssistancePreference"] = preference;
+  }
   return Object.freeze(result) as PartnerDraftMutation;
 }
 
@@ -904,13 +1166,25 @@ function automaticReviewReasons(
     reasons.push("manual_review_required");
   }
   if (rules["alwaysReview"] === true) reasons.push("service_requires_review");
-  if (scope["nonStandard"] === true) reasons.push("non_standard_job");
+  if (
+    scope["nonStandard"] === true ||
+    scope["multiStop"] === true ||
+    (Array.isArray(scope["equipmentNeeds"]) &&
+      scope["equipmentNeeds"].length > 0)
+  ) {
+    reasons.push("non_standard_job");
+  }
   if (
     scope["restrictedItems"] === true ||
     (Array.isArray(scope["restrictedItems"]) &&
-      scope["restrictedItems"].length > 0)
+      scope["restrictedItems"].length > 0) ||
+    (Array.isArray(scope["hazardCategories"]) &&
+      scope["hazardCategories"].length > 0)
   ) {
     reasons.push("restricted_item");
+  }
+  if (isRecord(scope["requiredCompletion"])) {
+    reasons.push("manual_review_required");
   }
   const maxItems = rules["maxItemCount"];
   const itemCount = scope["itemCount"];
@@ -1128,6 +1402,11 @@ export function computePartnerAvailability(input: {
   now: Date;
   jobsByLocalDate?: Readonly<Record<string, number>>;
   excludeBlockIds?: readonly string[];
+  resourcePlan?: Readonly<{
+    resources: readonly NamedScheduleResource[];
+    requirements: readonly NamedScheduleResourceRequirement[];
+    blocks: readonly NamedScheduleResourceBlock[];
+  }>;
 }): PartnerAvailabilityResult {
   const { policy, demand } = input;
   if (!policy.capacityPools[demand.capacityPoolKey]) {
@@ -1199,11 +1478,29 @@ export function computePartnerAvailability(input: {
           blocks: input.blocks,
           excludeBlockIds: input.excludeBlockIds,
         });
+        const resourceAssignment = input.resourcePlan
+          ? assignNamedScheduleResources({
+              capacityPoolKey: demand.capacityPoolKey,
+              occupancy: occupancy.occupancy,
+              localDate,
+              resources: input.resourcePlan.resources,
+              requirements: input.resourcePlan.requirements,
+              blocks: input.resourcePlan.blocks.filter(
+                (block) => !input.excludeBlockIds?.includes(block.id),
+              ),
+              maxJobsPerCrew: policy.maxJobsPerCrew,
+            })
+          : {
+              available: true as const,
+              reason: "available" as const,
+              assignments: Object.freeze([]),
+            };
         const available =
           withinHours &&
           withinLeadAndHorizon &&
           underDailyLimit &&
-          capacity.available;
+          capacity.available &&
+          resourceAssignment.available;
         const reason: PartnerAvailabilityCandidate["reason"] =
           !withinHours || !withinLeadAndHorizon
             ? "outside_hours"
@@ -1211,7 +1508,9 @@ export function computePartnerAvailability(input: {
               ? "daily_limit"
               : !capacity.available
                 ? "capacity"
-                : "available";
+                : !resourceAssignment.available
+                  ? "resource"
+                  : "available";
         candidates.push(
           Object.freeze({
             id: startAt.toISOString(),
@@ -1222,6 +1521,7 @@ export function computePartnerAvailability(input: {
             available,
             reason,
             remainingCapacityUnits: capacity.remainingCapacityUnits,
+            resourceAssignments: resourceAssignment.assignments,
           }),
         );
       }

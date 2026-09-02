@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, asc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
-import { auditLogs, conversationMessages, getDb } from "@/db";
+import {
+  auditLogs,
+  conversationMessages,
+  conversationThreads,
+  getDb,
+} from "@/db";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import {
@@ -22,6 +27,7 @@ import {
   type ConversationExportQuery,
 } from "@/lib/conversation-export";
 import { requirePermission } from "@/lib/permissions";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import {
   getVerifiedRequestActor,
   type VerifiedRequestActor,
@@ -264,6 +270,13 @@ async function prepareSnapshotExport(
         bodyBytes: sql<number>`octet_length(${conversationMessages.body})`,
       })
       .from(conversationMessages)
+      .innerJoin(
+        conversationThreads,
+        and(
+          eq(conversationMessages.threadId, conversationThreads.id),
+          genericInboxThreadScopeCondition(),
+        ),
+      )
       .where(and(...filters))
       .orderBy(
         asc(effectiveAt),
@@ -327,6 +340,13 @@ async function prepareSnapshotExport(
         body: conversationMessages.body,
       })
       .from(conversationMessages)
+      .innerJoin(
+        conversationThreads,
+        and(
+          eq(conversationMessages.threadId, conversationThreads.id),
+          genericInboxThreadScopeCondition(),
+        ),
+      )
       .where(inArray(conversationMessages.id, messageIds))
       .orderBy(
         asc(effectiveAt),

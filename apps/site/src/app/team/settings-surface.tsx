@@ -9,6 +9,8 @@ import {
 import { SettingsPreferencesClient } from "./components/SettingsPreferencesClient";
 import { ConversationExportClient } from "./components/ConversationExportClient";
 import type { PersonalSessionInventory } from "./settings-sessions";
+import type { TeamMfaSecurityStatus } from "./team-mfa-security";
+import { TeamMfaSecurityCard } from "./components/TeamMfaSecurityCard";
 
 type CalendarBadgeTone = "ok" | "warn" | "alert" | "idle";
 
@@ -32,6 +34,8 @@ type SettingsSurfaceProps = {
   } | null;
   personalSessions: PersonalSessionInventory | null;
   personalSessionsError: string | null;
+  mfaSecurity: TeamMfaSecurityStatus | null;
+  mfaSecurityError: string | null;
 };
 
 const calendarBadgeToneClasses: Record<CalendarBadgeTone, string> = {
@@ -60,6 +64,8 @@ export function SettingsSurface({
   calendarBadge,
   personalSessions,
   personalSessionsError,
+  mfaSecurity,
+  mfaSecurityError,
 }: SettingsSurfaceProps): ReactElement {
   const revokeOtherSessionsKey =
     personalSessions && personalSessions.activeOtherCount > 0
@@ -184,6 +190,11 @@ export function SettingsSurface({
           </div>
         ) : null}
 
+        <TeamMfaSecurityCard
+          initialStatus={mfaSecurity}
+          initialError={mfaSecurityError}
+        />
+
         <section
           id="sessions"
           aria-labelledby="team-personal-sessions-title"
@@ -245,6 +256,26 @@ export function SettingsSurface({
                           {session.authMethod === "break_glass"
                             ? "Emergency recovery"
                             : "Standard team sign-in"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="inline font-medium text-[color:var(--team-text)]">
+                          Security assurance:{" "}
+                        </dt>
+                        <dd className="inline">
+                          {session.assuranceLevel === "aal2"
+                            ? "Authenticator verified"
+                            : "Standard"}
+                          {session.mfaVerifiedAt ? (
+                            <>
+                              {" "}
+                              at{" "}
+                              <time dateTime={session.mfaVerifiedAt}>
+                                {formatEasternDateTime(session.mfaVerifiedAt)}{" "}
+                                Eastern
+                              </time>
+                            </>
+                          ) : null}
                         </dd>
                       </div>
                       <div>

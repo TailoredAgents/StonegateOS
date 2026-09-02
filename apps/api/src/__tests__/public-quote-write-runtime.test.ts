@@ -1,5 +1,17 @@
 import { NextRequest } from "next/server";
-import { jest } from "@jest/globals";
+import { jest as esmJest } from "@jest/globals";
+
+type JestWithEsmMocks = Pick<
+  typeof globalThis.jest,
+  "clearAllMocks" | "fn"
+> & {
+  unstable_mockModule: (
+    moduleName: string,
+    moduleFactory: () => unknown,
+  ) => typeof globalThis.jest;
+};
+
+const jest = esmJest as unknown as JestWithEsmMocks;
 
 const QUOTE_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_QUOTE_ID = "77777777-7777-4777-8777-777777777777";

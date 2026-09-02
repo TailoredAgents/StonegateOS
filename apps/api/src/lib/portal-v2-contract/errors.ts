@@ -24,6 +24,8 @@ export const PORTAL_V2_ERROR_CODES = [
   "invalid_if_match",
   "revision_mismatch",
   "conflict",
+  "billing_request_pending",
+  "invoice_not_disputable",
   "slot_unavailable",
   "hold_expired",
   "review_required",
@@ -163,6 +165,16 @@ const ERROR_DEFINITIONS: Readonly<Record<PortalV2ErrorCode, ErrorDefinition>> =
     conflict: {
       status: 409,
       message: "The request conflicts with the current state.",
+      retryable: false,
+    },
+    billing_request_pending: {
+      status: 409,
+      message: "This invoice already has a billing request under review.",
+      retryable: false,
+    },
+    invoice_not_disputable: {
+      status: 409,
+      message: "This invoice is not in a state that accepts billing requests.",
       retryable: false,
     },
     slot_unavailable: {

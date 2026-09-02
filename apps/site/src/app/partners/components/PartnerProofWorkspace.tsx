@@ -15,8 +15,17 @@ import {
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
 import type { PartnerProof, PartnerProofMedia } from "../lib/portal-v2";
-import { createPortalOperationKey, partnerPortalFetch } from "../lib/portal-v2";
-import { uploadPortalFileWithProgress } from "../lib/upload-with-progress";
+import {
+  createPortalOperationKey,
+  partnerPortalFetch,
+  portalSupportReferenceFromResponse,
+  withPortalSupportReference,
+} from "../lib/portal-v2";
+import { trackPartnerFunnelEvent } from "../lib/product-analytics";
+import {
+  PortalFileUploadError,
+  uploadPortalFileWithProgress,
+} from "../lib/upload-with-progress";
 import {
   PartnerEmptyState,
   PartnerNotice,
@@ -78,11 +87,13 @@ export function PartnerProofWorkspace({
   initialProof,
   canUpload,
   canShare,
+  persona,
 }: {
   jobId: string;
   initialProof: PartnerProof;
   canUpload: boolean;
   canShare: boolean;
+  persona?: string | null;
 }) {
   const [proof, setProof] = React.useState(initialProof);
   const [category, setCategory] = React.useState("intake");
@@ -190,6 +201,11 @@ export function PartnerProofWorkspace({
     setBusy(true);
     setUploadAttemptStarted(true);
     setMessage(null);
+    trackPartnerFunnelEvent({
+      stage: "upload_started",
+      persona,
+      surface: "proof_upload",
+    });
     const operationKey =
       uploadOperationKeyRef.current ?? createPortalOperationKey("proof-upload");
     uploadOperationKeyRef.current = operationKey;
@@ -213,6 +229,11 @@ export function PartnerProofWorkspace({
       body: JSON.stringify({ files: clientFiles }),
     }).catch(() => null);
     if (!intentResult?.ok) {
+      trackPartnerFunnelEvent({
+        stage: "upload_failed",
+        persona,
+        surface: "proof_upload",
+      });
       setBusy(false);
       setMessage({
         tone: "error",
@@ -221,6 +242,10 @@ export function PartnerProofWorkspace({
       return;
     }
 
+    const supportReference = portalSupportReferenceFromResponse(
+      intentResult.response,
+    );
+    let finalizedFailure: string | null = null;
     try {
       if (intentResult.data.intents.length !== files.length) {
         throw new Error("upload_intent_count_mismatch");
@@ -268,14 +293,32 @@ export function PartnerProofWorkspace({
           },
           body: JSON.stringify({ checksumSha256: null }),
         });
-        if (!finalized.ok) throw new Error(finalized.error.message);
+        if (!finalized.ok) {
+          finalizedFailure = finalized.error.message;
+          throw new Error("finalize_failed");
+        }
       }
-    } catch {
+    } catch (error) {
+      const interrupted =
+        error instanceof PortalFileUploadError &&
+        error.code === "storage_upload_interrupted";
+      trackPartnerFunnelEvent({
+        stage: interrupted ? "upload_interrupted" : "upload_failed",
+        persona,
+        surface: "proof_upload",
+      });
       setBusy(false);
       await refresh();
       setMessage({
         tone: "error",
-        text: "One or more photos did not finish uploading. Ready photos are shown below; retry the others.",
+        text:
+          finalizedFailure ??
+          withPortalSupportReference(
+            interrupted
+              ? "The photo transfer was interrupted. Ready photos are shown below; retry the unfinished files."
+              : "One or more photos did not finish uploading. Ready photos are shown below; retry the others.",
+            supportReference,
+          ),
       });
       return;
     }
@@ -291,6 +334,11 @@ export function PartnerProofWorkspace({
     setMessage({
       tone: "success",
       text: "Photos uploaded and linked to this job.",
+    });
+    trackPartnerFunnelEvent({
+      stage: "upload_completed",
+      persona,
+      surface: "proof_upload",
     });
   };
 
@@ -336,11 +384,13 @@ export function PartnerProofWorkspace({
     if (!result?.ok) {
       setMessage({
         tone: result?.response.status === 409 ? "warning" : "error",
-        text:
+        text: withPortalSupportReference(
           result?.response.status === 409
             ? "A formal package can be generated after the job is complete and every required photo is ready."
             : (result?.error.message ??
-              "The proof package could not be generated."),
+                "The proof package could not be generated."),
+          result?.error.correlationId,
+        ),
       });
       return;
     }
@@ -370,9 +420,13 @@ export function PartnerProofWorkspace({
         tone: [404, 501, 503].includes(result?.response.status ?? 503)
           ? "warning"
           : "error",
-        text: [404, 501, 503].includes(result?.response.status ?? 503)
-          ? "New proof share links are not available through the account service yet. No link was created."
-          : (result?.error.message ?? "The proof share link was not created."),
+        text: withPortalSupportReference(
+          [404, 501, 503].includes(result?.response.status ?? 503)
+            ? "New proof share links are not available through the account service yet. No link was created."
+            : (result?.error.message ??
+                "The proof share link was not created."),
+          result?.error.correlationId,
+        ),
       });
       return;
     }
@@ -411,9 +465,12 @@ export function PartnerProofWorkspace({
         tone: [404, 501, 503].includes(result?.response.status ?? 503)
           ? "warning"
           : "error",
-        text: [404, 501, 503].includes(result?.response.status ?? 503)
-          ? "That proof link could not be revoked through the account service. Contact Stonegate if it must be disabled now."
-          : (result?.error.message ?? "The proof link was not revoked."),
+        text: withPortalSupportReference(
+          [404, 501, 503].includes(result?.response.status ?? 503)
+            ? "That proof link could not be revoked through the account service. Contact Stonegate if it must be disabled now."
+            : (result?.error.message ?? "The proof link was not revoked."),
+          result?.error.correlationId,
+        ),
       });
       return;
     }
@@ -928,7 +985,7 @@ export function PartnerProofWorkspace({
                   </span>
                   {canShare && !link.revokedAt ? (
                     <details className="rounded-lg border border-rose-200 bg-white p-2 text-left">
-                      <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 px-1 font-semibold text-rose-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 [&::-webkit-details-marker]:hidden">
+                      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-1 font-semibold text-rose-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 [&::-webkit-details-marker]:hidden">
                         <Trash2 className="h-4 w-4" aria-hidden="true" />
                         Revoke link
                       </summary>
@@ -942,7 +999,7 @@ export function PartnerProofWorkspace({
                         disabled={revokingId === link.id}
                         className={cn(
                           partnerSecondaryButtonClass,
-                          "mt-2 min-h-9 px-3 py-1.5 text-rose-800",
+                          "mt-2 px-3 text-rose-800",
                         )}
                       >
                         {revokingId === link.id ? (

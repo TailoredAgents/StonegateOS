@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const workspaceRoot = resolve(__dirname, "../../../..");
+const workspaceRoot = resolve(process.cwd(), "../..");
 const read = (path: string): string =>
   readFileSync(resolve(workspaceRoot, path), "utf8");
 

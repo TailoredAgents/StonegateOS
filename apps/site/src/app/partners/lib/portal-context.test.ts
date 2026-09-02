@@ -38,6 +38,7 @@ function selectedAccountPayload() {
         persona: "commercial_client",
         capabilities: ["bookings.create", "properties.manage"],
         current: false,
+        defaultAccount: false,
       },
       {
         id: ACCOUNT_B_ID,
@@ -47,6 +48,7 @@ function selectedAccountPayload() {
         persona: "property_manager",
         capabilities: ["account.read", "properties.read"],
         current: true,
+        defaultAccount: true,
       },
     ],
   };
@@ -112,6 +114,24 @@ void test("the context binds capabilities to the one selected account membership
   assert.equal(context.accountId, ACCOUNT_B_ID);
   assert.equal(context.membershipId, MEMBERSHIP_B_ID);
   assert.equal(context.accountLabel, "Selected Property Group");
+  assert.deepEqual(context.accounts, [
+    {
+      id: ACCOUNT_A_ID,
+      membershipId: MEMBERSHIP_A_ID,
+      name: "Other Commercial Account",
+      roleKey: "scheduler",
+      current: false,
+      defaultAccount: false,
+    },
+    {
+      id: ACCOUNT_B_ID,
+      membershipId: MEMBERSHIP_B_ID,
+      name: "Selected Property Group",
+      roleKey: "viewer",
+      current: true,
+      defaultAccount: true,
+    },
+  ]);
   assert.deepEqual(context.capabilities, {
     overview: true,
     schedule: false,
@@ -129,6 +149,7 @@ void test("the context binds capabilities to the one selected account membership
     updateJobs: false,
     cancelJobs: false,
     manageLocations: false,
+    exportOperationalReports: false,
     uploadMedia: false,
     shareProof: false,
     readMessages: false,

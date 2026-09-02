@@ -20,6 +20,10 @@ describe("assignable team permission input", () => {
     "messages.*",
     "access.break_glass",
     "sessions.manage_self",
+    "partners.read",
+    "partners.write",
+    "partners.invite",
+    "partners.rates",
     "future.use",
   ])("rejects non-assignable permission %s", (permission) => {
     expect(validateAssignableTeamPermissions([permission])).toEqual({

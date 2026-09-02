@@ -67,6 +67,56 @@ describe("partner V2 base service and quantity add-ons", () => {
     ).toThrow();
   });
 
+  it("validates and canonicalizes the structured operational scope", () => {
+    expect(
+      parsePartnerDraftMutation({
+        scope: {
+          hazardCategories: ["paint", "chemicals"],
+          equipmentNeeds: ["stairs", "lift_gate"],
+          restrictedItems: true,
+          nonStandard: true,
+          requiredCompletion: {
+            localDate: "2026-09-18",
+            localTime: "14:30",
+          },
+          multiStop: true,
+          multiStopDetails: "  Building A, then building B.  ",
+          alternateContact: {
+            name: "  Site supervisor  ",
+            email: "BACKUP@EXAMPLE.COM",
+          },
+        },
+      }),
+    ).toMatchObject({
+      scope: {
+        hazardCategories: ["chemicals", "paint"],
+        equipmentNeeds: ["lift_gate", "stairs"],
+        restrictedItems: true,
+        nonStandard: true,
+        requiredCompletion: {
+          localDate: "2026-09-18",
+          localTime: "14:30",
+        },
+        multiStop: true,
+        multiStopDetails: "Building A, then building B.",
+        alternateContact: {
+          name: "Site supervisor",
+          email: "backup@example.com",
+        },
+      },
+    });
+
+    for (const scope of [
+      { hazardCategories: ["forged"] },
+      { equipmentNeeds: ["stairs", "stairs"] },
+      { requiredCompletion: { localDate: "2026-02-30" } },
+      { multiStop: true },
+      { alternateContact: { name: "Backup" } },
+    ]) {
+      expect(() => parsePartnerDraftMutation({ scope })).toThrow();
+    }
+  });
+
   it("calculates base plus quantity lines without trusting client prices", () => {
     const pricing = resolvePartnerBookingPrice({
       baseAmountMinor: 25_000,
@@ -129,11 +179,21 @@ describe("partner V2 base service and quantity add-ons", () => {
     expect(highQuantity.addOns[0]?.requiresReview).toBe(true);
   });
 
-  it("routes explicitly restricted or non-standard scope to review, not rejection", () => {
+  it("routes hazards, equipment, deadlines, and multi-stop scope to review, not rejection", () => {
     const result = validatePartnerBookingDraft({
       locationId: "11111111-1111-4111-8111-111111111111",
       serviceKey: "junk-removal",
-      scope: { restrictedItems: true, nonStandard: true },
+      scope: {
+        restrictedItems: true,
+        hazardCategories: ["paint"],
+        nonStandard: true,
+        equipmentNeeds: ["heavy_lift"],
+        multiStop: true,
+        requiredCompletion: {
+          localDate: "2026-09-18",
+          localTime: "14:30",
+        },
+      },
       description: "Remove unusually heavy containers with unknown material",
       onSiteContact: { name: "Site lead", phone: "+14045550100" },
       proofRequirements: { before: 1, after: 1 },
@@ -161,6 +221,7 @@ describe("partner V2 base service and quantity add-ons", () => {
     expect(result.reviewReasons).toEqual([
       "non_standard_job",
       "restricted_item",
+      "manual_review_required",
     ]);
   });
 

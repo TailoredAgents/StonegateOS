@@ -1,31 +1,50 @@
-import type { Metadata } from "next";
-import type { Route } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowRight, KeyRound, Link2, ShieldCheck } from "lucide-react";
-import {
-  requestPartnerMagicLinkAction,
-  partnerPasswordLoginAction,
-} from "@/app/partners/actions";
+import { ArrowRight, LockKeyhole, ShieldCheck } from "lucide-react";
+import { partnerPasswordLoginAction } from "@/app/partners/actions";
 import { PartnerMutationSubmitButton } from "@/app/partners/PartnerMutationSubmitButton";
 import {
   PartnerNotice,
   partnerFieldClass,
   partnerPrimaryButtonClass,
-  partnerSecondaryButtonClass,
 } from "@/app/partners/components/PartnerPortalUi";
 import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
 import { normalizePartnerReturnTo } from "@/app/partners/lib/safe-return";
 
 export const metadata: Metadata = {
-  title: "Sign in",
+  title: "Partner sign in",
+  robots: { index: false, follow: false, nocache: true },
+  referrer: "no-referrer",
 };
+
+function loginError(code: string | null): string | null {
+  if (!code) return null;
+  if (code === "missing_credentials")
+    return "Enter both your email and password.";
+  if (code === "activation_required" || code === "pending_activation") {
+    return "Your access is approved but not activated. Use the activation email to create your password.";
+  }
+  if (code === "rate_limited") {
+    return "Too many sign-in attempts were made. Wait a moment, then try again.";
+  }
+  if (code === "mfa_transaction_expired" || code === "mfa_attempts_exhausted") {
+    return "That verification attempt expired or was used. Sign in again to continue.";
+  }
+  if (code === "mfa_enrollment_required") {
+    return "This account requires an authenticator, but setup is incomplete. Contact Stonegate support to recover access.";
+  }
+  if (code === "temporarily_unavailable" || code === "request_failed") {
+    return "Sign-in is temporarily unavailable. Try again shortly or contact Stonegate.";
+  }
+  return "The email or password did not match an active partner account.";
+}
 
 export default async function PartnerLoginPage({
   searchParams,
 }: {
   searchParams?: Promise<{
-    sent?: string;
+    reset?: string;
     error?: string;
     returnTo?: string;
   }>;
@@ -34,41 +53,13 @@ export default async function PartnerLoginPage({
   const returnTo = normalizePartnerReturnTo(params.returnTo);
   const context = await getPartnerPortalContext();
   if (context.status === "authenticated") redirect(returnTo as Route);
-
-  const sent = params.sent === "1";
   const error =
-    typeof params.error === "string" && params.error.trim().length
+    typeof params.error === "string" && params.error.trim()
       ? params.error.trim()
       : null;
 
-  const errorMessage = (() => {
-    if (!error) return null;
-    if (error === "email_or_phone_required") {
-      return "Enter your work email or mobile phone number.";
-    }
-    if (error === "missing_credentials") {
-      return "Enter both your email and password.";
-    }
-    if (error === "expired_or_invalid") {
-      return "That secure link has expired or was already used. Request a new link below.";
-    }
-    if (error === "missing_token") {
-      return "That sign-in link is incomplete. Request a new link below.";
-    }
-    if (error === "invalid_credentials" || error === "login_failed") {
-      return "The email or password did not match an active partner account.";
-    }
-    if (error === "rate_limited") {
-      return "Too many sign-in attempts were made. Wait a moment, then try again.";
-    }
-    if (error === "temporarily_unavailable" || error === "request_failed") {
-      return "We couldn’t send a sign-in link right now. Try again shortly or contact support.";
-    }
-    return "We couldn’t sign you in. Try again or request a new secure link.";
-  })();
-
   return (
-    <div className="grid overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-200/60 lg:grid-cols-[0.9fr_1.1fr]">
+    <div className="grid overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-200/60 lg:grid-cols-[0.88fr_1.12fr]">
       <section className="relative overflow-hidden bg-primary-900 px-6 py-8 text-white sm:px-8 sm:py-10 lg:p-12">
         <div
           className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-accent-500/20 blur-3xl"
@@ -76,27 +67,27 @@ export default async function PartnerLoginPage({
         />
         <div className="relative">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent-200">
-            Built for busy partners
+            Approved partners
           </p>
           <h1 className="mt-3 max-w-lg text-3xl font-semibold tracking-tight sm:text-4xl">
-            Your jobs, locations, and service schedule in one place.
+            Your jobs, locations, proof, and records in one place.
           </h1>
           <p className="mt-4 max-w-lg text-sm leading-6 text-primary-100 sm:text-base">
-            Securely schedule pickups, track upcoming work, and keep every
-            service location organized.
+            Sign in to schedule service, follow active work, communicate with
+            Stonegate, and keep company documents organized.
           </p>
           <ul className="mt-8 space-y-4 text-sm text-primary-50">
             {[
-              "Schedule service from your partner rate card",
-              "Reuse saved addresses and access details",
-              "Request schedule changes or cancel with the job context preserved",
+              "Account-scoped company access",
+              "Secure password and recovery controls",
+              "Multi-factor protection for privileged roles",
             ].map((item) => (
               <li key={item} className="flex items-start gap-3">
                 <ShieldCheck
                   className="mt-0.5 h-5 w-5 shrink-0 text-accent-200"
                   aria-hidden="true"
                 />
-                <span>{item}</span>
+                {item}
               </li>
             ))}
           </ul>
@@ -105,183 +96,114 @@ export default async function PartnerLoginPage({
 
       <div className="p-6 sm:p-8 lg:p-10">
         <div className="max-w-xl">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">
-            Partner access
-          </p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-            Sign in to your portal
-          </h2>
-          <p className="mt-2 text-sm leading-6 text-slate-600">
-            Use a secure link for the simplest sign-in, or use your password if
-            you set one.
-          </p>
-          {sent ? (
-            <PartnerNotice tone="success" className="mt-5">
-              If the details match an active invitation, we’ll send a secure
-              link by text and/or email.
-            </PartnerNotice>
-          ) : null}
-          {errorMessage ? (
-            <PartnerNotice tone="error" className="mt-5">
-              {errorMessage}
-            </PartnerNotice>
-          ) : null}
-
-          <section aria-labelledby="secure-link-heading" className="mt-7">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 text-primary-700">
-                <Link2 className="h-5 w-5" aria-hidden="true" />
-              </div>
-              <div>
-                <h3
-                  id="secure-link-heading"
-                  className="font-semibold text-slate-950"
-                >
-                  Send a secure sign-in link
-                </h3>
-                <p className="text-xs text-slate-500">No password needed</p>
-              </div>
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-50 text-primary-700 ring-1 ring-primary-100">
+              <LockKeyhole className="h-5 w-5" aria-hidden="true" />
             </div>
-            <form
-              action={requestPartnerMagicLinkAction}
-              className="mt-4 space-y-4"
-              data-partner-analytics="magic_link_request"
-            >
-              <input type="hidden" name="returnTo" value={returnTo} />
-              <label className="block" htmlFor="partner-identifier">
-                <span className="text-sm font-semibold text-slate-700">
-                  Work email or mobile phone
-                </span>
-                <input
-                  id="partner-identifier"
-                  name="identifier"
-                  type="text"
-                  required
-                  autoComplete="username"
-                  className={partnerFieldClass}
-                  placeholder="you@company.com or (404) 555-1234"
-                />
-              </label>
-              <label className="flex min-h-11 items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
-                <input
-                  id="partner-magic-remember"
-                  name="rememberMe"
-                  type="checkbox"
-                  className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700 focus:ring-primary-600"
-                />
-                <span>
-                  <span className="block font-semibold text-slate-800">
-                    Keep me signed in
-                  </span>
-                  <span className="mt-0.5 block text-xs text-slate-500">
-                    Use only on a private device. This extends the session from
-                    12 hours to 30 days.
-                  </span>
-                </span>
-              </label>
-              <PartnerMutationSubmitButton
-                className={`${partnerPrimaryButtonClass} w-full`}
-                pendingLabel="Sending secure link…"
-              >
-                Send me a login link
-                <ArrowRight className="h-4 w-4" aria-hidden="true" />
-              </PartnerMutationSubmitButton>
-            </form>
-          </section>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">
+                Partner access
+              </p>
+              <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
+                Sign in to your portal
+              </h2>
+            </div>
+          </div>
 
-          <details className="group mt-7 border-t border-slate-200 pt-6">
-            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between rounded-xl px-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
-              <span className="flex items-center gap-2">
-                <KeyRound
-                  className="h-4 w-4 text-slate-500"
-                  aria-hidden="true"
-                />
-                Sign in with a password
+          {params.reset === "1" ? (
+            <PartnerNotice tone="success" className="mt-5">
+              Password reset. Sign in with your new password.
+            </PartnerNotice>
+          ) : null}
+          {loginError(error) ? (
+            <PartnerNotice tone="error" className="mt-5">
+              {loginError(error)}
+            </PartnerNotice>
+          ) : null}
+
+          <form
+            action={partnerPasswordLoginAction}
+            className="mt-7 space-y-4"
+            data-partner-analytics="password_login"
+          >
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <label className="block" htmlFor="partner-email">
+              <span className="text-sm font-semibold text-slate-700">
+                Email
               </span>
-              <span
-                className="text-slate-400 transition group-open:rotate-90"
-                aria-hidden="true"
-              >
-                ›
-              </span>
-            </summary>
-            <form
-              action={partnerPasswordLoginAction}
-              className="mt-4 space-y-4"
-              data-partner-analytics="password_login"
-            >
-              <input type="hidden" name="returnTo" value={returnTo} />
-              <label className="block" htmlFor="partner-email">
-                <span className="text-sm font-semibold text-slate-700">
-                  Email
-                </span>
-                <input
-                  id="partner-email"
-                  name="email"
-                  type="email"
-                  required
-                  autoComplete="username"
-                  className={partnerFieldClass}
-                  placeholder="you@company.com"
-                />
-              </label>
-              <label className="flex min-h-11 items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
-                <input
-                  id="partner-password-remember"
-                  name="rememberMe"
-                  type="checkbox"
-                  className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700 focus:ring-primary-600"
-                />
-                <span>
-                  <span className="block font-semibold text-slate-800">
-                    Keep me signed in
-                  </span>
-                  <span className="mt-0.5 block text-xs text-slate-500">
-                    Use only on a private device. This extends the session from
-                    12 hours to 30 days.
-                  </span>
-                </span>
-              </label>
-              <label className="block" htmlFor="partner-password">
-                <span className="text-sm font-semibold text-slate-700">
+              <input
+                id="partner-email"
+                name="email"
+                type="email"
+                required
+                maxLength={254}
+                autoComplete="username"
+                inputMode="email"
+                className={partnerFieldClass}
+                placeholder="you@company.com"
+              />
+            </label>
+            <div>
+              <div className="flex items-center justify-between gap-3">
+                <label
+                  htmlFor="partner-password"
+                  className="text-sm font-semibold text-slate-700"
+                >
                   Password
+                </label>
+                <Link
+                  href={"/partners/forgot-password" as Route}
+                  className="inline-flex min-h-11 items-center text-sm font-semibold text-primary-800 underline underline-offset-4"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+              <input
+                id="partner-password"
+                name="password"
+                type="password"
+                required
+                minLength={1}
+                maxLength={128}
+                autoComplete="current-password"
+                className={partnerFieldClass}
+              />
+            </div>
+            <label className="flex min-h-11 items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
+              <input
+                name="rememberMe"
+                type="checkbox"
+                className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700 focus:ring-primary-600"
+              />
+              <span>
+                <span className="block font-semibold text-slate-800">
+                  Keep me signed in
                 </span>
-                <input
-                  id="partner-password"
-                  name="password"
-                  type="password"
-                  required
-                  autoComplete="current-password"
-                  className={partnerFieldClass}
-                />
-              </label>
-              <PartnerMutationSubmitButton
-                className={`${partnerSecondaryButtonClass} w-full`}
-                pendingLabel="Signing in…"
-              >
-                Sign in with password
-              </PartnerMutationSubmitButton>
-            </form>
-          </details>
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  Use only on a private device. This extends the session from 12
+                  hours to 30 days.
+                </span>
+              </span>
+            </label>
+            <PartnerMutationSubmitButton
+              className={`${partnerPrimaryButtonClass} w-full`}
+              pendingLabel="Signing in…"
+            >
+              Sign in
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </PartnerMutationSubmitButton>
+          </form>
 
           <p className="mt-7 border-t border-slate-200 pt-5 text-sm leading-6 text-slate-600">
-            Need a new partner account? Tell us about your company and service
-            needs on the{" "}
+            Need a company account?{" "}
             <Link
               href="/partners/request-access"
               className="font-semibold text-primary-800 underline underline-offset-4"
             >
-              request access page
+              Verify your work email and request access
             </Link>
-            . If you already have an invitation, use the secure sign-in link
-            above.
+            .
           </p>
-          <Link
-            href="/"
-            className="mt-3 inline-flex min-h-11 items-center text-sm font-semibold text-primary-800 underline-offset-4 hover:underline"
-          >
-            Return to the Stonegate website
-          </Link>
         </div>
       </div>
     </div>

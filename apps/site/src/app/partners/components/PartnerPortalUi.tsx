@@ -30,16 +30,18 @@ const PARTNER_ERROR_MESSAGES: Record<string, string> = {
     "The cancellation response was incomplete. Refresh Jobs to confirm the current status.",
   missing_appointment_id:
     "The job details needed for that change were missing. Refresh Jobs and try again.",
-  password_too_short: "Use 12 to 128 characters for your new password.",
+  password_too_short: "Use 15 to 128 characters for your new password.",
   password_confirmation_mismatch:
     "The new password and confirmation do not match.",
   current_password_required: "Enter your current password to make this change.",
   current_password_incorrect: "The current password is incorrect.",
   password_reused: "Choose a password you are not already using.",
   recent_authentication_required:
-    "For your security, sign out and use a new secure sign-in link before setting a password.",
+    "For your security, sign in again and complete multi-factor verification if required.",
   rate_limited:
     "Too many attempts were made. Wait a few minutes and try again.",
+  logout_failed:
+    "We couldn’t confirm server sign-out, so this browser session remains active. Try again or revoke it from Active sessions.",
   save_failed: "We couldn’t save that change. Try again.",
   create_failed:
     "We couldn’t add that location. Check the address and try again.",
@@ -53,13 +55,8 @@ export function partnerErrorMessage(
   const normalized = value.trim();
   const known = PARTNER_ERROR_MESSAGES[normalized.toLowerCase()];
   if (known) return known;
-  if (
-    normalized.length <= 320 &&
-    /\s/u.test(normalized) &&
-    !/^[a-z0-9_-]+$/iu.test(normalized)
-  ) {
-    return normalized;
-  }
+  // Query strings are untrusted. Only stable, locally mapped error codes may
+  // become first-party portal copy.
   return fallback;
 }
 
@@ -294,12 +291,40 @@ function normalizeStatus(status: string): string {
 
 export function PartnerStatusBadge({ status }: { status: string }) {
   const normalized = status.trim().toLowerCase();
-  const tone =
-    normalized === "completed" || normalized === "confirmed"
-      ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
-      : normalized === "canceled" || normalized === "cancelled"
-        ? "bg-rose-50 text-rose-800 ring-rose-200"
-        : normalized === "scheduled" || normalized === "pending"
+  const tone = [
+    "completed",
+    "confirmed",
+    "paid",
+    "accepted",
+    "approved",
+  ].includes(normalized)
+    ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
+    : [
+          "canceled",
+          "cancelled",
+          "declined",
+          "failed",
+          "overdue",
+          "void",
+        ].includes(normalized)
+      ? "bg-rose-50 text-rose-800 ring-rose-200"
+      : [
+            "approval_needed",
+            "needs_information",
+            "requested",
+            "requested_review",
+            "review",
+            "under_review",
+          ].includes(normalized)
+        ? "bg-amber-50 text-amber-900 ring-amber-200"
+        : [
+              "en_route",
+              "in_progress",
+              "issued",
+              "partially_paid",
+              "pending",
+              "scheduled",
+            ].includes(normalized)
           ? "bg-sky-50 text-sky-800 ring-sky-200"
           : "bg-slate-100 text-slate-700 ring-slate-200";
 

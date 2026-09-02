@@ -20,6 +20,9 @@ mockModule("@/lib/partner-portal-onboarding", () => ({
 mockModule("@/lib/team-auth-rate-limit", () => ({
   consumeTeamAuthRateLimit: mockConsumeTeamAuthRateLimit,
 }));
+mockModule("@/lib/partner-portal-feature-flags", () => ({
+  isPartnerRoutineMagicLinkLoginEnabled: () => true,
+}));
 
 const { POST: consumeMagicLink } = await import(
   "../../app/api/portal/v2/auth/magic-link/consume/route"

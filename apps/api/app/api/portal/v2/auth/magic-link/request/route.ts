@@ -18,6 +18,7 @@ import {
   createPartnerPortalV2UnexpectedResponse,
 } from "@/lib/partner-portal-v2-response";
 import { isAllowedPartnerPortalMutationOrigin } from "@/lib/partner-portal-v2-security";
+import { isPartnerRoutineMagicLinkLoginEnabled } from "@/lib/partner-portal-feature-flags";
 
 function isExactEmailPayload(value: unknown): value is { email: string } {
   return (
@@ -31,6 +32,11 @@ function isExactEmailPayload(value: unknown): value is { email: string } {
 
 export async function POST(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
+  if (!isPartnerRoutineMagicLinkLoginEnabled()) {
+    return createPartnerPortalV2DescriptorResponse(
+      createPortalV2ErrorResponse("not_found", correlationId),
+    );
+  }
   if (!isAllowedPartnerPortalMutationOrigin(request)) {
     return createPartnerPortalV2DescriptorResponse(
       createPortalV2ErrorResponse("forbidden", correlationId),

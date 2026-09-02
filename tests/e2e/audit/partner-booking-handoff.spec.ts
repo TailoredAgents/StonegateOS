@@ -15,6 +15,9 @@ import {
 
 test.use({ storageState: "tests/e2e/storage/visitor.json" });
 
+const BOOKING_SCOPE_LABEL =
+  /What (?:needs to be done|should be completed at the facility)\?/u;
+
 test.beforeEach(({ page: _page }, testInfo) => {
   test.skip(
     testInfo.project.name !== "chromium-1440-light",
@@ -94,7 +97,10 @@ test("Partner Portal V2 books, replays safely, reschedules atomically, and cance
       `/partners/book?locationId=${fixture.locationId}&serviceKey=junk-removal`,
     );
     await expect(
-      page.getByRole("heading", { name: "Schedule a job", level: 1 }),
+      page.getByRole("heading", {
+        name: "Schedule facility service",
+        level: 1,
+      }),
     ).toBeVisible();
     await expect(page.getByText("All changes saved")).toBeVisible();
 
@@ -103,7 +109,7 @@ test("Partner Portal V2 books, replays safely, reschedules atomically, and cance
       page.getByRole("heading", { name: "Service & scope" }),
     ).toBeVisible();
     await page
-      .getByLabel("What needs to be done?")
+      .getByRole("textbox", { name: BOOKING_SCOPE_LABEL })
       .fill(
         `Remove staged office furniture and boxed material. E2E ${fixture.marker}`,
       );
@@ -309,7 +315,7 @@ test("Partner Portal V2 books, replays safely, reschedules atomically, and cance
       page.getByRole("heading", { name: "Service & scope" }),
     ).toBeVisible();
     await page
-      .getByLabel("What needs to be done?")
+      .getByRole("textbox", { name: BOOKING_SCOPE_LABEL })
       .fill(`Reviewed demo haul-off request. E2E ${fixture.marker}`);
     await page
       .getByRole("checkbox", {
@@ -430,7 +436,7 @@ test("account rules override client approval hints and a valid approval hold con
     await expect(page.getByText("All changes saved")).toBeVisible();
     await page.getByRole("button", { name: "Continue" }).click();
     await page
-      .getByLabel("What needs to be done?")
+      .getByRole("textbox", { name: BOOKING_SCOPE_LABEL })
       .fill(`Approval-controlled removal. E2E ${requester.marker}`);
     await page.getByRole("button", { name: "Continue" }).click();
     await page.getByLabel("On-site contact name").fill("Approval Site Lead");

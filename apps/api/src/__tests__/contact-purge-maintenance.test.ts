@@ -15,7 +15,7 @@ import {
 } from "@/lib/permissions";
 import { buildTeamRouteSecurityContract } from "@/lib/team-route-security-manifest";
 
-const API_ROOT = path.resolve(__dirname, "../..");
+const API_ROOT = process.cwd();
 const CONTACT_ID = "037cfdb8-e3af-40a1-bf96-d487cab3eb91";
 const DELETED_AT = new Date("2026-07-01T12:00:00.000Z");
 const ELIGIBLE_AT = new Date("2026-07-31T12:00:00.000Z");
@@ -174,6 +174,9 @@ describe("contact purge authorization and source contracts", () => {
   const migration = source(
     "src/db/migrations/0090_contact_purge_maintenance.sql",
   );
+  const taskIntentColumnRepair = source(
+    "src/db/migrations/0143_contact_purge_task_intent_column_repair.sql",
+  );
   const schema = source("src/db/schema.ts");
   const mergeLibrary = source("src/lib/merge-queue.ts");
   const roleUpdateRoute = source("app/api/admin/roles/[roleId]/route.ts");
@@ -186,24 +189,22 @@ describe("contact purge authorization and source contracts", () => {
 
   it("keeps purge out of custom grants and grants it only when stored explicitly", () => {
     expect(TEAM_PERMISSION_CATALOG).toContain("contacts.purge");
-    expect(TEAM_OWNER_ONLY_PERMISSION_CATALOG).toEqual([
-      "contacts.purge",
-      "expenses.approve",
-      "financials.read",
-      "ad_spend.write",
-    ]);
-    expect(TEAM_ASSIGNABLE_PERMISSION_CATALOG).not.toContain("contacts.purge");
-    expect(TEAM_ASSIGNABLE_PERMISSION_CATALOG).not.toContain(
-      "expenses.approve",
+    expect(TEAM_OWNER_ONLY_PERMISSION_CATALOG).toEqual(
+      expect.arrayContaining([
+        "contacts.purge",
+        "expenses.approve",
+        "financials.read",
+        "ad_spend.write",
+      ]),
     );
-    expect(TEAM_ASSIGNABLE_PERMISSION_CATALOG).not.toContain("financials.read");
-    expect(TEAM_ASSIGNABLE_PERMISSION_CATALOG).not.toContain("ad_spend.write");
+    for (const ownerOnlyPermission of TEAM_OWNER_ONLY_PERMISSION_CATALOG) {
+      expect(TEAM_ASSIGNABLE_PERMISSION_CATALOG).not.toContain(
+        ownerOnlyPermission,
+      );
+    }
     expect(getDefaultPermissionsForRole("owner")).toEqual([
       "*",
-      "contacts.purge",
-      "expenses.approve",
-      "financials.read",
-      "ad_spend.write",
+      ...TEAM_OWNER_ONLY_PERMISSION_CATALOG,
     ]);
     expect(
       computeEffectivePermissions({
@@ -467,6 +468,38 @@ describe("contact purge authorization and source contracts", () => {
     );
     expect(migration).toContain("interval '30 days'");
     expect(migration).not.toMatch(/DELETE\s+FROM\s+"?contacts"?/iu);
+  });
+
+  it("repairs the task-intent parent column additively after migration 0142", () => {
+    const journal = JSON.parse(
+      source("src/db/migrations/meta/_journal.json"),
+    ) as {
+      entries?: Array<{
+        idx?: number;
+        version?: string;
+        when?: number;
+        tag?: string;
+        breakpoints?: boolean;
+      }>;
+    };
+    expect(journal.entries).toContainEqual({
+      idx: 140,
+      version: "7",
+      when: 1793232000000,
+      tag: "0143_contact_purge_task_intent_column_repair",
+      breakpoints: true,
+    });
+    expect(migration).toContain('intent."operation_id"');
+    expect(taskIntentColumnRepair).toContain(
+      'operation."id" = intent."call_operation_id"',
+    );
+    expect(taskIntentColumnRepair).not.toContain('intent."operation_id"');
+    expect(taskIntentColumnRepair).toContain(
+      'CREATE OR REPLACE FUNCTION "public"."enforce_contact_purge_maintenance"()',
+    );
+    expect(taskIntentColumnRepair).not.toMatch(
+      /CREATE\s+TRIGGER|DROP\s+TRIGGER/iu,
+    );
   });
 
   it("does not let merge or scoped fixture cleanup opt into hard purge", () => {

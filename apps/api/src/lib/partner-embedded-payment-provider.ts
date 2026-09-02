@@ -1,4 +1,5 @@
 import { getSquareApiBaseUrl } from "@myst-os/sdk";
+import { isOperationalFeatureEnabled } from "@/lib/feature-flags";
 import { SQUARE_API_VERSION } from "@/lib/square-client";
 import { squareAttemptNote } from "@/lib/square-pos";
 
@@ -15,8 +16,8 @@ export type PartnerWebPaymentsConfiguration = Readonly<{
   sdkUrl:
     | "https://sandbox.web.squarecdn.com/v1/square.js"
     | "https://web.squarecdn.com/v1/square.js";
-  methods: Readonly<{ card: true; ach: false }>;
-  achUnavailableReason: "merchant_and_return_configuration_required";
+  methods: Readonly<{ card: true; ach: boolean }>;
+  achUnavailableReason: "merchant_and_webhook_configuration_required" | null;
 }>;
 
 export type PartnerEmbeddedOrderRequest = Readonly<{
@@ -39,6 +40,7 @@ export type PartnerEmbeddedPaymentRequest = Readonly<{
   appointmentId: string;
   providerOrderId: string;
   sourceToken: string;
+  paymentMethod: "card" | "ach";
   amountMinor: number;
   currency: "USD";
 }>;
@@ -49,6 +51,7 @@ export type PartnerEmbeddedPaymentResult = Readonly<{
   providerPaymentId: string;
   locationId: string;
   providerStatus: "COMPLETED" | "PENDING";
+  paymentMethod: "card" | "ach";
 }>;
 
 export interface PartnerEmbeddedPaymentProvider {
@@ -81,8 +84,11 @@ type SquareEmbeddedPaymentProviderOptions = Readonly<{
   locationId?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  achEnabled?: boolean;
   environment?: Readonly<Record<string, string | undefined>>;
 }>;
+
+const EXPLICIT_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -103,6 +109,42 @@ function providerString(value: unknown, maximum = 255): string | null {
     !hasControlCharacter(normalized)
     ? normalized
     : null;
+}
+
+function isExplicitlyEnabled(value: string | undefined): boolean {
+  return EXPLICIT_TRUE_VALUES.has(value?.trim().toLowerCase() ?? "");
+}
+
+function isSecureSquareWebhookConfiguration(
+  environment: Readonly<Record<string, string | undefined>>,
+): boolean {
+  const signatureKey = providerString(
+    environment["SQUARE_WEBHOOK_SIGNATURE_KEY"],
+    4_096,
+  );
+  const rawUrl = environment["SQUARE_WEBHOOK_NOTIFICATION_URL"]?.trim() ?? "";
+  if (!signatureKey || !rawUrl) return false;
+  try {
+    const url = new URL(rawUrl);
+    const loopback = ["localhost", "127.0.0.1", "::1"].includes(
+      url.hostname.toLowerCase(),
+    );
+    const secure =
+      url.protocol === "https:" ||
+      (environment["NODE_ENV"] !== "production" &&
+        loopback &&
+        url.protocol === "http:");
+    return (
+      secure &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      url.pathname === "/api/webhooks/square"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function safeInvoiceLabel(value: string): string {
@@ -257,6 +299,11 @@ export function createSquarePartnerEmbeddedPaymentProvider(
     environment["SQUARE_ENVIRONMENT"]?.trim().toLowerCase() === "sandbox"
       ? "sandbox"
       : "production";
+  const achEnabled =
+    options.achEnabled ??
+    (isOperationalFeatureEnabled("PARTNER_PORTAL_EMBEDDED_ACH_ENABLED") &&
+      isExplicitlyEnabled(environment["SQUARE_ACH_ENABLED"]) &&
+      isSecureSquareWebhookConfiguration(environment));
   const webPayments: PartnerWebPaymentsConfiguration = {
     applicationId,
     locationId,
@@ -265,11 +312,13 @@ export function createSquarePartnerEmbeddedPaymentProvider(
       squareEnvironment === "sandbox"
         ? "https://sandbox.web.squarecdn.com/v1/square.js"
         : "https://web.squarecdn.com/v1/square.js",
-    methods: { card: true, ach: false },
-    // ACH requires merchant eligibility plus Square's browser authorization
-    // redirect/transaction configuration. Neither can be inferred safely from
-    // the credentials used for card processing.
-    achUnavailableReason: "merchant_and_return_configuration_required",
+    methods: { card: true, ach: achEnabled },
+    // This explicit operator gate attests that the Square seller/location is
+    // ACH eligible and that signed payment.updated webhooks have been tested.
+    // Card credentials alone never imply bank-transfer readiness.
+    achUnavailableReason: achEnabled
+      ? null
+      : "merchant_and_webhook_configuration_required",
   };
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
@@ -378,9 +427,21 @@ export function createSquarePartnerEmbeddedPaymentProvider(
     },
     async createPayment(input) {
       assertPaymentRequest(input);
+      if (input.paymentMethod !== "card" && input.paymentMethod !== "ach") {
+        throw new PartnerEmbeddedPaymentProviderError(
+          "provider_request_invalid",
+          false,
+        );
+      }
       const providerOrderId = providerString(input.providerOrderId);
       const sourceToken = providerString(input.sourceToken, 2_048);
-      if (!providerOrderId || !sourceToken) {
+      const sourceTokenIsAch = sourceToken?.startsWith("bauth:") ?? false;
+      if (
+        !providerOrderId ||
+        !sourceToken ||
+        (input.paymentMethod === "ach" && (!achEnabled || !sourceTokenIsAch)) ||
+        (input.paymentMethod === "card" && sourceTokenIsAch)
+      ) {
         throw new PartnerEmbeddedPaymentProviderError(
           "provider_request_invalid",
           false,
@@ -431,13 +492,17 @@ export function createSquarePartnerEmbeddedPaymentProvider(
         isRecord(body) && isRecord(body["payment"]) ? body["payment"] : null;
       const providerPaymentId = providerString(payment?.["id"]);
       const status = payment?.["status"];
+      const expectedSourceType =
+        input.paymentMethod === "ach" ? "BANK_ACCOUNT" : "CARD";
       if (
         !payment ||
         !providerPaymentId ||
         payment["order_id"] !== providerOrderId ||
         payment["location_id"] !== locationId ||
-        (status !== "COMPLETED" && status !== "PENDING") ||
-        payment["source_type"] !== "CARD" ||
+        (input.paymentMethod === "ach"
+          ? status !== "PENDING"
+          : status !== "COMPLETED" && status !== "PENDING") ||
+        payment["source_type"] !== expectedSourceType ||
         !moneyMatches(
           payment["amount_money"],
           input.amountMinor,
@@ -456,7 +521,8 @@ export function createSquarePartnerEmbeddedPaymentProvider(
         providerOrderId,
         providerPaymentId,
         locationId,
-        providerStatus: status,
+        providerStatus: status === "COMPLETED" ? "COMPLETED" : "PENDING",
+        paymentMethod: input.paymentMethod,
       };
     },
   };

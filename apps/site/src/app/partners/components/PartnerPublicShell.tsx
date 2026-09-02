@@ -17,9 +17,9 @@ export function PartnerPublicShell({
 }) {
   const pathname = usePathname();
   const entryLink: { href: Route; label: string } =
-    pathname === "/partners/request-access"
-      ? { href: "/partners/login", label: "Sign in" }
-      : { href: "/partners/request-access", label: "Request access" };
+    pathname === "/partners/login"
+      ? { href: "/partners/request-access", label: "Request access" }
+      : { href: "/partners/login", label: "Sign in" };
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 text-slate-950">
       <a
@@ -31,7 +31,7 @@ export function PartnerPublicShell({
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex min-h-16 w-full max-w-6xl items-center justify-between gap-4 px-4 py-2 sm:px-6 lg:px-8">
           <Link
-            href="/partners/login"
+            href="/partners"
             className="flex min-w-0 items-center gap-3 rounded-lg"
           >
             <Image
@@ -46,7 +46,9 @@ export function PartnerPublicShell({
               <span className="block truncate text-sm font-semibold text-slate-950">
                 {company.name}
               </span>
-              <span className="block text-xs text-slate-500">Partner Portal</span>
+              <span className="block text-xs text-slate-500">
+                Partner Portal
+              </span>
             </span>
           </Link>
           <div className="flex items-center gap-2">
@@ -81,14 +83,20 @@ export function PartnerPublicShell({
             © {new Date().getFullYear()} {company.name}. Licensed and insured.
           </p>
           <nav aria-label="Legal" className="flex flex-wrap gap-x-4 gap-y-2">
-            <Link className="underline-offset-4 hover:underline" href="/privacy">
+            <Link
+              className="inline-flex min-h-11 items-center underline-offset-4 hover:underline"
+              href="/privacy"
+            >
               Privacy
             </Link>
-            <Link className="underline-offset-4 hover:underline" href="/terms">
+            <Link
+              className="inline-flex min-h-11 items-center underline-offset-4 hover:underline"
+              href="/terms"
+            >
               Terms
             </Link>
             <Link
-              className="underline-offset-4 hover:underline"
+              className="inline-flex min-h-11 items-center underline-offset-4 hover:underline"
               href="/service-agreement"
             >
               Service agreement

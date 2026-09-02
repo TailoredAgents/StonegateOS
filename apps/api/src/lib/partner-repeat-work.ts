@@ -1,6 +1,17 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DateTime } from "luxon";
-import { and, asc, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import {
   auditLogs,
   crmTasks,
@@ -14,6 +25,7 @@ import {
   partnerRecurringSeries,
   partnerServiceCatalog,
   partnerServiceTemplates,
+  teamMutationIdempotency,
 } from "@/db";
 import type { PartnerPrincipal } from "@/lib/partner-account-authorization";
 import { recordAuditEvent } from "@/lib/audit";
@@ -34,12 +46,20 @@ import {
 } from "@/lib/portal-v2-contract";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 import { projectPartnerAddOnSnapshots } from "@/lib/partner-portal-v2-service-add-ons";
+import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
+import { acquirePartnerRecurringHorizonClaimLock } from "@/lib/partner-recurring-coordination";
+import type { TeamMutationTransaction } from "@/lib/team-mutation";
 
 const MAX_TEMPLATES = 100;
 const MAX_BULK_ROWS = 100;
 const MAX_CSV_BYTES = 256 * 1024;
 const MAX_OCCURRENCES = 24;
 const RECURRING_CONFIRMATION_HORIZON_DAYS = 30;
+const RECURRING_LIFECYCLE_RECEIPT_ACTION =
+  "partner.portal.v2.recurring_series.lifecycle";
+const RECURRING_LIFECYCLE_RECEIPT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 const UNSAFE_REUSE_KEY =
   /(?:access|gate|lock|secret|password|credential|token|payment|card|bank|price|rate|quote|invoice|approval|hold|authorization)/iu;
@@ -76,6 +96,60 @@ export type RecurrenceInput = Readonly<{
   occurrenceCount: number;
   preferredWindowStart: string | null;
 }>;
+
+export type RecurringSeriesLifecycleAction = "pause" | "resume" | "cancel";
+
+export type RecurringSeriesLifecycleMutation = Readonly<{
+  action: RecurringSeriesLifecycleAction;
+  reason: string;
+}>;
+
+export type PartnerRecurringSeriesLifecycle = Readonly<{
+  action: RecurringSeriesLifecycleAction;
+  reason: string;
+  changedAt: string;
+}>;
+
+export type PartnerRecurringOccurrenceDto = Readonly<{
+  id: string;
+  localDate: string;
+  state: string;
+  draftId: string | null;
+  jobId: string | null;
+  reason: string | null;
+  evaluation: Readonly<Record<string, unknown>>;
+  evaluatedAt: string | null;
+}>;
+
+export type PartnerRecurringSeriesDto = Readonly<{
+  id: string;
+  name: string;
+  templateId: string | null;
+  recurrence: unknown;
+  timezone: string;
+  startsOn: string;
+  endsOn: string | null;
+  preferredWindowStart: string | null;
+  state: string;
+  revision: number;
+  etag: string;
+  lifecycle: PartnerRecurringSeriesLifecycle | null;
+  occurrences: readonly PartnerRecurringOccurrenceDto[];
+}>;
+
+export type PartnerRecurringSeriesLifecycleResult = Readonly<{
+  series: PartnerRecurringSeriesDto;
+  transition: Readonly<{
+    action: RecurringSeriesLifecycleAction;
+    reason: string;
+    changedAt: string;
+    changedOccurrences: number;
+    preservedOccurrences: number;
+  }>;
+  replayed: boolean;
+}>;
+
+type RepeatWorkDatabase = ReturnType<typeof getDb> | TeamMutationTransaction;
 
 export type BulkRowIssue = Readonly<{
   field: string;
@@ -845,6 +919,84 @@ export function parseRecurrenceInput(value: unknown): RecurrenceInput {
   });
 }
 
+export function parseRecurringSeriesLifecycleMutation(
+  value: unknown,
+): RecurringSeriesLifecycleMutation {
+  if (!isRecord(value)) {
+    throw new PartnerPortalSchedulingError(
+      "invalid_body",
+      "A JSON object is required.",
+      { status: 400 },
+    );
+  }
+  const allowed = new Set(["action", "reason"]);
+  const unknown = Object.keys(value).find((key) => !allowed.has(key));
+  if (unknown) {
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Review the recurring schedule change.",
+      {
+        status: 422,
+        fieldErrors: { [unknown]: "This field is not supported." },
+      },
+    );
+  }
+  const action = value["action"];
+  const rawReason = value["reason"];
+  const reason =
+    typeof rawReason === "string"
+      ? rawReason.trim().replaceAll(String.fromCharCode(0), "")
+      : "";
+  const errors: Record<string, string> = {};
+  if (!(action === "pause" || action === "resume" || action === "cancel")) {
+    errors["action"] = "Choose pause, resume, or cancel.";
+  }
+  if (reason.length < 2 || reason.length > 300) {
+    errors["reason"] = "Use 2 to 300 characters.";
+  }
+  if (Object.keys(errors).length) {
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Review the recurring schedule change.",
+      { status: 422, fieldErrors: errors },
+    );
+  }
+  return Object.freeze({
+    action: action as RecurringSeriesLifecycleAction,
+    reason,
+  });
+}
+
+export function recurringOccurrenceLifecycleTransition(input: {
+  action: RecurringSeriesLifecycleAction;
+  localDate: string;
+  tomorrow: string;
+  state: string;
+  failureCode: string | null;
+  bookingDraftId: string | null;
+  partnerBookingId: string | null;
+}): "tentative" | "skipped" | "canceled" | null {
+  if (
+    input.localDate < input.tomorrow ||
+    input.bookingDraftId ||
+    input.partnerBookingId
+  ) {
+    return null;
+  }
+  if (input.action === "pause") {
+    return input.state === "tentative" ? "skipped" : null;
+  }
+  if (input.action === "resume") {
+    return input.state === "skipped" && input.failureCode === "series_paused"
+      ? "tentative"
+      : null;
+  }
+  return input.state === "tentative" ||
+    (input.state === "skipped" && input.failureCode === "series_paused")
+    ? "canceled"
+    : null;
+}
+
 export function recurrenceDates(
   input: RecurrenceInput,
   timezone: string,
@@ -1375,12 +1527,19 @@ export async function evaluateClaimedPartnerRecurringOccurrence(input: {
 function recurringDto(
   series: typeof partnerRecurringSeries.$inferSelect,
   occurrences: readonly (typeof partnerRecurringOccurrences.$inferSelect)[],
-) {
-  return {
+  lifecycle: PartnerRecurringSeriesLifecycle | null = null,
+): PartnerRecurringSeriesDto {
+  let recurrence: unknown = {};
+  try {
+    recurrence = JSON.parse(series.recurrenceRule) as unknown;
+  } catch {
+    recurrence = {};
+  }
+  return Object.freeze({
     id: series.id,
     name: series.name,
     templateId: series.templateId,
-    recurrence: JSON.parse(series.recurrenceRule) as unknown,
+    recurrence,
     timezone: series.timezone,
     startsOn: series.startsOn,
     endsOn: series.endsOn,
@@ -1390,17 +1549,543 @@ function recurringDto(
     etag: createPortalV2StrongEtag(
       `partner-recurring-series:${series.id}:${series.revision}`,
     ),
-    occurrences: occurrences.map((occurrence) => ({
-      id: occurrence.id,
-      localDate: occurrence.localDate,
-      state: occurrence.state,
-      draftId: occurrence.bookingDraftId,
-      jobId: occurrence.partnerBookingId,
-      reason: occurrence.failureCode,
-      evaluation: occurrence.evaluation,
-      evaluatedAt: occurrence.evaluatedAt?.toISOString() ?? null,
-    })),
-  };
+    lifecycle,
+    occurrences: Object.freeze(
+      occurrences.map((occurrence) =>
+        Object.freeze({
+          id: occurrence.id,
+          localDate: occurrence.localDate,
+          state: occurrence.state,
+          draftId: occurrence.bookingDraftId,
+          jobId: occurrence.partnerBookingId,
+          reason: occurrence.failureCode,
+          evaluation: Object.freeze({ ...occurrence.evaluation }),
+          evaluatedAt: occurrence.evaluatedAt?.toISOString() ?? null,
+        }),
+      ),
+    ),
+  });
+}
+
+async function loadRecurringSeriesForActor(
+  db: RepeatWorkDatabase,
+  actor: PartnerSchedulingActor,
+  seriesId: string,
+): Promise<typeof partnerRecurringSeries.$inferSelect | null> {
+  if (!UUID_PATTERN.test(seriesId)) return null;
+  if (actor.accessLevel === "account") {
+    const [series] = await db
+      .select()
+      .from(partnerRecurringSeries)
+      .where(
+        and(
+          eq(partnerRecurringSeries.partnerAccountId, actor.accountId),
+          eq(partnerRecurringSeries.id, seriesId),
+        ),
+      )
+      .limit(1);
+    return series ?? null;
+  }
+
+  const grants: SQL[] = [];
+  if (actor.locationIds.length > 0) {
+    grants.push(
+      inArray(partnerServiceTemplates.locationId, [...actor.locationIds]),
+    );
+  }
+  if (actor.propertyIds.length > 0) {
+    grants.push(
+      inArray(partnerAccountLocations.propertyId, [...actor.propertyIds]),
+    );
+  }
+  if (grants.length === 0) return null;
+  const [row] = await db
+    .select({ series: partnerRecurringSeries })
+    .from(partnerRecurringSeries)
+    .innerJoin(
+      partnerServiceTemplates,
+      and(
+        eq(partnerRecurringSeries.templateId, partnerServiceTemplates.id),
+        eq(
+          partnerRecurringSeries.partnerAccountId,
+          partnerServiceTemplates.partnerAccountId,
+        ),
+      ),
+    )
+    .leftJoin(
+      partnerAccountLocations,
+      and(
+        eq(partnerAccountLocations.id, partnerServiceTemplates.locationId),
+        eq(
+          partnerAccountLocations.partnerAccountId,
+          partnerRecurringSeries.partnerAccountId,
+        ),
+      ),
+    )
+    .where(
+      and(
+        eq(partnerRecurringSeries.partnerAccountId, actor.accountId),
+        eq(partnerRecurringSeries.id, seriesId),
+        or(...grants) ?? sql`false`,
+      ),
+    )
+    .limit(1);
+  return row?.series ?? null;
+}
+
+async function loadRecurringOccurrences(
+  db: RepeatWorkDatabase,
+  accountId: string,
+  seriesId: string,
+): Promise<readonly (typeof partnerRecurringOccurrences.$inferSelect)[]> {
+  return db
+    .select()
+    .from(partnerRecurringOccurrences)
+    .where(
+      and(
+        eq(partnerRecurringOccurrences.partnerAccountId, accountId),
+        eq(partnerRecurringOccurrences.recurringSeriesId, seriesId),
+      ),
+    )
+    .orderBy(asc(partnerRecurringOccurrences.localDate))
+    .limit(MAX_OCCURRENCES);
+}
+
+function lifecycleFromAuditRow(
+  row: Pick<typeof auditLogs.$inferSelect, "meta" | "createdAt"> | undefined,
+): PartnerRecurringSeriesLifecycle | null {
+  if (!row || !isRecord(row.meta)) return null;
+  const action = row.meta["lifecycleAction"];
+  const reason = row.meta["changeReason"];
+  const changedAt = row.meta["lifecycleChangedAt"];
+  if (
+    !(action === "pause" || action === "resume" || action === "cancel") ||
+    typeof reason !== "string"
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    action,
+    reason,
+    changedAt:
+      typeof changedAt === "string" ? changedAt : row.createdAt.toISOString(),
+  });
+}
+
+async function loadRecurringLifecycle(
+  db: RepeatWorkDatabase,
+  seriesId: string,
+): Promise<PartnerRecurringSeriesLifecycle | null> {
+  const [row] = await db
+    .select({ meta: auditLogs.meta, createdAt: auditLogs.createdAt })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(
+          auditLogs.action,
+          "partner.portal.v2.recurring_series.lifecycle_changed",
+        ),
+        eq(auditLogs.entityType, "partner_recurring_series"),
+        eq(auditLogs.entityId, seriesId),
+      ),
+    )
+    .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
+    .limit(1);
+  return lifecycleFromAuditRow(row);
+}
+
+export async function getPartnerRecurringSeries(input: {
+  actor: PartnerSchedulingActor;
+  seriesId: string;
+}): Promise<PartnerRecurringSeriesDto | null> {
+  const db = getDb();
+  const series = await loadRecurringSeriesForActor(
+    db,
+    input.actor,
+    input.seriesId,
+  );
+  if (!series) return null;
+  const [occurrences, lifecycle] = await Promise.all([
+    loadRecurringOccurrences(db, input.actor.accountId, series.id),
+    loadRecurringLifecycle(db, series.id),
+  ]);
+  return recurringDto(series, occurrences, lifecycle);
+}
+
+function recurringLifecycleRevision(
+  series: Pick<typeof partnerRecurringSeries.$inferSelect, "id" | "revision">,
+): string {
+  return `partner-recurring-series:${series.id}:${series.revision}`;
+}
+
+function recurringLifecycleTargetState(
+  current: string,
+  action: RecurringSeriesLifecycleAction,
+): "active" | "paused" | "canceled" | null {
+  if (action === "pause") return current === "active" ? "paused" : null;
+  if (action === "resume") return current === "paused" ? "active" : null;
+  return current === "active" || current === "paused" ? "canceled" : null;
+}
+
+function lifecycleReceiptPayload(
+  value: Record<string, unknown> | null,
+): Omit<PartnerRecurringSeriesLifecycleResult, "replayed"> | null {
+  if (!isRecord(value)) return null;
+  const series = value["series"];
+  const transition = value["transition"];
+  if (!isRecord(series) || !isRecord(transition)) return null;
+  if (
+    typeof series["id"] !== "string" ||
+    typeof series["etag"] !== "string" ||
+    !Array.isArray(series["occurrences"]) ||
+    !(
+      transition["action"] === "pause" ||
+      transition["action"] === "resume" ||
+      transition["action"] === "cancel"
+    ) ||
+    typeof transition["reason"] !== "string" ||
+    typeof transition["changedAt"] !== "string" ||
+    typeof transition["changedOccurrences"] !== "number" ||
+    typeof transition["preservedOccurrences"] !== "number"
+  ) {
+    return null;
+  }
+  return value as unknown as Omit<
+    PartnerRecurringSeriesLifecycleResult,
+    "replayed"
+  >;
+}
+
+export async function mutatePartnerRecurringSeriesLifecycle(input: {
+  actor: PartnerSchedulingActor;
+  principal: PartnerPrincipal;
+  seriesId: string;
+  mutation: RecurringSeriesLifecycleMutation;
+  idempotencyKeyHash: string;
+  ifMatch: string | null | undefined;
+  correlationId: string;
+  now?: Date;
+}): Promise<PartnerRecurringSeriesLifecycleResult> {
+  if (!UUID_PATTERN.test(input.seriesId)) {
+    throw new PartnerPortalSchedulingError(
+      "not_found",
+      "The recurring schedule was not found.",
+      { status: 404 },
+    );
+  }
+  const now = input.now ?? new Date();
+  const changedAt = now.toISOString();
+  const principalHash = sha256(
+    "partner-portal-v2-recurring-lifecycle",
+    input.actor.partnerUserId,
+  );
+  const scopeHash = sha256(
+    "partner-recurring-series-lifecycle",
+    input.actor.accountId,
+    input.seriesId,
+  );
+  const requestHash = sha256(stableJson(input.mutation));
+
+  return getDb().transaction(async (tx) => {
+    // Keep this order aligned with the horizon worker and every schedule write:
+    // claim coordination, global schedule coordination, then the series lock.
+    await acquirePartnerRecurringHorizonClaimLock(tx);
+    await acquireScheduleConflictLock(tx);
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`partner_recurring_series_lifecycle_v1:${input.actor.accountId}:${input.seriesId}`}))`,
+    );
+
+    const series = await loadRecurringSeriesForActor(
+      tx,
+      input.actor,
+      input.seriesId,
+    );
+    if (!series) {
+      throw new PartnerPortalSchedulingError(
+        "not_found",
+        "The recurring schedule was not found.",
+        { status: 404 },
+      );
+    }
+
+    const [receipt] = await tx
+      .select()
+      .from(teamMutationIdempotency)
+      .where(
+        and(
+          eq(teamMutationIdempotency.principalHash, principalHash),
+          eq(
+            teamMutationIdempotency.action,
+            RECURRING_LIFECYCLE_RECEIPT_ACTION,
+          ),
+          eq(teamMutationIdempotency.keyHash, input.idempotencyKeyHash),
+        ),
+      )
+      .limit(1);
+    if (receipt) {
+      if (
+        receipt.scopeHash !== scopeHash ||
+        receipt.requestHash !== requestHash
+      ) {
+        throw new PartnerPortalSchedulingError(
+          "idempotency_conflict",
+          "That request key was already used for a different change.",
+          { status: 409 },
+        );
+      }
+      const replay = lifecycleReceiptPayload(receipt.responseBody);
+      if (receipt.status !== "succeeded" || !replay) {
+        throw new PartnerPortalSchedulingError(
+          "conflict",
+          "That schedule change is still being reconciled. Refresh before retrying.",
+          { status: 409, retryable: true },
+        );
+      }
+      return Object.freeze({ ...replay, replayed: true });
+    }
+
+    const precondition = evaluatePortalV2RevisionPrecondition({
+      ifMatch: input.ifMatch,
+      currentRevision: recurringLifecycleRevision(series),
+      correlationId: input.correlationId,
+    });
+    if (!precondition.ok) {
+      throw new PartnerPortalSchedulingError(
+        precondition.response.body.error,
+        precondition.response.body.message,
+        {
+          status: precondition.response.status,
+          additionalHeaders: precondition.response.headers,
+        },
+      );
+    }
+
+    const nextSeriesState = recurringLifecycleTargetState(
+      series.state,
+      input.mutation.action,
+    );
+    if (!nextSeriesState) {
+      throw new PartnerPortalSchedulingError(
+        "conflict",
+        series.state === "completed" || series.state === "canceled"
+          ? "This recurring schedule is complete and cannot be changed."
+          : `This recurring schedule is already ${series.state}.`,
+        { status: 409 },
+      );
+    }
+
+    const occurrences = await loadRecurringOccurrences(
+      tx,
+      input.actor.accountId,
+      series.id,
+    );
+    if (occurrences.some((occurrence) => occurrence.state === "evaluating")) {
+      throw new PartnerPortalSchedulingError(
+        "conflict",
+        "An occurrence is being evaluated. Refresh and retry after it finishes.",
+        { status: 409, retryable: true },
+      );
+    }
+    const tomorrow = DateTime.fromJSDate(now, { zone: series.timezone })
+      .startOf("day")
+      .plus({ days: 1 })
+      .toISODate();
+    if (!tomorrow) {
+      throw new PartnerPortalSchedulingError(
+        "conflict",
+        "This recurring schedule needs staff review before it can be changed.",
+        { status: 409 },
+      );
+    }
+    const planned = occurrences.filter(
+      (occurrence) =>
+        recurringOccurrenceLifecycleTransition({
+          action: input.mutation.action,
+          localDate: occurrence.localDate,
+          tomorrow,
+          state: occurrence.state,
+          failureCode: occurrence.failureCode,
+          bookingDraftId: occurrence.bookingDraftId,
+          partnerBookingId: occurrence.partnerBookingId,
+        }) !== null,
+    );
+
+    if (planned.length > 0) {
+      const targetOccurrenceState =
+        input.mutation.action === "pause"
+          ? "skipped"
+          : input.mutation.action === "resume"
+            ? "tentative"
+            : "canceled";
+      const priorStateCondition =
+        input.mutation.action === "pause"
+          ? eq(partnerRecurringOccurrences.state, "tentative")
+          : input.mutation.action === "resume"
+            ? and(
+                eq(partnerRecurringOccurrences.state, "skipped"),
+                eq(partnerRecurringOccurrences.failureCode, "series_paused"),
+              )
+            : or(
+                eq(partnerRecurringOccurrences.state, "tentative"),
+                and(
+                  eq(partnerRecurringOccurrences.state, "skipped"),
+                  eq(partnerRecurringOccurrences.failureCode, "series_paused"),
+                ),
+              );
+      const changed = await tx
+        .update(partnerRecurringOccurrences)
+        .set({
+          state: targetOccurrenceState,
+          failureCode:
+            input.mutation.action === "resume"
+              ? null
+              : input.mutation.action === "pause"
+                ? "series_paused"
+                : "series_canceled",
+          evaluation:
+            input.mutation.action === "resume"
+              ? {
+                  reservationCreated: false,
+                  restoredAt: changedAt,
+                  lifecycleState: "active",
+                }
+              : {
+                  reservationCreated: false,
+                  lifecycleChangedAt: changedAt,
+                  lifecycleState: nextSeriesState,
+                },
+          evaluatedAt: input.mutation.action === "resume" ? null : now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(
+              partnerRecurringOccurrences.partnerAccountId,
+              input.actor.accountId,
+            ),
+            eq(partnerRecurringOccurrences.recurringSeriesId, series.id),
+            inArray(
+              partnerRecurringOccurrences.id,
+              planned.map((occurrence) => occurrence.id),
+            ),
+            gte(partnerRecurringOccurrences.localDate, tomorrow),
+            isNull(partnerRecurringOccurrences.bookingDraftId),
+            isNull(partnerRecurringOccurrences.partnerBookingId),
+            priorStateCondition,
+          ),
+        )
+        .returning({ id: partnerRecurringOccurrences.id });
+      if (changed.length !== planned.length) {
+        throw new PartnerPortalSchedulingError(
+          "conflict",
+          "An occurrence changed while this request was processed. Refresh and try again.",
+          { status: 409, retryable: true },
+        );
+      }
+    }
+
+    const [updatedSeries] = await tx
+      .update(partnerRecurringSeries)
+      .set({
+        state: nextSeriesState,
+        revision: series.revision + 1,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(partnerRecurringSeries.partnerAccountId, input.actor.accountId),
+          eq(partnerRecurringSeries.id, series.id),
+          eq(partnerRecurringSeries.revision, series.revision),
+          eq(partnerRecurringSeries.state, series.state),
+        ),
+      )
+      .returning();
+    if (!updatedSeries) {
+      throw new PartnerPortalSchedulingError(
+        "revision_mismatch",
+        "The recurring schedule changed. Refresh and review the latest version.",
+        {
+          status: 412,
+          additionalHeaders: { ETag: precondition.currentEtag },
+        },
+      );
+    }
+
+    const updatedOccurrences = await loadRecurringOccurrences(
+      tx,
+      input.actor.accountId,
+      updatedSeries.id,
+    );
+    const lifecycle = Object.freeze({
+      action: input.mutation.action,
+      reason: input.mutation.reason,
+      changedAt,
+    });
+    const transition = Object.freeze({
+      ...lifecycle,
+      changedOccurrences: planned.length,
+      preservedOccurrences: occurrences.length - planned.length,
+    });
+    const response = Object.freeze({
+      series: recurringDto(updatedSeries, updatedOccurrences, lifecycle),
+      transition,
+    });
+    const receiptId = randomUUID();
+    const receiptOperationId = randomUUID();
+    await tx.insert(auditLogs).values({
+      actorType: "human",
+      actorId: input.principal.partnerUserId,
+      actorLabel: input.principal.email,
+      actorRole: input.principal.roleKey,
+      sessionId: input.principal.session.id,
+      authMethod: "partner_session",
+      correlationId: input.correlationId,
+      requiredPermissions: ["bookings.update"],
+      outcome: "succeeded",
+      surface: "partner_portal_v2",
+      idempotencyKeyHash: input.idempotencyKeyHash,
+      action: "partner.portal.v2.recurring_series.lifecycle_changed",
+      entityType: "partner_recurring_series",
+      entityId: updatedSeries.id,
+      meta: sanitizeAuditMetadata({
+        accountId: input.actor.accountId,
+        membershipId: input.actor.membershipId,
+        lifecycleAction: input.mutation.action,
+        changeReason: input.mutation.reason,
+        lifecycleChangedAt: changedAt,
+        previousState: series.state,
+        nextState: nextSeriesState,
+        changedOccurrences: planned.length,
+        preservedOccurrences: occurrences.length - planned.length,
+        requestHash,
+        operationReceiptId: receiptId,
+      }),
+      createdAt: now,
+    });
+    await tx.insert(teamMutationIdempotency).values({
+      id: receiptId,
+      principalHash,
+      action: RECURRING_LIFECYCLE_RECEIPT_ACTION,
+      keyHash: input.idempotencyKeyHash,
+      scopeHash,
+      requestHash,
+      status: "succeeded",
+      operationId: receiptOperationId,
+      correlationId: input.correlationId,
+      attemptCount: 1,
+      claimedAt: now,
+      claimExpiresAt: new Date(now.getTime() + 30_000),
+      completedAt: now,
+      expiresAt: new Date(
+        now.getTime() + RECURRING_LIFECYCLE_RECEIPT_RETENTION_MS,
+      ),
+      responseStatus: 200,
+      responseBody: response,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return Object.freeze({ ...response, replayed: false });
+  });
 }
 
 export async function createPartnerRecurringSeries(input: {
@@ -1636,21 +2321,11 @@ export async function listPartnerRecurringSeries(input: {
         })();
   const result = [];
   for (const row of series) {
-    const occurrences = await db
-      .select()
-      .from(partnerRecurringOccurrences)
-      .where(
-        and(
-          eq(
-            partnerRecurringOccurrences.partnerAccountId,
-            input.actor.accountId,
-          ),
-          eq(partnerRecurringOccurrences.recurringSeriesId, row.id),
-        ),
-      )
-      .orderBy(asc(partnerRecurringOccurrences.localDate))
-      .limit(MAX_OCCURRENCES);
-    result.push(recurringDto(row, occurrences));
+    const [occurrences, lifecycle] = await Promise.all([
+      loadRecurringOccurrences(db, input.actor.accountId, row.id),
+      loadRecurringLifecycle(db, row.id),
+    ]);
+    result.push(recurringDto(row, occurrences, lifecycle));
   }
   return result;
 }

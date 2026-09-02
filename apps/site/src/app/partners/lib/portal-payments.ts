@@ -45,11 +45,11 @@ export type PartnerEmbeddedPaymentIntent = {
   id: string;
   invoiceId: string;
   purpose: "deposit" | "one_off";
-  paymentMethod: "card";
+  paymentMethod: "card" | "ach";
   status: PartnerPaymentIntentStatus;
   amount: PartnerMoney;
   checkout: {
-    mode: "embedded_card";
+    mode: "embedded_card" | "embedded_ach";
     url: null;
     embedded: true;
   };
@@ -58,8 +58,8 @@ export type PartnerEmbeddedPaymentIntent = {
     locationId: string;
     environment: "sandbox" | "production";
     sdkUrl: (typeof SQUARE_WEB_PAYMENTS_SDK_URLS)[number];
-    methods: { card: true; ach: false };
-    achUnavailableReason: "merchant_and_return_configuration_required";
+    methods: { card: true; ach: boolean };
+    achUnavailableReason: "merchant_and_webhook_configuration_required" | null;
   };
   createdAt: string;
   updatedAt: string;
@@ -200,7 +200,7 @@ export function isPartnerEmbeddedPaymentIntent(
     isPartnerPaymentIntentId(value["id"]) &&
     isPartnerPaymentIntentId(value["invoiceId"]) &&
     (value["purpose"] === "deposit" || value["purpose"] === "one_off") &&
-    value["paymentMethod"] === "card" &&
+    (value["paymentMethod"] === "card" || value["paymentMethod"] === "ach") &&
     [
       "provisioning",
       "ready",
@@ -212,7 +212,12 @@ export function isPartnerEmbeddedPaymentIntent(
       "requires_review",
     ].includes(typeof status === "string" ? status : "") &&
     isPartnerMoney(value["amount"]) &&
-    checkout["mode"] === "embedded_card" &&
+    (checkout["mode"] === "embedded_card" ||
+      checkout["mode"] === "embedded_ach") &&
+    ((value["paymentMethod"] === "card" &&
+      checkout["mode"] === "embedded_card") ||
+      (value["paymentMethod"] === "ach" &&
+        checkout["mode"] === "embedded_ach")) &&
     checkout["embedded"] === true &&
     checkout["url"] === null &&
     isSafeProviderIdentifier(config["applicationId"]) &&
@@ -220,9 +225,14 @@ export function isPartnerEmbeddedPaymentIntent(
     isSquareWebPaymentsSdkUrl(sdkUrl) &&
     environmentMatchesSdk &&
     methods["card"] === true &&
-    methods["ach"] === false &&
-    config["achUnavailableReason"] ===
-      "merchant_and_return_configuration_required" &&
+    typeof methods["ach"] === "boolean" &&
+    (methods["ach"] === true
+      ? config["achUnavailableReason"] === null
+      : config["achUnavailableReason"] ===
+        "merchant_and_webhook_configuration_required") &&
+    (value["paymentMethod"] !== "ach" ||
+      value["status"] !== "ready" ||
+      methods["ach"] === true) &&
     isRfc3339Instant(value["createdAt"]) &&
     isRfc3339Instant(value["updatedAt"]) &&
     isRfc3339Instant(value["expiresAt"])

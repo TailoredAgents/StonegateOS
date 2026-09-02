@@ -9,7 +9,6 @@ import {
 import { requirePermission } from "@/lib/permissions";
 import { readPortalV2CorrelationId } from "@/lib/portal-v2-contract";
 
-const REQUIRED_PERMISSION = "partners.read" as const;
 const PREVIEW_SURFACE = "team.sales.outbound.partners.portal_preview";
 const NO_STORE_HEADERS = {
   "Cache-Control": "private, no-store, max-age=0",
@@ -43,7 +42,7 @@ async function auditDeniedSafely(input: {
       action: "partner_portal.staff_preview.denied",
       entityType: "partner_account",
       correlationId: input.correlationId,
-      requiredPermissions: [REQUIRED_PERMISSION],
+      requiredPermissions: ["partners.preview.read"],
       outcome: "denied",
       surface: PREVIEW_SURFACE,
       meta: {
@@ -72,7 +71,10 @@ export async function GET(
     );
   }
 
-  const permissionError = await requirePermission(request, REQUIRED_PERMISSION);
+  const permissionError = await requirePermission(
+    request,
+    "partners.preview.read",
+  );
   if (permissionError) {
     await auditDeniedSafely({
       request,
@@ -91,10 +93,7 @@ export async function GET(
     queryEntries.every(([key]) => key === "jobId") &&
     jobIdValues.length <= 1 &&
     (!jobId || PARTNER_STAFF_PREVIEW_UUID_PATTERN.test(jobId));
-  if (
-    !PARTNER_STAFF_PREVIEW_UUID_PATTERN.test(orgContactId) ||
-    !validQuery
-  ) {
+  if (!PARTNER_STAFF_PREVIEW_UUID_PATTERN.test(orgContactId) || !validQuery) {
     await auditDeniedSafely({
       request,
       correlationId,
@@ -126,7 +125,7 @@ export async function GET(
       entityType: "partner_account",
       entityId: result.preview.account.id,
       correlationId,
-      requiredPermissions: [REQUIRED_PERMISSION],
+      requiredPermissions: ["partners.preview.read"],
       outcome: "succeeded",
       surface: PREVIEW_SURFACE,
       meta: {
@@ -159,7 +158,7 @@ export async function GET(
         action: "partner_portal.staff_preview.failed",
         entityType: "partner_account",
         correlationId,
-        requiredPermissions: [REQUIRED_PERMISSION],
+        requiredPermissions: ["partners.preview.read"],
         outcome: "failed",
         surface: PREVIEW_SURFACE,
         meta: {

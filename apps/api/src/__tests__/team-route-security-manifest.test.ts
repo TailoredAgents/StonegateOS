@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   buildTeamRouteSecurityContract,
   routeIsInTeamSecurityScope,
@@ -18,16 +17,13 @@ type RouteMethodSource = {
   methodSource: string;
 };
 
-const API_ROOT = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../..",
-);
+const API_ROOT = path.resolve(process.cwd());
 const ROUTE_EXPORT_PATTERN = new RegExp(
   `export\\s+async\\s+function\\s+(${TEAM_ROUTE_HTTP_METHODS.join("|")})\\s*\\(`,
   "gu",
 );
 const PERMISSION_LITERAL_PATTERN =
-  /["']([a-z][a-z0-9_]*\.[a-z][a-z0-9_]*)["']/gu;
+  /["']([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)["']/gu;
 
 function listRouteFiles(root: string): string[] {
   const absoluteRoot = path.resolve(API_ROOT, root);

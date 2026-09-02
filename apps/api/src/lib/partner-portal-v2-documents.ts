@@ -134,7 +134,7 @@ export async function createPartnerDocumentDownloadIntent(input: {
       sessionId: input.sessionId,
       authMethod: "partner_session",
       correlationId: input.correlationId,
-      requiredPermissions: ["documents.read"],
+      requiredPermissions: ["documents.financial.read"],
       outcome: "succeeded",
       surface: "/partners/documents",
       action: "partner.document.download_intent_created",

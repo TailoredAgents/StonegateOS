@@ -4,8 +4,11 @@ import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
-import { requirePartnerCapability } from "@/lib/partner-account-authorization";
-import { arePartnerPortalEmbeddedPaymentsEnabled } from "@/lib/partner-portal-feature-flags";
+import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
+import {
+  arePartnerPortalEmbeddedAchPaymentsEnabled,
+  arePartnerPortalEmbeddedPaymentsEnabled,
+} from "@/lib/partner-portal-feature-flags";
 import { runPortalV2IdempotentMutation } from "@/lib/partner-portal-v2-idempotency";
 import { isSecurePartnerPaymentRequest } from "@/lib/partner-portal-v2-payment-security";
 import {
@@ -45,9 +48,9 @@ export async function POST(
   ) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
-  const authorization = await requirePartnerCapability(
+  const authorization = await requireRecentPartnerMfaCapability(
     request,
-    "payments.manage",
+    "payments.initiate",
   );
   if (!authorization.ok) {
     return createPartnerPortalV2ErrorResponse(
@@ -58,13 +61,6 @@ export async function POST(
   }
   const { principal } = authorization;
   const { paymentIntentId } = await context.params;
-  if (principal.session.assuranceLevel !== "aal2") {
-    return createPartnerPortalV2ErrorResponse(
-      "mfa_step_up_required",
-      403,
-      correlationId,
-    );
-  }
   if (
     !principal.accountId ||
     !principal.membershipId ||
@@ -116,8 +112,23 @@ export async function POST(
     return createPartnerPortalV2DescriptorResponse(
       createPortalV2ErrorResponse("invalid_fields", correlationId, {
         fieldErrors: {
+          paymentMethod:
+            "Choose the payment method used to create this intent.",
           sourceToken:
-            "The secure Square card token is missing or invalid. Re-enter the card details.",
+            "The secure one-use Square payment token is missing or invalid. Restart the payment method.",
+        },
+      }),
+    );
+  }
+  if (
+    payload.data.paymentMethod === "ach" &&
+    !arePartnerPortalEmbeddedAchPaymentsEnabled(principal.accountId)
+  ) {
+    return createPartnerPortalV2DescriptorResponse(
+      createPortalV2ErrorResponse("invalid_fields", correlationId, {
+        fieldErrors: {
+          paymentMethod:
+            "ACH bank transfer is not enabled for this account. Choose card or contact Stonegate.",
         },
       }),
     );
@@ -133,7 +144,11 @@ export async function POST(
       // The one-use token is deliberately excluded from the idempotency row.
       // Its fingerprint still prevents a key from being replayed with a
       // different token without persisting provider credentials.
-      payload: { paymentIntentId, sourceTokenHash },
+      payload: {
+        paymentIntentId,
+        paymentMethod: payload.data.paymentMethod,
+        sourceTokenHash,
+      },
       correlationId,
       execute: async () => {
         const rateLimit = await consumeTeamAuthRateLimit({
@@ -161,6 +176,7 @@ export async function POST(
           idempotencyKeyHash: idempotency.keyHash!,
           paymentIntentId,
           sourceToken: payload.data.sourceToken,
+          paymentMethod: payload.data.paymentMethod,
         });
       },
     });

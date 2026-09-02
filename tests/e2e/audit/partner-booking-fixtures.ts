@@ -39,6 +39,13 @@ export type PartnerBookingFixture = {
   sessionToken: string;
 };
 
+export type PartnerLongDataFixture = Readonly<{
+  accountName: string;
+  siteName: string;
+  externalPropertyId: string;
+  addressLine1: string;
+}>;
+
 export type PartnerApprovalFixture = Readonly<{
   requester: PartnerBookingFixture;
   approverUserId: string;
@@ -46,6 +53,25 @@ export type PartnerApprovalFixture = Readonly<{
   approverSessionId: string;
   approverSessionToken: string;
   approvalRuleId: string;
+}>;
+
+export type PartnerJobActionScenario = Readonly<{
+  bookingId: string;
+  appointmentId: string;
+}>;
+
+export type PartnerJobActionFixture = Readonly<{
+  requester: PartnerBookingFixture;
+  viewerUserId: string;
+  viewerMembershipId: string;
+  viewerSessionId: string;
+  viewerSessionToken: string;
+  jobs: Readonly<{
+    eligible: PartnerJobActionScenario;
+    imminent: PartnerJobActionScenario;
+    cancellationReviewPending: PartnerJobActionScenario;
+    completed: PartnerJobActionScenario;
+  }>;
 }>;
 
 export async function createPartnerBookingFixture(): Promise<PartnerBookingFixture> {
@@ -91,6 +117,22 @@ export async function createPartnerBookingFixture(): Promise<PartnerBookingFixtu
       SET partner_account_id = ${partnerAccountId}, updated_at = now()
       WHERE id = ${contactId}
     `;
+    await tx`
+      INSERT INTO partner_account_scheduling_policies (
+        partner_account_id, minimum_notice_minutes,
+        minimum_calendar_lead_days, maximum_booking_horizon_days,
+        instant_confirmation_enabled, revision, created_at, updated_at
+      ) VALUES (
+        ${partnerAccountId}, 0, 1, 30, true, 1, now(), now()
+      )
+      ON CONFLICT (partner_account_id) DO UPDATE SET
+        minimum_notice_minutes = excluded.minimum_notice_minutes,
+        minimum_calendar_lead_days = excluded.minimum_calendar_lead_days,
+        maximum_booking_horizon_days = excluded.maximum_booking_horizon_days,
+        instant_confirmation_enabled = excluded.instant_confirmation_enabled,
+        revision = partner_account_scheduling_policies.revision + 1,
+        updated_at = excluded.updated_at
+    `;
 
     const properties = await tx<Array<{ id: string }>>`
       INSERT INTO properties (
@@ -122,6 +164,19 @@ export async function createPartnerBookingFixture(): Promise<PartnerBookingFixtu
     if (!partnerUserId)
       throw new Error("Unable to create partner user fixture.");
 
+    const operationTemplates = await tx<Array<{ id: string }>>`
+      SELECT id
+      FROM partner_role_templates
+      WHERE partner_account_id IS NULL
+        AND key = 'operations'
+        AND active = true
+      LIMIT 1
+    `;
+    const operationsRoleTemplateId = operationTemplates[0]?.id;
+    if (!operationsRoleTemplateId) {
+      throw new Error("Operations role template is unavailable.");
+    }
+
     const memberships = await tx<Array<{ id: string }>>`
       INSERT INTO partner_account_memberships (
         partner_account_id, partner_user_id, role_template_id, role_key,
@@ -129,7 +184,7 @@ export async function createPartnerBookingFixture(): Promise<PartnerBookingFixtu
         invited_at, accepted_at, created_at, updated_at
       ) VALUES (
         ${partnerAccountId}, ${partnerUserId},
-        'f0000000-0000-4000-8000-000000000003', 'scheduler', 'active',
+        ${operationsRoleTemplateId}, 'operations', 'active',
         'commercial_client', 'account', '{}'::jsonb,
         '{"timezone":"America/New_York","locale":"en-US"}'::jsonb,
         true, now(), now(), now(), now()
@@ -245,6 +300,26 @@ export async function createPartnerBookingFixture(): Promise<PartnerBookingFixtu
         updated_at = excluded.updated_at
     `;
     await tx`
+      INSERT INTO partner_account_service_agreements (
+        partner_account_id, active, agreement_label, currency,
+        effective_from, effective_to, inclusions, exclusions, quote_rules,
+        service_entitlements, revision, created_at, updated_at
+      ) VALUES (
+        ${partnerAccountId}, true, 'E2E contracted service agreement', 'USD',
+        now() - interval '1 day', NULL, '[]'::jsonb, '[]'::jsonb, NULL,
+        ${tx.json([
+          {
+            serviceKey: "junk-removal",
+            pricingState: "contracted",
+            inclusions: [],
+            exclusions: [],
+            quoteRule: null,
+          },
+        ])}::jsonb,
+        1, now(), now()
+      )
+    `;
+    await tx`
       INSERT INTO calendar_sync_state (
         calendar_id, last_synced_at, external_busy_coverage_synced_at,
         created_at, updated_at
@@ -315,6 +390,302 @@ export async function createPartnerBookingFixture(): Promise<PartnerBookingFixtu
   });
 }
 
+export async function setPartnerCalendarSyncFreshness(
+  state: "current" | "stale",
+): Promise<void> {
+  const sql = sqlClient();
+  const calendarId =
+    process.env["GOOGLE_CALENDAR_ID"] ?? "google-calendar-e2e-calendar";
+  const ageMinutes = state === "stale" ? 60 : 0;
+  await sql`
+    INSERT INTO calendar_sync_state (
+      calendar_id, last_synced_at, external_busy_coverage_synced_at,
+      created_at, updated_at
+    ) VALUES (
+      ${calendarId},
+      statement_timestamp() - ${ageMinutes}::integer * interval '1 minute',
+      statement_timestamp() - ${ageMinutes}::integer * interval '1 minute',
+      statement_timestamp(), statement_timestamp()
+    )
+    ON CONFLICT (calendar_id) DO UPDATE SET
+      last_synced_at = excluded.last_synced_at,
+      external_busy_coverage_synced_at = excluded.external_busy_coverage_synced_at,
+      last_notification_at = NULL,
+      updated_at = excluded.updated_at
+  `;
+}
+
+export async function applyPartnerLongDataFixture(
+  fixture: PartnerBookingFixture,
+): Promise<PartnerLongDataFixture> {
+  const sql = sqlClient();
+  const accountName = `Northwestern Regional Distribution and Multi-Family Turnover Operations Center ${fixture.marker}`;
+  const siteName = `North Campus Receiving, Resident Turnovers, Commercial Loading and Materials Recovery ${fixture.marker}`;
+  const externalPropertyId = `PORTFOLIO-${fixture.marker}-BUILDING-18-LOADING-AREA-NORTHWEST`;
+  const addressLine1 = `100 Northwestern Regional Distribution Campus Boulevard ${fixture.marker}`;
+  await sql.begin(async (tx) => {
+    await tx`
+      UPDATE partner_accounts
+      SET name = ${accountName},
+          normalized_name = ${accountName.toLowerCase()},
+          updated_at = statement_timestamp()
+      WHERE id = ${fixture.partnerAccountId}
+    `;
+    await tx`
+      UPDATE partner_account_locations
+      SET site_name = ${siteName},
+          external_property_id = ${externalPropertyId},
+          address_line1 = ${addressLine1},
+          updated_at = statement_timestamp()
+      WHERE partner_account_id = ${fixture.partnerAccountId}
+        AND id = ${fixture.locationId}
+    `;
+  });
+  return { accountName, siteName, externalPropertyId, addressLine1 };
+}
+
+export async function createPartnerJobActionFixture(): Promise<PartnerJobActionFixture> {
+  const requester = await createPartnerBookingFixture();
+  const sql = sqlClient();
+  const viewerSessionToken = crypto.randomBytes(32).toString("base64url");
+  const viewerEmail = `viewer+${requester.marker}@mystos.test`;
+  const hour = 60 * 60 * 1_000;
+  const now = Date.now();
+  const scenarios = [
+    {
+      key: "eligible",
+      publicStatus: "confirmed",
+      appointmentStatus: "confirmed",
+      arrivalStartAt: new Date(now + 72 * hour),
+      completedAt: null,
+      cancellationReviewPending: false,
+    },
+    {
+      key: "imminent",
+      publicStatus: "confirmed",
+      appointmentStatus: "confirmed",
+      arrivalStartAt: new Date(now + 2 * hour),
+      completedAt: null,
+      cancellationReviewPending: false,
+    },
+    {
+      key: "cancellationReviewPending",
+      publicStatus: "confirmed",
+      appointmentStatus: "confirmed",
+      arrivalStartAt: new Date(now + 96 * hour),
+      completedAt: null,
+      cancellationReviewPending: true,
+    },
+    {
+      key: "completed",
+      publicStatus: "completed",
+      appointmentStatus: "completed",
+      arrivalStartAt: new Date(now - 48 * hour),
+      completedAt: new Date(now - 45 * hour),
+      cancellationReviewPending: false,
+    },
+  ] as const;
+
+  try {
+    return await sql.begin(async (tx) => {
+      await tx`
+        INSERT INTO partner_account_cancellation_policies (
+          partner_account_id, minimum_notice_minutes,
+          direct_cancellation_enabled, late_cancellation_disposition,
+          automatic_fee_minor, revision, created_at, updated_at
+        ) VALUES (
+          ${requester.partnerAccountId}, 1440, true, 'staff_review', NULL,
+          1, now(), now()
+        )
+        ON CONFLICT (partner_account_id) DO UPDATE SET
+          minimum_notice_minutes = 1440,
+          direct_cancellation_enabled = true,
+          late_cancellation_disposition = 'staff_review',
+          automatic_fee_minor = NULL,
+          revision = partner_account_cancellation_policies.revision + 1,
+          updated_at = now()
+      `;
+
+      const viewerTemplates = await tx<Array<{ id: string }>>`
+        SELECT id
+        FROM partner_role_templates
+        WHERE partner_account_id IS NULL
+          AND key = 'viewer'
+          AND active = true
+        LIMIT 1
+      `;
+      const viewerRoleTemplateId = viewerTemplates[0]?.id;
+      if (!viewerRoleTemplateId) {
+        throw new Error("Viewer role template is unavailable.");
+      }
+      const viewerUsers = await tx<Array<{ id: string }>>`
+        INSERT INTO partner_users (
+          org_contact_id, email, normalized_email, name, active,
+          identity_status, email_verified_at, created_at, updated_at
+        ) VALUES (
+          ${requester.contactId}, ${viewerEmail}, ${viewerEmail},
+          'Audit Portal Viewer', true, 'active', now(), now(), now()
+        ) RETURNING id
+      `;
+      const viewerUserId = viewerUsers[0]?.id;
+      if (!viewerUserId) {
+        throw new Error("Unable to create Partner Viewer fixture.");
+      }
+      const viewerMemberships = await tx<Array<{ id: string }>>`
+        INSERT INTO partner_account_memberships (
+          partner_account_id, partner_user_id, role_template_id, role_key,
+          status, persona, access_level, access_scope, preferences, is_default,
+          invited_at, accepted_at, created_at, updated_at
+        ) VALUES (
+          ${requester.partnerAccountId}, ${viewerUserId},
+          ${viewerRoleTemplateId}, 'viewer', 'active', 'commercial_client',
+          'account', '{}'::jsonb,
+          '{"timezone":"America/New_York","locale":"en-US"}'::jsonb,
+          true, now(), now(), now(), now()
+        ) RETURNING id
+      `;
+      const viewerMembershipId = viewerMemberships[0]?.id;
+      if (!viewerMembershipId) {
+        throw new Error("Unable to create Partner Viewer membership fixture.");
+      }
+      const viewerSessions = await tx<Array<{ id: string }>>`
+        INSERT INTO partner_sessions (
+          partner_user_id, active_partner_account_id, active_membership_id,
+          session_hash, auth_method, assurance_level, account_selected_at,
+          expires_at, created_at, last_seen_at
+        ) VALUES (
+          ${viewerUserId}, ${requester.partnerAccountId},
+          ${viewerMembershipId}, ${sessionHash(viewerSessionToken)},
+          'magic_link', 'aal1', now(), now() + interval '1 day', now(), now()
+        ) RETURNING id
+      `;
+      const viewerSessionId = viewerSessions[0]?.id;
+      if (!viewerSessionId) {
+        throw new Error("Unable to create Partner Viewer session fixture.");
+      }
+
+      const jobs = {} as Record<
+        (typeof scenarios)[number]["key"],
+        PartnerJobActionScenario
+      >;
+      for (const scenario of scenarios) {
+        const arrivalEndAt = new Date(
+          scenario.arrivalStartAt.getTime() + 2 * hour,
+        );
+        const description = `BOOK-015 ${scenario.key} ${requester.marker}`;
+        const appointmentRows = await tx<Array<{ id: string }>>`
+          INSERT INTO appointments (
+            contact_id, property_id, type, start_at, scheduling_timezone,
+            duration_min, status, quoted_total_cents, final_total_cents,
+            quoted_scope_text, completed_at, reschedule_token,
+            travel_buffer_min, partner_account_id, capacity_pool_key,
+            capacity_units, promised_arrival_start_at,
+            promised_arrival_end_at, schedule_policy_revision,
+            created_at, updated_at
+          ) VALUES (
+            ${requester.contactId}, ${requester.propertyId}, 'junk-removal',
+            ${scenario.arrivalStartAt}, 'America/New_York', 120,
+            ${scenario.appointmentStatus}, 25000,
+            ${scenario.completedAt ? 25000 : null}, ${description},
+            ${scenario.completedAt}, ${crypto.randomBytes(32).toString("hex")},
+            30, ${requester.partnerAccountId}, 'e2e_job_actions', 1,
+            ${scenario.arrivalStartAt}, ${arrivalEndAt},
+            ${`book-015:${requester.marker}`}, now(), now()
+          ) RETURNING id
+        `;
+        const appointmentId = appointmentRows[0]?.id;
+        if (!appointmentId) {
+          throw new Error(`Unable to create ${scenario.key} appointment.`);
+        }
+        const bookingRows = await tx<Array<{ id: string }>>`
+          INSERT INTO partner_bookings (
+            org_contact_id, partner_account_id, requested_by_membership_id,
+            partner_user_id, property_id, appointment_id, service_key,
+            amount_cents, currency, public_status, confirmation_mode,
+            arrival_window_start_at, arrival_window_end_at, scope_snapshot,
+            proof_requirements_snapshot, version, created_at, updated_at
+          ) VALUES (
+            ${requester.contactId}, ${requester.partnerAccountId},
+            ${requester.membershipId}, ${requester.partnerUserId},
+            ${requester.propertyId}, ${appointmentId}, 'junk-removal', 25000,
+            'USD', ${scenario.publicStatus}, 'instant',
+            ${scenario.arrivalStartAt}, ${arrivalEndAt},
+            ${tx.json({ description, crewInstructions: "Use the loading area." })}::jsonb,
+            '{"before":1,"after":1}'::jsonb,
+            1, now(), now()
+          ) RETURNING id
+        `;
+        const bookingId = bookingRows[0]?.id;
+        if (!bookingId) {
+          throw new Error(`Unable to create ${scenario.key} Partner job.`);
+        }
+        if (scenario.cancellationReviewPending) {
+          const requestedAt = new Date();
+          const requestRows = await tx<Array<{ id: string }>>`
+            INSERT INTO partner_cancellation_requests (
+              partner_account_id, partner_booking_id,
+              requested_by_membership_id, state, reason, request_snapshot,
+              operation_key_hash, request_hash, revision,
+              created_at, updated_at
+            ) VALUES (
+              ${requester.partnerAccountId}, ${bookingId},
+              ${requester.membershipId}, 'pending',
+              'The BOOK-015 fixture requires staff cancellation review.',
+              ${tx.json({
+                version: 1,
+                requestedAt: requestedAt.toISOString(),
+                job: {
+                  publicStatus: scenario.publicStatus,
+                  appointmentStatus: scenario.appointmentStatus,
+                  bookingVersion: 1,
+                },
+                schedule: {
+                  promisedArrivalStartAt: scenario.arrivalStartAt.toISOString(),
+                  promisedArrivalEndAt: arrivalEndAt.toISOString(),
+                  timezone: "America/New_York",
+                },
+                policy: {
+                  cutoffMinutes: 1440,
+                  directCancellationEnabled: false,
+                  lateCancellationDisposition: "staff_review",
+                  automaticFeeMinor: null,
+                  source: "configured",
+                  revision: 1,
+                  deadlineAt: new Date(
+                    scenario.arrivalStartAt.getTime() - 24 * hour,
+                  ).toISOString(),
+                  decisionReasonCode: "policy_review_required",
+                },
+              })}::jsonb,
+              ${crypto.createHash("sha256").update(`${description}:key`).digest("hex")},
+              ${crypto.createHash("sha256").update(`${description}:request`).digest("hex")},
+              1, ${requestedAt}, ${requestedAt}
+            ) RETURNING id
+          `;
+          if (!requestRows[0]?.id) {
+            throw new Error(
+              "Unable to create the pending Partner cancellation request.",
+            );
+          }
+        }
+        jobs[scenario.key] = { bookingId, appointmentId };
+      }
+
+      return {
+        requester,
+        viewerUserId,
+        viewerMembershipId,
+        viewerSessionId,
+        viewerSessionToken,
+        jobs,
+      };
+    });
+  } catch (error) {
+    await cleanupPartnerBookingFixture(requester);
+    throw error;
+  }
+}
+
 export async function configurePartnerApprovalFixture(
   requester: PartnerBookingFixture,
 ): Promise<PartnerApprovalFixture> {
@@ -324,16 +695,29 @@ export async function configurePartnerApprovalFixture(
   return sql.begin(async (tx) => {
     const users = await tx<Array<{ id: string }>>`
       INSERT INTO partner_users (
-        org_contact_id, email, name, active, mfa_enrolled_at,
+        org_contact_id, email, name, active, mfa_required, mfa_enrolled_at,
         created_at, updated_at
       ) VALUES (
         ${requester.contactId}, ${approverEmail}, 'Audit Account Approver',
-        true, now(), now(), now()
+        true, true, now(), now(), now()
       ) RETURNING id
     `;
     const approverUserId = users[0]?.id;
     if (!approverUserId) {
       throw new Error("Unable to create partner approval user fixture.");
+    }
+
+    const approverTemplates = await tx<Array<{ id: string }>>`
+      SELECT id
+      FROM partner_role_templates
+      WHERE partner_account_id IS NULL
+        AND key = 'billing_approver'
+        AND active = true
+      LIMIT 1
+    `;
+    const approverRoleTemplateId = approverTemplates[0]?.id;
+    if (!approverRoleTemplateId) {
+      throw new Error("Billing / Approver role template is unavailable.");
     }
 
     const memberships = await tx<Array<{ id: string }>>`
@@ -343,7 +727,7 @@ export async function configurePartnerApprovalFixture(
         invited_at, accepted_at, created_at, updated_at
       ) VALUES (
         ${requester.partnerAccountId}, ${approverUserId},
-        'f0000000-0000-4000-8000-000000000004', 'approver', 'active',
+        ${approverRoleTemplateId}, 'billing_approver', 'active',
         'commercial_client', 'account', '{}'::jsonb,
         '{"timezone":"America/New_York","locale":"en-US"}'::jsonb,
         true, now(), now(), now(), now()
@@ -373,13 +757,13 @@ export async function configurePartnerApprovalFixture(
     const rules = await tx<Array<{ id: string }>>`
       INSERT INTO partner_approval_rules (
         partner_account_id, name, conditions, required_approver_role_keys,
-        required_decision_count, active, version, created_by_membership_id,
-        created_at, updated_at
+        required_approver_capabilities, required_decision_count, active,
+        version, created_by_membership_id, created_at, updated_at
       ) VALUES (
         ${requester.partnerAccountId}, 'E2E service approval',
         ${tx.json({ serviceKeys: ["junk-removal"] })}::jsonb,
-        ARRAY['approver']::text[], 1, true, 1, ${approverMembershipId},
-        now(), now()
+        ARRAY[]::text[], ARRAY['approvals.decide']::text[], 1, true, 1,
+        ${approverMembershipId}, now(), now()
       ) RETURNING id
     `;
     const approvalRuleId = rules[0]?.id;
@@ -465,6 +849,51 @@ export async function findPartnerBookingByAppointmentId(
     JOIN appointments appointment ON appointment.id = booking.appointment_id
     WHERE booking.org_contact_id = ${fixture.contactId}
       AND booking.appointment_id = ${appointmentId}
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
+export async function getNoLeadPartnerBookingSnapshot(
+  fixture: PartnerBookingFixture,
+  bookingId: string,
+): Promise<{
+  appointmentLeadId: string | null;
+  appointmentPartnerAccountId: string | null;
+  appointmentQuotedTotalCents: number | null;
+  appointmentQuotedScopeText: string | null;
+  bookingPartnerAccountId: string | null;
+  bookingServiceKey: string | null;
+  bookingAmountCents: number | null;
+  bookingScopeDescription: string | null;
+} | null> {
+  const rows = await sqlClient()<
+    Array<{
+      appointmentLeadId: string | null;
+      appointmentPartnerAccountId: string | null;
+      appointmentQuotedTotalCents: number | null;
+      appointmentQuotedScopeText: string | null;
+      bookingPartnerAccountId: string | null;
+      bookingServiceKey: string | null;
+      bookingAmountCents: number | null;
+      bookingScopeDescription: string | null;
+    }>
+  >`
+    SELECT
+      appointment.lead_id AS "appointmentLeadId",
+      appointment.partner_account_id AS "appointmentPartnerAccountId",
+      appointment.quoted_total_cents AS "appointmentQuotedTotalCents",
+      appointment.quoted_scope_text AS "appointmentQuotedScopeText",
+      booking.partner_account_id AS "bookingPartnerAccountId",
+      booking.service_key AS "bookingServiceKey",
+      booking.amount_cents AS "bookingAmountCents",
+      booking.scope_snapshot->>'description' AS "bookingScopeDescription"
+    FROM partner_bookings AS booking
+    INNER JOIN appointments AS appointment
+      ON appointment.id = booking.appointment_id
+    WHERE booking.id = ${bookingId}
+      AND booking.partner_account_id = ${fixture.partnerAccountId}
+      AND booking.org_contact_id = ${fixture.contactId}
     LIMIT 1
   `;
   return rows[0] ?? null;
@@ -652,6 +1081,11 @@ export async function getPartnerReviewRequestSnapshot(
   bookingArrivalStartAt: string | null;
   bookingArrivalEndAt: string | null;
   preferredWindows: unknown;
+  scheduleAssistancePreference: string | null;
+  assistanceRequestCount: number;
+  assistancePreference: string | null;
+  assistanceState: string | null;
+  assistancePreferredWindows: unknown;
   reviewAuditCount: number;
   calendarOutboxCount: number;
 }> {
@@ -666,6 +1100,11 @@ export async function getPartnerReviewRequestSnapshot(
       bookingArrivalStartAt: string | null;
       bookingArrivalEndAt: string | null;
       preferredWindows: unknown;
+      scheduleAssistancePreference: string | null;
+      assistanceRequestCount: number | string;
+      assistancePreference: string | null;
+      assistanceState: string | null;
+      assistancePreferredWindows: unknown;
       reviewAuditCount: number | string;
       calendarOutboxCount: number | string;
     }>
@@ -679,6 +1118,27 @@ export async function getPartnerReviewRequestSnapshot(
       booking.arrival_window_start_at::text AS "bookingArrivalStartAt",
       booking.arrival_window_end_at::text AS "bookingArrivalEndAt",
       booking.scope_snapshot->'preferredWindows' AS "preferredWindows",
+      booking.scope_snapshot->>'scheduleAssistancePreference'
+        AS "scheduleAssistancePreference",
+      (SELECT count(*) FROM partner_schedule_assistance_requests assistance
+        WHERE assistance.partner_account_id = booking.partner_account_id
+          AND assistance.partner_booking_id = booking.id)
+        AS "assistanceRequestCount",
+      (SELECT assistance.preference
+        FROM partner_schedule_assistance_requests assistance
+        WHERE assistance.partner_account_id = booking.partner_account_id
+          AND assistance.partner_booking_id = booking.id
+        LIMIT 1) AS "assistancePreference",
+      (SELECT assistance.state
+        FROM partner_schedule_assistance_requests assistance
+        WHERE assistance.partner_account_id = booking.partner_account_id
+          AND assistance.partner_booking_id = booking.id
+        LIMIT 1) AS "assistanceState",
+      (SELECT assistance.preferred_windows_snapshot->'windows'
+        FROM partner_schedule_assistance_requests assistance
+        WHERE assistance.partner_account_id = booking.partner_account_id
+          AND assistance.partner_booking_id = booking.id
+        LIMIT 1) AS "assistancePreferredWindows",
       (SELECT count(*) FROM audit_logs
         WHERE action = 'partner.portal.v2.booking.review_requested'
           AND entity_id = booking.id::text
@@ -698,6 +1158,7 @@ export async function getPartnerReviewRequestSnapshot(
   if (!row) throw new Error("Partner review request snapshot unavailable.");
   return {
     ...row,
+    assistanceRequestCount: Number(row.assistanceRequestCount),
     reviewAuditCount: Number(row.reviewAuditCount),
     calendarOutboxCount: Number(row.calendarOutboxCount),
   };
@@ -856,6 +1317,128 @@ export async function cleanupPartnerBookingFixture(
       WHERE id = ${fixture.propertyId}
     `;
   });
+}
+
+export async function getPartnerJobActionFixtureSnapshot(
+  fixture: PartnerJobActionFixture,
+): Promise<{
+  jobs: Array<{
+    bookingId: string;
+    appointmentId: string;
+    publicStatus: string;
+    appointmentStatus: string;
+    arrivalWindowStartAt: string;
+    arrivalWindowEndAt: string;
+    completedAt: string | null;
+    cancellationReviewPending: boolean;
+  }>;
+  operationsRoleKey: string;
+  viewerRoleKey: string;
+  viewerActiveSessionCount: number;
+}> {
+  const bookingIds = Object.values(fixture.jobs).map((job) => job.bookingId);
+  const rows = await sqlClient()<
+    Array<{
+      bookingId: string;
+      appointmentId: string;
+      publicStatus: string;
+      appointmentStatus: string;
+      arrivalWindowStartAt: string;
+      arrivalWindowEndAt: string;
+      completedAt: string | null;
+      cancellationReviewPending: boolean;
+    }>
+  >`
+    SELECT booking.id AS "bookingId",
+      appointment.id AS "appointmentId",
+      booking.public_status AS "publicStatus",
+      appointment.status::text AS "appointmentStatus",
+      booking.arrival_window_start_at::text AS "arrivalWindowStartAt",
+      booking.arrival_window_end_at::text AS "arrivalWindowEndAt",
+      appointment.completed_at::text AS "completedAt",
+      EXISTS (
+        SELECT 1
+        FROM partner_cancellation_requests AS cancellation_request
+        WHERE cancellation_request.partner_account_id =
+          booking.partner_account_id
+          AND cancellation_request.partner_booking_id = booking.id
+          AND cancellation_request.state = 'pending'
+      ) AS "cancellationReviewPending"
+    FROM partner_bookings AS booking
+    INNER JOIN appointments AS appointment
+      ON appointment.id = booking.appointment_id
+    WHERE booking.partner_account_id = ${fixture.requester.partnerAccountId}
+      AND booking.id = ANY(${bookingIds}::uuid[])
+    ORDER BY booking.created_at, booking.id
+  `;
+  const membershipRows = await sqlClient()<
+    Array<{
+      operationsRoleKey: string;
+      viewerRoleKey: string;
+      viewerActiveSessionCount: number | string;
+    }>
+  >`
+    SELECT operations_membership.role_key AS "operationsRoleKey",
+      viewer_membership.role_key AS "viewerRoleKey",
+      (
+        SELECT count(*)
+        FROM partner_sessions AS session
+        WHERE session.id = ${fixture.viewerSessionId}
+          AND session.partner_user_id = ${fixture.viewerUserId}
+          AND session.active_membership_id = ${fixture.viewerMembershipId}
+          AND session.revoked_at IS NULL
+          AND session.expires_at > statement_timestamp()
+      ) AS "viewerActiveSessionCount"
+    FROM partner_account_memberships AS operations_membership
+    INNER JOIN partner_account_memberships AS viewer_membership
+      ON viewer_membership.partner_account_id =
+        operations_membership.partner_account_id
+    WHERE operations_membership.id = ${fixture.requester.membershipId}
+      AND viewer_membership.id = ${fixture.viewerMembershipId}
+    LIMIT 1
+  `;
+  const membership = membershipRows[0];
+  if (!membership || rows.length !== bookingIds.length) {
+    throw new Error("Partner job-action fixture snapshot is incomplete.");
+  }
+  return {
+    jobs: rows,
+    operationsRoleKey: membership.operationsRoleKey,
+    viewerRoleKey: membership.viewerRoleKey,
+    viewerActiveSessionCount: Number(membership.viewerActiveSessionCount),
+  };
+}
+
+export async function cleanupPartnerJobActionFixture(
+  fixture: PartnerJobActionFixture,
+): Promise<void> {
+  const sql = sqlClient();
+  await sql.begin(async (tx) => {
+    await tx`
+      UPDATE partner_sessions
+      SET revoked_at = coalesce(revoked_at, statement_timestamp())
+      WHERE partner_user_id = ${fixture.viewerUserId}
+    `;
+    await tx`
+      UPDATE partner_account_memberships
+      SET status = 'removed', is_default = false,
+          removed_at = coalesce(removed_at, statement_timestamp()),
+          updated_at = statement_timestamp()
+      WHERE id = ${fixture.viewerMembershipId}
+        AND status <> 'removed'
+    `;
+    await tx`
+      UPDATE partner_users
+      SET active = false,
+          identity_status = 'disabled',
+          email = ${`archived+${fixture.viewerUserId}@mystos.test`},
+          normalized_email = ${`archived+${fixture.viewerUserId}@mystos.test`},
+          org_contact_id = NULL,
+          updated_at = statement_timestamp()
+      WHERE id = ${fixture.viewerUserId}
+    `;
+  });
+  await cleanupPartnerBookingFixture(fixture.requester);
 }
 
 export async function closePartnerBookingFixtures(): Promise<void> {

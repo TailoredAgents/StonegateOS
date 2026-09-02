@@ -7,7 +7,6 @@ export const metadata: Metadata = {
   },
   description:
     "Schedule service, manage locations, and keep track of Stonegate jobs in one place.",
-  robots: { index: false, follow: false },
 };
 
 export default function PartnersLayout({

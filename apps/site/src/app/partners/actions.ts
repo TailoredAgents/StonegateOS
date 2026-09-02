@@ -2,8 +2,12 @@
 
 import type { Route } from "next";
 import { cookies } from "next/headers";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { PARTNER_SESSION_COOKIE } from "@/lib/partner-session";
+import {
+  PARTNER_AUTH_TRANSACTION_COOKIE,
+  PARTNER_SESSION_COOKIE,
+} from "@/lib/partner-session";
 import { callPartnerApi, callPartnerPublicApi } from "./lib/api";
 import { normalizePartnerReturnTo } from "./lib/safe-return";
 
@@ -28,47 +32,64 @@ async function readErrorMessage(
   }
 }
 
-export async function requestPartnerMagicLinkAction(formData: FormData) {
-  const identifierRaw = formData.get("identifier");
-  const identifier =
-    typeof identifierRaw === "string" ? identifierRaw.trim() : "";
-  if (!identifier) {
-    redirect("/partners/login?error=email_or_phone_required");
+function validHttpOrigin(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.origin
+      : null;
+  } catch {
+    return null;
   }
+}
 
-  const isEmail = identifier.includes("@");
-
-  const rememberMe = formData.get("rememberMe") === "on";
-  const returnTo = normalizePartnerReturnTo(formData.get("returnTo"));
-
-  const response = await callPartnerPublicApi(
-    "/api/public/partners/request-link",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        email: isEmail ? identifier : undefined,
-        phone: isEmail ? undefined : identifier,
-        rememberMe,
-        ...(returnTo !== "/partners" ? { returnTo } : {}),
-      }),
-    },
+async function partnerAuthForwardHeaders(): Promise<Headers> {
+  const incoming = await headers();
+  const result = new Headers();
+  const configuredOrigin = validHttpOrigin(
+    process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? null,
   );
+  const forwardedHost =
+    incoming.get("x-forwarded-host") ?? incoming.get("host");
+  const forwardedProtocol =
+    incoming.get("x-forwarded-proto") ??
+    (process.env["NODE_ENV"] === "production" ? "https" : "http");
+  const requestOrigin =
+    validHttpOrigin(incoming.get("origin")) ??
+    (forwardedHost
+      ? validHttpOrigin(`${forwardedProtocol}://${forwardedHost}`)
+      : null) ??
+    configuredOrigin;
+  if (requestOrigin) result.set("Origin", requestOrigin);
+  const forwardedIp =
+    incoming.get("cf-connecting-ip") ??
+    incoming.get("x-real-ip") ??
+    incoming.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    null;
+  if (forwardedIp) result.set("X-Forwarded-For", forwardedIp.slice(0, 128));
+  const userAgent = incoming.get("user-agent")?.trim();
+  if (userAgent) result.set("User-Agent", userAgent.slice(0, 512));
+  const correlationId = incoming.get("x-correlation-id")?.trim();
+  if (correlationId) result.set("x-correlation-id", correlationId);
+  return result;
+}
 
-  if (!response.ok) {
-    const error =
-      response.status === 429
-        ? "rate_limited"
-        : response.status >= 500
-          ? "temporarily_unavailable"
-          : "request_failed";
-    const query = new URLSearchParams({ error });
-    if (returnTo !== "/partners") query.set("returnTo", returnTo);
-    redirect(`/partners/login?${query.toString()}`);
-  }
+function validFutureExpiry(value: unknown, maximumMs: number): Date | null {
+  if (typeof value !== "string") return null;
+  const expiry = new Date(value);
+  const remaining = expiry.getTime() - Date.now();
+  return Number.isFinite(expiry.getTime()) &&
+    remaining > 0 &&
+    remaining <= maximumMs
+    ? expiry
+    : null;
+}
 
-  const query = new URLSearchParams({ sent: "1" });
-  if (returnTo !== "/partners") query.set("returnTo", returnTo);
-  redirect(`/partners/login?${query.toString()}`);
+function appendPartnerReturnTo(path: string, returnTo: string): string {
+  if (returnTo === "/partners/overview") return path;
+  const query = new URLSearchParams({ returnTo });
+  return `${path}${path.includes("?") ? "&" : "?"}${query.toString()}`;
 }
 
 export async function partnerPasswordLoginAction(formData: FormData) {
@@ -82,24 +103,62 @@ export async function partnerPasswordLoginAction(formData: FormData) {
 
   const rememberMe = formData.get("rememberMe") === "on";
   const returnTo = normalizePartnerReturnTo(formData.get("returnTo"));
+  const jar = await cookies();
+  jar.set({
+    name: PARTNER_AUTH_TRANSACTION_COOKIE,
+    value: "",
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    expires: new Date(0),
+  });
 
   const res = await callPartnerPublicApi(
     "/api/public/partners/login-password",
     {
       method: "POST",
+      headers: await partnerAuthForwardHeaders(),
       body: JSON.stringify({ email, password, rememberMe }),
     },
   );
 
   if (!res.ok) {
     const msg = await readErrorMessage(res, "login_failed");
-    redirect(`/partners/login?error=${encodeURIComponent(msg)}`);
+    const query = new URLSearchParams({ error: msg });
+    if (returnTo !== "/partners/overview") query.set("returnTo", returnTo);
+    redirect(`/partners/login?${query.toString()}`);
   }
 
   const payload = (await res.json().catch(() => ({}))) as {
+    status?: string;
     sessionToken?: string;
+    transactionToken?: string;
     expiresAt?: string;
   };
+  if (payload.status === "mfa_required") {
+    const transactionToken =
+      typeof payload.transactionToken === "string"
+        ? payload.transactionToken.trim()
+        : "";
+    const transactionExpiry = validFutureExpiry(
+      payload.expiresAt,
+      10 * 60 * 1_000,
+    );
+    if (!/^[A-Za-z0-9_-]{43}$/u.test(transactionToken) || !transactionExpiry) {
+      redirect("/partners/login?error=login_failed");
+    }
+    jar.set({
+      name: PARTNER_AUTH_TRANSACTION_COOKIE,
+      value: transactionToken,
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
+      expires: transactionExpiry,
+    });
+    redirect(appendPartnerReturnTo("/partners/login/mfa", returnTo) as Route);
+  }
   const token =
     typeof payload.sessionToken === "string" ? payload.sessionToken : "";
   if (!token) {
@@ -113,7 +172,15 @@ export async function partnerPasswordLoginAction(formData: FormData) {
     redirect("/partners/login?error=login_failed");
   }
 
-  const jar = await cookies();
+  jar.set({
+    name: PARTNER_AUTH_TRANSACTION_COOKIE,
+    value: "",
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    expires: new Date(0),
+  });
   jar.set({
     name: PARTNER_SESSION_COOKIE,
     value: token,
@@ -127,9 +194,139 @@ export async function partnerPasswordLoginAction(formData: FormData) {
   redirect(returnTo as Route);
 }
 
-function readFormString(formData: FormData, key: string): string {
-  const value = formData.get(key);
-  return typeof value === "string" ? value.trim() : "";
+export async function partnerPasswordMfaAction(formData: FormData) {
+  const returnTo = normalizePartnerReturnTo(formData.get("returnTo"));
+  const method = formData.get("method") === "recovery" ? "recovery" : "totp";
+  const verificationRaw = formData.get("verification");
+  const verification =
+    typeof verificationRaw === "string" ? verificationRaw.trim() : "";
+  const jar = await cookies();
+  const transactionToken =
+    jar.get(PARTNER_AUTH_TRANSACTION_COOKIE)?.value?.trim() ?? "";
+  const mfaPath = appendPartnerReturnTo("/partners/login/mfa", returnTo);
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(transactionToken)) {
+    redirect(
+      appendPartnerReturnTo(
+        "/partners/login?error=mfa_transaction_expired",
+        returnTo,
+      ) as Route,
+    );
+  }
+  if (
+    (method === "totp" && !/^\d{6}$/u.test(verification)) ||
+    (method === "recovery" &&
+      (verification.length < 16 || verification.length > 40))
+  ) {
+    redirect(
+      `${mfaPath}${mfaPath.includes("?") ? "&" : "?"}error=invalid_mfa_code` as Route,
+    );
+  }
+
+  const requestHeaders = await partnerAuthForwardHeaders();
+  requestHeaders.set("Authorization", `Bearer ${transactionToken}`);
+  const response = await callPartnerPublicApi(
+    "/api/public/partners/login-password/mfa",
+    {
+      method: "POST",
+      headers: requestHeaders,
+      body: JSON.stringify(
+        method === "recovery"
+          ? { recoveryCode: verification }
+          : { code: verification },
+      ),
+    },
+  ).catch(() => null);
+  if (!response) {
+    redirect(
+      `${mfaPath}${mfaPath.includes("?") ? "&" : "?"}error=temporarily_unavailable` as Route,
+    );
+  }
+  const payload = (await response.json().catch(() => null)) as {
+    error?: unknown;
+    status?: unknown;
+    sessionToken?: unknown;
+    expiresAt?: unknown;
+    assuranceLevel?: unknown;
+  } | null;
+  if (!response.ok) {
+    const code =
+      typeof payload?.error === "string"
+        ? payload.error
+        : "verification_failed";
+    const terminal =
+      response.status === 401 ||
+      response.status === 410 ||
+      code === "mfa_enrollment_required" ||
+      code === "mfa_attempts_exhausted";
+    if (terminal) {
+      jar.set({
+        name: PARTNER_AUTH_TRANSACTION_COOKIE,
+        value: "",
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        path: "/",
+        expires: new Date(0),
+      });
+      const loginError =
+        code === "mfa_enrollment_required"
+          ? "mfa_enrollment_required"
+          : "mfa_transaction_expired";
+      redirect(
+        appendPartnerReturnTo(
+          `/partners/login?error=${loginError}`,
+          returnTo,
+        ) as Route,
+      );
+    }
+    const safeError =
+      code === "invalid_mfa_code" ||
+      code === "rate_limited" ||
+      code === "temporarily_unavailable"
+        ? code
+        : "verification_failed";
+    redirect(
+      `${mfaPath}${mfaPath.includes("?") ? "&" : "?"}error=${safeError}` as Route,
+    );
+  }
+
+  const sessionToken =
+    typeof payload?.sessionToken === "string"
+      ? payload.sessionToken.trim()
+      : "";
+  const expiresAt = validFutureExpiry(
+    payload?.expiresAt,
+    31 * 24 * 60 * 60 * 1_000,
+  );
+  if (
+    payload?.status !== "authenticated" ||
+    payload?.assuranceLevel !== "aal2" ||
+    !/^[A-Za-z0-9_-]{43}$/u.test(sessionToken) ||
+    !expiresAt
+  ) {
+    redirect(
+      `${mfaPath}${mfaPath.includes("?") ? "&" : "?"}error=temporarily_unavailable` as Route,
+    );
+  }
+  jar.set({
+    name: PARTNER_AUTH_TRANSACTION_COOKIE,
+    value: "",
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    expires: new Date(0),
+  });
+  jar.set({
+    name: PARTNER_SESSION_COOKIE,
+    value: sessionToken,
+    httpOnly: true,
+    secure: process.env["NODE_ENV"] === "production",
+    sameSite: "lax",
+    path: "/",
+    expires: expiresAt,
+  });
+  redirect(returnTo as Route);
 }
 
 export async function partnerSetPasswordAction(formData: FormData) {
@@ -141,7 +338,7 @@ export async function partnerSetPasswordAction(formData: FormData) {
   const confirmPasswordRaw = formData.get("confirmPassword");
   const confirmPassword =
     typeof confirmPasswordRaw === "string" ? confirmPasswordRaw : "";
-  if (newPassword.length < 12 || newPassword.length > 128) {
+  if (newPassword.length < 15 || newPassword.length > 128) {
     redirect("/partners/settings?error=password_too_short");
   }
   if (newPassword !== confirmPassword) {
@@ -193,194 +390,4 @@ export async function partnerSetPasswordAction(formData: FormData) {
     query.set("sessionsRevoked", String(saved.otherSessionsRevoked));
   }
   redirect(`/partners/settings?${query.toString()}`);
-}
-
-export async function partnerCreatePropertyAction(formData: FormData) {
-  const addressLine1 = readFormString(formData, "addressLine1");
-  const addressLine2 = readFormString(formData, "addressLine2");
-  const city = readFormString(formData, "city");
-  const state = readFormString(formData, "state");
-  const postalCode = readFormString(formData, "postalCode");
-  const gated = formData.get("gated") === "on";
-
-  const res = await callPartnerApi("/api/portal/properties", {
-    method: "POST",
-    body: JSON.stringify({
-      addressLine1,
-      addressLine2: addressLine2.length ? addressLine2 : null,
-      city,
-      state,
-      postalCode,
-      gated,
-    }),
-  });
-
-  if (!res.ok) {
-    const msg = await readErrorMessage(res, "create_failed");
-    redirect(`/partners/properties?error=${encodeURIComponent(msg)}`);
-  }
-
-  redirect("/partners/properties?created=1");
-}
-
-export async function partnerCreateBookingAction(formData: FormData) {
-  const operationKey = readFormString(formData, "operationKey");
-  const propertyId = readFormString(formData, "propertyId");
-  const serviceKey = readFormString(formData, "serviceKey");
-  const tierKey = readFormString(formData, "tierKey");
-  const preferredDate = readFormString(formData, "preferredDate");
-  const timeWindowId = readFormString(formData, "timeWindowId");
-  const notes = readFormString(formData, "notes");
-  const rescheduleFromAppointmentId = readFormString(
-    formData,
-    "rescheduleFromAppointmentId",
-  );
-  const rescheduleFromVersion = readFormString(
-    formData,
-    "rescheduleFromVersion",
-  );
-
-  if (!operationKey) {
-    redirect("/partners/book?error=booking_operation_expired");
-  }
-  if (rescheduleFromAppointmentId && !rescheduleFromVersion) {
-    redirect(
-      "/partners/bookings?error=The%20job%20changed%20before%20it%20could%20be%20rescheduled.%20Refresh%20and%20try%20again.",
-    );
-  }
-
-  const res = await callPartnerApi("/api/portal/bookings", {
-    method: "POST",
-    headers: {
-      "Idempotency-Key": operationKey,
-      ...(rescheduleFromAppointmentId
-        ? { "If-Match": rescheduleFromVersion }
-        : {}),
-    },
-    body: JSON.stringify({
-      propertyId,
-      serviceKey,
-      tierKey: tierKey.length ? tierKey : null,
-      preferredDate,
-      timeWindowId,
-      notes: notes.length ? notes : null,
-      ...(rescheduleFromAppointmentId ? { rescheduleFromAppointmentId } : {}),
-    }),
-  }).catch(() => null);
-
-  if (!res) {
-    redirect(
-      rescheduleFromAppointmentId
-        ? "/partners/bookings?error=We%20could%20not%20confirm%20the%20reschedule.%20Check%20the%20job%20list%20before%20trying%20again."
-        : "/partners/book?error=We%20could%20not%20confirm%20the%20job.%20Check%20your%20job%20list%20before%20trying%20again.",
-    );
-  }
-  if (!res.ok) {
-    const msg = await readErrorMessage(
-      res,
-      rescheduleFromAppointmentId ? "reschedule_failed" : "booking_failed",
-    );
-    if (rescheduleFromAppointmentId) {
-      redirect(
-        `/partners/bookings?error=${encodeURIComponent(
-          `The reschedule was not completed; your original job remains in place (${msg}).`,
-        )}`,
-      );
-    }
-    redirect(`/partners/book?error=${encodeURIComponent(msg)}`);
-  }
-
-  const created = (await res.json().catch(() => null)) as {
-    ok?: boolean;
-    appointmentId?: string;
-    version?: number;
-    rescheduledFromAppointmentId?: string | null;
-    rescheduledFromVersion?: number | null;
-    receipt?: {
-      operationId?: string;
-      correlationId?: string;
-      auditEventId?: string;
-      committedAt?: string;
-    };
-  } | null;
-  if (
-    created?.ok !== true ||
-    typeof created.appointmentId !== "string" ||
-    typeof created.version !== "number" ||
-    typeof created.receipt?.operationId !== "string" ||
-    typeof created.receipt.correlationId !== "string" ||
-    typeof created.receipt.auditEventId !== "string" ||
-    typeof created.receipt.committedAt !== "string"
-  ) {
-    redirect(
-      rescheduleFromAppointmentId
-        ? "/partners/bookings?error=The%20server%20did%20not%20return%20a%20complete%20reschedule%20receipt.%20Refresh%20the%20job%20list%20before%20retrying."
-        : "/partners/book?error=booking_confirmation_invalid",
-    );
-  }
-
-  if (rescheduleFromAppointmentId) {
-    if (
-      created.rescheduledFromAppointmentId !== rescheduleFromAppointmentId ||
-      created.rescheduledFromVersion !== Number(rescheduleFromVersion)
-    ) {
-      redirect(
-        "/partners/bookings?error=The%20server%20receipt%20did%20not%20match%20the%20job%20you%20rescheduled.%20Refresh%20the%20list%20before%20retrying.",
-      );
-    }
-    redirect("/partners/bookings?rescheduled=1");
-  }
-
-  redirect("/partners/bookings?created=1");
-}
-
-export async function partnerCancelBookingAction(formData: FormData) {
-  const appointmentId = readFormString(formData, "appointmentId");
-  const version = readFormString(formData, "version");
-  const operationKey = readFormString(formData, "operationKey");
-  if (!appointmentId || !version || !operationKey) {
-    redirect("/partners/bookings?error=missing_appointment_id");
-  }
-
-  const res = await callPartnerApi(
-    `/api/portal/bookings/${encodeURIComponent(appointmentId)}/cancel`,
-    {
-      method: "POST",
-      headers: {
-        "Idempotency-Key": operationKey,
-        "If-Match": version,
-      },
-      body: JSON.stringify({}),
-    },
-  );
-
-  if (!res.ok) {
-    const msg = await readErrorMessage(res, "cancel_failed");
-    redirect(`/partners/bookings?error=${encodeURIComponent(msg)}`);
-  }
-
-  const canceled = (await res.json().catch(() => null)) as {
-    ok?: boolean;
-    status?: string;
-    version?: number;
-    receipt?: {
-      operationId?: string;
-      correlationId?: string;
-      auditEventId?: string;
-      committedAt?: string;
-    };
-  } | null;
-  if (
-    canceled?.ok !== true ||
-    canceled.status !== "canceled" ||
-    typeof canceled.version !== "number" ||
-    typeof canceled.receipt?.operationId !== "string" ||
-    typeof canceled.receipt.correlationId !== "string" ||
-    typeof canceled.receipt.auditEventId !== "string" ||
-    typeof canceled.receipt.committedAt !== "string"
-  ) {
-    redirect("/partners/bookings?error=cancel_confirmation_invalid");
-  }
-
-  redirect("/partners/bookings?canceled=1");
 }

@@ -19,6 +19,7 @@ import {
   AppointmentMediaError,
   assertAppointmentStatusTransitionAllowed,
 } from "@/lib/appointment-media";
+import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
 import {
   parseAppointmentBookingDetails,
   validateQuotedTotalForBookingDetails,
@@ -46,6 +47,10 @@ import {
   requiresSquareAttemptReconciliation,
   validateFinalTotalChange,
 } from "@/lib/payment-ledger";
+import {
+  evaluatePartnerProofCompletion,
+  recordPartnerProofCompletionOverride,
+} from "@/lib/partner-proof-completion";
 import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
 import {
   beginTeamMutation,
@@ -133,6 +138,7 @@ const StatusSchema = z
     finalTotalSameAsQuoted: z.boolean().optional(),
     sendCustomerNotification: z.boolean().optional().default(false),
     sendReviewRequest: z.boolean().optional().default(false),
+    proofOverrideReason: z.string().trim().min(10).max(500).optional(),
     // Kept during the canonical-route migration so current callers can send
     // their duplicate version field. If-Match remains authoritative and the
     // two values must be byte-for-byte identical after header normalization.
@@ -408,12 +414,24 @@ function validateInputRelationships(
       },
     );
   }
+  if (input.proofOverrideReason !== undefined && input.status !== "completed") {
+    throw new TeamMutationFailure(
+      "invalid",
+      "A proof exception can only be recorded while marking a partner job complete.",
+      {
+        fieldErrors: {
+          proofOverrideReason: "Choose the completed status first.",
+        },
+      },
+    );
+  }
 }
 
 function buildExecutionPolicy(input: {
   hasFinancialChanges: boolean;
   requiresPaymentManagement: boolean;
   requiresCommissionManagement: boolean;
+  requiresProofOverride: boolean;
   status: z.infer<typeof StatusSchema>["status"];
   sendsCustomerMessage: boolean;
 }): ActionPolicy | null {
@@ -440,6 +458,12 @@ function buildExecutionPolicy(input: {
   ) {
     requiredPermissions.push("commissions.manage");
   }
+  if (
+    input.requiresProofOverride &&
+    !requiredPermissions.includes("appointment_media.manage")
+  ) {
+    requiredPermissions.push("appointment_media.manage");
+  }
 
   // Cancellation can delete a linked Google Calendar event. It therefore
   // crosses the external-effect boundary even when the operator deliberately
@@ -449,7 +473,8 @@ function buildExecutionPolicy(input: {
   if (
     !policy &&
     !requiresExternalBoundary &&
-    !input.requiresCommissionManagement
+    !input.requiresCommissionManagement &&
+    !input.requiresProofOverride
   ) {
     return null;
   }
@@ -457,8 +482,9 @@ function buildExecutionPolicy(input: {
   policy = {
     ...BASE_STATUS_POLICY,
     requiredPermissions,
-    risk:
-      policy?.risk === "financial" || input.requiresCommissionManagement
+    risk: input.requiresProofOverride
+      ? "destructive"
+      : policy?.risk === "financial" || input.requiresCommissionManagement
         ? "financial"
         : requiresExternalBoundary
           ? "external"
@@ -618,6 +644,8 @@ export async function POST(
     const hasFinancialChanges = includesFinancialChanges(parsed.data);
     const hasCompletionTimeOverride = parsed.data.completedAt !== undefined;
     const hasFinalTotalCorrection = isFinalTotalCorrectionIntent(parsed.data);
+    const requiresProofOverride =
+      parsed.data.proofOverrideReason !== undefined;
     const requiresPaymentManagement =
       hasCompletionTimeOverride || hasFinalTotalCorrection;
     const sendsCustomerMessage =
@@ -645,6 +673,7 @@ export async function POST(
       hasFinancialChanges,
       requiresPaymentManagement,
       requiresCommissionManagement,
+      requiresProofOverride,
       status: parsed.data.status,
       sendsCustomerMessage,
     });
@@ -754,6 +783,9 @@ export async function POST(
         ? { completedAt: completedAtOverride.toISOString() }
         : {}),
       ...(crewMembers !== undefined ? { crewMembers } : {}),
+      ...(parsed.data.proofOverrideReason !== undefined
+        ? { proofOverrideReason: parsed.data.proofOverrideReason }
+        : {}),
       sendCustomerNotification: parsed.data.sendCustomerNotification,
       sendReviewRequest: parsed.data.sendReviewRequest,
     };
@@ -770,6 +802,10 @@ export async function POST(
     claim = claimed.claim;
 
     const outcome = await database.transaction(async (tx) => {
+      // Status transitions into or out of a non-blocking state change schedule
+      // capacity. Take the same transaction-scoped lock as every booking and
+      // reschedule writer before locking the appointment row.
+      await acquireScheduleConflictLock(tx);
       // Payment attempts lock this same row before calculating a balance. This
       // lock serializes completion, crew, and total decisions with collection.
       const [existing] = await tx
@@ -896,6 +932,8 @@ export async function POST(
       }
 
       const isQuoteOnly = isQuoteOnlyAppointmentType(existing.type);
+      let proofOverrideApplied = false;
+      let proofOverrideCategories: string[] = [];
       const existingCrewMembers =
         status === "completed" && !isQuoteOnly && crewMembers === undefined
           ? await readExistingCrewMembers(tx, appointmentId)
@@ -989,6 +1027,100 @@ export async function POST(
           ),
           422,
         );
+      }
+
+      if (
+        existing.status !== "completed" &&
+        status === "completed" &&
+        !isQuoteOnly
+      ) {
+        const proofDecision = await evaluatePartnerProofCompletion(
+          tx,
+          appointmentId,
+        );
+        if (proofDecision.kind === "invalid_binding") {
+          return storeTerminalFailure(
+            tx,
+            mutation,
+            claimed.claim,
+            statusFailure(
+              "conflict",
+              "partner_account_binding_required",
+              "This partner job has an unresolved account binding and cannot be completed until it is reconciled.",
+            ),
+            409,
+          );
+        }
+        if (
+          parsed.data.proofOverrideReason !== undefined &&
+          proofDecision.kind !== "missing"
+        ) {
+          return storeTerminalFailure(
+            tx,
+            mutation,
+            claimed.claim,
+            statusFailure(
+              "invalid",
+              "proof_override_not_applicable",
+              "A proof exception is not needed because this job's required evidence is complete.",
+              {
+                fieldErrors: {
+                  proofOverrideReason: "Remove the proof exception reason.",
+                },
+              },
+            ),
+            422,
+          );
+        }
+        if (proofDecision.kind === "missing") {
+          if (parsed.data.proofOverrideReason === undefined) {
+            const missingSummary = proofDecision.missing
+              .map(
+                (entry) =>
+                  `${entry.category} (${entry.availableCount}/${entry.minimumCount})`,
+              )
+              .join(", ");
+            return storeTerminalFailure(
+              tx,
+              mutation,
+              claimed.claim,
+              statusFailure(
+                "conflict",
+                "partner_proof_required",
+                `Required partner proof is incomplete: ${missingSummary}. Upload the evidence or record an authorized exception reason.`,
+                {
+                  fieldErrors: {
+                    proofOverrideReason:
+                      "Upload the missing proof or enter an exception reason of at least 10 characters.",
+                  },
+                },
+              ),
+              409,
+            );
+          }
+          if (
+            mutation.principalType !== "human" ||
+            !mutation.actor.id ||
+            !mutation.policy.requiredPermissions.includes(
+              "appointment_media.manage",
+            )
+          ) {
+            throw new TeamMutationFailure(
+              "forbidden",
+              "Proof exceptions require appointment-media management access.",
+            );
+          }
+          await recordPartnerProofCompletionOverride(tx, {
+            decision: proofDecision,
+            reason: parsed.data.proofOverrideReason,
+            teamMemberId: mutation.actor.id,
+            now: new Date(),
+          });
+          proofOverrideApplied = true;
+          proofOverrideCategories = proofDecision.missing.map(
+            (entry) => entry.category,
+          );
+        }
       }
 
       try {
@@ -1384,6 +1516,8 @@ export async function POST(
           commissionsReconciled: needsCommissionRefresh,
           commissionPayoutRunIds,
           commissionPeriod,
+          proofOverrideApplied,
+          proofOverrideCategories,
         },
         committedAt: updated.updatedAt,
       });

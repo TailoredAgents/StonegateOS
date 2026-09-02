@@ -363,6 +363,7 @@ type AppointmentSectionProps = {
   canUpdateAppointments: boolean;
   canCollectPayments: boolean;
   canSendCustomerMessages: boolean;
+  canManageAppointmentMedia: boolean;
   canManageCommissions: boolean;
   canOverrideAppointmentConflicts: boolean;
 };
@@ -379,6 +380,7 @@ function AppointmentSection({
   canUpdateAppointments,
   canCollectPayments,
   canSendCustomerMessages,
+  canManageAppointmentMedia,
   canManageCommissions,
   canOverrideAppointmentConflicts,
 }: AppointmentSectionProps): ReactElement | null {
@@ -422,6 +424,7 @@ function AppointmentSection({
             canUpdateAppointments={canUpdateAppointments}
             canCollectPayments={canCollectPayments}
             canSendCustomerMessages={canSendCustomerMessages}
+            canManageAppointmentMedia={canManageAppointmentMedia}
             canManageCommissions={canManageCommissions}
             canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
           />
@@ -440,6 +443,7 @@ type AppointmentCardProps = {
   canUpdateAppointments: boolean;
   canCollectPayments: boolean;
   canSendCustomerMessages: boolean;
+  canManageAppointmentMedia: boolean;
   canManageCommissions: boolean;
   canOverrideAppointmentConflicts: boolean;
 };
@@ -591,6 +595,7 @@ function AppointmentCard({
   canUpdateAppointments,
   canCollectPayments,
   canSendCustomerMessages,
+  canManageAppointmentMedia,
   canManageCommissions,
   canOverrideAppointmentConflicts,
 }: AppointmentCardProps): ReactElement {
@@ -1139,6 +1144,28 @@ function AppointmentCard({
                   quotedTotalCents={a.quotedTotalCents}
                 />
 
+                {canManageAppointmentMedia ? (
+                  <details className="sm:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
+                    <summary className="min-h-11 cursor-pointer py-2 font-semibold">
+                      Missing-proof exception
+                    </summary>
+                    <label className="mt-2 block">
+                      <span className="block leading-6">
+                        Use only when required partner proof cannot be captured.
+                        This reason is audited and requires recent MFA.
+                      </span>
+                      <textarea
+                        name="proofOverrideReason"
+                        minLength={10}
+                        maxLength={500}
+                        rows={3}
+                        className="mt-2 w-full rounded-xl border border-amber-300 bg-white px-3 py-2 text-base text-slate-950"
+                        placeholder="Explain why the required proof cannot be provided"
+                      />
+                    </label>
+                  </details>
+                ) : null}
+
                 <details className="sm:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
                   <summary className="cursor-pointer font-medium select-none">
                     Commissions
@@ -1560,6 +1587,10 @@ export async function MyDaySection({
   );
   const canCollectPayments = hasTeamPermission(principal, "payments.collect");
   const canSendCustomerMessages = hasTeamPermission(principal, "messages.send");
+  const canManageAppointmentMedia = hasTeamPermission(
+    principal,
+    "appointment_media.manage",
+  );
   const canManageCommissions = hasTeamPermission(
     principal,
     "commissions.manage",
@@ -1742,6 +1773,7 @@ export async function MyDaySection({
           canUpdateAppointments={canUpdateAppointments}
           canCollectPayments={canCollectPayments}
           canSendCustomerMessages={canSendCustomerMessages}
+          canManageAppointmentMedia={canManageAppointmentMedia}
           canManageCommissions={canManageCommissions}
           canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
         />
@@ -1760,6 +1792,7 @@ export async function MyDaySection({
           canUpdateAppointments={canUpdateAppointments}
           canCollectPayments={canCollectPayments}
           canSendCustomerMessages={canSendCustomerMessages}
+          canManageAppointmentMedia={canManageAppointmentMedia}
           canManageCommissions={canManageCommissions}
           canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
         />
@@ -1778,6 +1811,7 @@ export async function MyDaySection({
           canUpdateAppointments={canUpdateAppointments}
           canCollectPayments={canCollectPayments}
           canSendCustomerMessages={canSendCustomerMessages}
+          canManageAppointmentMedia={canManageAppointmentMedia}
           canManageCommissions={canManageCommissions}
           canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
         />
@@ -1796,6 +1830,7 @@ export async function MyDaySection({
           canUpdateAppointments={canUpdateAppointments}
           canCollectPayments={canCollectPayments}
           canSendCustomerMessages={canSendCustomerMessages}
+          canManageAppointmentMedia={canManageAppointmentMedia}
           canManageCommissions={canManageCommissions}
           canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
         />
@@ -1814,6 +1849,7 @@ export async function MyDaySection({
           canUpdateAppointments={canUpdateAppointments}
           canCollectPayments={canCollectPayments}
           canSendCustomerMessages={canSendCustomerMessages}
+          canManageAppointmentMedia={canManageAppointmentMedia}
           canManageCommissions={canManageCommissions}
           canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
         />

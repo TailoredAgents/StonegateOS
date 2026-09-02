@@ -168,6 +168,13 @@ export type QuoteV2IssuerSnapshot = {
   supportMessage?: string | null;
 };
 
+export type QuoteV2PartnerContext = {
+  accountId: string;
+  target: { type: "location" | "booking"; id: string };
+  accountName: string;
+  targetLabel: string;
+};
+
 type FetchLike = typeof fetch;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -616,6 +623,7 @@ export class QuoteV2StaffClient {
   async createDraft(
     draft: QuoteV2ComposerDraft,
     idempotencyKey: string,
+    partnerContext?: QuoteV2PartnerContext,
   ): Promise<QuoteV2DraftReceipt> {
     return this.mutateDraft(`${this.basePath}/quotes`, {
       method: "POST",
@@ -629,6 +637,14 @@ export class QuoteV2StaffClient {
         audience: draft.audience,
         documentType: draft.documentType,
         schedulingMode: draft.schedulingMode,
+        ...(partnerContext
+          ? {
+              partnerContext: {
+                accountId: partnerContext.accountId,
+                target: partnerContext.target,
+              },
+            }
+          : {}),
       }),
     });
   }

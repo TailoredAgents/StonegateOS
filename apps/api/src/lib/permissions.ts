@@ -3,6 +3,8 @@ import {
   TEAM_AUTHENTICATED_BASELINE_PERMISSIONS,
   TEAM_ASSIGNABLE_PERMISSION_CATALOG,
   TEAM_OWNER_ONLY_PERMISSION_CATALOG,
+  TEAM_PARTNER_LEGACY_PERMISSION_COMPATIBILITY,
+  TEAM_PARTNER_LEGACY_PERMISSION_CATALOG,
   TEAM_PERMISSION_CATALOG,
   TEAM_ROLE_PERMISSION_TEMPLATES,
 } from "@myst-os/sdk";
@@ -28,6 +30,9 @@ export type PermissionContext = {
   principalId: string | null;
   principalLabel: string | null;
   sessionId: string | null;
+  authenticatedAt: Date | null;
+  assuranceLevel: "aal1" | "aal2" | null;
+  mfaVerifiedAt: Date | null;
 };
 
 type MemberPermissionRow = {
@@ -127,16 +132,39 @@ function mergePermissions(base: string[], grant: string[]): string[] {
   return result;
 }
 
+function expandLegacyPartnerPermissions(permissions: string[]): string[] {
+  const expanded: string[] = [];
+  const seen = new Set<string>();
+  for (const permission of normalizePermissions(permissions)) {
+    const additions =
+      TEAM_PARTNER_LEGACY_PERMISSION_COMPATIBILITY[
+        permission as keyof typeof TEAM_PARTNER_LEGACY_PERMISSION_COMPATIBILITY
+      ] ?? [];
+    for (const candidate of [permission, ...additions]) {
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      expanded.push(candidate);
+    }
+  }
+  return expanded;
+}
+
 export function computeEffectivePermissions(input: {
   rolePermissions: string[] | null | undefined;
   grant: string[] | null | undefined;
   deny: string[] | null | undefined;
 }): string[] {
-  const merged = mergePermissions(input.rolePermissions ?? [], [
-    ...(input.grant ?? []),
-    ...TEAM_AUTHENTICATED_BASELINE_PERMISSIONS,
-  ]);
-  const denyList = normalizePermissions(input.deny);
+  const merged = expandLegacyPartnerPermissions(
+    mergePermissions(input.rolePermissions ?? [], [
+      ...(input.grant ?? []),
+      ...TEAM_AUTHENTICATED_BASELINE_PERMISSIONS,
+    ]),
+  );
+  // A stored deny for a broad legacy permission must also deny every narrow
+  // compatibility grant that broad permission would otherwise produce.
+  const denyList = expandLegacyPartnerPermissions(
+    normalizePermissions(input.deny),
+  );
 
   // Materialize wildcards into the human-assignable catalog. Explicitly
   // stored Owner-only permissions survive materialization, but a bare legacy
@@ -147,6 +175,10 @@ export function computeEffectivePermissions(input: {
   const granted = merged.includes("*")
     ? [
         ...TEAM_ASSIGNABLE_PERMISSION_CATALOG,
+        // Existing wildcard roles keep access to broad legacy routes during
+        // migration, but Access cannot assign these compatibility inputs to a
+        // new or edited role.
+        ...TEAM_PARTNER_LEGACY_PERMISSION_CATALOG,
         ...explicitOwnerOnly,
         ...TEAM_AUTHENTICATED_BASELINE_PERMISSIONS,
       ]
@@ -184,6 +216,9 @@ function unauthenticatedContext(): PermissionContext {
     principalId: null,
     principalLabel: null,
     sessionId: null,
+    authenticatedAt: null,
+    assuranceLevel: null,
+    mfaVerifiedAt: null,
   };
 }
 
@@ -200,6 +235,9 @@ function rememberVerifiedPrincipal(
     label: context.principalLabel,
     sessionId: context.sessionId,
     authMethod: context.source,
+    authenticatedAt: context.authenticatedAt?.toISOString() ?? null,
+    assuranceLevel: context.assuranceLevel,
+    mfaVerifiedAt: context.mfaVerifiedAt?.toISOString() ?? null,
   });
   return context;
 }
@@ -278,6 +316,9 @@ async function resolveForwardedTeamSession(
     .select({
       sessionId: teamSessions.id,
       authMethod: teamSessions.authMethod,
+      authenticatedAt: teamSessions.createdAt,
+      assuranceLevel: teamSessions.assuranceLevel,
+      mfaVerifiedAt: teamSessions.mfaVerifiedAt,
       memberId: teamMembers.id,
       memberName: teamMembers.name,
       expiresAt: teamSessions.expiresAt,
@@ -312,6 +353,9 @@ async function resolveForwardedTeamSession(
     principalId: row.memberId,
     principalLabel: row.memberName,
     sessionId: row.sessionId,
+    authenticatedAt: row.authenticatedAt,
+    assuranceLevel: row.assuranceLevel,
+    mfaVerifiedAt: row.mfaVerifiedAt,
   };
 }
 
@@ -332,6 +376,9 @@ function resolveExplicitServiceContext(
     principalId: request.headers.get("x-actor-id")?.trim() || null,
     principalLabel: label,
     sessionId: null,
+    authenticatedAt: null,
+    assuranceLevel: null,
+    mfaVerifiedAt: null,
   };
 }
 

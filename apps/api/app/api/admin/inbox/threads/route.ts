@@ -1,6 +1,15 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  ilike,
+  inArray,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import {
   getDb,
   conversationThreads,
@@ -26,6 +35,7 @@ import {
 import { requirePermission } from "@/lib/permissions";
 import { requireActiveContactForDirectOutbound } from "@/lib/contact-outbound-safety";
 import { buildInboxSnapshotSignature } from "@/lib/inbox-snapshot";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import { parseInboxQueue } from "@/lib/inbox-queue";
 import {
   TeamMutationFailure,
@@ -317,7 +327,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   // dates, contact, and source). They intentionally exclude both the selected
   // queue and the transitional legacy status so staff can see the true totals
   // available when switching queues.
-  const baseFilters = [];
+  const baseFilters: Array<SQL | undefined> = [
+    genericInboxThreadScopeCondition(),
+  ];
 
   if (channel) {
     baseFilters.push(eq(conversationThreads.channel, channel));
@@ -622,10 +634,15 @@ export async function GET(request: NextRequest): Promise<Response> {
         lastFailedAt: sql<Date | null>`max(${conversationMessages.createdAt})`,
       })
       .from(conversationMessages)
+      .innerJoin(
+        conversationThreads,
+        eq(conversationMessages.threadId, conversationThreads.id),
+      )
       .where(
         and(
           eq(conversationMessages.deliveryStatus, "failed"),
           eq(conversationMessages.direction, "outbound"),
+          genericInboxThreadScopeCondition(),
           sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`,
         ),
       ),
@@ -1061,6 +1078,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           leadId: leadId || null,
           contactId,
           propertyId: propertyId || null,
+          staffScope: "general",
           status,
           state,
           channel,
@@ -1152,7 +1170,12 @@ export async function POST(request: NextRequest): Promise<Response> {
             lastMessageAt: now,
             updatedAt: now,
           })
-          .where(eq(conversationThreads.id, thread.id));
+          .where(
+            and(
+              eq(conversationThreads.id, thread.id),
+              genericInboxThreadScopeCondition(),
+            ),
+          );
 
         if (direction === "outbound") {
           await tx.insert(outboxEvents).values({

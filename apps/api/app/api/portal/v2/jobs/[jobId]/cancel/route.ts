@@ -8,11 +8,14 @@ import {
   auditLogs,
   getDb,
   outboxEvents,
+  partnerAccountCancellationPolicies,
   partnerAccountMemberships,
   partnerAccountLocations,
   partnerBookings,
+  partnerCancellationRequestReconciliationCases,
+  partnerCancellationRequests,
   partnerJobEvents,
-  partnerNotifications,
+  partnerRescheduleRequests,
 } from "@/db";
 import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
@@ -21,10 +24,18 @@ import {
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
 import { requirePartnerCapability } from "@/lib/partner-account-authorization";
+import { createPartnerCancellationRequestSnapshot } from "@/lib/partner-cancellation-request-lifecycle";
+import {
+  acquirePartnerJobMutationLock,
+  supersedePendingPartnerJobChangeRequestForCancellation,
+} from "@/lib/partner-job-change-request-lifecycle";
+import { supersedeOfferedPartnerJobChangeOrderForCancellation } from "@/lib/partner-job-change-orders";
+import { queuePartnerBookingNotification } from "@/lib/partner-notification-delivery";
 import { arePartnerPortalV2WritesEnabled } from "@/lib/partner-portal-feature-flags";
 import {
   evaluatePartnerCancellation,
   resolvePartnerCancellationPolicy,
+  resolvePersistedPartnerAccountCancellationPolicy,
 } from "@/lib/partner-portal-v2-cancellation";
 import {
   createPartnerJobAccessCondition,
@@ -143,6 +154,7 @@ export async function POST(
     const db = getDb();
     const result = await db.transaction(async (tx) => {
       await acquireScheduleConflictLock(tx);
+      await acquirePartnerJobMutationLock(tx, principal.accountId!, jobId);
       const [row] = await tx
         .select({
           bookingId: partnerBookings.id,
@@ -150,9 +162,20 @@ export async function POST(
           bookingUpdatedAt: partnerBookings.updatedAt,
           publicStatus: partnerBookings.publicStatus,
           arrivalWindowStartAt: partnerBookings.arrivalWindowStartAt,
+          arrivalWindowEndAt: partnerBookings.arrivalWindowEndAt,
           requestedReviewReasons: partnerBookings.requestedReviewReasons,
           cancelOperationKeyHash: partnerBookings.cancelOperationKeyHash,
           cancelRequestHash: partnerBookings.cancelRequestHash,
+          cancellationMinimumNoticeMinutes:
+            partnerAccountCancellationPolicies.minimumNoticeMinutes,
+          cancellationDirectEnabled:
+            partnerAccountCancellationPolicies.directCancellationEnabled,
+          cancellationLateDisposition:
+            partnerAccountCancellationPolicies.lateCancellationDisposition,
+          cancellationAutomaticFeeMinor:
+            partnerAccountCancellationPolicies.automaticFeeMinor,
+          cancellationPolicyRevision:
+            partnerAccountCancellationPolicies.revision,
           notificationMembershipId: partnerAccountMemberships.id,
           appointmentId: appointments.id,
           appointmentStatus: appointments.status,
@@ -181,10 +204,103 @@ export async function POST(
             ),
           ),
         )
+        .leftJoin(
+          partnerAccountCancellationPolicies,
+          eq(
+            partnerAccountCancellationPolicies.partnerAccountId,
+            partnerBookings.partnerAccountId,
+          ),
+        )
         .where(createPartnerJobAccessCondition(principal, jobId))
         .for("update", { of: partnerBookings })
         .limit(1);
       if (!row) return { kind: "not_found" as const };
+
+      const [requestReplay] = await tx
+        .select({
+          id: partnerCancellationRequests.id,
+          partnerBookingId: partnerCancellationRequests.partnerBookingId,
+          state: partnerCancellationRequests.state,
+          requestHash: partnerCancellationRequests.requestHash,
+          revision: partnerCancellationRequests.revision,
+          createdAt: partnerCancellationRequests.createdAt,
+        })
+        .from(partnerCancellationRequests)
+        .where(
+          and(
+            eq(
+              partnerCancellationRequests.partnerAccountId,
+              principal.accountId!,
+            ),
+            eq(
+              partnerCancellationRequests.operationKeyHash,
+              idempotency.keyHash!,
+            ),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (requestReplay) {
+        if (
+          requestReplay.partnerBookingId !== row.bookingId ||
+          requestReplay.requestHash !== requestHash
+        ) {
+          return { kind: "idempotency_conflict" as const };
+        }
+        return {
+          kind: "success" as const,
+          replayed: true,
+          outcome: "review_requested" as const,
+          status: row.publicStatus,
+          version: row.bookingVersion,
+          updatedAt: row.bookingUpdatedAt,
+          cancellationRequest: {
+            id: requestReplay.id,
+            state: requestReplay.state,
+            revision: requestReplay.revision,
+            createdAt: requestReplay.createdAt,
+          },
+        };
+      }
+
+      const [pendingCancellationRequest] = await tx
+        .select({ id: partnerCancellationRequests.id })
+        .from(partnerCancellationRequests)
+        .where(
+          and(
+            eq(
+              partnerCancellationRequests.partnerAccountId,
+              principal.accountId!,
+            ),
+            eq(partnerCancellationRequests.partnerBookingId, row.bookingId),
+            eq(partnerCancellationRequests.state, "pending"),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (pendingCancellationRequest) {
+        return { kind: "review_pending" as const };
+      }
+      const [legacyCancellationReview] = await tx
+        .select({ id: partnerCancellationRequestReconciliationCases.id })
+        .from(partnerCancellationRequestReconciliationCases)
+        .where(
+          and(
+            eq(
+              partnerCancellationRequestReconciliationCases.partnerAccountId,
+              principal.accountId!,
+            ),
+            eq(
+              partnerCancellationRequestReconciliationCases.partnerBookingId,
+              row.bookingId,
+            ),
+            eq(partnerCancellationRequestReconciliationCases.state, "open"),
+          ),
+        )
+        .limit(1);
+      if (legacyCancellationReview) {
+        return { kind: "reconciliation_required" as const };
+      }
 
       if (
         row.cancelOperationKeyHash === idempotency.keyHash &&
@@ -213,7 +329,7 @@ export async function POST(
         return { kind: "already_canceled" as const };
       }
       if (row.cancelOperationKeyHash || row.cancelRequestHash) {
-        return { kind: "review_pending" as const };
+        return { kind: "reconciliation_required" as const };
       }
       const etagRevision = `${row.bookingId}:${row.bookingVersion}:${row.bookingUpdatedAt.toISOString()}`;
       const precondition = evaluatePortalV2RevisionPrecondition({
@@ -234,13 +350,85 @@ export async function POST(
         now,
         canCancel: true,
         reviewPending: false,
-        policy: resolvePartnerCancellationPolicy({ timezone: row.timezone }),
+        policy: resolvePartnerCancellationPolicy({
+          timezone: row.timezone,
+          accountPolicy: resolvePersistedPartnerAccountCancellationPolicy(
+            row.cancellationPolicyRevision !== null &&
+              row.cancellationMinimumNoticeMinutes !== null &&
+              row.cancellationDirectEnabled !== null &&
+              row.cancellationLateDisposition !== null
+              ? {
+                  minimumNoticeMinutes: row.cancellationMinimumNoticeMinutes,
+                  directCancellationEnabled: row.cancellationDirectEnabled,
+                  lateCancellationDisposition: row.cancellationLateDisposition,
+                  automaticFeeMinor: row.cancellationAutomaticFeeMinor,
+                  revision: row.cancellationPolicyRevision,
+                }
+              : null,
+          ),
+        }),
       });
       if (!cancellation.action) {
         return { kind: "status_conflict" as const };
       }
 
       if (cancellation.action === "request_cancellation_review") {
+        const [pendingRescheduleRequest] = await tx
+          .select({ id: partnerRescheduleRequests.id })
+          .from(partnerRescheduleRequests)
+          .where(
+            and(
+              eq(
+                partnerRescheduleRequests.partnerAccountId,
+                principal.accountId!,
+              ),
+              eq(partnerRescheduleRequests.partnerBookingId, row.bookingId),
+              eq(partnerRescheduleRequests.state, "pending"),
+            ),
+          )
+          .for("update")
+          .limit(1);
+        if (pendingRescheduleRequest) {
+          return { kind: "schedule_change_pending" as const };
+        }
+        const [cancellationRequest] = await tx
+          .insert(partnerCancellationRequests)
+          .values({
+            partnerAccountId: principal.accountId!,
+            partnerBookingId: row.bookingId,
+            requestedByMembershipId: principal.membershipId!,
+            state: "pending",
+            reason: parsed.data.reason,
+            requestSnapshot: createPartnerCancellationRequestSnapshot({
+              requestedAt: now,
+              publicStatus: row.publicStatus,
+              appointmentStatus: row.appointmentStatus,
+              bookingVersion: row.bookingVersion,
+              promisedArrivalStartAt: row.arrivalWindowStartAt,
+              promisedArrivalEndAt: row.arrivalWindowEndAt,
+              timezone: row.timezone ?? "America/New_York",
+              cutoffMinutes: cancellation.cutoffMinutes,
+              directCancellationEnabled: cancellation.directCancellationEnabled,
+              policySource: cancellation.policySource,
+              policyRevision: cancellation.policyRevision,
+              deadlineAt: cancellation.deadlineAt,
+              decisionReasonCode: cancellation.reason.code,
+            }),
+            operationKeyHash: idempotency.keyHash!,
+            requestHash,
+            revision: 1,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .returning({
+            id: partnerCancellationRequests.id,
+            state: partnerCancellationRequests.state,
+            revision: partnerCancellationRequests.revision,
+            createdAt: partnerCancellationRequests.createdAt,
+          });
+        if (!cancellationRequest) {
+          throw new Error("partner_cancellation_request_create_failed");
+        }
         const reviewReasons = Array.from(
           new Set([
             ...row.requestedReviewReasons,
@@ -281,6 +469,7 @@ export async function POST(
             actorType: "partner",
             actorMembershipId: principal.membershipId,
             metadata: {
+              cancellationRequestId: cancellationRequest.id,
               reasonCode: cancellation.reason.code,
               deadlineAt: cancellation.deadlineAt,
               automaticFeeMinor: null,
@@ -290,14 +479,17 @@ export async function POST(
         if (!reviewEvent) {
           throw new Error("partner_cancel_review_event_missing");
         }
-        await tx.insert(partnerNotifications).values({
-          partnerAccountId: principal.accountId!,
+        await queuePartnerBookingNotification({
+          tx,
+          accountId: principal.accountId!,
           membershipId: row.notificationMembershipId ?? principal.membershipId!,
           partnerBookingId: row.bookingId,
-          eventKey: "job.cancellation_review_requested",
-          title: "Cancellation request received",
-          body: "Stonegate staff will review the request. The job remains scheduled until they respond.",
-          actionPath: `/partners/bookings/${row.bookingId}`,
+          eventType: "booking.cancellation_review_requested",
+          dedupeKey: idempotency.keyHash!,
+          correlationId,
+          occurredAt: now,
+          accountTimezone: row.timezone,
+          serviceAt: row.arrivalWindowStartAt,
         });
         const auditId = randomUUID();
         await tx.insert(auditLogs).values({
@@ -315,12 +507,14 @@ export async function POST(
           idempotencyKeyHash: idempotency.keyHash,
           action: "partner.booking.cancellation_review_requested",
           entityType: "partner_booking",
-          entityId: row.bookingId,
+          entityId: cancellationRequest.id,
           meta: sanitizeAuditMetadata({
             eventId: auditId,
             correlationId,
             partnerAccountId: principal.accountId,
             partnerMembershipId: principal.membershipId,
+            partnerBookingId: row.bookingId,
+            cancellationRequestId: cancellationRequest.id,
             before: { publicStatus: row.publicStatus },
             after: {
               publicStatus: row.publicStatus,
@@ -331,6 +525,8 @@ export async function POST(
               reasonCode: cancellation.reason.code,
               deadlineAt: cancellation.deadlineAt,
               cutoffMinutes: cancellation.cutoffMinutes,
+              policyRevision: cancellation.policyRevision,
+              policySource: cancellation.policySource,
               automaticFeeMinor: null,
             },
             reason: parsed.data.reason,
@@ -341,6 +537,7 @@ export async function POST(
           payload: {
             partnerAccountId: principal.accountId,
             partnerBookingId: row.bookingId,
+            cancellationRequestId: cancellationRequest.id,
             appointmentId: row.appointmentId,
             partnerJobEventId: reviewEvent.id,
             sourceAuditEventId: auditId,
@@ -354,6 +551,7 @@ export async function POST(
           status: row.publicStatus,
           version: updatedBooking.version,
           updatedAt: updatedBooking.updatedAt,
+          cancellationRequest,
         };
       }
 
@@ -366,6 +564,43 @@ export async function POST(
           row.appointmentStatus === "confirmed");
       if (!directStatusIsCompatible) {
         return { kind: "status_conflict" as const };
+      }
+
+      const [pendingRescheduleRequest] = await tx
+        .select({ id: partnerRescheduleRequests.id })
+        .from(partnerRescheduleRequests)
+        .where(
+          and(
+            eq(
+              partnerRescheduleRequests.partnerAccountId,
+              principal.accountId!,
+            ),
+            eq(partnerRescheduleRequests.partnerBookingId, row.bookingId),
+            eq(partnerRescheduleRequests.state, "pending"),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (pendingRescheduleRequest) {
+        const [superseded] = await tx
+          .update(partnerRescheduleRequests)
+          .set({
+            state: "superseded",
+            resolutionReason:
+              "Superseded because the Partner directly canceled the job.",
+            resolvedAt: now,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(partnerRescheduleRequests.id, pendingRescheduleRequest.id),
+              eq(partnerRescheduleRequests.state, "pending"),
+            ),
+          )
+          .returning({ id: partnerRescheduleRequests.id });
+        if (!superseded) {
+          return { kind: "schedule_change_pending" as const };
+        }
       }
 
       const [updatedAppointment] = await tx
@@ -402,6 +637,26 @@ export async function POST(
         });
       if (!updatedBooking) throw new Error("partner_cancel_revision_race");
 
+      const supersededChangeRequest =
+        await supersedePendingPartnerJobChangeRequestForCancellation(tx, {
+          accountId: principal.accountId!,
+          jobId: row.bookingId,
+          actorType: "system",
+          triggeringMembershipId: principal.membershipId!,
+          bookingRevisionBefore: row.bookingVersion,
+          bookingRevisionAfter: updatedBooking.version,
+          correlationId,
+          now,
+        });
+      await supersedeOfferedPartnerJobChangeOrderForCancellation(tx, {
+        partnerAccountId: principal.accountId!,
+        partnerBookingId: row.bookingId,
+        bookingRevisionBefore: row.bookingVersion,
+        bookingRevisionAfter: updatedBooking.version,
+        correlationId,
+        now,
+      });
+
       await tx.insert(partnerJobEvents).values({
         partnerAccountId: principal.accountId!,
         partnerBookingId: row.bookingId,
@@ -412,14 +667,17 @@ export async function POST(
         actorType: "partner",
         actorMembershipId: principal.membershipId,
       });
-      await tx.insert(partnerNotifications).values({
-        partnerAccountId: principal.accountId!,
+      await queuePartnerBookingNotification({
+        tx,
+        accountId: principal.accountId!,
         membershipId: row.notificationMembershipId ?? principal.membershipId!,
         partnerBookingId: row.bookingId,
-        eventKey: "job.canceled",
-        title: "Job canceled",
-        body: "The service request was canceled.",
-        actionPath: `/partners/bookings/${row.bookingId}`,
+        eventType: "booking.canceled",
+        dedupeKey: idempotency.keyHash!,
+        correlationId,
+        occurredAt: now,
+        accountTimezone: row.timezone,
+        serviceAt: row.arrivalWindowStartAt,
       });
       const auditId = randomUUID();
       await tx.insert(auditLogs).values({
@@ -445,10 +703,13 @@ export async function POST(
           partnerMembershipId: principal.membershipId,
           before: { publicStatus: row.publicStatus },
           after: { publicStatus: "canceled", version: updatedBooking.version },
+          supersededChangeRequestId: supersededChangeRequest?.requestId ?? null,
           cancellation: {
             reasonCode: cancellation.reason.code,
             deadlineAt: cancellation.deadlineAt,
             cutoffMinutes: cancellation.cutoffMinutes,
+            policyRevision: cancellation.policyRevision,
+            policySource: cancellation.policySource,
             automaticFeeMinor: null,
           },
           reason: parsed.data.reason,
@@ -511,6 +772,40 @@ export async function POST(
     if (result.kind === "review_pending") {
       return createPartnerPortalV2ErrorResponse("conflict", 409, correlationId);
     }
+    if (result.kind === "schedule_change_pending") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "conflict",
+          message:
+            "A schedule-change request is already under review. Resolve it before requesting cancellation.",
+          retryable: false,
+          correlationId,
+        },
+        {
+          status: 409,
+          headers: {
+            "Cache-Control": "no-store",
+            "x-correlation-id": correlationId,
+            Vary: "Authorization",
+          },
+        },
+      );
+    }
+    if (result.kind === "reconciliation_required") {
+      return createPartnerPortalV2ErrorResponse(
+        "review_required",
+        422,
+        correlationId,
+      );
+    }
+    if (result.kind === "idempotency_conflict") {
+      return createPartnerPortalV2ErrorResponse(
+        "idempotency_conflict",
+        409,
+        correlationId,
+      );
+    }
     if (result.kind === "status_conflict") {
       return createPartnerPortalV2ErrorResponse("conflict", 409, correlationId);
     }
@@ -529,7 +824,22 @@ export async function POST(
         },
         cancellation: {
           outcome: result.outcome,
+          request:
+            "cancellationRequest" in result && result.cancellationRequest
+              ? {
+                  id: result.cancellationRequest.id,
+                  state: result.cancellationRequest.state,
+                  revision: result.cancellationRequest.revision,
+                  createdAt: result.cancellationRequest.createdAt.toISOString(),
+                }
+              : null,
           automaticFeeMinor: null,
+          automaticFeeApplied: false,
+          jobRemainsScheduled: result.outcome === "review_requested",
+          consequence:
+            result.outcome === "review_requested"
+              ? "Stonegate will review this request. The existing job remains scheduled unless staff confirms a change."
+              : "The job is canceled. No fee was applied automatically.",
         },
       },
       {

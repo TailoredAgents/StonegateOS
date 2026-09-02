@@ -12,6 +12,7 @@ import {
   evaluateCalendarCoverageState,
   evaluateDraftMediaReadiness,
   parsePartnerDraftMutation,
+  rankPartnerAlternativeWindows,
   partnerBookingSubmissionAppointmentSchedule,
   partnerBookingSubmissionScheduleDisposition,
   validatePartnerBookingDraft,
@@ -44,6 +45,7 @@ function policy() {
     bookingWindowDays: 30,
     defaultTravelBufferMinutes: 30,
     maxJobsPerDay: 6,
+    maxJobsPerCrew: 3,
     weeklyHours: {
       monday: hours,
       tuesday: hours,
@@ -631,6 +633,24 @@ describe("partner portal V2 scheduling domain", () => {
     ).toThrow("Review the highlighted fields");
   });
 
+  it("accepts only the explicit durable scheduling-assistance choices", () => {
+    expect(
+      parsePartnerDraftMutation({
+        scheduleAssistancePreference: "waitlist",
+      }),
+    ).toEqual({ scheduleAssistancePreference: "waitlist" });
+    expect(
+      parsePartnerDraftMutation({
+        scheduleAssistancePreference: "callback",
+      }),
+    ).toEqual({ scheduleAssistancePreference: "callback" });
+    expect(() =>
+      parsePartnerDraftMutation({
+        scheduleAssistancePreference: "call_me_maybe",
+      }),
+    ).toThrow("Review the highlighted fields");
+  });
+
   it("understands seeded base-field requirements without treating them as scope paths", () => {
     const result = validatePartnerBookingDraft({
       locationId: "11111111-1111-4111-8111-111111111111",
@@ -764,5 +784,38 @@ describe("partner portal V2 scheduling domain", () => {
         completeGrid: true,
       }),
     );
+  });
+
+  it("ranks preferred dates ahead of the earliest remaining alternatives", () => {
+    const result = computePartnerAvailability({
+      policy: policy(),
+      demand: createScheduleDemand({
+        serviceKey: "junk-removal",
+        durationMinutes: 60,
+        travelBufferMinutes: 30,
+        capacityPoolKey: "field_service",
+        capacityUnits: 1,
+      }),
+      blocks: [],
+      rangeStartAt: new Date("2026-09-01T08:00:00.000Z"),
+      rangeEndAt: new Date("2026-09-03T12:00:00.000Z"),
+      now: new Date("2026-08-31T08:00:00.000Z"),
+    });
+
+    const ranked = rankPartnerAlternativeWindows({
+      windows: result.windows,
+      preferredLocalDates: ["2026-09-02"],
+      limit: 3,
+    });
+    expect(ranked).toHaveLength(3);
+    expect(ranked[0]).toEqual(
+      expect.objectContaining({
+        localDate: "2026-09-02",
+        rank: 1,
+        reason: "preferred_date",
+      }),
+    );
+    expect(ranked.map((window) => window.rank)).toEqual([1, 2, 3]);
+    expect(JSON.stringify(ranked)).not.toContain("availableCandidates");
   });
 });

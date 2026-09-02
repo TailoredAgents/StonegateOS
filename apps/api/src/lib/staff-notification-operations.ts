@@ -25,7 +25,8 @@ export type PartnerBookingAuditActor = {
 
 export type PartnerBookingStaffAlertKind =
   | "partner_booking_created"
-  | "partner_booking_canceled";
+  | "partner_booking_canceled"
+  | "partner_billing_dispute_requested";
 
 export function normalizePartnerOperationKey(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -113,7 +114,7 @@ export async function queuePartnerBookingStaffAlert(
   tx: TeamMutationTransaction,
   input: {
     appointmentId: string;
-    contactId: string;
+    contactId: string | null;
     recipient: {
       teamMemberId: string;
       phoneE164: string;
@@ -190,9 +191,18 @@ export async function queuePartnerBookingStaffAlert(
     ...auditActorValues(input.actor),
     correlationId: input.correlationId,
     outcome: "succeeded",
-    surface: "/partners/bookings",
-    action: "partner.booking.staff_alert.requested",
-    entityType: "appointment",
+    surface:
+      input.kind === "partner_billing_dispute_requested"
+        ? "/partners/billing"
+        : "/partners/bookings",
+    action:
+      input.kind === "partner_billing_dispute_requested"
+        ? "partner.billing_dispute.staff_alert.requested"
+        : "partner.booking.staff_alert.requested",
+    entityType:
+      input.kind === "partner_billing_dispute_requested"
+        ? "partner_billing_dispute_request"
+        : "appointment",
     entityId: input.appointmentId,
     meta: sanitizeAuditMetadata({
       operationId: created.id,
@@ -280,6 +290,52 @@ export async function prepareStaffNotificationDispatch(
     return { kind: "terminal", state: "reconciliation_required" };
   }
 
+  const [currentRecipient] = operation.recipientTeamMemberId
+    ? await tx
+        .select({
+          id: teamMembers.id,
+          active: teamMembers.active,
+          phoneE164: teamMembers.phoneE164,
+        })
+        .from(teamMembers)
+        .where(eq(teamMembers.id, operation.recipientTeamMemberId))
+        .for("update")
+        .limit(1)
+    : [];
+  const currentRecipientPhone = currentRecipient?.phoneE164?.trim() ?? "";
+  const recipientFailureCode =
+    !currentRecipient || !currentRecipient.active
+      ? "recipient_unavailable"
+      : !E164_PATTERN.test(currentRecipientPhone) ||
+          currentRecipientPhone !== operation.recipientAddress
+        ? "recipient_address_changed"
+        : null;
+  if (recipientFailureCode) {
+    const [failed] = await tx
+      .update(staffNotificationOperations)
+      .set({
+        state: "failed",
+        retryable: false,
+        deliveryCertainty: "not_sent",
+        failureCode: recipientFailureCode,
+        failedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(staffNotificationOperations.id, operation.id))
+      .returning();
+    if (!failed) return { kind: "unavailable" };
+    await insertWorkerAudit(tx, {
+      operation: failed,
+      outboxEventId: input.outboxEventId,
+      action: "staff_notification.dispatch.suppressed",
+      outcome: "failed",
+      state: "failed",
+      failureCode: recipientFailureCode,
+      now,
+    });
+    return { kind: "terminal", state: "failed" };
+  }
+
   const uncertaintyAt = new Date(
     now.getTime() + STAFF_NOTIFICATION_UNCERTAINTY_WINDOW_MS,
   );
@@ -347,6 +403,8 @@ async function insertWorkerAudit(
     failureCode?: string | null;
   },
 ): Promise<void> {
+  const billingDispute =
+    input.operation.kind === "partner_billing_dispute_requested";
   await tx.insert(auditLogs).values({
     actorType: "worker",
     actorId: null,
@@ -354,13 +412,15 @@ async function insertWorkerAudit(
     actorLabel: "outbox-dispatcher",
     authMethod: "service",
     outcome: input.outcome,
-    surface: "/partners/bookings",
+    surface: billingDispute ? "/partners/billing" : "/partners/bookings",
     providerOperationId: input.providerOperationId ?? null,
     idempotencyKeyHash: createHash("sha256")
       .update(input.operation.providerRequestKey)
       .digest("hex"),
     action: input.action,
-    entityType: "appointment",
+    entityType: billingDispute
+      ? "partner_billing_dispute_request"
+      : "appointment",
     entityId: input.operation.appointmentId,
     meta: sanitizeAuditMetadata({
       operationId: input.operation.id,
@@ -408,14 +468,14 @@ export async function finalizeStaffNotificationDispatch(
     input.result.providerMessageId ??
     input.result.providerOperationIds?.[0] ??
     null;
-  if (input.result.ok) {
+  if (input.result.ok && input.result.deliveryCertainty === "accepted") {
     await tx
       .update(staffNotificationOperations)
       .set({
         state: "succeeded",
         provider: input.result.provider ?? null,
         providerOperationId,
-        deliveryCertainty: input.result.deliveryCertainty ?? "accepted",
+        deliveryCertainty: "accepted",
         retryable: false,
         failureCode: null,
         succeededAt: now,
@@ -436,8 +496,12 @@ export async function finalizeStaffNotificationDispatch(
     return { kind: "processed", state: "succeeded" };
   }
 
-  const failureCode = input.result.detail ?? "staff_notification_failed";
-  if (input.result.deliveryCertainty === "uncertain") {
+  const failureCode =
+    input.result.detail ??
+    (input.result.deliveryCertainty
+      ? "staff_notification_failed"
+      : "provider_delivery_certainty_missing");
+  if (input.result.deliveryCertainty !== "not_sent") {
     await tx
       .update(staffNotificationOperations)
       .set({

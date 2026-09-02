@@ -19,6 +19,9 @@ function findSurface(workspace: readonly string[]) {
     (candidate) => candidate.canonicalPath === canonicalPath,
   );
   if (exact) return exact;
+  if (canonicalPath === "/team/sales/outbound/partners") {
+    return TEAM_SURFACES.find((candidate) => candidate.id === "partners");
+  }
   return resolveQuoteWorkspaceRoute(workspace)
     ? TEAM_SURFACES.find((candidate) => candidate.id === "quotes")
     : undefined;
@@ -49,6 +52,19 @@ export default async function CanonicalTeamWorkspacePage({
   if (!surface) notFound();
 
   const currentSearchParams = await searchParams;
+  if (
+    surface.id === "partners" &&
+    `/team/${workspace.map(encodeURIComponent).join("/")}` !==
+      surface.canonicalPath
+  ) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(currentSearchParams ?? {})) {
+      if (typeof value === "string" && value.length > 0) query.set(key, value);
+    }
+    redirect(
+      `${surface.canonicalPath}${query.size ? `?${query.toString()}` : ""}`,
+    );
+  }
   const quoteRoute = resolveQuoteWorkspaceRoute(workspace);
   if (surface.id === "quotes" && quoteRoute) {
     const legacyMode =

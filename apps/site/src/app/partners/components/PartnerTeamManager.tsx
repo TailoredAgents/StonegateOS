@@ -503,14 +503,18 @@ export function PartnerTeamManager({ initial }: { initial: TeamPayload }) {
       {!initial.invitation.available ? (
         <PartnerNotice tone="info">
           <strong>New invitations are staff-assisted for now.</strong>{" "}
-          {initial.invitation.reason} Contact an account administrator to add a new
-          teammate; no invitation has been sent from this page.
+          {initial.invitation.reason} Contact an account administrator to add a
+          new teammate; no invitation has been sent from this page.
         </PartnerNotice>
       ) : null}
 
       {message ? <PartnerNotice tone="error">{message}</PartnerNotice> : null}
 
-      <div className="grid gap-4 xl:grid-cols-2" aria-live="polite">
+      <p className="sr-only" role="status" aria-live="polite">
+        {filtered.length} team {filtered.length === 1 ? "member" : "members"}
+        shown.
+      </p>
+      <div className="grid gap-4 xl:grid-cols-2">
         {filtered.map((member) => (
           <MemberCard
             key={member.id}

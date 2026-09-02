@@ -28,7 +28,7 @@ function principal(
     accountId: "22222222-2222-4222-8222-222222222222",
     accountName: "Partner Company",
     membershipId: "33333333-3333-4333-8333-333333333333",
-    roleKey: "scheduler",
+    roleKey: "operations",
     persona: "property_manager",
     accessLevel: "account",
     accessScope: {},
@@ -71,7 +71,7 @@ describe("partner account capability authorization", () => {
         ),
       ).toBe(true);
     }
-    expect(PARTNER_SYSTEM_ROLE_TEMPLATES.owner).toEqual(
+    expect(PARTNER_SYSTEM_ROLE_TEMPLATES.administrator).toEqual(
       PARTNER_CAPABILITY_CATALOG,
     );
   });
@@ -80,7 +80,7 @@ describe("partner account capability authorization", () => {
     expect(
       computePartnerCapabilities({
         roleCapabilities: ["bookings.*", "unknown.superpower"],
-        grants: ["reports.read", "not_in_the_registry"],
+        grants: ["reports.financial.read", "not_in_the_registry"],
         denies: ["bookings.cancel", "reports.*"],
       }),
     ).toEqual([
@@ -89,7 +89,7 @@ describe("partner account capability authorization", () => {
       "bookings.read",
       "bookings.create",
       "bookings.update",
-      "bookings.approve",
+      "bookings.pricing.read",
     ]);
   });
 
@@ -110,17 +110,23 @@ describe("partner account capability authorization", () => {
 
   it("requires MFA for privileged role templates and equivalent custom authority", () => {
     expect(
-      partnerAccessRequiresMfa({ roleKey: "admin", capabilities: [] }),
+      partnerAccessRequiresMfa({ roleKey: "administrator", capabilities: [] }),
     ).toBe(true);
     expect(
       partnerAccessRequiresMfa({
         roleKey: "custom_finance",
-        capabilities: ["payments.manage"],
+        capabilities: ["payments.initiate"],
       }),
     ).toBe(true);
     expect(
       partnerAccessRequiresMfa({
-        roleKey: "scheduler",
+        roleKey: "custom_commercial",
+        capabilities: ["commercial.edit"],
+      }),
+    ).toBe(true);
+    expect(
+      partnerAccessRequiresMfa({
+        roleKey: "operations",
         capabilities: ["bookings.create"],
       }),
     ).toBe(false);

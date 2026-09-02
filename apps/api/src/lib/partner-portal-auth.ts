@@ -2,33 +2,112 @@ import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
 import { and, asc, desc, eq, gt, isNull } from "drizzle-orm";
 import {
-  contacts,
+  auditLogs,
   getDb,
   partnerAccountMemberships,
   partnerAccounts,
+  partnerAuthTransactions,
   partnerLoginTokens,
+  partnerMfaMethods,
+  partnerRoleTemplates,
   partnerSessions,
   partnerUsers,
 } from "@/db";
 import { normalizePhone } from "../../app/api/web/utils";
 import { resolvePublicSiteBaseUrl as resolvePublicSiteBaseUrlInternal } from "@/lib/public-site-url";
+import { isPartnerRoutineMagicLinkLoginEnabled } from "@/lib/partner-portal-feature-flags";
+import {
+  getPartnerDummyPasswordHash,
+  hashPartnerPassword,
+  PARTNER_PASSWORD_HASH_VERSION_ARGON2ID,
+  verifyPartnerPassword,
+} from "@/lib/partner-password-crypto";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
+import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 
 const PARTNER_SESSION_LAST_SEEN_TOUCH_MS = 5 * 60 * 1000;
+export const PARTNER_PASSWORD_MFA_TRANSACTION_TTL_MS = 5 * 60 * 1_000;
+export const PARTNER_PASSWORD_MFA_MAX_ATTEMPTS = 8;
+const PARTNER_STANDARD_SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
+const PARTNER_REMEMBERED_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
+const PARTNER_MFA_REQUIRED_ROLES = new Set([
+  "administrator",
+  "billing_approver",
+]);
+const PARTNER_MFA_REQUIRED_CAPABILITIES = [
+  "account.members.manage",
+  "account.security.manage",
+  "approvals.decide",
+  "commercial.edit",
+  "payments.initiate",
+] as const;
+
+type InitialPartnerAccountBinding = {
+  accountId: string;
+  membershipId: string;
+  roleKey: string;
+  capabilityGrants: string[];
+  capabilityDenies: string[];
+  roleCapabilities: string[];
+};
+
+function capabilityPatternMatches(pattern: string, required: string): boolean {
+  const normalized = pattern.trim().toLowerCase();
+  return (
+    normalized === "*" ||
+    normalized === required ||
+    (normalized.endsWith(".*") &&
+      required.startsWith(`${normalized.slice(0, -2)}.`))
+  );
+}
+
+export function partnerPasswordLoginRequiresMfa(input: {
+  userMfaRequired: boolean;
+  userMfaEnrolled: boolean;
+  roleKey: string;
+  roleCapabilities: readonly string[];
+  capabilityGrants: readonly string[];
+  capabilityDenies: readonly string[];
+}): boolean {
+  if (input.userMfaRequired || input.userMfaEnrolled) return true;
+  if (PARTNER_MFA_REQUIRED_ROLES.has(input.roleKey.trim().toLowerCase())) {
+    return true;
+  }
+  const denied = (capability: string) =>
+    input.capabilityDenies.some((pattern) =>
+      capabilityPatternMatches(pattern, capability),
+    );
+  return PARTNER_MFA_REQUIRED_CAPABILITIES.some(
+    (capability) =>
+      !denied(capability) &&
+      [...input.roleCapabilities, ...input.capabilityGrants].some((pattern) =>
+        capabilityPatternMatches(pattern, capability),
+      ),
+  );
+}
 
 async function findInitialPartnerAccountBinding(
   tx: TeamMutationTransaction,
   partnerUserId: string,
-): Promise<{ accountId: string; membershipId: string } | null> {
+): Promise<InitialPartnerAccountBinding | null> {
   const [membership] = await tx
     .select({
       accountId: partnerAccountMemberships.partnerAccountId,
       membershipId: partnerAccountMemberships.id,
+      roleKey: partnerAccountMemberships.roleKey,
+      capabilityGrants: partnerAccountMemberships.capabilityGrants,
+      capabilityDenies: partnerAccountMemberships.capabilityDenies,
+      roleCapabilities: partnerRoleTemplates.capabilities,
+      roleTemplateActive: partnerRoleTemplates.active,
     })
     .from(partnerAccountMemberships)
     .innerJoin(
       partnerAccounts,
       eq(partnerAccountMemberships.partnerAccountId, partnerAccounts.id),
+    )
+    .leftJoin(
+      partnerRoleTemplates,
+      eq(partnerAccountMemberships.roleTemplateId, partnerRoleTemplates.id),
     )
     .where(
       and(
@@ -48,6 +127,12 @@ async function findInitialPartnerAccountBinding(
     ? {
         accountId: membership.accountId,
         membershipId: membership.membershipId,
+        roleKey: membership.roleKey,
+        capabilityGrants: membership.capabilityGrants ?? [],
+        capabilityDenies: membership.capabilityDenies ?? [],
+        roleCapabilities: membership.roleTemplateActive
+          ? (membership.roleCapabilities ?? [])
+          : [],
       }
     : null;
 }
@@ -168,53 +253,28 @@ export function getUserAgent(request: NextRequest): string | null {
   return request.headers.get("user-agent")?.trim() ?? null;
 }
 
-export async function findActivePartnerUserByEmail(email: string): Promise<{
-  id: string;
-  orgContactId: string;
-  name: string;
-  email: string;
-  phoneE164: string | null;
-  active: boolean;
-  passwordHash: string | null;
-} | null> {
-  const db = getDb();
-  const [row] = await db
-    .select({
-      id: partnerUsers.id,
-      orgContactId: partnerUsers.orgContactId,
-      name: partnerUsers.name,
-      email: partnerUsers.email,
-      phoneE164: partnerUsers.phoneE164,
-      active: partnerUsers.active,
-      passwordHash: partnerUsers.passwordHash,
-    })
-    .from(partnerUsers)
-    .innerJoin(contacts, eq(partnerUsers.orgContactId, contacts.id))
-    .where(
-      and(
-        eq(partnerUsers.email, email),
-        eq(partnerUsers.active, true),
-        eq(contacts.partnerStatus, "partner"),
-        isNull(contacts.deletedAt),
-      ),
-    )
-    .limit(1);
-
-  if (!row?.id || !row.active) return null;
+export function getPartnerAuthRequestBinding(request: NextRequest): {
+  requestedIp: string | null;
+  requestedUserAgent: string | null;
+} {
+  const ip = getClientIp(request)?.trim().toLowerCase() ?? null;
+  const userAgent = getUserAgent(request)?.trim() ?? null;
   return {
-    id: row.id,
-    orgContactId: row.orgContactId,
-    name: row.name,
-    email: row.email,
-    phoneE164: row.phoneE164 ?? null,
-    active: row.active ?? true,
-    passwordHash: row.passwordHash ?? null,
+    requestedIp: ip ? ip.slice(0, 128) : null,
+    requestedUserAgent: userAgent ? userAgent.slice(0, 512) : null,
   };
 }
 
-export async function findActivePartnerUserByPhone(phoneE164: string): Promise<{
+export function resolvePartnerAuthCorrelationId(request: NextRequest): string {
+  const candidate = request.headers.get("x-correlation-id")?.trim() ?? "";
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u.test(candidate)
+    ? candidate
+    : crypto.randomUUID();
+}
+
+export async function findActivePartnerUserByEmail(email: string): Promise<{
   id: string;
-  orgContactId: string;
+  orgContactId: string | null;
   name: string;
   email: string;
   phoneE164: string | null;
@@ -222,8 +282,8 @@ export async function findActivePartnerUserByPhone(phoneE164: string): Promise<{
   passwordHash: string | null;
 } | null> {
   const db = getDb();
-  const [row] = await db
-    .select({
+  const rows = await db
+    .selectDistinct({
       id: partnerUsers.id,
       orgContactId: partnerUsers.orgContactId,
       name: partnerUsers.name,
@@ -233,17 +293,30 @@ export async function findActivePartnerUserByPhone(phoneE164: string): Promise<{
       passwordHash: partnerUsers.passwordHash,
     })
     .from(partnerUsers)
-    .innerJoin(contacts, eq(partnerUsers.orgContactId, contacts.id))
-    .where(
+    .innerJoin(
+      partnerAccountMemberships,
       and(
-        eq(partnerUsers.phoneE164, phoneE164),
-        eq(partnerUsers.active, true),
-        eq(contacts.partnerStatus, "partner"),
-        isNull(contacts.deletedAt),
+        eq(partnerAccountMemberships.partnerUserId, partnerUsers.id),
+        eq(partnerAccountMemberships.status, "active"),
       ),
     )
-    .limit(1);
+    .innerJoin(
+      partnerAccounts,
+      and(
+        eq(partnerAccountMemberships.partnerAccountId, partnerAccounts.id),
+        eq(partnerAccounts.portalAccessEnabled, true),
+      ),
+    )
+    .where(
+      and(
+        eq(partnerUsers.normalizedEmail, email),
+        eq(partnerUsers.active, true),
+        eq(partnerUsers.identityStatus, "active"),
+      ),
+    )
+    .limit(2);
 
+  const row = rows.length === 1 ? rows[0] : null;
   if (!row?.id || !row.active) return null;
   return {
     id: row.id,
@@ -261,6 +334,9 @@ export async function createPartnerLoginToken(
   request: NextRequest,
   ttlMinutes = 30,
 ): Promise<{ rawToken: string; expiresAt: Date }> {
+  if (!isPartnerRoutineMagicLinkLoginEnabled()) {
+    throw new Error("partner_routine_magic_login_disabled");
+  }
   const db = getDb();
   const now = new Date();
 
@@ -268,18 +344,19 @@ export async function createPartnerLoginToken(
     const [eligible] = await tx
       .select({ id: partnerUsers.id })
       .from(partnerUsers)
-      .innerJoin(contacts, eq(partnerUsers.orgContactId, contacts.id))
       .where(
         and(
           eq(partnerUsers.id, partnerUserId),
           eq(partnerUsers.active, true),
-          eq(contacts.partnerStatus, "partner"),
-          isNull(contacts.deletedAt),
+          eq(partnerUsers.identityStatus, "active"),
         ),
       )
       .for("update")
       .limit(1);
-    if (!eligible?.id) {
+    const accountBinding = eligible
+      ? await findInitialPartnerAccountBinding(tx, eligible.id)
+      : null;
+    if (!eligible?.id || !accountBinding) {
       throw new Error("partner_portal_user_unavailable");
     }
     return replacePartnerLoginTokenInTransaction(tx, {
@@ -299,10 +376,11 @@ export async function exchangePartnerLoginToken(
 ): Promise<{
   sessionToken: string;
   partnerUserId: string;
-  orgContactId: string;
+  orgContactId: string | null;
   needsPasswordSetup: boolean;
   expiresAt: Date;
 } | null> {
+  if (!isPartnerRoutineMagicLinkLoginEnabled()) return null;
   const db = getDb();
   const tokenHash = sha256Base64Url(rawToken);
   const now = new Date();
@@ -329,13 +407,11 @@ export async function exchangePartnerLoginToken(
         id: partnerUsers.id,
         orgContactId: partnerUsers.orgContactId,
         active: partnerUsers.active,
+        identityStatus: partnerUsers.identityStatus,
         passwordHash: partnerUsers.passwordHash,
         securityVersion: partnerUsers.securityVersion,
-        partnerStatus: contacts.partnerStatus,
-        orgDeletedAt: contacts.deletedAt,
       })
       .from(partnerUsers)
-      .innerJoin(contacts, eq(partnerUsers.orgContactId, contacts.id))
       .where(eq(partnerUsers.id, tokenRow.partnerUserId))
       .for("update")
       .limit(1);
@@ -343,8 +419,7 @@ export async function exchangePartnerLoginToken(
     if (
       !userRow?.id ||
       !userRow.active ||
-      userRow.partnerStatus !== "partner" ||
-      userRow.orgDeletedAt
+      userRow.identityStatus !== "active"
     ) {
       await tx
         .update(partnerLoginTokens)
@@ -379,15 +454,16 @@ export async function exchangePartnerLoginToken(
       tx,
       userRow.id,
     );
+    if (!accountBinding) return null;
     await tx.insert(partnerSessions).values({
       partnerUserId: userRow.id,
-      activePartnerAccountId: accountBinding?.accountId ?? null,
-      activeMembershipId: accountBinding?.membershipId ?? null,
+      activePartnerAccountId: accountBinding.accountId,
+      activeMembershipId: accountBinding.membershipId,
       sessionHash,
       authMethod: "magic_link",
       assuranceLevel: "aal1",
       securityVersion: userRow.securityVersion,
-      accountSelectedAt: accountBinding ? now : null,
+      accountSelectedAt: now,
       ip: getClientIp(request),
       userAgent: getUserAgent(request),
       expiresAt,
@@ -423,7 +499,7 @@ export async function requirePartnerSession(request: NextRequest): Promise<
       partnerUser: {
         id: string;
         sessionId: string;
-        orgContactId: string;
+        orgContactId: string | null;
         email: string;
         name: string;
         passwordSet: boolean;
@@ -502,23 +578,20 @@ export async function requirePartnerSession(request: NextRequest): Promise<
         email: partnerUsers.email,
         name: partnerUsers.name,
         active: partnerUsers.active,
+        identityStatus: partnerUsers.identityStatus,
         passwordHash: partnerUsers.passwordHash,
         mfaRequired: partnerUsers.mfaRequired,
         mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
         securityVersion: partnerUsers.securityVersion,
-        partnerStatus: contacts.partnerStatus,
-        orgDeletedAt: contacts.deletedAt,
       })
       .from(partnerUsers)
-      .innerJoin(contacts, eq(partnerUsers.orgContactId, contacts.id))
       .where(eq(partnerUsers.id, sessionHint.partnerUserId))
       .limit(1);
 
     if (
       !userRow?.id ||
       !userRow.active ||
-      userRow.partnerStatus !== "partner" ||
-      userRow.orgDeletedAt
+      userRow.identityStatus !== "active"
     ) {
       await tx
         .update(partnerSessions)
@@ -603,27 +676,15 @@ export async function requirePartnerSession(request: NextRequest): Promise<
   });
 }
 
-const SCRYPT_KEYLEN = 64;
-
-function scryptHash(password: string, salt: Buffer): Buffer {
-  return crypto.scryptSync(password, salt, SCRYPT_KEYLEN);
+export function hashPassword(password: string): Promise<string> {
+  return hashPartnerPassword(password);
 }
 
-export function hashPassword(password: string): string {
-  const salt = crypto.randomBytes(16);
-  const derived = scryptHash(password, salt);
-  return `scrypt$${salt.toString("base64url")}$${derived.toString("base64url")}`;
-}
-
-export function verifyPassword(password: string, encoded: string): boolean {
-  if (!encoded.startsWith("scrypt$")) return false;
-  const parts = encoded.split("$");
-  if (parts.length !== 3) return false;
-  const salt = Buffer.from(parts[1] ?? "", "base64url");
-  const stored = Buffer.from(parts[2] ?? "", "base64url");
-  if (!salt.length || stored.length !== SCRYPT_KEYLEN) return false;
-  const derived = scryptHash(password, salt);
-  return crypto.timingSafeEqual(stored, derived);
+export async function verifyPassword(
+  password: string,
+  encoded: string,
+): Promise<boolean> {
+  return (await verifyPartnerPassword(password, encoded)).valid;
 }
 
 export async function setPartnerPassword(
@@ -632,26 +693,34 @@ export async function setPartnerPassword(
 ): Promise<boolean> {
   const db = getDb();
   const now = new Date();
-  const passwordHash = hashPassword(password);
+  const passwordHash = await hashPassword(password);
   return db.transaction(async (tx) => {
     const [eligible] = await tx
       .select({ id: partnerUsers.id })
       .from(partnerUsers)
-      .innerJoin(contacts, eq(partnerUsers.orgContactId, contacts.id))
       .where(
         and(
           eq(partnerUsers.id, partnerUserId),
           eq(partnerUsers.active, true),
-          eq(contacts.partnerStatus, "partner"),
-          isNull(contacts.deletedAt),
+          eq(partnerUsers.identityStatus, "active"),
         ),
       )
       .for("update")
       .limit(1);
-    if (!eligible?.id) return false;
+    if (
+      !eligible?.id ||
+      !(await findInitialPartnerAccountBinding(tx, eligible.id))
+    ) {
+      return false;
+    }
     const [updated] = await tx
       .update(partnerUsers)
-      .set({ passwordHash, passwordSetAt: now, updatedAt: now })
+      .set({
+        passwordHash,
+        passwordHashVersion: PARTNER_PASSWORD_HASH_VERSION_ARGON2ID,
+        passwordSetAt: now,
+        updatedAt: now,
+      })
       .where(
         and(eq(partnerUsers.id, partnerUserId), eq(partnerUsers.active, true)),
       )
@@ -660,65 +729,273 @@ export async function setPartnerPassword(
   });
 }
 
+export type PartnerPasswordLoginResult =
+  | {
+      kind: "authenticated";
+      sessionToken: string;
+      partnerUserId: string;
+      orgContactId: string | null;
+      mfaRequired: false;
+      expiresAt: Date;
+    }
+  | {
+      kind: "mfa_required";
+      transactionToken: string;
+      expiresAt: Date;
+      mfaRequired: true;
+    }
+  | {
+      kind: "mfa_enrollment_required";
+      mfaRequired: true;
+    };
+
+function passwordAuthAuditValues(input: {
+  action: string;
+  outcome: "succeeded" | "denied";
+  partnerUserId: string;
+  email: string;
+  roleKey: string;
+  correlationId: string;
+  entityType: string;
+  entityId: string;
+  accountId: string;
+  membershipId: string;
+  meta?: Record<string, unknown>;
+}) {
+  const id = crypto.randomUUID();
+  return {
+    id,
+    actorType: "human" as const,
+    actorId: input.partnerUserId,
+    actorLabel: input.email,
+    actorRole: input.roleKey,
+    sessionId: null,
+    authMethod: "partner_pre_auth",
+    correlationId: input.correlationId,
+    requiredPermissions: [] as string[],
+    outcome: input.outcome,
+    surface: "/partners/login",
+    action: input.action,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    meta: sanitizeAuditMetadata({
+      eventId: id,
+      correlationId: input.correlationId,
+      partnerAccountId: input.accountId,
+      partnerMembershipId: input.membershipId,
+      ...input.meta,
+    }),
+  };
+}
+
 export async function loginWithPassword(
   email: string,
   password: string,
   request: NextRequest,
-  sessionDays = 30,
-): Promise<{
-  sessionToken: string;
-  partnerUserId: string;
-  orgContactId: string;
-  expiresAt: Date;
-} | null> {
+  options: { rememberMe?: boolean; now?: Date; correlationId?: string } = {},
+): Promise<PartnerPasswordLoginResult | null> {
   const db = getDb();
+  const [candidate] = await db
+    .select({
+      id: partnerUsers.id,
+      orgContactId: partnerUsers.orgContactId,
+      email: partnerUsers.email,
+      active: partnerUsers.active,
+      identityStatus: partnerUsers.identityStatus,
+      passwordHash: partnerUsers.passwordHash,
+      passwordHashVersion: partnerUsers.passwordHashVersion,
+      securityVersion: partnerUsers.securityVersion,
+      mfaRequired: partnerUsers.mfaRequired,
+      mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
+    })
+    .from(partnerUsers)
+    .where(eq(partnerUsers.normalizedEmail, email))
+    .limit(1);
+  const verification = await verifyPartnerPassword(
+    password,
+    candidate?.passwordHash ?? (await getPartnerDummyPasswordHash()),
+  );
+  if (
+    !candidate?.id ||
+    !candidate.active ||
+    candidate.identityStatus !== "active" ||
+    !candidate.passwordHash ||
+    !verification.valid
+  ) {
+    return null;
+  }
+  const candidatePasswordHash = candidate.passwordHash;
+  const replacementHash = verification.needsRehash
+    ? await hashPartnerPassword(password)
+    : null;
+
   return db.transaction(async (tx) => {
     const [userRow] = await tx
       .select({
         id: partnerUsers.id,
         orgContactId: partnerUsers.orgContactId,
+        email: partnerUsers.email,
         active: partnerUsers.active,
+        identityStatus: partnerUsers.identityStatus,
         passwordHash: partnerUsers.passwordHash,
+        passwordHashVersion: partnerUsers.passwordHashVersion,
         securityVersion: partnerUsers.securityVersion,
-        partnerStatus: contacts.partnerStatus,
-        orgDeletedAt: contacts.deletedAt,
+        mfaRequired: partnerUsers.mfaRequired,
+        mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
       })
       .from(partnerUsers)
-      .innerJoin(contacts, eq(partnerUsers.orgContactId, contacts.id))
-      .where(eq(partnerUsers.email, email))
+      .where(eq(partnerUsers.id, candidate.id))
       .for("update")
       .limit(1);
-
     if (
-      !userRow?.id ||
-      !userRow.active ||
-      !userRow.passwordHash ||
-      userRow.partnerStatus !== "partner" ||
-      userRow.orgDeletedAt ||
-      !verifyPassword(password, userRow.passwordHash)
+      !userRow?.active ||
+      userRow.identityStatus !== "active" ||
+      userRow.passwordHash !== candidatePasswordHash ||
+      userRow.securityVersion !== candidate.securityVersion
     ) {
       return null;
     }
+    if (replacementHash) {
+      const [rehashUpdated] = await tx
+        .update(partnerUsers)
+        .set({
+          passwordHash: replacementHash,
+          passwordHashVersion: PARTNER_PASSWORD_HASH_VERSION_ARGON2ID,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(partnerUsers.id, userRow.id),
+            eq(partnerUsers.passwordHash, candidatePasswordHash),
+            eq(partnerUsers.securityVersion, candidate.securityVersion),
+          ),
+        )
+        .returning({ id: partnerUsers.id });
+      if (!rehashUpdated) return null;
+    }
 
-    const now = new Date();
-    const sessionToken = randomToken(32);
-    const sessionHash = sha256Base64Url(sessionToken);
-    const expiresAt = new Date(
-      now.getTime() + sessionDays * 24 * 60 * 60 * 1000,
-    );
     const accountBinding = await findInitialPartnerAccountBinding(
       tx,
       userRow.id,
     );
+    if (!accountBinding) return null;
+
+    const now = options.now ?? new Date();
+    const correlationId =
+      options.correlationId ?? resolvePartnerAuthCorrelationId(request);
+    const [activeTotpMethod] = await tx
+      .select({ id: partnerMfaMethods.id })
+      .from(partnerMfaMethods)
+      .where(
+        and(
+          eq(partnerMfaMethods.partnerUserId, userRow.id),
+          eq(partnerMfaMethods.methodType, "totp"),
+          eq(partnerMfaMethods.enabled, true),
+        ),
+      )
+      .limit(1);
+    const mfaRequired = partnerPasswordLoginRequiresMfa({
+      userMfaRequired: userRow.mfaRequired,
+      userMfaEnrolled:
+        Boolean(userRow.mfaEnrolledAt) || Boolean(activeTotpMethod?.id),
+      roleKey: accountBinding.roleKey,
+      roleCapabilities: accountBinding.roleCapabilities,
+      capabilityGrants: accountBinding.capabilityGrants,
+      capabilityDenies: accountBinding.capabilityDenies,
+    });
+    if (mfaRequired && !activeTotpMethod?.id) {
+      await tx.insert(auditLogs).values(
+        passwordAuthAuditValues({
+          action: "partner.auth.password_mfa_enrollment_required",
+          outcome: "denied",
+          partnerUserId: userRow.id,
+          email: userRow.email,
+          roleKey: accountBinding.roleKey,
+          correlationId,
+          entityType: "partner_user",
+          entityId: userRow.id,
+          accountId: accountBinding.accountId,
+          membershipId: accountBinding.membershipId,
+          meta: { reason: "active_totp_method_missing" },
+        }),
+      );
+      return { kind: "mfa_enrollment_required", mfaRequired: true };
+    }
+
+    if (mfaRequired) {
+      const transactionToken = randomToken(32);
+      const transactionId = crypto.randomUUID();
+      const expiresAt = new Date(
+        now.getTime() + PARTNER_PASSWORD_MFA_TRANSACTION_TTL_MS,
+      );
+      const binding = getPartnerAuthRequestBinding(request);
+      await tx
+        .update(partnerAuthTransactions)
+        .set({ consumedAt: now })
+        .where(
+          and(
+            eq(partnerAuthTransactions.partnerUserId, userRow.id),
+            isNull(partnerAuthTransactions.consumedAt),
+          ),
+        );
+      await tx.insert(partnerAuthTransactions).values({
+        id: transactionId,
+        partnerUserId: userRow.id,
+        partnerAccountId: accountBinding.accountId,
+        partnerMembershipId: accountBinding.membershipId,
+        tokenHash: sha256Base64Url(transactionToken),
+        purpose: "password_login_mfa",
+        securityVersion: userRow.securityVersion,
+        rememberMe: options.rememberMe === true,
+        requestedIp: binding.requestedIp,
+        requestedUserAgent: binding.requestedUserAgent,
+        attemptCount: 0,
+        expiresAt,
+        createdAt: now,
+      });
+      await tx.insert(auditLogs).values(
+        passwordAuthAuditValues({
+          action: "partner.auth.password_mfa_challenge_created",
+          outcome: "succeeded",
+          partnerUserId: userRow.id,
+          email: userRow.email,
+          roleKey: accountBinding.roleKey,
+          correlationId,
+          entityType: "partner_auth_transaction",
+          entityId: transactionId,
+          accountId: accountBinding.accountId,
+          membershipId: accountBinding.membershipId,
+          meta: {
+            expiresAt: expiresAt.toISOString(),
+            rememberMe: options.rememberMe === true,
+          },
+        }),
+      );
+      return {
+        kind: "mfa_required",
+        transactionToken,
+        expiresAt,
+        mfaRequired: true,
+      };
+    }
+
+    const sessionToken = randomToken(32);
+    const sessionHash = sha256Base64Url(sessionToken);
+    const expiresAt = new Date(
+      now.getTime() +
+        (options.rememberMe
+          ? PARTNER_REMEMBERED_SESSION_TTL_MS
+          : PARTNER_STANDARD_SESSION_TTL_MS),
+    );
     await tx.insert(partnerSessions).values({
       partnerUserId: userRow.id,
-      activePartnerAccountId: accountBinding?.accountId ?? null,
-      activeMembershipId: accountBinding?.membershipId ?? null,
+      activePartnerAccountId: accountBinding.accountId,
+      activeMembershipId: accountBinding.membershipId,
       sessionHash,
       authMethod: "password",
       assuranceLevel: "aal1",
       securityVersion: userRow.securityVersion,
-      accountSelectedAt: accountBinding ? now : null,
+      accountSelectedAt: now,
       ip: getClientIp(request),
       userAgent: getUserAgent(request),
       expiresAt,
@@ -727,9 +1004,11 @@ export async function loginWithPassword(
     });
 
     return {
+      kind: "authenticated",
       sessionToken,
       partnerUserId: userRow.id,
       orgContactId: userRow.orgContactId,
+      mfaRequired: false,
       expiresAt,
     };
   });

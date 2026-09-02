@@ -77,6 +77,13 @@ export async function POST(
       createPortalV2IdempotencyErrorResponse(idempotency, correlationId),
     );
   }
+  if (!idempotency.keyHash) {
+    return createPartnerPortalV2ErrorResponse(
+      "invalid_idempotency_key",
+      400,
+      correlationId,
+    );
+  }
   let raw: unknown;
   try {
     raw = await readBoundedJsonRequest(request, {
@@ -106,6 +113,7 @@ export async function POST(
       checksumSha256: parsed.data.checksumSha256,
       principal,
       correlationId,
+      idempotencyKeyHash: idempotency.keyHash,
     });
     return createPartnerPortalV2SuccessResponse(
       { ok: true, media },

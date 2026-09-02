@@ -66,42 +66,28 @@ describe("partner booking handoff integrity", () => {
     expect(STAFF_NOTIFICATION_UNCERTAINTY_WINDOW_MS).toBe(15 * 60_000);
   });
 
-  it("moves a partner booking atomically instead of creating then canceling", () => {
-    const route = source("app/api/portal/bookings/route.ts");
-    const actions = source("../site/src/app/partners/actions.ts");
+  it("moves a partner job atomically through a replacement V2 hold", () => {
+    const service = source(
+      "src/lib/partner-portal-v2-scheduling/service.ts",
+    );
+    const legacyRoute = source("app/api/portal/bookings/route.ts");
     const bookingPage = source(
       "../site/src/app/partners/(portal)/book/page.tsx",
     );
     const bookingWizard = source(
       "../site/src/app/partners/components/PartnerBookingWizard.tsx",
     );
-    expect(route).toContain('"rescheduleFromAppointmentId"');
-    expect(route).toContain('request.headers.get("if-match")');
-    expect(route).toContain(
-      "partner-booking-cancel:${rescheduleFromAppointmentId}",
-    );
-    expect(route).toContain(
-      "excludeAppointmentId: sourceBooking?.appointmentId",
-    );
-    expect(route).toContain("version: sourceBooking.bookingVersion + 1");
-    expect(route).toContain('reason: "partner.booking.rescheduled"');
-    expect(route).toContain('"partner.booking.rescheduled"');
-    expect(route).toContain("previousResultingVersion: sourceBookingVersion");
-    expect(route).toContain("version: originalVersion");
-    expect(route).toContain("status: originalStatus");
-    expect(route).toContain(
-      "const effectivePropertyId = sourceBooking?.propertyId ?? propertyId",
-    );
-    expect(route).toContain(
-      "const effectiveTierKey = sourceBooking ? sourceBooking.tierKey : tierKey",
-    );
-    expect(route).toContain("quotedTotalCents:");
-    expect(route).toContain("bookingDetails: sourceBooking?.bookingDetails");
-    expect(route).toContain("preservedSourceNotes.map");
-    expect(actions).toContain('"If-Match": rescheduleFromVersion');
-    expect(actions).toContain("rescheduleFromAppointmentId }");
-    expect(actions).not.toContain("rescheduleCancelOperationKey");
-    expect(actions).not.toContain("old_booking_cancel_failed");
+    expect(service).toContain("export async function reschedulePartnerBooking");
+    expect(service).toContain("await acquireScheduleConflictLock(tx)");
+    expect(service).toContain("draft.rescheduleFromPartnerBookingId !== source.booking.id");
+    expect(service).toContain("eq(appointmentHolds.id, input.holdId)");
+    expect(service).toContain('hold.status !== "active"');
+    expect(service).toContain('status: "consumed"');
+    expect(service).toContain("eq(partnerBookings.version, source.booking.version)");
+    expect(service).toContain('action: "partner.portal.v2.booking.rescheduled"');
+    expect(service).toContain('reason: "partner.portal.v2.booking.rescheduled"');
+    expect(legacyRoute).toContain('error: "legacy_route_retired"');
+    expect(legacyRoute).not.toContain("rescheduleFromAppointmentId");
     expect(bookingPage).toContain("PartnerBookingWizard");
     expect(bookingWizard).toContain('"If-Match": current.etag');
     expect(bookingWizard).toContain(
@@ -109,47 +95,45 @@ describe("partner booking handoff integrity", () => {
     );
   });
 
-  it("queues creation, confirmation, audit, and staff work atomically", () => {
-    const route = source("app/api/portal/bookings/route.ts");
-    expect(route).toContain('request.headers.get("idempotency-key")');
-    expect(route).toContain("readBoundedJsonRequest(request");
-    expect(route).toContain("pg_advisory_xact_lock");
-    expect(route).toContain("createOperationKeyHash: operationKeyHash");
-    expect(route).toContain("createRequestHash: requestHash");
-    expect(route).toContain("acquireScheduleConflictLock(tx)");
-    expect(route).toContain("inspectScheduleConflicts(tx, {");
-    expect(route).toContain(
-      "travelBufferMinutes: effectiveTravelBufferMinutes",
+  it("creates the account job, schedule, audit, and outbox atomically", () => {
+    const service = source(
+      "src/lib/partner-portal-v2-scheduling/service.ts",
     );
-    expect(route).toContain("queuePartnerBookingStaffAlert(tx");
-    expect(route).toContain("queueSystemOutboundMessage({");
-    expect(route).toContain("db: tx");
-    expect(route).toContain("auditAction = rescheduleFromAppointmentId");
-    expect(route).toContain(': "partner.booking.created"');
-    expect(route).toContain("action: auditAction");
-    expect(route).toContain('authMethod: "partner_session"');
-    expect(route).not.toContain("sendSmsMessage");
-    expect(route).not.toContain("team_member_phones");
-    expect(route).not.toContain("resolveDevonPhone");
+    const submitRoute = source(
+      "app/api/portal/v2/booking-drafts/[draftId]/submit/route.ts",
+    );
+    expect(submitRoute).toContain("readPortalV2IdempotencyKey");
+    expect(submitRoute).toContain("ifMatch: requestIfMatch(request)");
+    expect(service).toContain('operationHash(\n    "booking.submit"');
+    expect(service).toContain("await acquireScheduleConflictLock(tx)");
+    expect(service).toContain("eq(partnerBookings.partnerAccountId, input.actor.accountId)");
+    expect(service).toContain("createOperationKeyHash: opHash");
+    expect(service).toContain("requestedByMembershipId: input.actor.membershipId");
+    expect(service).toContain("scopeSnapshot:");
+    expect(service).toContain("rateSnapshot:");
+    expect(service).toContain('type: "appointment.calendar_sync_requested"');
+    expect(service).toContain("await tx.insert(auditLogs).values");
+    expect(service).not.toContain("partnerUsers.phoneE164");
   });
 
-  it("makes cancellation versioned, replay-safe, audited, and recoverable", () => {
+  it("makes V2 cancellation versioned, replay-safe, audited, and recoverable", () => {
     const route = source(
-      "app/api/portal/bookings/[appointmentId]/cancel/route.ts",
+      "app/api/portal/v2/jobs/[jobId]/cancel/route.ts",
     );
-    expect(route).toContain('request.headers.get("idempotency-key")');
+    expect(route).toContain("readPortalV2IdempotencyKey");
     expect(route).toContain('request.headers.get("if-match")');
     expect(route).toContain("readBoundedJsonRequest(request");
-    expect(route).toContain("cancelOperationKeyHash: operationKeyHash");
+    expect(route).toContain("createPartnerJobAccessCondition(principal, jobId)");
+    expect(route).toContain("cancelOperationKeyHash: idempotency.keyHash");
     expect(route).toContain("version: row.bookingVersion + 1");
-    expect(route).toContain("queuePartnerBookingStaffAlert(tx");
+    expect(route).toContain("await acquireScheduleConflictLock(tx)");
+    expect(route).toContain('eventType: "job.canceled"');
     expect(route).toContain('type: "estimate.status_changed"');
     expect(route).toContain('type: "appointment.calendar_sync_requested"');
     expect(route).toContain('action: "partner.booking.canceled"');
-    expect(route).toContain('requiredPermission: "partner.bookings.cancel"');
+    expect(route).toContain('requiredPermission: "bookings.cancel"');
     expect(route).not.toContain("sendSmsMessage");
-    expect(route).not.toContain("team_member_phones");
-    expect(route).not.toContain("resolveDevonPhone");
+    expect(route).not.toContain("partnerUsers.phoneE164");
   });
 
   it("dispatches staff alerts through an uncertainty-safe outbox operation", () => {
@@ -204,7 +188,6 @@ describe("partner booking handoff integrity", () => {
   });
 
   it("sends stable browser operation/version evidence and validates receipts", () => {
-    const actions = source("../site/src/app/partners/actions.ts");
     const bookingPage = source(
       "../site/src/app/partners/(portal)/book/page.tsx",
     );
@@ -217,11 +200,6 @@ describe("partner booking handoff integrity", () => {
     const jobActions = source(
       "../site/src/app/partners/components/PartnerJobActions.tsx",
     );
-    expect(actions).toContain('"Idempotency-Key": operationKey');
-    expect(actions).toContain('"If-Match": version');
-    expect(actions).toContain('"If-Match": rescheduleFromVersion');
-    expect(actions).toContain("booking_confirmation_invalid");
-    expect(actions).toContain("cancel_confirmation_invalid");
     expect(bookingPage).toContain("PartnerBookingWizard");
     expect(bookingWizard).toContain('"Idempotency-Key"');
     expect(bookingWizard).toContain('"If-Match"');

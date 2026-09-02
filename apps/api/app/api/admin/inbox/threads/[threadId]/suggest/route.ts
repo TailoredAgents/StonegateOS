@@ -11,6 +11,7 @@ import {
   properties,
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import {
   getBusinessHoursPolicy,
   getCompanyProfilePolicy,
@@ -1398,14 +1399,6 @@ export async function POST(
     return NextResponse.json({ error: "thread_id_required" }, { status: 400 });
   }
 
-  const config = getOpenAIConfig();
-  if (!config) {
-    return NextResponse.json(
-      { error: "openai_not_configured" },
-      { status: 400 },
-    );
-  }
-
   const db = getDb();
   const [thread] = await db
     .select({
@@ -1428,11 +1421,24 @@ export async function POST(
     .from(conversationThreads)
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
     .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
-    .where(eq(conversationThreads.id, threadId))
+    .where(
+      and(
+        eq(conversationThreads.id, threadId),
+        genericInboxThreadScopeCondition(),
+      ),
+    )
     .limit(1);
 
   if (!thread) {
     return NextResponse.json({ error: "thread_not_found" }, { status: 404 });
+  }
+
+  const config = getOpenAIConfig();
+  if (!config) {
+    return NextResponse.json(
+      { error: "openai_not_configured" },
+      { status: 400 },
+    );
   }
 
   const replyChannel = thread.channel;

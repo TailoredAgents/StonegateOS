@@ -7,6 +7,7 @@ import {
   crmTasks,
   mediaAssets,
   outboxEvents,
+  partnerQuotes,
   paymentAttempts,
   payments,
   quoteActivityEvents,
@@ -22,8 +23,8 @@ import {
 } from "@/db";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 import { getBusinessHoursPolicy } from "@/lib/policy";
-import { ensureQuoteAcceptanceCertificate } from "@/lib/quote-v2-acceptance-certificate";
-import { quoteCapabilityReadExpiry } from "@/lib/quote-v2-capability";
+import { partnerQuoteApprovalAllowsAcceptance } from "@/lib/partner-quote-v2-approval";
+import { reconcileQuoteAcceptanceCertificate } from "@/lib/quote-v2-acceptance-certificate";
 import { quoteV2CompletedDepositDisposition } from "@/lib/quote-v2-deposit-evidence";
 import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
@@ -45,6 +46,10 @@ import type {
 import { QuoteDocumentSnapshotSchema } from "@/lib/quote-v2-contract";
 import { calculateQuoteV2Totals } from "@/lib/quote-v2-domain";
 import { parseQuoteV2OutboxEvent } from "@/lib/quote-v2-outbox-contract";
+import {
+  persistQuoteV2TerminalDecision,
+  QuoteV2TerminalDecisionConflict,
+} from "@/lib/quote-v2-terminal-decision";
 import type { z } from "zod";
 
 type QuoteDbExecutor = DatabaseClient | TeamMutationTransaction;
@@ -54,6 +59,8 @@ type PublicRefreshCommand = z.infer<typeof PublicQuoteRefreshCommandSchema>;
 
 export type QuoteV2ResolvedCapability = QuoteV2PublicCapabilitySnapshot & {
   tokenHash: string;
+  partnerAccountId: string | null;
+  currency: string;
   contactDoNotContact: boolean;
   opportunityRevision: number | null;
   opportunityOwnerTeamMemberId: string | null;
@@ -73,6 +80,7 @@ export type QuoteV2PublicMutationReceipt = {
   appointmentId?: string;
   respondedAt: string;
   replayed: boolean;
+  certificateState?: "ready" | "pending";
 };
 
 export type QuoteV2AfterAcceptanceHook = (
@@ -123,6 +131,7 @@ export async function loadQuoteV2CapabilityByHash(
       revokedAt: quoteCapabilities.revokedAt,
       quoteId: quotes.id,
       quoteNumber: quotes.quoteNumber,
+      partnerAccountId: quotes.partnerAccountId,
       aggregateState: quotes.aggregateState,
       aggregateRevision: quotes.aggregateRevision,
       currentVersionId: quotes.currentVersionId,
@@ -136,6 +145,7 @@ export async function loadQuoteV2CapabilityByHash(
       versionId: quoteVersions.id,
       versionNumber: quoteVersions.versionNumber,
       versionState: quoteVersions.state,
+      currency: quoteVersions.currency,
       documentSnapshot: quoteVersions.documentSnapshot,
       selectedOptionIds: quoteVersions.selectedOptionIds,
       subtotalMinCents: quoteVersions.subtotalMinCents,
@@ -1186,6 +1196,8 @@ export async function recordQuoteV2Decision(
     }
     assertBoundCapability(row, input.command);
     const responseType = input.command.decision;
+    const acceptedCommand =
+      input.command.decision === "accepted" ? input.command : null;
     const action = responseType === "accepted" ? "accept" : "decline";
     assertPublicMutationAccess(row, now, action);
     const replay = await findReplay(tx, {
@@ -1199,6 +1211,7 @@ export async function recordQuoteV2Decision(
     assertAction(row, action, now);
     if (
       !row.opportunityId ||
+      !row.quoteNumber ||
       row.opportunityStatus !== "open" ||
       !row.opportunityRevision ||
       !row.aggregateRevision
@@ -1223,6 +1236,43 @@ export async function recordQuoteV2Decision(
         requestedStartAt: input.command.requestedStartAt,
         holdId: input.command.holdId,
       });
+      if (row.partnerAccountId) {
+        const [binding] = await tx
+          .select({
+            accountId: partnerQuotes.partnerAccountId,
+            bookingId: partnerQuotes.partnerBookingId,
+            bookingDraftId: partnerQuotes.bookingDraftId,
+          })
+          .from(partnerQuotes)
+          .where(
+            and(
+              eq(partnerQuotes.quoteId, row.quoteId),
+              eq(partnerQuotes.partnerAccountId, row.partnerAccountId),
+              eq(partnerQuotes.authority, "quote_v2"),
+            ),
+          )
+          .limit(1);
+        if (!binding) {
+          throw new QuoteV2PublicStateError(
+            "provider_unavailable",
+            "This account proposal cannot be verified right now.",
+          );
+        }
+        const approvalAllowed = await partnerQuoteApprovalAllowsAcceptance(tx, {
+          accountId: binding.accountId,
+          bookingId: binding.bookingId,
+          bookingDraftId: binding.bookingDraftId,
+          totalMinCents: evidence.totals.totalMinCents,
+          totalMaxCents: evidence.totals.totalMaxCents,
+          currency: row.currency,
+        });
+        if (!approvalAllowed) {
+          throw new QuoteV2PublicStateError(
+            "invalid",
+            "This account requires an approved request for the exact proposal amount before acceptance.",
+          );
+        }
+      }
       acceptedTotals = evidence.totals;
       responseValues = {
         quoteId: row.quoteId,
@@ -1249,6 +1299,7 @@ export async function recordQuoteV2Decision(
           requestHash: input.requestHash,
           capabilityId: row.capabilityId,
           evidenceQuality: "exact",
+          certificateIntent: true,
         }),
         respondedAt: now,
         createdAt: now,
@@ -1273,195 +1324,57 @@ export async function recordQuoteV2Decision(
       };
     }
 
-    const [response] = await tx
-      .insert(quoteResponses)
-      .values(responseValues)
-      .returning({ id: quoteResponses.id });
-    if (!response) throw new Error("quote_v2_response_not_persisted");
-    const [updatedVersion] = await tx
-      .update(quoteVersions)
-      .set({
-        state: responseType,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(quoteVersions.id, row.versionId),
-          eq(quoteVersions.quoteId, row.quoteId),
-          eq(quoteVersions.state, "issued"),
-        ),
-      )
-      .returning({ id: quoteVersions.id });
-    if (!updatedVersion) {
-      throw new QuoteV2PublicStateError(
-        "conflict",
-        "The proposal changed while the response was submitted.",
-      );
-    }
-
-    const nextQuoteRevision = row.aggregateRevision + 1;
-    const [updatedQuote] = await tx
-      .update(quotes)
-      .set({
-        aggregateState: responseType,
-        aggregateRevision: nextQuoteRevision,
-        status: responseType,
-        decisionAt: now,
+    let terminal;
+    try {
+      terminal = await persistQuoteV2TerminalDecision(tx, {
+        context: {
+          quoteId: row.quoteId,
+          quoteNumber: row.quoteNumber,
+          versionId: row.versionId,
+          versionNumber: row.versionNumber,
+          contactId: row.contactId,
+          opportunityId: row.opportunityId,
+          opportunityStatus: "open",
+          opportunityRevision: row.opportunityRevision,
+          quoteRevision: row.aggregateRevision,
+        },
+        decision: responseType,
+        responseValues,
+        acceptedTotals,
         decisionNotes:
           input.command.decision === "declined"
             ? [input.command.category, input.command.notes]
                 .filter((value): value is string => Boolean(value))
                 .join("\n")
             : null,
-        revision: nextQuoteRevision,
-        ...(acceptedTotals
+        correlationId: input.correlationId,
+        now,
+        ...(input.afterAcceptance && acceptedCommand
           ? {
-              subtotal: (acceptedTotals.subtotalMinCents / 100).toFixed(2),
-              discounts: (acceptedTotals.discountMinCents / 100).toFixed(2),
-              total: (acceptedTotals.totalMinCents / 100).toFixed(2),
-              depositDue: (acceptedTotals.depositCents / 100).toFixed(2),
-              balanceDue: (acceptedTotals.balanceMinCents / 100).toFixed(2),
+              afterAcceptance: (decisionTx, decision) =>
+                input.afterAcceptance!(decisionTx, {
+                  ...decision,
+                  holdId: acceptedCommand.holdId ?? null,
+                }),
             }
           : {}),
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(quotes.id, row.quoteId),
-          eq(quotes.publishedVersionId, row.versionId),
-          eq(quotes.aggregateState, "open"),
-          eq(quotes.aggregateRevision, row.aggregateRevision),
-        ),
-      )
-      .returning({ id: quotes.id });
-    if (!updatedQuote) {
-      throw new QuoteV2PublicStateError(
-        "conflict",
-        "The quote changed while the response was submitted.",
-      );
-    }
-
-    const retainedUntil = quoteCapabilityReadExpiry({
-      at: now,
-      outcome: responseType,
-    });
-    const acceptedActionUntil = new Date(
-      now.getTime() + 30 * 24 * 60 * 60 * 1_000,
-    );
-    await tx
-      .update(quoteCapabilities)
-      .set({
-        readExpiresAt: sql`GREATEST(${quoteCapabilities.readExpiresAt}, ${retainedUntil})`,
-        actionExpiresAt:
-          responseType === "accepted"
-            ? sql`GREATEST(${quoteCapabilities.actionExpiresAt}, ${acceptedActionUntil})`
-            : null,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(quoteCapabilities.quoteVersionId, row.versionId),
-          ne(quoteCapabilities.status, "revoked"),
-        ),
-      );
-
-    if (responseType === "accepted") {
-      const [opportunity] = await tx
-        .update(salesOpportunities)
-        .set({
-          status: "approved",
-          pipelineStage: "approved",
-          estimatedValueCents:
-            acceptedTotals?.totalMinCents ?? row.totalMinCents,
-          revision: row.opportunityRevision + 1,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(salesOpportunities.id, row.opportunityId),
-            eq(salesOpportunities.status, "open"),
-            eq(salesOpportunities.revision, row.opportunityRevision),
-          ),
-        )
-        .returning({ id: salesOpportunities.id });
-      if (!opportunity) {
-        throw new QuoteV2PublicStateError(
-          "conflict",
-          "The project changed while the approval was submitted.",
-        );
+      });
+    } catch (error) {
+      if (error instanceof QuoteV2TerminalDecisionConflict) {
+        throw new QuoteV2PublicStateError("conflict", error.message);
       }
-    } else {
-      const [otherActionableQuote] = await tx
-        .select({ id: quotes.id })
-        .from(quotes)
-        .where(
-          and(
-            eq(quotes.salesOpportunityId, row.opportunityId),
-            eq(quotes.engineVersion, "v2"),
-            eq(quotes.aggregateState, "open"),
-            ne(quotes.id, row.quoteId),
-          ),
-        )
-        .limit(1);
-      const [opportunity] = await tx
-        .update(salesOpportunities)
-        .set({
-          ...(otherActionableQuote
-            ? { pipelineStage: "quoted" }
-            : { status: "lost", pipelineStage: "lost", closedAt: now }),
-          revision: row.opportunityRevision + 1,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(salesOpportunities.id, row.opportunityId),
-            eq(salesOpportunities.status, "open"),
-            eq(salesOpportunities.revision, row.opportunityRevision),
-          ),
-        )
-        .returning({ id: salesOpportunities.id });
-      if (!opportunity) {
-        throw new QuoteV2PublicStateError(
-          "conflict",
-          "The project changed while the decline was submitted.",
-        );
-      }
+      throw error;
     }
-
-    const combinedBooking =
-      responseType === "accepted" && acceptedTotals && input.afterAcceptance
-        ? await input.afterAcceptance(tx, {
-            quoteId: row.quoteId,
-            versionId: row.versionId,
-            responseId: response.id,
-            holdId:
-              input.command.decision === "accepted"
-                ? (input.command.holdId ?? null)
-                : null,
-            acceptedDepositCents: acceptedTotals.depositCents,
-            correlationId: input.correlationId,
-          })
-        : null;
-    const outboxEventId =
-      combinedBooking?.outboxEventId ??
-      (await insertV2OutboxEvent(tx, {
-        type: "quote.response_recorded.v2",
-        quoteId: row.quoteId,
-        versionId: row.versionId,
-        responseId: response.id,
-        correlationId: input.correlationId,
-        occurredAt: now,
-      }));
-    if (!combinedBooking) {
+    if (!terminal.appointmentId) {
       await insertPublicActivity(tx, {
         quoteId: row.quoteId,
         versionId: row.versionId,
         eventType: responseType,
-        outboxEventId,
+        outboxEventId: terminal.outboxEventId,
         correlationId: input.correlationId,
         occurredAt: now,
         metadata: {
-          responseId: response.id,
+          responseId: terminal.responseId,
           evidenceQuality: responseType === "accepted" ? "exact" : "basic",
           selectedOptionCount: acceptedTotals?.selectedOptionIds.length ?? 0,
         },
@@ -1472,30 +1385,31 @@ export async function recordQuoteV2Decision(
       keyHash: input.idempotencyKeyHash,
       action: `quote.public_${responseType}.v2`,
       entityType: "quote_response",
-      entityId: response.id,
+      entityId: terminal.responseId,
       quoteId: row.quoteId,
       versionId: row.versionId,
-      outboxEventId,
+      outboxEventId: terminal.outboxEventId,
       occurredAt: now,
     });
     return {
       quoteId: row.quoteId,
       versionId: row.versionId,
-      responseId: response.id,
+      responseId: terminal.responseId,
       responseType,
-      ...(combinedBooking
-        ? { appointmentId: combinedBooking.appointmentId }
+      ...(terminal.appointmentId
+        ? { appointmentId: terminal.appointmentId }
         : {}),
       respondedAt: now.toISOString(),
       replayed: false,
     };
   });
   if (receipt.responseType === "accepted") {
-    await ensureQuoteAcceptanceCertificate(db, {
+    const certificate = await reconcileQuoteAcceptanceCertificate(db, {
       responseId: receipt.responseId,
       correlationId: input.correlationId,
       now,
     });
+    return { ...receipt, certificateState: certificate.state };
   }
   return receipt;
 }

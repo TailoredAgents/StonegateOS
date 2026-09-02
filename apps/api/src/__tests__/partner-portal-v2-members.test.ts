@@ -19,10 +19,10 @@ const ADMIN_CAPABILITIES = [
   "account.members.read",
   "account.members.manage",
 ] as const satisfies readonly PartnerCapability[];
-const OWNER_CAPABILITIES = [
+const FULL_ADMINISTRATOR_CAPABILITIES = [
   ...ADMIN_CAPABILITIES,
   "account.security.manage",
-  "payments.manage",
+  "payments.initiate",
   "jobs.read",
 ] as const satisfies readonly PartnerCapability[];
 const VIEWER_CAPABILITIES = [
@@ -51,7 +51,7 @@ describe("partner V2 member administration policy", () => {
         targetCapabilities: ADMIN_CAPABILITIES,
         activeAdministratorCount: 2,
         mutation: { action: "suspend" },
-        currentRoleKey: "admin",
+        currentRoleKey: "administrator",
       }),
     ).toEqual({ allowed: false, reason: "self_suspension" });
   });
@@ -60,42 +60,42 @@ describe("partner V2 member administration policy", () => {
     expect(
       evaluatePartnerMemberAdministration({
         actorPartnerUserId: ACTOR_ID,
-        actorCapabilities: OWNER_CAPABILITIES,
+        actorCapabilities: FULL_ADMINISTRATOR_CAPABILITIES,
         targetPartnerUserId: TARGET_ID,
         targetStatus: "active",
         targetCapabilities: ADMIN_CAPABILITIES,
         activeAdministratorCount: 1,
         mutation: { action: "suspend" },
-        currentRoleKey: "admin",
+        currentRoleKey: "administrator",
       }),
     ).toEqual({ allowed: false, reason: "last_administrator" });
     expect(
       evaluatePartnerMemberAdministration({
         actorPartnerUserId: ACTOR_ID,
-        actorCapabilities: OWNER_CAPABILITIES,
+        actorCapabilities: FULL_ADMINISTRATOR_CAPABILITIES,
         targetPartnerUserId: TARGET_ID,
         targetStatus: "active",
         targetCapabilities: ADMIN_CAPABILITIES,
         activeAdministratorCount: 1,
         mutation: { action: "role_update", roleKey: "viewer" },
         proposedCapabilities: VIEWER_CAPABILITIES,
-        currentRoleKey: "admin",
+        currentRoleKey: "administrator",
       }),
     ).toEqual({ allowed: false, reason: "last_administrator" });
   });
 
-  it("allows the final administrator to switch to another managing role", () => {
+  it("allows a non-final administrator to move to a non-managing role", () => {
     expect(
       evaluatePartnerMemberAdministration({
         actorPartnerUserId: ACTOR_ID,
-        actorCapabilities: OWNER_CAPABILITIES,
+        actorCapabilities: FULL_ADMINISTRATOR_CAPABILITIES,
         targetPartnerUserId: ACTOR_ID,
         targetStatus: "active",
-        targetCapabilities: OWNER_CAPABILITIES,
-        activeAdministratorCount: 1,
-        mutation: { action: "role_update", roleKey: "admin" },
-        proposedCapabilities: ADMIN_CAPABILITIES,
-        currentRoleKey: "owner",
+        targetCapabilities: FULL_ADMINISTRATOR_CAPABILITIES,
+        activeAdministratorCount: 2,
+        mutation: { action: "role_update", roleKey: "viewer" },
+        proposedCapabilities: VIEWER_CAPABILITIES,
+        currentRoleKey: "administrator",
       }),
     ).toEqual({ allowed: true });
   });
@@ -109,8 +109,8 @@ describe("partner V2 member administration policy", () => {
         targetStatus: "active",
         targetCapabilities: VIEWER_CAPABILITIES,
         activeAdministratorCount: 2,
-        mutation: { action: "role_update", roleKey: "owner" },
-        proposedCapabilities: OWNER_CAPABILITIES,
+        mutation: { action: "role_update", roleKey: "administrator" },
+        proposedCapabilities: FULL_ADMINISTRATOR_CAPABILITIES,
         currentRoleKey: "viewer",
       }),
     ).toEqual({ allowed: false, reason: "privilege_escalation" });
@@ -120,10 +120,10 @@ describe("partner V2 member administration policy", () => {
         actorCapabilities: ADMIN_CAPABILITIES,
         targetPartnerUserId: TARGET_ID,
         targetStatus: "active",
-        targetCapabilities: OWNER_CAPABILITIES,
+        targetCapabilities: FULL_ADMINISTRATOR_CAPABILITIES,
         activeAdministratorCount: 2,
         mutation: { action: "suspend" },
-        currentRoleKey: "owner",
+        currentRoleKey: "administrator",
       }),
     ).toEqual({ allowed: false, reason: "privilege_escalation" });
   });
@@ -132,7 +132,7 @@ describe("partner V2 member administration policy", () => {
     expect(
       evaluatePartnerMemberAdministration({
         actorPartnerUserId: ACTOR_ID,
-        actorCapabilities: OWNER_CAPABILITIES,
+        actorCapabilities: FULL_ADMINISTRATOR_CAPABILITIES,
         targetPartnerUserId: TARGET_ID,
         targetStatus: "suspended",
         targetCapabilities: VIEWER_CAPABILITIES,
@@ -144,7 +144,7 @@ describe("partner V2 member administration policy", () => {
     expect(
       evaluatePartnerMemberAdministration({
         actorPartnerUserId: ACTOR_ID,
-        actorCapabilities: OWNER_CAPABILITIES,
+        actorCapabilities: FULL_ADMINISTRATOR_CAPABILITIES,
         targetPartnerUserId: TARGET_ID,
         targetStatus: "active",
         targetCapabilities: VIEWER_CAPABILITIES,
@@ -160,15 +160,23 @@ describe("partner V2 member administration policy", () => {
     expect(
       PartnerMemberMutationSchema.safeParse({
         action: "role_update",
-        roleKey: "scheduler",
+        roleKey: "operations",
       }).success,
     ).toBe(true);
     expect(
       PartnerMemberMutationSchema.safeParse({
         action: "suspend",
-        roleKey: "owner",
+        roleKey: "administrator",
       }).success,
     ).toBe(false);
+    expect(
+      PartnerMemberMutationSchema.safeParse({
+        action: "scope_update",
+        accessLevel: "scoped",
+        locationIds: ["33333333-3333-4333-8333-333333333333"],
+        costCenterIds: [],
+      }).success,
+    ).toBe(true);
     expect(
       PartnerMemberMutationSchema.safeParse({
         action: "role_update",

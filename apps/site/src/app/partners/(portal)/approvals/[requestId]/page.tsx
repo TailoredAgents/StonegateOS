@@ -183,7 +183,7 @@ export default async function PartnerApprovalDetailPage({
           title="Approval request"
           description="Approval details are available only to authorized account approvers."
           breadcrumbs={[
-            { label: "Overview", href: "/partners" },
+            { label: "Overview", href: "/partners/overview" },
             { label: "Approvals", href: "/partners/approvals" },
             { label: "Request", href: `/partners/approvals/${requestId}` },
           ]}
@@ -214,7 +214,7 @@ export default async function PartnerApprovalDetailPage({
             title="Approval request"
             description="Verify this secure session before viewing commercial request details."
             breadcrumbs={[
-              { label: "Overview", href: "/partners" },
+              { label: "Overview", href: "/partners/overview" },
               { label: "Approvals", href: "/partners/approvals" },
               { label: "Request", href: `/partners/approvals/${requestId}` },
             ]}
@@ -288,7 +288,7 @@ export default async function PartnerApprovalDetailPage({
         title={service ? humanizeApprovalValue(service) : "Service request"}
         description="Review the immutable request snapshot and every matching account rule before making a decision."
         breadcrumbs={[
-          { label: "Overview", href: "/partners" },
+          { label: "Overview", href: "/partners/overview" },
           { label: "Approvals", href: "/partners/approvals" },
           {
             label: `Request ${approval.id.slice(0, 8).toUpperCase()}`,
@@ -537,11 +537,16 @@ export default async function PartnerApprovalDetailPage({
                     {rule.requiredDecisionCount === 1 ? "" : "s"} required
                   </p>
                   <p className="mt-1 text-xs leading-5 text-slate-500">
-                    Eligible roles:{" "}
-                    {rule.requiredApproverRoleKeys
-                      .map((role) => humanizeApprovalValue(role))
-                      .join(", ")}
+                    Eligible account members: Authorized account approvers
                   </p>
+                  {rule.requiredApproverRoleKeys.length > 0 ? (
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      Captured legacy role restrictions:{" "}
+                      {rule.requiredApproverRoleKeys
+                        .map((role) => humanizeApprovalValue(role))
+                        .join(", ")}
+                    </p>
+                  ) : null}
                 </li>
               ))}
             </ol>

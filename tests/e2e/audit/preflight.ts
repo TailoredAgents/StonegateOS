@@ -23,6 +23,20 @@ function assertDockerRuntime(): void {
   }
 }
 
+function assertDockerComposeRuntime(): void {
+  const plugin = spawnSync("docker", ["compose", "version"], {
+    encoding: "utf8",
+  });
+  if (plugin.status === 0) return;
+  const standalone = spawnSync("docker-compose", ["version"], {
+    encoding: "utf8",
+  });
+  if (!standalone.error && standalone.status === 0) return;
+  throw new Error(
+    "Team audit runtime is unavailable: install the Docker Compose plugin or the docker-compose command.",
+  );
+}
+
 function assertPlaywrightBrowser(name: string, executablePath: string): void {
   if (!existsSync(executablePath)) {
     throw new Error(
@@ -35,5 +49,6 @@ const environment = ensureE2EEnv();
 assertSafeAuditRuntimeEnvironment(environment);
 assertSafeAuditSeedDatabase();
 assertDockerRuntime();
+assertDockerComposeRuntime();
 assertPlaywrightBrowser("Chromium", chromium.executablePath());
 assertPlaywrightBrowser("WebKit", webkit.executablePath());

@@ -1,9 +1,9 @@
-import { isAssignableTeamPermission, type TeamPermission } from "@myst-os/sdk";
+import {
+  isAssignableTeamPermission,
+  type TeamAssignablePermission,
+} from "@myst-os/sdk";
 
-export type AssignableTeamPermission = Exclude<
-  TeamPermission,
-  "access.break_glass" | "contacts.purge" | "sessions.manage_self"
->;
+export type AssignableTeamPermission = TeamAssignablePermission;
 
 export type PermissionListValidation =
   | { ok: true; permissions: AssignableTeamPermission[] }

@@ -468,6 +468,17 @@ export type QuoteAcceptanceCertificateReceipt = {
   state: "created" | "existing";
 };
 
+export type QuoteAcceptanceCertificateReconciliation =
+  | Readonly<{
+      state: "ready";
+      documentId: string;
+      sha256: string;
+    }>
+  | Readonly<{
+      state: "pending";
+      retryable: boolean;
+    }>;
+
 export async function ensureQuoteAcceptanceCertificate(
   db: DatabaseClient,
   input: {
@@ -599,6 +610,48 @@ export async function ensureQuoteAcceptanceCertificate(
       state: "existing" as const,
     };
   });
+}
+
+export type QuoteAcceptanceCertificateEnsurer =
+  typeof ensureQuoteAcceptanceCertificate;
+
+/**
+ * Best-effort materialization for a certificate whose immutable intent and
+ * source evidence were committed with the accepted quote response. Derived
+ * PDF/storage failure must never rewrite a truthful acceptance into a failed
+ * mutation response; every fresh or idempotent replay can safely retry.
+ */
+export async function reconcileQuoteAcceptanceCertificate(
+  db: DatabaseClient,
+  input: {
+    responseId: string;
+    generatedByTeamMemberId?: string | null;
+    correlationId?: string | null;
+    now?: Date;
+  },
+  dependencies: Readonly<{
+    ensure: QuoteAcceptanceCertificateEnsurer;
+  }> = { ensure: ensureQuoteAcceptanceCertificate },
+): Promise<QuoteAcceptanceCertificateReconciliation> {
+  try {
+    const receipt = await dependencies.ensure(db, input);
+    return {
+      state: "ready",
+      documentId: receipt.documentId,
+      sha256: receipt.sha256,
+    };
+  } catch (error) {
+    const evidenceFailure =
+      error instanceof QuoteAcceptanceCertificateError &&
+      error.code === "evidence_mismatch";
+    console.warn("[quote-v2] acceptance certificate remains pending", {
+      responseId: input.responseId,
+      correlationId: input.correlationId ?? null,
+      error: error instanceof Error ? error.name : "unknown",
+      retryable: !evidenceFailure,
+    });
+    return { state: "pending", retryable: !evidenceFailure };
+  }
 }
 
 export async function ensureQuoteAcceptanceCertificateForVersion(

@@ -34,7 +34,6 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const payload = (await res.json().catch(() => ({}))) as {
     sessionToken?: string;
-    needsPasswordSetup?: boolean;
     expiresAt?: string;
   };
   const sessionToken =
@@ -55,12 +54,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     );
   }
 
-  const redirectUrl = new URL(returnTo, origin);
-  if (payload.needsPasswordSetup) {
-    redirectUrl.searchParams.set("setup", "1");
-  }
-
-  const response = NextResponse.redirect(redirectUrl);
+  const response = NextResponse.redirect(new URL(returnTo, origin));
   response.cookies.set({
     name: PARTNER_SESSION_COOKIE,
     value: sessionToken,

@@ -207,7 +207,6 @@ export async function PUT(request: NextRequest): Promise<Response> {
           partnerUserId: authorization.principal.partnerUserId,
           sessionId: authorization.principal.session.id,
           preference: payload,
-          existing: current,
           correlationId,
           idempotencyKeyHash: idempotency.keyHash!,
         });

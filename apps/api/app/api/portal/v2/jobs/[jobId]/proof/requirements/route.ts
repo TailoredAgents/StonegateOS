@@ -226,6 +226,8 @@ export async function PATCH(
               required: requirement.required,
               minimumCount: requirement.minimumCount,
               source: "job_override",
+              overrideReason: null,
+              overriddenByTeamMemberId: null,
               updatedAt: now,
             })
             .where(eq(partnerEvidenceRequirements.id, existing.id));

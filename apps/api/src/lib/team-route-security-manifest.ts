@@ -89,6 +89,29 @@ const HUMAN_ONLY_ROUTE_KEYS = new Set([
   "app/api/appointments/[id]/manual-payments/route.ts#POST",
   "app/api/appointments/[id]/payment-attempts/route.ts#POST",
   "app/api/payments/square/return/route.ts#POST",
+  "app/api/admin/partner-management/v1/domains/route.ts#POST",
+  "app/api/admin/partner-management/v1/domains/[domainId]/verify/route.ts#PATCH",
+  "app/api/admin/partner-management/v1/domains/[domainId]/revoke/route.ts#PATCH",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/scheduling-policy/route.ts#PATCH",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/cancellation-policy/route.ts#PATCH",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/suspend/route.ts#POST",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/reactivate/route.ts#POST",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/close/route.ts#POST",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/recover-administrator/route.ts#POST",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/merge/route.ts#POST",
+  "app/api/admin/partner-management/v1/account-merges/[caseId]/complete/route.ts#POST",
+  "app/api/admin/partner-management/v1/memberships/[membershipId]/route.ts#PATCH",
+  "app/api/admin/partner-management/v1/memberships/[membershipId]/role/route.ts#PATCH",
+  "app/api/admin/partner-management/v1/memberships/[membershipId]/scope/route.ts#PATCH",
+  "app/api/admin/partner-management/v1/memberships/[membershipId]/migration-review/route.ts#PATCH",
+  "app/api/admin/partner-management/v1/security/sessions/[sessionId]/revoke/route.ts#POST",
+  "app/api/admin/partner-management/v1/security/identities/[userId]/disable/route.ts#POST",
+  "app/api/admin/partner-management/v1/security/identities/[userId]/mfa/reset/route.ts#POST",
+  "app/api/admin/partner-management/v1/quarantine/[caseId]/resolve/route.ts#POST",
+  "app/api/admin/partner-management/v1/billing-disputes/[requestId]/decision/route.ts#POST",
+  "app/api/admin/partner-management/v1/cancellation-requests/[requestId]/decision/route.ts#POST",
+  "app/api/admin/partner-management/v1/change-requests/[requestId]/decision/route.ts#POST",
+  "app/api/admin/partner-management/v1/location-reviews/[reviewId]/decision/route.ts#POST",
 ]);
 
 const RISK_OVERRIDES: Readonly<Record<string, TeamActionRisk>> = {
@@ -98,6 +121,51 @@ const RISK_OVERRIDES: Readonly<Record<string, TeamActionRisk>> = {
   "app/api/admin/inbox/export/jsonl/route.ts#PUT": "read",
   "app/api/admin/partners/users/route.ts#POST": "external",
   "app/api/admin/partners/users/route.ts#PATCH": "destructive",
+  "app/api/admin/partner-management/v1/memberships/[membershipId]/route.ts#PATCH":
+    "destructive",
+  "app/api/admin/partner-management/v1/memberships/[membershipId]/role/route.ts#PATCH":
+    "destructive",
+  "app/api/admin/partner-management/v1/memberships/[membershipId]/scope/route.ts#PATCH":
+    "destructive",
+  "app/api/admin/partner-management/v1/memberships/[membershipId]/migration-review/route.ts#PATCH":
+    "destructive",
+  "app/api/admin/partner-management/v1/domains/route.ts#POST": "destructive",
+  "app/api/admin/partner-management/v1/domains/[domainId]/verify/route.ts#PATCH":
+    "destructive",
+  "app/api/admin/partner-management/v1/domains/[domainId]/revoke/route.ts#PATCH":
+    "destructive",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/scheduling-policy/route.ts#PATCH":
+    "external",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/cancellation-policy/route.ts#PATCH":
+    "external",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/suspend/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/reactivate/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/close/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/recover-administrator/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/accounts/[accountId]/merge/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/account-merges/[caseId]/complete/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/security/sessions/[sessionId]/revoke/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/security/identities/[userId]/disable/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/security/identities/[userId]/mfa/reset/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/quarantine/[caseId]/resolve/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/billing-disputes/[requestId]/decision/route.ts#POST":
+    "financial",
+  "app/api/admin/partner-management/v1/cancellation-requests/[requestId]/decision/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/change-requests/[requestId]/decision/route.ts#POST":
+    "destructive",
+  "app/api/admin/partner-management/v1/location-reviews/[reviewId]/decision/route.ts#POST":
+    "destructive",
   "app/api/admin/partners/invite-operations/route.ts#POST": "destructive",
   "app/api/admin/sales/autopilot/route.ts#PATCH": "external",
   "app/api/admin/outbox/dispatch/route.ts#POST": "external",

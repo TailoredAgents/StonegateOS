@@ -9,6 +9,10 @@ import {
 } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
 import {
+  PartnerAccountProfileManager,
+  type PartnerAccountProfile,
+} from "@/app/partners/components/PartnerAccountProfileManager";
+import {
   PartnerAccountSecurityManager,
   type PartnerSettingsAccount,
   type PartnerSettingsMfa,
@@ -24,6 +28,16 @@ import {
   partnerSecondaryButtonClass,
 } from "@/app/partners/components/PartnerPortalUi";
 import { PartnerPasswordForm } from "@/app/partners/components/PartnerPasswordForm";
+import { PartnerEmailChangeForm } from "@/app/partners/components/PartnerEmailChangeForm";
+import {
+  PartnerPersonalProfileManager,
+  type PartnerPersonalProfile,
+} from "@/app/partners/components/PartnerPersonalProfileManager";
+import {
+  PartnerProofDefaultsManager,
+  type PartnerProofDefault,
+} from "@/app/partners/components/PartnerProofDefaultsManager";
+import { parsePartnerSmsEndpoints } from "@/app/partners/lib/notification-endpoints";
 
 export const metadata: Metadata = { title: "Account & security" };
 
@@ -65,27 +79,58 @@ export default async function PartnerSettingsPage({
     "We couldn’t save that password. Try again.",
   );
 
-  const [meResponse, mfaResponse, sessionsResponse, preferencesResponse] =
-    await Promise.all([
-      callPartnerApi("/api/portal/v2/me").catch(() => null),
-      callPartnerApi("/api/portal/v2/mfa").catch(() => null),
-      callPartnerApi("/api/portal/v2/sessions").catch(() => null),
-      callPartnerApi("/api/portal/v2/notification-preferences").catch(
-        () => null,
-      ),
-    ]);
+  const [
+    meResponse,
+    mfaResponse,
+    sessionsResponse,
+    preferencesResponse,
+    smsEndpointsResponse,
+    proofDefaultsResponse,
+    accountProfileResponse,
+    personalProfileResponse,
+  ] = await Promise.all([
+    callPartnerApi("/api/portal/v2/me").catch(() => null),
+    callPartnerApi("/api/portal/v2/mfa").catch(() => null),
+    callPartnerApi("/api/portal/v2/sessions").catch(() => null),
+    callPartnerApi("/api/portal/v2/notification-preferences").catch(() => null),
+    callPartnerApi("/api/portal/v2/notification-endpoints").catch(() => null),
+    callPartnerApi("/api/portal/v2/proof-requirements").catch(() => null),
+    callPartnerApi("/api/portal/v2/account-profile").catch(() => null),
+    callPartnerApi("/api/portal/v2/personal-profile").catch(() => null),
+  ]);
 
-  const [payload, mfaPayload, sessionsPayload, preferencesPayload] =
-    await Promise.all([
-      readJson<MePayload>(meResponse),
-      readJson<PartnerSettingsMfa & { ok: true }>(mfaResponse),
-      readJson<{ ok: true; sessions: PartnerSettingsSession[] }>(
-        sessionsResponse,
-      ),
-      readJson<{ ok: true; preferences: PartnerSettingsPreference[] }>(
-        preferencesResponse,
-      ),
-    ]);
+  const [
+    payload,
+    mfaPayload,
+    sessionsPayload,
+    preferencesPayload,
+    smsEndpointsPayload,
+    proofDefaultsPayload,
+    accountProfilePayload,
+    personalProfilePayload,
+  ] = await Promise.all([
+    readJson<MePayload>(meResponse),
+    readJson<PartnerSettingsMfa & { ok: true }>(mfaResponse),
+    readJson<{ ok: true; sessions: PartnerSettingsSession[] }>(
+      sessionsResponse,
+    ),
+    readJson<{ ok: true; preferences: PartnerSettingsPreference[] }>(
+      preferencesResponse,
+    ),
+    readJson<{ ok: true; endpoints: unknown }>(smsEndpointsResponse),
+    readJson<{ ok: true; requirements: PartnerProofDefault[] }>(
+      proofDefaultsResponse,
+    ),
+    readJson<{ ok: true; profile: PartnerAccountProfile }>(
+      accountProfileResponse,
+    ),
+    readJson<{ ok: true; profile: PartnerPersonalProfile }>(
+      personalProfileResponse,
+    ),
+  ]);
+  const smsEndpoints = smsEndpointsPayload?.ok
+    ? parsePartnerSmsEndpoints(smsEndpointsPayload.endpoints)
+    : null;
 
   if (!payload?.ok) {
     return (
@@ -104,6 +149,11 @@ export default async function PartnerSettingsPage({
   const canReadMembers = payload.membership.capabilities?.includes(
     "account.members.read",
   );
+  const canManageSmsEndpoints = payload.membership.capabilities?.includes(
+    "account.security.manage",
+  );
+  const canManageProofDefaults =
+    payload.membership.capabilities?.includes("account.update");
 
   return (
     <div className="space-y-5 sm:space-y-6">
@@ -112,7 +162,7 @@ export default async function PartnerSettingsPage({
         title="Account & security"
         description="Manage your working account, sign-in security, active devices, and notification delivery."
         breadcrumbs={[
-          { label: "Overview", href: "/partners" },
+          { label: "Overview", href: "/partners/overview" },
           { label: "Account & security", href: "/partners/settings" },
         ]}
         actions={
@@ -168,10 +218,10 @@ export default async function PartnerSettingsPage({
             <div>
               <dt className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                 <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-                Secure-link access
+                Portal access
               </dt>
               <dd className="mt-1 text-sm font-medium text-emerald-800">
-                Enabled
+                Active
               </dd>
             </div>
           </dl>
@@ -192,7 +242,7 @@ export default async function PartnerSettingsPage({
               <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
                 {passwordSet
                   ? "Enter your current password and choose a replacement. Saving revokes every other portal session; this device stays signed in."
-                  : "First-time setup requires a recent magic-link sign-in or MFA verification. If that verification is no longer recent, you’ll be asked to sign in again. Saving signs out every other device."}
+                  : "First-time setup requires a recent password sign-in or MFA verification. If that verification is no longer recent, you’ll be asked to sign in again. Saving signs out every other device."}
               </p>
             </div>
             <span
@@ -209,13 +259,39 @@ export default async function PartnerSettingsPage({
         </PartnerPanel>
       </div>
 
+      <PartnerPersonalProfileManager
+        initialProfile={personalProfilePayload?.profile ?? null}
+        initialEtag={personalProfileResponse?.headers.get("etag") ?? null}
+      />
+
+      <PartnerEmailChangeForm
+        currentEmail={userEmail}
+        passwordSet={passwordSet}
+        mfaRequired={Boolean(mfaPayload?.security.required)}
+      />
+
+      <PartnerAccountProfileManager
+        initialProfile={accountProfilePayload?.profile ?? null}
+        initialEtag={accountProfileResponse?.headers.get("etag") ?? null}
+      />
+
       <PartnerAccountSecurityManager
         accounts={accounts}
         mfa={mfaPayload}
         sessions={sessionsPayload?.sessions ?? null}
         sessionsEtag={sessionsResponse?.headers.get("etag") ?? null}
         preferences={preferencesPayload?.preferences ?? null}
+        smsEndpoints={smsEndpoints}
+        canManageSmsEndpoints={Boolean(canManageSmsEndpoints)}
       />
+
+      {proofDefaultsPayload?.ok ? (
+        <PartnerProofDefaultsManager
+          requirements={proofDefaultsPayload.requirements}
+          etag={proofDefaultsResponse?.headers.get("etag") ?? ""}
+          canEdit={Boolean(canManageProofDefaults)}
+        />
+      ) : null}
     </div>
   );
 }

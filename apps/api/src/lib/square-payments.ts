@@ -37,7 +37,10 @@ import {
   syncAppointmentCardTipCents,
 } from "@/lib/payment-ledger";
 import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
-import { finalizePartnerPortalPaymentReconciliation } from "@/lib/partner-portal-v2-payments";
+import {
+  finalizePartnerPortalPaymentReconciliation,
+  parsePartnerPaymentAttemptMetadata,
+} from "@/lib/partner-portal-v2-payments";
 import {
   recordProviderFailure,
   recordProviderSuccess,
@@ -381,6 +384,11 @@ export async function reconcileSquareAttempt(input: {
     attempt.squareLocationId?.trim() ??
     process.env["SQUARE_LOCATION_ID"]?.trim();
   if (!expectedLocationId) throw new Error("SQUARE_LOCATION_ID is not set");
+  const partnerPaymentMetadata = parsePartnerPaymentAttemptMetadata(
+    attempt.metadata,
+  );
+  const expectedSourceType =
+    partnerPaymentMetadata?.paymentMethod === "ach" ? "BANK_ACCOUNT" : "CARD";
 
   const assertLockedAttempt = (locked: typeof attempt): void => {
     if (
@@ -483,6 +491,7 @@ export async function reconcileSquareAttempt(input: {
       expectedAttemptId: attempt.id,
       expectedJobAmountCents: attempt.requestedJobAmountCents,
       expectedLocationId,
+      expectedSourceType,
     });
   } catch (error) {
     const code = errorCode(error);
@@ -661,7 +670,7 @@ export async function reconcileSquareAttempt(input: {
           status: verified.providerStatus.toLowerCase(),
           canonicalStatus: "completed",
           providerStatus: verified.providerStatus,
-          method: "card",
+          method: verified.tenderType,
           tenderType: verified.tenderType,
           entryMethod: verified.entryMethod,
           cardBrand: verified.cardBrand,
@@ -910,6 +919,7 @@ async function reconcileSquarePayment(payment: SquarePayment): Promise<{
       quoteResponseId: paymentAttempts.quoteResponseId,
       providerOrderId: paymentAttempts.providerOrderId,
       providerPaymentId: paymentAttempts.providerPaymentId,
+      metadata: paymentAttempts.metadata,
     })
     .from(paymentAttempts)
     .where(eq(paymentAttempts.id, attemptId))
@@ -977,6 +987,22 @@ async function reconcileSquarePayment(payment: SquarePayment): Promise<{
   if (reconciled.status === "verified") {
     return {
       paymentId: reconciled.paymentId,
+      paymentAttemptId: attemptId,
+      status: "processed",
+    };
+  }
+  const partnerPaymentMetadata = parsePartnerPaymentAttemptMetadata(
+    completedAttempt?.metadata,
+  );
+  if (
+    partnerPaymentMetadata?.paymentMethod === "ach" &&
+    reconciled.status === "pending_verification"
+  ) {
+    // A signed payment.updated webhook can arrive while the bank transfer is
+    // still pending. Acknowledge it without creating a payment allocation or
+    // changing the invoice balance; a later completed webhook reconciles it.
+    return {
+      paymentId: null,
       paymentAttemptId: attemptId,
       status: "processed",
     };

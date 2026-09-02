@@ -528,6 +528,8 @@ export async function requireTeamSession(request: NextRequest): Promise<
       ok: true;
       sessionId: string;
       authMethod: TeamSessionAuthMethod;
+      assuranceLevel: "aal1" | "aal2";
+      mfaVerifiedAt: Date | null;
       teamMember: {
         id: string;
         name: string;
@@ -552,6 +554,8 @@ export async function requireTeamSession(request: NextRequest): Promise<
       id: teamSessions.id,
       teamMemberId: teamSessions.teamMemberId,
       authMethod: teamSessions.authMethod,
+      assuranceLevel: teamSessions.assuranceLevel,
+      mfaVerifiedAt: teamSessions.mfaVerifiedAt,
       expiresAt: teamSessions.expiresAt,
       revokedAt: teamSessions.revokedAt,
     })
@@ -612,6 +616,8 @@ export async function requireTeamSession(request: NextRequest): Promise<
     ok: true,
     sessionId: sessionRow.id,
     authMethod: sessionRow.authMethod,
+    assuranceLevel: sessionRow.assuranceLevel,
+    mfaVerifiedAt: sessionRow.mfaVerifiedAt,
     teamMember: {
       id: memberRow.id,
       name: memberRow.name,

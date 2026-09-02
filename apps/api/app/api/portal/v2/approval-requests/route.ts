@@ -17,7 +17,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
   const authorization = await requirePartnerCapability(
     request,
-    "bookings.approve",
+    "approvals.read",
   );
   if (!authorization.ok) {
     return createPartnerPortalV2ErrorResponse(

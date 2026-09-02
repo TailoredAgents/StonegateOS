@@ -6,6 +6,26 @@ import {
 
 const ATTEMPT_ID = "11111111-1111-4111-8111-111111111111";
 
+type FetchCall = Parameters<typeof fetch>;
+
+interface RecordedFetch {
+  (...call: FetchCall): ReturnType<typeof fetch>;
+  readonly calls: FetchCall[];
+}
+
+function recordedFetch(
+  implementation: (...call: FetchCall) => ReturnType<typeof fetch>,
+): RecordedFetch {
+  const calls: FetchCall[] = [];
+  return Object.assign(
+    (...call: FetchCall) => {
+      calls.push(call);
+      return implementation(...call);
+    },
+    { calls },
+  );
+}
+
 function squareFetch(input?: {
   amount?: number;
   tip?: number;
@@ -13,13 +33,15 @@ function squareFetch(input?: {
   locationId?: string;
   paymentStatus?: string;
   attemptId?: string | null;
-}): typeof fetch {
+  sourceType?: "CARD" | "BANK_ACCOUNT";
+}): RecordedFetch {
   const amount = input?.amount ?? 10_000;
   const tip = input?.tip ?? 2_000;
   const total = input?.total ?? amount + tip;
   const locationId = input?.locationId ?? "LOCATION";
+  const sourceType = input?.sourceType ?? "CARD";
 
-  return jest.fn((request: string | URL | Request) => {
+  return recordedFetch((request) => {
     const url =
       typeof request === "string"
         ? request
@@ -49,7 +71,7 @@ function squareFetch(input?: {
                 {
                   id: "payment-1",
                   payment_id: "payment-1",
-                  type: "CARD",
+                  type: sourceType,
                   location_id: locationId,
                   amount_money: { amount: total, currency: "USD" },
                   tip_money: { amount: tip, currency: "USD" },
@@ -70,7 +92,7 @@ function squareFetch(input?: {
               order_id: "order-1",
               location_id: locationId,
               status: input?.paymentStatus ?? "COMPLETED",
-              source_type: "CARD",
+              source_type: sourceType,
               amount_money: { amount, currency: "USD" },
               tip_money: { amount: tip, currency: "USD" },
               total_money: { amount: total, currency: "USD" },
@@ -87,7 +109,7 @@ function squareFetch(input?: {
       );
     }
     return Promise.resolve(new Response("not found", { status: 404 }));
-  }) as typeof fetch;
+  });
 }
 
 describe("Square payment verification", () => {
@@ -112,6 +134,47 @@ describe("Square payment verification", () => {
       cardBrand: "VISA",
       last4: "4242",
     });
+  });
+
+  it("verifies a completed bank-account tender only when ACH is expected", async () => {
+    const fetchImpl = squareFetch({
+      amount: 10_000,
+      tip: 0,
+      total: 10_000,
+      sourceType: "BANK_ACCOUNT",
+    });
+    await expect(
+      retrieveAndVerifySquarePayment({
+        orderId: "order-1",
+        expectedAttemptId: ATTEMPT_ID,
+        expectedJobAmountCents: 10_000,
+        expectedLocationId: "LOCATION",
+        expectedSourceType: "BANK_ACCOUNT",
+        accessToken: "token",
+        fetchImpl,
+      }),
+    ).resolves.toMatchObject({
+      tenderType: "bank_account",
+      entryMethod: null,
+      cardBrand: null,
+      last4: null,
+      totalAmountCents: 10_000,
+    });
+    await expect(
+      retrieveAndVerifySquarePayment({
+        orderId: "order-1",
+        expectedAttemptId: ATTEMPT_ID,
+        expectedJobAmountCents: 10_000,
+        expectedLocationId: "LOCATION",
+        accessToken: "token",
+        fetchImpl: squareFetch({
+          amount: 10_000,
+          tip: 0,
+          total: 10_000,
+          sourceType: "BANK_ACCOUNT",
+        }),
+      }),
+    ).rejects.toThrow("square_card_tender_count_mismatch");
   });
 
   it("rejects a mismatched job amount", async () => {
@@ -155,7 +218,7 @@ describe("Square payment verification", () => {
 
   it("rejects inconsistent order or tender totals", async () => {
     const fetchImpl = squareFetch();
-    const inconsistentFetch = jest.fn(
+    const inconsistentFetch = recordedFetch(
       async (request: string | URL | Request, init?: RequestInit) => {
         const response = await fetchImpl(request, init);
         const url =
@@ -171,7 +234,7 @@ describe("Square payment verification", () => {
         body.order.total_money.amount -= 1;
         return new Response(JSON.stringify(body), { status: 200 });
       },
-    ) as typeof fetch;
+    );
 
     await expect(
       retrieveAndVerifySquarePayment({
@@ -214,7 +277,7 @@ describe("Square payment verification", () => {
 
 describe("Square list pagination", () => {
   it("walks every payment and refund cursor in the bounded window", async () => {
-    const fetchImpl = jest.fn((request: string | URL | Request) => {
+    const fetchImpl = recordedFetch((request) => {
       const url = new URL(
         typeof request === "string"
           ? request
@@ -254,7 +317,7 @@ describe("Square list pagination", () => {
         );
       }
       return Promise.resolve(new Response("not found", { status: 404 }));
-    }) as typeof fetch;
+    });
     const window = {
       locationId: "LOCATION",
       beginTime: new Date("2026-07-23T00:00:00.000Z"),
@@ -271,11 +334,11 @@ describe("Square list pagination", () => {
       { id: "refund-1" },
       { id: "refund-2" },
     ]);
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl.calls).toHaveLength(4);
   });
 
   it("rejects a repeated provider cursor instead of looping", async () => {
-    const fetchImpl = jest.fn(() =>
+    const fetchImpl = recordedFetch(() =>
       Promise.resolve(
         new Response(
           JSON.stringify({
@@ -285,7 +348,7 @@ describe("Square list pagination", () => {
           { status: 200 },
         ),
       ),
-    ) as typeof fetch;
+    );
 
     await expect(
       listSquarePayments({

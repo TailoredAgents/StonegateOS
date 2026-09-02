@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import type { z } from "zod";
 import { getDb } from "@/db";
 import { isQuoteV2FeatureEnabled } from "@/lib/feature-flags";
-import { ensureQuoteAcceptanceCertificate } from "@/lib/quote-v2-acceptance-certificate";
+import { reconcileQuoteAcceptanceCertificate } from "@/lib/quote-v2-acceptance-certificate";
 import {
   QuoteV2ArchiveCommandSchema,
   QuoteV2ChangeResolutionCommandSchema,
@@ -315,13 +315,13 @@ async function runLifecycleRoute<
   }
 }
 
-function acceptedReplayEvidence(
+async function acceptedReplayEvidence(
   db: ReturnType<typeof getDb>,
   result: MutationResult<unknown>,
   mutation: TeamMutationContext,
 ): Promise<void> {
   if (!result.ok || !result.data || typeof result.data !== "object") {
-    return Promise.resolve();
+    return;
   }
   const data = result.data as Record<string, unknown>;
   if (
@@ -329,12 +329,13 @@ function acceptedReplayEvidence(
     typeof data["responseId"] !== "string" ||
     !UUID_PATTERN.test(data["responseId"])
   ) {
-    return Promise.resolve();
+    return;
   }
-  return ensureQuoteAcceptanceCertificate(db, {
+  const certificate = await reconcileQuoteAcceptanceCertificate(db, {
     responseId: data["responseId"],
     correlationId: mutation.correlationId,
-  }).then(() => undefined);
+  });
+  data["certificateState"] = certificate.state;
 }
 
 export async function handleQuoteV2StaffDecision(
@@ -404,10 +405,11 @@ export async function handleQuoteV2StaffDecision(
     }),
     afterCommit: async (db, receipt, mutation) => {
       if (receipt.decision !== "accepted") return;
-      await ensureQuoteAcceptanceCertificate(db, {
+      const certificate = await reconcileQuoteAcceptanceCertificate(db, {
         responseId: receipt.responseId,
         correlationId: mutation.correlationId,
       });
+      receipt.certificateState = certificate.state;
     },
     repairReplay: acceptedReplayEvidence,
   });

@@ -113,7 +113,7 @@ void test("offers hosted card payment only for payable USD invoice balances", ()
   );
 });
 
-void test("accepts only exact Square SDK configuration for embedded card intents", () => {
+void test("accepts only method-consistent Square SDK configuration for embedded intents", () => {
   const embedded = {
     ...readyIntent(),
     purpose: "deposit",
@@ -124,7 +124,7 @@ void test("accepts only exact Square SDK configuration for embedded card intents
       environment: "sandbox",
       sdkUrl: "https://sandbox.web.squarecdn.com/v1/square.js",
       methods: { card: true, ach: false },
-      achUnavailableReason: "merchant_and_return_configuration_required",
+      achUnavailableReason: "merchant_and_webhook_configuration_required",
     },
   };
   assert.equal(isPartnerEmbeddedPaymentIntent(embedded), true);
@@ -138,15 +138,39 @@ void test("accepts only exact Square SDK configuration for embedded card intents
     }),
     false,
   );
+  const ach = {
+    ...embedded,
+    paymentMethod: "ach",
+    checkout: { mode: "embedded_ach", url: null, embedded: true },
+    webPayments: {
+      ...embedded.webPayments,
+      methods: { card: true, ach: true },
+      achUnavailableReason: null,
+    },
+  };
+  assert.equal(isPartnerEmbeddedPaymentIntent(ach), true);
   assert.equal(
     isPartnerEmbeddedPaymentIntent({
-      ...embedded,
+      ...ach,
       webPayments: {
-        ...embedded.webPayments,
-        methods: { card: true, ach: true },
+        ...ach.webPayments,
+        methods: { card: true, ach: false },
+        achUnavailableReason: "merchant_and_webhook_configuration_required",
       },
     }),
     false,
+  );
+  assert.equal(
+    isPartnerEmbeddedPaymentIntent({
+      ...ach,
+      status: "pending",
+      webPayments: {
+        ...ach.webPayments,
+        methods: { card: true, ach: false },
+        achUnavailableReason: "merchant_and_webhook_configuration_required",
+      },
+    }),
+    true,
   );
   assert.equal(
     isSquareWebPaymentsSdkUrl("https://web.squarecdn.com/v1/square.js"),
@@ -178,20 +202,25 @@ void test("derives the exact outstanding deposit and Square verification amount"
   );
 });
 
-void test("payment UI keeps creation idempotent and card-hosted", () => {
+void test("payment UI keeps card and ACH creation idempotent and tokens ephemeral", () => {
   const component = readFileSync(
     new URL("../components/PartnerInvoicePayment.tsx", import.meta.url),
     "utf8",
   );
   assert.match(component, /"Idempotency-Key": operationKey\.current/u);
   assert.match(component, /paymentMethod: "card"/u);
-  assert.doesNotMatch(component, /paymentMethod: "ach"/u);
+  assert.match(component, /paymentMethod: "ach"/u);
   assert.match(component, /Square’s secure hosted checkout/u);
   assert.match(component, /invoice reconciliation/u);
   assert.match(component, /currentCard\.tokenize/u);
+  assert.match(component, /currentAch\.tokenize/u);
+  assert.match(component, /transactionId: intent\.id/u);
+  assert.match(component, /accountHolderName/u);
+  assert.match(component, /startsWith\("bauth:"\)/u);
   assert.match(component, /intent: "CHARGE"/u);
   assert.match(component, /sellerKeyedIn: false/u);
-  assert.match(component, /ACH is not enabled/u);
+  assert.match(component, /invoice remains due until a signed Square update/u);
+  assert.match(component, /oneUseToken = ""/u);
   assert.doesNotMatch(component, /localStorage/u);
 });
 

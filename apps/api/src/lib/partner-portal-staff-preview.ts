@@ -1,13 +1,4 @@
-import {
-  and,
-  asc,
-  desc,
-  eq,
-  inArray,
-  isNull,
-  or,
-  sql,
-} from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   appointments,
   contacts,
@@ -176,7 +167,10 @@ export type PartnerStaffPreviewResult =
   | Readonly<{ kind: "found"; preview: PartnerStaffPreview }>
   | Readonly<{ kind: "not_found" }>;
 
-function money(amountMinor: number, currency: string): PartnerStaffPreviewMoney {
+function money(
+  amountMinor: number,
+  currency: string,
+): PartnerStaffPreviewMoney {
   if (!Number.isSafeInteger(amountMinor) || !CURRENCY_PATTERN.test(currency)) {
     throw new TypeError("partner_staff_preview_money_invalid");
   }
@@ -232,15 +226,9 @@ async function loadSelectedJob(
       timezone: partnerAccountLocations.timezone,
     })
     .from(partnerBookings)
-    .innerJoin(
-      appointments,
-      eq(partnerBookings.appointmentId, appointments.id),
-    )
+    .innerJoin(appointments, eq(partnerBookings.appointmentId, appointments.id))
     .leftJoin(properties, eq(partnerBookings.propertyId, properties.id))
-    .leftJoin(
-      partnerAccountLocations,
-      createPartnerJobLocationJoinCondition(),
-    )
+    .leftJoin(partnerAccountLocations, createPartnerJobLocationJoinCondition())
     .where(
       and(
         eq(partnerBookings.partnerAccountId, accountId),
@@ -480,11 +468,9 @@ export async function loadPartnerStaffPreview(input: {
       or(
         eq(partnerAccounts.id, contacts.partnerAccountId),
         eq(partnerAccounts.portalContactId, contacts.id),
-      )!,
+      ),
     )
-    .where(
-      and(eq(contacts.id, input.orgContactId), isNull(contacts.deletedAt)),
-    )
+    .where(and(eq(contacts.id, input.orgContactId), isNull(contacts.deletedAt)))
     .limit(2);
   if (accountCandidates.length !== 1 || !accountCandidates[0]) {
     return { kind: "not_found" };
@@ -590,43 +576,44 @@ export async function loadPartnerStaffPreview(input: {
     (total, count) => total + count,
     0,
   );
-  const jobs = pageRows.map((job): PartnerStaffPreviewJobSummary =>
-    Object.freeze({
-      id: job.id,
-      status: job.status,
-      confirmationMode: job.confirmationMode,
-      service: Object.freeze({ key: job.serviceKey, tierKey: job.tierKey }),
-      schedule: createPartnerPublicJobScheduleDto({
-        arrivalWindowStartAt: job.arrivalStartAt,
-        arrivalWindowEndAt: job.arrivalEndAt,
-        timezone: job.timezone,
-        completedAt: job.completedAt,
+  const jobs = pageRows.map(
+    (job): PartnerStaffPreviewJobSummary =>
+      Object.freeze({
+        id: job.id,
+        status: job.status,
+        confirmationMode: job.confirmationMode,
+        service: Object.freeze({ key: job.serviceKey, tierKey: job.tierKey }),
+        schedule: createPartnerPublicJobScheduleDto({
+          arrivalWindowStartAt: job.arrivalStartAt,
+          arrivalWindowEndAt: job.arrivalEndAt,
+          timezone: job.timezone,
+          completedAt: job.completedAt,
+        }),
+        location: Object.freeze({
+          id: job.locationId,
+          name: job.siteName,
+          address: job.addressLine1
+            ? Object.freeze({
+                line1: job.addressLine1,
+                city: job.city ?? "",
+                state: job.state ?? "",
+                postalCode: job.postalCode ?? "",
+              })
+            : null,
+        }),
+        references: Object.freeze({
+          poNumber: job.poNumber,
+          costCenter: job.costCenter,
+          project: job.projectReference,
+        }),
+        financial:
+          job.amountCents === null
+            ? null
+            : money(job.amountCents, job.currency),
+        allowedActions: Object.freeze([]),
+        createdAt: job.createdAt.toISOString(),
+        updatedAt: job.updatedAt.toISOString(),
       }),
-      location: Object.freeze({
-        id: job.locationId,
-        name: job.siteName,
-        address: job.addressLine1
-          ? Object.freeze({
-              line1: job.addressLine1,
-              city: job.city ?? "",
-              state: job.state ?? "",
-              postalCode: job.postalCode ?? "",
-            })
-          : null,
-      }),
-      references: Object.freeze({
-        poNumber: job.poNumber,
-        costCenter: job.costCenter,
-        project: job.projectReference,
-      }),
-      financial:
-        job.amountCents === null
-          ? null
-          : money(job.amountCents, job.currency),
-      allowedActions: Object.freeze([]),
-      createdAt: job.createdAt.toISOString(),
-      updatedAt: job.updatedAt.toISOString(),
-    }),
   );
 
   return {

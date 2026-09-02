@@ -19,6 +19,8 @@ import {
   customType,
   check,
   date,
+  foreignKey,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
@@ -146,6 +148,12 @@ export type AppointmentBookingDetails = {
     placementLocation: string;
   } | null;
 };
+export type AppointmentResourceAssignmentSnapshot = Readonly<{
+  resourceId: string;
+  kind: "crew" | "truck" | "equipment";
+  label: string;
+  capacityUnits: number;
+}>;
 export const commissionRoleEnum = pgEnum("commission_role", [
   "sales",
   "marketing",
@@ -273,6 +281,55 @@ export const partnerAccounts = pgTable(
     portalAccessEnabled: boolean("portal_access_enabled")
       .default(false)
       .notNull(),
+    portalLifecycleStatus: text("portal_lifecycle_status")
+      .$type<"active" | "suspended" | "closed" | "merged">()
+      .default("active")
+      .notNull(),
+    portalLifecycleRevision: integer("portal_lifecycle_revision")
+      .default(1)
+      .notNull(),
+    portalLifecycleChangedAt: timestamp("portal_lifecycle_changed_at", {
+      withTimezone: true,
+    }),
+    // Migration 0156 owns this FK because teamMembers is declared below.
+    portalLifecycleChangedByTeamMemberId: uuid(
+      "portal_lifecycle_changed_by_team_member_id",
+    ),
+    portalLifecycleReason: varchar("portal_lifecycle_reason", { length: 1000 }),
+    portalLifecyclePriorAccessEnabled: boolean(
+      "portal_lifecycle_prior_access_enabled",
+    ),
+    // Migration 0156 owns the self-referencing account FK.
+    mergedIntoPartnerAccountId: uuid("merged_into_partner_account_id"),
+    // Partner-managed account profile. These fields belong to the canonical
+    // tenant and never derive authority from a CRM contact.
+    profileRevision: integer("profile_revision").default(1).notNull(),
+    serviceContactName: varchar("service_contact_name", { length: 160 }),
+    serviceContactEmail: varchar("service_contact_email", { length: 254 }),
+    serviceContactPhoneE164: varchar("service_contact_phone_e164", {
+      length: 16,
+    }),
+    billingContactName: varchar("billing_contact_name", { length: 160 }),
+    billingContactEmail: varchar("billing_contact_email", { length: 254 }),
+    billingContactPhoneE164: varchar("billing_contact_phone_e164", {
+      length: 16,
+    }),
+    billingAddressLine1: varchar("billing_address_line1", { length: 200 }),
+    billingAddressLine2: varchar("billing_address_line2", { length: 200 }),
+    billingAddressCity: varchar("billing_address_city", { length: 120 }),
+    billingAddressState: varchar("billing_address_state", { length: 64 }),
+    billingAddressPostalCode: varchar("billing_address_postal_code", {
+      length: 20,
+    }),
+    billingAddressCountry: varchar("billing_address_country", { length: 2 }),
+    defaultPoNumber: varchar("default_po_number", { length: 80 }),
+    costCenterGuidance: varchar("cost_center_guidance", { length: 500 }),
+    // Migration 0154 owns the deferrable composite FK because locations are
+    // declared later in this module.
+    defaultPartnerLocationId: uuid("default_partner_location_id"),
+    locationDirectoryVersion: integer("location_directory_version")
+      .default(1)
+      .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -297,6 +354,110 @@ export const partnerAccounts = pgTable(
     portalAccessIdx: index("partner_accounts_portal_access_idx").on(
       table.portalAccessEnabled,
       table.status,
+    ),
+    portalLifecycleIdx: index("partner_accounts_portal_lifecycle_idx").on(
+      table.portalLifecycleStatus,
+      table.updatedAt,
+      table.id,
+    ),
+    mergeTargetIdx: index("partner_accounts_merge_target_idx")
+      .on(table.mergedIntoPartnerAccountId)
+      .where(sql`${table.mergedIntoPartnerAccountId} IS NOT NULL`),
+    defaultLocationIdx: index("partner_accounts_default_location_idx")
+      .on(table.defaultPartnerLocationId)
+      .where(sql`${table.defaultPartnerLocationId} IS NOT NULL`),
+    locationDirectoryVersionCheck: check(
+      "partner_accounts_location_directory_version_check",
+      sql`${table.locationDirectoryVersion} > 0`,
+    ),
+    profileRevisionCheck: check(
+      "partner_accounts_profile_revision_check",
+      sql`${table.profileRevision} > 0`,
+    ),
+    portalLifecycleStatusCheck: check(
+      "partner_accounts_portal_lifecycle_status_check",
+      sql`${table.portalLifecycleStatus} IN ('active', 'suspended', 'closed', 'merged')`,
+    ),
+    portalLifecycleRevisionCheck: check(
+      "partner_accounts_portal_lifecycle_revision_check",
+      sql`${table.portalLifecycleRevision} > 0`,
+    ),
+    portalLifecycleEvidenceCheck: check(
+      "partner_accounts_portal_lifecycle_evidence_check",
+      sql`${table.portalLifecycleStatus} = 'active' OR (${table.portalLifecycleChangedAt} IS NOT NULL AND ${table.portalLifecycleChangedByTeamMemberId} IS NOT NULL AND length(btrim(${table.portalLifecycleReason})) BETWEEN 20 AND 1000)`,
+    ),
+    portalLifecycleAccessCheck: check(
+      "partner_accounts_portal_lifecycle_access_check",
+      sql`${table.portalLifecycleStatus} = 'active' OR (${table.portalAccessEnabled} IS false AND ${table.portalLifecyclePriorAccessEnabled} IS NOT NULL)`,
+    ),
+    mergeShapeCheck: check(
+      "partner_accounts_merge_shape_check",
+      sql`(${table.portalLifecycleStatus} = 'merged') = (${table.mergedIntoPartnerAccountId} IS NOT NULL) AND ${table.mergedIntoPartnerAccountId} IS DISTINCT FROM ${table.id}`,
+    ),
+    serviceContactShapeCheck: check(
+      "partner_accounts_service_contact_shape_check",
+      sql`(
+        ${table.serviceContactName} IS NULL
+        AND ${table.serviceContactEmail} IS NULL
+        AND ${table.serviceContactPhoneE164} IS NULL
+      ) OR (
+        ${table.serviceContactName} IS NOT NULL
+        AND ${table.serviceContactEmail} IS NOT NULL
+        AND length(btrim(${table.serviceContactName})) BETWEEN 1 AND 160
+        AND ${table.serviceContactEmail} = lower(btrim(${table.serviceContactEmail}))
+        AND length(${table.serviceContactEmail}) BETWEEN 3 AND 254
+        AND ${table.serviceContactEmail} !~ '[[:space:]]'
+        AND ${table.serviceContactEmail} LIKE '%@%'
+        AND (${table.serviceContactPhoneE164} IS NULL OR ${table.serviceContactPhoneE164} ~ '^\\+[1-9][0-9]{7,14}$')
+      )`,
+    ),
+    billingContactShapeCheck: check(
+      "partner_accounts_billing_contact_shape_check",
+      sql`(
+        ${table.billingContactName} IS NULL
+        AND ${table.billingContactEmail} IS NULL
+        AND ${table.billingContactPhoneE164} IS NULL
+      ) OR (
+        ${table.billingContactName} IS NOT NULL
+        AND ${table.billingContactEmail} IS NOT NULL
+        AND length(btrim(${table.billingContactName})) BETWEEN 1 AND 160
+        AND ${table.billingContactEmail} = lower(btrim(${table.billingContactEmail}))
+        AND length(${table.billingContactEmail}) BETWEEN 3 AND 254
+        AND ${table.billingContactEmail} !~ '[[:space:]]'
+        AND ${table.billingContactEmail} LIKE '%@%'
+        AND (${table.billingContactPhoneE164} IS NULL OR ${table.billingContactPhoneE164} ~ '^\\+[1-9][0-9]{7,14}$')
+      )`,
+    ),
+    billingAddressShapeCheck: check(
+      "partner_accounts_billing_address_shape_check",
+      sql`(
+        ${table.billingAddressLine1} IS NULL
+        AND ${table.billingAddressLine2} IS NULL
+        AND ${table.billingAddressCity} IS NULL
+        AND ${table.billingAddressState} IS NULL
+        AND ${table.billingAddressPostalCode} IS NULL
+        AND ${table.billingAddressCountry} IS NULL
+      ) OR (
+        ${table.billingAddressLine1} IS NOT NULL
+        AND ${table.billingAddressCity} IS NOT NULL
+        AND ${table.billingAddressState} IS NOT NULL
+        AND ${table.billingAddressPostalCode} IS NOT NULL
+        AND ${table.billingAddressCountry} IS NOT NULL
+        AND length(btrim(${table.billingAddressLine1})) BETWEEN 1 AND 200
+        AND (${table.billingAddressLine2} IS NULL OR length(btrim(${table.billingAddressLine2})) BETWEEN 1 AND 200)
+        AND length(btrim(${table.billingAddressCity})) BETWEEN 1 AND 120
+        AND length(btrim(${table.billingAddressState})) BETWEEN 1 AND 64
+        AND length(btrim(${table.billingAddressPostalCode})) BETWEEN 1 AND 20
+        AND ${table.billingAddressCountry} ~ '^[A-Z]{2}$'
+      )`,
+    ),
+    defaultPoNumberCheck: check(
+      "partner_accounts_default_po_number_check",
+      sql`${table.defaultPoNumber} IS NULL OR length(btrim(${table.defaultPoNumber})) BETWEEN 1 AND 80`,
+    ),
+    costCenterGuidanceCheck: check(
+      "partner_accounts_cost_center_guidance_check",
+      sql`${table.costCenterGuidance} IS NULL OR length(btrim(${table.costCenterGuidance})) BETWEEN 1 AND 500`,
     ),
   }),
 );
@@ -644,6 +805,8 @@ export const teamMembers = pgTable(
     fixedCrewJobRateBps: integer("fixed_crew_job_rate_bps"),
     passwordHash: text("password_hash"),
     passwordSetAt: timestamp("password_set_at", { withTimezone: true }),
+    mfaRequired: boolean("mfa_required").default(false).notNull(),
+    mfaEnrolledAt: timestamp("mfa_enrolled_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -672,6 +835,62 @@ export const teamMembers = pgTable(
     emailIdentityCheck: check(
       "team_members_email_identity_state",
       sql`(${table.emailIdentityStatus} = 'ready' AND ${table.email} IS NOT NULL AND ${table.emailNormalized} = ${table.email}) OR (${table.emailIdentityStatus} = 'needs_review' AND ${table.email} IS NOT NULL AND ${table.emailNormalized} IS NULL) OR (${table.emailIdentityStatus} = 'none' AND ${table.email} IS NULL AND ${table.emailNormalized} IS NULL)`,
+    ),
+  }),
+);
+
+export const partnerAccountDomains = pgTable(
+  "partner_account_domains",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "cascade" }),
+    normalizedDomain: varchar("normalized_domain", { length: 253 }).notNull(),
+    status: text("status")
+      .$type<"pending" | "verified" | "revoked">()
+      .default("pending")
+      .notNull(),
+    verificationMethod: text("verification_method"),
+    verificationEvidence: text("verification_evidence"),
+    verifiedByTeamMemberId: uuid("verified_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    revokedByTeamMemberId: uuid("revoked_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    accountDomainKey: uniqueIndex(
+      "partner_account_domains_account_domain_key",
+    ).on(table.partnerAccountId, table.normalizedDomain),
+    domainStatusIdx: index("partner_account_domains_domain_status_idx").on(
+      table.normalizedDomain,
+      table.status,
+      table.partnerAccountId,
+    ),
+    domainCheck: check(
+      "partner_account_domains_domain_check",
+      sql`${table.normalizedDomain} = lower(btrim(${table.normalizedDomain})) AND length(${table.normalizedDomain}) BETWEEN 3 AND 253 AND ${table.normalizedDomain} ~ '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$'`,
+    ),
+    statusCheck: check(
+      "partner_account_domains_status_check",
+      sql`${table.status} IN ('pending', 'verified', 'revoked')`,
+    ),
+    lifecycleCheck: check(
+      "partner_account_domains_lifecycle_check",
+      sql`(${table.status} = 'pending' AND ${table.verifiedAt} IS NULL AND ${table.verifiedByTeamMemberId} IS NULL AND ${table.revokedAt} IS NULL AND ${table.revokedByTeamMemberId} IS NULL) OR (${table.status} = 'verified' AND ${table.verifiedAt} IS NOT NULL AND ${table.verifiedByTeamMemberId} IS NOT NULL AND ${table.verificationMethod} IS NOT NULL AND ${table.verificationEvidence} IS NOT NULL AND ${table.revokedAt} IS NULL AND ${table.revokedByTeamMemberId} IS NULL) OR (${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL AND ${table.revokedByTeamMemberId} IS NOT NULL)`,
     ),
   }),
 );
@@ -857,6 +1076,11 @@ export const teamSessions = pgTable(
       .$type<"team_session" | "break_glass">()
       .default("team_session")
       .notNull(),
+    assuranceLevel: text("assurance_level")
+      .$type<"aal1" | "aal2">()
+      .default("aal1")
+      .notNull(),
+    mfaVerifiedAt: timestamp("mfa_verified_at", { withTimezone: true }),
     ip: text("ip"),
     userAgent: text("user_agent"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -872,6 +1096,137 @@ export const teamSessions = pgTable(
     sessionHashIdx: uniqueIndex("team_sessions_hash_key").on(table.sessionHash),
     memberIdx: index("team_sessions_member_idx").on(table.teamMemberId),
     expiresIdx: index("team_sessions_expires_idx").on(table.expiresAt),
+    assuranceLevelCheck: check(
+      "team_sessions_assurance_level_check",
+      sql`${table.assuranceLevel} IN ('aal1', 'aal2')`,
+    ),
+    assuranceStateCheck: check(
+      "team_sessions_assurance_state_check",
+      sql`(${table.assuranceLevel} = 'aal1' AND ${table.mfaVerifiedAt} IS NULL) OR (${table.assuranceLevel} = 'aal2' AND ${table.mfaVerifiedAt} IS NOT NULL AND ${table.authMethod} = 'team_session')`,
+    ),
+  }),
+);
+
+/** Team MFA is deliberately stored separately from partner MFA identities. */
+export const teamMfaMethods = pgTable(
+  "team_mfa_methods",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    teamMemberId: uuid("team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "cascade" }),
+    methodType: text("method_type").$type<"totp">().notNull(),
+    label: text("label"),
+    totpSecretCiphertext: text("totp_secret_ciphertext").notNull(),
+    totpSecretKeyVersion: integer("totp_secret_key_version").notNull(),
+    lastTotpCounter: integer("last_totp_counter"),
+    enabled: boolean("enabled").default(true).notNull(),
+    enrolledAt: timestamp("enrolled_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    memberIdx: index("team_mfa_methods_member_idx").on(
+      table.teamMemberId,
+      table.enabled,
+    ),
+    oneActiveTotpKey: uniqueIndex("team_mfa_methods_active_totp_key")
+      .on(table.teamMemberId)
+      .where(sql`${table.methodType} = 'totp' AND ${table.enabled} = true`),
+    methodTypeCheck: check(
+      "team_mfa_methods_type_check",
+      sql`${table.methodType} = 'totp'`,
+    ),
+    enabledStateCheck: check(
+      "team_mfa_methods_enabled_state_check",
+      sql`(${table.enabled} = true AND ${table.disabledAt} IS NULL) OR (${table.enabled} = false AND ${table.disabledAt} IS NOT NULL)`,
+    ),
+    keyVersionCheck: check(
+      "team_mfa_methods_key_version_check",
+      sql`${table.totpSecretKeyVersion} > 0`,
+    ),
+    lastTotpCounterCheck: check(
+      "team_mfa_methods_last_counter_check",
+      sql`${table.lastTotpCounter} IS NULL OR ${table.lastTotpCounter} >= 0`,
+    ),
+  }),
+);
+
+export const teamMfaEnrollmentChallenges = pgTable(
+  "team_mfa_enrollment_challenges",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    teamMemberId: uuid("team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "cascade" }),
+    secretCiphertext: text("secret_ciphertext").notNull(),
+    secretKeyVersion: integer("secret_key_version").notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    activeMemberKey: uniqueIndex("team_mfa_enrollment_active_member_key")
+      .on(table.teamMemberId)
+      .where(sql`${table.consumedAt} IS NULL`),
+    expiryIdx: index("team_mfa_enrollment_expiry_idx").on(
+      table.expiresAt,
+      table.consumedAt,
+    ),
+    keyVersionCheck: check(
+      "team_mfa_enrollment_key_version_check",
+      sql`${table.secretKeyVersion} > 0`,
+    ),
+    attemptCountCheck: check(
+      "team_mfa_enrollment_attempt_count_check",
+      sql`${table.attemptCount} BETWEEN 0 AND 8`,
+    ),
+  }),
+);
+
+export const teamMfaRecoveryCodes = pgTable(
+  "team_mfa_recovery_codes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    methodId: uuid("method_id")
+      .notNull()
+      .references(() => teamMfaMethods.id, { onDelete: "cascade" }),
+    codeHash: varchar("code_hash", { length: 64 }).notNull(),
+    keyVersion: integer("key_version").notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    methodCodeKey: uniqueIndex("team_mfa_recovery_method_code_key").on(
+      table.methodId,
+      table.codeHash,
+    ),
+    unusedIdx: index("team_mfa_recovery_unused_idx").on(
+      table.methodId,
+      table.usedAt,
+    ),
+    codeHashCheck: check(
+      "team_mfa_recovery_code_hash_check",
+      sql`${table.codeHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    keyVersionCheck: check(
+      "team_mfa_recovery_key_version_check",
+      sql`${table.keyVersion} > 0`,
+    ),
   }),
 );
 
@@ -914,7 +1269,7 @@ export const auditLogs = pgTable(
     cursorIdx: index("audit_logs_cursor_idx").on(table.createdAt, table.id),
     authMethodCheck: check(
       "audit_logs_auth_method_check",
-      sql`${table.authMethod} IS NULL OR ${table.authMethod} IN ('team_session', 'break_glass', 'partner_session', 'service')`,
+      sql`${table.authMethod} IS NULL OR ${table.authMethod} IN ('team_session', 'break_glass', 'partner_session', 'partner_pre_auth', 'magic_link', 'password', 'mfa_step_up', 'verified_email_session', 'service')`,
     ),
     outcomeCheck: check(
       "audit_logs_outcome_check",
@@ -1529,6 +1884,10 @@ export const conversationThreads = pgTable(
       { onDelete: "restrict" },
     ),
     partnerBookingId: uuid("partner_booking_id"),
+    staffScope: text("staff_scope")
+      .$type<"general" | "partner_billing">()
+      .default("general")
+      .notNull(),
     portalVisible: boolean("portal_visible").default(false).notNull(),
     status: conversationThreadStatusEnum("status").default("open").notNull(),
     state: conversationStateEnum("state").default("new").notNull(),
@@ -1565,6 +1924,9 @@ export const conversationThreads = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => ({
+    partnerAccountIdKey: uniqueIndex(
+      "conversation_threads_partner_account_id_key",
+    ).on(table.partnerAccountId, table.id),
     salesOpportunityIdx: index("conversation_threads_sales_opportunity_idx").on(
       table.salesOpportunityId,
     ),
@@ -1587,6 +1949,14 @@ export const conversationThreads = pgTable(
       .where(
         sql`${table.partnerAccountId} IS NOT NULL AND ${table.partnerBookingId} IS NOT NULL AND ${table.portalVisible} = true`,
       ),
+    staffScopeCheck: check(
+      "conversation_threads_staff_scope_check",
+      sql`${table.staffScope} IN ('general', 'partner_billing')`,
+    ),
+    billingScopeBindingCheck: check(
+      "conversation_threads_billing_scope_binding_check",
+      sql`${table.staffScope} <> 'partner_billing' OR (${table.partnerAccountId} IS NOT NULL AND ${table.partnerBookingId} IS NULL AND ${table.portalVisible} IS true)`,
+    ),
   }),
 );
 
@@ -1697,15 +2067,30 @@ export const partnerUsers = pgTable(
   "partner_users",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    orgContactId: uuid("org_contact_id")
-      .notNull()
-      .references(() => contacts.id, { onDelete: "cascade" }),
+    orgContactId: uuid("org_contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
     email: text("email").notNull(),
+    // Authentication uses the canonical normalized address. The original
+    // email remains the user-facing value during the legacy cutover.
+    normalizedEmail: text("normalized_email"),
     phone: text("phone"),
     phoneE164: text("phone_e164"),
     name: text("name").notNull(),
     active: boolean("active").default(true).notNull(),
+    identityStatus: text("identity_status")
+      .$type<
+        | "pending_activation"
+        | "active"
+        | "suspended"
+        | "disabled"
+        | "quarantined"
+      >()
+      .default("active")
+      .notNull(),
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
     passwordHash: text("password_hash"),
+    passwordHashVersion: integer("password_hash_version").default(1).notNull(),
     passwordSetAt: timestamp("password_set_at", { withTimezone: true }),
     mfaRequired: boolean("mfa_required").default(false).notNull(),
     mfaEnrolledAt: timestamp("mfa_enrolled_at", { withTimezone: true }),
@@ -1722,6 +2107,9 @@ export const partnerUsers = pgTable(
   },
   (table) => ({
     emailIdx: uniqueIndex("partner_users_email_key").on(table.email),
+    normalizedEmailIdx: uniqueIndex("partner_users_normalized_email_key")
+      .on(table.normalizedEmail)
+      .where(sql`${table.normalizedEmail} IS NOT NULL`),
     phoneE164Idx: uniqueIndex("partner_users_phone_e164_key").on(
       table.phoneE164,
     ),
@@ -1731,6 +2119,18 @@ export const partnerUsers = pgTable(
     securityVersionCheck: check(
       "partner_users_security_version_check",
       sql`${table.securityVersion} > 0`,
+    ),
+    normalizedEmailCheck: check(
+      "partner_users_normalized_email_check",
+      sql`${table.normalizedEmail} IS NULL OR (${table.normalizedEmail} = lower(btrim(${table.normalizedEmail})) AND length(${table.normalizedEmail}) BETWEEN 3 AND 254 AND ${table.normalizedEmail} !~ '[[:space:]]' AND ${table.normalizedEmail} LIKE '%@%')`,
+    ),
+    identityStatusCheck: check(
+      "partner_users_identity_status_check",
+      sql`${table.identityStatus} IN ('pending_activation', 'active', 'suspended', 'disabled', 'quarantined')`,
+    ),
+    passwordHashVersionCheck: check(
+      "partner_users_password_hash_version_check",
+      sql`${table.passwordHashVersion} > 0`,
     ),
   }),
 );
@@ -2104,6 +2504,11 @@ export const partnerMfaEnrollmentChallenges = pgTable(
     partnerUserId: uuid("partner_user_id")
       .notNull()
       .references(() => partnerUsers.id, { onDelete: "cascade" }),
+    // Migration 0141 owns this FK because partnerAuthTransactions is declared
+    // after the MFA tables. A value here makes activation bootstrap material
+    // usable only by the exact one-use pre-authentication transaction that
+    // created it.
+    authTransactionId: uuid("auth_transaction_id"),
     secretCiphertext: text("secret_ciphertext").notNull(),
     secretKeyVersion: integer("secret_key_version").notNull(),
     attemptCount: integer("attempt_count").default(0).notNull(),
@@ -2117,6 +2522,11 @@ export const partnerMfaEnrollmentChallenges = pgTable(
     activeUserKey: uniqueIndex("partner_mfa_enrollment_active_user_key")
       .on(table.partnerUserId)
       .where(sql`${table.consumedAt} IS NULL`),
+    authTransactionKey: uniqueIndex(
+      "partner_mfa_enrollment_auth_transaction_key",
+    )
+      .on(table.authTransactionId)
+      .where(sql`${table.authTransactionId} IS NOT NULL`),
     expiryIdx: index("partner_mfa_enrollment_expiry_idx").on(
       table.expiresAt,
       table.consumedAt,
@@ -2282,6 +2692,17 @@ export type PartnerMembershipPreferences = {
   locale?: string | null;
   defaultPropertyId?: string | null;
   notificationChannels?: Array<"email" | "sms" | "in_portal">;
+  onboardingChecklist?: {
+    version: 1;
+    completedSteps?: Array<
+      | "first_location"
+      | "communication_preferences"
+      | "proof_defaults"
+      | "billing_details"
+      | "teammates"
+    >;
+    dismissedAt?: string | null;
+  };
 };
 
 export const partnerAccountMemberships = pgTable(
@@ -2332,6 +2753,20 @@ export const partnerAccountMemberships = pgTable(
     acceptedAt: timestamp("accepted_at", { withTimezone: true }),
     suspendedAt: timestamp("suspended_at", { withTimezone: true }),
     removedAt: timestamp("removed_at", { withTimezone: true }),
+    migrationReviewStatus: text("migration_review_status")
+      .$type<"not_required" | "pending" | "approved" | "quarantined">()
+      .default("not_required")
+      .notNull(),
+    migrationLegacyRoleKey: varchar("migration_legacy_role_key", {
+      length: 64,
+    }),
+    migrationReviewedByTeamMemberId: uuid(
+      "migration_reviewed_by_team_member_id",
+    ).references(() => teamMembers.id, { onDelete: "set null" }),
+    migrationReviewedAt: timestamp("migration_reviewed_at", {
+      withTimezone: true,
+    }),
+    migrationReviewNote: text("migration_review_note"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -2345,6 +2780,9 @@ export const partnerAccountMemberships = pgTable(
       table.id,
       table.partnerAccountId,
     ),
+    idAccountUserKey: uniqueIndex(
+      "partner_account_memberships_id_account_user_key",
+    ).on(table.id, table.partnerAccountId, table.partnerUserId),
     accountUserKey: uniqueIndex(
       "partner_account_memberships_account_user_key",
     ).on(table.partnerAccountId, table.partnerUserId),
@@ -2401,6 +2839,14 @@ export const partnerAccountMemberships = pgTable(
         AND ${table.removedAt} IS NOT NULL
       )`,
     ),
+    migrationReviewCheck: check(
+      "partner_account_memberships_migration_review_check",
+      sql`${table.migrationReviewStatus} IN ('not_required', 'pending', 'approved', 'quarantined')`,
+    ),
+    migrationReviewEvidenceCheck: check(
+      "partner_account_memberships_migration_review_evidence_check",
+      sql`(${table.migrationReviewStatus} = 'approved' AND ${table.migrationReviewedAt} IS NOT NULL AND ${table.migrationReviewedByTeamMemberId} IS NOT NULL) OR (${table.migrationReviewStatus} <> 'approved')`,
+    ),
   }),
 );
 
@@ -2436,6 +2882,10 @@ export const partnerAccountInvitations = pgTable(
       .references(() => partnerRoleTemplates.id, { onDelete: "restrict" }),
     roleTemplateVersion: integer("role_template_version").notNull(),
     roleKey: varchar("role_key", { length: 64 }).notNull(),
+    accessLevel: text("access_level")
+      .$type<"account" | "scoped">()
+      .default("account")
+      .notNull(),
     persona: varchar("persona", { length: 64 })
       .$type<PartnerPersona>()
       .default("other")
@@ -2485,6 +2935,9 @@ export const partnerAccountInvitations = pgTable(
     )
       .on(table.partnerAccountId, table.normalizedEmail)
       .where(sql`${table.status} = 'pending'`),
+    accountInvitationKey: uniqueIndex(
+      "partner_account_invitations_account_invitation_key",
+    ).on(table.partnerAccountId, table.id),
     tokenHashKey: uniqueIndex("partner_account_invitations_token_hash_key")
       .on(table.tokenHash)
       .where(sql`${table.tokenHash} IS NOT NULL`),
@@ -2510,6 +2963,14 @@ export const partnerAccountInvitations = pgTable(
     roleKeyCheck: check(
       "partner_account_invitations_role_key_check",
       sql`${table.roleKey} ~ '^[a-z][a-z0-9_]{1,63}$'`,
+    ),
+    accessLevelCheck: check(
+      "partner_account_invitations_access_level_check",
+      sql`${table.accessLevel} IN ('account', 'scoped')`,
+    ),
+    administratorScopeCheck: check(
+      "partner_account_invitations_administrator_scope_check",
+      sql`${table.roleKey} <> 'administrator' OR ${table.accessLevel} = 'account'`,
     ),
     personaCheck: check(
       "partner_account_invitations_persona_check",
@@ -2578,6 +3039,277 @@ export const partnerAccountInvitations = pgTable(
   }),
 );
 
+export type PartnerAuthChallengePurpose =
+  | "email_verification"
+  | "account_activation"
+  | "password_reset"
+  | "email_change";
+export type PartnerAuthChallengeStatus =
+  | "pending"
+  | "consumed"
+  | "revoked"
+  | "expired";
+export type PartnerAuthChallengeDeliveryStatus =
+  | "queued"
+  | "dispatching"
+  | "accepted"
+  | "failed"
+  | "reconciliation_required";
+
+/**
+ * Purpose-bound mailbox credentials. A purpose-specific handler must match
+ * both purpose and subject before consuming a digest, so these credentials
+ * can never be exchanged by the legacy routine-login path.
+ */
+export const partnerAuthChallenges = pgTable(
+  "partner_auth_challenges",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    purpose: text("purpose").$type<PartnerAuthChallengePurpose>().notNull(),
+    status: text("status")
+      .$type<PartnerAuthChallengeStatus>()
+      .default("pending")
+      .notNull(),
+    normalizedEmail: text("normalized_email").notNull(),
+    tokenHash: varchar("token_hash", { length: 64 }),
+    generation: integer("generation").default(1).notNull(),
+    partnerUserId: uuid("partner_user_id").references(() => partnerUsers.id, {
+      onDelete: "cascade",
+    }),
+    partnerAccountId: uuid("partner_account_id").references(
+      () => partnerAccounts.id,
+      { onDelete: "restrict" },
+    ),
+    partnerMembershipId: uuid("partner_membership_id").references(
+      () => partnerAccountMemberships.id,
+      { onDelete: "cascade" },
+    ),
+    // Migration 0131 owns this FK because applications are declared below.
+    applicationId: uuid("application_id"),
+    securityVersionSnapshot: integer("security_version_snapshot"),
+    requestedIp: text("requested_ip"),
+    requestedUserAgent: text("requested_user_agent"),
+    consumedIp: text("consumed_ip"),
+    consumedUserAgent: text("consumed_user_agent"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    expiredAt: timestamp("expired_at", { withTimezone: true }),
+    deliveryStatus: text("delivery_status")
+      .$type<PartnerAuthChallengeDeliveryStatus>()
+      .default("queued")
+      .notNull(),
+    deliveryOutboxEventId: uuid("delivery_outbox_event_id"),
+    deliveryAttemptId: uuid("delivery_attempt_id"),
+    deliveryProvider: text("delivery_provider"),
+    deliveryProviderMessageId: text("delivery_provider_message_id"),
+    deliveryDetail: text("delivery_detail"),
+    dispatchStartedAt: timestamp("dispatch_started_at", {
+      withTimezone: true,
+    }),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    tokenHashKey: uniqueIndex("partner_auth_challenges_token_hash_key")
+      .on(table.tokenHash)
+      .where(sql`${table.tokenHash} IS NOT NULL`),
+    activeMailboxPurposeEmailKey: uniqueIndex(
+      "partner_auth_challenges_active_mailbox_purpose_email_key",
+    )
+      .on(table.purpose, table.normalizedEmail)
+      .where(
+        sql`${table.status} = 'pending' AND ${table.purpose} <> 'account_activation'`,
+      ),
+    activeActivationMembershipKey: uniqueIndex(
+      "partner_auth_challenges_active_activation_membership_key",
+    )
+      .on(table.purpose, table.partnerAccountId, table.partnerMembershipId)
+      .where(
+        sql`${table.status} = 'pending' AND ${table.purpose} = 'account_activation'`,
+      ),
+    activeEmailChangeUserKey: uniqueIndex(
+      "partner_auth_challenges_active_email_change_user_key",
+    )
+      .on(table.partnerUserId)
+      .where(
+        sql`${table.status} = 'pending' AND ${table.purpose} = 'email_change'`,
+      ),
+    subjectIdx: index("partner_auth_challenges_subject_idx").on(
+      table.partnerUserId,
+      table.purpose,
+      table.status,
+    ),
+    expiryIdx: index("partner_auth_challenges_expiry_idx").on(
+      table.status,
+      table.expiresAt,
+    ),
+    purposeCheck: check(
+      "partner_auth_challenges_purpose_check",
+      sql`${table.purpose} IN ('email_verification', 'account_activation', 'password_reset', 'email_change')`,
+    ),
+    subjectCheck: check(
+      "partner_auth_challenges_subject_check",
+      sql`(
+        ${table.purpose} = 'email_verification'
+        AND ${table.partnerUserId} IS NULL
+        AND ${table.partnerAccountId} IS NULL
+        AND ${table.partnerMembershipId} IS NULL
+        AND ${table.securityVersionSnapshot} IS NULL
+      ) OR (
+        ${table.purpose} = 'account_activation'
+        AND ${table.partnerUserId} IS NOT NULL
+        AND ${table.partnerAccountId} IS NOT NULL
+        AND ${table.partnerMembershipId} IS NOT NULL
+        AND ${table.securityVersionSnapshot} IS NOT NULL
+      ) OR (
+        ${table.purpose} = 'password_reset'
+        AND ${table.partnerUserId} IS NOT NULL
+        AND ${table.partnerAccountId} IS NULL
+        AND ${table.partnerMembershipId} IS NULL
+        AND ${table.applicationId} IS NULL
+        AND ${table.securityVersionSnapshot} IS NOT NULL
+      ) OR (
+        ${table.purpose} = 'email_change'
+        AND ${table.partnerUserId} IS NOT NULL
+        AND ${table.partnerAccountId} IS NOT NULL
+        AND ${table.partnerMembershipId} IS NOT NULL
+        AND ${table.applicationId} IS NULL
+        AND ${table.securityVersionSnapshot} IS NOT NULL
+      )`,
+    ),
+    accountMembershipPairCheck: check(
+      "partner_auth_challenges_account_membership_pair_check",
+      sql`(${table.partnerAccountId} IS NULL) = (${table.partnerMembershipId} IS NULL)`,
+    ),
+    membershipAccountFk: foreignKey({
+      name: "partner_auth_challenges_membership_account_fk",
+      columns: [table.partnerMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+    }).onDelete("cascade"),
+    statusCheck: check(
+      "partner_auth_challenges_status_check",
+      sql`${table.status} IN ('pending', 'consumed', 'revoked', 'expired')`,
+    ),
+    emailCheck: check(
+      "partner_auth_challenges_email_check",
+      sql`${table.normalizedEmail} = lower(btrim(${table.normalizedEmail})) AND length(${table.normalizedEmail}) BETWEEN 3 AND 254 AND ${table.normalizedEmail} !~ '[[:space:]]' AND ${table.normalizedEmail} LIKE '%@%'`,
+    ),
+    tokenHashCheck: check(
+      "partner_auth_challenges_token_hash_check",
+      sql`${table.tokenHash} IS NULL OR ${table.tokenHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    generationCheck: check(
+      "partner_auth_challenges_generation_check",
+      sql`${table.generation} > 0`,
+    ),
+    securityVersionCheck: check(
+      "partner_auth_challenges_security_version_check",
+      sql`${table.securityVersionSnapshot} IS NULL OR ${table.securityVersionSnapshot} > 0`,
+    ),
+    deliveryStatusCheck: check(
+      "partner_auth_challenges_delivery_status_check",
+      sql`${table.deliveryStatus} IN ('queued', 'dispatching', 'accepted', 'failed', 'reconciliation_required')`,
+    ),
+    lifecycleCheck: check(
+      "partner_auth_challenges_lifecycle_check",
+      sql`(
+        ${table.status} = 'pending'
+        AND ${table.tokenHash} IS NOT NULL
+        AND ${table.consumedAt} IS NULL
+        AND ${table.revokedAt} IS NULL
+        AND ${table.expiredAt} IS NULL
+      ) OR (
+        ${table.status} = 'consumed'
+        AND ${table.tokenHash} IS NULL
+        AND ${table.consumedAt} IS NOT NULL
+        AND ${table.revokedAt} IS NULL
+        AND ${table.expiredAt} IS NULL
+      ) OR (
+        ${table.status} = 'revoked'
+        AND ${table.tokenHash} IS NULL
+        AND ${table.consumedAt} IS NULL
+        AND ${table.revokedAt} IS NOT NULL
+        AND ${table.expiredAt} IS NULL
+      ) OR (
+        ${table.status} = 'expired'
+        AND ${table.tokenHash} IS NULL
+        AND ${table.consumedAt} IS NULL
+        AND ${table.revokedAt} IS NULL
+        AND ${table.expiredAt} IS NOT NULL
+      )`,
+    ),
+  }),
+);
+
+/** A verified-email applicant session has no partner tenant capabilities. */
+export const partnerApplicantSessions = pgTable(
+  "partner_applicant_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    verificationChallengeId: uuid("verification_challenge_id")
+      .notNull()
+      .references(() => partnerAuthChallenges.id, { onDelete: "restrict" }),
+    normalizedEmail: text("normalized_email").notNull(),
+    sessionHash: varchar("session_hash", { length: 64 }).notNull(),
+    // Migration 0131 owns this FK because applications are declared below.
+    applicationId: uuid("application_id"),
+    draftPayload: jsonb("draft_payload")
+      .$type<Record<string, unknown>>()
+      .default({})
+      .notNull(),
+    draftVersion: integer("draft_version").default(1).notNull(),
+    ip: text("ip"),
+    userAgent: text("user_agent"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    sessionHashKey: uniqueIndex("partner_applicant_sessions_hash_key").on(
+      table.sessionHash,
+    ),
+    challengeKey: uniqueIndex("partner_applicant_sessions_challenge_key").on(
+      table.verificationChallengeId,
+    ),
+    emailActiveIdx: index("partner_applicant_sessions_email_active_idx").on(
+      table.normalizedEmail,
+      table.revokedAt,
+      table.expiresAt,
+    ),
+    emailCheck: check(
+      "partner_applicant_sessions_email_check",
+      sql`${table.normalizedEmail} = lower(btrim(${table.normalizedEmail})) AND length(${table.normalizedEmail}) BETWEEN 3 AND 254 AND ${table.normalizedEmail} !~ '[[:space:]]' AND ${table.normalizedEmail} LIKE '%@%'`,
+    ),
+    sessionHashCheck: check(
+      "partner_applicant_sessions_hash_check",
+      sql`${table.sessionHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    draftVersionCheck: check(
+      "partner_applicant_sessions_draft_version_check",
+      sql`${table.draftVersion} > 0`,
+    ),
+  }),
+);
+
 export type PartnerAccessApplicationStatus =
   | "submitted"
   | "under_review"
@@ -2601,6 +3333,22 @@ export const partnerAccessApplications = pgTable(
     partnerType: text("partner_type").notNull(),
     serviceAreas: text("service_areas").array().notNull().default([]),
     requestedNeeds: text("requested_needs").array().notNull().default([]),
+    flowVersion: integer("flow_version").default(1).notNull(),
+    emailVerificationChallengeId: uuid(
+      "email_verification_challenge_id",
+    ).references(() => partnerAuthChallenges.id, { onDelete: "restrict" }),
+    applicantSessionId: uuid("applicant_session_id").references(
+      () => partnerApplicantSessions.id,
+      { onDelete: "restrict" },
+    ),
+    companyResolutionChoice: text("company_resolution_choice").$type<
+      "join_existing" | "create_new" | "manual_review"
+    >(),
+    companyCandidateId: varchar("company_candidate_id", { length: 64 }),
+    requestedPartnerAccountId: uuid("requested_partner_account_id").references(
+      () => partnerAccounts.id,
+      { onDelete: "restrict" },
+    ),
     status: text("status")
       .$type<PartnerAccessApplicationStatus>()
       .default("submitted")
@@ -2632,6 +3380,7 @@ export const partnerAccessApplications = pgTable(
       withTimezone: true,
     }).notNull(),
     reviewNote: text("review_note"),
+    applicantResponse: text("applicant_response"),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
     submittedAt: timestamp("submitted_at", { withTimezone: true })
       .defaultNow()
@@ -2660,6 +3409,14 @@ export const partnerAccessApplications = pgTable(
     bootstrapAccountIdx: index(
       "partner_access_applications_bootstrap_account_idx",
     ).on(table.bootstrapPartnerAccountId, table.status),
+    requestedAccountIdx: index(
+      "partner_access_applications_requested_account_idx",
+    ).on(table.requestedPartnerAccountId, table.status),
+    applicantSessionKey: uniqueIndex(
+      "partner_access_applications_applicant_session_key",
+    )
+      .on(table.applicantSessionId)
+      .where(sql`${table.applicantSessionId} IS NOT NULL`),
     identityHashCheck: check(
       "partner_access_applications_identity_hash_check",
       sql`${table.identityHash} ~ '^[0-9a-f]{64}$'`,
@@ -2672,13 +3429,36 @@ export const partnerAccessApplications = pgTable(
       "partner_access_applications_version_check",
       sql`${table.version} > 0`,
     ),
+    flowVersionCheck: check(
+      "partner_access_applications_flow_version_check",
+      sql`${table.flowVersion} IN (1, 2)`,
+    ),
+    verificationFirstCheck: check(
+      "partner_access_applications_verification_first_check",
+      sql`${table.flowVersion} <> 2 OR (${table.emailVerifiedAt} IS NOT NULL AND ${table.emailVerificationChallengeId} IS NOT NULL AND ${table.applicantSessionId} IS NOT NULL AND ${table.bootstrapPartnerAccountId} IS NULL)`,
+    ),
+    companyResolutionCheck: check(
+      "partner_access_applications_company_resolution_check",
+      sql`(
+        ${table.flowVersion} = 1
+        AND ${table.companyResolutionChoice} IS NULL
+        AND ${table.companyCandidateId} IS NULL
+        AND ${table.requestedPartnerAccountId} IS NULL
+      ) OR (
+        ${table.flowVersion} = 2
+        AND (
+          (${table.companyResolutionChoice} = 'join_existing' AND ${table.companyCandidateId} IS NOT NULL AND ${table.requestedPartnerAccountId} IS NOT NULL)
+          OR (${table.companyResolutionChoice} IN ('create_new', 'manual_review') AND ${table.companyCandidateId} IS NULL AND ${table.requestedPartnerAccountId} IS NULL)
+        )
+      )`,
+    ),
     approvalCheck: check(
       "partner_access_applications_approval_check",
       sql`${table.status} <> 'approved' OR (${table.approvedPartnerAccountId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL)`,
     ),
     approvalTenantCheck: check(
       "partner_access_applications_approval_tenant_check",
-      sql`${table.status} <> 'approved' OR (${table.bootstrapPartnerAccountId} IS NOT NULL AND ${table.approvedPartnerAccountId} = ${table.bootstrapPartnerAccountId})`,
+      sql`${table.status} <> 'approved' OR ((${table.flowVersion} = 1 AND ${table.bootstrapPartnerAccountId} IS NOT NULL AND ${table.approvedPartnerAccountId} = ${table.bootstrapPartnerAccountId}) OR (${table.flowVersion} = 2 AND ${table.bootstrapPartnerAccountId} IS NULL))`,
     ),
   }),
 );
@@ -2776,6 +3556,9 @@ export type PartnerSessionAuthMethod =
   | "passkey"
   | "mfa_step_up";
 export type PartnerAssuranceLevel = "aal1" | "aal2";
+export type PartnerAuthTransactionPurpose =
+  | "password_login_mfa"
+  | "activation_mfa_setup";
 
 export const partnerSessions = pgTable(
   "partner_sessions",
@@ -2855,6 +3638,102 @@ export const partnerSessions = pgTable(
     deviceNameCheck: check(
       "partner_sessions_device_name_check",
       sql`${table.deviceName} IS NULL OR char_length(btrim(${table.deviceName})) BETWEEN 1 AND 120`,
+    ),
+  }),
+);
+
+/**
+ * A password has been verified but no portal session exists yet. These
+ * short-lived, one-use records carry only the authority to finish MFA for the
+ * exact identity, account, membership, and security version captured here.
+ */
+export const partnerAuthTransactions = pgTable(
+  "partner_auth_transactions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerUserId: uuid("partner_user_id").notNull(),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    partnerMembershipId: uuid("partner_membership_id").notNull(),
+    tokenHash: varchar("token_hash", { length: 43 }).notNull(),
+    purpose: text("purpose")
+      .$type<PartnerAuthTransactionPurpose>()
+      .default("password_login_mfa")
+      .notNull(),
+    sourceAuthChallengeId: uuid("source_auth_challenge_id").references(
+      () => partnerAuthChallenges.id,
+      { onDelete: "restrict" },
+    ),
+    securityVersion: integer("security_version").notNull(),
+    rememberMe: boolean("remember_me").default(false).notNull(),
+    requestedIp: text("requested_ip"),
+    requestedUserAgent: text("requested_user_agent"),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    completedSessionId: uuid("completed_session_id").references(
+      () => partnerSessions.id,
+      { onDelete: "set null" },
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    tokenHashKey: uniqueIndex("partner_auth_transactions_token_hash_key").on(
+      table.tokenHash,
+    ),
+    sourceAuthChallengeKey: uniqueIndex(
+      "partner_auth_transactions_source_challenge_key",
+    )
+      .on(table.sourceAuthChallengeId)
+      .where(sql`${table.sourceAuthChallengeId} IS NOT NULL`),
+    activeUserKey: uniqueIndex("partner_auth_transactions_active_user_key")
+      .on(table.partnerUserId)
+      .where(sql`${table.consumedAt} IS NULL`),
+    expiryIdx: index("partner_auth_transactions_expiry_idx").on(
+      table.expiresAt,
+      table.consumedAt,
+    ),
+    membershipBindingFk: foreignKey({
+      columns: [
+        table.partnerMembershipId,
+        table.partnerAccountId,
+        table.partnerUserId,
+      ],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+        partnerAccountMemberships.partnerUserId,
+      ],
+      name: "partner_auth_transactions_membership_binding_fk",
+    }).onDelete("cascade"),
+    purposeCheck: check(
+      "partner_auth_transactions_purpose_check",
+      sql`${table.purpose} IN ('password_login_mfa', 'activation_mfa_setup')`,
+    ),
+    purposeSourceCheck: check(
+      "partner_auth_transactions_purpose_source_check",
+      sql`(${table.purpose} = 'password_login_mfa' AND ${table.sourceAuthChallengeId} IS NULL) OR (${table.purpose} = 'activation_mfa_setup' AND ${table.sourceAuthChallengeId} IS NOT NULL)`,
+    ),
+    tokenHashCheck: check(
+      "partner_auth_transactions_token_hash_check",
+      sql`${table.tokenHash} ~ '^[A-Za-z0-9_-]{43}$'`,
+    ),
+    securityVersionCheck: check(
+      "partner_auth_transactions_security_version_check",
+      sql`${table.securityVersion} > 0`,
+    ),
+    attemptCountCheck: check(
+      "partner_auth_transactions_attempt_count_check",
+      sql`${table.attemptCount} BETWEEN 0 AND 8`,
+    ),
+    expiryCheck: check(
+      "partner_auth_transactions_expiry_check",
+      sql`${table.expiresAt} > ${table.createdAt} AND ${table.expiresAt} <= ${table.createdAt} + interval '10 minutes'`,
+    ),
+    completionCheck: check(
+      "partner_auth_transactions_completion_check",
+      sql`${table.completedSessionId} IS NULL OR ${table.consumedAt} IS NOT NULL`,
     ),
   }),
 );
@@ -4758,6 +5637,11 @@ export const webEventCountsDaily = pgTable(
     dateIdx: index("web_event_counts_daily_date_idx").on(table.dateStart),
     eventIdx: index("web_event_counts_daily_event_idx").on(table.event),
     pathIdx: index("web_event_counts_daily_path_idx").on(table.path),
+    partnerFunnelDateKeyIdx: index(
+      "web_event_counts_daily_partner_funnel_date_key_idx",
+    )
+      .on(table.dateStart, table.key)
+      .where(sql`${table.event} = 'partner_funnel'`),
   }),
 );
 
@@ -4909,6 +5793,10 @@ export const appointments = pgTable(
       withTimezone: true,
     }),
     schedulePolicyRevision: text("schedule_policy_revision"),
+    resourceAssignmentSnapshot: jsonb("resource_assignment_snapshot")
+      .$type<AppointmentResourceAssignmentSnapshot[]>()
+      .notNull()
+      .default([]),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -4949,6 +5837,10 @@ export const appointments = pgTable(
     arrivalWindowCheck: check(
       "appointments_arrival_window_check",
       sql`(${table.promisedArrivalStartAt} IS NULL AND ${table.promisedArrivalEndAt} IS NULL) OR (${table.promisedArrivalStartAt} IS NOT NULL AND ${table.promisedArrivalEndAt} > ${table.promisedArrivalStartAt})`,
+    ),
+    resourceAssignmentSnapshotCheck: check(
+      "appointments_resource_assignment_snapshot_check",
+      sql`jsonb_typeof(${table.resourceAssignmentSnapshot}) = 'array'`,
     ),
     quoteSchedulingTimezoneCheck: check(
       "appointments_quote_scheduling_timezone_check",
@@ -4999,6 +5891,10 @@ export const appointmentHolds = pgTable(
     }),
     policyRevision: text("policy_revision"),
     serviceProfileRevision: integer("service_profile_revision"),
+    resourceAssignmentSnapshot: jsonb("resource_assignment_snapshot")
+      .$type<AppointmentResourceAssignmentSnapshot[]>()
+      .notNull()
+      .default([]),
     idempotencyKeyHash: varchar("idempotency_key_hash", { length: 64 }),
     status: text("status").default("active").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -5055,6 +5951,10 @@ export const appointmentHolds = pgTable(
       "appointment_holds_arrival_window_check",
       sql`(${table.arrivalWindowStartAt} IS NULL AND ${table.arrivalWindowEndAt} IS NULL) OR (${table.arrivalWindowStartAt} IS NOT NULL AND ${table.arrivalWindowEndAt} > ${table.arrivalWindowStartAt})`,
     ),
+    resourceAssignmentSnapshotCheck: check(
+      "appointment_holds_resource_assignment_snapshot_check",
+      sql`jsonb_typeof(${table.resourceAssignmentSnapshot}) = 'array'`,
+    ),
     quoteVersionLinkCheck: check(
       "appointment_holds_quote_version_link_check",
       sql`${table.quoteVersionId} IS NULL OR ${table.fullQuoteId} IS NOT NULL`,
@@ -5106,6 +6006,10 @@ export const mediaAssets = pgTable(
   "media_assets",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id").references(
+      () => partnerAccounts.id,
+      { onDelete: "restrict" },
+    ),
     storageProvider: text("storage_provider").default("r2").notNull(),
     storageBucket: text("storage_bucket").notNull(),
     originalObjectKey: text("original_object_key").notNull(),
@@ -5149,6 +6053,10 @@ export const mediaAssets = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => ({
+    idPartnerAccountKey: uniqueIndex("media_assets_id_partner_account_key").on(
+      table.id,
+      table.partnerAccountId,
+    ),
     sourceKeyIdx: uniqueIndex("media_assets_source_key_key").on(
       table.sourceKey,
     ),
@@ -5468,6 +6376,19 @@ export const partnerBookings = pgTable(
       table.propertyId,
       table.createdAt,
     ),
+    accountCreatedIdx: index("partner_bookings_account_created_id_idx")
+      .on(table.partnerAccountId, table.createdAt, table.id)
+      .where(sql`${table.partnerAccountId} IS NOT NULL`),
+    accountServiceCreatedIdx: index(
+      "partner_bookings_account_service_created_id_idx",
+    )
+      .on(table.partnerAccountId, table.serviceKey, table.createdAt, table.id)
+      .where(sql`${table.partnerAccountId} IS NOT NULL`),
+    accountPropertyCreatedIdx: index(
+      "partner_bookings_account_property_created_id_idx",
+    )
+      .on(table.partnerAccountId, table.propertyId, table.createdAt, table.id)
+      .where(sql`${table.partnerAccountId} IS NOT NULL`),
     createOperationKeyIdx: uniqueIndex(
       "partner_bookings_create_operation_key_hash_key",
     )
@@ -5612,7 +6533,7 @@ export const staffNotificationOperations = pgTable(
     ),
     kindCheck: check(
       "staff_notification_operations_kind_check",
-      sql`${table.kind} IN ('partner_booking_created', 'partner_booking_canceled')`,
+      sql`${table.kind} IN ('partner_booking_created', 'partner_booking_canceled', 'partner_billing_dispute_requested')`,
     ),
     recipientCheck: check(
       "staff_notification_operations_recipient_check",
@@ -6041,6 +6962,10 @@ export const quotes = pgTable(
     salesOpportunityId: uuid("sales_opportunity_id"),
     currentVersionId: uuid("current_version_id"),
     publishedVersionId: uuid("published_version_id"),
+    partnerAccountId: uuid("partner_account_id").references(
+      () => partnerAccounts.id,
+      { onDelete: "restrict" },
+    ),
     engineVersion: text("engine_version").default("legacy").notNull(),
     aggregateState: text("aggregate_state"),
     aggregateRevision: integer("aggregate_revision"),
@@ -6106,6 +7031,18 @@ export const quotes = pgTable(
     publishedVersionIdx: index("quotes_published_version_idx").on(
       table.publishedVersionId,
     ),
+    idPartnerAccountKey: uniqueIndex("quotes_id_partner_account_key").on(
+      table.id,
+      table.partnerAccountId,
+    ),
+    partnerAccountStateIdx: index("quotes_partner_account_state_idx")
+      .on(
+        table.partnerAccountId,
+        table.aggregateState,
+        table.updatedAt,
+        table.id,
+      )
+      .where(sql`${table.partnerAccountId} IS NOT NULL`),
     aggregateStateIdx: index("quotes_aggregate_state_idx").on(
       table.engineVersion,
       table.aggregateState,
@@ -6119,6 +7056,10 @@ export const quotes = pgTable(
       .where(
         sql`${table.engineVersion} = 'v2' AND ${table.quoteNumber} IS NOT NULL`,
       ),
+    partnerAccountEngineCheck: check(
+      "quotes_partner_account_engine_check",
+      sql`${table.partnerAccountId} IS NULL OR ${table.engineVersion} = 'v2'`,
+    ),
     shareTokenIdx: uniqueIndex("quotes_share_token_key").on(table.shareToken),
     acceptedAppointmentIdx: index("quotes_accepted_appointment_idx").on(
       table.acceptedAppointmentId,
@@ -8032,6 +8973,27 @@ export const partnerAccountLocations = pgTable(
     serviceAreaStatus: text("service_area_status")
       .default("unverified")
       .notNull(),
+    addressVerificationStatus: text("address_verification_status")
+      .$type<
+        | "verified"
+        | "suggested_correction"
+        | "review_required"
+        | "staff_verified"
+      >()
+      .default("review_required")
+      .notNull(),
+    addressVerificationProvider: text("address_verification_provider")
+      .$type<"mapbox" | "manual" | "legacy" | "none">()
+      .default("none")
+      .notNull(),
+    addressVerificationConfidence: integer("address_verification_confidence"),
+    addressVerificationFeatureId: text("address_verification_feature_id"),
+    addressVerificationSuggestion: jsonb(
+      "address_verification_suggestion",
+    ).$type<Record<string, unknown> | null>(),
+    addressVerifiedAt: timestamp("address_verified_at", {
+      withTimezone: true,
+    }),
     accessInstructions: text("access_instructions"),
     parkingInstructions: text("parking_instructions"),
     loadingInstructions: text("loading_instructions"),
@@ -8041,6 +9003,11 @@ export const partnerAccountLocations = pgTable(
       string,
       unknown
     > | null>(),
+    parentLocationId: uuid("parent_location_id"),
+    mergedIntoLocationId: uuid("merged_into_location_id"),
+    mergedAt: timestamp("merged_at", { withTimezone: true }),
+    mergedByMembershipId: uuid("merged_by_membership_id"),
+    mergeReason: text("merge_reason"),
     active: boolean("active").default(true).notNull(),
     version: integer("version").default(1).notNull(),
     createdByMembershipId: uuid("created_by_membership_id").references(
@@ -8074,6 +9041,58 @@ export const partnerAccountLocations = pgTable(
       table.active,
       table.siteName,
     ),
+    accountActiveSiteIdIdx: index(
+      "partner_account_locations_account_active_site_id_idx",
+    ).on(table.partnerAccountId, table.active, table.siteName, table.id),
+    accountSiteIdIdx: index("partner_account_locations_account_site_id_idx").on(
+      table.partnerAccountId,
+      table.siteName,
+      table.id,
+    ),
+    parentIdx: index("partner_account_locations_parent_idx").on(
+      table.partnerAccountId,
+      table.parentLocationId,
+      table.active,
+      table.siteName,
+      table.id,
+    ),
+    verificationQueueIdx: index(
+      "partner_account_locations_verification_queue_idx",
+    )
+      .on(
+        table.addressVerificationStatus,
+        table.partnerAccountId,
+        table.updatedAt,
+        table.id,
+      )
+      .where(
+        sql`${table.active} = true AND ${table.addressVerificationStatus} IN ('suggested_correction', 'review_required')`,
+      ),
+    mergedIntoIdx: index("partner_account_locations_merged_into_idx")
+      .on(
+        table.partnerAccountId,
+        table.mergedIntoLocationId,
+        table.mergedAt,
+        table.id,
+      )
+      .where(sql`${table.mergedIntoLocationId} IS NOT NULL`),
+    parentAccountFk: foreignKey({
+      name: "partner_account_locations_parent_account_fk",
+      columns: [table.partnerAccountId, table.parentLocationId],
+      foreignColumns: [table.partnerAccountId, table.id],
+    }).onDelete("restrict"),
+    mergeActorAccountFk: foreignKey({
+      name: "partner_account_locations_merge_actor_account_fk",
+      columns: [table.mergedByMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+    }).onDelete("restrict"),
+    parentNotSelfCheck: check(
+      "partner_account_locations_parent_not_self_check",
+      sql`${table.parentLocationId} IS NULL OR ${table.parentLocationId} <> ${table.id}`,
+    ),
     versionCheck: check(
       "partner_account_locations_version_check",
       sql`${table.version} > 0`,
@@ -8086,10 +9105,567 @@ export const partnerAccountLocations = pgTable(
       "partner_account_locations_service_area_status_check",
       sql`${table.serviceAreaStatus} IN ('unverified', 'eligible', 'review', 'outside')`,
     ),
+    verificationStatusCheck: check(
+      "partner_account_locations_verification_status_check",
+      sql`${table.addressVerificationStatus} IN ('verified', 'suggested_correction', 'review_required', 'staff_verified')`,
+    ),
+    verificationProviderCheck: check(
+      "partner_account_locations_verification_provider_check",
+      sql`${table.addressVerificationProvider} IN ('mapbox', 'manual', 'legacy', 'none')`,
+    ),
+    verificationConfidenceCheck: check(
+      "partner_account_locations_verification_confidence_check",
+      sql`${table.addressVerificationConfidence} IS NULL OR ${table.addressVerificationConfidence} BETWEEN 0 AND 100`,
+    ),
+    verificationEvidenceCheck: check(
+      "partner_account_locations_verification_evidence_check",
+      sql`(${table.addressVerificationStatus} IN ('verified', 'staff_verified') AND ${table.addressVerifiedAt} IS NOT NULL) OR (${table.addressVerificationStatus} IN ('suggested_correction', 'review_required') AND ${table.addressVerifiedAt} IS NULL)`,
+    ),
+    suggestionShapeCheck: check(
+      "partner_account_locations_suggestion_shape_check",
+      sql`${table.addressVerificationSuggestion} IS NULL OR jsonb_typeof(${table.addressVerificationSuggestion}) = 'object'`,
+    ),
+    mergeStateCheck: check(
+      "partner_account_locations_merge_state_check",
+      sql`(${table.mergedIntoLocationId} IS NULL AND ${table.mergedAt} IS NULL AND ${table.mergedByMembershipId} IS NULL AND ${table.mergeReason} IS NULL) OR (${table.mergedIntoLocationId} IS NOT NULL AND ${table.mergedIntoLocationId} <> ${table.id} AND ${table.mergedAt} IS NOT NULL AND ${table.mergedByMembershipId} IS NOT NULL AND length(btrim(${table.mergeReason})) BETWEEN 5 AND 500 AND ${table.active} IS FALSE)`,
+    ),
     secretStateCheck: check(
       "partner_account_locations_secret_state_check",
       sql`(${table.accessSecretCiphertext} IS NULL AND ${table.accessSecretKeyVersion} IS NULL) OR (${table.accessSecretCiphertext} IS NOT NULL AND ${table.accessSecretKeyVersion} > 0)`,
     ),
+  }),
+);
+
+export const partnerLocationAddressReviews = pgTable(
+  "partner_location_address_reviews",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    requestedByMembershipId: uuid("requested_by_membership_id").notNull(),
+    state: text("state")
+      .$type<"pending" | "verified" | "correction_required" | "dismissed">()
+      .default("pending")
+      .notNull(),
+    reasonCode: text("reason_code")
+      .$type<
+        | "provider_unavailable"
+        | "low_confidence"
+        | "suggested_correction"
+        | "possible_duplicate"
+        | "partner_requested"
+      >()
+      .notNull(),
+    enteredAddress: jsonb("entered_address")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    providerSuggestion: jsonb("provider_suggestion").$type<Record<
+      string,
+      unknown
+    > | null>(),
+    providerConfidence: integer("provider_confidence"),
+    duplicateCandidates: jsonb("duplicate_candidates")
+      .$type<Array<Record<string, unknown>>>()
+      .default([])
+      .notNull(),
+    reviewedByTeamMemberId: uuid("reviewed_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    resolutionNote: text("resolution_note"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    version: integer("version").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    accountFk: foreignKey({
+      name: "partner_location_address_reviews_account_fk",
+      columns: [table.partnerAccountId],
+      foreignColumns: [partnerAccounts.id],
+    }).onDelete("restrict"),
+    locationAccountFk: foreignKey({
+      name: "partner_location_address_reviews_location_account_fk",
+      columns: [table.partnerAccountId, table.locationId],
+      foreignColumns: [
+        partnerAccountLocations.partnerAccountId,
+        partnerAccountLocations.id,
+      ],
+    }).onDelete("restrict"),
+    requesterAccountFk: foreignKey({
+      name: "partner_location_address_reviews_requester_account_fk",
+      columns: [table.requestedByMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+    }).onDelete("restrict"),
+    openLocationKey: uniqueIndex(
+      "partner_location_address_reviews_open_location_key",
+    )
+      .on(table.partnerAccountId, table.locationId)
+      .where(sql`${table.state} = 'pending'`),
+    queueIdx: index("partner_location_address_reviews_queue_idx").on(
+      table.state,
+      table.createdAt,
+      table.id,
+    ),
+    accountIdx: index("partner_location_address_reviews_account_idx").on(
+      table.partnerAccountId,
+      table.state,
+      table.createdAt,
+      table.id,
+    ),
+    stateCheck: check(
+      "partner_location_address_reviews_state_check",
+      sql`${table.state} IN ('pending', 'verified', 'correction_required', 'dismissed')`,
+    ),
+    reasonCheck: check(
+      "partner_location_address_reviews_reason_check",
+      sql`${table.reasonCode} IN ('provider_unavailable', 'low_confidence', 'suggested_correction', 'possible_duplicate', 'partner_requested')`,
+    ),
+    jsonCheck: check(
+      "partner_location_address_reviews_json_check",
+      sql`jsonb_typeof(${table.enteredAddress}) = 'object' AND (${table.providerSuggestion} IS NULL OR jsonb_typeof(${table.providerSuggestion}) = 'object') AND jsonb_typeof(${table.duplicateCandidates}) = 'array' AND jsonb_array_length(${table.duplicateCandidates}) <= 20`,
+    ),
+    confidenceCheck: check(
+      "partner_location_address_reviews_confidence_check",
+      sql`${table.providerConfidence} IS NULL OR ${table.providerConfidence} BETWEEN 0 AND 100`,
+    ),
+    lifecycleCheck: check(
+      "partner_location_address_reviews_lifecycle_check",
+      sql`(${table.state} = 'pending' AND ${table.reviewedByTeamMemberId} IS NULL AND ${table.resolutionNote} IS NULL AND ${table.resolvedAt} IS NULL) OR (${table.state} <> 'pending' AND ${table.reviewedByTeamMemberId} IS NOT NULL AND length(btrim(${table.resolutionNote})) BETWEEN 5 AND 1000 AND ${table.resolvedAt} IS NOT NULL)`,
+    ),
+    versionCheck: check(
+      "partner_location_address_reviews_version_check",
+      sql`${table.version} > 0`,
+    ),
+  }),
+);
+
+export const partnerLocationFavorites = pgTable(
+  "partner_location_favorites",
+  {
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    membershipId: uuid("membership_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    primaryKey: primaryKey({
+      name: "partner_location_favorites_pk",
+      columns: [table.membershipId, table.locationId],
+    }),
+    membershipAccountFk: foreignKey({
+      name: "partner_location_favorites_membership_account_fk",
+      columns: [table.membershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+    }).onDelete("cascade"),
+    locationAccountFk: foreignKey({
+      name: "partner_location_favorites_location_account_fk",
+      columns: [table.partnerAccountId, table.locationId],
+      foreignColumns: [
+        partnerAccountLocations.partnerAccountId,
+        partnerAccountLocations.id,
+      ],
+    }).onDelete("cascade"),
+    accountLocationIdx: index(
+      "partner_location_favorites_account_location_idx",
+    ).on(table.partnerAccountId, table.locationId, table.membershipId),
+  }),
+);
+
+export const partnerAccountMergeCases = pgTable(
+  "partner_account_merge_cases",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sourcePartnerAccountId: uuid("source_partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    targetPartnerAccountId: uuid("target_partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    state: text("state")
+      .$type<"needs_reconciliation" | "ready" | "completed" | "cancelled">()
+      .default("needs_reconciliation")
+      .notNull(),
+    reason: varchar("reason", { length: 1_000 }).notNull(),
+    conflictSummary: jsonb("conflict_summary")
+      .$type<Record<string, number>>()
+      .default({})
+      .notNull(),
+    preflightHash: varchar("preflight_hash", { length: 64 }).notNull(),
+    sourceLifecycleRevision: integer("source_lifecycle_revision").notNull(),
+    targetLifecycleRevision: integer("target_lifecycle_revision").notNull(),
+    requestedByTeamMemberId: uuid("requested_by_team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    completedByTeamMemberId: uuid("completed_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    cancelledByTeamMemberId: uuid("cancelled_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    resolutionNote: varchar("resolution_note", { length: 1_000 }),
+    version: integer("version").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    openSourceKey: uniqueIndex("partner_account_merge_cases_open_source_key")
+      .on(table.sourcePartnerAccountId)
+      .where(sql`${table.state} IN ('needs_reconciliation', 'ready')`),
+    queueIdx: index("partner_account_merge_cases_queue_idx").on(
+      table.state,
+      table.createdAt,
+      table.id,
+    ),
+    targetIdx: index("partner_account_merge_cases_target_idx").on(
+      table.targetPartnerAccountId,
+      table.state,
+      table.createdAt,
+      table.id,
+    ),
+    distinctAccountsCheck: check(
+      "partner_account_merge_cases_distinct_accounts_check",
+      sql`${table.sourcePartnerAccountId} <> ${table.targetPartnerAccountId}`,
+    ),
+    stateCheck: check(
+      "partner_account_merge_cases_state_check",
+      sql`${table.state} IN ('needs_reconciliation', 'ready', 'completed', 'cancelled')`,
+    ),
+    reasonCheck: check(
+      "partner_account_merge_cases_reason_check",
+      sql`length(btrim(${table.reason})) BETWEEN 20 AND 1000`,
+    ),
+    conflictCheck: check(
+      "partner_account_merge_cases_conflict_check",
+      sql`jsonb_typeof(${table.conflictSummary}) = 'object' AND octet_length(${table.conflictSummary}::text) <= 8192 AND ${table.preflightHash} ~ '^[0-9a-f]{64}$' AND ${table.sourceLifecycleRevision} > 0 AND ${table.targetLifecycleRevision} > 0`,
+    ),
+    lifecycleCheck: check(
+      "partner_account_merge_cases_lifecycle_check",
+      sql`(${table.state} IN ('needs_reconciliation', 'ready') AND ${table.completedByTeamMemberId} IS NULL AND ${table.completedAt} IS NULL AND ${table.cancelledByTeamMemberId} IS NULL AND ${table.cancelledAt} IS NULL AND ${table.resolutionNote} IS NULL) OR (${table.state} = 'completed' AND ${table.completedByTeamMemberId} IS NOT NULL AND ${table.completedAt} IS NOT NULL AND ${table.cancelledByTeamMemberId} IS NULL AND ${table.cancelledAt} IS NULL AND length(btrim(${table.resolutionNote})) BETWEEN 20 AND 1000) OR (${table.state} = 'cancelled' AND ${table.cancelledByTeamMemberId} IS NOT NULL AND ${table.cancelledAt} IS NOT NULL AND ${table.completedByTeamMemberId} IS NULL AND ${table.completedAt} IS NULL AND length(btrim(${table.resolutionNote})) BETWEEN 20 AND 1000)`,
+    ),
+    versionCheck: check(
+      "partner_account_merge_cases_version_check",
+      sql`${table.version} > 0`,
+    ),
+  }),
+);
+
+export const partnerLocationImports = pgTable(
+  "partner_location_imports",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    requestedByMembershipId: uuid("requested_by_membership_id").notNull(),
+    committedByMembershipId: uuid("committed_by_membership_id"),
+    dryRunIdempotencyKeyHash: varchar("dry_run_idempotency_key_hash", {
+      length: 64,
+    }).notNull(),
+    commitIdempotencyKeyHash: varchar("commit_idempotency_key_hash", {
+      length: 64,
+    }),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    commitRequestHash: varchar("commit_request_hash", { length: 64 }),
+    state: text("state")
+      .$type<"validated" | "invalid" | "committed" | "expired">()
+      .default("validated")
+      .notNull(),
+    directoryVersion: integer("directory_version").notNull(),
+    rowCount: integer("row_count").notNull(),
+    validRowCount: integer("valid_row_count").notNull(),
+    invalidRowCount: integer("invalid_row_count").notNull(),
+    normalizedRows: jsonb("normalized_rows")
+      .$type<Array<Record<string, unknown>>>()
+      .default([])
+      .notNull(),
+    rowResults: jsonb("row_results")
+      .$type<Array<Record<string, unknown>>>()
+      .default([])
+      .notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    purgeAfter: timestamp("purge_after", { withTimezone: true }).notNull(),
+    committedAt: timestamp("committed_at", { withTimezone: true }),
+    revision: integer("revision").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    accountFk: foreignKey({
+      name: "partner_location_imports_account_fk",
+      columns: [table.partnerAccountId],
+      foreignColumns: [partnerAccounts.id],
+    }).onDelete("restrict"),
+    requesterAccountFk: foreignKey({
+      name: "partner_location_imports_requester_account_fk",
+      columns: [table.requestedByMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+    }).onDelete("restrict"),
+    committerAccountFk: foreignKey({
+      name: "partner_location_imports_committer_account_fk",
+      columns: [table.committedByMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+    }).onDelete("restrict"),
+    accountDryKey: uniqueIndex("partner_location_imports_account_dry_key").on(
+      table.partnerAccountId,
+      table.dryRunIdempotencyKeyHash,
+    ),
+    accountCommitKey: uniqueIndex("partner_location_imports_account_commit_key")
+      .on(table.partnerAccountId, table.commitIdempotencyKeyHash)
+      .where(sql`${table.commitIdempotencyKeyHash} IS NOT NULL`),
+    accountHistoryIdx: index("partner_location_imports_account_history_idx").on(
+      table.partnerAccountId,
+      table.createdAt,
+      table.id,
+    ),
+    cleanupIdx: index("partner_location_imports_cleanup_idx").on(
+      table.purgeAfter,
+      table.id,
+    ),
+    stateCheck: check(
+      "partner_location_imports_state_check",
+      sql`${table.state} IN ('validated', 'invalid', 'committed', 'expired')`,
+    ),
+    hashCheck: check(
+      "partner_location_imports_hash_check",
+      sql`${table.dryRunIdempotencyKeyHash} ~ '^[0-9a-f]{64}$' AND ${table.requestHash} ~ '^[0-9a-f]{64}$' AND (${table.commitIdempotencyKeyHash} IS NULL OR ${table.commitIdempotencyKeyHash} ~ '^[0-9a-f]{64}$') AND (${table.commitRequestHash} IS NULL OR ${table.commitRequestHash} ~ '^[0-9a-f]{64}$')`,
+    ),
+    countsCheck: check(
+      "partner_location_imports_counts_check",
+      sql`${table.rowCount} BETWEEN 1 AND 500 AND ${table.validRowCount} BETWEEN 0 AND ${table.rowCount} AND ${table.invalidRowCount} BETWEEN 0 AND ${table.rowCount} AND ${table.validRowCount} + ${table.invalidRowCount} = ${table.rowCount} AND jsonb_typeof(${table.normalizedRows}) = 'array' AND jsonb_array_length(${table.normalizedRows}) = ${table.validRowCount} AND jsonb_typeof(${table.rowResults}) = 'array' AND jsonb_array_length(${table.rowResults}) = ${table.rowCount}`,
+    ),
+    versionCheck: check(
+      "partner_location_imports_version_check",
+      sql`${table.directoryVersion} > 0 AND ${table.revision} > 0`,
+    ),
+    lifecycleCheck: check(
+      "partner_location_imports_lifecycle_check",
+      sql`${table.expiresAt} > ${table.createdAt} AND ${table.expiresAt} <= ${table.createdAt} + interval '24 hours' AND ${table.purgeAfter} > ${table.expiresAt} AND ${table.purgeAfter} <= ${table.createdAt} + interval '30 days' AND ((${table.state} = 'committed' AND ${table.committedAt} IS NOT NULL AND ${table.committedByMembershipId} IS NOT NULL AND ${table.commitIdempotencyKeyHash} IS NOT NULL AND ${table.commitRequestHash} IS NOT NULL) OR (${table.state} <> 'committed' AND ${table.committedAt} IS NULL))`,
+    ),
+    noSecretKeysCheck: check(
+      "partner_location_imports_no_secret_keys_check",
+      sql`${table.normalizedRows}::text !~* '"(accesssecret|gatecode|accesscode|doorcode)"[[:space:]]*:' AND ${table.rowResults}::text !~* '"(accesssecret|gatecode|accesscode|doorcode)"[[:space:]]*:'`,
+    ),
+  }),
+);
+
+export const partnerAccountCostCenters = pgTable(
+  "partner_account_cost_centers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "cascade" }),
+    code: varchar("code", { length: 120 }).notNull(),
+    name: text("name").notNull(),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    accountIdKey: uniqueIndex("partner_account_cost_centers_account_id_key").on(
+      table.partnerAccountId,
+      table.id,
+    ),
+    accountCodeKey: uniqueIndex(
+      "partner_account_cost_centers_account_code_key",
+    ).on(table.partnerAccountId, table.code),
+    accountActiveIdx: index(
+      "partner_account_cost_centers_account_active_idx",
+    ).on(table.partnerAccountId, table.active, table.name),
+    codeCheck: check(
+      "partner_account_cost_centers_code_check",
+      sql`length(btrim(${table.code})) BETWEEN 1 AND 120`,
+    ),
+  }),
+);
+
+export const partnerMembershipLocationScopes = pgTable(
+  "partner_membership_location_scopes",
+  {
+    membershipId: uuid("membership_id").notNull(),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    primaryKey: primaryKey({
+      name: "partner_membership_location_scopes_pk",
+      columns: [table.membershipId, table.locationId],
+    }),
+    membershipAccountFk: foreignKey({
+      name: "partner_membership_location_scopes_membership_account_fk",
+      columns: [table.membershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+    }).onDelete("cascade"),
+    locationAccountFk: foreignKey({
+      name: "partner_membership_location_scopes_location_account_fk",
+      columns: [table.partnerAccountId, table.locationId],
+      foreignColumns: [
+        partnerAccountLocations.partnerAccountId,
+        partnerAccountLocations.id,
+      ],
+    }).onDelete("cascade"),
+    accountMembershipIdx: index(
+      "partner_membership_location_scopes_account_membership_idx",
+    ).on(table.partnerAccountId, table.membershipId),
+  }),
+);
+
+export const partnerMembershipCostCenterScopes = pgTable(
+  "partner_membership_cost_center_scopes",
+  {
+    membershipId: uuid("membership_id").notNull(),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    costCenterId: uuid("cost_center_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    primaryKey: primaryKey({
+      name: "partner_membership_cost_center_scopes_pk",
+      columns: [table.membershipId, table.costCenterId],
+    }),
+    membershipAccountFk: foreignKey({
+      name: "partner_membership_cost_center_scopes_membership_account_fk",
+      columns: [table.membershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+    }).onDelete("cascade"),
+    costCenterAccountFk: foreignKey({
+      name: "partner_membership_cost_center_scopes_cost_center_account_fk",
+      columns: [table.partnerAccountId, table.costCenterId],
+      foreignColumns: [
+        partnerAccountCostCenters.partnerAccountId,
+        partnerAccountCostCenters.id,
+      ],
+    }).onDelete("cascade"),
+    accountMembershipIdx: index(
+      "partner_membership_cost_center_scopes_account_membership_idx",
+    ).on(table.partnerAccountId, table.membershipId),
+  }),
+);
+
+/**
+ * The account-safe scope snapshot accepted with an invitation. Acceptance
+ * revalidates these rows and copies them to the new membership; client JSON is
+ * never trusted as membership authority.
+ */
+export const partnerInvitationLocationScopes = pgTable(
+  "partner_invitation_location_scopes",
+  {
+    invitationId: uuid("invitation_id").notNull(),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    primaryKey: primaryKey({
+      name: "partner_invitation_location_scopes_pk",
+      columns: [table.invitationId, table.locationId],
+    }),
+    invitationAccountFk: foreignKey({
+      name: "partner_invitation_location_scopes_invitation_account_fk",
+      columns: [table.partnerAccountId, table.invitationId],
+      foreignColumns: [
+        partnerAccountInvitations.partnerAccountId,
+        partnerAccountInvitations.id,
+      ],
+    }).onDelete("cascade"),
+    locationAccountFk: foreignKey({
+      name: "partner_invitation_location_scopes_location_account_fk",
+      columns: [table.partnerAccountId, table.locationId],
+      foreignColumns: [
+        partnerAccountLocations.partnerAccountId,
+        partnerAccountLocations.id,
+      ],
+    }).onDelete("cascade"),
+    accountInvitationIdx: index(
+      "partner_invitation_location_scopes_account_invitation_idx",
+    ).on(table.partnerAccountId, table.invitationId),
+  }),
+);
+
+export const partnerInvitationCostCenterScopes = pgTable(
+  "partner_invitation_cost_center_scopes",
+  {
+    invitationId: uuid("invitation_id").notNull(),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    costCenterId: uuid("cost_center_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    primaryKey: primaryKey({
+      name: "partner_invitation_cost_center_scopes_pk",
+      columns: [table.invitationId, table.costCenterId],
+    }),
+    invitationAccountFk: foreignKey({
+      name: "partner_invitation_cost_center_scopes_invitation_account_fk",
+      columns: [table.partnerAccountId, table.invitationId],
+      foreignColumns: [
+        partnerAccountInvitations.partnerAccountId,
+        partnerAccountInvitations.id,
+      ],
+    }).onDelete("cascade"),
+    costCenterAccountFk: foreignKey({
+      name: "partner_invitation_cost_center_scopes_cost_center_account_fk",
+      columns: [table.partnerAccountId, table.costCenterId],
+      foreignColumns: [
+        partnerAccountCostCenters.partnerAccountId,
+        partnerAccountCostCenters.id,
+      ],
+    }).onDelete("cascade"),
+    accountInvitationIdx: index(
+      "partner_invitation_cost_center_scopes_account_invitation_idx",
+    ).on(table.partnerAccountId, table.invitationId),
   }),
 );
 
@@ -8348,6 +9924,252 @@ export const partnerSchedulingProfiles = pgTable(
   }),
 );
 
+export const scheduleResources = pgTable(
+  "schedule_resources",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    capacityPoolKey: varchar("capacity_pool_key", { length: 64 })
+      .notNull()
+      .references(() => scheduleResourcePools.key, { onDelete: "restrict" }),
+    kind: text("kind").$type<"crew" | "truck" | "equipment">().notNull(),
+    label: text("label").notNull(),
+    capacityUnits: integer("capacity_units").notNull(),
+    skillKeys: text("skill_keys").array().notNull().default([]),
+    active: boolean("active").default(true).notNull(),
+    source: text("source")
+      .$type<"staff" | "compatibility_pool">()
+      .default("staff")
+      .notNull(),
+    sourceKey: text("source_key"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    sourceKeyIndex: uniqueIndex("schedule_resources_source_key")
+      .on(table.sourceKey)
+      .where(sql`${table.sourceKey} IS NOT NULL`),
+    poolKindActiveIdx: index("schedule_resources_pool_kind_active_idx").on(
+      table.capacityPoolKey,
+      table.kind,
+      table.active,
+      table.label,
+      table.id,
+    ),
+    kindCheck: check(
+      "schedule_resources_kind_check",
+      sql`${table.kind} IN ('crew', 'truck', 'equipment')`,
+    ),
+    labelCheck: check(
+      "schedule_resources_label_check",
+      sql`${table.label} = btrim(${table.label}) AND length(${table.label}) BETWEEN 1 AND 160`,
+    ),
+    capacityCheck: check(
+      "schedule_resources_capacity_check",
+      sql`${table.capacityUnits} BETWEEN 1 AND 10000`,
+    ),
+    sourceCheck: check(
+      "schedule_resources_source_check",
+      sql`${table.source} IN ('staff', 'compatibility_pool')`,
+    ),
+    sourceKeyCheck: check(
+      "schedule_resources_source_key_check",
+      sql`(${table.source} = 'staff' AND ${table.sourceKey} IS NULL) OR (${table.source} = 'compatibility_pool' AND ${table.sourceKey} ~ '^pool:[a-z][a-z0-9_-]{0,63}:(crew|truck)$')`,
+    ),
+    skillKeysCheck: check(
+      "schedule_resources_skill_keys_check",
+      sql`cardinality(${table.skillKeys}) <= 50 AND array_position(${table.skillKeys}, NULL) IS NULL`,
+    ),
+  }),
+);
+
+export const partnerSchedulingProfileResourceRequirements = pgTable(
+  "partner_scheduling_profile_resource_requirements",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    schedulingProfileId: uuid("scheduling_profile_id")
+      .notNull()
+      .references(() => partnerSchedulingProfiles.id, { onDelete: "cascade" }),
+    resourceKind: text("resource_kind")
+      .$type<"crew" | "truck" | "equipment">()
+      .notNull(),
+    quantity: integer("quantity").default(1).notNull(),
+    capacityUnits: integer("capacity_units").default(1).notNull(),
+    requiredSkillKeys: text("required_skill_keys")
+      .array()
+      .notNull()
+      .default([]),
+    source: text("source")
+      .$type<"staff" | "compatibility_pool">()
+      .default("staff")
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    profileKindKey: uniqueIndex(
+      "partner_profile_resource_requirements_kind_key",
+    ).on(table.schedulingProfileId, table.resourceKind),
+    profileIdx: index("partner_profile_resource_requirements_profile_idx").on(
+      table.schedulingProfileId,
+      table.resourceKind,
+      table.id,
+    ),
+    kindCheck: check(
+      "partner_profile_resource_requirements_kind_check",
+      sql`${table.resourceKind} IN ('crew', 'truck', 'equipment')`,
+    ),
+    quantityCheck: check(
+      "partner_profile_resource_requirements_quantity_check",
+      sql`${table.quantity} BETWEEN 1 AND 20`,
+    ),
+    capacityCheck: check(
+      "partner_profile_resource_requirements_capacity_check",
+      sql`${table.capacityUnits} BETWEEN 1 AND 100`,
+    ),
+    sourceCheck: check(
+      "partner_profile_resource_requirements_source_check",
+      sql`${table.source} IN ('staff', 'compatibility_pool')`,
+    ),
+    skillKeysCheck: check(
+      "partner_profile_resource_requirements_skill_keys_check",
+      sql`cardinality(${table.requiredSkillKeys}) <= 50 AND array_position(${table.requiredSkillKeys}, NULL) IS NULL`,
+    ),
+  }),
+);
+
+/**
+ * Account-specific constraints for Partner self-service scheduling. These
+ * values are narrowing inputs only: the scheduling domain combines them with
+ * Stonegate's global Partner channel by max/max/min/AND precedence and never
+ * uses them to expand hours, capacity, notice, horizon, or confirmation.
+ */
+export const partnerAccountSchedulingPolicies = pgTable(
+  "partner_account_scheduling_policies",
+  {
+    partnerAccountId: uuid("partner_account_id")
+      .primaryKey()
+      .references(() => partnerAccounts.id, { onDelete: "cascade" }),
+    minimumNoticeMinutes: integer("minimum_notice_minutes")
+      .default(0)
+      .notNull(),
+    minimumCalendarLeadDays: integer("minimum_calendar_lead_days")
+      .default(1)
+      .notNull(),
+    maximumBookingHorizonDays: integer("maximum_booking_horizon_days")
+      .default(30)
+      .notNull(),
+    instantConfirmationEnabled: boolean("instant_confirmation_enabled")
+      .default(false)
+      .notNull(),
+    revision: integer("revision").default(1).notNull(),
+    lastChangedByTeamMemberId: uuid(
+      "last_changed_by_team_member_id",
+    ).references(() => teamMembers.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      precision: 3,
+    })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    noticeCheck: check(
+      "partner_account_scheduling_policies_notice_check",
+      sql`${table.minimumNoticeMinutes} BETWEEN 0 AND 10080`,
+    ),
+    leadDaysCheck: check(
+      "partner_account_scheduling_policies_lead_days_check",
+      sql`${table.minimumCalendarLeadDays} BETWEEN 1 AND 30`,
+    ),
+    horizonCheck: check(
+      "partner_account_scheduling_policies_horizon_check",
+      sql`${table.maximumBookingHorizonDays} BETWEEN 1 AND 30`,
+    ),
+    revisionCheck: check(
+      "partner_account_scheduling_policies_revision_check",
+      sql`${table.revision} > 0`,
+    ),
+    changedByIdx: index(
+      "partner_account_scheduling_policies_changed_by_idx",
+    ).on(table.lastChangedByTeamMemberId, table.updatedAt),
+  }),
+);
+
+/**
+ * Account-specific constraints for Partner cancellation. The account notice
+ * is combined with Stonegate's global notice using max precedence, and direct
+ * cancellation is combined using logical AND. Late requests always remain
+ * scheduled for staff review and this launch policy never applies a fee.
+ */
+export const partnerAccountCancellationPolicies = pgTable(
+  "partner_account_cancellation_policies",
+  {
+    partnerAccountId: uuid("partner_account_id")
+      .primaryKey()
+      .references(() => partnerAccounts.id, { onDelete: "cascade" }),
+    minimumNoticeMinutes: integer("minimum_notice_minutes")
+      .default(1_440)
+      .notNull(),
+    directCancellationEnabled: boolean("direct_cancellation_enabled")
+      .default(true)
+      .notNull(),
+    lateCancellationDisposition: text("late_cancellation_disposition")
+      .$type<"staff_review">()
+      .default("staff_review")
+      .notNull(),
+    automaticFeeMinor: integer("automatic_fee_minor"),
+    revision: integer("revision").default(1).notNull(),
+    lastChangedByTeamMemberId: uuid(
+      "last_changed_by_team_member_id",
+    ).references(() => teamMembers.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      precision: 3,
+    })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    noticeCheck: check(
+      "partner_account_cancellation_policies_notice_check",
+      sql`${table.minimumNoticeMinutes} BETWEEN 1440 AND 525600`,
+    ),
+    lateDispositionCheck: check(
+      "partner_account_cancellation_policies_late_disposition_check",
+      sql`${table.lateCancellationDisposition} = 'staff_review'`,
+    ),
+    noAutomaticFeeCheck: check(
+      "partner_account_cancellation_policies_no_automatic_fee_check",
+      sql`${table.automaticFeeMinor} IS NULL`,
+    ),
+    revisionCheck: check(
+      "partner_account_cancellation_policies_revision_check",
+      sql`${table.revision} > 0`,
+    ),
+    changedByIdx: index(
+      "partner_account_cancellation_policies_changed_by_idx",
+    ).on(table.lastChangedByTeamMemberId, table.updatedAt),
+  }),
+);
+
 export const scheduleDateOverrides = pgTable(
   "schedule_date_overrides",
   {
@@ -8489,6 +10311,10 @@ export const partnerBookingDrafts = pgTable(
       .$type<Array<Record<string, unknown>>>()
       .notNull()
       .default([]),
+    scheduleAssistancePreference: text("schedule_assistance_preference")
+      .$type<"none" | "waitlist" | "callback">()
+      .default("none")
+      .notNull(),
     reviewReasons: text("review_reasons").array().notNull().default([]),
     validation: jsonb("validation")
       .$type<Record<string, unknown>>()
@@ -8534,6 +10360,122 @@ export const partnerBookingDrafts = pgTable(
     stateCheck: check(
       "partner_booking_drafts_state_check",
       sql`${table.state} IN ('draft', 'ready', 'submitted', 'abandoned', 'expired')`,
+    ),
+    scheduleAssistanceCheck: check(
+      "partner_booking_drafts_schedule_assistance_check",
+      sql`${table.scheduleAssistancePreference} IN ('none', 'waitlist', 'callback')`,
+    ),
+  }),
+);
+
+export type PartnerScheduleAssistanceWindowsSnapshot = Readonly<{
+  version: 1;
+  windows: ReadonlyArray<
+    Readonly<{
+      localDate: string;
+      timeOfDay: "morning" | "afternoon" | "anytime";
+      timezone: string;
+    }>
+  >;
+}>;
+
+export const partnerScheduleAssistanceRequests = pgTable(
+  "partner_schedule_assistance_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    partnerBookingId: uuid("partner_booking_id").notNull(),
+    bookingDraftId: uuid("booking_draft_id").notNull(),
+    requestedByMembershipId: uuid("requested_by_membership_id").notNull(),
+    preference: text("preference").$type<"waitlist" | "callback">().notNull(),
+    state: text("state")
+      .$type<"pending" | "contacted" | "fulfilled" | "canceled">()
+      .default("pending")
+      .notNull(),
+    preferredWindowsSnapshot: jsonb("preferred_windows_snapshot")
+      .$type<PartnerScheduleAssistanceWindowsSnapshot>()
+      .notNull(),
+    operationKeyHash: varchar("operation_key_hash", { length: 64 }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    revision: integer("revision").default(1).notNull(),
+    resolvedByTeamMemberId: uuid("resolved_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    resolutionNote: text("resolution_note"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    bookingAccountFk: foreignKey({
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+      name: "partner_schedule_assistance_booking_account_fk",
+    }).onDelete("cascade"),
+    draftAccountFk: foreignKey({
+      columns: [table.partnerAccountId, table.bookingDraftId],
+      foreignColumns: [
+        partnerBookingDrafts.partnerAccountId,
+        partnerBookingDrafts.id,
+      ],
+      name: "partner_schedule_assistance_draft_account_fk",
+    }).onDelete("restrict"),
+    requesterAccountFk: foreignKey({
+      columns: [table.requestedByMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+      name: "partner_schedule_assistance_requester_account_fk",
+    }).onDelete("restrict"),
+    bookingKey: uniqueIndex("partner_schedule_assistance_booking_key").on(
+      table.partnerAccountId,
+      table.partnerBookingId,
+    ),
+    operationKey: uniqueIndex("partner_schedule_assistance_operation_key").on(
+      table.partnerAccountId,
+      table.operationKeyHash,
+    ),
+    queueIdx: index("partner_schedule_assistance_queue_idx").on(
+      table.state,
+      table.createdAt,
+      table.id,
+    ),
+    preferenceCheck: check(
+      "partner_schedule_assistance_preference_check",
+      sql`${table.preference} IN ('waitlist', 'callback')`,
+    ),
+    stateCheck: check(
+      "partner_schedule_assistance_state_check",
+      sql`${table.state} IN ('pending', 'contacted', 'fulfilled', 'canceled')`,
+    ),
+    windowsCheck: check(
+      "partner_schedule_assistance_windows_check",
+      sql`jsonb_typeof(${table.preferredWindowsSnapshot}) = 'object' AND ${table.preferredWindowsSnapshot} ->> 'version' = '1' AND jsonb_typeof(${table.preferredWindowsSnapshot} -> 'windows') = 'array' AND jsonb_array_length(${table.preferredWindowsSnapshot} -> 'windows') BETWEEN 1 AND 3`,
+    ),
+    operationHashCheck: check(
+      "partner_schedule_assistance_operation_hash_check",
+      sql`${table.operationKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    requestHashCheck: check(
+      "partner_schedule_assistance_request_hash_check",
+      sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    revisionCheck: check(
+      "partner_schedule_assistance_revision_check",
+      sql`${table.revision} > 0`,
+    ),
+    resolutionCheck: check(
+      "partner_schedule_assistance_resolution_check",
+      sql`(${table.state} = 'pending' AND ${table.resolvedByTeamMemberId} IS NULL AND ${table.resolutionNote} IS NULL AND ${table.resolvedAt} IS NULL) OR (${table.state} <> 'pending' AND ${table.resolvedByTeamMemberId} IS NOT NULL AND length(btrim(${table.resolutionNote})) BETWEEN 5 AND 1000 AND ${table.resolvedAt} IS NOT NULL)`,
     ),
   }),
 );
@@ -8634,6 +10576,438 @@ export const partnerRescheduleRequests = pgTable(
   }),
 );
 
+export type PartnerCancellationRequestSnapshot = Readonly<{
+  version: 1;
+  requestedAt: string;
+  job: Readonly<{
+    publicStatus: string;
+    appointmentStatus: string;
+    bookingVersion: number;
+  }>;
+  schedule: Readonly<{
+    promisedArrivalStartAt: string | null;
+    promisedArrivalEndAt: string | null;
+    timezone: string;
+  }>;
+  policy: Readonly<{
+    cutoffMinutes: number;
+    directCancellationEnabled: boolean;
+    lateCancellationDisposition: "staff_review";
+    automaticFeeMinor: null;
+    source: "launch_default" | "configured" | "unconfigured";
+    revision: number | null;
+    deadlineAt: string | null;
+    decisionReasonCode: string;
+  }>;
+}>;
+
+/**
+ * Durable Partner cancellation-review requests. Request evidence is immutable;
+ * only the state/revision and bounded Staff resolution evidence may change.
+ * Composite foreign keys are installed by migration 0149.
+ */
+export const partnerCancellationRequests = pgTable(
+  "partner_cancellation_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    partnerBookingId: uuid("partner_booking_id").notNull(),
+    requestedByMembershipId: uuid("requested_by_membership_id").notNull(),
+    state: text("state")
+      .$type<"pending" | "approved" | "declined">()
+      .default("pending")
+      .notNull(),
+    reason: text("reason").notNull(),
+    requestSnapshot: jsonb("request_snapshot")
+      .$type<PartnerCancellationRequestSnapshot>()
+      .notNull(),
+    operationKeyHash: varchar("operation_key_hash", { length: 64 }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    revision: integer("revision").default(1).notNull(),
+    resolvedByTeamMemberId: uuid("resolved_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    resolutionReason: text("resolution_reason"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    accountRequestKey: uniqueIndex(
+      "partner_cancellation_requests_account_request_key",
+    ).on(table.partnerAccountId, table.id),
+    accountOperationKey: uniqueIndex(
+      "partner_cancellation_requests_account_operation_key",
+    ).on(table.partnerAccountId, table.operationKeyHash),
+    pendingBookingKey: uniqueIndex(
+      "partner_cancellation_requests_pending_booking_key",
+    )
+      .on(table.partnerAccountId, table.partnerBookingId)
+      .where(sql`${table.state} = 'pending'`),
+    accountStateIdx: index(
+      "partner_cancellation_requests_account_state_idx",
+    ).on(table.partnerAccountId, table.state, table.createdAt, table.id),
+    stateCheck: check(
+      "partner_cancellation_requests_state_check",
+      sql`${table.state} IN ('pending', 'approved', 'declined')`,
+    ),
+    reasonCheck: check(
+      "partner_cancellation_requests_reason_check",
+      sql`${table.reason} = btrim(${table.reason}) AND length(${table.reason}) BETWEEN 5 AND 1000`,
+    ),
+    snapshotCheck: check(
+      "partner_cancellation_requests_snapshot_check",
+      sql`jsonb_typeof(${table.requestSnapshot}) = 'object' AND ${table.requestSnapshot} ->> 'version' = '1'`,
+    ),
+    operationHashCheck: check(
+      "partner_cancellation_requests_operation_hash_check",
+      sql`${table.operationKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    requestHashCheck: check(
+      "partner_cancellation_requests_request_hash_check",
+      sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    revisionCheck: check(
+      "partner_cancellation_requests_revision_check",
+      sql`${table.revision} > 0`,
+    ),
+    resolutionCheck: check(
+      "partner_cancellation_requests_resolution_check",
+      sql`(${table.state} = 'pending' AND ${table.resolvedByTeamMemberId} IS NULL AND ${table.resolutionReason} IS NULL AND ${table.resolvedAt} IS NULL) OR (${table.state} IN ('approved', 'declined') AND ${table.resolvedByTeamMemberId} IS NOT NULL AND ${table.resolutionReason} IS NOT NULL AND length(btrim(${table.resolutionReason})) BETWEEN 12 AND 1000 AND ${table.resolvedAt} IS NOT NULL)`,
+    ),
+  }),
+);
+
+/**
+ * Read-only quarantine evidence for pre-0149 hash-based review rows. These are
+ * deliberately not promoted into actionable requests without reconciliation.
+ */
+export const partnerCancellationRequestReconciliationCases = pgTable(
+  "partner_cancellation_request_reconciliation_cases",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id").references(
+      () => partnerAccounts.id,
+      { onDelete: "restrict" },
+    ),
+    partnerBookingId: uuid("partner_booking_id")
+      .notNull()
+      .references(() => partnerBookings.id, { onDelete: "restrict" }),
+    legacyOperationKeyHash: varchar("legacy_operation_key_hash", {
+      length: 64,
+    }),
+    legacyRequestHash: varchar("legacy_request_hash", { length: 64 }),
+    reasonCode: text("reason_code").notNull(),
+    evidenceSnapshot: jsonb("evidence_snapshot")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    state: text("state").$type<"open">().default("open").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    bookingKey: uniqueIndex(
+      "partner_cancellation_request_reconciliation_booking_key",
+    ).on(table.partnerBookingId),
+    accountStateIdx: index(
+      "partner_cancellation_request_reconciliation_account_state_idx",
+    ).on(table.partnerAccountId, table.state, table.createdAt, table.id),
+    stateCheck: check(
+      "partner_cancellation_request_reconciliation_state_check",
+      sql`${table.state} = 'open'`,
+    ),
+    reasonCheck: check(
+      "partner_cancellation_request_reconciliation_reason_check",
+      sql`${table.reasonCode} IN ('legacy_cancellation_review_requires_reconciliation', 'legacy_cancellation_review_hash_pair_invalid', 'legacy_cancellation_review_tenant_unresolved')`,
+    ),
+    hashCheck: check(
+      "partner_cancellation_request_reconciliation_hash_check",
+      sql`(${table.legacyOperationKeyHash} IS NOT NULL OR ${table.legacyRequestHash} IS NOT NULL) AND (${table.legacyOperationKeyHash} IS NULL OR ${table.legacyOperationKeyHash} ~ '^[0-9a-f]{64}$') AND (${table.legacyRequestHash} IS NULL OR ${table.legacyRequestHash} ~ '^[0-9a-f]{64}$')`,
+    ),
+    evidenceCheck: check(
+      "partner_cancellation_request_reconciliation_evidence_check",
+      sql`jsonb_typeof(${table.evidenceSnapshot}) = 'object' AND ${table.evidenceSnapshot} ->> 'version' = '1'`,
+    ),
+  }),
+);
+
+export type PartnerJobChangeProposedChanges = Readonly<{
+  version: 1;
+  description?: string | null;
+  crewInstructions?: string | null;
+  accessDetails?: string | null;
+  onSiteContact?: Readonly<Record<string, string | null>> | null;
+  materiality: Readonly<{
+    price: boolean;
+    schedule: boolean;
+    service: boolean;
+    quantity: boolean;
+    hazards: boolean;
+    proof: boolean;
+  }>;
+}>;
+
+export type PartnerJobChangeRequestDbSnapshot = Readonly<{
+  version: 1;
+  requestedAt: string;
+  job: Readonly<{
+    publicStatus: string;
+    appointmentStatus: string;
+    bookingRevision: number;
+  }>;
+  current: Readonly<{
+    description: string | null;
+    crewInstructions: string | null;
+    accessDetails: string | null;
+    onSiteContact: Readonly<Record<string, string | null>> | null;
+  }>;
+  proposed: Omit<PartnerJobChangeProposedChanges, "version">;
+}>;
+
+export type PartnerJobChangeResolutionSnapshot =
+  | Readonly<{
+      version: 1;
+      outcome: "approved" | "declined" | "change_order_required";
+      appliedFields: readonly string[];
+      bookingRevisionBefore: number;
+      bookingRevisionAfter: number;
+    }>
+  | Readonly<{
+      version: 1;
+      outcome: "superseded";
+      actorType: "system" | "staff";
+      trigger: "partner_direct_cancellation" | "staff_approved_cancellation";
+      triggeringMembershipId?: string;
+      bookingRevisionBefore: number;
+      bookingRevisionAfter: number;
+    }>;
+
+/**
+ * Account-owned Partner job change requests. The migration installs composite
+ * tenant FKs and an immutable-evidence/one-way-resolution trigger.
+ */
+export const partnerJobChangeRequests = pgTable(
+  "partner_job_change_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    partnerBookingId: uuid("partner_booking_id").notNull(),
+    requestedByMembershipId: uuid("requested_by_membership_id").notNull(),
+    state: text("state")
+      .$type<
+        | "pending"
+        | "approved"
+        | "declined"
+        | "change_order_required"
+        | "superseded"
+      >()
+      .default("pending")
+      .notNull(),
+    reason: text("reason").notNull(),
+    proposedChanges: jsonb("proposed_changes")
+      .$type<PartnerJobChangeProposedChanges>()
+      .notNull(),
+    requestSnapshot: jsonb("request_snapshot")
+      .$type<PartnerJobChangeRequestDbSnapshot>()
+      .notNull(),
+    baseBookingRevision: integer("base_booking_revision").notNull(),
+    operationKeyHash: varchar("operation_key_hash", { length: 64 }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    revision: integer("revision").default(1).notNull(),
+    resolvedByTeamMemberId: uuid("resolved_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    resolutionReason: text("resolution_reason"),
+    resolutionSnapshot: jsonb(
+      "resolution_snapshot",
+    ).$type<PartnerJobChangeResolutionSnapshot | null>(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    bookingAccountFk: foreignKey({
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+      name: "partner_job_change_requests_booking_account_fk",
+    }).onDelete("cascade"),
+    requesterAccountFk: foreignKey({
+      columns: [table.requestedByMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+      name: "partner_job_change_requests_requester_account_fk",
+    }).onDelete("restrict"),
+    accountRequestKey: uniqueIndex(
+      "partner_job_change_requests_account_request_key",
+    ).on(table.partnerAccountId, table.id),
+    accountBookingRequestKey: uniqueIndex(
+      "partner_job_change_requests_account_booking_request_key",
+    ).on(table.partnerAccountId, table.partnerBookingId, table.id),
+    accountOperationKey: uniqueIndex(
+      "partner_job_change_requests_account_operation_key",
+    ).on(table.partnerAccountId, table.operationKeyHash),
+    pendingBookingKey: uniqueIndex(
+      "partner_job_change_requests_pending_booking_key",
+    )
+      .on(table.partnerAccountId, table.partnerBookingId)
+      .where(sql`${table.state} = 'pending'`),
+    accountStateIdx: index("partner_job_change_requests_account_state_idx").on(
+      table.partnerAccountId,
+      table.state,
+      table.createdAt,
+      table.id,
+    ),
+    stateCheck: check(
+      "partner_job_change_requests_state_check",
+      sql`${table.state} IN ('pending', 'approved', 'declined', 'change_order_required', 'superseded')`,
+    ),
+    reasonCheck: check(
+      "partner_job_change_requests_reason_check",
+      sql`${table.reason} = btrim(${table.reason}) AND length(${table.reason}) BETWEEN 5 AND 1000`,
+    ),
+    proposedCheck: check(
+      "partner_job_change_requests_proposed_check",
+      sql`jsonb_typeof(${table.proposedChanges}) = 'object' AND ${table.proposedChanges} ->> 'version' = '1' AND jsonb_typeof(${table.proposedChanges} -> 'materiality') = 'object'`,
+    ),
+    snapshotCheck: check(
+      "partner_job_change_requests_snapshot_check",
+      sql`jsonb_typeof(${table.requestSnapshot}) = 'object' AND ${table.requestSnapshot} ->> 'version' = '1'`,
+    ),
+    baseRevisionCheck: check(
+      "partner_job_change_requests_base_revision_check",
+      sql`${table.baseBookingRevision} > 0`,
+    ),
+    operationHashCheck: check(
+      "partner_job_change_requests_operation_hash_check",
+      sql`${table.operationKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    requestHashCheck: check(
+      "partner_job_change_requests_request_hash_check",
+      sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    revisionCheck: check(
+      "partner_job_change_requests_revision_check",
+      sql`${table.revision} > 0`,
+    ),
+    resolutionCheck: check(
+      "partner_job_change_requests_resolution_check",
+      sql`(${table.state} = 'pending' AND ${table.resolvedByTeamMemberId} IS NULL AND ${table.resolutionReason} IS NULL AND ${table.resolutionSnapshot} IS NULL AND ${table.resolvedAt} IS NULL) OR (${table.state} IN ('approved', 'declined', 'change_order_required') AND ${table.resolvedByTeamMemberId} IS NOT NULL AND ${table.resolutionReason} IS NOT NULL AND length(btrim(${table.resolutionReason})) BETWEEN 12 AND 1000 AND jsonb_typeof(${table.resolutionSnapshot}) = 'object' AND ${table.resolutionSnapshot} ->> 'version' = '1' AND ${table.resolutionSnapshot} ->> 'outcome' = ${table.state} AND ${table.resolvedAt} IS NOT NULL) OR (${table.state} = 'superseded' AND ${table.resolutionReason} IS NOT NULL AND length(btrim(${table.resolutionReason})) BETWEEN 12 AND 1000 AND jsonb_typeof(${table.resolutionSnapshot}) = 'object' AND ${table.resolutionSnapshot} ->> 'version' = '1' AND ${table.resolutionSnapshot} ->> 'outcome' = 'superseded' AND ${table.resolutionSnapshot} ->> 'trigger' IN ('partner_direct_cancellation', 'staff_approved_cancellation') AND ((${table.resolutionSnapshot} ->> 'actorType' = 'system' AND ${table.resolutionSnapshot} ->> 'trigger' = 'partner_direct_cancellation' AND ${table.resolvedByTeamMemberId} IS NULL) OR (${table.resolutionSnapshot} ->> 'actorType' = 'staff' AND ${table.resolutionSnapshot} ->> 'trigger' = 'staff_approved_cancellation' AND ${table.resolvedByTeamMemberId} IS NOT NULL)) AND ${table.resolvedAt} IS NOT NULL)`,
+    ),
+  }),
+);
+
+export const partnerMediaMutationOperations = pgTable(
+  "partner_media_mutation_operations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "cascade" }),
+    actorMembershipId: uuid("actor_membership_id").notNull(),
+    action: varchar("action", { length: 64 }).notNull(),
+    idempotencyKeyHash: varchar("idempotency_key_hash", {
+      length: 64,
+    }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    parentKind: text("parent_kind").notNull(),
+    parentId: uuid("parent_id").notNull(),
+    associationId: uuid("association_id").notNull(),
+    status: text("status").default("in_progress").notNull(),
+    claimToken: uuid("claim_token").notNull(),
+    claimExpiresAt: timestamp("claim_expires_at", {
+      withTimezone: true,
+    }).notNull(),
+    attemptCount: integer("attempt_count").default(1).notNull(),
+    lastErrorCode: varchar("last_error_code", { length: 80 }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    actorAccountFk: foreignKey({
+      columns: [table.actorMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+      name: "partner_media_mutation_operations_actor_account_fk",
+    }).onDelete("restrict"),
+    actorActionKey: uniqueIndex(
+      "partner_media_mutation_operations_actor_action_key",
+    ).on(
+      table.partnerAccountId,
+      table.actorMembershipId,
+      table.action,
+      table.idempotencyKeyHash,
+    ),
+    claimIdx: index("partner_media_mutation_operations_claim_idx").on(
+      table.status,
+      table.claimExpiresAt,
+    ),
+    associationIdx: index(
+      "partner_media_mutation_operations_association_idx",
+    ).on(
+      table.partnerAccountId,
+      table.parentKind,
+      table.parentId,
+      table.associationId,
+      table.createdAt,
+    ),
+    actionCheck: check(
+      "partner_media_mutation_operations_action_check",
+      sql`${table.action} IN ('finalize')`,
+    ),
+    parentKindCheck: check(
+      "partner_media_mutation_operations_parent_kind_check",
+      sql`${table.parentKind} IN ('draft', 'job')`,
+    ),
+    statusCheck: check(
+      "partner_media_mutation_operations_status_check",
+      sql`${table.status} IN ('in_progress', 'succeeded', 'failed')`,
+    ),
+    idempotencyHashCheck: check(
+      "partner_media_mutation_operations_idempotency_hash_check",
+      sql`${table.idempotencyKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    requestHashCheck: check(
+      "partner_media_mutation_operations_request_hash_check",
+      sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    attemptCountCheck: check(
+      "partner_media_mutation_operations_attempt_count_check",
+      sql`${table.attemptCount} BETWEEN 1 AND 20`,
+    ),
+    completionCheck: check(
+      "partner_media_mutation_operations_completion_check",
+      sql`(${table.status} = 'in_progress' AND ${table.completedAt} IS NULL) OR (${table.status} <> 'in_progress' AND ${table.completedAt} IS NOT NULL)`,
+    ),
+  }),
+);
+
 export const partnerDraftMedia = pgTable(
   "partner_draft_media",
   {
@@ -8670,6 +11044,27 @@ export const partnerDraftMedia = pgTable(
       table.bookingDraftId,
       table.sortOrder,
     ),
+    accountDraftFk: foreignKey({
+      columns: [table.partnerAccountId, table.bookingDraftId],
+      foreignColumns: [
+        partnerBookingDrafts.partnerAccountId,
+        partnerBookingDrafts.id,
+      ],
+      name: "partner_draft_media_account_draft_fk",
+    }).onDelete("cascade"),
+    assetAccountFk: foreignKey({
+      columns: [table.mediaAssetId, table.partnerAccountId],
+      foreignColumns: [mediaAssets.id, mediaAssets.partnerAccountId],
+      name: "partner_draft_media_asset_account_fk",
+    }).onDelete("restrict"),
+    uploaderAccountFk: foreignKey({
+      columns: [table.uploadedByMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+      name: "partner_draft_media_uploader_account_fk",
+    }).onDelete("restrict"),
     categoryCheck: check(
       "partner_draft_media_category_check",
       sql`${table.category} IN ('intake', 'before', 'after', 'completion', 'issue', 'document')`,
@@ -8873,6 +11268,24 @@ export const partnerJobEvidence = pgTable(
       table.category,
       table.sortOrder,
     ),
+    accountBookingFk: foreignKey({
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+      name: "partner_job_evidence_account_booking_fk",
+    }).onDelete("cascade"),
+    assetAccountFk: foreignKey({
+      columns: [table.mediaAssetId, table.partnerAccountId],
+      foreignColumns: [mediaAssets.id, mediaAssets.partnerAccountId],
+      name: "partner_job_evidence_asset_account_fk",
+    }).onDelete("restrict"),
+    uploaderAccountFk: foreignKey({
+      columns: [table.uploadedByMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+      name: "partner_job_evidence_uploader_account_fk",
+    }).onDelete("restrict"),
     categoryCheck: check(
       "partner_job_evidence_category_check",
       sql`${table.category} IN ('intake', 'before', 'after', 'completion', 'issue', 'document')`,
@@ -8981,6 +11394,186 @@ export const partnerProofShareLinks = pgTable(
   }),
 );
 
+export type PartnerNotificationEndpointStatus =
+  | "pending"
+  | "verified"
+  | "revoked";
+
+/**
+ * Identity-owned notification destinations. Phone numbers in this table are
+ * delivery endpoints only and can never be used to authenticate a partner.
+ */
+export const partnerNotificationEndpoints = pgTable(
+  "partner_notification_endpoints",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerUserId: uuid("partner_user_id")
+      .notNull()
+      .references(() => partnerUsers.id, { onDelete: "cascade" }),
+    channel: text("channel").$type<"sms">().default("sms").notNull(),
+    normalizedDestination: varchar("normalized_destination", {
+      length: 32,
+    }).notNull(),
+    status: text("status")
+      .$type<PartnerNotificationEndpointStatus>()
+      .default("pending")
+      .notNull(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    consentAt: timestamp("consent_at", { withTimezone: true }),
+    consentSource: text("consent_source"),
+    consentVersion: text("consent_version"),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    userDestinationKey: uniqueIndex(
+      "partner_notification_endpoints_user_destination_key",
+    ).on(table.partnerUserId, table.channel, table.normalizedDestination),
+    activeSmsUserKey: uniqueIndex(
+      "partner_notification_endpoints_verified_sms_user_key",
+    )
+      .on(table.partnerUserId, table.channel)
+      .where(sql`${table.status} = 'verified'`),
+    statusIdx: index("partner_notification_endpoints_user_status_idx").on(
+      table.partnerUserId,
+      table.status,
+      table.updatedAt,
+    ),
+    channelCheck: check(
+      "partner_notification_endpoints_channel_check",
+      sql`${table.channel} = 'sms'`,
+    ),
+    destinationCheck: check(
+      "partner_notification_endpoints_destination_check",
+      sql`${table.normalizedDestination} ~ '^\+[1-9][0-9]{7,14}$'`,
+    ),
+    statusCheck: check(
+      "partner_notification_endpoints_status_check",
+      sql`${table.status} IN ('pending', 'verified', 'revoked')`,
+    ),
+    lifecycleCheck: check(
+      "partner_notification_endpoints_lifecycle_check",
+      sql`(${table.status} = 'pending' AND ${table.verifiedAt} IS NULL AND ${table.consentAt} IS NULL AND ${table.consentSource} IS NULL AND ${table.consentVersion} IS NULL AND ${table.revokedAt} IS NULL) OR (${table.status} = 'verified' AND ${table.verifiedAt} IS NOT NULL AND ${table.consentAt} IS NOT NULL AND ${table.consentSource} IS NOT NULL AND ${table.consentVersion} IS NOT NULL AND ${table.revokedAt} IS NULL) OR (${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL)`,
+    ),
+  }),
+);
+
+export type PartnerNotificationEndpointChallengeStatus =
+  | "pending"
+  | "consumed"
+  | "revoked"
+  | "expired";
+export type PartnerNotificationEndpointDeliveryStatus =
+  | "queued"
+  | "dispatching"
+  | "accepted"
+  | "failed"
+  | "reconciliation_required";
+
+export const partnerNotificationEndpointChallenges = pgTable(
+  "partner_notification_endpoint_challenges",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    endpointId: uuid("endpoint_id")
+      .notNull()
+      .references(() => partnerNotificationEndpoints.id, {
+        onDelete: "cascade",
+      }),
+    partnerUserId: uuid("partner_user_id")
+      .notNull()
+      .references(() => partnerUsers.id, { onDelete: "cascade" }),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    membershipId: uuid("membership_id").notNull(),
+    codeHash: text("code_hash"),
+    generation: integer("generation").default(1).notNull(),
+    status: text("status")
+      .$type<PartnerNotificationEndpointChallengeStatus>()
+      .default("pending")
+      .notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    deliveryStatus: text("delivery_status")
+      .$type<PartnerNotificationEndpointDeliveryStatus>()
+      .default("queued")
+      .notNull(),
+    deliveryOutboxEventId: uuid("delivery_outbox_event_id").references(
+      () => outboxEvents.id,
+      { onDelete: "set null" },
+    ),
+    deliveryAttemptId: uuid("delivery_attempt_id"),
+    deliveryProvider: text("delivery_provider"),
+    deliveryProviderMessageId: text("delivery_provider_message_id"),
+    deliveryDetail: text("delivery_detail"),
+    dispatchStartedAt: timestamp("dispatch_started_at", {
+      withTimezone: true,
+    }),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    expiredAt: timestamp("expired_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    endpointGenerationKey: uniqueIndex(
+      "partner_notification_endpoint_challenges_endpoint_generation_key",
+    ).on(table.endpointId, table.generation),
+    activeEndpointKey: uniqueIndex(
+      "partner_notification_endpoint_challenges_active_endpoint_key",
+    )
+      .on(table.endpointId)
+      .where(sql`${table.status} = 'pending'`),
+    deliveryOutboxKey: uniqueIndex(
+      "partner_notification_endpoint_challenges_delivery_outbox_key",
+    )
+      .on(table.deliveryOutboxEventId)
+      .where(sql`${table.deliveryOutboxEventId} IS NOT NULL`),
+    membershipAccountFk: foreignKey({
+      name: "partner_notification_endpoint_challenges_membership_account_fk",
+      columns: [table.membershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+    }).onDelete("cascade"),
+    expiryIdx: index("partner_notification_endpoint_challenges_expiry_idx").on(
+      table.status,
+      table.expiresAt,
+    ),
+    statusCheck: check(
+      "partner_notification_endpoint_challenges_status_check",
+      sql`${table.status} IN ('pending', 'consumed', 'revoked', 'expired')`,
+    ),
+    deliveryStatusCheck: check(
+      "partner_notification_endpoint_challenges_delivery_status_check",
+      sql`${table.deliveryStatus} IN ('queued', 'dispatching', 'accepted', 'failed', 'reconciliation_required')`,
+    ),
+    generationCheck: check(
+      "partner_notification_endpoint_challenges_generation_check",
+      sql`${table.generation} > 0`,
+    ),
+    attemptCountCheck: check(
+      "partner_notification_endpoint_challenges_attempt_count_check",
+      sql`${table.attemptCount} BETWEEN 0 AND 5`,
+    ),
+    lifecycleCheck: check(
+      "partner_notification_endpoint_challenges_lifecycle_check",
+      sql`(${table.status} = 'pending' AND ${table.codeHash} IS NOT NULL AND ${table.consumedAt} IS NULL AND ${table.revokedAt} IS NULL AND ${table.expiredAt} IS NULL) OR (${table.status} = 'consumed' AND ${table.codeHash} IS NULL AND ${table.consumedAt} IS NOT NULL AND ${table.revokedAt} IS NULL AND ${table.expiredAt} IS NULL) OR (${table.status} = 'revoked' AND ${table.codeHash} IS NULL AND ${table.consumedAt} IS NULL AND ${table.revokedAt} IS NOT NULL AND ${table.expiredAt} IS NULL) OR (${table.status} = 'expired' AND ${table.codeHash} IS NULL AND ${table.consumedAt} IS NULL AND ${table.revokedAt} IS NULL AND ${table.expiredAt} IS NOT NULL)`,
+    ),
+  }),
+);
+
 export const partnerNotificationPreferences = pgTable(
   "partner_notification_preferences",
   {
@@ -8998,6 +11591,13 @@ export const partnerNotificationPreferences = pgTable(
     smsVerifiedOptInAt: timestamp("sms_verified_opt_in_at", {
       withTimezone: true,
     }),
+    smsVerifiedPhoneE164: varchar("sms_verified_phone_e164", { length: 32 }),
+    smsVerifiedEndpointId: uuid("sms_verified_endpoint_id").references(
+      () => partnerNotificationEndpoints.id,
+      { onDelete: "set null" },
+    ),
+    smsOptInSource: text("sms_opt_in_source"),
+    smsConsentVersion: text("sms_consent_version"),
     quietHoursStart: varchar("quiet_hours_start", { length: 5 }),
     quietHoursEnd: varchar("quiet_hours_end", { length: 5 }),
     timezone: text("timezone").default("America/New_York").notNull(),
@@ -9019,7 +11619,11 @@ export const partnerNotificationPreferences = pgTable(
     ),
     smsConsentCheck: check(
       "partner_notification_preferences_sms_consent_check",
-      sql`${table.smsEnabled} = false OR ${table.smsVerifiedOptInAt} IS NOT NULL`,
+      sql`${table.smsEnabled} = false OR (${table.smsVerifiedOptInAt} IS NOT NULL AND ${table.smsVerifiedPhoneE164} IS NOT NULL AND ${table.smsVerifiedEndpointId} IS NOT NULL AND ${table.smsOptInSource} IS NOT NULL AND ${table.smsConsentVersion} IS NOT NULL)`,
+    ),
+    smsPhoneCheck: check(
+      "partner_notification_preferences_sms_phone_check",
+      sql`${table.smsVerifiedPhoneE164} IS NULL OR ${table.smsVerifiedPhoneE164} ~ '^\\+[1-9][0-9]{7,14}$'`,
     ),
     quietHoursCheck: check(
       "partner_notification_preferences_quiet_hours_check",
@@ -9058,6 +11662,165 @@ export const partnerNotifications = pgTable(
       table.readAt,
       table.createdAt,
       table.id,
+    ),
+  }),
+);
+
+export type PartnerNotificationDeliveryEventType =
+  | "booking.created"
+  | "booking.review_received"
+  | "booking.rescheduled"
+  | "booking.reschedule_review_requested"
+  | "booking.canceled"
+  | "booking.cancellation_review_requested"
+  | "billing.dispute_requested"
+  | "billing.dispute_resolved";
+export type PartnerNotificationDeliveryChannel = "in_app" | "email" | "sms";
+export type PartnerNotificationDeliveryState =
+  | "suppressed"
+  | "queued"
+  | "dispatching"
+  | "accepted"
+  | "failed"
+  | "reconciliation_required";
+
+/**
+ * Immutable per-channel intent plus the provider dispatch state. The outbox
+ * payload contains only this opaque ID; destinations are resolved again from
+ * canonical identity/endpoint records immediately before dispatch.
+ */
+export const partnerNotificationDeliveries = pgTable(
+  "partner_notification_deliveries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    membershipId: uuid("membership_id").notNull(),
+    partnerBookingId: uuid("partner_booking_id"),
+    partnerNotificationId: uuid("partner_notification_id").references(
+      () => partnerNotifications.id,
+      { onDelete: "set null" },
+    ),
+    eventType: text("event_type")
+      .$type<PartnerNotificationDeliveryEventType>()
+      .notNull(),
+    preferenceEventKey: text("preference_event_key").notNull(),
+    channel: text("channel")
+      .$type<PartnerNotificationDeliveryChannel>()
+      .notNull(),
+    state: text("state").$type<PartnerNotificationDeliveryState>().notNull(),
+    urgency: text("urgency").default("ordinary").notNull(),
+    dedupeKeyHash: varchar("dedupe_key_hash", { length: 64 }).notNull(),
+    title: varchar("title", { length: 120 }).notNull(),
+    body: varchar("body", { length: 500 }).notNull(),
+    actionPath: varchar("action_path", { length: 200 }).notNull(),
+    endpointId: uuid("endpoint_id").references(
+      () => partnerNotificationEndpoints.id,
+      { onDelete: "set null" },
+    ),
+    providerRequestKey: varchar("provider_request_key", { length: 200 }),
+    outboxEventId: uuid("outbox_event_id").references(() => outboxEvents.id, {
+      onDelete: "restrict",
+    }),
+    scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    dispatchAttemptId: uuid("dispatch_attempt_id"),
+    dispatchStartedAt: timestamp("dispatch_started_at", {
+      withTimezone: true,
+    }),
+    provider: varchar("provider", { length: 64 }),
+    providerMessageId: varchar("provider_message_id", { length: 255 }),
+    providerIdempotencySupported: boolean("provider_idempotency_supported"),
+    deliveryCertainty: text("delivery_certainty"),
+    detail: varchar("detail", { length: 500 }),
+    correlationId: varchar("correlation_id", { length: 128 }),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    membershipAccountFk: foreignKey({
+      name: "partner_notification_deliveries_membership_account_fk",
+      columns: [table.membershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+    }).onDelete("restrict"),
+    bookingAccountFk: foreignKey({
+      name: "partner_notification_deliveries_booking_account_fk",
+      columns: [table.partnerBookingId, table.partnerAccountId],
+      foreignColumns: [partnerBookings.id, partnerBookings.partnerAccountId],
+    }).onDelete("restrict"),
+    channelDedupeKey: uniqueIndex(
+      "partner_notification_deliveries_channel_dedupe_key",
+    ).on(
+      table.membershipId,
+      table.eventType,
+      table.dedupeKeyHash,
+      table.channel,
+    ),
+    outboxKey: uniqueIndex("partner_notification_deliveries_outbox_key")
+      .on(table.outboxEventId)
+      .where(sql`${table.outboxEventId} IS NOT NULL`),
+    dispatchIdx: index("partner_notification_deliveries_dispatch_idx").on(
+      table.state,
+      table.scheduledFor,
+      table.createdAt,
+    ),
+    accountBookingIdx: index(
+      "partner_notification_deliveries_account_booking_idx",
+    ).on(table.partnerAccountId, table.partnerBookingId, table.createdAt),
+    eventTypeCheck: check(
+      "partner_notification_deliveries_event_type_check",
+      sql`${table.eventType} IN ('booking.created', 'booking.review_received', 'booking.rescheduled', 'booking.reschedule_review_requested', 'booking.canceled', 'booking.cancellation_review_requested', 'billing.dispute_requested', 'billing.dispute_resolved')`,
+    ),
+    preferenceEventKeyCheck: check(
+      "partner_notification_deliveries_preference_event_key_check",
+      sql`${table.preferenceEventKey} IN ('booking_created', 'booking_changed', 'invoice_issued')`,
+    ),
+    channelCheck: check(
+      "partner_notification_deliveries_channel_check",
+      sql`${table.channel} IN ('in_app', 'email', 'sms')`,
+    ),
+    stateCheck: check(
+      "partner_notification_deliveries_state_check",
+      sql`${table.state} IN ('suppressed', 'queued', 'dispatching', 'accepted', 'failed', 'reconciliation_required')`,
+    ),
+    urgencyCheck: check(
+      "partner_notification_deliveries_urgency_check",
+      sql`${table.urgency} IN ('ordinary', 'urgent_same_day')`,
+    ),
+    attemptCountCheck: check(
+      "partner_notification_deliveries_attempt_count_check",
+      sql`${table.attemptCount} BETWEEN 0 AND 3`,
+    ),
+    hashCheck: check(
+      "partner_notification_deliveries_dedupe_hash_check",
+      sql`${table.dedupeKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    actionPathCheck: check(
+      "partner_notification_deliveries_action_path_check",
+      sql`${table.actionPath} ~ '^/partners/bookings/[0-9a-f-]{36}$' OR ${table.actionPath} = '/partners/billing'`,
+    ),
+    lifecycleCheck: check(
+      "partner_notification_deliveries_lifecycle_check",
+      sql`(
+        ${table.channel} = 'in_app'
+        AND ${table.outboxEventId} IS NULL
+        AND ${table.providerRequestKey} IS NULL
+        AND ${table.endpointId} IS NULL
+        AND ${table.state} IN ('suppressed', 'accepted')
+      ) OR (
+        ${table.channel} IN ('email', 'sms')
+        AND ((${table.outboxEventId} IS NULL) = (${table.providerRequestKey} IS NULL))
+        AND (${table.state} = 'suppressed' OR ${table.outboxEventId} IS NOT NULL)
+        AND (${table.channel} <> 'sms' OR ${table.state} = 'suppressed' OR ${table.endpointId} IS NOT NULL)
+      )`,
     ),
   }),
 );
@@ -9379,6 +12142,9 @@ export const partnerDocuments = pgTable(
       .notNull(),
   },
   (table) => ({
+    accountDocumentKey: uniqueIndex(
+      "partner_documents_account_document_key",
+    ).on(table.partnerAccountId, table.id),
     storageKey: uniqueIndex("partner_documents_storage_key").on(
       table.storageBucket,
       table.storageObjectKey,
@@ -9403,6 +12169,100 @@ export const partnerDocuments = pgTable(
     versionCheck: check(
       "partner_documents_version_check",
       sql`${table.version} > 0`,
+    ),
+  }),
+);
+
+export type PartnerAccountServiceAgreementEntitlement = Readonly<{
+  serviceKey: string;
+  pricingState: "contracted" | "estimate" | "quote_required" | "standard_rate";
+  inclusions: readonly string[];
+  exclusions: readonly string[];
+  quoteRule: string | null;
+}>;
+
+/**
+ * The single account-owned commercial agreement used to authorize Partner
+ * booking choices. Historical booking snapshots remain immutable when this
+ * current policy is revised.
+ */
+export const partnerAccountServiceAgreements = pgTable(
+  "partner_account_service_agreements",
+  {
+    partnerAccountId: uuid("partner_account_id")
+      .primaryKey()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    active: boolean("active").default(false).notNull(),
+    agreementLabel: varchar("agreement_label", { length: 160 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull(),
+    effectiveFrom: timestamp("effective_from", {
+      withTimezone: true,
+    }).notNull(),
+    effectiveTo: timestamp("effective_to", { withTimezone: true }),
+    inclusions: jsonb("inclusions")
+      .$type<readonly string[]>()
+      .default([])
+      .notNull(),
+    exclusions: jsonb("exclusions")
+      .$type<readonly string[]>()
+      .default([])
+      .notNull(),
+    quoteRules: text("quote_rules"),
+    serviceEntitlements: jsonb("service_entitlements")
+      .$type<readonly PartnerAccountServiceAgreementEntitlement[]>()
+      .notNull(),
+    agreementDocumentId: uuid("agreement_document_id"),
+    revision: integer("revision").default(1).notNull(),
+    updatedByTeamMemberId: uuid("updated_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    documentAccountFk: foreignKey({
+      name: "partner_account_service_agreements_document_account_fk",
+      columns: [table.partnerAccountId, table.agreementDocumentId],
+      foreignColumns: [partnerDocuments.partnerAccountId, partnerDocuments.id],
+    }).onDelete("restrict"),
+    effectiveIdx: index("partner_account_service_agreements_effective_idx").on(
+      table.active,
+      table.effectiveFrom,
+      table.effectiveTo,
+    ),
+    labelCheck: check(
+      "partner_account_service_agreements_label_check",
+      sql`${table.agreementLabel} = btrim(${table.agreementLabel}) AND length(${table.agreementLabel}) BETWEEN 1 AND 160`,
+    ),
+    currencyCheck: check(
+      "partner_account_service_agreements_currency_check",
+      sql`${table.currency} ~ '^[A-Z]{3}$'`,
+    ),
+    rangeCheck: check(
+      "partner_account_service_agreements_range_check",
+      sql`${table.effectiveTo} IS NULL OR ${table.effectiveTo} > ${table.effectiveFrom}`,
+    ),
+    listsCheck: check(
+      "partner_account_service_agreements_lists_check",
+      sql`jsonb_typeof(${table.inclusions}) = 'array' AND jsonb_array_length(${table.inclusions}) <= 40 AND jsonb_typeof(${table.exclusions}) = 'array' AND jsonb_array_length(${table.exclusions}) <= 40`,
+    ),
+    entitlementsCheck: check(
+      "partner_account_service_agreements_entitlements_check",
+      sql`jsonb_typeof(${table.serviceEntitlements}) = 'array' AND jsonb_array_length(${table.serviceEntitlements}) BETWEEN 1 AND 100`,
+    ),
+    quoteRulesCheck: check(
+      "partner_account_service_agreements_quote_rules_check",
+      sql`${table.quoteRules} IS NULL OR (${table.quoteRules} = btrim(${table.quoteRules}) AND length(${table.quoteRules}) BETWEEN 1 AND 2000)`,
+    ),
+    revisionCheck: check(
+      "partner_account_service_agreements_revision_check",
+      sql`${table.revision} > 0`,
     ),
   }),
 );
@@ -9549,17 +12409,25 @@ export const partnerApprovalRules = pgTable(
     requiredApproverRoleKeys: text("required_approver_role_keys")
       .array()
       .notNull()
-      .default(["approver"]),
+      .default([]),
+    requiredApproverCapabilities: text("required_approver_capabilities")
+      .array()
+      .notNull()
+      .default(["approvals.decide"]),
     requiredDecisionCount: integer("required_decision_count")
       .default(1)
       .notNull(),
     active: boolean("active").default(true).notNull(),
     version: integer("version").default(1).notNull(),
-    createdByMembershipId: uuid("created_by_membership_id")
-      .notNull()
-      .references(() => partnerAccountMemberships.id, {
-        onDelete: "restrict",
-      }),
+    createdByMembershipId: uuid("created_by_membership_id"),
+    createdByTeamMemberId: uuid("created_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    updatedByTeamMemberId: uuid("updated_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -9573,6 +12441,40 @@ export const partnerApprovalRules = pgTable(
       table.partnerAccountId,
       table.active,
       table.name,
+    ),
+    accountRuleKey: uniqueIndex("partner_approval_rules_account_rule_key").on(
+      table.partnerAccountId,
+      table.id,
+    ),
+    teamCreatorIdx: index("partner_approval_rules_team_creator_idx")
+      .on(table.createdByTeamMemberId, table.createdAt)
+      .where(sql`${table.createdByTeamMemberId} IS NOT NULL`),
+    teamUpdaterIdx: index("partner_approval_rules_team_updater_idx")
+      .on(table.updatedByTeamMemberId, table.updatedAt)
+      .where(sql`${table.updatedByTeamMemberId} IS NOT NULL`),
+    creatorMembershipAccountFk: foreignKey({
+      columns: [table.createdByMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+      name: "partner_approval_rules_creator_membership_account_fk",
+    }).onDelete("restrict"),
+    creatorProvenanceCheck: check(
+      "partner_approval_rules_creator_provenance_check",
+      sql`num_nonnulls(${table.createdByMembershipId}, ${table.createdByTeamMemberId}) = 1`,
+    ),
+    nameCheck: check(
+      "partner_approval_rules_name_check",
+      sql`${table.name} = btrim(${table.name}) AND length(${table.name}) BETWEEN 1 AND 160`,
+    ),
+    conditionsObjectCheck: check(
+      "partner_approval_rules_conditions_object_check",
+      sql`jsonb_typeof(${table.conditions}) = 'object'`,
+    ),
+    fixedCapabilityCheck: check(
+      "partner_approval_rules_fixed_capability_check",
+      sql`${table.requiredApproverCapabilities} = ARRAY['approvals.decide']::text[] AND ${table.requiredApproverRoleKeys} = ARRAY[]::text[]`,
     ),
     decisionCountCheck: check(
       "partner_approval_rules_decision_count_check",
@@ -9696,9 +12598,14 @@ export const partnerQuotes = pgTable(
   "partner_quotes",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    authority: text("authority")
+      .$type<"legacy_snapshot" | "quote_v2">()
+      .default("legacy_snapshot")
+      .notNull(),
     partnerAccountId: uuid("partner_account_id")
       .notNull()
       .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    quoteId: uuid("quote_id"),
     partnerBookingId: uuid("partner_booking_id").references(
       () => partnerBookings.id,
       { onDelete: "restrict" },
@@ -9707,15 +12614,16 @@ export const partnerQuotes = pgTable(
       () => partnerBookingDrafts.id,
       { onDelete: "restrict" },
     ),
-    quoteNumber: text("quote_number").notNull(),
-    version: integer("version").default(1).notNull(),
-    status: text("status").default("draft").notNull(),
-    currency: varchar("currency", { length: 3 }).default("USD").notNull(),
-    subtotalCents: integer("subtotal_cents").notNull(),
-    taxCents: integer("tax_cents").default(0).notNull(),
-    discountCents: integer("discount_cents").default(0).notNull(),
-    totalCents: integer("total_cents").notNull(),
-    lines: jsonb("lines").$type<Array<Record<string, unknown>>>().notNull(),
+    partnerAccountLocationId: uuid("partner_account_location_id"),
+    quoteNumber: text("quote_number"),
+    version: integer("version").default(1),
+    status: text("status").default("draft"),
+    currency: varchar("currency", { length: 3 }).default("USD"),
+    subtotalCents: integer("subtotal_cents"),
+    taxCents: integer("tax_cents").default(0),
+    discountCents: integer("discount_cents").default(0),
+    totalCents: integer("total_cents"),
+    lines: jsonb("lines").$type<Array<Record<string, unknown>>>(),
     terms: text("terms"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     sentAt: timestamp("sent_at", { withTimezone: true }),
@@ -9738,19 +12646,61 @@ export const partnerQuotes = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => ({
+    quoteAccountFk: foreignKey({
+      name: "partner_quotes_quote_account_fk",
+      columns: [table.quoteId, table.partnerAccountId],
+      foreignColumns: [quotes.id, quotes.partnerAccountId],
+    }).onDelete("restrict"),
+    bookingAccountFk: foreignKey({
+      name: "partner_quotes_booking_account_fk",
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+    }).onDelete("restrict"),
+    draftAccountFk: foreignKey({
+      name: "partner_quotes_draft_account_fk",
+      columns: [table.partnerAccountId, table.bookingDraftId],
+      foreignColumns: [
+        partnerBookingDrafts.partnerAccountId,
+        partnerBookingDrafts.id,
+      ],
+    }).onDelete("restrict"),
+    locationAccountFk: foreignKey({
+      name: "partner_quotes_location_account_fk",
+      columns: [table.partnerAccountId, table.partnerAccountLocationId],
+      foreignColumns: [
+        partnerAccountLocations.partnerAccountId,
+        partnerAccountLocations.id,
+      ],
+    }).onDelete("restrict"),
+    quoteV2BindingKey: uniqueIndex("partner_quotes_quote_v2_binding_key")
+      .on(table.quoteId)
+      .where(sql`${table.authority} = 'quote_v2'`),
     quoteVersionKey: uniqueIndex("partner_quotes_quote_version_key").on(
       table.partnerAccountId,
       table.quoteNumber,
       table.version,
     ),
+    accountAuthorityIdx: index("partner_quotes_account_authority_idx").on(
+      table.partnerAccountId,
+      table.authority,
+      table.createdAt,
+      table.id,
+    ),
+    accountBookingProjectionKey: uniqueIndex(
+      "partner_quotes_account_booking_projection_key",
+    ).on(table.partnerAccountId, table.partnerBookingId, table.id),
     accountStatusIdx: index("partner_quotes_account_status_idx").on(
       table.partnerAccountId,
       table.status,
       table.createdAt,
     ),
-    targetCheck: check(
-      "partner_quotes_target_check",
-      sql`num_nonnulls(${table.partnerBookingId}, ${table.bookingDraftId}) >= 1`,
+    authorityCheck: check(
+      "partner_quotes_authority_check",
+      sql`${table.authority} IN ('legacy_snapshot', 'quote_v2')`,
+    ),
+    projectionShapeCheck: check(
+      "partner_quotes_projection_shape_check",
+      sql`(${table.authority} = 'legacy_snapshot' AND ${table.quoteId} IS NULL AND ${table.partnerAccountLocationId} IS NULL AND ${table.quoteNumber} IS NOT NULL AND ${table.version} IS NOT NULL AND ${table.status} IS NOT NULL AND ${table.currency} IS NOT NULL AND ${table.subtotalCents} IS NOT NULL AND ${table.taxCents} IS NOT NULL AND ${table.discountCents} IS NOT NULL AND ${table.totalCents} IS NOT NULL AND ${table.lines} IS NOT NULL AND num_nonnulls(${table.partnerBookingId}, ${table.bookingDraftId}) >= 1) OR (${table.authority} = 'quote_v2' AND ${table.quoteId} IS NOT NULL AND num_nonnulls(${table.partnerBookingId}, ${table.bookingDraftId}, ${table.partnerAccountLocationId}) = 1 AND ${table.quoteNumber} IS NULL AND ${table.version} IS NULL AND ${table.status} IS NULL AND ${table.currency} IS NULL AND ${table.subtotalCents} IS NULL AND ${table.taxCents} IS NULL AND ${table.discountCents} IS NULL AND ${table.totalCents} IS NULL AND ${table.lines} IS NULL AND ${table.terms} IS NULL AND ${table.expiresAt} IS NULL AND ${table.sentAt} IS NULL AND ${table.acceptedAt} IS NULL AND ${table.declinedAt} IS NULL AND ${table.supersededAt} IS NULL AND ${table.documentId} IS NULL)`,
     ),
     statusCheck: check(
       "partner_quotes_status_check",
@@ -9819,6 +12769,15 @@ export const partnerInvoices = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => ({
+    accountIdKey: uniqueIndex("partner_invoices_account_id_key").on(
+      table.partnerAccountId,
+      table.id,
+    ),
+    bookingAccountFk: foreignKey({
+      name: "partner_invoices_account_booking_fk",
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+    }).onDelete("restrict"),
     accountInvoiceKey: uniqueIndex("partner_invoices_account_invoice_key").on(
       table.partnerAccountId,
       table.invoiceNumber,
@@ -9847,6 +12806,208 @@ export const partnerInvoices = pgTable(
     versionCheck: check(
       "partner_invoices_version_check",
       sql`${table.version} > 0`,
+    ),
+  }),
+);
+
+export type PartnerBillingDisputeCategory =
+  | "invoice_amount"
+  | "duplicate_charge"
+  | "payment_not_reflected"
+  | "service_concern"
+  | "refund_request"
+  | "tax_or_document"
+  | "other";
+
+export type PartnerBillingDisputeState =
+  | "pending"
+  | "information_provided"
+  | "adjustment_required"
+  | "refund_review"
+  | "declined";
+
+export type PartnerBillingDisputeRequestSnapshot = Readonly<{
+  version: 1;
+  requestedAt: string;
+  invoice: Readonly<{
+    id: string;
+    invoiceNumber: string;
+    version: number;
+    status: string;
+    currency: string;
+    totalMinor: number;
+    paidMinor: number;
+    balanceMinor: number;
+    bookingId: string | null;
+  }>;
+  evidence: Readonly<{
+    disputedAmountMinor: number | null;
+    reference: string | null;
+    details: string | null;
+  }>;
+  replayReceipt: Readonly<{
+    version: 1;
+    status: 201;
+    correlationId: string;
+    etag: string;
+    message: string;
+  }>;
+}>;
+
+export type PartnerBillingDisputeResolutionSnapshot = Readonly<{
+  version: 1;
+  outcome: Exclude<PartnerBillingDisputeState, "pending">;
+  resolvedAt: string;
+  invoiceVersion: number;
+  invoiceStatus: string;
+  monetaryMutationPerformed: false;
+  providerActionPerformed: false;
+}>;
+
+/**
+ * Account/invoice-owned billing questions, disputes, and refund-review
+ * requests. The lifecycle only classifies Staff follow-up; it never mutates
+ * financial/provider state.
+ */
+export const partnerBillingDisputeRequests = pgTable(
+  "partner_billing_dispute_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    partnerInvoiceId: uuid("partner_invoice_id").notNull(),
+    partnerBookingId: uuid("partner_booking_id"),
+    requestedByMembershipId: uuid("requested_by_membership_id").notNull(),
+    conversationThreadId: uuid("conversation_thread_id").notNull(),
+    threadScope: text("thread_scope").$type<"account_billing">().notNull(),
+    category: text("category").$type<PartnerBillingDisputeCategory>().notNull(),
+    reason: text("reason").notNull(),
+    requestSnapshot: jsonb("request_snapshot")
+      .$type<PartnerBillingDisputeRequestSnapshot>()
+      .notNull(),
+    operationKeyHash: varchar("operation_key_hash", { length: 64 }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    state: text("state")
+      .$type<PartnerBillingDisputeState>()
+      .default("pending")
+      .notNull(),
+    revision: integer("revision").default(1).notNull(),
+    resolvedByTeamMemberId: uuid("resolved_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    resolutionReason: text("resolution_reason"),
+    resolutionSnapshot: jsonb(
+      "resolution_snapshot",
+    ).$type<PartnerBillingDisputeResolutionSnapshot | null>(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    invoiceAccountFk: foreignKey({
+      name: "partner_billing_disputes_invoice_account_fk",
+      columns: [table.partnerAccountId, table.partnerInvoiceId],
+      foreignColumns: [partnerInvoices.partnerAccountId, partnerInvoices.id],
+    }).onDelete("restrict"),
+    bookingAccountFk: foreignKey({
+      name: "partner_billing_disputes_booking_account_fk",
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+    }).onDelete("restrict"),
+    requesterAccountFk: foreignKey({
+      name: "partner_billing_disputes_requester_account_fk",
+      columns: [table.requestedByMembershipId, table.partnerAccountId],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+      ],
+    }).onDelete("restrict"),
+    threadAccountFk: foreignKey({
+      name: "partner_billing_disputes_thread_account_fk",
+      columns: [table.partnerAccountId, table.conversationThreadId],
+      foreignColumns: [
+        conversationThreads.partnerAccountId,
+        conversationThreads.id,
+      ],
+    }).onDelete("restrict"),
+    accountRequestKey: uniqueIndex(
+      "partner_billing_disputes_account_request_key",
+    ).on(table.partnerAccountId, table.id),
+    accountOperationKey: uniqueIndex(
+      "partner_billing_disputes_account_operation_key",
+    ).on(table.partnerAccountId, table.operationKeyHash),
+    pendingInvoiceKey: uniqueIndex(
+      "partner_billing_disputes_pending_invoice_key",
+    )
+      .on(table.partnerAccountId, table.partnerInvoiceId)
+      .where(sql`${table.state} = 'pending'`),
+    accountBillingThreadKey: uniqueIndex(
+      "partner_billing_disputes_account_thread_key",
+    )
+      .on(table.conversationThreadId)
+      .where(sql`${table.threadScope} = 'account_billing'`),
+    accountStateIdx: index("partner_billing_disputes_account_state_idx").on(
+      table.partnerAccountId,
+      table.state,
+      table.createdAt,
+      table.id,
+    ),
+    invoiceHistoryIdx: index("partner_billing_disputes_invoice_history_idx").on(
+      table.partnerAccountId,
+      table.partnerInvoiceId,
+      table.createdAt,
+      table.id,
+    ),
+    bookingHistoryIdx: index("partner_billing_disputes_booking_history_idx")
+      .on(
+        table.partnerAccountId,
+        table.partnerBookingId,
+        table.createdAt,
+        table.id,
+      )
+      .where(sql`${table.partnerBookingId} IS NOT NULL`),
+    threadScopeCheck: check(
+      "partner_billing_disputes_thread_scope_check",
+      sql`${table.threadScope} = 'account_billing'`,
+    ),
+    categoryCheck: check(
+      "partner_billing_disputes_category_check",
+      sql`${table.category} IN ('invoice_amount', 'duplicate_charge', 'payment_not_reflected', 'service_concern', 'refund_request', 'tax_or_document', 'other')`,
+    ),
+    reasonCheck: check(
+      "partner_billing_disputes_reason_check",
+      sql`${table.reason} = btrim(${table.reason}) AND length(${table.reason}) BETWEEN 10 AND 2000`,
+    ),
+    snapshotCheck: check(
+      "partner_billing_disputes_snapshot_check",
+      sql`jsonb_typeof(${table.requestSnapshot}) = 'object' AND ${table.requestSnapshot} @> '{"version": 1}'::jsonb AND ${table.requestSnapshot} ? 'replayReceipt' AND jsonb_typeof(${table.requestSnapshot} -> 'replayReceipt') = 'object' AND ${table.requestSnapshot} -> 'replayReceipt' @> '{"version": 1, "status": 201}'::jsonb AND ${table.requestSnapshot} -> 'replayReceipt' ? 'correlationId' AND jsonb_typeof(${table.requestSnapshot} -> 'replayReceipt' -> 'correlationId') = 'string' AND ${table.requestSnapshot} -> 'replayReceipt' ->> 'correlationId' ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$' AND ${table.requestSnapshot} -> 'replayReceipt' ? 'etag' AND jsonb_typeof(${table.requestSnapshot} -> 'replayReceipt' -> 'etag') = 'string' AND ${table.requestSnapshot} -> 'replayReceipt' ->> 'etag' ~ '^"[A-Za-z0-9_-]{43}"$' AND ${table.requestSnapshot} -> 'replayReceipt' ? 'message' AND jsonb_typeof(${table.requestSnapshot} -> 'replayReceipt' -> 'message') = 'string' AND length(${table.requestSnapshot} -> 'replayReceipt' ->> 'message') BETWEEN 1 AND 500`,
+    ),
+    operationHashCheck: check(
+      "partner_billing_disputes_operation_hash_check",
+      sql`${table.operationKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    requestHashCheck: check(
+      "partner_billing_disputes_request_hash_check",
+      sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    stateCheck: check(
+      "partner_billing_disputes_state_check",
+      sql`${table.state} IN ('pending', 'information_provided', 'adjustment_required', 'refund_review', 'declined')`,
+    ),
+    revisionCheck: check(
+      "partner_billing_disputes_revision_check",
+      sql`${table.revision} > 0`,
+    ),
+    resolutionCheck: check(
+      "partner_billing_disputes_resolution_check",
+      sql`(${table.state} = 'pending' AND ${table.resolvedByTeamMemberId} IS NULL AND ${table.resolutionReason} IS NULL AND ${table.resolutionSnapshot} IS NULL AND ${table.resolvedAt} IS NULL) OR (${table.state} IN ('information_provided', 'adjustment_required', 'refund_review', 'declined') AND ${table.resolvedByTeamMemberId} IS NOT NULL AND ${table.resolutionReason} IS NOT NULL AND length(btrim(${table.resolutionReason})) BETWEEN 12 AND 2000 AND ${table.resolutionSnapshot} IS NOT NULL AND jsonb_typeof(${table.resolutionSnapshot}) = 'object' AND ${table.resolutionSnapshot} @> '{"version": 1, "monetaryMutationPerformed": false, "providerActionPerformed": false}'::jsonb AND ${table.resolutionSnapshot} ? 'outcome' AND jsonb_typeof(${table.resolutionSnapshot} -> 'outcome') = 'string' AND ${table.resolutionSnapshot} ->> 'outcome' = ${table.state} AND ${table.resolvedAt} IS NOT NULL)`,
     ),
   }),
 );
@@ -10801,6 +13962,14 @@ export const quoteResponses = pgTable(
     teamMemberId: uuid("team_member_id").references(() => teamMembers.id, {
       onDelete: "set null",
     }),
+    partnerAccountId: uuid("partner_account_id").references(
+      () => partnerAccounts.id,
+      { onDelete: "restrict" },
+    ),
+    partnerMembershipId: uuid("partner_membership_id"),
+    partnerUserId: uuid("partner_user_id").references(() => partnerUsers.id, {
+      onDelete: "restrict",
+    }),
     changeRequestId: uuid("change_request_id").references(
       () => quoteChangeRequests.id,
       { onDelete: "set null" },
@@ -10835,6 +14004,7 @@ export const quoteResponses = pgTable(
     acceptedBalanceMinCents: integer("accepted_balance_min_cents"),
     acceptedBalanceMaxCents: integer("accepted_balance_max_cents"),
     idempotencyKeyHash: varchar("idempotency_key_hash", { length: 64 }),
+    requestHash: varchar("request_hash", { length: 64 }),
     requestMetadata: jsonb("request_metadata")
       .$type<Record<string, unknown>>()
       .default({})
@@ -10847,9 +14017,32 @@ export const quoteResponses = pgTable(
       .notNull(),
   },
   (table) => ({
+    quotePartnerAccountFk: foreignKey({
+      name: "quote_responses_quote_partner_account_fk",
+      columns: [table.quoteId, table.partnerAccountId],
+      foreignColumns: [quotes.id, quotes.partnerAccountId],
+    }).onDelete("restrict"),
+    partnerActorFk: foreignKey({
+      name: "quote_responses_partner_actor_fk",
+      columns: [
+        table.partnerMembershipId,
+        table.partnerAccountId,
+        table.partnerUserId,
+      ],
+      foreignColumns: [
+        partnerAccountMemberships.id,
+        partnerAccountMemberships.partnerAccountId,
+        partnerAccountMemberships.partnerUserId,
+      ],
+    }).onDelete("restrict"),
     terminalVersionKey: uniqueIndex("quote_responses_terminal_version_key")
       .on(table.quoteVersionId)
       .where(sql`${table.responseType} IN ('accepted', 'declined')`),
+    idQuoteVersionKey: uniqueIndex("quote_responses_id_quote_version_key").on(
+      table.id,
+      table.quoteId,
+      table.quoteVersionId,
+    ),
     versionIdempotencyKey: uniqueIndex(
       "quote_responses_version_idempotency_key",
     )
@@ -10859,6 +14052,9 @@ export const quoteResponses = pgTable(
       table.quoteId,
       table.respondedAt,
     ),
+    partnerActorIdx: index("quote_responses_partner_actor_idx")
+      .on(table.partnerAccountId, table.partnerMembershipId, table.respondedAt)
+      .where(sql`${table.source} = 'partner_member'`),
     appointmentKey: uniqueIndex("quote_responses_appointment_key")
       .on(table.appointmentId)
       .where(sql`${table.appointmentId} IS NOT NULL`),
@@ -10868,11 +14064,11 @@ export const quoteResponses = pgTable(
     ),
     sourceCheck: check(
       "quote_responses_source_check",
-      sql`${table.source} IN ('customer', 'team_member', 'system')`,
+      sql`${table.source} IN ('customer', 'team_member', 'partner_member', 'system')`,
     ),
     actorCheck: check(
       "quote_responses_actor_check",
-      sql`${table.source} <> 'team_member' OR ${table.teamMemberId} IS NOT NULL`,
+      sql`(${table.source} = 'team_member' AND ${table.teamMemberId} IS NOT NULL AND num_nonnulls(${table.partnerAccountId}, ${table.partnerMembershipId}, ${table.partnerUserId}) = 0) OR (${table.source} = 'partner_member' AND ${table.teamMemberId} IS NULL AND ${table.partnerAccountId} IS NOT NULL AND ${table.partnerMembershipId} IS NOT NULL AND ${table.partnerUserId} IS NOT NULL AND ${table.idempotencyKeyHash} IS NOT NULL AND ${table.requestHash} IS NOT NULL) OR (${table.source} IN ('customer', 'system') AND ${table.teamMemberId} IS NULL AND num_nonnulls(${table.partnerAccountId}, ${table.partnerMembershipId}, ${table.partnerUserId}) = 0)`,
     ),
     changeRequestCheck: check(
       "quote_responses_change_request_check",
@@ -10897,6 +14093,152 @@ export const quoteResponses = pgTable(
     idempotencyHashCheck: check(
       "quote_responses_idempotency_hash_check",
       sql`${table.idempotencyKeyHash} IS NULL OR ${table.idempotencyKeyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    requestHashCheck: check(
+      "quote_responses_request_hash_check",
+      sql`${table.requestHash} IS NULL OR ${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+  }),
+);
+
+export type PartnerJobChangeOrderOfferSnapshot = Readonly<{
+  version: 1;
+  offeredAt: string;
+  partnerQuoteId: string;
+  quoteId: string;
+  quoteVersionId: string;
+  quoteVersionNumber: number;
+  quoteContentHash: string;
+  amountMinor: number;
+  currency: string;
+  bookingRevision: number;
+}>;
+
+export type PartnerJobChangeOrderResolutionSnapshot = Readonly<{
+  version: 1;
+  outcome: "accepted" | "declined" | "superseded";
+  quoteResponseId: string | null;
+  bookingRevisionBefore: number;
+  bookingRevisionAfter: number;
+  appliedPublicFields: readonly string[];
+  operationalEffectsPending: readonly ("schedule" | "service" | "proof")[];
+}>;
+
+/**
+ * Bridges a material Partner job-change request to one exact account/job-bound
+ * Quote V2. The immutable offer snapshot is the commercial evidence applied
+ * when the Partner accepts that quote.
+ */
+export const partnerJobChangeOrders = pgTable(
+  "partner_job_change_orders",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    partnerBookingId: uuid("partner_booking_id").notNull(),
+    partnerJobChangeRequestId: uuid("partner_job_change_request_id").notNull(),
+    partnerQuoteId: uuid("partner_quote_id").notNull(),
+    quoteId: uuid("quote_id").notNull(),
+    quoteVersionId: uuid("quote_version_id").notNull(),
+    state: text("state")
+      .$type<"offered" | "accepted" | "declined" | "superseded">()
+      .default("offered")
+      .notNull(),
+    offerSnapshot: jsonb("offer_snapshot")
+      .$type<PartnerJobChangeOrderOfferSnapshot>()
+      .notNull(),
+    baseBookingRevision: integer("base_booking_revision").notNull(),
+    revision: integer("revision").default(1).notNull(),
+    offeredByTeamMemberId: uuid("offered_by_team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    quoteResponseId: uuid("quote_response_id"),
+    resolutionSnapshot: jsonb(
+      "resolution_snapshot",
+    ).$type<PartnerJobChangeOrderResolutionSnapshot | null>(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    requestAccountJobFk: foreignKey({
+      name: "partner_job_change_orders_request_account_job_fk",
+      columns: [
+        table.partnerAccountId,
+        table.partnerBookingId,
+        table.partnerJobChangeRequestId,
+      ],
+      foreignColumns: [
+        partnerJobChangeRequests.partnerAccountId,
+        partnerJobChangeRequests.partnerBookingId,
+        partnerJobChangeRequests.id,
+      ],
+    }).onDelete("restrict"),
+    quoteAccountJobFk: foreignKey({
+      name: "partner_job_change_orders_quote_account_job_fk",
+      columns: [
+        table.partnerAccountId,
+        table.partnerBookingId,
+        table.partnerQuoteId,
+      ],
+      foreignColumns: [
+        partnerQuotes.partnerAccountId,
+        partnerQuotes.partnerBookingId,
+        partnerQuotes.id,
+      ],
+    }).onDelete("restrict"),
+    versionQuoteFk: foreignKey({
+      name: "partner_job_change_orders_version_quote_fk",
+      columns: [table.quoteVersionId, table.quoteId],
+      foreignColumns: [quoteVersions.id, quoteVersions.quoteId],
+    }).onDelete("restrict"),
+    responseQuoteVersionFk: foreignKey({
+      name: "partner_job_change_orders_response_quote_version_fk",
+      columns: [table.quoteResponseId, table.quoteId, table.quoteVersionId],
+      foreignColumns: [
+        quoteResponses.id,
+        quoteResponses.quoteId,
+        quoteResponses.quoteVersionId,
+      ],
+    }).onDelete("restrict"),
+    requestKey: uniqueIndex("partner_job_change_orders_request_key").on(
+      table.partnerJobChangeRequestId,
+    ),
+    quoteKey: uniqueIndex("partner_job_change_orders_quote_key").on(
+      table.partnerQuoteId,
+    ),
+    activeBookingKey: uniqueIndex(
+      "partner_job_change_orders_active_booking_key",
+    )
+      .on(table.partnerAccountId, table.partnerBookingId)
+      .where(sql`${table.state} = 'offered'`),
+    accountStateIdx: index("partner_job_change_orders_account_state_idx").on(
+      table.partnerAccountId,
+      table.state,
+      table.createdAt,
+      table.id,
+    ),
+    stateCheck: check(
+      "partner_job_change_orders_state_check",
+      sql`${table.state} IN ('offered', 'accepted', 'declined', 'superseded')`,
+    ),
+    offerCheck: check(
+      "partner_job_change_orders_offer_check",
+      sql`jsonb_typeof(${table.offerSnapshot}) = 'object' AND ${table.offerSnapshot} ->> 'version' = '1' AND (${table.offerSnapshot} ->> 'amountMinor')::numeric > 0 AND ${table.offerSnapshot} ->> 'currency' ~ '^[A-Z]{3}$'`,
+    ),
+    revisionCheck: check(
+      "partner_job_change_orders_revision_check",
+      sql`${table.revision} > 0 AND ${table.baseBookingRevision} > 0`,
+    ),
+    resolutionCheck: check(
+      "partner_job_change_orders_resolution_check",
+      sql`(${table.state} = 'offered' AND ${table.quoteResponseId} IS NULL AND ${table.resolutionSnapshot} IS NULL AND ${table.resolvedAt} IS NULL) OR (${table.state} IN ('accepted', 'declined', 'superseded') AND jsonb_typeof(${table.resolutionSnapshot}) = 'object' AND ${table.resolutionSnapshot} ->> 'version' = '1' AND ${table.resolutionSnapshot} ->> 'outcome' = ${table.state} AND ${table.resolvedAt} IS NOT NULL AND ((${table.state} IN ('accepted', 'declined') AND ${table.quoteResponseId} IS NOT NULL) OR (${table.state} = 'superseded' AND ${table.quoteResponseId} IS NULL)))`,
     ),
   }),
 );

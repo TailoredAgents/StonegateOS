@@ -4,7 +4,7 @@ import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
-import { requirePartnerCapability } from "@/lib/partner-account-authorization";
+import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
 import { arePartnerPortalV2WritesEnabled } from "@/lib/partner-portal-feature-flags";
 import { decidePartnerApprovalRequest } from "@/lib/partner-portal-v2-approvals";
 import { runPortalV2IdempotentMutation } from "@/lib/partner-portal-v2-idempotency";
@@ -54,9 +54,9 @@ export async function POST(
   if (!isAllowedPartnerPortalMutationOrigin(request)) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
-  const authorization = await requirePartnerCapability(
+  const authorization = await requireRecentPartnerMfaCapability(
     request,
-    "bookings.approve",
+    "approvals.decide",
   );
   if (!authorization.ok) {
     return createPartnerPortalV2ErrorResponse(
@@ -66,13 +66,6 @@ export async function POST(
     );
   }
   const { principal } = authorization;
-  if (principal.session.assuranceLevel !== "aal2") {
-    return createPartnerPortalV2ErrorResponse(
-      "mfa_step_up_required",
-      403,
-      correlationId,
-    );
-  }
   const { requestId } = await context.params;
   if (
     !principal.accountId ||

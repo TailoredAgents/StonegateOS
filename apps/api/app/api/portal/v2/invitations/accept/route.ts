@@ -9,13 +9,20 @@ import {
   PartnerInvitationAcceptanceSchema,
 } from "@/lib/partner-account-invitations";
 import {
+  createPartnerPortalV2DescriptorResponse,
   createPartnerPortalV2ErrorResponse,
-  createPartnerPortalV2SuccessResponse,
+  createPartnerPortalV2StoredResponse,
   createPartnerPortalV2UnexpectedResponse,
 } from "@/lib/partner-portal-v2-response";
+import { runPortalV2IdempotentMutation } from "@/lib/partner-portal-v2-idempotency";
 import { isAllowedPartnerPortalMutationOrigin } from "@/lib/partner-portal-v2-security";
 import { consumeTeamAuthRateLimit } from "@/lib/team-auth-rate-limit";
-import { readPortalV2CorrelationId } from "@/lib/portal-v2-contract";
+import {
+  createPortalV2ErrorResponse,
+  createPortalV2IdempotencyErrorResponse,
+  readPortalV2CorrelationId,
+  readPortalV2IdempotencyKey,
+} from "@/lib/portal-v2-contract";
 
 export async function POST(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
@@ -42,38 +49,63 @@ export async function POST(request: NextRequest): Promise<Response> {
     if (!payload.success || !/^[A-Za-z0-9_-]{32,256}$/u.test(payload.data.token)) {
       return createPartnerPortalV2ErrorResponse("invalid_fields", 422, correlationId);
     }
+    const idempotency = readPortalV2IdempotencyKey(request.headers);
+    if (!idempotency.ok) {
+      return createPartnerPortalV2DescriptorResponse(
+        createPortalV2IdempotencyErrorResponse(idempotency, correlationId),
+      );
+    }
     const tokenFingerprint = createHash("sha256")
       .update(payload.data.token, "utf8")
       .digest("hex");
-    const rateLimit = await consumeTeamAuthRateLimit({
-      action: "partner_invitation_accept",
-      request,
-      identity: { kind: "token", value: tokenFingerprint },
-    });
-    if (rateLimit.limited) {
-      const response = createPartnerPortalV2ErrorResponse("rate_limited", 429, correlationId);
-      response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
-      return response;
-    }
-    const accepted = await acceptPartnerAccountInvitation({
-      token: payload.data.token,
-      request,
+    const run = await runPortalV2IdempotentMutation({
+      principal: `partner-invitation:${tokenFingerprint}`,
+      action: "partner.account_invitation.accept",
+      keyHash: idempotency.keyHash!,
+      scope: `POST:/api/portal/v2/invitations/accept:${tokenFingerprint}`,
+      payload: { tokenFingerprint },
       correlationId,
-      sessionDays: payload.data.rememberMe ? 30 : 0.5,
-    });
-    if (!accepted) {
-      return createPartnerPortalV2ErrorResponse("unauthorized", 401, correlationId);
-    }
-    return createPartnerPortalV2SuccessResponse(
-      {
-        ok: true,
-        sessionToken: accepted.sessionToken,
-        needsPasswordSetup: accepted.needsPasswordSetup,
-        expiresAt: accepted.expiresAt.toISOString(),
-        persistent: payload.data.rememberMe === true,
+      execute: async () => {
+        const rateLimit = await consumeTeamAuthRateLimit({
+          action: "partner_invitation_accept",
+          request,
+          identity: { kind: "token", value: tokenFingerprint },
+        });
+        if (rateLimit.limited) {
+          return {
+            status: 429,
+            body: { ok: false, error: "rate_limited" },
+            headers: { "Retry-After": String(rateLimit.retryAfterSeconds) },
+          };
+        }
+        const accepted = await acceptPartnerAccountInvitation({
+          token: payload.data.token,
+          correlationId,
+        });
+        if (!accepted) {
+          return { status: 401, body: { ok: false, error: "unauthorized" } };
+        }
+        return {
+          status: 202,
+          body: {
+            ok: true,
+            activationRequired: accepted.activationRequired,
+            deliveryStatus: accepted.deliveryStatus,
+          },
+        };
       },
-      correlationId,
-    );
+    });
+    if (run.kind === "conflict") {
+      return createPartnerPortalV2DescriptorResponse(
+        createPortalV2ErrorResponse(
+          run.reason === "different_request"
+            ? "idempotency_conflict"
+            : "conflict",
+          correlationId,
+        ),
+      );
+    }
+    return createPartnerPortalV2StoredResponse(run.result, correlationId);
   } catch (error) {
     return createPartnerPortalV2UnexpectedResponse(correlationId, error);
   }

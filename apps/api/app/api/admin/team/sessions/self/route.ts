@@ -36,6 +36,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     .select({
       id: teamSessions.id,
       authMethod: teamSessions.authMethod,
+      assuranceLevel: teamSessions.assuranceLevel,
+      mfaVerifiedAt: teamSessions.mfaVerifiedAt,
       createdAt: teamSessions.createdAt,
       lastSeenAt: teamSessions.lastSeenAt,
       expiresAt: teamSessions.expiresAt,
@@ -74,6 +76,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       sessions: visibleRows.map((session) => ({
         current: session.id === actor.sessionId,
         authMethod: session.authMethod,
+        assuranceLevel: session.assuranceLevel,
+        mfaVerifiedAt: session.mfaVerifiedAt?.toISOString() ?? null,
         createdAt: session.createdAt.toISOString(),
         lastSeenAt: session.lastSeenAt.toISOString(),
         expiresAt: session.expiresAt.toISOString(),

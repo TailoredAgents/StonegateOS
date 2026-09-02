@@ -14,9 +14,13 @@ import {
 } from "@/lib/partner-portal-v2-response";
 import { isAllowedPartnerPortalMutationOrigin } from "@/lib/partner-portal-v2-security";
 import { consumeTeamAuthRateLimit } from "@/lib/team-auth-rate-limit";
+import { isPartnerRoutineMagicLinkLoginEnabled } from "@/lib/partner-portal-feature-flags";
 
 export async function POST(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
+  if (!isPartnerRoutineMagicLinkLoginEnabled()) {
+    return createPartnerPortalV2ErrorResponse("not_found", 404, correlationId);
+  }
   if (!isAllowedPartnerPortalMutationOrigin(request)) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }

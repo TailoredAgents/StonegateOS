@@ -3,6 +3,7 @@ import Link from "next/link";
 import { CalendarClock } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
 import { PartnerRescheduleFlow } from "@/app/partners/components/PartnerRescheduleFlow";
+import type { PartnerCancellationDecision } from "@/app/partners/components/PartnerJobActions";
 import {
   PartnerErrorState,
   PartnerPageHeader,
@@ -17,6 +18,7 @@ type RescheduleJob = {
   schedule: {
     arrivalWindow: { startAt: string; endAt: string; timezone: string } | null;
   };
+  cancellation: PartnerCancellationDecision;
   allowedActions: string[];
 };
 
@@ -27,8 +29,10 @@ function isRescheduleJob(value: unknown): value is RescheduleJob {
   const record = value as Record<string, unknown>;
   return (
     typeof record["id"] === "string" &&
+    typeof record["status"] === "string" &&
     typeof record["location"] === "object" &&
     typeof record["schedule"] === "object" &&
+    typeof record["cancellation"] === "object" &&
     Array.isArray(record["allowedActions"])
   );
 }
@@ -96,6 +100,15 @@ export default async function PartnerReschedulePage({
   }
   const locationName =
     job.location.name?.trim() || job.location.address?.line1 || "this job";
+  const cancellationDeadline = job.cancellation.deadlineAt
+    ? Date.parse(job.cancellation.deadlineAt)
+    : Number.NaN;
+  const scheduleChangeRequiresReview =
+    job.status === "confirmed" &&
+    (!job.cancellation.directCancellationEnabled ||
+      job.cancellation.policySource === "unconfigured" ||
+      !Number.isFinite(cancellationDeadline) ||
+      Date.now() >= cancellationDeadline);
 
   return (
     <div className="space-y-5 sm:space-y-6">
@@ -104,7 +117,7 @@ export default async function PartnerReschedulePage({
         title="Change arrival window"
         description={`Choose a new two-hour arrival window for ${locationName}. Your current schedule stays in place until the change is confirmed.`}
         breadcrumbs={[
-          { label: "Overview", href: "/partners" },
+          { label: "Overview", href: "/partners/overview" },
           { label: "Jobs", href: "/partners/bookings" },
           {
             label: `Job ${job.id.slice(0, 8)}`,
@@ -137,6 +150,8 @@ export default async function PartnerReschedulePage({
         jobId={job.id}
         jobEtag={etag}
         currentWindow={currentWindow}
+        cancellation={job.cancellation}
+        scheduleChangeRequiresReview={scheduleChangeRequiresReview}
       />
 
       <Link

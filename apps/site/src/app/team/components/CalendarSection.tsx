@@ -84,6 +84,10 @@ export async function CalendarSection({
   );
   const canCollectPayments = hasTeamPermission(principal, "payments.collect");
   const canSendCustomerMessages = hasTeamPermission(principal, "messages.send");
+  const canManageAppointmentMedia = hasTeamPermission(
+    principal,
+    "appointment_media.manage",
+  );
   const canOverrideScheduleConflicts = hasTeamPermission(
     principal,
     "appointments.override_conflicts",
@@ -134,6 +138,7 @@ export async function CalendarSection({
         canUpdateAppointments={canUpdateAppointments}
         canCollectPayments={canCollectPayments}
         canSendCustomerMessages={canSendCustomerMessages}
+        canManageAppointmentMedia={canManageAppointmentMedia}
         canOverrideScheduleConflicts={canOverrideScheduleConflicts}
         googleCalendarState={feed.googleCalendarState ?? "disabled"}
       />

@@ -23,6 +23,7 @@ const OTHER_LOCATION_ID = "66666666-6666-4666-8666-666666666666";
 const OTHER_PROPERTY_ID = "77777777-7777-4777-8777-777777777777";
 const MEMBERSHIP_ID = "88888888-8888-4888-8888-888888888888";
 const OTHER_MEMBERSHIP_ID = "99999999-9999-4999-8999-999999999999";
+const COST_CENTER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 function accountPrincipal(): PartnerDraftAuthorizationPrincipal {
   return {
@@ -110,6 +111,7 @@ describe("partner V2 job resource authorization", () => {
         123,
       ],
       propertyIds: [PROPERTY_ID, ""],
+      costCenterIds: [COST_CENTER_ID, "not-a-cost-center"],
     } as unknown as PartnerJobAuthorizationPrincipal["accessScope"];
     const normalized = normalizePartnerJobAccessScope(
       scopedPrincipal(malformedScope),
@@ -117,6 +119,7 @@ describe("partner V2 job resource authorization", () => {
     expect(normalized).toEqual({
       locationIds: [LOCATION_ID],
       propertyIds: [PROPERTY_ID],
+      costCenterIds: [COST_CENTER_ID],
     });
     expect(Object.isFrozen(normalized)).toBe(true);
     expect(Object.isFrozen(normalized.locationIds)).toBe(true);
@@ -126,7 +129,7 @@ describe("partner V2 job resource authorization", () => {
           null as unknown as PartnerJobAuthorizationPrincipal["accessScope"],
         ),
       ),
-    ).toEqual({ locationIds: [], propertyIds: [] });
+    ).toEqual({ locationIds: [], propertyIds: [], costCenterIds: [] });
     expect(
       normalizePartnerJobAccessScope(
         scopedPrincipal({ locationIds: Array(1_001).fill(LOCATION_ID) }),
@@ -140,6 +143,7 @@ describe("partner V2 job resource authorization", () => {
         scopedPrincipal({
           propertyIds: [PROPERTY_ID, OTHER_PROPERTY_ID],
           locationIds: [LOCATION_ID],
+          costCenterIds: [COST_CENTER_ID],
         }),
       ),
     ).toBe(
@@ -147,6 +151,7 @@ describe("partner V2 job resource authorization", () => {
         scopedPrincipal({
           locationIds: [LOCATION_ID],
           propertyIds: [OTHER_PROPERTY_ID, PROPERTY_ID],
+          costCenterIds: [COST_CENTER_ID],
         }),
       ),
     );
@@ -158,6 +163,11 @@ describe("partner V2 job resource authorization", () => {
     expect(partnerJobAccessScopeKey(scopedPrincipal())).not.toContain(
       LOCATION_ID,
     );
+    expect(
+      partnerJobAccessScopeKey(
+        scopedPrincipal({ costCenterIds: [COST_CENTER_ID] }),
+      ),
+    ).not.toContain(COST_CENTER_ID);
   });
 
   it("encodes account, job, location, and property restrictions in SQL", () => {
@@ -520,6 +530,12 @@ describe("partner V2 job route authorization contracts", () => {
     expect(list).toContain(
       "pagination.cursor.payload.accessScopeKey !== accessScopeKey",
     );
+    expect(list).toContain("pagination.cursor.payload.jobId !== jobId");
+    expect(list).toContain(
+      "eq(partnerNotifications.partnerBookingId, jobId)",
+    );
+    expect(list).toContain("SAFE_NOTIFICATION_ACTION_PATHS");
+    expect(list).not.toContain('value?.startsWith("/partners/")');
   });
 
   it("requires account-wide access before mutating account proof defaults", () => {

@@ -26,6 +26,18 @@ const MAX_MESSAGE_LENGTH = 5_000;
 
 export type PartnerJobMessage = {
   id: string;
+  kind?: "message" | "issue";
+  issue?: {
+    category:
+      | "access"
+      | "safety"
+      | "property_damage"
+      | "service_quality"
+      | "schedule"
+      | "other";
+    categoryLabel: string;
+    priority: "standard" | "urgent";
+  } | null;
   authorType: string;
   direction: string;
   channel: string;
@@ -51,10 +63,33 @@ export type PartnerMessagesPayload = {
   page: PartnerMessagePage;
 };
 
-type PendingSend = {
-  body: string;
-  idempotencyKey: string;
-};
+type PartnerIssueCategory = NonNullable<PartnerJobMessage["issue"]>["category"];
+type PartnerIssuePriority = NonNullable<PartnerJobMessage["issue"]>["priority"];
+type PendingSend =
+  | {
+      kind: "message";
+      body: string;
+      idempotencyKey: string;
+    }
+  | {
+      kind: "issue";
+      body: string;
+      category: PartnerIssueCategory;
+      priority: PartnerIssuePriority;
+      idempotencyKey: string;
+    };
+
+const ISSUE_CATEGORIES: ReadonlyArray<{
+  key: PartnerIssueCategory;
+  label: string;
+}> = [
+  { key: "access", label: "Access issue" },
+  { key: "safety", label: "Safety concern" },
+  { key: "property_damage", label: "Property damage" },
+  { key: "service_quality", label: "Service quality" },
+  { key: "schedule", label: "Schedule issue" },
+  { key: "other", label: "Other issue" },
+];
 
 function validDate(value: string | null | undefined): Date | null {
   if (!value) return null;
@@ -132,14 +167,25 @@ export function PartnerJobMessages({
   const [historyError, setHistoryError] = React.useState(initialError ?? null);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
   const [draft, setDraft] = React.useState("");
+  const [issueDraft, setIssueDraft] = React.useState("");
+  const [issueCategory, setIssueCategory] =
+    React.useState<PartnerIssueCategory>("access");
+  const [issuePriority, setIssuePriority] =
+    React.useState<PartnerIssuePriority>("standard");
   const [sending, setSending] = React.useState(false);
   const [sendError, setSendError] = React.useState<string | null>(null);
-  const [pendingSend, setPendingSend] = React.useState<PendingSend | null>(null);
-  const [sendConfirmation, setSendConfirmation] = React.useState<string | null>(null);
+  const [pendingSend, setPendingSend] = React.useState<PendingSend | null>(
+    null,
+  );
+  const [sendConfirmation, setSendConfirmation] = React.useState<string | null>(
+    null,
+  );
   const messageListRef = React.useRef<HTMLDivElement>(null);
   const previousMessageCountRef = React.useRef(messages.length);
   const trimmedDraft = draft.trim();
   const charactersRemaining = MAX_MESSAGE_LENGTH - draft.length;
+  const trimmedIssueDraft = issueDraft.trim();
+  const issueCharactersRemaining = 2_000 - issueDraft.length;
 
   React.useEffect(() => {
     if (messages.length <= previousMessageCountRef.current) return;
@@ -191,7 +237,21 @@ export function PartnerJobMessages({
       }>(`jobs/${encodeURIComponent(jobId)}/messages`, {
         method: "POST",
         headers: { "Idempotency-Key": operation.idempotencyKey },
-        body: JSON.stringify({ body: operation.body, attachmentIds: [] }),
+        body: JSON.stringify(
+          operation.kind === "issue"
+            ? {
+                kind: "issue",
+                body: operation.body,
+                attachmentIds: [],
+                issueCategory: operation.category,
+                issuePriority: operation.priority,
+              }
+            : {
+                kind: "message",
+                body: operation.body,
+                attachmentIds: [],
+              },
+        ),
       }).catch(() => null);
       setSending(false);
       if (!result?.ok) {
@@ -205,9 +265,17 @@ export function PartnerJobMessages({
         return;
       }
       setMessages((current) => mergeMessages(current, [result.data.message]));
-      setDraft("");
+      if (operation.kind === "issue") {
+        setIssueDraft("");
+      } else {
+        setDraft("");
+      }
       setPendingSend(null);
-      setSendConfirmation("Message sent to Stonegate.");
+      setSendConfirmation(
+        operation.kind === "issue"
+          ? "Issue reported to Stonegate and added to this job thread."
+          : "Message sent to Stonegate.",
+      );
     },
     [jobId],
   );
@@ -217,10 +285,11 @@ export function PartnerJobMessages({
     if (!trimmedDraft || trimmedDraft.length > MAX_MESSAGE_LENGTH || sending) {
       return;
     }
-    const operation =
-      pendingSend?.body === trimmedDraft
+    const operation: PendingSend =
+      pendingSend?.kind === "message" && pendingSend.body === trimmedDraft
         ? pendingSend
         : {
+            kind: "message",
             body: trimmedDraft,
             idempotencyKey: createPortalOperationKey("job-message"),
           };
@@ -232,6 +301,32 @@ export function PartnerJobMessages({
     if (pendingSend && !sending) void sendMessage(pendingSend);
   };
 
+  const submitIssue = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    if (
+      trimmedIssueDraft.length < 10 ||
+      trimmedIssueDraft.length > 2_000 ||
+      sending
+    ) {
+      return;
+    }
+    const operation: PendingSend =
+      pendingSend?.kind === "issue" &&
+      pendingSend.body === trimmedIssueDraft &&
+      pendingSend.category === issueCategory &&
+      pendingSend.priority === issuePriority
+        ? pendingSend
+        : {
+            kind: "issue",
+            body: trimmedIssueDraft,
+            category: issueCategory,
+            priority: issuePriority,
+            idempotencyKey: createPortalOperationKey("job-issue"),
+          };
+    setPendingSend(operation);
+    void sendMessage(operation);
+  };
+
   return (
     <section aria-labelledby="job-messages-heading">
       <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-start sm:justify-between">
@@ -241,10 +336,14 @@ export function PartnerJobMessages({
           </span>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h2 id="job-messages-heading" className="text-lg font-semibold text-slate-950">
+              <h2
+                id="job-messages-heading"
+                className="text-lg font-semibold text-slate-950"
+              >
                 Job messages
               </h2>
-              {typeof initialUnreadCount === "number" && initialUnreadCount > 0 ? (
+              {typeof initialUnreadCount === "number" &&
+              initialUnreadCount > 0 ? (
                 <span
                   className="inline-flex rounded-full bg-primary-100 px-2.5 py-1 text-xs font-semibold text-primary-800"
                   aria-label={`${initialUnreadCount} unread ${initialUnreadCount === 1 ? "message" : "messages"}`}
@@ -265,7 +364,10 @@ export function PartnerJobMessages({
           className={cn(partnerSecondaryButtonClass, "shrink-0")}
         >
           {loadingHistory ? (
-            <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            <LoaderCircle
+              className="h-4 w-4 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
           ) : (
             <RefreshCw className="h-4 w-4" aria-hidden="true" />
           )}
@@ -302,13 +404,22 @@ export function PartnerJobMessages({
           {messages.length ? (
             <ol className="space-y-3">
               {messages.map((message) => (
-                <MessageItem key={message.id} message={message} timezone={timezone} />
+                <MessageItem
+                  key={message.id}
+                  message={message}
+                  timezone={timezone}
+                />
               ))}
             </ol>
           ) : (
             <div className="flex min-h-36 flex-col items-center justify-center px-4 text-center">
-              <MessageSquareText className="h-6 w-6 text-slate-400" aria-hidden="true" />
-              <p className="mt-3 font-semibold text-slate-900">No messages yet</p>
+              <MessageSquareText
+                className="h-6 w-6 text-slate-400"
+                aria-hidden="true"
+              />
+              <p className="mt-3 font-semibold text-slate-900">
+                No messages yet
+              </p>
               <p className="mt-1 max-w-sm text-sm leading-6 text-slate-600">
                 {canSend
                   ? "Send the first update or question about this job below."
@@ -327,63 +438,240 @@ export function PartnerJobMessages({
           className={cn(partnerSecondaryButtonClass, "mt-3 w-full")}
         >
           {loadingHistory ? (
-            <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            <LoaderCircle
+              className="h-4 w-4 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
           ) : null}
           {loadingHistory ? "Loading…" : "Load newer messages"}
         </button>
       ) : null}
 
       {canSend ? (
-        <form onSubmit={submitMessage} className="mt-5 border-t border-slate-200 pt-5" data-partner-analytics="job_message_send">
-          <label htmlFor="partner-job-message" className="text-sm font-semibold text-slate-900">
-            Message Stonegate
-          </label>
-          <textarea
-            id="partner-job-message"
-            value={draft}
-            onChange={(event) => {
-              const nextDraft = event.currentTarget.value;
-              setDraft(nextDraft);
-              setSendConfirmation(null);
-              if (pendingSend && pendingSend.body !== nextDraft.trim()) {
-                setPendingSend(null);
-                setSendError(null);
-              }
-            }}
-            required
-            maxLength={MAX_MESSAGE_LENGTH}
-            rows={4}
-            disabled={sending}
-            aria-describedby="partner-job-message-help partner-job-message-count"
-            className={cn(partnerFieldClass, "resize-y")}
-            placeholder="Share an access update, timing question, or other detail about this job."
-          />
-          <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-xs leading-5 text-slate-500">
-              <p id="partner-job-message-help">Don’t include passwords, payment card details, or access codes.</p>
-              <p
-                id="partner-job-message-count"
-                className={charactersRemaining < 100 ? "font-semibold text-amber-700" : undefined}
-              >
-                {charactersRemaining.toLocaleString()} characters remaining
-              </p>
-            </div>
-            <button
-              type="submit"
-              disabled={sending || !trimmedDraft || trimmedDraft.length > MAX_MESSAGE_LENGTH}
-              className={cn(partnerPrimaryButtonClass, "w-full sm:w-auto")}
+        <>
+          <form
+            onSubmit={submitMessage}
+            className="mt-5 border-t border-slate-200 pt-5"
+            data-partner-analytics="job_message_send"
+          >
+            <label
+              htmlFor="partner-job-message"
+              className="text-sm font-semibold text-slate-900"
             >
-              {sending ? (
-                <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-              ) : (
-                <Send className="h-4 w-4" aria-hidden="true" />
-              )}
-              {sending ? "Sending…" : "Send message"}
-            </button>
-          </div>
-
+              Message Stonegate
+            </label>
+            <textarea
+              id="partner-job-message"
+              value={draft}
+              onChange={(event) => {
+                const nextDraft = event.currentTarget.value;
+                setDraft(nextDraft);
+                setSendConfirmation(null);
+                if (pendingSend && pendingSend.body !== nextDraft.trim()) {
+                  setPendingSend(null);
+                  setSendError(null);
+                }
+              }}
+              required
+              maxLength={MAX_MESSAGE_LENGTH}
+              rows={4}
+              disabled={sending}
+              aria-describedby="partner-job-message-help partner-job-message-count"
+              className={cn(partnerFieldClass, "resize-y")}
+              placeholder="Share an access update, timing question, or other detail about this job."
+            />
+            <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-xs leading-5 text-slate-500">
+                <p id="partner-job-message-help">
+                  Don’t include passwords, payment card details, or access
+                  codes.
+                </p>
+                <p
+                  id="partner-job-message-count"
+                  className={
+                    charactersRemaining < 100
+                      ? "font-semibold text-amber-700"
+                      : undefined
+                  }
+                >
+                  {charactersRemaining.toLocaleString()} characters remaining
+                </p>
+              </div>
+              <button
+                type="submit"
+                disabled={
+                  sending ||
+                  !trimmedDraft ||
+                  trimmedDraft.length > MAX_MESSAGE_LENGTH
+                }
+                className={cn(partnerPrimaryButtonClass, "w-full sm:w-auto")}
+              >
+                {sending ? (
+                  <LoaderCircle
+                    className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Send className="h-4 w-4" aria-hidden="true" />
+                )}
+                {sending ? "Sending…" : "Send message"}
+              </button>
+            </div>
+          </form>
+          <details className="mt-5 rounded-2xl border border-amber-200 bg-amber-50/50 px-4 py-3">
+            <summary className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg font-semibold text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600 focus-visible:ring-offset-2">
+              <CircleAlert
+                className="h-5 w-5 text-amber-700"
+                aria-hidden="true"
+              />
+              Report a job issue
+            </summary>
+            <form
+              onSubmit={submitIssue}
+              className="mt-3 border-t border-amber-200 pt-4"
+              data-partner-analytics="job_issue_report"
+            >
+              <p
+                id="partner-job-issue-emergency"
+                className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold leading-6 text-rose-900"
+              >
+                For immediate danger or a medical emergency, call 911. This form
+                does not guarantee an immediate response.
+              </p>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label
+                    htmlFor="partner-job-issue-category"
+                    className="text-sm font-semibold text-slate-900"
+                  >
+                    Issue type
+                  </label>
+                  <select
+                    id="partner-job-issue-category"
+                    value={issueCategory}
+                    onChange={(event) => {
+                      setIssueCategory(
+                        event.currentTarget.value as PartnerIssueCategory,
+                      );
+                      if (pendingSend?.kind === "issue") {
+                        setPendingSend(null);
+                        setSendError(null);
+                      }
+                    }}
+                    disabled={sending}
+                    className={partnerFieldClass}
+                  >
+                    {ISSUE_CATEGORIES.map((category) => (
+                      <option key={category.key} value={category.key}>
+                        {category.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <fieldset disabled={sending}>
+                  <legend className="text-sm font-semibold text-slate-900">
+                    Priority
+                  </legend>
+                  <div className="mt-2 flex flex-wrap gap-4">
+                    {(["standard", "urgent"] as const).map((priority) => (
+                      <label
+                        key={priority}
+                        className="inline-flex min-h-11 cursor-pointer items-center gap-2 text-sm text-slate-800"
+                      >
+                        <input
+                          type="radio"
+                          name="partner-job-issue-priority"
+                          value={priority}
+                          checked={issuePriority === priority}
+                          onChange={() => {
+                            setIssuePriority(priority);
+                            if (pendingSend?.kind === "issue") {
+                              setPendingSend(null);
+                              setSendError(null);
+                            }
+                          }}
+                          className="h-5 w-5 accent-primary-700"
+                        />
+                        {priority === "urgent" ? "Urgent" : "Standard"}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              </div>
+              <label
+                htmlFor="partner-job-issue-details"
+                className="mt-4 block text-sm font-semibold text-slate-900"
+              >
+                What happened?
+              </label>
+              <textarea
+                id="partner-job-issue-details"
+                value={issueDraft}
+                onChange={(event) => {
+                  const nextDraft = event.currentTarget.value;
+                  setIssueDraft(nextDraft);
+                  setSendConfirmation(null);
+                  if (
+                    pendingSend?.kind === "issue" &&
+                    pendingSend.body !== nextDraft.trim()
+                  ) {
+                    setPendingSend(null);
+                    setSendError(null);
+                  }
+                }}
+                required
+                minLength={10}
+                maxLength={2_000}
+                rows={4}
+                disabled={sending}
+                aria-describedby="partner-job-issue-emergency partner-job-issue-help partner-job-issue-count"
+                className={cn(partnerFieldClass, "resize-y")}
+                placeholder="Describe the issue, where it occurred, and what you need Stonegate to review."
+              />
+              <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-xs leading-5 text-slate-600">
+                  <p id="partner-job-issue-help">
+                    Do not include passwords, payment card details, or access
+                    codes. Your report joins this job’s shared Stonegate thread.
+                  </p>
+                  <p
+                    id="partner-job-issue-count"
+                    className={
+                      issueCharactersRemaining < 100
+                        ? "font-semibold text-amber-800"
+                        : undefined
+                    }
+                  >
+                    {issueCharactersRemaining.toLocaleString()} characters
+                    remaining
+                  </p>
+                </div>
+                <button
+                  type="submit"
+                  disabled={
+                    sending ||
+                    trimmedIssueDraft.length < 10 ||
+                    trimmedIssueDraft.length > 2_000
+                  }
+                  className={cn(partnerPrimaryButtonClass, "w-full sm:w-auto")}
+                >
+                  {sending && pendingSend?.kind === "issue" ? (
+                    <LoaderCircle
+                      className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <CircleAlert className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  {sending && pendingSend?.kind === "issue"
+                    ? "Reporting…"
+                    : "Report issue"}
+                </button>
+              </div>
+            </form>
+          </details>
           {sendError ? (
-            <div className="mt-4">
+            <div className="mt-4" aria-live="assertive">
               <PartnerNotice tone="error">
                 <div>
                   <p>{sendError}</p>
@@ -394,7 +682,10 @@ export function PartnerJobMessages({
                       disabled={sending}
                       className="mt-2 min-h-11 rounded-lg font-semibold underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
                     >
-                      Retry this message
+                      Retry this{" "}
+                      {pendingSend.kind === "issue"
+                        ? "issue report"
+                        : "message"}
                     </button>
                   ) : null}
                 </div>
@@ -402,11 +693,11 @@ export function PartnerJobMessages({
             </div>
           ) : null}
           {sendConfirmation ? (
-            <div className="mt-4">
+            <div className="mt-4" aria-live="polite">
               <PartnerNotice tone="success">{sendConfirmation}</PartnerNotice>
             </div>
           ) : null}
-        </form>
+        </>
       ) : (
         <p className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
           Your portal role can view this conversation but cannot send messages.
@@ -424,11 +715,25 @@ function MessageItem({
   timezone: string;
 }) {
   const mine = message.authorType.trim().toLowerCase() === "partner";
-  const system = message.system === true || message.authorType.trim().toLowerCase() === "system";
+  const system =
+    message.system === true ||
+    message.authorType.trim().toLowerCase() === "system";
   const deliveryLabel = normalizeDeliveryStatus(message.deliveryStatus);
   const deliveryFailed = ["failed", "undelivered"].includes(
     message.deliveryStatus?.trim().toLowerCase() ?? "",
   );
+  const issueCategory =
+    message.kind === "issue" && message.issue
+      ? (ISSUE_CATEGORIES.find(
+          (category) => category.key === message.issue?.category,
+        ) ?? null)
+      : null;
+  const issuePriority =
+    issueCategory &&
+    (message.issue?.priority === "standard" ||
+      message.issue?.priority === "urgent")
+      ? message.issue.priority
+      : null;
 
   if (system) {
     return (
@@ -436,7 +741,10 @@ function MessageItem({
         <p className="break-words text-xs leading-5 text-slate-500 [overflow-wrap:anywhere]">
           {message.body}
         </p>
-        <time dateTime={message.createdAt} className="mt-1 block text-[0.6875rem] text-slate-400">
+        <time
+          dateTime={message.createdAt}
+          className="mt-1 block text-[0.6875rem] text-slate-400"
+        >
           {formatMessageTime(message.createdAt, timezone)}
         </time>
       </li>
@@ -451,9 +759,40 @@ function MessageItem({
           mine
             ? "rounded-br-md bg-primary-700 text-white"
             : "rounded-bl-md border border-slate-200 bg-white text-slate-900",
+          issuePriority === "urgent"
+            ? mine
+              ? "ring-2 ring-rose-200"
+              : "border-rose-300 ring-1 ring-rose-200"
+            : issueCategory
+              ? mine
+                ? "ring-2 ring-amber-200"
+                : "border-amber-300"
+              : null,
         )}
-        aria-label={mine ? "Message from you" : "Message from Stonegate"}
+        aria-label={
+          issueCategory
+            ? `${issuePriority === "urgent" ? "Urgent " : ""}${issueCategory.label} reported ${mine ? "by you" : "by Stonegate"}`
+            : mine
+              ? "Message from you"
+              : "Message from Stonegate"
+        }
       >
+        {issueCategory ? (
+          <p
+            className={cn(
+              "mb-1.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.6875rem] font-semibold uppercase tracking-wide",
+              mine
+                ? "bg-white/15 text-white"
+                : issuePriority === "urgent"
+                  ? "bg-rose-100 text-rose-800"
+                  : "bg-amber-100 text-amber-900",
+            )}
+          >
+            <CircleAlert className="h-3 w-3" aria-hidden="true" />
+            {issuePriority === "urgent" ? "Urgent · " : ""}
+            {issueCategory.label}
+          </p>
+        ) : null}
         <p className="whitespace-pre-wrap break-words text-sm leading-6 [overflow-wrap:anywhere]">
           {message.body}
         </p>
@@ -470,7 +809,11 @@ function MessageItem({
             <span
               className={cn(
                 "inline-flex items-center gap-1",
-                deliveryFailed ? (mine ? "font-semibold text-rose-100" : "font-semibold text-rose-700") : null,
+                deliveryFailed
+                  ? mine
+                    ? "font-semibold text-rose-100"
+                    : "font-semibold text-rose-700"
+                  : null,
               )}
             >
               {deliveryFailed ? (

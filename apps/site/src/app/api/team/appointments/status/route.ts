@@ -191,6 +191,46 @@ export async function POST(request: NextRequest): Promise<Response> {
       "The customer-message choices are invalid. Review the checkboxes and submit again.",
     );
   }
+  const proofOverrideReasonRaw = formData.get("proofOverrideReason");
+  if (
+    proofOverrideReasonRaw !== null &&
+    typeof proofOverrideReasonRaw !== "string"
+  ) {
+    return failureResponse(
+      returnJson,
+      redirectTo,
+      "The proof exception reason is invalid.",
+    );
+  }
+  const proofOverrideReason = proofOverrideReasonRaw?.trim() ?? "";
+  if (
+    proofOverrideReason &&
+    (proofOverrideReason.length < 10 || proofOverrideReason.length > 500)
+  ) {
+    return failureResponse(
+      returnJson,
+      redirectTo,
+      "A proof exception reason must be between 10 and 500 characters.",
+    );
+  }
+  if (proofOverrideReason && statusValue !== "completed") {
+    return failureResponse(
+      returnJson,
+      redirectTo,
+      "Proof exceptions can only be recorded while completing a job.",
+    );
+  }
+  if (
+    proofOverrideReason &&
+    !hasTeamPermission(auth.principal, "appointment_media.manage")
+  ) {
+    return failureResponse(
+      returnJson,
+      redirectTo,
+      "You do not have permission to record a proof exception.",
+      403,
+    );
+  }
   if (
     (customerNotificationIntent.value || reviewRequestIntent.value) &&
     !hasTeamPermission(auth.principal, "messages.send")
@@ -207,6 +247,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     sendCustomerNotification: customerNotificationIntent.value,
     sendReviewRequest: reviewRequestIntent.value,
   };
+  if (proofOverrideReason) {
+    payload["proofOverrideReason"] = proofOverrideReason;
+  }
   if (typeof expectedVersion === "string" && expectedVersion.trim()) {
     payload["expectedVersion"] = expectedVersion.trim();
   }

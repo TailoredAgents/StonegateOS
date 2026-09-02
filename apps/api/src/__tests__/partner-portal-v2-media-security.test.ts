@@ -13,6 +13,7 @@ import {
   orderPartnerMediaAssociations,
   PartnerMediaUploadIntentSchema,
   projectPartnerJobMessageAttachmentHandles,
+  resolvePartnerMediaFinalizeChecksum,
   sanitizePartnerMediaPublicValue,
 } from "@/lib/partner-portal-v2-media";
 import { isMissingMediaObjectError } from "@/lib/media-storage";
@@ -293,6 +294,46 @@ describe("partner media upload declaration", () => {
         $metadata: { httpStatusCode: 404 },
       }),
     ).toBe(false);
+  });
+
+  it("never lets finalization replace the checksum bound to the upload intent", () => {
+    expect(() =>
+      resolvePartnerMediaFinalizeChecksum({
+        sourceMetadata: { expectedSha256: "a".repeat(64) },
+        suppliedChecksum: "b".repeat(64),
+      }),
+    ).toThrow("idempotency_conflict");
+
+    expect(
+      resolvePartnerMediaFinalizeChecksum({
+        sourceMetadata: {},
+        suppliedChecksum: "c".repeat(64),
+      }),
+    ).toEqual({
+      expectedChecksum: "c".repeat(64),
+      metadataPatch: { finalizeExpectedSha256: "c".repeat(64) },
+    });
+  });
+
+  it("fails closed when a ready asset lacks or contradicts its input digest", () => {
+    expect(() =>
+      resolvePartnerMediaFinalizeChecksum({
+        sourceMetadata: { expectedSha256: "a".repeat(64) },
+        readyInputSha256: null,
+      }),
+    ).toThrow("media_integrity_conflict");
+    expect(() =>
+      resolvePartnerMediaFinalizeChecksum({
+        sourceMetadata: { expectedSha256: "a".repeat(64) },
+        readyInputSha256: "b".repeat(64),
+      }),
+    ).toThrow("media_integrity_conflict");
+    expect(
+      resolvePartnerMediaFinalizeChecksum({
+        sourceMetadata: { expectedSha256: "a".repeat(64) },
+        readyInputSha256: "a".repeat(64),
+      }).expectedChecksum,
+    ).toBe("a".repeat(64));
   });
 });
 

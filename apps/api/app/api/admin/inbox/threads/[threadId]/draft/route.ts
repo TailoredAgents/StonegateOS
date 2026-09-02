@@ -9,6 +9,7 @@ import {
   getDb
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -60,7 +61,12 @@ export async function POST(
           contactId: conversationThreads.contactId
         })
         .from(conversationThreads)
-        .where(eq(conversationThreads.id, threadId))
+        .where(
+          and(
+            eq(conversationThreads.id, threadId),
+            genericInboxThreadScopeCondition(),
+          ),
+        )
         .limit(1);
 
       if (!thread) {

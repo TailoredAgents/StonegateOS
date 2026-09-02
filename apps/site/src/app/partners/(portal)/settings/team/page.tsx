@@ -78,7 +78,7 @@ export default async function PartnerTeamSettingsPage() {
         title="Team access"
         description="Review who can use this account, assign roles within your own authority, and suspend or restore account access."
         breadcrumbs={[
-          { label: "Overview", href: "/partners" },
+          { label: "Overview", href: "/partners/overview" },
           { label: "Account & security", href: "/partners/settings" },
           { label: "Team access", href: "/partners/settings/team" },
         ]}

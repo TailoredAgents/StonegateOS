@@ -1,6 +1,7 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
 import {
+  BellRing,
   CalendarClock,
   Camera,
   CircleDollarSign,
@@ -12,6 +13,10 @@ import {
   UserRound,
 } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
+import {
+  parsePartnerJobActionAvailability,
+  type PartnerJobActionAvailability,
+} from "@/app/partners/lib/job-action-availability";
 import {
   PartnerJobActions,
   type PartnerCancellationDecision,
@@ -64,6 +69,23 @@ type JobDetail = {
     arrivalWindow: { startAt: string; endAt: string; timezone: string } | null;
     completedAt: string | null;
   };
+  operations: {
+    eta: {
+      state:
+        | "operational_estimate"
+        | "not_published"
+        | "complete"
+        | "not_applicable";
+      startAt: string | null;
+      endAt: string | null;
+      publishedAt: string | null;
+    };
+    assignedTeam: {
+      state: "assigned" | "pending" | "complete" | "not_applicable";
+      displayLabel: "Stonegate service crew";
+      memberCount: number | null;
+    };
+  };
   location: {
     id: string | null;
     name: string | null;
@@ -95,6 +117,18 @@ type JobDetail = {
     amountMinor: number;
     currency: string;
     minorUnit: number;
+  } | null;
+  pricingBasis: {
+    pricingState:
+      | "contracted"
+      | "estimate"
+      | "quote_required"
+      | "standard_rate";
+    agreementLabel: string;
+    agreementRevision: number;
+    effectiveFrom: string;
+    effectiveTo: string | null;
+    finalPriceSource: "accepted_change_order_quote_v2" | null;
   } | null;
   timeline: Array<{
     id: string;
@@ -149,6 +183,54 @@ type JobDetail = {
     lastMessageAt: string | null;
   } | null;
   cancellation: PartnerCancellationDecision;
+  cancellationRequest: {
+    id: string | null;
+    state: "pending" | "reconciliation_required";
+    reason: string | null;
+    revision: number | null;
+    createdAt: string | null;
+  } | null;
+  changeRequest: {
+    id: string;
+    state: "pending";
+    reason: string;
+    revision: number;
+    createdAt: string;
+    consequence: string;
+  } | null;
+  changeOrder: {
+    id: string;
+    state: "offered" | "accepted" | "declined" | "superseded";
+    partnerQuoteId: string;
+    amount: {
+      amountMinor: number;
+      currency: string;
+      minorUnit: number;
+    } | null;
+    operationalEffectsPending: Array<"schedule" | "service" | "proof">;
+    revision: number;
+    createdAt: string;
+    resolvedAt: string | null;
+  } | null;
+  notificationDestination: {
+    inApp: boolean;
+    email: { enabled: boolean; destination: string };
+    sms: { enabled: boolean; destination: string | null };
+    settingsPath: string;
+  };
+  notificationDeliveryHistory: Array<{
+    id: string;
+    event: { key: string; label: string };
+    channel: { key: "in_app" | "email" | "sms"; label: string };
+    status: {
+      key: "not_sent" | "pending" | "sent" | "failed" | "checking";
+      label: string;
+    };
+    createdAt: string;
+    acceptedAt: string | null;
+    updatedAt: string;
+  }>;
+  actionAvailability: PartnerJobActionAvailability[];
   allowedActions: string[];
   revision: number;
   createdAt: string;
@@ -160,11 +242,150 @@ type ThreadSummary = {
   unreadCount: number;
 };
 
+type JobNotification = {
+  id: string;
+  jobId: string;
+  eventKey: string;
+  title: string;
+  body: string;
+  readAt: string | null;
+  createdAt: string;
+};
+
+type JobNotificationsPayload = {
+  ok: true;
+  notifications: JobNotification[];
+  page: { limit: number; nextCursor: string | null; hasMore: boolean };
+};
+
 const EMPTY_MESSAGE_PAGE: PartnerMessagePage = {
   limit: 50,
   nextCursor: null,
   hasMore: false,
 };
+
+const DELIVERY_EVENT_LABELS: Record<string, string> = {
+  "booking.created": "Booking received",
+  "booking.review_received": "Review request received",
+  "booking.rescheduled": "Schedule updated",
+  "booking.reschedule_review_requested": "Reschedule review requested",
+  "booking.canceled": "Job canceled",
+  "booking.cancellation_review_requested": "Cancellation review requested",
+};
+const DELIVERY_CHANNEL_LABELS: Record<string, string> = {
+  in_app: "In-app",
+  email: "Email",
+  sms: "SMS",
+};
+const DELIVERY_STATUS_LABELS: Record<string, string> = {
+  not_sent: "Not sent by preference",
+  pending: "Queued",
+  sent: "Accepted for delivery",
+  failed: "Could not send",
+  checking: "Delivery being checked",
+};
+
+function isDateTime(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function isJobOperationsSummary(
+  value: unknown,
+): value is JobDetail["operations"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const eta = record["eta"];
+  const assignedTeam = record["assignedTeam"];
+  if (
+    !eta ||
+    typeof eta !== "object" ||
+    Array.isArray(eta) ||
+    !assignedTeam ||
+    typeof assignedTeam !== "object" ||
+    Array.isArray(assignedTeam)
+  ) {
+    return false;
+  }
+  const etaRecord = eta as Record<string, unknown>;
+  const teamRecord = assignedTeam as Record<string, unknown>;
+  const etaState = etaRecord["state"];
+  const teamState = teamRecord["state"];
+  const etaDatesValid =
+    etaState === "operational_estimate"
+      ? isDateTime(etaRecord["startAt"]) &&
+        isDateTime(etaRecord["endAt"]) &&
+        isDateTime(etaRecord["publishedAt"]) &&
+        Date.parse(etaRecord["endAt"]) > Date.parse(etaRecord["startAt"])
+      : ["not_published", "complete", "not_applicable"].includes(
+          typeof etaState === "string" ? etaState : "",
+        ) &&
+        etaRecord["startAt"] === null &&
+        etaRecord["endAt"] === null &&
+        etaRecord["publishedAt"] === null;
+  const memberCount = teamRecord["memberCount"];
+  return (
+    etaDatesValid &&
+    ["assigned", "pending", "complete", "not_applicable"].includes(
+      typeof teamState === "string" ? teamState : "",
+    ) &&
+    teamRecord["displayLabel"] === "Stonegate service crew" &&
+    (memberCount === null ||
+      (Number.isSafeInteger(memberCount) &&
+        Number(memberCount) >= 1 &&
+        Number(memberCount) <= 99)) &&
+    (teamState !== "assigned" || memberCount !== null)
+  );
+}
+
+function isJobNotificationDeliveryHistory(
+  value: unknown,
+): value is JobDetail["notificationDeliveryHistory"] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 50 &&
+    value.every((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return false;
+      }
+      const record = entry as Record<string, unknown>;
+      const event = record["event"];
+      const channel = record["channel"];
+      const status = record["status"];
+      if (
+        !event ||
+        typeof event !== "object" ||
+        Array.isArray(event) ||
+        !channel ||
+        typeof channel !== "object" ||
+        Array.isArray(channel) ||
+        !status ||
+        typeof status !== "object" ||
+        Array.isArray(status)
+      ) {
+        return false;
+      }
+      const eventRecord = event as Record<string, unknown>;
+      const channelRecord = channel as Record<string, unknown>;
+      const statusRecord = status as Record<string, unknown>;
+      const eventKey = eventRecord["key"];
+      const channelKey = channelRecord["key"];
+      const statusKey = statusRecord["key"];
+      return (
+        typeof record["id"] === "string" &&
+        /^[0-9a-f-]{36}$/iu.test(record["id"]) &&
+        typeof eventKey === "string" &&
+        eventRecord["label"] === DELIVERY_EVENT_LABELS[eventKey] &&
+        typeof channelKey === "string" &&
+        channelRecord["label"] === DELIVERY_CHANNEL_LABELS[channelKey] &&
+        typeof statusKey === "string" &&
+        statusRecord["label"] === DELIVERY_STATUS_LABELS[statusKey] &&
+        isDateTime(record["createdAt"]) &&
+        (record["acceptedAt"] === null || isDateTime(record["acceptedAt"])) &&
+        isDateTime(record["updatedAt"])
+      );
+    })
+  );
+}
 
 export async function generateMetadata({
   params,
@@ -178,13 +399,98 @@ export async function generateMetadata({
 function isJobDetail(value: unknown): value is JobDetail {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
+  const notification = record["notificationDestination"];
+  const notificationRecord =
+    notification &&
+    typeof notification === "object" &&
+    !Array.isArray(notification)
+      ? (notification as Record<string, unknown>)
+      : null;
+  const email = notificationRecord?.["email"];
+  const emailRecord =
+    email && typeof email === "object" && !Array.isArray(email)
+      ? (email as Record<string, unknown>)
+      : null;
+  const sms = notificationRecord?.["sms"];
+  const smsRecord =
+    sms && typeof sms === "object" && !Array.isArray(sms)
+      ? (sms as Record<string, unknown>)
+      : null;
+  const pricingBasis = record["pricingBasis"];
+  const pricingRecord =
+    pricingBasis &&
+    typeof pricingBasis === "object" &&
+    !Array.isArray(pricingBasis)
+      ? (pricingBasis as Record<string, unknown>)
+      : null;
+  const pricingBasisValid =
+    pricingBasis === null ||
+    (pricingRecord !== null &&
+      ["contracted", "estimate", "quote_required", "standard_rate"].includes(
+        typeof pricingRecord["pricingState"] === "string"
+          ? pricingRecord["pricingState"]
+          : "",
+      ) &&
+      typeof pricingRecord["agreementLabel"] === "string" &&
+      Number.isSafeInteger(pricingRecord["agreementRevision"]) &&
+      typeof pricingRecord["effectiveFrom"] === "string" &&
+      (pricingRecord["effectiveTo"] === null ||
+        typeof pricingRecord["effectiveTo"] === "string") &&
+      (pricingRecord["finalPriceSource"] === null ||
+        pricingRecord["finalPriceSource"] ===
+          "accepted_change_order_quote_v2"));
   return (
     typeof record["id"] === "string" &&
     typeof record["status"] === "string" &&
     typeof record["service"] === "object" &&
     typeof record["schedule"] === "object" &&
+    isJobOperationsSummary(record["operations"]) &&
     typeof record["cancellation"] === "object" &&
+    pricingBasisValid &&
+    typeof notificationRecord?.["inApp"] === "boolean" &&
+    typeof notificationRecord["settingsPath"] === "string" &&
+    notificationRecord["settingsPath"] === "/partners/settings#notifications" &&
+    typeof emailRecord?.["enabled"] === "boolean" &&
+    typeof emailRecord["destination"] === "string" &&
+    typeof smsRecord?.["enabled"] === "boolean" &&
+    (smsRecord["destination"] === null ||
+      typeof smsRecord["destination"] === "string") &&
+    isJobNotificationDeliveryHistory(record["notificationDeliveryHistory"]) &&
+    parsePartnerJobActionAvailability(record["actionAvailability"]) !== null &&
     Array.isArray(record["allowedActions"])
+  );
+}
+
+function isJobNotificationsPayload(
+  value: unknown,
+  expectedJobId: string,
+): value is JobNotificationsPayload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const page = record["page"];
+  return (
+    record["ok"] === true &&
+    Array.isArray(record["notifications"]) &&
+    record["notifications"].every((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return false;
+      }
+      const notification = entry as Record<string, unknown>;
+      return (
+        typeof notification["id"] === "string" &&
+        notification["jobId"] === expectedJobId &&
+        typeof notification["eventKey"] === "string" &&
+        typeof notification["title"] === "string" &&
+        typeof notification["body"] === "string" &&
+        (notification["readAt"] === null ||
+          typeof notification["readAt"] === "string") &&
+        typeof notification["createdAt"] === "string"
+      );
+    }) &&
+    Boolean(page) &&
+    typeof page === "object" &&
+    !Array.isArray(page) &&
+    typeof (page as Record<string, unknown>)["hasMore"] === "boolean"
   );
 }
 
@@ -361,6 +667,37 @@ export default async function PartnerJobDetailPage({
   const crewInstructions = textAt(job.scope, "crewInstructions");
   const accessDetails =
     textAt(job.scope, "accessDetails") ?? job.location.access.instructions;
+  const operationalEtaValue =
+    job.operations.eta.state === "operational_estimate" &&
+    job.operations.eta.startAt &&
+    job.operations.eta.endAt
+      ? `${formatDateTime(job.operations.eta.startAt, timezone)} – ${formatDateTime(job.operations.eta.endAt, timezone)}`
+      : job.operations.eta.state === "complete"
+        ? "Job completed"
+        : job.operations.eta.state === "not_applicable"
+          ? "Not applicable"
+          : "No operational estimate published";
+  const operationalEtaDetail =
+    job.operations.eta.state === "operational_estimate" &&
+    job.operations.eta.publishedAt
+      ? `Published ${formatDateTime(job.operations.eta.publishedAt, timezone)}. This estimate may change; the promised two-hour arrival window remains authoritative.`
+      : job.operations.eta.state === "not_published" &&
+          job.schedule.arrivalWindow
+        ? "Use the promised two-hour arrival window until Stonegate publishes a narrower operational estimate."
+        : null;
+  const assignedTeamValue =
+    job.operations.assignedTeam.state === "assigned"
+      ? job.operations.assignedTeam.displayLabel
+      : job.operations.assignedTeam.state === "complete"
+        ? "Service crew completed this job"
+        : job.operations.assignedTeam.state === "not_applicable"
+          ? "Not applicable"
+          : "Assignment pending";
+  const assignedTeamDetail =
+    job.operations.assignedTeam.state === "assigned" &&
+    job.operations.assignedTeam.memberCount
+      ? `${job.operations.assignedTeam.memberCount} assigned ${job.operations.assignedTeam.memberCount === 1 ? "team member" : "team members"}. Individual names and live location are not shared.`
+      : null;
   const canReadMessages =
     portalContext.status === "authenticated" &&
     portalContext.permissions.readMessages;
@@ -372,14 +709,41 @@ export default async function PartnerJobDetailPage({
   let initialMessagePage = EMPTY_MESSAGE_PAGE;
   let initialMessageError: string | null = null;
   let initialUnreadCount: number | undefined;
+  let jobNotifications: JobNotification[] = [];
+  let jobNotificationsHaveMore = false;
+  let jobNotificationsError: string | null = null;
+  const [notificationsResponse, messagesResponse, threadsResponse] =
+    await Promise.all([
+      callPartnerApi(
+        `/api/portal/v2/notifications?state=all&jobId=${encodeURIComponent(job.id)}&limit=25`,
+      ).catch(() => null),
+      canReadMessages
+        ? callPartnerApi(
+            `/api/portal/v2/jobs/${encodeURIComponent(job.id)}/messages?limit=50`,
+          ).catch(() => null)
+        : Promise.resolve(null),
+      canReadMessages
+        ? callPartnerApi("/api/portal/v2/threads?limit=100").catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+  if (notificationsResponse?.ok) {
+    const notificationsPayload = (await notificationsResponse
+      .json()
+      .catch(() => null)) as unknown;
+    if (isJobNotificationsPayload(notificationsPayload, job.id)) {
+      jobNotifications = notificationsPayload.notifications;
+      jobNotificationsHaveMore = notificationsPayload.page.hasMore;
+    } else {
+      jobNotificationsError =
+        "The update history response was incomplete. Refresh before relying on it.";
+    }
+  } else {
+    jobNotificationsError =
+      "Job update history couldn’t be loaded. No job information was changed.";
+  }
 
   if (canReadMessages) {
-    const [messagesResponse, threadsResponse] = await Promise.all([
-      callPartnerApi(
-        `/api/portal/v2/jobs/${encodeURIComponent(job.id)}/messages?limit=50`,
-      ).catch(() => null),
-      callPartnerApi("/api/portal/v2/threads?limit=100").catch(() => null),
-    ]);
     if (messagesResponse?.ok) {
       const messagesPayload = (await messagesResponse
         .json()
@@ -424,7 +788,7 @@ export default async function PartnerJobDetailPage({
         }
         description={`${humanize(job.service.key)} · ${formatDateTime(job.schedule.arrivalWindow?.startAt ?? null, timezone)}`}
         breadcrumbs={[
-          { label: "Overview", href: "/partners" },
+          { label: "Overview", href: "/partners/overview" },
           { label: "Jobs", href: "/partners/bookings" },
           {
             label: `Job ${job.id.slice(0, 8)}`,
@@ -447,6 +811,33 @@ export default async function PartnerJobDetailPage({
             {job.confirmationMode === "approval" && job.schedule.arrivalWindow
               ? "Account approval is required. The requested window is held only temporarily and is not confirmed; if the approval hold expires, a scheduler must choose a new available window."
               : `Stonegate review is needed before every detail is final. Your ${job.schedule.arrivalWindow ? "preferred arrival window" : "preferred dates"} and current status remain visible here; no time is reserved until Stonegate confirms it.`}
+          </PartnerNotice>
+        ) : null}
+        {job.changeOrder?.state === "offered" ? (
+          <PartnerNotice tone="warning" className="mt-3">
+            A fixed-price change order for{" "}
+            <strong>
+              {job.changeOrder.amount
+                ? formatMoney(job.changeOrder.amount)
+                : "this job"}
+            </strong>{" "}
+            is ready for review. Your current job remains unchanged until you
+            respond.{" "}
+            <Link
+              className="font-semibold underline underline-offset-2"
+              href={`/partners/billing/quotes/${encodeURIComponent(job.changeOrder.partnerQuoteId)}`}
+            >
+              Review change order
+            </Link>
+          </PartnerNotice>
+        ) : job.changeOrder?.state === "accepted" &&
+          job.changeOrder.operationalEffectsPending.length > 0 ? (
+          <PartnerNotice tone="warning" className="mt-3">
+            The change-order price is final. Stonegate still needs to execute
+            these operational updates:{" "}
+            {job.changeOrder.operationalEffectsPending.map(humanize).join(", ")}
+            . Until confirmed, the schedule, service, and proof requirements
+            shown on this job remain in effect.
           </PartnerNotice>
         ) : null}
       </PartnerPageHeader>
@@ -480,6 +871,18 @@ export default async function PartnerJobDetailPage({
                     ? `${humanize(preferredWindows[0]?.timeOfDay)} preferred · Not reserved`
                     : null
                 }
+              />
+              <DetailItem
+                icon={Clock3}
+                label="Operational arrival estimate"
+                value={operationalEtaValue}
+                detail={operationalEtaDetail}
+              />
+              <DetailItem
+                icon={UserRound}
+                label="Assigned team"
+                value={assignedTeamValue}
+                detail={assignedTeamDetail}
               />
               <DetailItem
                 icon={MapPin}
@@ -619,6 +1022,119 @@ export default async function PartnerJobDetailPage({
           </PartnerPanel>
 
           <PartnerPanel>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  Communication record
+                </p>
+                <h2 className="mt-1 text-lg font-semibold text-slate-950">
+                  Job update history
+                </h2>
+              </div>
+              <BellRing
+                className="h-5 w-5 text-primary-700"
+                aria-hidden="true"
+              />
+            </div>
+            {jobNotificationsError ? (
+              <PartnerNotice tone="warning" className="mt-4">
+                {jobNotificationsError}
+              </PartnerNotice>
+            ) : jobNotifications.length ? (
+              <>
+                <ol className="mt-4 divide-y divide-slate-200">
+                  {jobNotifications.map((notification) => (
+                    <li
+                      key={notification.id}
+                      className="py-4 first:pt-0 last:pb-0"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <h3 className="font-semibold text-slate-950">
+                          {notification.title}
+                        </h3>
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                          {notification.readAt ? "Read" : "New"}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-sm leading-6 text-slate-600">
+                        {notification.body}
+                      </p>
+                      <time
+                        dateTime={notification.createdAt}
+                        className="mt-1 block text-xs text-slate-500"
+                      >
+                        {formatDateTime(notification.createdAt, timezone)}
+                      </time>
+                    </li>
+                  ))}
+                </ol>
+                {jobNotificationsHaveMore ? (
+                  <p className="mt-4 text-xs text-slate-500">
+                    Showing the 25 most recent job updates. Older account
+                    notifications remain available from Overview.
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <div className="mt-4">
+                <PartnerEmptyState
+                  title="No job notifications yet"
+                  description="Confirmation, schedule, proof, billing, and payment updates sent for this job will appear here."
+                />
+              </div>
+            )}
+            <section
+              aria-labelledby="job-notification-delivery-heading"
+              className="mt-6 border-t border-slate-200 pt-5"
+            >
+              <h3
+                id="job-notification-delivery-heading"
+                className="font-semibold text-slate-950"
+              >
+                Delivery status for you
+              </h3>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                This account-member view shows recorded scheduling notification
+                attempts without exposing destinations or provider details.
+              </p>
+              {job.notificationDeliveryHistory.length ? (
+                <ul className="mt-3 space-y-2">
+                  {job.notificationDeliveryHistory.map((delivery) => (
+                    <li
+                      key={delivery.id}
+                      className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-950">
+                          {delivery.event.label}
+                        </p>
+                        <p className="mt-0.5 text-sm text-slate-600">
+                          {delivery.channel.label} · {delivery.status.label}
+                        </p>
+                      </div>
+                      <time
+                        dateTime={delivery.updatedAt}
+                        className="text-xs text-slate-500 sm:text-right"
+                      >
+                        {formatDateTime(delivery.updatedAt, timezone)}
+                      </time>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+                  No per-channel scheduling delivery attempts are recorded for
+                  you on this job yet.
+                </p>
+              )}
+              <p className="mt-3 text-xs leading-5 text-slate-500">
+                “Accepted for delivery” confirms provider acceptance, not that a
+                person opened or read the message.
+              </p>
+            </section>
+          </PartnerPanel>
+
+          <PartnerPanel>
             <div className="flex items-center gap-3">
               <Camera className="h-5 w-5 text-primary-700" aria-hidden="true" />
               <div>
@@ -676,14 +1192,17 @@ export default async function PartnerJobDetailPage({
               Job actions
             </h2>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Available actions reflect this job’s status and your account role.
+              Actions and unavailable reasons reflect the current job, schedule,
+              account policy, pending reviews, and your role.
             </p>
             <div className="mt-4">
               <PartnerJobActions
                 jobId={job.id}
                 etag={etag}
                 allowedActions={job.allowedActions}
+                actionAvailability={job.actionAvailability}
                 cancellation={job.cancellation}
+                references={job.references}
               />
             </div>
             <div className="mt-5 border-t border-slate-200 pt-5">
@@ -699,6 +1218,23 @@ export default async function PartnerJobDetailPage({
                   confirmed={calendarWindowConfirmed}
                 />
               </div>
+              <p className="mt-3 text-xs leading-5 text-slate-600">
+                Updates are recorded in-app
+                {job.notificationDestination.email.enabled
+                  ? ` and emailed to ${job.notificationDestination.email.destination}`
+                  : ""}
+                {job.notificationDestination.sms.enabled &&
+                job.notificationDestination.sms.destination
+                  ? `; SMS is enabled for ${job.notificationDestination.sms.destination}`
+                  : "; SMS is not enabled"}
+                .{" "}
+                <Link
+                  className="font-semibold text-primary-700 underline underline-offset-2"
+                  href={job.notificationDestination.settingsPath as Route}
+                >
+                  Notification settings
+                </Link>
+              </p>
             </div>
           </PartnerPanel>
 
@@ -719,6 +1255,27 @@ export default async function PartnerJobDetailPage({
                   job.financial ? formatMoney(job.financial) : "Not available"
                 }
               />
+              {job.pricingBasis ? (
+                <>
+                  <CompactItem
+                    label="Price basis"
+                    value={
+                      job.pricingBasis.finalPriceSource ===
+                      "accepted_change_order_quote_v2"
+                        ? "Accepted change order"
+                        : humanize(job.pricingBasis.pricingState)
+                    }
+                  />
+                  <CompactItem
+                    label="Account agreement"
+                    value={`${job.pricingBasis.agreementLabel} · revision ${job.pricingBasis.agreementRevision}`}
+                  />
+                  <CompactItem
+                    label="Agreement period"
+                    value={`${formatDateTime(job.pricingBasis.effectiveFrom, timezone)}–${job.pricingBasis.effectiveTo ? formatDateTime(job.pricingBasis.effectiveTo, timezone) : "no scheduled end"}`}
+                  />
+                </>
+              ) : null}
               <CompactItem
                 label="PO / work order"
                 value={job.references.poNumber ?? "Not provided"}
@@ -859,7 +1416,7 @@ function CompactItem({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start justify-between gap-3">
       <dt className="text-slate-500">{label}</dt>
-      <dd className="max-w-[60%] text-right font-semibold text-slate-900">
+      <dd className="min-w-0 max-w-[60%] break-words text-right font-semibold text-slate-900">
         {value}
       </dd>
     </div>

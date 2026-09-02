@@ -15,6 +15,7 @@ import {
   PartnerPaymentReturnStatus,
   type PartnerPaymentSecurity,
 } from "@/app/partners/components/PartnerInvoicePayment";
+import { PartnerInvoiceDisputeManager } from "@/app/partners/components/PartnerInvoiceDisputeManager";
 import {
   PartnerEmptyState,
   PartnerNotice,
@@ -35,6 +36,7 @@ import {
 import { isPartnerPaymentIntentId } from "@/app/partners/lib/portal-payments";
 import {
   parsePartnerServiceRateCard,
+  type PartnerServiceAgreementPresentation,
   type PartnerServiceRateCardState,
   type PartnerServiceRateItem,
 } from "@/app/partners/lib/partner-service-rate-card";
@@ -50,8 +52,10 @@ export const metadata: Metadata = { title: "Billing & documents" };
 type PaymentAccess = {
   available: boolean;
   canManagePayments: boolean;
+  canRequestBillingDisputes: boolean;
   security: PartnerPaymentSecurity | null;
   payerEmail: string | null;
+  payerName: string | null;
 };
 
 async function loadRateCard(): Promise<PartnerServiceRateCardState> {
@@ -77,13 +81,15 @@ async function loadPaymentAccess(): Promise<PaymentAccess> {
     return {
       available: false,
       canManagePayments: false,
+      canRequestBillingDisputes: false,
       security: null,
       payerEmail: null,
+      payerName: null,
     };
   }
   const payload = (await response.json().catch(() => null)) as {
     ok?: unknown;
-    partnerUser?: { email?: unknown };
+    partnerUser?: { email?: unknown; name?: unknown };
     membership?: { capabilities?: unknown; accessLevel?: unknown };
     security?: { mfaEnrolled?: unknown; mfaSatisfied?: unknown };
   } | null;
@@ -92,18 +98,23 @@ async function loadPaymentAccess(): Promise<PaymentAccess> {
     payload?.ok === true &&
     payload.membership?.accessLevel === "account" &&
     Array.isArray(capabilities) &&
-    capabilities.includes("payments.manage");
+    capabilities.includes("payments.initiate");
   if (payload?.ok !== true || !Array.isArray(capabilities)) {
     return {
       available: false,
       canManagePayments: false,
+      canRequestBillingDisputes: false,
       security: null,
       payerEmail: null,
+      payerName: null,
     };
   }
   return {
     available: true,
     canManagePayments,
+    canRequestBillingDisputes: capabilities.includes(
+      "invoices.disputes.request",
+    ),
     security:
       typeof payload?.security?.mfaEnrolled === "boolean" &&
       typeof payload.security.mfaSatisfied === "boolean"
@@ -116,6 +127,11 @@ async function loadPaymentAccess(): Promise<PaymentAccess> {
       typeof payload.partnerUser?.email === "string" &&
       payload.partnerUser.email.length <= 320
         ? payload.partnerUser.email
+        : null,
+    payerName:
+      typeof payload.partnerUser?.name === "string" &&
+      payload.partnerUser.name.length <= 128
+        ? payload.partnerUser.name
         : null,
   };
 }
@@ -209,7 +225,7 @@ export default async function PartnerBillingPage({
         title="Billing & documents"
         description="Review account pricing, quotes, invoices, statements, and secure documents without mixing them with operational job totals."
         breadcrumbs={[
-          { label: "Overview", href: "/partners" },
+          { label: "Overview", href: "/partners/overview" },
           { label: "Billing & documents", href: "/partners/billing" },
         ]}
       >
@@ -217,7 +233,7 @@ export default async function PartnerBillingPage({
           {!paymentAccess.available
             ? "Protected payment controls are temporarily unavailable. Invoice records remain visible, but no payment has been started or treated as complete."
             : paymentAccess.canManagePayments
-              ? "Required deposits can be paid by card through Square’s secure form in this page. Remaining invoice balances open on Square’s hosted payment page. ACH is not offered in this portal."
+              ? "Required deposits can be paid by card or, when enabled for the account, ACH through Square’s secure form. ACH remains pending until Square confirms settlement. Remaining invoice balances open on Square’s hosted payment page."
               : "Invoice status is read-only for your current role. An authorized account billing user can pay eligible balances by card on Square, or contact Stonegate for assistance."}
         </PartnerNotice>
       </PartnerPageHeader>
@@ -226,7 +242,7 @@ export default async function PartnerBillingPage({
         <SectionHeading
           icon={<CircleDollarSign className="h-5 w-5" aria-hidden="true" />}
           eyebrow="Current account"
-          title="Partner rate card"
+          title="Service agreement & rates"
         />
         {rates.status !== "ready" ? (
           <div className="mt-5">
@@ -240,17 +256,29 @@ export default async function PartnerBillingPage({
                   : "Online account pricing is not available right now. Contact Stonegate for a current quote."}
             </PartnerNotice>
           </div>
-        ) : rates.items.length === 0 ? (
-          <div className="mt-5">
-            <PartnerEmptyState
-              title="No online rates available"
-              description="Contact Stonegate for pricing and to confirm which services should be enabled for your account."
-              action={{ href: "/partners/help", label: "Contact Stonegate" }}
-              icon={<CircleDollarSign className="h-6 w-6" aria-hidden="true" />}
-            />
-          </div>
         ) : (
-          <RateCard currency={rates.currency} items={rates.items} />
+          <div className="mt-5 space-y-5">
+            {rates.agreement ? (
+              <AgreementSummary agreement={rates.agreement} />
+            ) : (
+              <PartnerNotice tone="warning">
+                The account agreement summary is unavailable. Contact Stonegate
+                before relying on these rates or inclusions.
+              </PartnerNotice>
+            )}
+            {rates.items.length === 0 ? (
+              <PartnerEmptyState
+                title="No fixed online rates available"
+                description="One or more entitled services may require a quote. Review the agreement terms above or contact Stonegate before scheduling."
+                action={{ href: "/partners/help", label: "Contact Stonegate" }}
+                icon={
+                  <CircleDollarSign className="h-6 w-6" aria-hidden="true" />
+                }
+              />
+            ) : (
+              <RateCard currency={rates.currency} items={rates.items} />
+            )}
+          </div>
         )}
       </PartnerPanel>
 
@@ -431,10 +459,157 @@ function RateCard({
         ))}
       </div>
       <p className="mt-5 text-xs leading-5 text-slate-500">
-        Rates support online scheduling. Final scope, approved changes, labor,
-        materials, and disposal conditions can change a completed-job amount.
+        A displayed rate is final only for the described contracted scope.
+        Material scope discrepancies require an explicit revised quote or change
+        order before the new price is accepted; schedule, service, and proof
+        changes remain subject to separate Stonegate confirmation.
       </p>
     </>
+  );
+}
+
+function AgreementSummary({
+  agreement,
+}: {
+  agreement: PartnerServiceAgreementPresentation;
+}) {
+  return (
+    <section
+      className="rounded-2xl border border-primary-200 bg-primary-50/50 p-4 sm:p-5"
+      aria-labelledby="account-agreement-summary"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary-700">
+            Active account terms
+          </p>
+          <h3
+            id="account-agreement-summary"
+            className="mt-1 font-semibold text-slate-950"
+          >
+            {agreement.label}
+          </h3>
+        </div>
+        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-primary-800 shadow-sm">
+          {agreement.currency}
+        </span>
+      </div>
+      <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+        <div>
+          <dt className="text-slate-500">Effective from</dt>
+          <dd className="mt-1 font-medium text-slate-950">
+            <time dateTime={agreement.effectiveFrom}>
+              {formatPartnerDate(agreement.effectiveFrom)}
+            </time>
+          </dd>
+        </div>
+        <div>
+          <dt className="text-slate-500">Effective until</dt>
+          <dd className="mt-1 font-medium text-slate-950">
+            {agreement.effectiveTo ? (
+              <time dateTime={agreement.effectiveTo}>
+                {formatPartnerDate(agreement.effectiveTo)}
+              </time>
+            ) : (
+              "No scheduled end"
+            )}
+          </dd>
+        </div>
+      </dl>
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <TermsList
+          title="Included"
+          items={agreement.inclusions}
+          empty="No account-wide inclusions are listed."
+        />
+        <TermsList
+          title="Excluded"
+          items={agreement.exclusions}
+          empty="No account-wide exclusions are listed."
+        />
+      </div>
+      {agreement.services.length > 0 ? (
+        <div className="mt-4">
+          <h4 className="text-sm font-semibold text-slate-950">
+            Entitled service rules
+          </h4>
+          <ul className="mt-2 grid gap-3 lg:grid-cols-2">
+            {agreement.services.map((service) => (
+              <li
+                key={service.serviceKey}
+                className="rounded-xl border border-primary-100 bg-white/80 p-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-slate-950">
+                    {formatLabel(service.serviceKey)}
+                  </span>
+                  <span className="text-xs font-medium text-slate-600">
+                    {formatLabel(service.pricingState)}
+                  </span>
+                </div>
+                {service.inclusions.length > 0 ? (
+                  <p className="mt-2 text-xs leading-5 text-slate-600">
+                    Included: {service.inclusions.join("; ")}
+                  </p>
+                ) : null}
+                {service.exclusions.length > 0 ? (
+                  <p className="mt-1 text-xs leading-5 text-slate-600">
+                    Excluded: {service.exclusions.join("; ")}
+                  </p>
+                ) : null}
+                {service.quoteRule ? (
+                  <p className="mt-1 text-xs font-medium leading-5 text-amber-800">
+                    {service.quoteRule}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {agreement.quoteRules ? (
+        <PartnerNotice tone="warning" className="mt-4">
+          {agreement.quoteRules}
+        </PartnerNotice>
+      ) : null}
+      {agreement.document ? (
+        <p className="mt-4 text-xs text-slate-600">
+          Agreement document:{" "}
+          <span className="font-semibold">{agreement.document.filename}</span>.
+          Find the secure copy in Documents below.
+        </p>
+      ) : null}
+      <p className="mt-4 text-xs leading-5 text-slate-600">
+        If the requested or on-site scope differs from these terms, stop and
+        request clarification. The portal will not treat a mismatched service,
+        currency, estimate, or quote-required item as contracted final pricing.
+      </p>
+    </section>
+  );
+}
+
+function TermsList({
+  title,
+  items,
+  empty,
+}: {
+  title: string;
+  items: string[];
+  empty: string;
+}) {
+  return (
+    <div>
+      <h4 className="text-sm font-semibold text-slate-950">{title}</h4>
+      {items.length > 0 ? (
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+          {items.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-sm text-slate-500">{empty}</p>
+      )}
+    </div>
   );
 }
 
@@ -517,8 +692,13 @@ function InvoiceList({
               canManagePayments={paymentAccess.canManagePayments}
               initialSecurity={paymentAccess.security}
               payerEmail={paymentAccess.payerEmail}
+              payerName={paymentAccess.payerName}
             />
           </div>
+          <PartnerInvoiceDisputeManager
+            invoiceId={invoice.id}
+            canRequest={paymentAccess.canRequestBillingDisputes}
+          />
         </li>
       ))}
     </ul>
@@ -539,8 +719,10 @@ function QuoteList({ items }: { items: PartnerQuote[] }) {
                 {quote.quoteNumber ? `Quote ${quote.quoteNumber}` : "Quote"}
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                Version {quote.version} · {quote.lineCount} line
-                {quote.lineCount === 1 ? "" : "s"}
+                Version {quote.version}
+                {quote.lineCount === null
+                  ? ""
+                  : ` · ${quote.lineCount} line${quote.lineCount === 1 ? "" : "s"}`}
               </p>
             </div>
             <PartnerStatusBadge status={quote.status} />
@@ -549,7 +731,7 @@ function QuoteList({ items }: { items: PartnerQuote[] }) {
             <div>
               <dt className="text-slate-500">Quoted total</dt>
               <dd className="mt-1 font-semibold text-slate-950">
-                {formatPartnerMoney(quote.amounts.total)}
+                {formatQuoteTotal(quote)}
               </dd>
             </div>
             <div>
@@ -560,16 +742,22 @@ function QuoteList({ items }: { items: PartnerQuote[] }) {
             </div>
           </dl>
           <div className="mt-4 flex flex-wrap items-start gap-2 border-t border-slate-200 pt-3">
+            <Link
+              href={`/partners/billing/quotes/${quote.id}` as Route}
+              className="inline-flex min-h-11 items-center text-sm font-semibold text-primary-800 underline underline-offset-4"
+            >
+              {quote.actionable ? "Review and respond" : "Review quote"}
+            </Link>
             {quote.documentId ? (
               <PartnerDocumentDownloadButton
                 documentId={quote.documentId}
                 label="Download quote"
               />
-            ) : (
+            ) : quote.authority === "legacy_snapshot" ? (
               <span className="text-xs leading-5 text-slate-500">
-                Quote file not generated
+                Historical quote file not available
               </span>
-            )}
+            ) : null}
             {quote.bookingId ? (
               <Link
                 href={`/partners/bookings/${quote.bookingId}` as Route}
@@ -583,6 +771,16 @@ function QuoteList({ items }: { items: PartnerQuote[] }) {
       ))}
     </ul>
   );
+}
+
+function formatQuoteTotal(quote: PartnerQuote): string {
+  if (!quote.amounts) return "Pending finalization";
+  if ("total" in quote.amounts) {
+    return formatPartnerMoney(quote.amounts.total);
+  }
+  const minimum = formatPartnerMoney(quote.amounts.totalMin);
+  const maximum = formatPartnerMoney(quote.amounts.totalMax);
+  return minimum === maximum ? minimum : `${minimum}–${maximum}`;
 }
 
 function StatementList({ items }: { items: PartnerStatement[] }) {

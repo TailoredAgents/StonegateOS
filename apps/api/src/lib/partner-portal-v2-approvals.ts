@@ -86,6 +86,8 @@ export type ApprovalRuleSnapshot = {
   id: string;
   name: string;
   version: number;
+  requiredApproverCapabilities: string[];
+  /** Legacy display/migration projection; never used as authority. */
   requiredApproverRoleKeys: string[];
   requiredDecisionCount: number;
   conditions?: PartnerApprovalRuleConditionsSnapshot;
@@ -94,6 +96,7 @@ export type ApprovalRuleSnapshot = {
 export type ApprovalDecisionSnapshot = {
   membershipId: string;
   roleKey: string;
+  capabilities?: string[];
   decision: "approved" | "declined";
 };
 
@@ -314,21 +317,46 @@ export function parseApprovalRuleSnapshots(
       "approverRoleKeys",
     ]);
     if (
-      !Array.isArray(rawRoles) ||
+      rawRoles !== undefined &&
+      (!Array.isArray(rawRoles) ||
       rawRoles.some(
         (role) => typeof role !== "string" || !ROLE_KEY_PATTERN.test(role),
-      )
+      ))
     ) {
       return null;
     }
-    const roles = [...new Set(rawRoles as string[])];
+    const roles = [...new Set((rawRoles ?? []) as string[])];
+    const rawCapabilities = firstDefined(record, [
+      "requiredApproverCapabilities",
+      "required_approver_capabilities",
+    ]);
+    if (
+      rawCapabilities !== undefined &&
+      (!Array.isArray(rawCapabilities) ||
+        rawCapabilities.some(
+          (capability) =>
+            typeof capability !== "string" ||
+            !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u.test(capability),
+        ))
+    ) {
+      return null;
+    }
+    // Legacy snapshots carried role names. They are accepted only as a
+    // migration shape and are converted to the stable approval capability.
+    const capabilities = [
+      ...new Set(
+        ((rawCapabilities as string[] | undefined) ??
+          (roles.length ? ["approvals.decide"] : [])),
+      ),
+    ];
     const rawCount = firstDefined(record, [
       "requiredDecisionCount",
       "required_decision_count",
     ]);
     const requiredDecisionCount = Number(rawCount);
     if (
-      roles.length < 1 ||
+      capabilities.length < 1 ||
+      capabilities.length > 20 ||
       roles.length > 20 ||
       !Number.isSafeInteger(requiredDecisionCount) ||
       requiredDecisionCount < 1 ||
@@ -346,6 +374,7 @@ export function parseApprovalRuleSnapshots(
       id,
       name,
       version,
+      requiredApproverCapabilities: capabilities,
       requiredApproverRoleKeys: roles,
       requiredDecisionCount,
       ...(conditions ? { conditions } : {}),
@@ -364,6 +393,8 @@ export function evaluateAllMatchingApprovalRules(input: {
   ruleSnapshot: unknown;
   requiredDecisionCount: number;
   decisions: readonly ApprovalDecisionSnapshot[];
+  actorCapabilities?: readonly string[];
+  /** Migration-only compatibility input; live authorization passes capabilities. */
   actorRoleKey?: string;
 }): ApprovalRulesEvaluation {
   const rules = parseApprovalRuleSnapshots(input.ruleSnapshot);
@@ -380,6 +411,13 @@ export function evaluateAllMatchingApprovalRules(input: {
     if (
       !isPortalV2Uuid(decision.membershipId) ||
       !ROLE_KEY_PATTERN.test(decision.roleKey) ||
+      (decision.capabilities !== undefined &&
+      (!Array.isArray(decision.capabilities) ||
+      decision.capabilities.some(
+        (capability) =>
+          typeof capability !== "string" ||
+          !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u.test(capability),
+      ))) ||
       !["approved", "declined"].includes(decision.decision) ||
       decisionsByMembership.has(decision.membershipId)
     ) {
@@ -396,7 +434,9 @@ export function evaluateAllMatchingApprovalRules(input: {
   );
   const ruleResults = rules.map((rule) => {
     const approvedDecisionCount = approvedDecisions.filter((decision) =>
-      rule.requiredApproverRoleKeys.includes(decision.roleKey),
+      rule.requiredApproverCapabilities.every((capability) =>
+        (decision.capabilities ?? ["approvals.decide"]).includes(capability),
+      ),
     ).length;
     return {
       id: rule.id,
@@ -405,16 +445,21 @@ export function evaluateAllMatchingApprovalRules(input: {
       satisfied: approvedDecisionCount >= rule.requiredDecisionCount,
     };
   });
-  const eligibleRuleIds = input.actorRoleKey
+  const actorCapabilities =
+    input.actorCapabilities ??
+    (input.actorRoleKey ? ["approvals.decide"] : []);
+  const eligibleRuleIds = actorCapabilities.length
     ? rules
         .filter((rule) =>
-          rule.requiredApproverRoleKeys.includes(input.actorRoleKey!),
+          rule.requiredApproverCapabilities.every((capability) =>
+            actorCapabilities.includes(capability),
+          ),
         )
         .map((rule) => rule.id)
     : [];
   return {
     ok: true,
-    actorEligible: Boolean(input.actorRoleKey) && eligibleRuleIds.length > 0,
+    actorEligible: eligibleRuleIds.length > 0,
     approved:
       !declined &&
       approvedDecisions.length >= input.requiredDecisionCount &&
@@ -433,17 +478,23 @@ export type PartnerApprovalTransaction = Parameters<
   : never;
 
 export type PartnerApprovalRuleCandidate = Readonly<
-  Pick<
+  Omit<
+    Pick<
     typeof partnerApprovalRules.$inferSelect,
     | "id"
     | "partnerAccountId"
     | "name"
     | "conditions"
+    | "requiredApproverCapabilities"
     | "requiredApproverRoleKeys"
     | "requiredDecisionCount"
     | "active"
     | "version"
-  >
+    >,
+    "requiredApproverCapabilities"
+  > & {
+    requiredApproverCapabilities?: string[];
+  }
 >;
 
 export type PartnerApprovalRuleMatchContext = Readonly<{
@@ -591,6 +642,8 @@ function activeApprovalRuleSnapshot(
 ): Readonly<ApprovalRuleSnapshot> {
   const ruleId = isPortalV2Uuid(row.id) ? row.id : null;
   const name = safeText(row.name, 10_000);
+  const capabilities =
+    row.requiredApproverCapabilities ?? ["approvals.decide"];
   const roles = row.requiredApproverRoleKeys;
   const conditions = parsePartnerApprovalRuleConditions(row.conditions);
   if (
@@ -601,8 +654,16 @@ function activeApprovalRuleSnapshot(
     name.length > 160 ||
     !Number.isSafeInteger(row.version) ||
     row.version < 1 ||
+    !Array.isArray(capabilities) ||
+    capabilities.length < 1 ||
+    capabilities.length > 20 ||
+    capabilities.some(
+      (capability) =>
+        typeof capability !== "string" ||
+        !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u.test(capability),
+    ) ||
+    new Set(capabilities).size !== capabilities.length ||
     !Array.isArray(roles) ||
-    roles.length < 1 ||
     roles.length > 20 ||
     roles.some(
       (role) => typeof role !== "string" || !ROLE_KEY_PATTERN.test(role),
@@ -621,6 +682,7 @@ function activeApprovalRuleSnapshot(
     id: ruleId,
     name,
     version: row.version,
+    requiredApproverCapabilities: [...capabilities],
     requiredApproverRoleKeys: [...roles],
     requiredDecisionCount: row.requiredDecisionCount,
     conditions: {
@@ -782,6 +844,8 @@ export async function resolvePartnerApprovalRequirement(input: {
       partnerAccountId: partnerApprovalRules.partnerAccountId,
       name: partnerApprovalRules.name,
       conditions: partnerApprovalRules.conditions,
+      requiredApproverCapabilities:
+        partnerApprovalRules.requiredApproverCapabilities,
       requiredApproverRoleKeys: partnerApprovalRules.requiredApproverRoleKeys,
       requiredDecisionCount: partnerApprovalRules.requiredDecisionCount,
       active: partnerApprovalRules.active,
@@ -973,6 +1037,9 @@ export function buildPartnerApprovalRequestInsert(input: {
       id: rule.id,
       name: rule.name,
       version: rule.version,
+      requiredApproverCapabilities: [
+        ...rule.requiredApproverCapabilities,
+      ],
       requiredApproverRoleKeys: [...rule.requiredApproverRoleKeys],
       requiredDecisionCount: rule.requiredDecisionCount,
       conditions: {
@@ -1153,6 +1220,25 @@ function decisionRole(row: ApprovalDecisionRow): string | null {
     : null;
 }
 
+function decisionCapabilities(row: ApprovalDecisionRow): string[] {
+  const snapshot = row.decisionSnapshot["capabilities"];
+  if (
+    Array.isArray(snapshot) &&
+    snapshot.length > 0 &&
+    snapshot.length <= 20 &&
+    snapshot.every(
+      (capability) =>
+        typeof capability === "string" &&
+        /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u.test(capability),
+    )
+  ) {
+    return [...new Set(snapshot as string[])];
+  }
+  // Legacy decisions already passed the then-current authorization check.
+  // Preserve that immutable evidence without consulting today's role name.
+  return ["approvals.decide"];
+}
+
 function approvalRequestDto(input: {
   row: ApprovalRequestRow;
   decisions: readonly ApprovalDecisionRow[];
@@ -1208,6 +1294,7 @@ function approvalRequestDto(input: {
         id: rule.id,
         name: rule.name,
         version: rule.version,
+        requiredApproverCapabilities: rule.requiredApproverCapabilities,
         requiredApproverRoleKeys: rule.requiredApproverRoleKeys,
         requiredDecisionCount: rule.requiredDecisionCount,
       })) ?? [],
@@ -2094,7 +2181,7 @@ export async function decidePartnerApprovalRequest(
       grants: membership.capabilityGrants,
       denies: membership.capabilityDenies,
     });
-    if (!capabilities.includes("bookings.approve")) {
+    if (!capabilities.includes("approvals.decide")) {
       return { status: 403, body: { ok: false, error: "forbidden" } };
     }
 
@@ -2151,6 +2238,7 @@ export async function decidePartnerApprovalRequest(
       immutableDecisions.push({
         membershipId: decision.decidedByMembershipId,
         roleKey,
+        capabilities: decisionCapabilities(decision),
         decision: decision.decision,
       });
     }
@@ -2158,7 +2246,7 @@ export async function decidePartnerApprovalRequest(
       ruleSnapshot: requestRow.ruleSnapshot,
       requiredDecisionCount: requestRow.requiredDecisionCount,
       decisions: immutableDecisions,
-      actorRoleKey: membership.roleKey,
+      actorCapabilities: capabilities,
     });
     if (!eligibility.ok) {
       return {
@@ -2179,6 +2267,7 @@ export async function decidePartnerApprovalRequest(
         {
           membershipId: input.membershipId,
           roleKey: membership.roleKey,
+          capabilities: ["approvals.decide"],
           decision: input.decision,
         },
       ],
@@ -2210,6 +2299,7 @@ export async function decidePartnerApprovalRequest(
         reason: input.reason,
         decisionSnapshot: {
           roleKey: membership.roleKey,
+          capabilities: ["approvals.decide"],
           eligibleRuleIds: eligibility.eligibleRuleIds,
           requestRevision: requestRow.revision,
           assuranceLevel: "aal2",
@@ -2263,7 +2353,7 @@ export async function decidePartnerApprovalRequest(
       sessionId: input.sessionId,
       authMethod: "partner_session",
       correlationId: input.correlationId,
-      requiredPermissions: ["bookings.approve"],
+      requiredPermissions: ["approvals.decide"],
       outcome: "succeeded",
       surface: "/partners/approvals",
       idempotencyKeyHash: input.idempotencyKeyHash,

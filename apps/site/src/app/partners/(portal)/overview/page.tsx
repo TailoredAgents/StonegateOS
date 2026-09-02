@@ -13,9 +13,12 @@ import {
 import { callPartnerApi } from "@/app/partners/lib/api";
 import {
   getPartnerPortalContext,
-  partnerPersonaLabel,
   type PartnerCapability,
 } from "@/app/partners/lib/portal-context";
+import {
+  getPartnerPersonaPresentation,
+  type PartnerPersonaTaskId,
+} from "@/app/partners/lib/persona-presentation";
 import {
   loadPartnerCommercial,
   type PartnerCommercialState,
@@ -37,6 +40,11 @@ import {
   PartnerNotificationList,
   type PartnerDashboardNotification,
 } from "@/app/partners/components/PartnerNotificationList";
+import {
+  PartnerOnboardingChecklist,
+  type PartnerOnboardingChecklistState,
+} from "@/app/partners/components/PartnerOnboardingChecklist";
+import { PartnerPersonaOverviewGuide } from "@/app/partners/components/PartnerPersonaOverviewGuide";
 
 export const metadata: Metadata = { title: "Overview" };
 
@@ -56,6 +64,10 @@ type ApprovalPayload = {
   ok?: boolean;
   approvalRequests?: Array<{ id: string; state?: string }>;
   page?: Page;
+};
+type ChecklistPayload = {
+  ok?: boolean;
+  checklist?: PartnerOnboardingChecklistState;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -131,13 +143,7 @@ function isOverviewInvoice(value: unknown): value is PartnerInvoice {
   );
 }
 
-export default async function PartnersHomePage({
-  searchParams,
-}: {
-  searchParams?: Promise<{ setup?: string }>;
-}) {
-  const params = (await searchParams) ?? {};
-  const setup = params.setup === "1";
+export default async function PartnersHomePage() {
   const context = await getPartnerPortalContext();
   const capabilities =
     context.status === "authenticated" ? context.capabilities : null;
@@ -148,6 +154,7 @@ export default async function PartnersHomePage({
     notificationsResponse,
     approvalsResponse,
     invoices,
+    checklistResponse,
   ] = await Promise.all([
     capabilities?.jobs
       ? callPartnerApi("/api/portal/v2/jobs?limit=100").catch(() => null)
@@ -172,15 +179,22 @@ export default async function PartnersHomePage({
           isOverviewInvoice,
         )
       : Promise.resolve({ status: "forbidden" } as const),
+    callPartnerApi("/api/portal/v2/onboarding-checklist").catch(() => null),
   ]);
 
-  const [jobsPayload, locationsPayload, notificationsPayload, approvalPayload] =
-    await Promise.all([
-      responseJson<JobsPayload>(jobsResponse),
-      responseJson<LocationsPayload>(locationsResponse),
-      responseJson<NotificationsPayload>(notificationsResponse),
-      responseJson<ApprovalPayload>(approvalsResponse),
-    ]);
+  const [
+    jobsPayload,
+    locationsPayload,
+    notificationsPayload,
+    approvalPayload,
+    checklistPayload,
+  ] = await Promise.all([
+    responseJson<JobsPayload>(jobsResponse),
+    responseJson<LocationsPayload>(locationsResponse),
+    responseJson<NotificationsPayload>(notificationsResponse),
+    responseJson<ApprovalPayload>(approvalsResponse),
+    responseJson<ChecklistPayload>(checklistResponse),
+  ]);
   const jobs = Array.isArray(jobsPayload?.jobs) ? jobsPayload.jobs : [];
   const locations = Array.isArray(locationsPayload?.locations)
     ? locationsPayload.locations
@@ -219,10 +233,9 @@ export default async function PartnersHomePage({
     context.status === "authenticated"
       ? context.accountLabel
       : "Partner account";
-  const persona =
-    context.status === "authenticated"
-      ? partnerPersonaLabel(context.partnerType)
-      : "Partner services";
+  const personaPresentation = getPartnerPersonaPresentation(
+    context.status === "authenticated" ? context.partnerType : null,
+  );
   const firstName =
     context.status === "authenticated"
       ? context.user.name.split(/\s+/u)[0] || context.user.name
@@ -231,6 +244,12 @@ export default async function PartnersHomePage({
     Boolean(capabilities?.jobs && !jobsPayload) ||
     Boolean(capabilities?.locations && !locationsPayload) ||
     !notificationsPayload;
+  const personaActionDescriptions = new Map(
+    personaPresentation.overview.nextActions.map((action) => [
+      action.id,
+      action.description,
+    ]),
+  );
   const quickActions: Array<{
     href: Route;
     label: string;
@@ -240,69 +259,89 @@ export default async function PartnersHomePage({
   }> = [
     {
       href: "/partners/book",
-      label: "Schedule a job",
+      label: personaPresentation.taskLabels.schedule,
       description:
+        personaActionDescriptions.get("schedule") ??
         "Choose a location, add scope and photos, then select live availability.",
       icon: CalendarPlus2,
       capability: "schedule",
     },
     {
       href: "/partners/bookings",
-      label: "Review jobs",
+      label: personaPresentation.taskLabels.jobs,
       description:
+        personaActionDescriptions.get("jobs") ??
         "Track status, change timing, share proof, or message Stonegate.",
       icon: BriefcaseBusiness,
       capability: "jobs",
     },
     {
       href: "/partners/properties",
-      label: "Manage locations",
+      label: personaPresentation.taskLabels.locations,
       description:
+        personaActionDescriptions.get("locations") ??
         "Reuse site contacts, access notes, parking, and loading details.",
       icon: MapPin,
       capability: "locations",
     },
     {
       href: "/partners/photos",
-      label: "Photos & proof",
+      label: personaPresentation.taskLabels.proof,
       description:
+        personaActionDescriptions.get("proof") ??
         "Review intake, before, after, and completion documentation.",
       icon: Camera,
       capability: "proof",
     },
   ];
+  const visiblePersonaTaskIds: PartnerPersonaTaskId[] = [
+    ...(capabilities?.schedule ? (["schedule"] as const) : []),
+    ...(capabilities?.jobs ? (["jobs"] as const) : []),
+    ...(capabilities?.locations ? (["locations"] as const) : []),
+    ...(capabilities?.proof ? (["proof"] as const) : []),
+  ];
 
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
-        eyebrow={persona}
+        eyebrow={personaPresentation.overview.eyebrow}
         title={`Welcome back, ${firstName}`}
-        description={`Manage service for ${accountLabel}, from the first scope note through payment and completion proof.`}
+        description={`${personaPresentation.overview.description} Current account: ${accountLabel}.`}
         actions={
           capabilities?.schedule ? (
             <Link href="/partners/book" className={partnerPrimaryButtonClass}>
               <CalendarPlus2 className="h-4 w-4" aria-hidden="true" />
-              Schedule job
+              {personaPresentation.taskLabels.schedule}
             </Link>
           ) : undefined
         }
       >
-        {setup ? (
-          <PartnerNotice tone="warning">
-            <span className="font-semibold">Finish account security:</span>{" "}
-            review your password, MFA, sessions, and notification preferences.{" "}
-            <Link className="font-semibold underline" href="/partners/settings">
-              Open settings
-            </Link>
-          </PartnerNotice>
-        ) : null}
         {dataUnavailable ? (
-          <PartnerNotice tone="warning" className={setup ? "mt-3" : undefined}>
+          <PartnerNotice tone="warning">
             Some dashboard information could not be refreshed. No account or job
             information was changed.
           </PartnerNotice>
         ) : null}
       </PartnerPageHeader>
+
+      {checklistPayload?.checklist &&
+      !checklistPayload.checklist.dismissed &&
+      checklistResponse ? (
+        <PartnerOnboardingChecklist
+          initialChecklist={checklistPayload.checklist}
+          initialEtag={checklistResponse.headers.get("etag") ?? ""}
+          persona={
+            context.status === "authenticated" ? context.partnerType : null
+          }
+        />
+      ) : null}
+
+      <PartnerPersonaOverviewGuide
+        persona={
+          context.status === "authenticated" ? context.partnerType : null
+        }
+        visibleTaskIds={visiblePersonaTaskIds}
+      />
 
       <section
         aria-label="Account summary"

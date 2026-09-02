@@ -1,5 +1,11 @@
 import type { NextRequest } from "next/server";
 
+const jest = import.meta.jest;
+const mockModule = jest.unstable_mockModule as unknown as (
+  moduleName: string,
+  factory: () => Record<string, unknown>,
+) => void;
+
 let mockRows: Array<Array<Record<string, unknown>>> = [];
 
 function mockQuery() {
@@ -17,7 +23,8 @@ const mockDb = {
   select: jest.fn(() => mockQuery()),
 };
 
-jest.mock("@/db", () => ({
+mockModule("@/db", () => ({
+  auditLogs: {},
   getDb: () => mockDb,
   teamMembers: {
     id: "team_members.id",
@@ -37,13 +44,18 @@ jest.mock("@/db", () => ({
     teamMemberId: "team_sessions.team_member_id",
     sessionHash: "team_sessions.session_hash",
     authMethod: "team_sessions.auth_method",
+    createdAt: "team_sessions.created_at",
+    assuranceLevel: "team_sessions.assurance_level",
+    mfaVerifiedAt: "team_sessions.mfa_verified_at",
     expiresAt: "team_sessions.expires_at",
     revokedAt: "team_sessions.revoked_at",
   },
 }));
 
-import { requirePermission, resolvePermissionContext } from "@/lib/permissions";
-import { getAuditActorFromRequest } from "@/lib/audit";
+const { requirePermission, resolvePermissionContext } = await import(
+  "@/lib/permissions"
+);
+const { getAuditActorFromRequest } = await import("@/lib/audit");
 
 function request(headers: Record<string, string>): NextRequest {
   return { headers: new Headers(headers) } as NextRequest;
@@ -55,6 +67,9 @@ function activeSessionRow(
   return {
     sessionId: "11111111-1111-4111-8111-111111111111",
     authMethod: "team_session",
+    authenticatedAt: new Date(),
+    assuranceLevel: "aal1",
+    mfaVerifiedAt: null,
     memberId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     memberName: "Verified Sales User",
     expiresAt: new Date(Date.now() + 60_000),
@@ -117,6 +132,9 @@ describe("permission principal resolution", () => {
       label: "Verified Sales User",
       sessionId: "11111111-1111-4111-8111-111111111111",
       authMethod: "team_session",
+      authenticatedAt: expect.any(String) as unknown,
+      assuranceLevel: "aal1",
+      mfaVerifiedAt: null,
     });
   });
 
@@ -143,6 +161,9 @@ describe("permission principal resolution", () => {
       label: "Verified Sales User",
       sessionId: "11111111-1111-4111-8111-111111111111",
       authMethod: "break_glass",
+      authenticatedAt: expect.any(String) as unknown,
+      assuranceLevel: "aal1",
+      mfaVerifiedAt: null,
     });
   });
 
@@ -166,6 +187,9 @@ describe("permission principal resolution", () => {
       principalId: null,
       principalLabel: null,
       sessionId: null,
+      authenticatedAt: null,
+      assuranceLevel: null,
+      mfaVerifiedAt: null,
     });
   });
 

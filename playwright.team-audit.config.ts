@@ -37,7 +37,7 @@ const viewportCases = [
 const auditProjects = viewportCases.flatMap((entry) =>
   (["light", "dark"] as const).map((theme) => ({
     name: `chromium-${entry.id}-${theme}`,
-    grepInvert: /@team-a11y/u,
+    grepInvert: /(?:@team-a11y|@partner-stateful|@partner-zoom)/u,
     metadata: { auditTheme: theme },
     use: {
       ...entry.base,
@@ -63,6 +63,41 @@ const accessibilityProjects = [
     use: {
       ...devices["Pixel 7"],
       viewport: { width: 375, height: 812 },
+    },
+  },
+] as const;
+
+const partnerStatefulProjects = [
+  {
+    name: "chromium-partner-stateful-1440-light",
+    grep: /@partner-stateful/u,
+    metadata: { auditTheme: "light" },
+    use: {
+      ...devices["Desktop Chrome"],
+      viewport: { width: 1440, height: 1000 },
+    },
+  },
+] as const;
+
+const partnerZoomProjects = [
+  {
+    name: "chromium-partner-zoom-200-light",
+    grep: /@partner-zoom/u,
+    metadata: { auditTheme: "light", effectiveZoom: 200 },
+    use: {
+      ...devices["Desktop Chrome"],
+      viewport: { width: 640, height: 900 },
+      deviceScaleFactor: 2,
+    },
+  },
+  {
+    name: "chromium-partner-zoom-400-light",
+    grep: /@partner-zoom/u,
+    metadata: { auditTheme: "light", effectiveZoom: 400 },
+    use: {
+      ...devices["Desktop Chrome"],
+      viewport: { width: 320, height: 740 },
+      deviceScaleFactor: 4,
     },
   },
 ] as const;
@@ -97,6 +132,11 @@ export default defineConfig({
     video: "retain-on-failure",
     storageState: "tests/e2e/storage/visitor.json",
   },
-  projects: [...auditProjects, ...accessibilityProjects],
+  projects: [
+    ...auditProjects,
+    ...accessibilityProjects,
+    ...partnerStatefulProjects,
+    ...partnerZoomProjects,
+  ],
   outputDir: "artifacts/team-crm-audit/playwright-test-results",
 });

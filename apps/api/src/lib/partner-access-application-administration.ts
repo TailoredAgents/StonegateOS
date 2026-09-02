@@ -6,6 +6,10 @@ import {
   partnerUsers,
 } from "@/db";
 import type { PartnerAccessApplicationStatus } from "@/db";
+import {
+  PARTNER_LAUNCH_ROLE_KEYS,
+  type PartnerLaunchRoleKey,
+} from "@/lib/partner-account-authorization";
 import { TeamMutationFailure } from "@/lib/team-mutation";
 
 const ACTIVE_APPLICATION_STATUSES = [
@@ -39,6 +43,10 @@ export type StaffAccessApplicationDecision =
       action: "approve";
       note: string | null;
       confirmation: "APPROVE";
+      roleKey: PartnerLaunchRoleKey;
+      accessLevel: "account" | "scoped";
+      locationIds: string[];
+      costCenterIds: string[];
     }
   | {
       action: "decline";
@@ -48,6 +56,7 @@ export type StaffAccessApplicationDecision =
 
 type StaffApplicationRow = {
   id: string;
+  flowVersion: number;
   status: PartnerAccessApplicationStatus;
   version: number;
   name: string;
@@ -56,6 +65,8 @@ type StaffApplicationRow = {
   companyName: string;
   website: string | null;
   partnerType: string;
+  companyResolutionChoice: string | null;
+  requestedPartnerAccountId: string | null;
   serviceAreas: string[];
   requestedNeeds: string[];
   applicantPartnerUserId: string | null;
@@ -98,6 +109,32 @@ function escapedSearchPattern(value: string): string {
     .replace(/\\/gu, "\\\\")
     .replace(/[%_]/gu, "\\$&")
     .replace(/\s+/gu, "%")}%`;
+}
+
+function normalizedUuidArray(value: unknown, field: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > 250 ||
+    !value.every((item) => typeof item === "string" && UUID_PATTERN.test(item))
+  ) {
+    throw new TeamMutationFailure("invalid", "Choose valid account scopes.", {
+      fieldErrors: {
+        [field]: "Use no more than 250 unique resource identifiers.",
+      },
+    });
+  }
+  const normalized = value.map((item: unknown) => {
+    if (typeof item !== "string") {
+      throw new TeamMutationFailure("invalid", "Choose valid account scopes.");
+    }
+    return item.toLowerCase();
+  });
+  if (new Set(normalized).size !== normalized.length) {
+    throw new TeamMutationFailure("invalid", "Choose valid account scopes.", {
+      fieldErrors: { [field]: "Remove duplicate resource identifiers." },
+    });
+  }
+  return normalized;
 }
 
 export function isStaffAccessApplicationId(value: string): boolean {
@@ -170,7 +207,17 @@ export function parseStaffAccessApplicationDecision(
       fieldErrors: { request: "A JSON object is required." },
     });
   }
-  const allowedKeys = new Set(["action", "confirmation", "note"]);
+  const baseKeys = ["action", "confirmation", "note"] as const;
+  const approvalKeys = [
+    ...baseKeys,
+    "roleKey",
+    "accessLevel",
+    "locationIds",
+    "costCenterIds",
+  ] as const;
+  const allowedKeys = new Set<string>(
+    value["action"] === "approve" ? approvalKeys : baseKeys,
+  );
   if (
     !("action" in value) ||
     !("confirmation" in value) ||
@@ -182,7 +229,10 @@ export function parseStaffAccessApplicationDecision(
       "The decision is incomplete or contains unsupported fields.",
       {
         fieldErrors: {
-          request: "Send exactly action, note, and confirmation.",
+          request:
+            value["action"] === "approve"
+              ? "Send the decision and one explicit role and access scope."
+              : "Send exactly action, note, and confirmation.",
         },
       },
     );
@@ -195,9 +245,29 @@ export function parseStaffAccessApplicationDecision(
       rawNote === null || rawNote === ""
         ? null
         : normalizedText(rawNote, 1_000);
+    const roleKey = value["roleKey"];
+    const accessLevel = value["accessLevel"];
+    const locationIds = normalizedUuidArray(
+      value["locationIds"],
+      "locationIds",
+    );
+    const costCenterIds = normalizedUuidArray(
+      value["costCenterIds"],
+      "costCenterIds",
+    );
+    const roleIsValid =
+      typeof roleKey === "string" &&
+      PARTNER_LAUNCH_ROLE_KEYS.includes(roleKey as PartnerLaunchRoleKey);
+    const accessIsValid = accessLevel === "account" || accessLevel === "scoped";
+    const scopeCount = locationIds.length + costCenterIds.length;
     if (
       confirmation !== "APPROVE" ||
-      (rawNote !== null && rawNote !== "" && !note)
+      (rawNote !== null && rawNote !== "" && !note) ||
+      !roleIsValid ||
+      !accessIsValid ||
+      (roleKey === "administrator" && accessLevel !== "account") ||
+      (accessLevel === "account" && scopeCount !== 0) ||
+      (accessLevel === "scoped" && scopeCount === 0)
     ) {
       throw new TeamMutationFailure("invalid", "Confirm this approval.", {
         fieldErrors: {
@@ -207,10 +277,42 @@ export function parseStaffAccessApplicationDecision(
           ...(rawNote !== null && rawNote !== "" && !note
             ? { note: "Use 1,000 characters or fewer." }
             : {}),
+          ...(!roleIsValid
+            ? {
+                roleKey:
+                  "Choose Administrator, Operations, Billing/Approver, or Viewer.",
+              }
+            : {}),
+          ...(!accessIsValid
+            ? { accessLevel: "Choose account-wide or scoped access." }
+            : {}),
+          ...(roleKey === "administrator" && accessLevel !== "account"
+            ? { accessLevel: "Administrators must be account-wide." }
+            : {}),
+          ...(accessLevel === "account" && scopeCount !== 0
+            ? {
+                accessLevel:
+                  "Account-wide access cannot include resource scopes.",
+              }
+            : {}),
+          ...(accessLevel === "scoped" && scopeCount === 0
+            ? {
+                accessLevel:
+                  "Scoped access requires a location or cost center.",
+              }
+            : {}),
         },
       });
     }
-    return { action, confirmation, note };
+    return {
+      action,
+      confirmation,
+      note,
+      roleKey: roleKey as PartnerLaunchRoleKey,
+      accessLevel,
+      locationIds,
+      costCenterIds,
+    };
   }
   if (action === "needs_information") {
     const note = normalizedText(rawNote, 2_000);
@@ -264,6 +366,7 @@ export function isActiveStaffAccessApplicationStatus(
 function applicationSelection() {
   return {
     id: partnerAccessApplications.id,
+    flowVersion: partnerAccessApplications.flowVersion,
     status: partnerAccessApplications.status,
     version: partnerAccessApplications.version,
     name: partnerAccessApplications.name,
@@ -272,6 +375,9 @@ function applicationSelection() {
     companyName: partnerAccessApplications.companyName,
     website: partnerAccessApplications.website,
     partnerType: partnerAccessApplications.partnerType,
+    companyResolutionChoice: partnerAccessApplications.companyResolutionChoice,
+    requestedPartnerAccountId:
+      partnerAccessApplications.requestedPartnerAccountId,
     serviceAreas: partnerAccessApplications.serviceAreas,
     requestedNeeds: partnerAccessApplications.requestedNeeds,
     applicantPartnerUserId: partnerAccessApplications.applicantPartnerUserId,
@@ -307,6 +413,7 @@ function serializeApplication(
   );
   return {
     id: row.id,
+    flowVersion: row.flowVersion,
     status: row.status,
     version: String(row.version),
     applicant: {
@@ -323,6 +430,8 @@ function serializeApplication(
       persona: row.partnerType,
       serviceAreas: row.serviceAreas,
       requestedNeeds: row.requestedNeeds,
+      resolutionChoice: row.companyResolutionChoice,
+      requestedPartnerAccountId: row.requestedPartnerAccountId,
     },
     account: row.bootstrapPartnerAccountId
       ? {
@@ -343,12 +452,12 @@ function serializeApplication(
     submittedAt: row.submittedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     allowedActions: active
-      ? tenantBound
+      ? row.flowVersion === 2 || tenantBound
         ? ["needs_information", "approve", "decline"]
         : ["needs_information"]
       : [],
     decisionBlockedReason:
-      active && !tenantBound
+      active && row.flowVersion !== 2 && !tenantBound
         ? "The generated account binding requires staff reconciliation before approval or decline."
         : null,
   };

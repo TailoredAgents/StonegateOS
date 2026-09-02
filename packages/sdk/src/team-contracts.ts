@@ -67,6 +67,53 @@ export const TEAM_PERMISSION_CATALOG = [
   "partners.write",
   "partners.invite",
   "partners.rates",
+  // Account-centred Partner Administration V1. The four broad permissions
+  // above remain compatibility inputs while stored roles are migrated.
+  "partners.accounts.read",
+  "partners.applications.read",
+  "partners.joins.read",
+  "partners.people.read",
+  "partners.memberships.read",
+  "partners.invitations.read",
+  "partners.domains.read",
+  "partners.security.read",
+  "partners.quarantine.read",
+  "partners.preview.read",
+  "partners.commercial.read",
+  "partners.billing_disputes.read",
+  "partners.cancellation_requests.read",
+  "partners.change_requests.read",
+  "partners.relationships.manage",
+  "partners.accounts.manage",
+  "partners.accounts.lifecycle",
+  "partners.applications.review",
+  "partners.applications.approve",
+  "partners.applications.decline",
+  "partners.joins.review",
+  "partners.joins.approve",
+  "partners.joins.decline",
+  "partners.invitations.send",
+  "partners.invitations.revoke",
+  "partners.memberships.manage",
+  "partners.memberships.suspend",
+  "partners.memberships.migration.review",
+  "partners.domains.manage",
+  "partners.domains.verify",
+  "partners.domains.revoke",
+  "partners.security.sessions.revoke",
+  "partners.quarantine.contain",
+  "partners.reconciliation.manage",
+  "partners.commercial.manage",
+  "partners.billing_disputes.decide",
+  "partners.cancellation_requests.decide",
+  "partners.change_requests.decide",
+  "partners.identities.disable",
+  "partners.security.mfa.reset",
+  "partners.memberships.recover_admin",
+  "partners.domains.override",
+  "partners.accounts.merge",
+  "partners.accounts.close",
+  "partners.quarantine.release",
   "finance.read",
   "financials.read",
   "commissions.read",
@@ -80,6 +127,72 @@ export const TEAM_PERMISSION_CATALOG = [
 ] as const;
 
 export type TeamPermission = (typeof TEAM_PERMISSION_CATALOG)[number];
+
+/**
+ * Exact expansion used while broad, historical partner grants remain stored.
+ *
+ * Expansion is intentionally one-way: a narrow V1 grant never implies access
+ * to a broad legacy route. This lets administrators migrate roles without a
+ * temporary privilege increase and keeps legacy denies meaningful.
+ */
+export const TEAM_PARTNER_LEGACY_PERMISSION_COMPATIBILITY = {
+  "partners.read": [
+    "partners.accounts.read",
+    "partners.applications.read",
+    "partners.joins.read",
+    "partners.people.read",
+    "partners.memberships.read",
+    "partners.invitations.read",
+    "partners.domains.read",
+    "partners.security.read",
+    "partners.quarantine.read",
+    "partners.preview.read",
+    "partners.commercial.read",
+    "partners.billing_disputes.read",
+    "partners.cancellation_requests.read",
+    "partners.change_requests.read",
+  ],
+  "partners.write": [
+    "partners.relationships.manage",
+    "partners.accounts.manage",
+    "partners.domains.manage",
+    "partners.accounts.lifecycle",
+    "partners.quarantine.contain",
+    "partners.reconciliation.manage",
+    "partners.cancellation_requests.decide",
+    "partners.change_requests.decide",
+  ],
+  "partners.invite": [
+    "partners.applications.review",
+    "partners.applications.approve",
+    "partners.applications.decline",
+    "partners.joins.review",
+    "partners.joins.approve",
+    "partners.joins.decline",
+    "partners.invitations.send",
+    "partners.invitations.revoke",
+    "partners.memberships.manage",
+    "partners.memberships.suspend",
+    "partners.memberships.migration.review",
+    "partners.domains.verify",
+    "partners.domains.revoke",
+    "partners.reconciliation.manage",
+  ],
+  "partners.rates": [
+    "partners.commercial.read",
+    "partners.commercial.manage",
+    "partners.billing_disputes.read",
+    "partners.billing_disputes.decide",
+  ],
+} as const satisfies Record<string, readonly TeamPermission[]>;
+
+/** Stored-role inputs accepted at runtime but unavailable for new grants. */
+export const TEAM_PARTNER_LEGACY_PERMISSION_CATALOG = [
+  "partners.read",
+  "partners.write",
+  "partners.invite",
+  "partners.rates",
+] as const satisfies readonly TeamPermission[];
 
 const TEAM_PERMISSION_SET: ReadonlySet<string> = new Set(
   TEAM_PERMISSION_CATALOG,
@@ -99,6 +212,13 @@ export const TEAM_OWNER_ONLY_PERMISSION_CATALOG = [
   "expenses.approve",
   "financials.read",
   "ad_spend.write",
+  "partners.identities.disable",
+  "partners.security.mfa.reset",
+  "partners.memberships.recover_admin",
+  "partners.domains.override",
+  "partners.accounts.merge",
+  "partners.accounts.close",
+  "partners.quarantine.release",
 ] as const satisfies readonly TeamPermission[];
 
 const TEAM_OWNER_ONLY_PERMISSION_SET: ReadonlySet<string> = new Set(
@@ -109,7 +229,10 @@ export type TeamOwnerOnlyPermission =
   (typeof TEAM_OWNER_ONLY_PERMISSION_CATALOG)[number];
 export type TeamAssignablePermission = Exclude<
   TeamPermission,
-  "access.break_glass" | TeamOwnerOnlyPermission | "sessions.manage_self"
+  | "access.break_glass"
+  | TeamOwnerOnlyPermission
+  | "sessions.manage_self"
+  | (typeof TEAM_PARTNER_LEGACY_PERMISSION_CATALOG)[number]
 >;
 
 /** Permissions an access administrator may assign to roles or members. */
@@ -118,7 +241,10 @@ export const TEAM_ASSIGNABLE_PERMISSION_CATALOG: TeamAssignablePermission[] =
     (permission): permission is TeamAssignablePermission =>
       permission !== "access.break_glass" &&
       !TEAM_OWNER_ONLY_PERMISSION_SET.has(permission) &&
-      permission !== "sessions.manage_self",
+      permission !== "sessions.manage_self" &&
+      !TEAM_PARTNER_LEGACY_PERMISSION_CATALOG.includes(
+        permission as (typeof TEAM_PARTNER_LEGACY_PERMISSION_CATALOG)[number],
+      ),
   );
 
 const TEAM_ASSIGNABLE_PERMISSION_SET: ReadonlySet<string> = new Set(
@@ -158,7 +284,7 @@ export const TEAM_READ_ONLY_PERMISSIONS = [
   "quotes.read",
   "sales.read",
   "outbound.read",
-  "partners.read",
+  ...TEAM_PARTNER_LEGACY_PERMISSION_COMPATIBILITY["partners.read"],
   "finance.read",
   "commissions.read",
   "marketing.read",
@@ -304,6 +430,8 @@ export type TeamPrincipal = {
   permissions: Permission[];
   label: string;
   authMethod: "team_session" | "break_glass";
+  assuranceLevel?: "aal1" | "aal2";
+  mfaVerifiedAt?: string | null;
 };
 
 export type TeamSurfaceGroup =
@@ -337,6 +465,12 @@ export type ActionPolicy = {
   requiredPermissions: TeamPermission[];
   risk: ActionRisk;
   requiresIdempotency: boolean;
+  /**
+   * Maximum age of the human authentication ceremony for sensitive actions.
+   * This is intentionally policy data rather than a route-local check so the
+   * authorization decision and the resulting audit receipt cannot drift.
+   */
+  maxAuthenticationAgeSeconds?: number;
   auditAction: string;
 };
 

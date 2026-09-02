@@ -263,6 +263,31 @@ async function runPartnerRecurringHorizonOnce() {
   }
 }
 
+async function runPartnerAuthRetentionOnce() {
+  const {
+    parsePartnerAuthRetentionBatchSize,
+    prunePartnerAuthenticationMetadata,
+  } = await import("../apps/api/src/lib/partner-auth-retention");
+  const result = await prunePartnerAuthenticationMetadata({
+    limit: parsePartnerAuthRetentionBatchSize(
+      process.env["PARTNER_AUTH_RETENTION_BATCH_SIZE"],
+    ),
+  });
+  if (
+    result.challengesExpired > 0 ||
+    result.challengesSanitized > 0 ||
+    result.applicantSessionsSanitized > 0 ||
+    result.authTransactionsDeleted > 0 ||
+    result.sessionsSanitized > 0 ||
+    result.loginTokensDeleted > 0
+  ) {
+    logWorkerEvent("info", "partners.auth_retention.completed", {
+      ok: true,
+      result,
+    });
+  }
+}
+
 async function main() {
   registerAliases();
   const { batchSize, pollIntervalMs, heartbeatIntervalMs } =
@@ -294,6 +319,9 @@ async function main() {
   const partnerRecurringHorizonIntervalMs = Number(
     process.env["PARTNER_RECURRING_HORIZON_INTERVAL_MS"] ?? 5 * 60 * 1000,
   );
+  const partnerAuthRetentionIntervalMs = Number(
+    process.env["PARTNER_AUTH_RETENTION_INTERVAL_MS"] ?? 24 * 60 * 60 * 1000,
+  );
   let nextSeoAt = Date.now();
   let nextGoogleAdsAt = Date.now();
   let nextSalesDraftPrepAt = Date.now();
@@ -303,6 +331,7 @@ async function main() {
   let nextSquareReconciliationAt = Date.now();
   let nextPartnerInviteRecoveryAt = Date.now();
   let nextPartnerRecurringHorizonAt = Date.now();
+  let nextPartnerAuthRetentionAt = Date.now();
 
   logWorkerEvent("info", "outbox.worker.started", {
     ok: true,
@@ -472,6 +501,22 @@ async function main() {
               ? partnerRecurringHorizonIntervalMs
               : 5 * 60 * 1000);
         }
+        if (Date.now() >= nextPartnerAuthRetentionAt) {
+          try {
+            await runPartnerAuthRetentionOnce();
+          } catch (error) {
+            logWorkerEvent("warn", "partners.auth_retention.loop_failed", {
+              ok: false,
+              detail: outboxWorkerErrorDetail(error),
+            });
+          }
+          nextPartnerAuthRetentionAt =
+            Date.now() +
+            (Number.isFinite(partnerAuthRetentionIntervalMs) &&
+            partnerAuthRetentionIntervalMs >= 60 * 60 * 1000
+              ? partnerAuthRetentionIntervalMs
+              : 24 * 60 * 60 * 1000);
+        }
         if (stats.total === 0) {
           await sleep(pollIntervalMs);
         }
@@ -490,6 +535,7 @@ async function main() {
     await runSquareReconciliationOnce();
     await runPartnerInviteRecoveryOnce();
     await runPartnerRecurringHorizonOnce();
+    await runPartnerAuthRetentionOnce();
     await recordAndLogWorkerHeartbeat(true);
     logWorkerEvent("info", "outbox.worker.completed", { ok: true });
   }

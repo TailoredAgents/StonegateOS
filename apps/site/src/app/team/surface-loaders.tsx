@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import type { PersonalSessionInventory } from "./settings-sessions";
+import type { TeamMfaSecurityStatus } from "./team-mfa-security";
 import type { TeamSurfaceId } from "./surface-registry";
 
 export type TeamSurfaceLoaderContext = {
@@ -34,6 +35,9 @@ export type TeamSurfaceLoaderContext = {
     contactId?: string;
     propertyId?: string;
     instantQuoteId?: string;
+    partnerAccountId?: string;
+    partnerTargetType?: string;
+    partnerTargetId?: string;
     memberId?: string;
   };
   expenses: {
@@ -76,6 +80,10 @@ export type TeamSurfaceLoaderContext = {
   };
   partners: {
     filters: {
+      adminView?: string;
+      adminCursor?: string;
+      adminQuery?: string;
+      adminStatus?: string;
       status?: string;
       ownerId?: string;
       type?: string;
@@ -177,6 +185,8 @@ export type TeamSurfaceLoaderContext = {
     } | null;
     personalSessions: PersonalSessionInventory | null;
     personalSessionsError: string | null;
+    mfaSecurity: TeamMfaSecurityStatus | null;
+    mfaSecurityError: string | null;
   };
 };
 
@@ -220,8 +230,10 @@ export const TEAM_SURFACE_LOADERS = {
     return <OutboundSection {...context.outbound} />;
   },
   partners: async (context) => {
-    const { PartnersSection } = await import("./components/PartnersSection");
-    return <PartnersSection {...context.partners} />;
+    const { PartnerAdministrationSection } = await import(
+      "./components/PartnerAdministrationSection"
+    );
+    return <PartnerAdministrationSection {...context.partners} />;
   },
   "sales-log": async (context) => {
     const { SalesActivityLogSection } = await import(

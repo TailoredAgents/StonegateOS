@@ -21,7 +21,7 @@ export async function GET(
   }
   const authorization = await requirePartnerCapability(
     request,
-    "payments.manage",
+    "payments.initiate",
   );
   if (!authorization.ok) {
     return createPartnerPortalV2ErrorResponse(

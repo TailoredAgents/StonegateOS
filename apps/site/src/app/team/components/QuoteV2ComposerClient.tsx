@@ -14,6 +14,7 @@ import {
   type QuoteV2AttachmentItem,
   type QuoteV2IssuerSnapshot,
   type QuoteV2IssueReceipt,
+  type QuoteV2PartnerContext,
 } from "../lib/quote-v2-client";
 import {
   QUOTE_V2_COMPOSER_STEPS,
@@ -247,6 +248,7 @@ export type QuoteV2ComposerClientProps = {
   recoveryId: string;
   initialContactId?: string;
   initialPropertyId?: string;
+  partnerContext?: QuoteV2PartnerContext;
 };
 
 export default function QuoteV2ComposerClient({
@@ -257,6 +259,7 @@ export default function QuoteV2ComposerClient({
   recoveryId,
   initialContactId,
   initialPropertyId,
+  partnerContext,
 }: QuoteV2ComposerClientProps) {
   const client = React.useMemo(() => new QuoteV2StaffClient(), []);
   const [step, setStep] = React.useState<QuoteV2ComposerStep>("client_project");
@@ -326,8 +329,13 @@ export default function QuoteV2ComposerClient({
   const issueKeyRef = React.useRef<string | null>(null);
   const recoveryKey = React.useMemo(
     () =>
-      `stonegate:quote-v2:${initialContactId ?? "blank"}:${initialPropertyId ?? "blank"}`,
-    [initialContactId, initialPropertyId],
+      `stonegate:quote-v2:${initialContactId ?? "blank"}:${initialPropertyId ?? "blank"}:${partnerContext?.accountId ?? "unbound"}:${partnerContext?.target.id ?? "none"}`,
+    [
+      initialContactId,
+      initialPropertyId,
+      partnerContext?.accountId,
+      partnerContext?.target.id,
+    ],
   );
 
   const optimisticTotals = React.useMemo(
@@ -534,7 +542,12 @@ export default function QuoteV2ComposerClient({
   }, [client, contactQuery, initialContactId]);
 
   const stepOneComplete = Boolean(
-    draft.contactId && draft.propertyId && draft.projectName.trim(),
+    draft.contactId &&
+      draft.propertyId &&
+      draft.projectName.trim() &&
+      (!partnerContext ||
+        (draft.contactId === initialContactId &&
+          draft.propertyId === initialPropertyId)),
   );
   React.useEffect(() => {
     if (!hydrated || recovery || receipt || !stepOneComplete) return;
@@ -557,7 +570,7 @@ export default function QuoteV2ComposerClient({
       setSaveStatus("creating");
       setSaveMessage("Creating the server draft…");
       void client
-        .createDraft(draft, createKeyRef.current)
+        .createDraft(draft, createKeyRef.current, partnerContext)
         .then((nextReceipt) => {
           setReceipt(nextReceipt);
           savedFingerprintRef.current = null;
@@ -591,6 +604,9 @@ export default function QuoteV2ComposerClient({
     recovery,
     recoveryKey,
     retryCreate,
+    initialContactId,
+    initialPropertyId,
+    partnerContext,
     stepOneComplete,
   ]);
 
@@ -1220,6 +1236,20 @@ export default function QuoteV2ComposerClient({
             ) : null}
           </div>
         </div>
+        {partnerContext ? (
+          <div
+            className={`${teamStatePanelClass("info")} mt-4`}
+            role="status"
+            aria-label="Partner account quote binding"
+          >
+            <p className="font-semibold">Portal-visible account quote</p>
+            <p className="mt-1 text-xs leading-5">
+              Bound to {partnerContext.accountName} · {partnerContext.targetLabel}.
+              The verified client, property, account, and location cannot be
+              changed after this draft is created.
+            </p>
+          </div>
+        ) : null}
       </div>
 
       {recovery ? (
@@ -1368,11 +1398,12 @@ export default function QuoteV2ComposerClient({
                         Client and service property
                       </h4>
                       <p className="mt-1 text-xs text-[color:var(--team-text-soft)]">
-                        Search remotely. No client or property is selected by
-                        default.
+                        {partnerContext
+                          ? "This verified client and property are fixed to the selected Partner account location."
+                          : "Search remotely. No client or property is selected by default."}
                       </p>
                     </div>
-                    {canQuickCreate ? (
+                    {canQuickCreate && !partnerContext ? (
                       <button
                         type="button"
                         className={teamButtonClass("secondary", "sm")}
@@ -1387,7 +1418,7 @@ export default function QuoteV2ComposerClient({
                     ) : null}
                   </div>
 
-                  {canQuickCreate && quickCreateOpen ? (
+                  {canQuickCreate && !partnerContext && quickCreateOpen ? (
                     <div
                       id="quote-v2-quick-client"
                       className="mt-4 space-y-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4"
@@ -1435,39 +1466,43 @@ export default function QuoteV2ComposerClient({
                     </div>
                   ) : null}
 
-                  <label
-                    htmlFor="quote-client-search"
-                    className="mt-4 block space-y-2 text-sm"
-                  >
-                    <span className="font-medium">Search clients</span>
-                    <input
-                      id="quote-client-search"
-                      type="search"
-                      value={contactQuery}
-                      onChange={(event) => setContactQuery(event.target.value)}
-                      placeholder="Name, company, email, phone, or address"
-                      autoComplete="off"
-                      className={`${TEAM_INPUT} w-full`}
-                      aria-describedby="quote-client-search-status"
-                    />
-                  </label>
-                  <div
-                    id="quote-client-search-status"
-                    className="mt-2 text-xs text-[color:var(--team-text-soft)]"
-                    role={contactSearchState === "error" ? "alert" : "status"}
-                    aria-live="polite"
-                  >
-                    {contactSearchMessage ??
-                      (contactSearchState === "loading"
-                        ? "Searching…"
-                        : contactQuery.trim().length < 2
-                          ? "Enter at least two characters."
-                          : contactSearchState === "loaded" &&
-                              contactResults.length === 0
-                            ? "No matching clients."
-                            : "")}
-                  </div>
-                  {contactResults.length > 0 ? (
+                  {!partnerContext ? (
+                    <>
+                      <label
+                        htmlFor="quote-client-search"
+                        className="mt-4 block space-y-2 text-sm"
+                      >
+                        <span className="font-medium">Search clients</span>
+                        <input
+                          id="quote-client-search"
+                          type="search"
+                          value={contactQuery}
+                          onChange={(event) => setContactQuery(event.target.value)}
+                          placeholder="Name, company, email, phone, or address"
+                          autoComplete="off"
+                          className={`${TEAM_INPUT} w-full`}
+                          aria-describedby="quote-client-search-status"
+                        />
+                      </label>
+                      <div
+                        id="quote-client-search-status"
+                        className="mt-2 text-xs text-[color:var(--team-text-soft)]"
+                        role={contactSearchState === "error" ? "alert" : "status"}
+                        aria-live="polite"
+                      >
+                        {contactSearchMessage ??
+                          (contactSearchState === "loading"
+                            ? "Searching…"
+                            : contactQuery.trim().length < 2
+                              ? "Enter at least two characters."
+                              : contactSearchState === "loaded" &&
+                                  contactResults.length === 0
+                                ? "No matching clients."
+                                : "")}
+                      </div>
+                    </>
+                  ) : null}
+                  {!partnerContext && contactResults.length > 0 ? (
                     <ul
                       className="mt-3 max-h-72 space-y-2 overflow-y-auto"
                       aria-label="Client search results"
@@ -1507,7 +1542,7 @@ export default function QuoteV2ComposerClient({
                         ? quoteV2ContactResultLabel(draft.contact)
                         : "No client selected"}
                     </p>
-                    {draft.contact ? (
+                    {draft.contact && !partnerContext ? (
                       <button
                         type="button"
                         className={`mt-2 text-xs font-semibold text-[color:var(--team-link)] underline ${TEAM_FOCUS_RING}`}
@@ -1559,7 +1594,7 @@ export default function QuoteV2ComposerClient({
                           ),
                         );
                       }}
-                      disabled={!draft.contact}
+                      disabled={!draft.contact || Boolean(partnerContext)}
                       className={`${TEAM_SELECT} w-full`}
                       aria-invalid={Boolean(fieldErrors["propertyId"])}
                       aria-describedby="quote-property-error"

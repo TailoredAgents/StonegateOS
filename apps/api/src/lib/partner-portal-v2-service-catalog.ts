@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lte, or } from "drizzle-orm";
 import {
   getDb,
+  partnerAccountServiceAgreements,
   partnerRateAddOnItems,
   partnerRateCards,
   partnerRateItems,
@@ -9,6 +10,15 @@ import {
   partnerServiceAddOns,
   partnerServiceCatalog,
 } from "@/db";
+import {
+  findPartnerServiceEntitlement,
+  partnerPricingStateRequiresRate,
+  type PartnerServicePricingState,
+} from "@/lib/partner-account-service-agreement";
+import {
+  PartnerServiceAgreementConfigurationError,
+  projectPartnerAccountServiceAgreement,
+} from "@/lib/partner-account-service-agreement-service";
 import { MAX_PARTNER_SERVICE_ADD_ONS } from "@/lib/partner-portal-v2-service-add-ons";
 import { isPartnerAddOnTierKey } from "@myst-os/pricing";
 
@@ -37,11 +47,23 @@ export type PartnerServiceCatalogItemDto = Readonly<{
   description: string;
   requiredScopeFields: readonly string[];
   defaultProofRequirements: Readonly<Record<string, unknown>>;
+  bookable: boolean;
+  priceState: PartnerServicePricingState;
+  agreement: Readonly<{
+    label: string;
+    currency: string;
+    effectiveFrom: string;
+    effectiveTo: string | null;
+  }>;
+  inclusions: readonly string[];
+  exclusions: readonly string[];
+  quoteRule: string | null;
   pricingStatus: "contracted" | "review_required" | "hidden";
   basePrice: PartnerCatalogMoney | null;
   baseOptions: readonly Readonly<{
     tierKey: string;
     label: string;
+    priceState: Exclude<PartnerServicePricingState, "quote_required">;
     pricingStatus: "contracted" | "review_required" | "hidden";
     price: PartnerCatalogMoney | null;
   }>[];
@@ -85,6 +107,24 @@ export async function listPartnerServiceCatalog(input: {
 }): Promise<readonly PartnerServiceCatalogItemDto[]> {
   const now = input.now ?? new Date();
   const db = getDb();
+  const [agreementRow] = await db
+    .select()
+    .from(partnerAccountServiceAgreements)
+    .where(
+      and(
+        eq(partnerAccountServiceAgreements.partnerAccountId, input.accountId),
+        eq(partnerAccountServiceAgreements.active, true),
+        lte(partnerAccountServiceAgreements.effectiveFrom, now),
+        or(
+          isNull(partnerAccountServiceAgreements.effectiveTo),
+          gt(partnerAccountServiceAgreements.effectiveTo, now),
+        ),
+      ),
+    )
+    .limit(1);
+  if (!agreementRow) return Object.freeze([]);
+  const agreement = projectPartnerAccountServiceAgreement(agreementRow);
+  const entitlementKeys = agreement.services.map((item) => item.serviceKey);
   const rows = await db
     .select({
       key: partnerServiceCatalog.key,
@@ -108,6 +148,7 @@ export async function listPartnerServiceCatalog(input: {
           isNull(partnerSchedulingProfiles.effectiveTo),
           gt(partnerSchedulingProfiles.effectiveTo, now),
         ),
+        inArray(partnerServiceCatalog.key, entitlementKeys),
       ),
     )
     .orderBy(
@@ -159,21 +200,14 @@ export async function listPartnerServiceCatalog(input: {
     )
     .limit(2_000);
 
-  const baseRows: BasePriceRow[] = await db
+  const [selectedCard] = await db
     .select({
-      serviceKey: partnerRateItems.serviceKey,
-      amountMinor: partnerRateItems.amountCents,
+      id: partnerRateCards.id,
       currency: partnerRateCards.currency,
-      rateCardId: partnerRateCards.id,
-      tierKey: partnerRateItems.tierKey,
-      label: partnerRateItems.label,
-      sortOrder: partnerRateItems.sortOrder,
+      version: partnerRateCards.version,
+      effectiveFrom: partnerRateCards.effectiveFrom,
     })
     .from(partnerRateCards)
-    .innerJoin(
-      partnerRateItems,
-      eq(partnerRateItems.rateCardId, partnerRateCards.id),
-    )
     .where(
       and(
         eq(partnerRateCards.partnerAccountId, input.accountId),
@@ -183,15 +217,47 @@ export async function listPartnerServiceCatalog(input: {
           isNull(partnerRateCards.effectiveTo),
           gt(partnerRateCards.effectiveTo, now),
         ),
-        inArray(partnerRateItems.serviceKey, serviceKeys),
       ),
     )
     .orderBy(
       desc(partnerRateCards.version),
       desc(partnerRateCards.effectiveFrom),
-      desc(partnerRateItems.sortOrder),
+      desc(partnerRateCards.id),
     )
-    .limit(1_000);
+    .limit(1);
+  if (
+    selectedCard &&
+    selectedCard.currency.trim().toUpperCase() !== agreement.currency
+  ) {
+    throw new PartnerServiceAgreementConfigurationError(
+      "agreement_rate_currency_mismatch",
+    );
+  }
+  const baseRows: BasePriceRow[] = selectedCard
+    ? await db
+        .select({
+          serviceKey: partnerRateItems.serviceKey,
+          amountMinor: partnerRateItems.amountCents,
+          currency: partnerRateCards.currency,
+          rateCardId: partnerRateCards.id,
+          tierKey: partnerRateItems.tierKey,
+          label: partnerRateItems.label,
+          sortOrder: partnerRateItems.sortOrder,
+        })
+        .from(partnerRateCards)
+        .innerJoin(
+          partnerRateItems,
+          eq(partnerRateItems.rateCardId, partnerRateCards.id),
+        )
+        .where(
+          and(
+            eq(partnerRateCards.id, selectedCard.id),
+            inArray(partnerRateItems.serviceKey, serviceKeys),
+          ),
+        )
+        .orderBy(desc(partnerRateItems.sortOrder))
+        .limit(1_000)
+    : [];
   const baseCandidates = new Map<string, BasePriceRow[]>();
   for (const row of baseRows) {
     if (isPartnerAddOnTierKey(row.serviceKey, row.tierKey)) continue;
@@ -257,6 +323,12 @@ export async function listPartnerServiceCatalog(input: {
 
   return Object.freeze(
     services.map((service) => {
+      const entitlement = findPartnerServiceEntitlement(agreement, service.key);
+      if (!entitlement) {
+        throw new PartnerServiceAgreementConfigurationError(
+          "service_not_entitled",
+        );
+      }
       const base = selectedBase.get(service.key) ?? null;
       const rateCard = selectedRateCard.get(service.key) ?? null;
       const basePrice =
@@ -264,7 +336,11 @@ export async function listPartnerServiceCatalog(input: {
           ? normalizedMoney(base.amountMinor, base.currency)
           : null;
       const tierGroups = new Map<string, BasePriceRow[]>();
-      for (const candidate of baseCandidates.get(service.key) ?? []) {
+      for (const candidate of partnerPricingStateRequiresRate(
+        entitlement.pricingState,
+      )
+        ? (baseCandidates.get(service.key) ?? [])
+        : []) {
         const group = tierGroups.get(candidate.tierKey) ?? [];
         group.push(candidate);
         tierGroups.set(candidate.tierKey, group);
@@ -285,8 +361,12 @@ export async function listPartnerServiceCatalog(input: {
                   tierKey
                     .replace(/[-_]+/gu, " ")
                     .replace(/\b\w/gu, (letter) => letter.toUpperCase()),
+                priceState: entitlement.pricingState as Exclude<
+                  PartnerServicePricingState,
+                  "quote_required"
+                >,
                 pricingStatus: input.revealPrices
-                  ? price
+                  ? price && entitlement.pricingState === "contracted"
                     ? ("contracted" as const)
                     : ("review_required" as const)
                   : ("hidden" as const),
@@ -344,8 +424,22 @@ export async function listPartnerServiceCatalog(input: {
         defaultProofRequirements: Object.freeze({
           ...service.defaultProofRequirements,
         }),
+        bookable:
+          entitlement.pricingState === "quote_required" ||
+          baseOptions.length > 0,
+        priceState: entitlement.pricingState,
+        agreement: Object.freeze({
+          label: agreement.agreementLabel,
+          currency: agreement.currency,
+          effectiveFrom: agreement.effectiveFrom.toISOString(),
+          effectiveTo: agreement.effectiveTo?.toISOString() ?? null,
+        }),
+        inclusions: Object.freeze([...entitlement.inclusions]),
+        exclusions: Object.freeze([...entitlement.exclusions]),
+        quoteRule: entitlement.quoteRule,
         pricingStatus: input.revealPrices
-          ? allBaseOptionsContracted
+          ? entitlement.pricingState === "contracted" &&
+            allBaseOptionsContracted
             ? "contracted"
             : "review_required"
           : "hidden",

@@ -1,9 +1,12 @@
 import {
+  arePartnerPortalEmbeddedAchPaymentsEnabled,
   arePartnerPortalEmbeddedPaymentsEnabled,
   arePartnerPortalHostedPaymentsEnabled,
+  arePartnerPurposeAuthTokensEnabled,
   arePartnerPortalV2ReadsEnabled,
   arePartnerPortalV2WritesEnabled,
   getPartnerPortalFeatureState,
+  isPartnerRoutineMagicLinkLoginEnabled,
   isPartnerPortalInstantConfirmationEnabled,
   isPartnerPortalV2AccountEligible,
 } from "@/lib/partner-portal-feature-flags";
@@ -18,11 +21,15 @@ describe("partner portal feature flags", () => {
     process.env.NODE_ENV = "production";
     delete process.env.PARTNER_PORTAL_V2_READS_ENABLED;
     delete process.env.PARTNER_PORTAL_V2_WRITES_ENABLED;
+    delete process.env.PARTNER_PORTAL_INTERNAL_TEST_MODE;
     delete process.env.PARTNER_PORTAL_V2_CANARY_ACCOUNT_IDS;
     delete process.env.PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED;
     delete process.env.PARTNER_PORTAL_EMBEDDED_PAYMENTS_ENABLED;
+    delete process.env.PARTNER_PORTAL_EMBEDDED_ACH_ENABLED;
     delete process.env.PARTNER_PORTAL_HOSTED_PAYMENTS_ENABLED;
     delete process.env.PARTNER_PORTAL_OUTBOUND_NOTIFICATIONS_ENABLED;
+    delete process.env.PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED;
+    delete process.env.PARTNER_PORTAL_PURPOSE_AUTH_ENABLED;
     delete process.env.TEAM_KILL_FINANCIAL_MUTATIONS;
   });
 
@@ -40,14 +47,39 @@ describe("partner portal feature flags", () => {
       embeddedPayments: false,
       outboundNotifications: false,
     });
+    expect(arePartnerPurposeAuthTokensEnabled()).toBe(false);
+    expect(isPartnerRoutineMagicLinkLoginEnabled()).toBe(false);
   });
 
-  it("restricts enabled features to configured canary accounts", () => {
+  it("keeps routine magic sign-in disabled unless explicitly restored", () => {
+    process.env.PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED = "false";
+    expect(isPartnerRoutineMagicLinkLoginEnabled()).toBe(false);
+    process.env.PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED = "true";
+    expect(isPartnerRoutineMagicLinkLoginEnabled()).toBe(true);
+  });
+
+  it("enables purpose-bound links behind their independent rollout flag", () => {
+    process.env.PARTNER_PORTAL_PURPOSE_AUTH_ENABLED = "true";
+    expect(arePartnerPurposeAuthTokensEnabled()).toBe(true);
+    expect(isPartnerRoutineMagicLinkLoginEnabled()).toBe(false);
+  });
+
+  it("ignores a stale account cohort unless internal-test mode is explicit", () => {
+    process.env.PARTNER_PORTAL_V2_READS_ENABLED = "1";
+    process.env.PARTNER_PORTAL_V2_CANARY_ACCOUNT_IDS = ACCOUNT_A;
+
+    expect(isPartnerPortalV2AccountEligible(ACCOUNT_A)).toBe(true);
+    expect(isPartnerPortalV2AccountEligible(ACCOUNT_B)).toBe(true);
+    expect(arePartnerPortalV2ReadsEnabled(ACCOUNT_B)).toBe(true);
+  });
+
+  it("restricts enabled features only for explicit internal-test accounts", () => {
     process.env.PARTNER_PORTAL_V2_READS_ENABLED = "1";
     process.env.PARTNER_PORTAL_V2_WRITES_ENABLED = "1";
     process.env.PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED = "1";
     process.env.PARTNER_PORTAL_EMBEDDED_PAYMENTS_ENABLED = "1";
     process.env.PARTNER_PORTAL_HOSTED_PAYMENTS_ENABLED = "1";
+    process.env.PARTNER_PORTAL_INTERNAL_TEST_MODE = "1";
     process.env.PARTNER_PORTAL_V2_CANARY_ACCOUNT_IDS = `invalid, ${ACCOUNT_A}`;
 
     expect(isPartnerPortalV2AccountEligible(ACCOUNT_A)).toBe(true);
@@ -92,5 +124,17 @@ describe("partner portal feature flags", () => {
 
     expect(arePartnerPortalHostedPaymentsEnabled(ACCOUNT_A)).toBe(true);
     expect(arePartnerPortalEmbeddedPaymentsEnabled(ACCOUNT_A)).toBe(false);
+  });
+
+  it("keeps ACH behind both embedded checkout and its dedicated gate", () => {
+    process.env.PARTNER_PORTAL_V2_READS_ENABLED = "1";
+    process.env.PARTNER_PORTAL_V2_WRITES_ENABLED = "1";
+    process.env.PARTNER_PORTAL_EMBEDDED_PAYMENTS_ENABLED = "1";
+
+    expect(arePartnerPortalEmbeddedPaymentsEnabled(ACCOUNT_A)).toBe(true);
+    expect(arePartnerPortalEmbeddedAchPaymentsEnabled(ACCOUNT_A)).toBe(false);
+
+    process.env.PARTNER_PORTAL_EMBEDDED_ACH_ENABLED = "1";
+    expect(arePartnerPortalEmbeddedAchPaymentsEnabled(ACCOUNT_A)).toBe(true);
   });
 });

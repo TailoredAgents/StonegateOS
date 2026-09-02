@@ -66,6 +66,7 @@ export const PartnerInvoicePaymentLinkRequestSchema = z
 
 export const PartnerEmbeddedPaymentCompletionSchema = z
   .object({
+    paymentMethod: z.enum(["card", "ach"]).default("card"),
     sourceToken: z
       .string()
       .trim()
@@ -100,8 +101,8 @@ export type PartnerPaymentAttemptMetadata = Readonly<{
   partnerMembershipId: string;
   partnerUserId: string;
   purpose: PartnerPaymentPurpose;
-  paymentMethod: "card";
-  checkoutMode: "hosted_redirect" | "embedded_card";
+  paymentMethod: "card" | "ach";
+  checkoutMode: "hosted_redirect" | "embedded_card" | "embedded_ach";
   amountMinor: number;
   currency: "USD";
   minorUnit: 2;
@@ -145,7 +146,7 @@ type CreatePartnerEmbeddedPaymentInput = Readonly<{
   purpose: PartnerPaymentPurpose;
   amountMinor: number;
   currency: "USD";
-  paymentMethod: "card";
+  paymentMethod: "card" | "ach";
   provider?: PartnerEmbeddedPaymentProvider;
 }>;
 
@@ -160,6 +161,7 @@ type CompletePartnerEmbeddedPaymentInput = Readonly<{
   idempotencyKeyHash: string;
   paymentIntentId: string;
   sourceToken: string;
+  paymentMethod: "card" | "ach";
   provider?: PartnerEmbeddedPaymentProvider;
 }>;
 
@@ -177,6 +179,12 @@ function safeProviderIdentifier(value: unknown): value is string {
       return point < 32 || point === 127;
     })
   );
+}
+
+function isEmbeddedCheckoutMode(
+  value: string,
+): value is "embedded_card" | "embedded_ach" {
+  return value === "embedded_card" || value === "embedded_ach";
 }
 
 export function parsePartnerPaymentAttemptMetadata(
@@ -204,9 +212,17 @@ export function parsePartnerPaymentAttemptMetadata(
     !UUID_PATTERN.test(candidate["partnerUserId"]) ||
     (candidate["purpose"] !== "deposit" &&
       candidate["purpose"] !== "one_off") ||
-    candidate["paymentMethod"] !== "card" ||
+    (candidate["paymentMethod"] !== "card" &&
+      candidate["paymentMethod"] !== "ach") ||
     (candidate["checkoutMode"] !== "hosted_redirect" &&
-      candidate["checkoutMode"] !== "embedded_card") ||
+      candidate["checkoutMode"] !== "embedded_card" &&
+      candidate["checkoutMode"] !== "embedded_ach") ||
+    (candidate["checkoutMode"] === "hosted_redirect" &&
+      candidate["paymentMethod"] !== "card") ||
+    (candidate["checkoutMode"] === "embedded_card" &&
+      candidate["paymentMethod"] !== "card") ||
+    (candidate["checkoutMode"] === "embedded_ach" &&
+      candidate["paymentMethod"] !== "ach") ||
     typeof candidate["amountMinor"] !== "number" ||
     !Number.isSafeInteger(candidate["amountMinor"]) ||
     candidate["amountMinor"] <= 0 ||
@@ -254,7 +270,7 @@ export function parsePartnerPaymentAttemptMetadata(
     partnerMembershipId: candidate["partnerMembershipId"],
     partnerUserId: candidate["partnerUserId"],
     purpose: candidate["purpose"],
-    paymentMethod: "card",
+    paymentMethod: candidate["paymentMethod"],
     checkoutMode: candidate["checkoutMode"],
     amountMinor: candidate["amountMinor"],
     currency: "USD",
@@ -416,8 +432,9 @@ function paymentIntentDto(input: {
   purpose: PartnerPaymentPurpose;
   amountMinor: number;
   status: PartnerPaymentIntentStatus;
+  paymentMethod?: "card" | "ach";
   checkoutUrl: string | null;
-  checkoutMode?: "hosted_redirect" | "embedded_card";
+  checkoutMode?: "hosted_redirect" | "embedded_card" | "embedded_ach";
   webPayments?: PartnerWebPaymentsConfiguration | null;
   createdAt: Date;
   updatedAt: Date;
@@ -427,29 +444,27 @@ function paymentIntentDto(input: {
     id: input.id,
     invoiceId: input.invoiceId,
     purpose: input.purpose,
-    paymentMethod: "card" as const,
+    paymentMethod: input.paymentMethod ?? ("card" as const),
     status: input.status,
     amount: {
       amountMinor: input.amountMinor,
       currency: "USD" as const,
       minorUnit: 2 as const,
     },
-    checkout:
-      input.checkoutMode === "embedded_card"
-        ? {
-            mode: "embedded_card" as const,
-            url: null,
-            embedded: true,
-          }
-        : {
-            mode: "hosted_redirect" as const,
-            url: input.status === "ready" ? input.checkoutUrl : null,
-            embedded: false,
-          },
-    webPayments:
-      input.checkoutMode === "embedded_card"
-        ? (input.webPayments ?? null)
-        : null,
+    checkout: isEmbeddedCheckoutMode(input.checkoutMode ?? "hosted_redirect")
+      ? {
+          mode: input.checkoutMode as "embedded_card" | "embedded_ach",
+          url: null,
+          embedded: true,
+        }
+      : {
+          mode: "hosted_redirect" as const,
+          url: input.status === "ready" ? input.checkoutUrl : null,
+          embedded: false,
+        },
+    webPayments: isEmbeddedCheckoutMode(input.checkoutMode ?? "hosted_redirect")
+      ? (input.webPayments ?? null)
+      : null,
     createdAt: input.createdAt.toISOString(),
     updatedAt: input.updatedAt.toISOString(),
     expiresAt: input.expiresAt.toISOString(),
@@ -492,7 +507,7 @@ async function insertPartnerPaymentAudit(input: {
     sessionId: input.sessionId ?? null,
     authMethod: input.actorType === "human" ? "partner_session" : "service",
     correlationId: input.correlationId,
-    requiredPermissions: ["payments.manage"],
+    requiredPermissions: ["payments.initiate"],
     outcome: input.outcome,
     surface: "/partners/billing",
     idempotencyKeyHash: input.idempotencyKeyHash ?? null,
@@ -635,7 +650,8 @@ export async function createPartnerHostedPaymentIntent(
     for (const attempt of attempts) {
       const metadata = parsePartnerPaymentAttemptMetadata(attempt.metadata);
       if (
-        metadata?.checkoutMode === "embedded_card" &&
+        metadata !== null &&
+        isEmbeddedCheckoutMode(metadata.checkoutMode) &&
         !metadata.completionIdempotencyKeyHash &&
         (attempt.status === "created" || attempt.status === "launched") &&
         attempt.expiresAt <= now
@@ -1014,6 +1030,11 @@ export async function createPartnerEmbeddedPaymentIntent(
   } catch {
     return failure(503, "service_unavailable");
   }
+  if (input.paymentMethod === "ach" && !provider.webPayments.methods.ach) {
+    return failure(503, "service_unavailable");
+  }
+  const checkoutMode =
+    input.paymentMethod === "ach" ? "embedded_ach" : "embedded_card";
   const intentId = randomUUID();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + EMBEDDED_INTENT_LIFETIME_MS);
@@ -1132,7 +1153,8 @@ export async function createPartnerEmbeddedPaymentIntent(
     for (const attempt of attempts) {
       const metadata = parsePartnerPaymentAttemptMetadata(attempt.metadata);
       if (
-        metadata?.checkoutMode === "embedded_card" &&
+        metadata !== null &&
+        isEmbeddedCheckoutMode(metadata.checkoutMode) &&
         !metadata.completionIdempotencyKeyHash &&
         (attempt.status === "created" || attempt.status === "launched") &&
         attempt.expiresAt <= now
@@ -1150,7 +1172,8 @@ export async function createPartnerEmbeddedPaymentIntent(
       }
       if (
         attempt.status === "launched" &&
-        metadata?.checkoutMode === "embedded_card" &&
+        metadata?.checkoutMode === checkoutMode &&
+        metadata.paymentMethod === input.paymentMethod &&
         metadata.partnerAccountId === input.accountId &&
         metadata.partnerInvoiceId === input.invoiceId &&
         metadata.purpose === input.purpose &&
@@ -1166,7 +1189,8 @@ export async function createPartnerEmbeddedPaymentIntent(
             amountMinor: amount.amountMinor,
             status: "ready",
             checkoutUrl: null,
-            checkoutMode: "embedded_card",
+            paymentMethod: input.paymentMethod,
+            checkoutMode,
             webPayments: provider.webPayments,
             createdAt: attempt.createdAt,
             updatedAt: attempt.updatedAt,
@@ -1184,8 +1208,8 @@ export async function createPartnerEmbeddedPaymentIntent(
       partnerMembershipId: input.membershipId,
       partnerUserId: input.partnerUserId,
       purpose: input.purpose,
-      paymentMethod: "card",
-      checkoutMode: "embedded_card",
+      paymentMethod: input.paymentMethod,
+      checkoutMode,
       amountMinor: amount.amountMinor,
       currency: "USD",
       minorUnit: 2,
@@ -1348,7 +1372,7 @@ export async function createPartnerEmbeddedPaymentIntent(
           amountMinor: prepared.amountMinor,
           provider: provider.provider,
           providerOrderId: order.providerOrderId,
-          paymentMethod: "card",
+          paymentMethod: input.paymentMethod,
         },
       });
       return true;
@@ -1381,8 +1405,9 @@ export async function createPartnerEmbeddedPaymentIntent(
     purpose: input.purpose,
     amountMinor: prepared.amountMinor,
     status: "ready",
+    paymentMethod: input.paymentMethod,
     checkoutUrl: null,
-    checkoutMode: "embedded_card",
+    checkoutMode,
     webPayments: provider.webPayments,
     createdAt: now,
     updatedAt: committedAt,
@@ -1401,6 +1426,9 @@ export async function completePartnerEmbeddedPaymentIntent(
   try {
     provider = input.provider ?? createSquarePartnerEmbeddedPaymentProvider();
   } catch {
+    return failure(503, "service_unavailable");
+  }
+  if (input.paymentMethod === "ach" && !provider.webPayments.methods.ach) {
     return failure(503, "service_unavailable");
   }
   const db = getDb();
@@ -1442,7 +1470,10 @@ export async function completePartnerEmbeddedPaymentIntent(
       !attempt ||
       !attempt.appointmentId ||
       !metadata ||
-      metadata.checkoutMode !== "embedded_card" ||
+      !isEmbeddedCheckoutMode(metadata.checkoutMode) ||
+      metadata.paymentMethod !== input.paymentMethod ||
+      metadata.checkoutMode !==
+        (input.paymentMethod === "ach" ? "embedded_ach" : "embedded_card") ||
       metadata.partnerAccountId !== input.accountId ||
       metadata.partnerMembershipId !== input.membershipId ||
       metadata.amountMinor !== attempt.amountMinor ||
@@ -1586,6 +1617,7 @@ export async function completePartnerEmbeddedPaymentIntent(
       providerOrderId: attempt.providerOrderId,
       amountMinor: metadata.amountMinor,
       currency: metadata.currency,
+      paymentMethod: metadata.paymentMethod,
     };
   });
 
@@ -1611,6 +1643,7 @@ export async function completePartnerEmbeddedPaymentIntent(
       appointmentId: prepared.appointmentId,
       providerOrderId: prepared.providerOrderId,
       sourceToken: input.sourceToken,
+      paymentMethod: prepared.paymentMethod,
       amountMinor: prepared.amountMinor,
       currency: prepared.currency,
     });
@@ -1713,6 +1746,7 @@ export async function completePartnerEmbeddedPaymentIntent(
           providerOrderId: payment.providerOrderId,
           providerPaymentId: payment.providerPaymentId,
           providerStatus: payment.providerStatus,
+          paymentMethod: prepared.paymentMethod,
         },
       });
     });
@@ -1726,18 +1760,20 @@ export async function completePartnerEmbeddedPaymentIntent(
       .where(eq(paymentAttempts.id, prepared.attemptId));
   }
 
-  try {
-    // square-payments invokes this module's allocation finalizer for webhooks.
-    // Load the reconciler lazily here to avoid a static runtime import cycle.
-    const { reconcileSquareAttempt } = await import("@/lib/square-payments");
-    await reconcileSquareAttempt({
-      attemptId: prepared.attemptId,
-      orderId: payment.providerOrderId,
-      finalize: finalizePartnerPortalPaymentReconciliation,
-    });
-  } catch {
-    // A submitted provider payment is never retried with a new amount or
-    // treated as failed merely because immediate verification is unavailable.
+  if (prepared.paymentMethod === "card") {
+    try {
+      // Card payments can settle synchronously. ACH deliberately remains
+      // pending until a signed Square webhook drives reconciliation.
+      const { reconcileSquareAttempt } = await import("@/lib/square-payments");
+      await reconcileSquareAttempt({
+        attemptId: prepared.attemptId,
+        orderId: payment.providerOrderId,
+        finalize: finalizePartnerPortalPaymentReconciliation,
+      });
+    } catch {
+      // A submitted provider payment is never retried with a new amount or
+      // treated as failed merely because immediate verification is unavailable.
+    }
   }
   const result = await getPartnerPaymentIntent({
     accountId: input.accountId,
@@ -1872,19 +1908,19 @@ export async function getPartnerPaymentIntent(input: {
       invoice.appointmentStatus,
       invoice.appointmentType,
     );
-  const embeddedAmount =
-    metadata.checkoutMode === "embedded_card"
-      ? resolvePartnerEmbeddedPaymentAmount({
-          purpose: metadata.purpose,
-          requestedAmountMinor: metadata.amountMinor,
-          invoice,
-        })
-      : null;
+  const embeddedAmount = isEmbeddedCheckoutMode(metadata.checkoutMode)
+    ? resolvePartnerEmbeddedPaymentAmount({
+        purpose: metadata.purpose,
+        requestedAmountMinor: metadata.amountMinor,
+        invoice,
+      })
+    : null;
   const collectible =
     baseCollectible &&
-    (metadata.checkoutMode !== "embedded_card" || embeddedAmount?.ok === true);
-  const status =
-    metadata.checkoutMode === "embedded_card" &&
+    (!isEmbeddedCheckoutMode(metadata.checkoutMode) ||
+      embeddedAmount?.ok === true);
+  let status =
+    isEmbeddedCheckoutMode(metadata.checkoutMode) &&
     attempt.status === "created" &&
     metadata.completionIdempotencyKeyHash &&
     attempt.expiresAt <= new Date()
@@ -1893,13 +1929,20 @@ export async function getPartnerPaymentIntent(input: {
         ? "requires_review"
         : derivedStatus;
   let webPayments: PartnerWebPaymentsConfiguration | null = null;
-  if (metadata.checkoutMode === "embedded_card") {
+  if (isEmbeddedCheckoutMode(metadata.checkoutMode)) {
     try {
       webPayments =
         input.provider?.webPayments ??
         createSquarePartnerEmbeddedPaymentProvider().webPayments;
     } catch {
       return { ok: false, status: 503, error: "service_unavailable" };
+    }
+    if (
+      metadata.paymentMethod === "ach" &&
+      status === "ready" &&
+      !webPayments.methods.ach
+    ) {
+      status = "requires_review";
     }
   }
   return {
@@ -1910,6 +1953,7 @@ export async function getPartnerPaymentIntent(input: {
       purpose: metadata.purpose,
       amountMinor: metadata.amountMinor,
       status,
+      paymentMethod: metadata.paymentMethod,
       checkoutUrl: metadata.checkoutUrl,
       checkoutMode: metadata.checkoutMode,
       webPayments,
@@ -2102,6 +2146,7 @@ export async function finalizePartnerPortalPaymentReconciliation(
       currency: payments.currency,
       canonicalStatus: payments.canonicalStatus,
       providerStatus: payments.providerStatus,
+      tenderType: payments.tenderType,
     })
     .from(payments)
     .where(eq(payments.id, result.paymentId))
@@ -2117,6 +2162,8 @@ export async function finalizePartnerPortalPaymentReconciliation(
     payment.paymentAttemptId !== attempt.id ||
     payment.jobAmountCents !== metadata.amountMinor ||
     payment.currency !== metadata.currency ||
+    payment.tenderType !==
+      (metadata.paymentMethod === "ach" ? "bank_account" : "card") ||
     (payment.canonicalStatus !== "completed" &&
       payment.providerStatus?.toLowerCase() !== "completed") ||
     invoice.currency !== metadata.currency ||

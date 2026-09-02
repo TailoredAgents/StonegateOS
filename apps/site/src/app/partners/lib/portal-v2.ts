@@ -24,6 +24,7 @@ export type PartnerDraft = {
   proofRequirements: Record<string, unknown>;
   commercial: Record<string, unknown>;
   preferredWindows: Array<Record<string, unknown>>;
+  scheduleAssistancePreference: "none" | "waitlist" | "callback";
   reviewReasons: string[];
   validation: Record<string, unknown>;
   revision: number;
@@ -31,6 +32,30 @@ export type PartnerDraft = {
   submittedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  etag: string;
+};
+
+export type PartnerLocationImportRowResult = {
+  rowNumber: number;
+  status: "valid" | "invalid";
+  values: Record<string, string>;
+  errors: Array<{ code: string; field: string; message: string }>;
+};
+
+export type PartnerLocationImport = {
+  id: string;
+  state: "validated" | "invalid" | "committed" | "expired";
+  directoryVersion: number;
+  rowCount: number;
+  validRowCount: number;
+  invalidRowCount: number;
+  rows: PartnerLocationImportRowResult[];
+  canCommit: boolean;
+  correctionsUrl: string;
+  expiresAt: string;
+  purgeAfter: string;
+  committedAt: string | null;
+  revision: number;
   etag: string;
 };
 
@@ -45,6 +70,11 @@ export type PartnerRescheduleResult = {
   version: number;
   updatedAt: string;
   etag: string;
+  consequence: {
+    existingScheduleRemainsInPlace: boolean;
+    automaticFeeMinor: null;
+    label: string;
+  };
 };
 
 export type PartnerAvailability = {
@@ -56,7 +86,13 @@ export type PartnerAvailability = {
   reviewReasons: string[];
   instantConfirmationEligible: boolean;
   pricing: {
-    status: "contracted" | "review_required" | "hidden";
+    status:
+      | "contracted"
+      | "estimate"
+      | "quote_required"
+      | "standard_rate"
+      | "review_required"
+      | "hidden";
     currency: string | null;
     baseAmount: PartnerMoney | null;
     addOnTotal: PartnerMoney | null;
@@ -78,6 +114,16 @@ export type PartnerAvailability = {
     endAt: string;
     label: string;
     available: boolean;
+  }>;
+  rankedAlternatives: Array<{
+    id: string;
+    localDate: string;
+    startAt: string;
+    endAt: string;
+    label: string;
+    available: boolean;
+    rank: number;
+    reason: "preferred_date" | "soonest_available" | "more_capacity";
   }>;
 };
 
@@ -110,7 +156,33 @@ export type PartnerLocation = {
     hasSecret?: boolean;
   };
   onSiteContact: Record<string, unknown> | null;
-  serviceArea: { status: string; reason: string | null };
+  portfolio: {
+    isDefault: boolean;
+    isFavorite: boolean;
+    parentLocationId: string | null;
+    childCount: number;
+    directoryVersion: number | null;
+    mergedIntoLocationId: string | null;
+    mergedAt: string | null;
+  };
+  addressVerification: {
+    status: string;
+    provider: string;
+    confidence: number | null;
+    suggestedAddress: {
+      line1: string | null;
+      line2: string | null;
+      city: string | null;
+      state: string | null;
+      postalCode: string | null;
+    } | null;
+    verifiedAt: string | null;
+  };
+  serviceArea: {
+    status: string;
+    geocodeStatus?: string;
+    reason: string | null;
+  };
   active: boolean;
   revision: number;
   etag: string;
@@ -125,26 +197,113 @@ export type PartnerMoney = {
 
 export type PartnerQuote = {
   id: string;
+  authority: "legacy_snapshot" | "quote_v2";
+  actionable: boolean;
+  notice: string | null;
   quoteNumber: string | null;
   version: number;
   status: string;
+  projectName: string | null;
   bookingId: string | null;
   bookingDraftId: string | null;
-  amounts: {
-    subtotal: PartnerMoney;
-    tax: PartnerMoney;
-    discount: PartnerMoney;
-    total: PartnerMoney;
-  };
-  lineCount: number;
+  locationId: string | null;
+  amounts:
+    | {
+        subtotal: PartnerMoney;
+        tax: PartnerMoney;
+        discount: PartnerMoney;
+        total: PartnerMoney;
+      }
+    | {
+        subtotalMin: PartnerMoney;
+        subtotalMax: PartnerMoney;
+        discountMin: PartnerMoney;
+        discountMax: PartnerMoney;
+        totalMin: PartnerMoney;
+        totalMax: PartnerMoney;
+        deposit: PartnerMoney;
+      }
+    | null;
+  lineCount: number | null;
   expiresAt: string | null;
-  sentAt: string | null;
-  acceptedAt: string | null;
-  declinedAt: string | null;
-  supersededAt: string | null;
+  issuedAt: string | null;
   documentId: string | null;
+  allowedActions: string[];
+  etag: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type PartnerQuoteLineItem = {
+  id: string;
+  name: string;
+  description: string | null;
+  quantity: number;
+  unit: string;
+  unitPriceMinCents: number;
+  unitPriceMaxCents: number | null;
+  optionGroupId: string | null;
+  selectedByDefault: boolean;
+};
+
+export type PartnerQuoteOptionGroup = {
+  id: string;
+  label: string;
+  mode: "single" | "multiple";
+  minimumSelections: number;
+  maximumSelections: number;
+};
+
+export type PartnerQuoteDetail = PartnerQuote & {
+  legacyTerms: string | null;
+  document: {
+    documentType: string;
+    schedulingMode: string;
+    parties: {
+      customerName: string;
+      companyName: string | null;
+      serviceAddress: string;
+      projectName: string | null;
+      purchaseOrder: string | null;
+      reference: string | null;
+    };
+    issuer: { displayName: string; email: string; phoneE164: string };
+    scope: string;
+    inclusions: string[];
+    exclusions: string[];
+    assumptions: string[];
+    pricing: {
+      currency: string;
+      lineItems: PartnerQuoteLineItem[];
+      optionGroups: PartnerQuoteOptionGroup[];
+    };
+    terms: {
+      terms: string;
+      paymentTerms: string;
+      changeOrderRules: string;
+      consentVersion: string;
+    };
+    estimatedDurationMinutes: number;
+  } | null;
+  proposalDocument: {
+    id: string;
+    filename: string | null;
+    byteSize: number;
+    sha256: string;
+  } | null;
+  response: {
+    id: string;
+    decision: "accepted" | "declined";
+    respondedAt: string;
+  } | null;
+  history: Array<{
+    id: string;
+    version: number;
+    state: string;
+    issuedAt: string | null;
+    expiresAt: string | null;
+    current: boolean;
+  }>;
 };
 
 export type PartnerInvoice = {
@@ -249,13 +408,31 @@ export type PartnerJobSummary = {
     deadlineAt: string | null;
     timezone: string;
     cutoffMinutes: number;
+    directCancellationEnabled: boolean;
+    lateCancellationDisposition: "staff_review";
     consequence: {
       code: string;
       label: string;
       automaticFeeMinor: null;
     };
-    policySource: "launch_default" | "configured";
+    policySource: "launch_default" | "configured" | "unconfigured";
+    policyRevision: number | null;
   };
+  cancellationRequest: {
+    id: string | null;
+    state: "pending" | "reconciliation_required";
+    reason: string | null;
+    revision: number | null;
+    createdAt: string | null;
+  } | null;
+  changeRequest: {
+    id: string;
+    state: "pending";
+    reason: string;
+    revision: number;
+    createdAt: string | null;
+    consequence: string;
+  } | null;
   allowedActions: string[];
   createdAt: string;
   updatedAt: string;
@@ -317,6 +494,33 @@ export type PortalV2Result<T> =
   | { ok: true; data: T; response: Response }
   | { ok: false; error: PortalV2Error; response: Response };
 
+const PORTAL_CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
+
+export function portalSupportReference(
+  value: string | null | undefined,
+): string | null {
+  const candidate = value?.trim() ?? "";
+  return PORTAL_CORRELATION_ID_PATTERN.test(candidate) ? candidate : null;
+}
+
+export function portalSupportReferenceFromResponse(
+  response: Pick<Response, "headers"> | null | undefined,
+): string | null {
+  return portalSupportReference(response?.headers.get("x-correlation-id"));
+}
+
+export function withPortalSupportReference(
+  message: string,
+  correlationId: string | null | undefined,
+): string {
+  const baseMessage = message.trim() || "The partner service is unavailable.";
+  const reference = portalSupportReference(correlationId);
+  if (!reference || /\bsupport reference\s*:/iu.test(baseMessage)) {
+    return baseMessage;
+  }
+  return `${baseMessage} Support reference: ${reference}.`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -329,6 +533,17 @@ export async function readPortalV2Response<T>(
     return { ok: true, data: payload as T, response };
   }
   const record = isRecord(payload) ? payload : {};
+  const correlationId =
+    portalSupportReferenceFromResponse(response) ??
+    portalSupportReference(
+      typeof record["correlationId"] === "string"
+        ? record["correlationId"]
+        : null,
+    );
+  const baseMessage =
+    typeof record["message"] === "string"
+      ? record["message"].trim()
+      : "The partner service is temporarily unavailable.";
   return {
     ok: false,
     response,
@@ -338,13 +553,8 @@ export async function readPortalV2Response<T>(
         typeof record["error"] === "string"
           ? record["error"]
           : "service_unavailable",
-      message:
-        typeof record["message"] === "string"
-          ? record["message"]
-          : "The partner service is temporarily unavailable.",
-      ...(typeof record["correlationId"] === "string"
-        ? { correlationId: record["correlationId"] }
-        : {}),
+      message: withPortalSupportReference(baseMessage, correlationId),
+      ...(correlationId ? { correlationId } : {}),
       ...(typeof record["retryable"] === "boolean"
         ? { retryable: record["retryable"] }
         : {}),
@@ -359,16 +569,41 @@ export async function partnerPortalFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<PortalV2Result<T>> {
+  const headers = new Headers(init?.headers);
+  if (init?.body && !headers.has("content-type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const correlationId =
+    portalSupportReference(headers.get("x-correlation-id")) ??
+    `portal_${globalThis.crypto.randomUUID().replace(/-/gu, "")}`;
+  headers.set("x-correlation-id", correlationId);
+
   const response = await fetch(
     `/api/partners/portal/${path.replace(/^\/+|\/+$/gu, "")}`,
     {
       ...init,
       cache: "no-store",
-      headers: {
-        ...(init?.body ? { "Content-Type": "application/json" } : {}),
-        ...(init?.headers ?? {}),
-      },
+      headers,
     },
+  ).catch(
+    () =>
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: "service_unavailable",
+          message:
+            "The partner service could not be reached. Try again shortly.",
+          retryable: true,
+          correlationId,
+        }),
+        {
+          status: 503,
+          headers: {
+            "content-type": "application/json",
+            "x-correlation-id": correlationId,
+          },
+        },
+      ),
   );
   return readPortalV2Response<T>(response);
 }

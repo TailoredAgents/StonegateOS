@@ -35,22 +35,43 @@ export type PartnerAccessReviewSnapshot = {
   applicationId: string;
   applicationStatus: string;
   applicationVersion: number;
+  applicationFlowVersion: number;
   emailVerified: boolean;
-  bootstrapAccountId: string;
+  applicantSessionId: string;
+  applicantSessionActive: boolean;
+  verificationChallengeStatus: string;
+  bootstrapAccountId: string | null;
+  requestedAccountId: string | null;
   approvedAccountId: string | null;
-  accountStatus: string;
+  authorityAccountCount: number;
+  accountStatus: string | null;
   accountPortalFit: string | null;
-  portalAccessEnabled: boolean;
-  partnerUserId: string;
-  mfaRequired: boolean;
+  portalAccessEnabled: boolean | null;
+  accountPortalContactId: string | null;
+  partnerUserId: string | null;
+  canonicalIdentityCount: number;
+  identityActive: boolean | null;
+  identityStatus: string | null;
+  identityOrgContactId: string | null;
+  passwordSet: boolean;
+  mfaRequired: boolean | null;
   mfaEnrolled: boolean;
-  membershipId: string;
-  membershipStatus: string;
-  membershipRoleKey: string;
-  membershipAccessLevel: string;
-  roleTemplateKey: string;
+  membershipId: string | null;
+  membershipCount: number;
+  membershipStatus: string | null;
+  membershipAccepted: boolean;
+  membershipRoleKey: string | null;
+  membershipAccessLevel: string | null;
+  membershipIsDefault: boolean | null;
+  roleTemplateKey: string | null;
   roleTemplateAccountId: string | null;
-  roleTemplateIsSystem: boolean;
+  roleTemplateIsSystem: boolean | null;
+  crmContactCount: number;
+  portalSessionCount: number;
+  activationChallengeCount: number;
+  activationChallengeStatus: string | null;
+  activationDeliveryStatus: string | null;
+  activationDeliveryQueued: boolean;
   rateCardCount: number;
   rateItemCount: number;
   decisionAuditCount: number;
@@ -67,22 +88,43 @@ export async function findPartnerAccessReviewSnapshot(
       applicationId: string;
       applicationStatus: string;
       applicationVersion: number;
+      applicationFlowVersion: number;
       emailVerified: boolean;
-      bootstrapAccountId: string;
+      applicantSessionId: string;
+      applicantSessionActive: boolean;
+      verificationChallengeStatus: string;
+      bootstrapAccountId: string | null;
+      requestedAccountId: string | null;
       approvedAccountId: string | null;
-      accountStatus: string;
+      authorityAccountCount: number | string;
+      accountStatus: string | null;
       accountPortalFit: string | null;
-      portalAccessEnabled: boolean;
-      partnerUserId: string;
-      mfaRequired: boolean;
+      portalAccessEnabled: boolean | null;
+      accountPortalContactId: string | null;
+      partnerUserId: string | null;
+      canonicalIdentityCount: number | string;
+      identityActive: boolean | null;
+      identityStatus: string | null;
+      identityOrgContactId: string | null;
+      passwordSet: boolean;
+      mfaRequired: boolean | null;
       mfaEnrolled: boolean;
-      membershipId: string;
-      membershipStatus: string;
-      membershipRoleKey: string;
-      membershipAccessLevel: string;
-      roleTemplateKey: string;
+      membershipId: string | null;
+      membershipCount: number | string;
+      membershipStatus: string | null;
+      membershipAccepted: boolean;
+      membershipRoleKey: string | null;
+      membershipAccessLevel: string | null;
+      membershipIsDefault: boolean | null;
+      roleTemplateKey: string | null;
       roleTemplateAccountId: string | null;
-      roleTemplateIsSystem: boolean;
+      roleTemplateIsSystem: boolean | null;
+      crmContactCount: number | string;
+      portalSessionCount: number | string;
+      activationChallengeCount: number | string;
+      activationChallengeStatus: string | null;
+      activationDeliveryStatus: string | null;
+      activationDeliveryQueued: boolean;
       rateCardCount: number | string;
       rateItemCount: number | string;
       decisionAuditCount: number | string;
@@ -94,22 +136,80 @@ export async function findPartnerAccessReviewSnapshot(
       application.id AS "applicationId",
       application.status AS "applicationStatus",
       application.version AS "applicationVersion",
+      application.flow_version AS "applicationFlowVersion",
       application.email_verified_at IS NOT NULL AS "emailVerified",
+      application.applicant_session_id AS "applicantSessionId",
+      applicant_session.revoked_at IS NULL
+        AND applicant_session.expires_at > statement_timestamp()
+        AS "applicantSessionActive",
+      verification_challenge.status AS "verificationChallengeStatus",
       application.bootstrap_partner_account_id AS "bootstrapAccountId",
+      application.requested_partner_account_id AS "requestedAccountId",
       application.approved_partner_account_id AS "approvedAccountId",
+      (
+        SELECT count(DISTINCT authority_account.id)
+        FROM unnest(ARRAY[
+          application.bootstrap_partner_account_id,
+          application.requested_partner_account_id,
+          application.approved_partner_account_id
+        ]::uuid[]) AS authority_account(id)
+        WHERE authority_account.id IS NOT NULL
+      ) AS "authorityAccountCount",
       account.status AS "accountStatus",
       account.portal_fit AS "accountPortalFit",
       account.portal_access_enabled AS "portalAccessEnabled",
+      account.portal_contact_id AS "accountPortalContactId",
       partner_user.id AS "partnerUserId",
+      (
+        SELECT count(*)
+        FROM partner_users AS canonical_identity
+        WHERE canonical_identity.normalized_email = application.normalized_email
+      ) AS "canonicalIdentityCount",
+      partner_user.active AS "identityActive",
+      partner_user.identity_status AS "identityStatus",
+      partner_user.org_contact_id AS "identityOrgContactId",
+      partner_user.password_hash IS NOT NULL
+        AND partner_user.password_set_at IS NOT NULL AS "passwordSet",
       partner_user.mfa_required AS "mfaRequired",
       partner_user.mfa_enrolled_at IS NOT NULL AS "mfaEnrolled",
       membership.id AS "membershipId",
+      (
+        SELECT count(*)
+        FROM partner_account_memberships AS user_membership
+        WHERE user_membership.partner_user_id = partner_user.id
+      ) AS "membershipCount",
       membership.status AS "membershipStatus",
+      membership.accepted_at IS NOT NULL AS "membershipAccepted",
       membership.role_key AS "membershipRoleKey",
       membership.access_level AS "membershipAccessLevel",
+      membership.is_default AS "membershipIsDefault",
       role_template.key AS "roleTemplateKey",
       role_template.partner_account_id AS "roleTemplateAccountId",
       role_template.is_system AS "roleTemplateIsSystem",
+      (
+        SELECT count(*)
+        FROM contacts AS crm_contact
+        WHERE lower(btrim(crm_contact.email)) = application.normalized_email
+           OR crm_contact.id = partner_user.org_contact_id
+           OR crm_contact.partner_account_id = account.id
+      ) AS "crmContactCount",
+      (
+        SELECT count(*)
+        FROM partner_sessions AS portal_session
+        WHERE portal_session.partner_user_id = partner_user.id
+          AND portal_session.revoked_at IS NULL
+          AND portal_session.expires_at > statement_timestamp()
+      ) AS "portalSessionCount",
+      (
+        SELECT count(*)
+        FROM partner_auth_challenges AS activation_count
+        WHERE activation_count.application_id = application.id
+          AND activation_count.purpose = 'account_activation'
+      ) AS "activationChallengeCount",
+      activation_challenge.status AS "activationChallengeStatus",
+      activation_challenge.delivery_status AS "activationDeliveryStatus",
+      activation_challenge.delivery_outbox_event_id IS NOT NULL
+        AS "activationDeliveryQueued",
       (
         SELECT count(*)
         FROM partner_rate_cards AS rate_card
@@ -136,11 +236,16 @@ export async function findPartnerAccessReviewSnapshot(
       decision_audit.meta->>'commercialConfigurationChanged' = 'true'
         AS "commercialConfigurationChanged"
     FROM partner_access_applications AS application
-    INNER JOIN partner_accounts AS account
-      ON account.id = application.bootstrap_partner_account_id
-    INNER JOIN partner_users AS partner_user
+    INNER JOIN partner_applicant_sessions AS applicant_session
+      ON applicant_session.id = application.applicant_session_id
+    INNER JOIN partner_auth_challenges AS verification_challenge
+      ON verification_challenge.id = application.email_verification_challenge_id
+     AND verification_challenge.purpose = 'email_verification'
+    LEFT JOIN partner_accounts AS account
+      ON account.id = application.approved_partner_account_id
+    LEFT JOIN partner_users AS partner_user
       ON partner_user.id = application.applicant_partner_user_id
-    INNER JOIN partner_account_memberships AS membership
+    LEFT JOIN partner_account_memberships AS membership
       ON membership.partner_account_id = account.id
      AND membership.partner_user_id = partner_user.id
     LEFT JOIN partner_role_templates AS role_template
@@ -154,6 +259,16 @@ export async function findPartnerAccessReviewSnapshot(
       ORDER BY audit.created_at DESC, audit.id DESC
       LIMIT 1
     ) AS decision_audit ON true
+    LEFT JOIN LATERAL (
+      SELECT challenge.status,
+             challenge.delivery_status,
+             challenge.delivery_outbox_event_id
+      FROM partner_auth_challenges AS challenge
+      WHERE challenge.application_id = application.id
+        AND challenge.purpose = 'account_activation'
+      ORDER BY challenge.generation DESC, challenge.created_at DESC
+      LIMIT 1
+    ) AS activation_challenge ON true
     WHERE application.normalized_email = ${email}
     ORDER BY application.created_at DESC
     LIMIT 1
@@ -162,63 +277,52 @@ export async function findPartnerAccessReviewSnapshot(
   if (!row) return null;
   return {
     ...row,
+    authorityAccountCount: Number(row.authorityAccountCount),
+    canonicalIdentityCount: Number(row.canonicalIdentityCount),
+    membershipCount: Number(row.membershipCount),
+    crmContactCount: Number(row.crmContactCount),
+    portalSessionCount: Number(row.portalSessionCount),
+    activationChallengeCount: Number(row.activationChallengeCount),
     rateCardCount: Number(row.rateCardCount),
     rateItemCount: Number(row.rateItemCount),
     decisionAuditCount: Number(row.decisionAuditCount),
   };
 }
 
-export async function partnerAccessNotificationDeliveryState(
-  rawEmail: string,
-): Promise<
-  "delivered" | "quiet_hours_deferred" | "pending" | "failed" | "missing"
-> {
-  const email = normalizedFixtureEmail(rawEmail);
-  const rows = await sqlClient()<
-    Array<{
-      processedAt: Date | null;
-      lastError: string | null;
-      nextAttemptAt: Date | null;
-      deliveryStatus: string | null;
-    }>
-  >`
-    SELECT event.processed_at AS "processedAt",
-           event.last_error AS "lastError",
-           event.next_attempt_at AS "nextAttemptAt",
-           message.delivery_status AS "deliveryStatus"
-    FROM outbox_events AS event
-    INNER JOIN conversation_messages AS message
-      ON message.id::text = event.payload->>'messageId'
-    INNER JOIN conversation_threads AS thread
-      ON thread.id = message.thread_id
-    INNER JOIN partner_access_applications AS application
-      ON application.normalized_email = ${email}
-    INNER JOIN partner_accounts AS account
-      ON account.id = application.bootstrap_partner_account_id
-     AND account.portal_contact_id = thread.contact_id
-    WHERE event.type = 'message.send'
-      AND event.quarantined_at IS NULL
-    ORDER BY event.created_at DESC, event.id DESC
-    LIMIT 1
+export async function markAuditOwnerSessionMfaVerifiedForPartnerReview(): Promise<void> {
+  const updated = await sqlClient()<Array<{ id: string }>>`
+    UPDATE team_sessions AS session
+    SET assurance_level = 'aal2',
+        mfa_verified_at = statement_timestamp(),
+        last_seen_at = statement_timestamp()
+    FROM team_members AS member
+    WHERE member.id = session.team_member_id
+      AND lower(member.email) = 'audit-owner@mystos.test'
+      AND member.active = true
+      AND session.auth_method = 'team_session'
+      AND session.expires_at > statement_timestamp()
+    RETURNING session.id
   `;
-  const row = rows[0];
-  if (!row) return "missing";
-  if (
-    row.processedAt &&
-    (row.deliveryStatus === "sent" || row.deliveryStatus === "delivered")
-  ) {
-    return "delivered";
+  if (updated.length !== 1) {
+    throw new Error(
+      `Expected one active Audit Owner session for partner review, found ${updated.length}.`,
+    );
   }
-  if (
-    !row.processedAt &&
-    row.lastError === "quiet_hours" &&
-    row.nextAttemptAt &&
-    row.nextAttemptAt.getTime() > Date.now()
-  ) {
-    return "quiet_hours_deferred";
-  }
-  if (row.deliveryStatus === "failed") return "failed";
-  return "pending";
+}
+
+export async function resetPartnerAccessReviewRateLimits(): Promise<void> {
+  await sqlClient()`
+    DELETE FROM team_auth_rate_limits
+    WHERE split_part(bucket, ':', 1) = ANY(${[
+      "partner_email_verification_request",
+      "partner_email_verification_consume",
+      "partner_access_application",
+      "partner_application_mutation",
+      "partner_activation",
+      "partner_mfa_enrollment",
+      "partner_mfa_verification",
+    ]}::text[])
+  `;
 }
 
 export async function cleanupPartnerAccessReviewFixture(
@@ -232,20 +336,27 @@ export async function cleanupPartnerAccessReviewFixture(
         applicationId: string;
         accountId: string | null;
         partnerUserId: string | null;
-        contactId: string | null;
+        identityContactId: string | null;
+        accountContactId: string | null;
       }>
     >`
       SELECT application.id AS "applicationId",
-             application.bootstrap_partner_account_id AS "accountId",
+             CASE
+               WHEN account.source = 'partner_portal_access_application'
+                 THEN account.id
+               ELSE NULL
+             END AS "accountId",
              application.applicant_partner_user_id AS "partnerUserId",
-             account.portal_contact_id AS "contactId"
+             partner_user.org_contact_id AS "identityContactId",
+             account.portal_contact_id AS "accountContactId"
       FROM partner_access_applications AS application
       LEFT JOIN partner_accounts AS account
-        ON account.id = application.bootstrap_partner_account_id
+        ON account.id = application.approved_partner_account_id
+      LEFT JOIN partner_users AS partner_user
+        ON partner_user.id = application.applicant_partner_user_id
       WHERE application.normalized_email = ${email}
       FOR UPDATE OF application
     `;
-    if (fixtures.length === 0) return;
     const applicationIds = fixtures.map((row) => row.applicationId);
     const accountIds = fixtures
       .map((row) => row.accountId)
@@ -254,12 +365,29 @@ export async function cleanupPartnerAccessReviewFixture(
       .map((row) => row.partnerUserId)
       .filter((value): value is string => Boolean(value));
     const contactIds = fixtures
-      .map((row) => row.contactId)
+      .flatMap((row) => [row.identityContactId, row.accountContactId])
       .filter((value): value is string => Boolean(value));
 
-    // Access-link delivery operations and their audit rows are immutable
-    // production evidence. Retire and redact this synthetic identity without
-    // bypassing those append-only guards.
+    // Auth-delivery outbox records and audit rows are immutable production
+    // evidence. Revoke live authority and redact only mutable fixture records;
+    // never delete or rewrite those append-only ledgers.
+    await tx`
+      UPDATE partner_auth_challenges
+      SET status = 'revoked',
+          token_hash = NULL,
+          revoked_at = statement_timestamp(),
+          updated_at = statement_timestamp()
+      WHERE normalized_email = ${email}
+        AND purpose IN ('email_verification', 'account_activation')
+        AND status = 'pending'
+    `;
+    await tx`
+      UPDATE partner_applicant_sessions
+      SET revoked_at = coalesce(revoked_at, statement_timestamp()),
+          draft_payload = '{}'::jsonb,
+          updated_at = statement_timestamp()
+      WHERE normalized_email = ${email}
+    `;
     if (partnerUserIds.length) {
       await tx`
         UPDATE partner_sessions
@@ -272,12 +400,26 @@ export async function cleanupPartnerAccessReviewFixture(
         WHERE partner_user_id = ANY(${partnerUserIds}::uuid[])
       `;
       await tx`
+        UPDATE partner_mfa_methods
+        SET enabled = false,
+            disabled_at = coalesce(disabled_at, statement_timestamp()),
+            updated_at = statement_timestamp()
+        WHERE partner_user_id = ANY(${partnerUserIds}::uuid[])
+      `;
+      await tx`
         UPDATE partner_users
         SET active = false,
             email = 'archived+' || id::text || '@mystos.test',
+            normalized_email = 'archived+' || id::text || '@mystos.test',
+            identity_status = 'disabled',
+            org_contact_id = NULL,
             phone = NULL,
             phone_e164 = NULL,
             name = 'Archived E2E portal applicant',
+            password_hash = NULL,
+            password_set_at = NULL,
+            mfa_enrolled_at = NULL,
+            security_version = security_version + 1,
             updated_at = statement_timestamp()
         WHERE id = ANY(${partnerUserIds}::uuid[])
       `;
@@ -285,9 +427,9 @@ export async function cleanupPartnerAccessReviewFixture(
     if (accountIds.length) {
       await tx`
         UPDATE partner_account_memberships
-        SET status = 'suspended',
+        SET status = 'removed',
             is_default = false,
-            suspended_at = coalesce(suspended_at, statement_timestamp()),
+            removed_at = coalesce(removed_at, statement_timestamp()),
             updated_at = statement_timestamp()
         WHERE partner_account_id = ANY(${accountIds}::uuid[])
           AND status <> 'removed'
@@ -327,35 +469,75 @@ export async function cleanupPartnerAccessReviewFixture(
         WHERE id = ANY(${contactIds}::uuid[])
       `;
     }
-    await tx`
-      UPDATE partner_access_applications
-      SET status = CASE
-            WHEN status IN ('submitted', 'under_review', 'needs_information')
-              THEN 'withdrawn'
-            ELSE status
-          END,
-          email = 'archived+' || id::text || '@mystos.test',
-          normalized_email = 'archived+' || id::text || '@mystos.test',
-          name = 'Archived E2E portal applicant',
-          phone = NULL,
-          phone_e164 = NULL,
-          company_name = 'Archived E2E partner workspace',
-          website = NULL,
-          service_areas = ARRAY[]::text[],
-          requested_needs = ARRAY[]::text[],
-          review_note = NULL,
-          version = version + 1,
-          updated_at = statement_timestamp()
-      WHERE id = ANY(${applicationIds}::uuid[])
-    `;
+    if (applicationIds.length) {
+      await tx`
+        UPDATE partner_access_applications
+        SET status = CASE
+              WHEN status IN ('submitted', 'under_review', 'needs_information')
+                THEN 'withdrawn'
+              ELSE status
+            END,
+            email = 'archived+' || id::text || '@mystos.test',
+            normalized_email = 'archived+' || id::text || '@mystos.test',
+            name = 'Archived E2E portal applicant',
+            phone = NULL,
+            phone_e164 = NULL,
+            company_name = 'Archived E2E partner workspace',
+            website = NULL,
+            service_areas = ARRAY[]::text[],
+            requested_needs = ARRAY[]::text[],
+            review_note = NULL,
+            version = version + 1,
+            updated_at = statement_timestamp()
+        WHERE id = ANY(${applicationIds}::uuid[])
+      `;
+    }
   });
 
-  const remaining = await sql<Array<{ count: number | string }>>`
-    SELECT count(*) AS count
-    FROM partner_access_applications
-    WHERE normalized_email = ${email}
+  const remaining = await sql<
+    Array<{
+      applicationCount: number | string;
+      activeApplicantSessionCount: number | string;
+      activeChallengeCount: number | string;
+      activePortalSessionCount: number | string;
+    }>
+  >`
+    SELECT
+      (
+        SELECT count(*)
+        FROM partner_access_applications
+        WHERE normalized_email = ${email}
+      ) AS "applicationCount",
+      (
+        SELECT count(*)
+        FROM partner_applicant_sessions
+        WHERE normalized_email = ${email}
+          AND revoked_at IS NULL
+          AND expires_at > statement_timestamp()
+      ) AS "activeApplicantSessionCount",
+      (
+        SELECT count(*)
+        FROM partner_auth_challenges
+        WHERE normalized_email = ${email}
+          AND status = 'pending'
+      ) AS "activeChallengeCount",
+      (
+        SELECT count(*)
+        FROM partner_sessions AS session
+        INNER JOIN partner_users AS identity
+          ON identity.id = session.partner_user_id
+        WHERE identity.normalized_email = ${email}
+          AND session.revoked_at IS NULL
+          AND session.expires_at > statement_timestamp()
+      ) AS "activePortalSessionCount"
   `;
-  if (Number(remaining[0]?.count ?? 0) !== 0) {
+  const residue = remaining[0];
+  if (
+    Number(residue?.applicationCount ?? 0) !== 0 ||
+    Number(residue?.activeApplicantSessionCount ?? 0) !== 0 ||
+    Number(residue?.activeChallengeCount ?? 0) !== 0 ||
+    Number(residue?.activePortalSessionCount ?? 0) !== 0
+  ) {
     throw new Error(
       `Access-review cleanup left application data for ${email}.`,
     );

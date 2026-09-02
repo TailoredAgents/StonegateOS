@@ -9,6 +9,7 @@ import {
   messageDeliveryEvents,
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import { isAdminRequest } from "../../../web/admin";
 
 const DEFAULT_LIMIT = 25;
@@ -43,11 +44,16 @@ export async function GET(request: NextRequest): Promise<Response> {
   const failedSendFilter = and(
     eq(conversationMessages.deliveryStatus, "failed"),
     eq(conversationMessages.direction, "outbound"),
+    genericInboxThreadScopeCondition(),
     sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`,
   );
   const [totalRow] = await db
     .select({ count: sql<number>`count(*)` })
     .from(conversationMessages)
+    .innerJoin(
+      conversationThreads,
+      eq(conversationMessages.threadId, conversationThreads.id),
+    )
     .where(failedSendFilter);
 
   const total = Number(totalRow?.count ?? 0);

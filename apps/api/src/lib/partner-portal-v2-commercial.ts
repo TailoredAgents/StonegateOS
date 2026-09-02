@@ -1,11 +1,20 @@
-import { and, desc, eq, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 import {
   getDb,
+  partnerAccountCostCenters,
+  partnerAccountLocations,
+  partnerBookings,
   partnerDocuments,
   partnerInvoices,
   partnerQuotes,
   partnerStatements,
 } from "@/db";
+import type { PartnerPrincipal } from "@/lib/partner-account-authorization";
+import {
+  createPartnerJobAccessCondition,
+  createPartnerJobLocationJoinCondition,
+  normalizePartnerJobAccessScope,
+} from "@/lib/partner-portal-v2-resource-authorization";
 import {
   encodePortalV2Cursor,
   parsePortalV2Pagination,
@@ -34,7 +43,11 @@ export type PartnerCommercialListResult =
     }
   | {
       ok: false;
-      error: "invalid_cursor" | "invalid_fields" | "service_unavailable";
+      error:
+        | "invalid_cursor"
+        | "invalid_fields"
+        | "service_unavailable"
+        | "forbidden";
       status: number;
       fieldErrors?: Record<string, string>;
     };
@@ -57,6 +70,36 @@ const INVOICE_STATUSES = new Set([
 ]);
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
+
+export type PartnerCommercialAccess = Pick<
+  PartnerPrincipal,
+  "accountId" | "accessLevel" | "accessScope"
+>;
+
+function scopedJobCondition(
+  access: PartnerCommercialAccess | undefined,
+): SQL | undefined {
+  return access?.accessLevel === "scoped"
+    ? createPartnerJobAccessCondition(access)
+    : undefined;
+}
+
+export function createPartnerInvoiceAccessCondition(
+  access: PartnerCommercialAccess | undefined,
+): SQL | undefined {
+  if (access?.accessLevel !== "scoped" || !access.accountId) return undefined;
+  const scope = normalizePartnerJobAccessScope(access);
+  const grants: SQL[] = [createPartnerJobAccessCondition(access)];
+  if (scope.costCenterIds.length > 0) {
+    grants.push(
+      and(
+        eq(partnerAccountCostCenters.partnerAccountId, access.accountId),
+        inArray(partnerAccountCostCenters.id, [...scope.costCenterIds]),
+      )!,
+    );
+  }
+  return or(...grants) ?? sql`false`;
+}
 
 function safeText(value: string | null, maximum = 240): string | null {
   if (value === null) return null;
@@ -235,6 +278,7 @@ export function createPartnerCommercialCsv(
 export async function listPartnerQuotes(input: {
   accountId: string;
   params: URLSearchParams;
+  access?: PartnerCommercialAccess;
 }): Promise<PartnerCommercialListResult> {
   const kind = "commercial.quotes";
   const options = parseOptions({
@@ -270,9 +314,18 @@ export async function listPartnerQuotes(input: {
       updatedAt: partnerQuotes.updatedAt,
     })
     .from(partnerQuotes)
+    .leftJoin(
+      partnerBookings,
+      and(
+        eq(partnerQuotes.partnerBookingId, partnerBookings.id),
+        eq(partnerQuotes.partnerAccountId, partnerBookings.partnerAccountId),
+      ),
+    )
+    .leftJoin(partnerAccountLocations, createPartnerJobLocationJoinCondition())
     .where(
       and(
         eq(partnerQuotes.partnerAccountId, input.accountId),
+        scopedJobCondition(input.access),
         options.filter ? eq(partnerQuotes.status, options.filter) : undefined,
         cursorAt && options.cursor
           ? or(
@@ -296,10 +349,10 @@ export async function listPartnerQuotes(input: {
     bookingId: row.bookingId,
     bookingDraftId: row.bookingDraftId,
     amounts: {
-      subtotal: money(row.subtotalCents, row.currency),
-      tax: money(row.taxCents, row.currency),
-      discount: money(row.discountCents, row.currency),
-      total: money(row.totalCents, row.currency),
+      subtotal: money(row.subtotalCents!, row.currency!),
+      tax: money(row.taxCents!, row.currency!),
+      discount: money(row.discountCents!, row.currency!),
+      total: money(row.totalCents!, row.currency!),
     },
     lineCount: Math.min(
       Array.isArray(row.lines) ? row.lines.length : 0,
@@ -364,6 +417,7 @@ export async function listPartnerQuotes(input: {
 export async function listPartnerInvoices(input: {
   accountId: string;
   params: URLSearchParams;
+  access?: PartnerCommercialAccess;
 }): Promise<PartnerCommercialListResult> {
   const kind = "commercial.invoices";
   const options = parseOptions({
@@ -401,9 +455,28 @@ export async function listPartnerInvoices(input: {
       updatedAt: partnerInvoices.updatedAt,
     })
     .from(partnerInvoices)
+    .leftJoin(
+      partnerBookings,
+      and(
+        eq(partnerInvoices.partnerBookingId, partnerBookings.id),
+        eq(partnerInvoices.partnerAccountId, partnerBookings.partnerAccountId),
+      ),
+    )
+    .leftJoin(partnerAccountLocations, createPartnerJobLocationJoinCondition())
+    .leftJoin(
+      partnerAccountCostCenters,
+      and(
+        eq(
+          partnerAccountCostCenters.partnerAccountId,
+          partnerInvoices.partnerAccountId,
+        ),
+        eq(partnerAccountCostCenters.code, partnerInvoices.costCenter),
+      ),
+    )
     .where(
       and(
         eq(partnerInvoices.partnerAccountId, input.accountId),
+        createPartnerInvoiceAccessCondition(input.access),
         options.filter ? eq(partnerInvoices.status, options.filter) : undefined,
         cursorAt && options.cursor
           ? or(
@@ -502,6 +575,7 @@ export async function listPartnerInvoices(input: {
 export async function listPartnerStatements(input: {
   accountId: string;
   params: URLSearchParams;
+  access?: PartnerCommercialAccess;
   cursorKind?: string;
   resource?: "statements" | "reports";
 }): Promise<PartnerCommercialListResult> {
@@ -515,6 +589,17 @@ export async function listPartnerStatements(input: {
     validateLastAt: (value) => DATE_PATTERN.test(value),
   });
   if (!options.ok) return options;
+  if (input.access?.accessLevel === "scoped") {
+    return {
+      ok: false,
+      error: "forbidden",
+      status: 403,
+      fieldErrors: {
+        scope:
+          "Account statements require account-wide financial access. Use scoped invoices or reports instead.",
+      },
+    };
+  }
   const rows = await getDb()
     .select()
     .from(partnerStatements)
@@ -603,6 +688,7 @@ export async function listPartnerStatements(input: {
 export async function listPartnerDocuments(input: {
   accountId: string;
   params: URLSearchParams;
+  access?: PartnerCommercialAccess;
 }): Promise<PartnerCommercialListResult> {
   const kind = "commercial.documents";
   const options = parseOptions({
@@ -627,9 +713,18 @@ export async function listPartnerDocuments(input: {
       createdAt: partnerDocuments.createdAt,
     })
     .from(partnerDocuments)
+    .leftJoin(
+      partnerBookings,
+      and(
+        eq(partnerDocuments.partnerBookingId, partnerBookings.id),
+        eq(partnerDocuments.partnerAccountId, partnerBookings.partnerAccountId),
+      ),
+    )
+    .leftJoin(partnerAccountLocations, createPartnerJobLocationJoinCondition())
     .where(
       and(
         eq(partnerDocuments.partnerAccountId, input.accountId),
+        scopedJobCondition(input.access),
         options.filter
           ? eq(partnerDocuments.documentType, options.filter)
           : undefined,
@@ -707,13 +802,28 @@ function safeAggregate(value: unknown): number {
 export async function listPartnerReports(input: {
   accountId: string;
   params: URLSearchParams;
+  access?: PartnerCommercialAccess;
 }): Promise<PartnerCommercialListResult> {
-  const statements = await listPartnerStatements({
-    ...input,
-    cursorKind: "commercial.reports",
-    resource: "reports",
-  });
-  if (!statements.ok) return statements;
+  const scoped = input.access?.accessLevel === "scoped";
+  const scopedOptions = scoped
+    ? parseOptions({
+        params: input.params,
+        accountId: input.accountId,
+        cursorKind: "commercial.reports",
+        filterName: "currency",
+        validateFilter: (value) => CURRENCY_PATTERN.test(value),
+        validateLastAt: (value) => DATE_PATTERN.test(value),
+      })
+    : null;
+  if (scopedOptions && !scopedOptions.ok) return scopedOptions;
+  const statements = scoped
+    ? null
+    : await listPartnerStatements({
+        ...input,
+        cursorKind: "commercial.reports",
+        resource: "reports",
+      });
+  if (statements && !statements.ok) return statements;
   const currencyValues = input.params.getAll("currency");
   const currency = currencyValues.length === 1 ? currencyValues[0] : null;
   const aggregates = await getDb()
@@ -725,9 +835,28 @@ export async function listPartnerReports(input: {
       balanceCents: sql<string>`coalesce(sum(${partnerInvoices.balanceCents}), 0)::text`,
     })
     .from(partnerInvoices)
+    .leftJoin(
+      partnerBookings,
+      and(
+        eq(partnerInvoices.partnerBookingId, partnerBookings.id),
+        eq(partnerInvoices.partnerAccountId, partnerBookings.partnerAccountId),
+      ),
+    )
+    .leftJoin(partnerAccountLocations, createPartnerJobLocationJoinCondition())
+    .leftJoin(
+      partnerAccountCostCenters,
+      and(
+        eq(
+          partnerAccountCostCenters.partnerAccountId,
+          partnerInvoices.partnerAccountId,
+        ),
+        eq(partnerAccountCostCenters.code, partnerInvoices.costCenter),
+      ),
+    )
     .where(
       and(
         eq(partnerInvoices.partnerAccountId, input.accountId),
+        createPartnerInvoiceAccessCondition(input.access),
         currency ? eq(partnerInvoices.currency, currency) : undefined,
       ),
     )
@@ -740,6 +869,36 @@ export async function listPartnerReports(input: {
     paid: money(safeAggregate(row.paidCents), row.currency),
     balance: money(safeAggregate(row.balanceCents), row.currency),
   }));
+  if (scoped && scopedOptions?.ok) {
+    return {
+      ok: true,
+      format: scopedOptions.format,
+      resource: "reports",
+      items: [],
+      limit: scopedOptions.limit,
+      nextCursor: null,
+      summary,
+      csv: createPartnerCommercialCsv(
+        [
+          "currency",
+          "invoice_count",
+          "total_minor",
+          "paid_minor",
+          "balance_minor",
+        ],
+        aggregates.map((row) => [
+          row.currency,
+          safeAggregate(row.invoiceCount),
+          safeAggregate(row.totalCents),
+          safeAggregate(row.paidCents),
+          safeAggregate(row.balanceCents),
+        ]),
+      ),
+    };
+  }
+  if (!statements?.ok) {
+    throw new TypeError("partner_report_statement_result_invalid");
+  }
   const items = statements.items.map((statement) => ({
     reportType: "statement_summary",
     ...statement,

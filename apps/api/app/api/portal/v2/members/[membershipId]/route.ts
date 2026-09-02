@@ -3,7 +3,7 @@ import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
-import { requirePartnerCapability } from "@/lib/partner-account-authorization";
+import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
 import { arePartnerPortalV2WritesEnabled } from "@/lib/partner-portal-feature-flags";
 import { runPortalV2IdempotentMutation } from "@/lib/partner-portal-v2-idempotency";
 import {
@@ -37,7 +37,7 @@ export async function PATCH(
 ): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
   try {
-    const authorization = await requirePartnerCapability(
+    const authorization = await requireRecentPartnerMfaCapability(
       request,
       "account.members.manage",
     );
@@ -125,8 +125,9 @@ export async function PATCH(
       return createPartnerPortalV2DescriptorResponse(
         createPortalV2ErrorResponse("invalid_fields", correlationId, {
           fieldErrors: {
-            action: "Choose role_update, suspend, or reactivate.",
+            action: "Choose role_update, scope_update, suspend, or reactivate.",
             roleKey: "Choose an available account role.",
+            scope: "Choose valid locations or cost centers from this account.",
           },
         }),
       );

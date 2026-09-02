@@ -16,9 +16,11 @@ export const SCHEDULING_REVIEW_REASON_CODES = [
   "property_requires_review",
   "service_area_requires_review",
   "schedule_policy_unconfigured",
+  "resource_assignment_unconfigured",
   "calendar_unconfigured",
   "calendar_stale",
   "availability_unverified",
+  "schedule_change_policy_review_required",
   "manual_review_required",
 ] as const;
 

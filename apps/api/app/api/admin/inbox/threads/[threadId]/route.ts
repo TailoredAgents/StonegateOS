@@ -39,6 +39,7 @@ import {
   parseInboxThreadMessageQuery,
   type InboxThreadMessageKey,
 } from "@/lib/inbox-thread-message-pagination";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 
 const THREAD_STATUS = ["open", "pending", "closed"] as const;
 const CLOSE_REASONS = ["lost", "do_not_contact", "closed"] as const;
@@ -168,7 +169,12 @@ export async function GET(
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
     .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
     .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id))
-    .where(eq(conversationThreads.id, threadId))
+    .where(
+      and(
+        eq(conversationThreads.id, threadId),
+        genericInboxThreadScopeCondition(),
+      ),
+    )
     .limit(1);
 
   if (!threadRow) {
@@ -580,7 +586,12 @@ export async function PATCH(
       leadId: conversationThreads.leadId
     })
     .from(conversationThreads)
-    .where(eq(conversationThreads.id, threadId))
+    .where(
+      and(
+        eq(conversationThreads.id, threadId),
+        genericInboxThreadScopeCondition(),
+      ),
+    )
     .limit(1);
 
   if (!existingThread) {
@@ -659,7 +670,12 @@ export async function PATCH(
     const [updatedThread] = await tx
       .update(conversationThreads)
       .set(updates)
-      .where(eq(conversationThreads.id, threadId))
+      .where(
+        and(
+          eq(conversationThreads.id, threadId),
+          genericInboxThreadScopeCondition(),
+        ),
+      )
       .returning();
 
     if (!updatedThread) return null;

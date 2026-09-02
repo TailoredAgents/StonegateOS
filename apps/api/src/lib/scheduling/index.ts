@@ -5,5 +5,6 @@ export * from "./errors";
 export * from "./intervals";
 export * from "./partner-windows";
 export * from "./policy";
+export * from "./resources";
 export * from "./service-keys";
 export * from "./types";

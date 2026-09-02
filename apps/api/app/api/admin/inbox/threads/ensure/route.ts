@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { and, desc, eq, or } from "drizzle-orm";
 import { conversationParticipants, conversationThreads, contacts, getDb } from "@/db";
 import { requirePermission } from "@/lib/permissions";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -40,6 +41,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       and(
         eq(conversationThreads.contactId, contactId),
         eq(conversationThreads.channel, channel),
+        genericInboxThreadScopeCondition(),
         or(eq(conversationThreads.status, "open"), eq(conversationThreads.status, "pending"), eq(conversationThreads.status, "closed"))
       )
     )
@@ -78,6 +80,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         .insert(conversationThreads)
         .values({
           contactId: contact.id,
+          staffScope: "general",
           channel,
           status: "open",
           state: "new",

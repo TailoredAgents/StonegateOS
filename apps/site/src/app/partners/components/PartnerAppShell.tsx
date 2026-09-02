@@ -9,6 +9,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   BarChart3,
   BriefcaseBusiness,
+  Building2,
   CalendarPlus2,
   Camera,
   CircleDollarSign,
@@ -18,15 +19,22 @@ import {
   LogOut,
   MapPin,
   Menu,
+  LoaderCircle,
   Settings,
   UserRound,
   X,
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
 import type {
+  PartnerPortalAccount,
   PartnerCapabilities,
   PartnerCapability,
 } from "../lib/portal-context";
+import {
+  partnerPortalFetch,
+  portalSupportReferenceFromResponse,
+  withPortalSupportReference,
+} from "../lib/portal-v2";
 
 const MAIN_ID = "partner-main-content";
 const DRAWER_ID = "partner-mobile-navigation";
@@ -44,7 +52,7 @@ type PartnerNavItem = {
 
 const NAV_ITEMS: PartnerNavItem[] = [
   {
-    href: "/partners",
+    href: "/partners/overview",
     label: "Overview",
     capability: "overview",
     icon: Home,
@@ -119,11 +127,16 @@ function isActivePath(pathname: string, item: PartnerNavItem): boolean {
 }
 
 function getPageTitle(pathname: string): string {
-  return PAGE_TITLES.find((entry) => pathname.startsWith(entry.prefix))?.title ?? "Overview";
+  return (
+    PAGE_TITLES.find((entry) => pathname.startsWith(entry.prefix))?.title ??
+    "Overview"
+  );
 }
 
 function focusableElements(container: HTMLElement): HTMLElement[] {
-  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+  ).filter(
     (element) =>
       !element.closest('[hidden], [inert], [aria-hidden="true"]') &&
       element.getClientRects().length > 0,
@@ -160,7 +173,9 @@ function PortalNavigation({
             <Icon
               className={cn(
                 "h-5 w-5 shrink-0",
-                active ? "text-primary-700" : "text-slate-400 group-hover:text-slate-700",
+                active
+                  ? "text-primary-700"
+                  : "text-slate-400 group-hover:text-slate-700",
               )}
               aria-hidden="true"
             />
@@ -172,11 +187,126 @@ function PortalNavigation({
   );
 }
 
+function ShellAccountSwitcher({
+  accounts,
+  accountLabel,
+  idPrefix,
+  onSwitched,
+}: {
+  accounts: PartnerPortalAccount[];
+  accountLabel: string;
+  idPrefix: string;
+  onSwitched?: () => void;
+}) {
+  const current = accounts.find((account) => account.current) ?? accounts[0];
+  const [selected, setSelected] = React.useState(current?.id ?? "");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setSelected(current?.id ?? "");
+  }, [current?.id]);
+
+  const switchAccount = async (): Promise<void> => {
+    if (!selected || selected === current?.id || busy) return;
+    if (document.querySelector('[data-partner-unsaved="true"]')) {
+      setError(
+        "Save or discard your unsaved changes before switching accounts.",
+      );
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const result = await partnerPortalFetch<{
+      ok: true;
+      currentAccountId: string;
+      currentMembershipId: string;
+      defaultAccount: boolean;
+    }>("session/account", {
+      method: "POST",
+      body: JSON.stringify({ accountId: selected }),
+    }).catch(() => null);
+    if (!result || !result.ok || result.data.currentAccountId !== selected) {
+      const failureMessage =
+        result && !result.ok
+          ? result.error.message
+          : withPortalSupportReference(
+              "We couldn’t switch accounts. Your current workspace is unchanged.",
+              result?.response
+                ? portalSupportReferenceFromResponse(result.response)
+                : null,
+            );
+      setBusy(false);
+      setError(failureMessage);
+      return;
+    }
+    onSwitched?.();
+    // A document navigation prevents account-owned React/server caches from
+    // surviving the tenant switch.
+    globalThis.location.assign("/partners/overview");
+  };
+
+  if (accounts.length <= 1) {
+    return (
+      <p className="mt-1 truncate text-sm font-semibold text-slate-900">
+        {accountLabel}
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      <label htmlFor={`${idPrefix}-account`} className="sr-only">
+        Working account
+      </label>
+      <select
+        id={`${idPrefix}-account`}
+        value={selected}
+        onChange={(event) => {
+          setSelected(event.target.value);
+          setError(null);
+        }}
+        disabled={busy}
+        className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+      >
+        {accounts.map((account) => (
+          <option key={account.membershipId} value={account.id}>
+            {account.name}
+            {account.defaultAccount ? " · default" : ""}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={() => void switchAccount()}
+        disabled={busy || !selected || selected === current?.id}
+        className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {busy ? (
+          <LoaderCircle
+            className="h-4 w-4 animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+        ) : (
+          <Building2 className="h-4 w-4" aria-hidden="true" />
+        )}
+        {busy ? "Switching…" : "Switch workspace"}
+      </button>
+      {error ? (
+        <p role="alert" className="text-xs leading-5 text-rose-700">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export function PartnerAppShell({
   children,
   companyName,
   logoPath,
   accountLabel,
+  accounts,
   userName,
   userEmail,
   capabilities,
@@ -185,6 +315,7 @@ export function PartnerAppShell({
   companyName: string;
   logoPath: string;
   accountLabel: string;
+  accounts: PartnerPortalAccount[];
   userName: string;
   userEmail: string;
   capabilities: PartnerCapabilities;
@@ -202,7 +333,9 @@ export function PartnerAppShell({
   const openNavigation = React.useCallback(() => {
     focusDestinationRef.current = "trigger";
     activeTriggerRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     setMobileOpen(true);
   }, []);
 
@@ -280,8 +413,11 @@ export function PartnerAppShell({
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = previousOverflow;
       const main = document.getElementById(MAIN_ID);
-      const preferredTarget = focusDestinationRef.current === "main" ? main : trigger;
-      const target = preferredTarget?.getClientRects().length ? preferredTarget : main;
+      const preferredTarget =
+        focusDestinationRef.current === "main" ? main : trigger;
+      const target = preferredTarget?.getClientRects().length
+        ? preferredTarget
+        : main;
       target?.focus();
       activeTriggerRef.current = null;
       focusDestinationRef.current = "trigger";
@@ -289,7 +425,10 @@ export function PartnerAppShell({
   }, [closeNavigation, mobileOpen]);
 
   const brand = (
-    <Link href="/partners" className="flex min-w-0 items-center gap-3 rounded-lg">
+    <Link
+      href={"/partners/overview" as Route}
+      className="flex min-w-0 items-center gap-3 rounded-lg"
+    >
       <Image
         src={logoPath}
         alt=""
@@ -302,7 +441,9 @@ export function PartnerAppShell({
         <span className="block truncate text-sm font-semibold text-slate-950">
           {companyName}
         </span>
-        <span className="block truncate text-xs text-slate-500">Partner Portal</span>
+        <span className="block truncate text-xs text-slate-500">
+          Partner Portal
+        </span>
       </span>
     </Link>
   );
@@ -324,9 +465,11 @@ export function PartnerAppShell({
               <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
                 Working for
               </p>
-              <p className="mt-1 truncate text-sm font-semibold text-slate-900">
-                {accountLabel}
-              </p>
+              <ShellAccountSwitcher
+                accounts={accounts}
+                accountLabel={accountLabel}
+                idPrefix="partner-desktop"
+              />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
               {capabilities.schedule ? (
@@ -338,7 +481,10 @@ export function PartnerAppShell({
                   Schedule job
                 </Link>
               ) : null}
-              <PortalNavigation pathname={pathname} capabilities={capabilities} />
+              <PortalNavigation
+                pathname={pathname}
+                capabilities={capabilities}
+              />
             </div>
             <div className="border-t border-slate-200 p-4">
               <div className="flex items-center gap-3 px-2 py-2">
@@ -346,7 +492,9 @@ export function PartnerAppShell({
                   <UserRound className="h-5 w-5" aria-hidden="true" />
                 </div>
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-slate-900">{userName}</p>
+                  <p className="truncate text-sm font-semibold text-slate-900">
+                    {userName}
+                  </p>
                   <p className="truncate text-xs text-slate-500">{userEmail}</p>
                 </div>
               </div>
@@ -393,7 +541,9 @@ export function PartnerAppShell({
                     <p className="truncate text-base font-semibold text-slate-950 sm:text-lg">
                       {pageTitle}
                     </p>
-                    <p className="truncate text-xs text-slate-500 lg:hidden">{accountLabel}</p>
+                    <p className="truncate text-xs text-slate-500 lg:hidden">
+                      {accountLabel}
+                    </p>
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -505,7 +655,12 @@ export function PartnerAppShell({
               <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
                 Working for
               </p>
-              <p className="mt-1 text-sm font-semibold text-slate-900">{accountLabel}</p>
+              <ShellAccountSwitcher
+                accounts={accounts}
+                accountLabel={accountLabel}
+                idPrefix="partner-mobile"
+                onSwitched={navigateFromDrawer}
+              />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
               <PortalNavigation
@@ -515,9 +670,18 @@ export function PartnerAppShell({
               />
             </div>
             <div className="border-t border-slate-200 p-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
-              <p className="truncate px-2 text-sm font-semibold text-slate-900">{userName}</p>
-              <p className="truncate px-2 text-xs text-slate-500">{userEmail}</p>
-              <div className={cn("mt-3 grid gap-2", capabilities.settings ? "grid-cols-2" : "grid-cols-1")}>
+              <p className="truncate px-2 text-sm font-semibold text-slate-900">
+                {userName}
+              </p>
+              <p className="truncate px-2 text-xs text-slate-500">
+                {userEmail}
+              </p>
+              <div
+                className={cn(
+                  "mt-3 grid gap-2",
+                  capabilities.settings ? "grid-cols-2" : "grid-cols-1",
+                )}
+              >
                 {capabilities.settings ? (
                   <Link
                     href="/partners/settings"

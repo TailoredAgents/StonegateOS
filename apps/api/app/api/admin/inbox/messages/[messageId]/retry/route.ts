@@ -11,6 +11,7 @@ import {
   outboxEvents,
 } from "@/db";
 import { requireActiveContactForDirectOutbound } from "@/lib/contact-outbound-safety";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
 import {
   claimTeamMutationIdempotency,
@@ -109,7 +110,12 @@ export async function POST(
           eq(conversationMessages.threadId, conversationThreads.id),
         )
         .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
-        .where(eq(conversationMessages.id, messageId))
+        .where(
+          and(
+            eq(conversationMessages.id, messageId),
+            genericInboxThreadScopeCondition(),
+          ),
+        )
         .for("update", { of: conversationMessages })
         .limit(1);
 

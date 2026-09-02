@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import {
   prepareQuoteAcceptanceCertificate,
   QuoteAcceptanceCertificateError,
+  reconcileQuoteAcceptanceCertificate,
+  type QuoteAcceptanceCertificateEnsurer,
   type QuoteAcceptanceCertificateSource,
 } from "@/lib/quote-v2-acceptance-certificate";
 import { hashQuoteContent } from "@/lib/quote-v2-domain";
@@ -214,5 +216,69 @@ describe("Quote V2 acceptance certificate", () => {
         acceptanceSource({ versionState: "issued" }),
       ),
     ).rejects.toThrow("requires an accepted quote version");
+  });
+
+  it("keeps a committed acceptance pending after storage failure and converges on retry", async () => {
+    let attempts = 0;
+    const ensure: QuoteAcceptanceCertificateEnsurer = (_db, input) => {
+      attempts += 1;
+      if (attempts === 1)
+        return Promise.reject(new Error("injected_storage_failure"));
+      return Promise.resolve({
+        documentId: "70000000-0000-4000-8000-000000000001",
+        quoteId: "10000000-0000-4000-8000-000000000001",
+        versionId: "20000000-0000-4000-8000-000000000001",
+        responseId: input.responseId,
+        sha256: "a".repeat(64),
+        state: "created",
+      });
+    };
+    const warn = console.warn;
+    console.warn = () => undefined;
+    try {
+      const pending = await reconcileQuoteAcceptanceCertificate(
+        {} as Parameters<typeof reconcileQuoteAcceptanceCertificate>[0],
+        { responseId: "30000000-0000-4000-8000-000000000001" },
+        { ensure },
+      );
+      expect(pending).toEqual({ state: "pending", retryable: true });
+
+      const ready = await reconcileQuoteAcceptanceCertificate(
+        {} as Parameters<typeof reconcileQuoteAcceptanceCertificate>[0],
+        { responseId: "30000000-0000-4000-8000-000000000001" },
+        { ensure },
+      );
+      expect(ready).toEqual({
+        state: "ready",
+        documentId: "70000000-0000-4000-8000-000000000001",
+        sha256: "a".repeat(64),
+      });
+      expect(attempts).toBe(2);
+    } finally {
+      console.warn = warn;
+    }
+  });
+
+  it("marks immutable evidence conflicts pending for reconciliation without throwing", async () => {
+    const ensure: QuoteAcceptanceCertificateEnsurer = () =>
+      Promise.reject(
+        new QuoteAcceptanceCertificateError(
+          "evidence_mismatch",
+          "Injected evidence mismatch.",
+        ),
+      );
+    const warn = console.warn;
+    console.warn = () => undefined;
+    try {
+      await expect(
+        reconcileQuoteAcceptanceCertificate(
+          {} as Parameters<typeof reconcileQuoteAcceptanceCertificate>[0],
+          { responseId: "30000000-0000-4000-8000-000000000001" },
+          { ensure },
+        ),
+      ).resolves.toEqual({ state: "pending", retryable: false });
+    } finally {
+      console.warn = warn;
+    }
   });
 });

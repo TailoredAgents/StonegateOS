@@ -13,7 +13,7 @@ const BASE = {
   generatedAt: new Date("2026-09-01T12:00:00.000Z"),
 } as const;
 
-test("creates a confirmed two-hour calendar receipt without query data", () => {
+void test("creates a confirmed two-hour calendar receipt without query data", () => {
   const file = createPartnerJobCalendarFile({ ...BASE, status: "confirmed" });
   assert.equal(file.filename, "stonegate-job-55f64d58.ics");
   assert.match(file.content, /DTSTART:20260902T130000Z\r\n/u);
@@ -23,7 +23,7 @@ test("creates a confirmed two-hour calendar receipt without query data", () => {
   assert.doesNotMatch(file.content, /created=1|#receipt/u);
 });
 
-test("labels review-only requested windows as tentative and escapes calendar text", () => {
+void test("labels review-only requested windows as tentative and escapes calendar text", () => {
   const file = createPartnerJobCalendarFile({
     ...BASE,
     serviceLabel: "Pickup, paint; tires",
@@ -36,7 +36,7 @@ test("labels review-only requested windows as tentative and escapes calendar tex
   assert.match(file.content, /Requested window only—/u);
 });
 
-test("rejects invalid windows, references, and non-web portal URLs", () => {
+void test("rejects invalid windows, references, and non-web portal URLs", () => {
   assert.throws(() =>
     createPartnerJobCalendarFile({
       ...BASE,

@@ -90,6 +90,12 @@ export async function readTeamMutationError(
     case 401:
       return "Your session expired. Sign in again, then retry. No change was confirmed.";
     case 403:
+      if (detail?.toLowerCase().includes("sign in again")) {
+        return appendGuidance(
+          detail,
+          "Your current page data is unchanged. Sign in again, reopen Partner administration, and retry with the refreshed version.",
+        );
+      }
       return "You do not have permission to complete this action. Ask an owner for access. No change was confirmed.";
     case 408:
     case 504:

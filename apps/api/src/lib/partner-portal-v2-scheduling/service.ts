@@ -27,26 +27,29 @@ import {
   getDb,
   mediaAssets,
   outboxEvents,
+  partnerAccountCancellationPolicies,
   partnerAccountLocations,
   partnerAccountMemberships,
+  partnerAccountSchedulingPolicies,
   partnerAccounts,
   partnerApprovalRequests,
   partnerBookingDrafts,
   partnerBookings,
+  partnerCancellationRequests,
   partnerDraftMedia,
   partnerJobEvidence,
   partnerJobEvents,
-  partnerNotifications,
-  partnerRateCards,
   partnerRateAddOnItems,
-  partnerRateItems,
   partnerRescheduleRequests,
+  partnerScheduleAssistanceRequests,
+  partnerSchedulingProfileResourceRequirements,
   partnerSchedulingProfiles,
   partnerServiceAddOnOptions,
   partnerServiceAddOns,
   partnerServiceCatalog,
   scheduleBlocks,
   scheduleDateOverrides,
+  scheduleResources,
   scheduleResourcePools,
   type DatabaseClient,
 } from "@/db";
@@ -77,11 +80,33 @@ import {
   createSchedulePolicySnapshotFromLegacy,
   evaluateInstantConfirmEligibility,
   normalizeSchedulingReviewReasons,
+  type NamedScheduleResource,
+  type NamedScheduleResourceBlock,
+  type NamedScheduleResourceRequirement,
   type ScheduleCapacityBlock,
   type SchedulePolicySnapshot,
   type SchedulingReviewReasonCode,
 } from "@/lib/scheduling";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
+import { narrowGlobalPartnerSchedulingPolicy } from "@/lib/partner-account-scheduling-policy";
+import {
+  partnerPricingStateAllowsInstantConfirmation,
+  partnerPricingStateRequiresRate,
+  type PartnerAccountServiceAgreementRecord,
+  type PartnerAccountServiceEntitlement,
+} from "@/lib/partner-account-service-agreement";
+import {
+  loadPartnerAgreementRateOptions,
+  PartnerServiceAgreementConfigurationError,
+  requirePartnerServiceEntitlement,
+  type PartnerEffectiveRateOption,
+} from "@/lib/partner-account-service-agreement-service";
+import { queuePartnerBookingNotification } from "@/lib/partner-notification-delivery";
+import {
+  evaluatePartnerCancellation,
+  resolvePartnerCancellationPolicy,
+  resolvePersistedPartnerAccountCancellationPolicy,
+} from "@/lib/partner-portal-v2-cancellation";
 import {
   projectPartnerAddOnSnapshots,
   resolvePartnerBookingPrice,
@@ -108,11 +133,13 @@ import {
   partnerBookingSubmissionAppointmentSchedule,
   partnerBookingSubmissionScheduleDisposition,
   requirePartnerArrivalWindowId,
+  rankPartnerAlternativeWindows,
   schedulingDemandFromProfile,
   validatePartnerBookingDraft,
   type DraftValidationResult,
   type PartnerAvailabilityResult,
   type PartnerArrivalWindowDto,
+  type PartnerRankedAlternativeWindowDto,
   type PartnerDraftMutation,
   type PartnerHoldDto,
   type PartnerPreferredWindow,
@@ -176,6 +203,7 @@ export type PartnerDraftDto = Readonly<{
   proofRequirements: Readonly<Record<string, unknown>>;
   commercial: Readonly<Record<string, unknown>>;
   preferredWindows: readonly Readonly<Record<string, unknown>>[];
+  scheduleAssistancePreference: "none" | "waitlist" | "callback";
   reviewReasons: readonly string[];
   validation: Readonly<Record<string, unknown>>;
   revision: number;
@@ -195,11 +223,18 @@ export type AvailabilityDto = Readonly<{
   reviewReasons: readonly SchedulingReviewReasonCode[];
   instantConfirmationEligible: boolean;
   windows: readonly PartnerArrivalWindowDto[];
+  rankedAlternatives: readonly PartnerRankedAlternativeWindowDto[];
   pricing: PartnerAvailabilityPricingDto;
 }>;
 
 export type PartnerAvailabilityPricingDto = Readonly<{
-  status: "contracted" | "review_required" | "hidden";
+  status:
+    | "contracted"
+    | "estimate"
+    | "quote_required"
+    | "standard_rate"
+    | "review_required"
+    | "hidden";
   currency: string | null;
   baseAmount: Readonly<{
     amountMinor: number;
@@ -335,6 +370,7 @@ export function toPartnerDraftDto(row: DraftRow): PartnerDraftDto {
     proofRequirements: row.proofRequirements,
     commercial: row.commercial,
     preferredWindows: row.preferredWindows,
+    scheduleAssistancePreference: row.scheduleAssistancePreference,
     reviewReasons: row.reviewReasons,
     validation: Object.freeze(publicValidation),
     revision: row.revision,
@@ -379,7 +415,9 @@ export function requirePartnerSchedulingActor(
     email: principal.email,
     sessionId: principal.session.id,
     accessLevel: principal.accessLevel,
-    canReadRates: principal.capabilities.includes("rates.read"),
+    canReadRates:
+      principal.capabilities.includes("bookings.pricing.read") ||
+      principal.capabilities.includes("rates.read"),
     locationIds: Object.freeze([...(principal.accessScope.locationIds ?? [])]),
     propertyIds: Object.freeze([...(principal.accessScope.propertyIds ?? [])]),
   });
@@ -636,9 +674,10 @@ async function assertAccountServiceTier(
   serviceKey: string | null,
   tierKey: string | null,
   now: Date,
+  requireComplete = false,
 ): Promise<void> {
-  if (!tierKey) return;
-  if (!serviceKey || isPartnerAddOnTierKey(serviceKey, tierKey)) {
+  if (!serviceKey) {
+    if (!tierKey) return;
     throw new PartnerPortalSchedulingError(
       "invalid_fields",
       "Choose a supported base service option.",
@@ -648,28 +687,70 @@ async function assertAccountServiceTier(
       },
     );
   }
-  const rows = await tx
-    .select({ id: partnerRateItems.id })
-    .from(partnerRateCards)
-    .innerJoin(
-      partnerRateItems,
-      eq(partnerRateItems.rateCardId, partnerRateCards.id),
-    )
-    .where(
-      and(
-        eq(partnerRateCards.partnerAccountId, accountId),
-        eq(partnerRateCards.active, true),
-        lte(partnerRateCards.effectiveFrom, now),
-        or(
-          isNull(partnerRateCards.effectiveTo),
-          gt(partnerRateCards.effectiveTo, now),
-        ),
-        eq(partnerRateItems.serviceKey, serviceKey),
-        eq(partnerRateItems.tierKey, tierKey),
-      ),
-    )
-    .limit(2);
-  if (rows.length !== 1) {
+  let agreement: PartnerAccountServiceAgreementRecord;
+  let entitlement: PartnerAccountServiceEntitlement;
+  try {
+    ({ agreement, entitlement } = await requirePartnerServiceEntitlement(tx, {
+      accountId,
+      serviceKey,
+      now,
+    }));
+  } catch (error) {
+    if (!(error instanceof PartnerServiceAgreementConfigurationError)) {
+      throw error;
+    }
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "That service is not included in this account’s current agreement.",
+      {
+        status: 422,
+        fieldErrors: {
+          serviceKey: "Choose a service from this account’s current agreement.",
+        },
+      },
+    );
+  }
+  if (entitlement.pricingState === "quote_required") {
+    if (!tierKey) return;
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "This service requires a Stonegate quote and does not accept a rate tier.",
+      { status: 422, fieldErrors: { tierKey: "Clear the base rate option." } },
+    );
+  }
+  if (!tierKey) {
+    if (!requireComplete) return;
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Choose a base service option from this account’s current agreement.",
+      {
+        status: 422,
+        fieldErrors: { tierKey: "Choose a current base service option." },
+      },
+    );
+  }
+  if (isPartnerAddOnTierKey(serviceKey, tierKey)) {
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Choose a supported base service option.",
+      { status: 422, fieldErrors: { tierKey: "Choose a base option." } },
+    );
+  }
+  let rows: Awaited<ReturnType<typeof loadPartnerAgreementRateOptions>>;
+  try {
+    rows = await loadPartnerAgreementRateOptions(tx, {
+      accountId,
+      serviceKey,
+      agreementCurrency: agreement.currency,
+      now,
+    });
+  } catch (error) {
+    if (!(error instanceof PartnerServiceAgreementConfigurationError)) {
+      throw error;
+    }
+    rows = [];
+  }
+  if (rows.filter((row) => row.tierKey === tierKey).length !== 1) {
     throw new PartnerPortalSchedulingError(
       "invalid_fields",
       "That base service option is not available for this account.",
@@ -958,6 +1039,27 @@ export async function createPartnerRescheduleDraft(input: {
         { status: 409 },
       );
     }
+    const [pendingCancellationRequest] = await tx
+      .select({ id: partnerCancellationRequests.id })
+      .from(partnerCancellationRequests)
+      .where(
+        and(
+          eq(
+            partnerCancellationRequests.partnerAccountId,
+            input.actor.accountId,
+          ),
+          eq(partnerCancellationRequests.partnerBookingId, source.id),
+          eq(partnerCancellationRequests.state, "pending"),
+        ),
+      )
+      .limit(1);
+    if (pendingCancellationRequest) {
+      throw new PartnerPortalSchedulingError(
+        "conflict",
+        "A cancellation request is awaiting review. The existing schedule remains in place until Stonegate responds.",
+        { status: 409 },
+      );
+    }
 
     const activeDrafts = await tx
       .select()
@@ -1123,7 +1225,16 @@ export async function updatePartnerBookingDraft(input: {
   now?: Date;
 }): Promise<PartnerDraftDto> {
   const now = input.now ?? new Date();
+  const mayInvalidateHold =
+    input.mutation.locationId !== undefined ||
+    input.mutation.serviceKey !== undefined ||
+    input.mutation.tierKey !== undefined ||
+    input.mutation.selectedAddOns !== undefined ||
+    input.mutation.scope !== undefined;
   return getDb().transaction(async (tx) => {
+    // Draft mutations can release an active hold when schedule-defining scope
+    // changes. Keep the lock order consistent with hold/submit/reschedule.
+    if (mayInvalidateHold) await acquireScheduleConflictLock(tx);
     const { draft } = await loadDraft(tx, input.actor, input.draftId, {
       lock: true,
     });
@@ -1214,12 +1325,19 @@ type CalendarHealth = Readonly<{
   externalBusyCoverageSyncedAt: Date | null;
 }>;
 
+type NamedResourcePlan = Readonly<{
+  resources: readonly NamedScheduleResource[];
+  requirements: readonly NamedScheduleResourceRequirement[];
+  revision: string;
+}>;
+
 type SchedulingSetup = Readonly<{
   catalog: CatalogRow;
   profile: ProfileRow;
   policy: SchedulePolicySnapshot;
   calendar: CalendarHealth;
   accountCommercial: AccountCommercialEligibility;
+  resourcePlan: NamedResourcePlan | null;
   configurationReviewReasons: readonly SchedulingReviewReasonCode[];
 }>;
 
@@ -1232,11 +1350,16 @@ type AccountContractPrice = Readonly<{
   tierKey: string;
   effectiveFrom: Date;
   effectiveTo: Date | null;
+  pricingState: "contracted" | "estimate" | "standard_rate";
+  agreementRevision: number;
+  agreementLabel: string;
 }>;
 
 type AccountCommercialEligibility = Readonly<{
   accountStatus: string;
   approved: boolean;
+  entitlement: PartnerAccountServiceEntitlement | null;
+  agreement: PartnerAccountServiceAgreementRecord | null;
   contractPrice: AccountContractPrice | null;
   pricing: PartnerBookingPriceResolution;
 }>;
@@ -1277,52 +1400,85 @@ async function loadAccountCommercialEligibility(input: {
     );
   }
 
-  const prices =
-    input.serviceKey && input.tierKey
-      ? await input.tx
-          .select({
-            amountMinor: partnerRateItems.amountCents,
-            currency: partnerRateCards.currency,
-            rateCardId: partnerRateCards.id,
-            rateCardVersion: partnerRateCards.version,
-            rateItemId: partnerRateItems.id,
-            tierKey: partnerRateItems.tierKey,
-            effectiveFrom: partnerRateCards.effectiveFrom,
-            effectiveTo: partnerRateCards.effectiveTo,
-          })
-          .from(partnerRateCards)
-          .innerJoin(
-            partnerRateItems,
-            eq(partnerRateItems.rateCardId, partnerRateCards.id),
-          )
-          .where(
-            and(
-              eq(partnerRateCards.partnerAccountId, input.accountId),
-              eq(partnerRateCards.active, true),
-              lte(partnerRateCards.effectiveFrom, input.now),
-              or(
-                isNull(partnerRateCards.effectiveTo),
-                gt(partnerRateCards.effectiveTo, input.now),
-              ),
-              eq(partnerRateItems.serviceKey, input.serviceKey),
-              eq(partnerRateItems.tierKey, input.tierKey),
-            ),
-          )
-          .orderBy(
-            desc(partnerRateCards.version),
-            desc(partnerRateCards.effectiveFrom),
-            desc(partnerRateItems.sortOrder),
-          )
-          .limit(2)
-      : [];
-  const price = prices.length === 1 ? prices[0] : null;
+  let agreement: PartnerAccountServiceAgreementRecord | null = null;
+  let entitlement: PartnerAccountServiceEntitlement | null = null;
+  if (input.serviceKey) {
+    try {
+      ({ agreement, entitlement } = await requirePartnerServiceEntitlement(
+        input.tx,
+        {
+          accountId: input.accountId,
+          serviceKey: input.serviceKey,
+          now: input.now,
+        },
+      ));
+    } catch (error) {
+      if (!(error instanceof PartnerServiceAgreementConfigurationError)) {
+        throw error;
+      }
+      throw new PartnerPortalSchedulingError(
+        "invalid_fields",
+        "That service is not included in this account’s active agreement.",
+        {
+          status: 422,
+          fieldErrors: {
+            serviceKey:
+              "Choose a service from the current account agreement or contact Stonegate.",
+          },
+        },
+      );
+    }
+  }
+  let prices: readonly PartnerEffectiveRateOption[] = [];
+  if (
+    agreement &&
+    entitlement &&
+    input.serviceKey &&
+    input.tierKey &&
+    partnerPricingStateRequiresRate(entitlement.pricingState)
+  ) {
+    try {
+      prices = await loadPartnerAgreementRateOptions(input.tx, {
+        accountId: input.accountId,
+        serviceKey: input.serviceKey,
+        agreementCurrency: agreement.currency,
+        now: input.now,
+      });
+    } catch (error) {
+      if (!(error instanceof PartnerServiceAgreementConfigurationError)) {
+        throw error;
+      }
+      throw new PartnerPortalSchedulingError(
+        "review_required",
+        "Account pricing cannot be verified in the agreement currency.",
+        {
+          status: 422,
+          retryable: false,
+          fieldErrors: {
+            tierKey:
+              "Contact Stonegate to reconcile this account’s rate card and currency.",
+          },
+        },
+      );
+    }
+  }
+  const price = prices.find((row) => row.tierKey === input.tierKey) ?? null;
   const currency = price?.currency.trim().toUpperCase() ?? "";
   const contractPrice =
     price &&
+    agreement &&
+    entitlement &&
+    entitlement.pricingState !== "quote_required" &&
     Number.isSafeInteger(price.amountMinor) &&
     price.amountMinor >= 0 &&
     /^[A-Z]{3}$/u.test(currency)
-      ? Object.freeze({ ...price, currency })
+      ? Object.freeze({
+          ...price,
+          currency,
+          pricingState: entitlement.pricingState,
+          agreementRevision: agreement.revision,
+          agreementLabel: agreement.agreementLabel,
+        })
       : null;
 
   await assertConfiguredSelectedAddOns(
@@ -1393,7 +1549,8 @@ async function loadAccountCommercialEligibility(input: {
   );
   const pricing = resolvePartnerBookingPrice({
     baseAmountMinor: contractPrice?.amountMinor ?? null,
-    baseCurrency: contractPrice?.currency ?? null,
+    baseCurrency: agreement?.currency ?? contractPrice?.currency ?? null,
+    priceState: entitlement?.pricingState ?? "quote_required",
     selectedAddOns: input.selectedAddOns,
     configuredAddOns,
   });
@@ -1401,6 +1558,8 @@ async function loadAccountCommercialEligibility(input: {
   return Object.freeze({
     accountStatus: account.status,
     approved: accountStatusAllowsInstantConfirmation(account.status),
+    entitlement,
+    agreement,
     contractPrice,
     pricing,
   });
@@ -1683,11 +1842,138 @@ async function loadCalendarHealth(
   });
 }
 
+const SCHEDULE_RESOURCE_KEY_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/u;
+
+function validScheduleResourceKeys(values: readonly string[]): boolean {
+  return (
+    values.length <= 50 &&
+    values.every(
+      (value) =>
+        SCHEDULE_RESOURCE_KEY_PATTERN.test(value) &&
+        value === value.trim().toLowerCase(),
+    ) &&
+    new Set(values).size === values.length
+  );
+}
+
+async function loadNamedResourcePlan(input: {
+  tx: SchedulingTransaction;
+  profile: ProfileRow;
+}): Promise<{ plan: NamedResourcePlan | null; revision: string }> {
+  const [resourceRows, requirementRows] = await Promise.all([
+    input.tx
+      .select()
+      .from(scheduleResources)
+      .where(
+        eq(scheduleResources.capacityPoolKey, input.profile.capacityPoolKey),
+      )
+      .orderBy(
+        scheduleResources.kind,
+        scheduleResources.label,
+        scheduleResources.id,
+      ),
+    input.tx
+      .select()
+      .from(partnerSchedulingProfileResourceRequirements)
+      .where(
+        eq(
+          partnerSchedulingProfileResourceRequirements.schedulingProfileId,
+          input.profile.id,
+        ),
+      )
+      .orderBy(
+        partnerSchedulingProfileResourceRequirements.resourceKind,
+        partnerSchedulingProfileResourceRequirements.id,
+      ),
+  ]);
+  const staffKinds = new Set(
+    resourceRows
+      .filter((resource) => resource.source === "staff")
+      .map((resource) => resource.kind),
+  );
+  const selectedDefinitions = resourceRows.filter(
+    (resource) => resource.source === "staff" || !staffKinds.has(resource.kind),
+  );
+  const resources = selectedDefinitions
+    .filter((resource) => resource.active)
+    .map((resource) =>
+      Object.freeze({
+        id: resource.id,
+        capacityPoolKey: resource.capacityPoolKey,
+        kind: resource.kind,
+        label: resource.label,
+        capacityUnits: resource.capacityUnits,
+        dailyJobMultiplier:
+          resource.source === "compatibility_pool" ? resource.capacityUnits : 1,
+        skillKeys: Object.freeze([...resource.skillKeys]),
+      }),
+    );
+  const requirements = requirementRows.map((requirement) =>
+    Object.freeze({
+      kind: requirement.resourceKind,
+      quantity: requirement.quantity,
+      capacityUnits: requirement.capacityUnits,
+      requiredSkillKeys: Object.freeze([...requirement.requiredSkillKeys]),
+    }),
+  );
+  const revision = sha256(
+    stableJson({
+      resources: resourceRows.map((resource) => ({
+        id: resource.id,
+        capacityPoolKey: resource.capacityPoolKey,
+        kind: resource.kind,
+        label: resource.label,
+        capacityUnits: resource.capacityUnits,
+        skillKeys: resource.skillKeys,
+        active: resource.active,
+        source: resource.source,
+        updatedAt: resource.updatedAt.toISOString(),
+      })),
+      requirements: requirementRows.map((requirement) => ({
+        id: requirement.id,
+        kind: requirement.resourceKind,
+        quantity: requirement.quantity,
+        capacityUnits: requirement.capacityUnits,
+        requiredSkillKeys: requirement.requiredSkillKeys,
+        source: requirement.source,
+        updatedAt: requirement.updatedAt.toISOString(),
+      })),
+    }),
+  );
+  const structurallyValid =
+    requirements.length > 0 &&
+    requirements.every(
+      (requirement) =>
+        validScheduleResourceKeys(requirement.requiredSkillKeys) &&
+        selectedDefinitions.filter(
+          (resource) =>
+            resource.kind === requirement.kind &&
+            resource.capacityUnits >= requirement.capacityUnits &&
+            validScheduleResourceKeys(resource.skillKeys) &&
+            requirement.requiredSkillKeys.every((skill) =>
+              resource.skillKeys.includes(skill),
+            ),
+        ).length >= requirement.quantity,
+    );
+  return {
+    plan: structurallyValid
+      ? Object.freeze({
+          resources: Object.freeze(resources),
+          requirements: Object.freeze(requirements),
+          revision,
+        })
+      : null,
+    revision,
+  };
+}
+
 async function loadSchedulePolicy(input: {
   tx: SchedulingTransaction;
+  accountId: string;
   profile: ProfileRow;
   rangeStartAt: Date;
   rangeEndAt: Date;
+  resourceConfigurationRevision: string;
 }): Promise<{ policy: SchedulePolicySnapshot; configured: boolean }> {
   const overrideStartDate = DateTime.fromJSDate(input.rangeStartAt, {
     zone: "utc",
@@ -1711,6 +1997,7 @@ async function loadSchedulePolicy(input: {
     bookingRules,
     storedBusinessHours,
     storedBookingRules,
+    accountPolicy,
     pool,
     overrides,
   ] = await Promise.all([
@@ -1718,6 +2005,14 @@ async function loadSchedulePolicy(input: {
     getBookingRulesPolicy(input.tx),
     getPolicySetting(input.tx, "business_hours"),
     getPolicySetting(input.tx, "booking_rules"),
+    input.tx
+      .select()
+      .from(partnerAccountSchedulingPolicies)
+      .where(
+        eq(partnerAccountSchedulingPolicies.partnerAccountId, input.accountId),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
     input.tx
       .select()
       .from(scheduleResourcePools)
@@ -1747,13 +2042,51 @@ async function loadSchedulePolicy(input: {
     );
   }
   const safeBookingRules = normalizeBookingRulesForScheduling(bookingRules);
+  const effectiveAccountPolicy = narrowGlobalPartnerSchedulingPolicy({
+    global: {
+      minimumNoticeMinutes: 0,
+      minimumCalendarLeadDays: 1,
+      maximumBookingHorizonDays: Math.min(
+        30,
+        safeBookingRules.bookingWindowDays,
+      ),
+      instantConfirmationEnabled: true,
+    },
+    account: accountPolicy
+      ? {
+          minimumNoticeMinutes: accountPolicy.minimumNoticeMinutes,
+          minimumCalendarLeadDays: accountPolicy.minimumCalendarLeadDays,
+          maximumBookingHorizonDays: accountPolicy.maximumBookingHorizonDays,
+          instantConfirmationEnabled: accountPolicy.instantConfirmationEnabled,
+        }
+      : null,
+  });
+  // Account policy has no hours or capacity fields. It can only demand more
+  // notice/lead time, shorten this horizon, or disable instant confirmation.
+  const partnerBookingRules = {
+    ...safeBookingRules,
+    bookingWindowDays: effectiveAccountPolicy.maximumBookingHorizonDays,
+  };
   const safeBusinessHours = normalizeBusinessHoursForScheduling(businessHours);
   const policyRevision = sha256(
     stableJson({
       businessHours,
       effectiveBusinessHours: safeBusinessHours,
       bookingRules,
-      effectiveBookingRules: safeBookingRules,
+      effectiveBookingRules: partnerBookingRules,
+      accountPolicy: accountPolicy
+        ? {
+            partnerAccountId: accountPolicy.partnerAccountId,
+            minimumNoticeMinutes: accountPolicy.minimumNoticeMinutes,
+            minimumCalendarLeadDays: accountPolicy.minimumCalendarLeadDays,
+            maximumBookingHorizonDays: accountPolicy.maximumBookingHorizonDays,
+            instantConfirmationEnabled:
+              accountPolicy.instantConfirmationEnabled,
+            revision: accountPolicy.revision,
+            updatedAt: accountPolicy.updatedAt.toISOString(),
+          }
+        : { partnerAccountId: input.accountId, configured: false },
+      effectiveAccountPolicy,
       pool: {
         key: pool.key,
         capacityUnits: pool.capacityUnits,
@@ -1764,6 +2097,7 @@ async function loadSchedulePolicy(input: {
         version: input.profile.version,
         updatedAt: input.profile.updatedAt.toISOString(),
       },
+      resourceConfigurationRevision: input.resourceConfigurationRevision,
       overrides: overrides.map((override) => ({
         id: override.id,
         localDate: override.localDate,
@@ -1789,14 +2123,13 @@ async function loadSchedulePolicy(input: {
             },
     }));
   return {
-    configured: hasExplicitSchedulePolicy(
-      storedBusinessHours,
-      storedBookingRules,
-    ),
+    configured:
+      hasExplicitSchedulePolicy(storedBusinessHours, storedBookingRules) &&
+      Boolean(accountPolicy),
     policy: createSchedulePolicySnapshotFromLegacy({
       revision: policyRevision,
       businessHours: safeBusinessHours,
-      bookingRules: safeBookingRules,
+      bookingRules: partnerBookingRules,
       capacityUnits: pool.capacityUnits,
       capacityPoolKey: pool.key,
       dateOverrides: applicableOverrides,
@@ -1805,9 +2138,11 @@ async function loadSchedulePolicy(input: {
       holdTtlMinutes: HOLD_TTL_MINUTES,
       channels: {
         partner_portal: {
-          minimumNoticeMinutes: 0,
-          minimumCalendarLeadDays: 0,
-          allowsInstantConfirmation: true,
+          minimumNoticeMinutes: effectiveAccountPolicy.minimumNoticeMinutes,
+          minimumCalendarLeadDays:
+            effectiveAccountPolicy.minimumCalendarLeadDays,
+          allowsInstantConfirmation:
+            effectiveAccountPolicy.instantConfirmationEnabled,
         },
         public_quote: {
           minimumNoticeMinutes: 0,
@@ -1859,12 +2194,18 @@ async function requireSchedulingSetup(input: {
       { status: 503, retryable: false },
     );
   }
+  const namedResourceConfiguration = await loadNamedResourcePlan({
+    tx: input.tx,
+    profile,
+  });
   const [{ policy, configured }, calendar] = await Promise.all([
     loadSchedulePolicy({
       tx: input.tx,
+      accountId: input.draft.partnerAccountId,
       profile,
       rangeStartAt: input.rangeStartAt,
       rangeEndAt: input.rangeEndAt,
+      resourceConfigurationRevision: namedResourceConfiguration.revision,
     }),
     loadCalendarHealth(input.tx, input.now),
   ]);
@@ -1874,8 +2215,12 @@ async function requireSchedulingSetup(input: {
     policy,
     calendar,
     accountCommercial,
+    resourcePlan: namedResourceConfiguration.plan,
     configurationReviewReasons: Object.freeze([
       ...(!configured ? (["schedule_policy_unconfigured"] as const) : []),
+      ...(!namedResourceConfiguration.plan
+        ? (["resource_assignment_unconfigured"] as const)
+        : []),
       ...(!accountCommercial.approved
         ? (["account_approval_required"] as const)
         : []),
@@ -1913,6 +2258,7 @@ async function validateDraftWithRows(input: {
     input.draft.serviceKey,
     input.draft.tierKey,
     input.now,
+    true,
   );
   const { catalog, profile } = await loadCatalogAndProfile(
     input.tx,
@@ -2021,6 +2367,7 @@ async function loadCapacity(input: {
   now: Date;
 }): Promise<{
   blocks: readonly ScheduleCapacityBlock[];
+  resourceBlocks: readonly NamedScheduleResourceBlock[];
   ownHoldBlockIds: readonly string[];
   jobsByLocalDate: Readonly<Record<string, number>>;
 }> {
@@ -2046,6 +2393,7 @@ async function loadCapacity(input: {
         travelBufferMinutes: appointments.travelBufferMinutes,
         capacityPoolKey: appointments.capacityPoolKey,
         capacityUnits: appointments.capacityUnits,
+        resourceAssignments: appointments.resourceAssignmentSnapshot,
       })
       .from(appointments)
       .where(
@@ -2073,6 +2421,7 @@ async function loadCapacity(input: {
         travelBufferMinutes: appointmentHolds.travelBufferMinutes,
         capacityPoolKey: appointmentHolds.capacityPoolKey,
         capacityUnits: appointmentHolds.capacityUnits,
+        resourceAssignments: appointmentHolds.resourceAssignmentSnapshot,
       })
       .from(appointmentHolds)
       .where(
@@ -2100,6 +2449,7 @@ async function loadCapacity(input: {
   ]);
 
   const blocks: ScheduleCapacityBlock[] = [];
+  const resourceBlocks: NamedScheduleResourceBlock[] = [];
   const ownHoldBlockIds: string[] = [];
   const jobsByLocalDate: Record<string, number> = {};
   for (const row of appointmentRows) {
@@ -2119,8 +2469,18 @@ async function loadCapacity(input: {
     const localDate = DateTime.fromJSDate(row.startAt, { zone: "utc" })
       .setZone(input.policy.timezone)
       .toISODate();
-    if (localDate)
+    if (localDate) {
       jobsByLocalDate[localDate] = (jobsByLocalDate[localDate] ?? 0) + 1;
+      for (const assignment of row.resourceAssignments) {
+        resourceBlocks.push({
+          id,
+          resourceId: assignment.resourceId,
+          capacityUnits: assignment.capacityUnits,
+          occupancy: { startAt: row.startAt, endAt },
+          localDate,
+        });
+      }
+    }
   }
   for (const row of holdRows) {
     const id = `hold:${row.id}`;
@@ -2135,12 +2495,23 @@ async function loadCapacity(input: {
       capacityUnits: row.capacityUnits,
       occupancy: { startAt: row.startAt, endAt },
     });
+    const localDate = DateTime.fromJSDate(row.startAt, { zone: "utc" })
+      .setZone(input.policy.timezone)
+      .toISODate();
+    if (localDate) {
+      for (const assignment of row.resourceAssignments) {
+        resourceBlocks.push({
+          id,
+          resourceId: assignment.resourceId,
+          capacityUnits: assignment.capacityUnits,
+          occupancy: { startAt: row.startAt, endAt },
+          localDate,
+        });
+      }
+    }
     if (row.draftId === input.draft.id) {
       ownHoldBlockIds.push(id);
     } else {
-      const localDate = DateTime.fromJSDate(row.startAt, { zone: "utc" })
-        .setZone(input.policy.timezone)
-        .toISODate();
       if (localDate) {
         jobsByLocalDate[localDate] = (jobsByLocalDate[localDate] ?? 0) + 1;
       }
@@ -2168,6 +2539,7 @@ async function loadCapacity(input: {
   }
   return {
     blocks: Object.freeze(blocks),
+    resourceBlocks: Object.freeze(resourceBlocks),
     ownHoldBlockIds: Object.freeze(ownHoldBlockIds),
     jobsByLocalDate: Object.freeze(jobsByLocalDate),
   };
@@ -2252,6 +2624,14 @@ function availabilityToDto(input: {
     reviewReasons: input.reviewReasons,
     instantConfirmationEligible: input.instantConfirmationEligible,
     windows: input.result.windows,
+    rankedAlternatives: rankPartnerAlternativeWindows({
+      windows: input.result.windows,
+      preferredLocalDates: input.draft.preferredWindows
+        .map((window) => window["localDate"])
+        .filter(
+          (localDate): localDate is string => typeof localDate === "string",
+        ),
+    }),
   });
   return Object.freeze({
     draft: toPartnerDraftDto(input.draft),
@@ -2315,6 +2695,15 @@ async function computeAvailabilityInTransaction(input: {
     now: input.now,
     jobsByLocalDate: capacity.jobsByLocalDate,
     excludeBlockIds: capacity.ownHoldBlockIds,
+    ...(setup.resourcePlan
+      ? {
+          resourcePlan: {
+            resources: setup.resourcePlan.resources,
+            requirements: setup.resourcePlan.requirements,
+            blocks: capacity.resourceBlocks,
+          },
+        }
+      : {}),
   });
   const reviewReasons = reviewReasonsForSetup(validation, setup, draftMedia);
   const eligibility = evaluateInstantConfirmEligibility({
@@ -2324,6 +2713,12 @@ async function computeAvailabilityInTransaction(input: {
     demandAllowsInstantConfirmation:
       setup.catalog.instantBookable &&
       setup.profile.instantConfirmationEnabled &&
+      Boolean(
+        setup.accountCommercial.entitlement &&
+          partnerPricingStateAllowsInstantConfirmation(
+            setup.accountCommercial.entitlement.pricingState,
+          ),
+      ) &&
       pricingEligibilityAllowsInstantConfirmation(
         setup.profile.pricingEligibility,
       ),
@@ -2536,6 +2931,9 @@ export async function createOrReplacePartnerHold(input: {
         arrivalWindowEndAt: window.endAt,
         policyRevision: availability.setup.policy.revision,
         serviceProfileRevision: availability.setup.profile.version,
+        resourceAssignmentSnapshot: candidate.resourceAssignments.map(
+          (assignment) => ({ ...assignment }),
+        ),
         idempotencyKeyHash: keyHash,
         status: "active",
         expiresAt,
@@ -2556,6 +2954,7 @@ export async function releasePartnerHold(input: {
 }): Promise<{ released: boolean }> {
   const now = input.now ?? new Date();
   return getDb().transaction(async (tx) => {
+    await acquireScheduleConflictLock(tx);
     const { draft } = await loadDraft(tx, input.actor, input.draftId);
     const predicates = [
       eq(appointmentHolds.partnerAccountId, input.actor.accountId),
@@ -3158,12 +3557,21 @@ async function submitUnscheduledPartnerReviewRequest(input: {
         onSiteContact: input.draft.onSiteContact,
         locationId: input.location.id,
         preferredWindows,
+        scheduleAssistancePreference: input.draft.scheduleAssistancePreference,
       },
       rateSnapshot: {
         amountMinor: pricing.totalAmountMinor,
         baseAmountMinor: pricing.baseAmountMinor,
         addOnTotalMinor: pricing.addOnTotalMinor,
         currency: pricing.currency,
+        pricingState:
+          accountCommercial.entitlement?.pricingState ?? "quote_required",
+        agreementLabel: accountCommercial.agreement?.agreementLabel ?? null,
+        agreementRevision: accountCommercial.agreement?.revision ?? null,
+        agreementEffectiveFrom:
+          accountCommercial.agreement?.effectiveFrom.toISOString() ?? null,
+        agreementEffectiveTo:
+          accountCommercial.agreement?.effectiveTo?.toISOString() ?? null,
         rateCardId: contractPrice?.rateCardId ?? null,
         rateCardVersion: contractPrice?.rateCardVersion ?? null,
         rateItemId: contractPrice?.rateItemId ?? null,
@@ -3195,6 +3603,44 @@ async function submitUnscheduledPartnerReviewRequest(input: {
     })
     .returning();
   if (!booking) throw new Error("partner_review_booking_create_failed");
+
+  let scheduleAssistanceRequestId: string | null = null;
+  if (input.draft.scheduleAssistancePreference !== "none") {
+    const assistanceOperationHash = operationHash(
+      "schedule.assistance",
+      input.actor.accountId,
+      input.opHash,
+    );
+    const [assistanceRequest] = await input.tx
+      .insert(partnerScheduleAssistanceRequests)
+      .values({
+        partnerAccountId: input.actor.accountId,
+        partnerBookingId: booking.id,
+        bookingDraftId: input.draft.id,
+        requestedByMembershipId: input.actor.membershipId,
+        preference: input.draft.scheduleAssistancePreference,
+        state: "pending",
+        preferredWindowsSnapshot: {
+          version: 1,
+          windows: preferredWindows.map((window) => ({ ...window })),
+        },
+        operationKeyHash: assistanceOperationHash,
+        requestHash: sha256(
+          input.draft.id,
+          booking.id,
+          input.draft.scheduleAssistancePreference,
+          stableJson(preferredWindows),
+        ),
+        revision: 1,
+        createdAt: input.now,
+        updatedAt: input.now,
+      })
+      .returning({ id: partnerScheduleAssistanceRequests.id });
+    if (!assistanceRequest) {
+      throw new Error("partner_schedule_assistance_create_failed");
+    }
+    scheduleAssistanceRequestId = assistanceRequest.id;
+  }
 
   let approvalRequestId: string | null = null;
   if (approvalResolution?.required) {
@@ -3240,7 +3686,11 @@ async function submitUnscheduledPartnerReviewRequest(input: {
     publicLabel: approvalRequired ? "Approval requested" : "Review requested",
     publicDetail: approvalRequired
       ? "Your request was submitted for account approval. No arrival window is reserved."
-      : "Stonegate received your preferred dates and will confirm availability after review.",
+      : input.draft.scheduleAssistancePreference === "waitlist"
+        ? "Stonegate received your preferred dates and added this request to the scheduling waitlist. No arrival window is reserved."
+        : input.draft.scheduleAssistancePreference === "callback"
+          ? "Stonegate received your preferred dates and callback request. No arrival window is reserved."
+          : "Stonegate received your preferred dates and will confirm availability after review.",
     effectiveAt: input.now,
     actorType: "partner",
     actorMembershipId: input.actor.membershipId,
@@ -3250,8 +3700,20 @@ async function submitUnscheduledPartnerReviewRequest(input: {
       confirmationMode,
       publicStatus,
       capacityReserved: false,
+      scheduleAssistancePreference: input.draft.scheduleAssistancePreference,
     },
     createdAt: input.now,
+  });
+  await queuePartnerBookingNotification({
+    tx: input.tx,
+    accountId: input.actor.accountId,
+    membershipId: input.actor.membershipId,
+    partnerBookingId: booking.id,
+    eventType: "booking.review_received",
+    dedupeKey: input.opHash,
+    correlationId: input.correlationId,
+    occurredAt: input.now,
+    accountTimezone: input.location.timezone,
   });
   const [submittedDraft] = await input.tx
     .update(partnerBookingDrafts)
@@ -3266,6 +3728,7 @@ async function submitUnscheduledPartnerReviewRequest(input: {
         checkedAt: input.now.toISOString(),
         bookingId: booking.id,
         schedulePromise: "none",
+        scheduleAssistancePreference: input.draft.scheduleAssistancePreference,
       },
       revision: input.draft.revision + 1,
       submittedAt: input.now,
@@ -3291,6 +3754,9 @@ async function submitUnscheduledPartnerReviewRequest(input: {
       `Preferred dates: ${preferredWindows
         .map((window) => `${window.localDate} (${window.timeOfDay})`)
         .join(", ")}`,
+      input.draft.scheduleAssistancePreference !== "none"
+        ? `Scheduling assistance: ${input.draft.scheduleAssistancePreference}`
+        : null,
       input.draft.description
         ? `Description: ${input.draft.description}`
         : null,
@@ -3337,6 +3803,8 @@ async function submitUnscheduledPartnerReviewRequest(input: {
       calendarOutboxEventId: null,
       approvalRequestId,
       approvalResolutionFailure: approval.failureCode,
+      scheduleAssistancePreference: input.draft.scheduleAssistancePreference,
+      scheduleAssistanceRequestId,
     }),
     createdAt: input.now,
   });
@@ -3486,6 +3954,16 @@ export async function submitPartnerBookingDraft(input: {
         { status: 409 },
       );
     }
+    if (
+      stableJson(hold.resourceAssignmentSnapshot) !==
+      stableJson(selectedCandidate.resourceAssignments)
+    ) {
+      throw new PartnerPortalSchedulingError(
+        "slot_unavailable",
+        "The assigned crew or equipment changed while this window was held. Choose a window again.",
+        { status: 409 },
+      );
+    }
     if (!availability.validation.valid) {
       throw new PartnerPortalSchedulingError(
         "invalid_fields",
@@ -3530,6 +4008,12 @@ export async function submitPartnerBookingDraft(input: {
       demandAllowsInstantConfirmation:
         availability.setup.catalog.instantBookable &&
         availability.setup.profile.instantConfirmationEnabled &&
+        Boolean(
+          availability.setup.accountCommercial.entitlement &&
+            partnerPricingStateAllowsInstantConfirmation(
+              availability.setup.accountCommercial.entitlement.pricingState,
+            ),
+        ) &&
         pricingEligibilityAllowsInstantConfirmation(
           availability.setup.profile.pricingEligibility,
         ),
@@ -3617,6 +4101,13 @@ export async function submitPartnerBookingDraft(input: {
         promisedArrivalStartAt: appointmentSchedule.promisedArrivalStartAt,
         promisedArrivalEndAt: appointmentSchedule.promisedArrivalEndAt,
         schedulePolicyRevision: appointmentSchedule.schedulePolicyRevision,
+        resourceAssignmentSnapshot:
+          scheduleDisposition.reservesCapacity ||
+          scheduleDisposition.retainsApprovalHold
+            ? hold.resourceAssignmentSnapshot.map((assignment) => ({
+                ...assignment,
+              }))
+            : [],
         createdAt: now,
         updatedAt: now,
       })
@@ -3654,6 +4145,20 @@ export async function submitPartnerBookingDraft(input: {
           baseAmountMinor: pricing.baseAmountMinor,
           addOnTotalMinor: pricing.addOnTotalMinor,
           currency,
+          pricingState:
+            availability.setup.accountCommercial.entitlement?.pricingState ??
+            "quote_required",
+          agreementLabel:
+            availability.setup.accountCommercial.agreement?.agreementLabel ??
+            null,
+          agreementRevision:
+            availability.setup.accountCommercial.agreement?.revision ?? null,
+          agreementEffectiveFrom:
+            availability.setup.accountCommercial.agreement?.effectiveFrom.toISOString() ??
+            null,
+          agreementEffectiveTo:
+            availability.setup.accountCommercial.agreement?.effectiveTo?.toISOString() ??
+            null,
           rateCardId: contractPrice?.rateCardId ?? null,
           rateCardVersion: contractPrice?.rateCardVersion ?? null,
           rateItemId: contractPrice?.rateItemId ?? null,
@@ -3760,6 +4265,20 @@ export async function submitPartnerBookingDraft(input: {
         publicStatus,
       },
       createdAt: now,
+    });
+    await queuePartnerBookingNotification({
+      tx,
+      accountId: input.actor.accountId,
+      membershipId: input.actor.membershipId,
+      partnerBookingId: booking.id,
+      eventType: scheduleDisposition.reservesCapacity
+        ? "booking.created"
+        : "booking.review_received",
+      dedupeKey: opHash,
+      correlationId: input.correlationId,
+      occurredAt: now,
+      accountTimezone: location.timezone,
+      serviceAt: hold.arrivalWindowStartAt,
     });
 
     const [submittedDraft] = await tx
@@ -3886,6 +4405,11 @@ export type PartnerRescheduleResultDto = Readonly<{
   version: number;
   updatedAt: string;
   etag: string;
+  consequence: Readonly<{
+    existingScheduleRemainsInPlace: boolean;
+    automaticFeeMinor: null;
+    label: string;
+  }>;
 }>;
 
 export function createPartnerRescheduleResultDto(input: {
@@ -3927,6 +4451,14 @@ export function createPartnerRescheduleResultDto(input: {
     version: input.booking.version,
     updatedAt: input.booking.updatedAt.toISOString(),
     etag: createPortalV2StrongEtag(partnerJobRevision(input.booking)),
+    consequence: Object.freeze({
+      existingScheduleRemainsInPlace: input.mode === "review",
+      automaticFeeMinor: null,
+      label:
+        input.mode === "review"
+          ? "The requested window is awaiting staff review. The existing schedule remains in place and no fee is applied automatically."
+          : "The new arrival window is confirmed. No fee is applied automatically.",
+    }),
   });
 }
 
@@ -4045,6 +4577,29 @@ export async function reschedulePartnerBooking(input: {
       };
     }
 
+    const [pendingCancellationRequest] = await tx
+      .select({ id: partnerCancellationRequests.id })
+      .from(partnerCancellationRequests)
+      .where(
+        and(
+          eq(
+            partnerCancellationRequests.partnerAccountId,
+            input.actor.accountId,
+          ),
+          eq(partnerCancellationRequests.partnerBookingId, source.booking.id),
+          eq(partnerCancellationRequests.state, "pending"),
+        ),
+      )
+      .for("update")
+      .limit(1);
+    if (pendingCancellationRequest) {
+      throw new PartnerPortalSchedulingError(
+        "conflict",
+        "A cancellation request is awaiting review. The existing schedule remains in place until Stonegate responds.",
+        { status: 409 },
+      );
+    }
+
     assertPartnerJobRevision(
       source.booking,
       input.jobIfMatch,
@@ -4063,6 +4618,33 @@ export async function reschedulePartnerBooking(input: {
         { status: 409 },
       );
     }
+    const [cancellationPolicyRow] = await tx
+      .select()
+      .from(partnerAccountCancellationPolicies)
+      .where(
+        eq(
+          partnerAccountCancellationPolicies.partnerAccountId,
+          input.actor.accountId,
+        ),
+      )
+      .limit(1);
+    const cancellationPolicy = resolvePartnerCancellationPolicy({
+      timezone: location.timezone,
+      accountPolicy: resolvePersistedPartnerAccountCancellationPolicy(
+        cancellationPolicyRow ?? null,
+      ),
+    });
+    const scheduleChangePolicyDecision = evaluatePartnerCancellation({
+      status: source.booking.publicStatus,
+      promisedArrivalStartAt: source.booking.arrivalWindowStartAt,
+      now,
+      canCancel: true,
+      reviewPending: false,
+      policy: cancellationPolicy,
+    });
+    const scheduleChangePolicyRequiresReview =
+      source.booking.publicStatus === "confirmed" &&
+      scheduleChangePolicyDecision.action === "request_cancellation_review";
 
     const { draft } = await loadDraft(tx, input.actor, input.draftId, {
       lock: true,
@@ -4138,6 +4720,16 @@ export async function reschedulePartnerBooking(input: {
         { status: 409 },
       );
     }
+    if (
+      stableJson(hold.resourceAssignmentSnapshot) !==
+      stableJson(selectedCandidate.resourceAssignments)
+    ) {
+      throw new PartnerPortalSchedulingError(
+        "slot_unavailable",
+        "The assigned crew or equipment changed while this window was held. Choose a window again.",
+        { status: 409 },
+      );
+    }
     if (!availability.validation.valid) {
       throw new PartnerPortalSchedulingError(
         "invalid_fields",
@@ -4148,6 +4740,9 @@ export async function reschedulePartnerBooking(input: {
 
     const baseReviewReasons = normalizeSchedulingReviewReasons([
       ...availability.reviewReasons,
+      ...(scheduleChangePolicyRequiresReview
+        ? (["schedule_change_policy_review_required"] as const)
+        : []),
       ...(!source.accountPortalAccessEnabled
         ? (["manual_review_required"] as const)
         : []),
@@ -4207,6 +4802,9 @@ export async function reschedulePartnerBooking(input: {
           promisedArrivalStartAt: hold.arrivalWindowStartAt,
           promisedArrivalEndAt: hold.arrivalWindowEndAt,
           schedulePolicyRevision: hold.policyRevision,
+          resourceAssignmentSnapshot: hold.resourceAssignmentSnapshot.map(
+            (assignment) => ({ ...assignment }),
+          ),
           rescheduleToken: randomUUID().replace(/-/gu, ""),
           status: "confirmed",
           updatedAt: now,
@@ -4259,16 +4857,19 @@ export async function reschedulePartnerBooking(input: {
         metadata: { draftId: draft.id },
         createdAt: now,
       });
-      await tx.insert(partnerNotifications).values({
-        partnerAccountId: input.actor.accountId,
+      await queuePartnerBookingNotification({
+        tx,
+        accountId: input.actor.accountId,
         membershipId:
           source.booking.requestedByMembershipId ?? input.actor.membershipId,
+        fallbackMembershipId: input.actor.membershipId,
         partnerBookingId: source.booking.id,
-        eventKey: "job.rescheduled",
-        title: "Job rescheduled",
-        body: "The new arrival window is confirmed.",
-        actionPath: `/partners/jobs/${source.booking.id}`,
-        createdAt: now,
+        eventType: "booking.rescheduled",
+        dedupeKey: opHash,
+        correlationId: input.correlationId,
+        occurredAt: now,
+        accountTimezone: location.timezone,
+        serviceAt: hold.arrivalWindowStartAt,
       });
       await tx.insert(appointmentNotes).values({
         appointmentId: source.appointment.id,
@@ -4343,6 +4944,9 @@ export async function reschedulePartnerBooking(input: {
           previousStartAt: source.appointment.startAt.toISOString(),
           newStartAt: hold.startAt.toISOString(),
           policyRevision: availability.setup.policy.revision,
+          cancellationPolicyRevision: cancellationPolicy.revision,
+          cancellationPolicySource: cancellationPolicy.source,
+          scheduleChangePolicyReason: scheduleChangePolicyDecision.reason.code,
         }),
         createdAt: now,
       });
@@ -4465,19 +5069,27 @@ export async function reschedulePartnerBooking(input: {
       effectiveAt: now,
       actorType: "partner",
       actorMembershipId: input.actor.membershipId,
-      metadata: { requestId: reviewRequest.id, draftId: draft.id },
+      metadata: {
+        requestId: reviewRequest.id,
+        draftId: draft.id,
+        cancellationPolicyRevision: cancellationPolicy.revision,
+        scheduleChangePolicyReason: scheduleChangePolicyDecision.reason.code,
+      },
       createdAt: now,
     });
-    await tx.insert(partnerNotifications).values({
-      partnerAccountId: input.actor.accountId,
+    await queuePartnerBookingNotification({
+      tx,
+      accountId: input.actor.accountId,
       membershipId:
         source.booking.requestedByMembershipId ?? input.actor.membershipId,
+      fallbackMembershipId: input.actor.membershipId,
       partnerBookingId: source.booking.id,
-      eventKey: "job.reschedule_review_requested",
-      title: "Schedule change under review",
-      body: "The current schedule remains in place until the request is approved.",
-      actionPath: `/partners/jobs/${source.booking.id}`,
-      createdAt: now,
+      eventType: "booking.reschedule_review_requested",
+      dedupeKey: opHash,
+      correlationId: input.correlationId,
+      occurredAt: now,
+      accountTimezone: location.timezone,
+      serviceAt: hold.arrivalWindowStartAt,
     });
     await tx.insert(appointmentNotes).values({
       appointmentId: source.appointment.id,
@@ -4514,6 +5126,9 @@ export async function reschedulePartnerBooking(input: {
         holdId: hold.id,
         requestedStartAt: hold.startAt.toISOString(),
         currentSchedulePreserved: true,
+        cancellationPolicyRevision: cancellationPolicy.revision,
+        cancellationPolicySource: cancellationPolicy.source,
+        scheduleChangePolicyReason: scheduleChangePolicyDecision.reason.code,
         reviewReasons,
       }),
       createdAt: now,

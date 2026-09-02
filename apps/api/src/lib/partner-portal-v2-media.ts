@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  sql,
+} from "drizzle-orm";
 import { z } from "zod";
 import {
   auditLogs,
@@ -10,6 +19,7 @@ import {
   partnerBookings,
   partnerDraftMedia,
   partnerJobEvidence,
+  partnerMediaMutationOperations,
   type DatabaseClient,
 } from "@/db";
 import {
@@ -29,7 +39,6 @@ import {
   getMediaObject,
   getMediaStorageBucket,
   getMediaStorageProvider,
-  headMediaObject,
   putImmutableMediaObject,
   tryHeadMediaObject,
 } from "@/lib/media-storage";
@@ -48,6 +57,8 @@ const MAX_PARTNER_MEDIA_COUNT = 40;
 const MAX_PARTNER_MEDIA_BATCH = 10;
 const STAGING_LIFETIME_MS = 24 * 60 * 60 * 1_000;
 const DOWNLOAD_INTENT_SECONDS = 300;
+const FINALIZE_CLAIM_MS = 5 * 60 * 1_000;
+const MAX_FINALIZE_ATTEMPTS = 20;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const PARTNER_JOB_EVIDENCE_CATEGORIES = new Set([
@@ -168,8 +179,8 @@ export function sanitizePartnerMediaPublicValue<T>(
   value: T,
 ): PublicMediaValue<T> {
   if (Array.isArray(value)) {
-    return value.map((item) =>
-      sanitizePartnerMediaPublicValue(item),
+    return (value as unknown[]).map((item) =>
+      sanitizePartnerMediaPublicValue<unknown>(item),
     ) as PublicMediaValue<T>;
   }
   if (value && typeof value === "object" && !(value instanceof Date)) {
@@ -436,6 +447,221 @@ function metadataNumber(
   return typeof value === "number" && Number.isSafeInteger(value)
     ? value
     : null;
+}
+
+function normalizeChecksum(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase() ?? null;
+  return normalized && /^[0-9a-f]{64}$/u.test(normalized) ? normalized : null;
+}
+
+/**
+ * Resolves the checksum promise without allowing a finalization request to
+ * replace the digest bound to its upload intent (or an earlier retry).
+ */
+export function resolvePartnerMediaFinalizeChecksum(input: {
+  sourceMetadata: Record<string, unknown> | null;
+  suppliedChecksum?: string | null;
+  readyInputSha256?: string | null;
+}): {
+  expectedChecksum: string | null;
+  metadataPatch: Record<string, unknown>;
+} {
+  const declared = normalizeChecksum(
+    metadataString(input.sourceMetadata, "expectedSha256"),
+  );
+  const retryBound = normalizeChecksum(
+    metadataString(input.sourceMetadata, "finalizeExpectedSha256"),
+  );
+  const supplied = normalizeChecksum(input.suppliedChecksum);
+  const candidates = [declared, retryBound, supplied].filter(
+    (value): value is string => Boolean(value),
+  );
+  if (new Set(candidates).size > 1) {
+    throw new PartnerPortalMediaError("idempotency_conflict", 409);
+  }
+  const expectedChecksum = candidates[0] ?? null;
+  const readyInputSha256 = normalizeChecksum(input.readyInputSha256);
+  if (
+    input.readyInputSha256 !== undefined &&
+    (!readyInputSha256 ||
+      (expectedChecksum !== null && readyInputSha256 !== expectedChecksum))
+  ) {
+    throw new PartnerPortalMediaError("media_integrity_conflict", 409);
+  }
+  return {
+    expectedChecksum,
+    metadataPatch:
+      supplied && !declared && !retryBound
+        ? { finalizeExpectedSha256: supplied }
+        : {},
+  };
+}
+
+function partnerMediaFinalizeRequestHash(input: {
+  parentKind: PartnerMediaParentKind;
+  parentId: string;
+  associationId: string;
+  checksumSha256?: string | null;
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        parentKind: input.parentKind,
+        parentId: input.parentId,
+        associationId: input.associationId,
+        checksumSha256: normalizeChecksum(input.checksumSha256),
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+type FinalizeOperationClaim = Readonly<{
+  id: string;
+  claimToken: string;
+  replayed: boolean;
+}>;
+
+async function claimPartnerMediaFinalizeOperation(
+  tx: TransactionClient,
+  input: {
+    accountId: string;
+    membershipId: string;
+    idempotencyKeyHash: string;
+    requestHash: string;
+    parentKind: PartnerMediaParentKind;
+    parentId: string;
+    associationId: string;
+  },
+): Promise<FinalizeOperationClaim> {
+  const now = new Date();
+  const claimToken = randomUUID();
+  const claimExpiresAt = new Date(now.getTime() + FINALIZE_CLAIM_MS);
+  const [created] = await tx
+    .insert(partnerMediaMutationOperations)
+    .values({
+      partnerAccountId: input.accountId,
+      actorMembershipId: input.membershipId,
+      action: "finalize",
+      idempotencyKeyHash: input.idempotencyKeyHash,
+      requestHash: input.requestHash,
+      parentKind: input.parentKind,
+      parentId: input.parentId,
+      associationId: input.associationId,
+      status: "in_progress",
+      claimToken,
+      claimExpiresAt,
+      attemptCount: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoNothing()
+    .returning({ id: partnerMediaMutationOperations.id });
+  if (created) return { id: created.id, claimToken, replayed: false };
+
+  const [existing] = await tx
+    .select({
+      id: partnerMediaMutationOperations.id,
+      requestHash: partnerMediaMutationOperations.requestHash,
+      parentKind: partnerMediaMutationOperations.parentKind,
+      parentId: partnerMediaMutationOperations.parentId,
+      associationId: partnerMediaMutationOperations.associationId,
+      status: partnerMediaMutationOperations.status,
+      claimExpiresAt: partnerMediaMutationOperations.claimExpiresAt,
+      attemptCount: partnerMediaMutationOperations.attemptCount,
+    })
+    .from(partnerMediaMutationOperations)
+    .where(
+      and(
+        eq(partnerMediaMutationOperations.partnerAccountId, input.accountId),
+        eq(
+          partnerMediaMutationOperations.actorMembershipId,
+          input.membershipId,
+        ),
+        eq(partnerMediaMutationOperations.action, "finalize"),
+        eq(
+          partnerMediaMutationOperations.idempotencyKeyHash,
+          input.idempotencyKeyHash,
+        ),
+      ),
+    )
+    .for("update")
+    .limit(1);
+  if (
+    !existing ||
+    existing.requestHash !== input.requestHash ||
+    existing.parentKind !== input.parentKind ||
+    existing.parentId !== input.parentId ||
+    existing.associationId !== input.associationId
+  ) {
+    throw new PartnerPortalMediaError("idempotency_conflict", 409);
+  }
+  if (existing.status === "succeeded") {
+    return { id: existing.id, claimToken, replayed: true };
+  }
+  if (
+    existing.status === "in_progress" &&
+    existing.claimExpiresAt.getTime() > now.getTime()
+  ) {
+    throw new PartnerPortalMediaError("conflict", 409);
+  }
+  if (existing.attemptCount >= MAX_FINALIZE_ATTEMPTS) {
+    throw new PartnerPortalMediaError("conflict", 409);
+  }
+  const [reclaimed] = await tx
+    .update(partnerMediaMutationOperations)
+    .set({
+      status: "in_progress",
+      claimToken,
+      claimExpiresAt,
+      attemptCount: sql`${partnerMediaMutationOperations.attemptCount} + 1`,
+      lastErrorCode: null,
+      completedAt: null,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(partnerMediaMutationOperations.id, existing.id),
+        existing.status === "failed"
+          ? eq(partnerMediaMutationOperations.status, "failed")
+          : and(
+              eq(partnerMediaMutationOperations.status, "in_progress"),
+              lte(partnerMediaMutationOperations.claimExpiresAt, now),
+            ),
+      ),
+    )
+    .returning({ id: partnerMediaMutationOperations.id });
+  if (!reclaimed) throw new PartnerPortalMediaError("conflict", 409);
+  return { id: reclaimed.id, claimToken, replayed: false };
+}
+
+async function completePartnerMediaFinalizeOperation(
+  tx: TransactionClient,
+  input: {
+    id: string;
+    claimToken: string;
+    status: "succeeded" | "failed";
+    errorCode?: string;
+  },
+): Promise<void> {
+  const now = new Date();
+  const [updated] = await tx
+    .update(partnerMediaMutationOperations)
+    .set({
+      status: input.status,
+      lastErrorCode: input.errorCode ?? null,
+      completedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(partnerMediaMutationOperations.id, input.id),
+        eq(partnerMediaMutationOperations.claimToken, input.claimToken),
+        eq(partnerMediaMutationOperations.status, "in_progress"),
+      ),
+    )
+    .returning({ id: partnerMediaMutationOperations.id });
+  if (!updated) throw new PartnerPortalMediaError("conflict", 409);
 }
 
 async function assertParentAvailable(
@@ -822,7 +1048,7 @@ export async function createPartnerMediaUploadIntents(input: {
   const bucket = getMediaStorageBucket();
   const provider = getMediaStorageProvider();
   const db = getDb();
-  const rows = await db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     await lockParentForMediaMutation(tx, {
       parentKind: input.parentKind,
       parentId: input.parentId,
@@ -853,6 +1079,10 @@ export async function createPartnerMediaUploadIntents(input: {
       .select({
         sourceKey: mediaAssets.sourceKey,
         assetId: mediaAssets.id,
+        partnerAccountId: mediaAssets.partnerAccountId,
+        status: mediaAssets.status,
+        originalObjectKey: mediaAssets.originalObjectKey,
+        deletedAt: mediaAssets.deletedAt,
         sourceMetadata: mediaAssets.sourceMetadata,
       })
       .from(mediaAssets)
@@ -870,6 +1100,7 @@ export async function createPartnerMediaUploadIntents(input: {
     const stagingExpiresAt = new Date(now.getTime() + STAGING_LIFETIME_MS);
     const createdIds: string[] = [];
     const existingAssociationIds = new Set<string>();
+    const supersededStagingKeys: string[] = [];
     for (const [index, file] of input.files.entries()) {
       const sourceKey = sourceKeys[index]!;
       const requestFingerprint = createHash("sha256")
@@ -889,6 +1120,8 @@ export async function createPartnerMediaUploadIntents(input: {
       const existingAsset = existingByKey.get(sourceKey);
       if (existingAsset) {
         if (
+          existingAsset.partnerAccountId !== accountId ||
+          existingAsset.deletedAt !== null ||
           metadataString(existingAsset.sourceMetadata, "requestFingerprint") !==
             requestFingerprint ||
           metadataString(existingAsset.sourceMetadata, "idempotencyKeyHash") !==
@@ -910,6 +1143,47 @@ export async function createPartnerMediaUploadIntents(input: {
         }
         createdIds.push(existingAssociation.id);
         existingAssociationIds.add(existingAssociation.id);
+        if (
+          existingAsset.status === "failed" &&
+          existingAsset.sourceMetadata?.["replacementRequired"] === true
+        ) {
+          const retryGeneration =
+            (metadataNumber(existingAsset.sourceMetadata, "retryGeneration") ??
+              0) + 1;
+          if (retryGeneration > MAX_FINALIZE_ATTEMPTS) {
+            throw new PartnerPortalMediaError("conflict", 409);
+          }
+          const replacementKey = `partner/staging/${accountId}/${existingAsset.assetId}/upload-${retryGeneration}`;
+          const [rotated] = await tx
+            .update(mediaAssets)
+            .set({
+              originalObjectKey: replacementKey,
+              status: "staging",
+              processingError: null,
+              sourceMetadata: {
+                ...(existingAsset.sourceMetadata ?? {}),
+                replacementRequired: false,
+                retryGeneration,
+              },
+              stagingExpiresAt,
+              updatedAt: now,
+            })
+            .where(
+              and(
+                eq(mediaAssets.id, existingAsset.assetId),
+                eq(mediaAssets.partnerAccountId, accountId),
+                eq(mediaAssets.status, "failed"),
+                eq(
+                  mediaAssets.originalObjectKey,
+                  existingAsset.originalObjectKey,
+                ),
+                isNull(mediaAssets.deletedAt),
+              ),
+            )
+            .returning({ id: mediaAssets.id });
+          if (!rotated) throw new PartnerPortalMediaError("conflict", 409);
+          supersededStagingKeys.push(existingAsset.originalObjectKey);
+        }
         continue;
       }
       const assetId = randomUUID();
@@ -918,6 +1192,7 @@ export async function createPartnerMediaUploadIntents(input: {
         .insert(mediaAssets)
         .values({
           id: assetId,
+          partnerAccountId: accountId,
           storageProvider: provider,
           storageBucket: bucket,
           originalObjectKey: stagingKey,
@@ -985,17 +1260,26 @@ export async function createPartnerMediaUploadIntents(input: {
     // each private storage URL with the File at the same index; an unordered
     // SQL IN result could otherwise upload one customer's image under another
     // file's declared type, byte length, caption, or proof category.
-    return orderPartnerMediaAssociations(createdIds, associatedRows).map(
-      (row) => ({
-        ...row,
-        wasExisting: existingAssociationIds.has(row.id),
-      }),
-    );
+    return {
+      rows: orderPartnerMediaAssociations(createdIds, associatedRows).map(
+        (row) => ({
+          ...row,
+          wasExisting: existingAssociationIds.has(row.id),
+        }),
+      ),
+      supersededStagingKeys,
+    };
   });
+
+  await Promise.all(
+    result.supersededStagingKeys.map((key) =>
+      deleteMediaObject(key).catch(() => undefined),
+    ),
+  );
 
   return sanitizePartnerMediaPublicValue(
     await Promise.all(
-      rows.map(async (row) => {
+      result.rows.map(async (row) => {
         if (row.assetStatus === "ready") {
           return {
             id: row.id,
@@ -1062,11 +1346,16 @@ export async function finalizePartnerMedia(input: {
   checksumSha256?: string | null;
   principal: PartnerPrincipal;
   correlationId: string;
+  idempotencyKeyHash: string;
 }) {
   const accountId = input.principal.accountId;
-  if (!accountId) throw new PartnerPortalMediaError("not_found", 404);
+  const membershipId = input.principal.membershipId;
+  if (!accountId || !membershipId) {
+    throw new PartnerPortalMediaError("not_found", 404);
+  }
+  const requestHash = partnerMediaFinalizeRequestHash(input);
   const db = getDb();
-  let row = await db.transaction(async (tx) => {
+  const prepared = await db.transaction(async (tx) => {
     const parent = await lockParentForMediaMutation(tx, {
       parentKind: input.parentKind,
       parentId: input.parentId,
@@ -1081,42 +1370,80 @@ export async function finalizePartnerMedia(input: {
       db: tx,
     });
     if (!association) throw new PartnerPortalMediaError("not_found", 404);
+    const checksum = resolvePartnerMediaFinalizeChecksum({
+      sourceMetadata: association.sourceMetadata,
+      suppliedChecksum: input.checksumSha256,
+      ...(association.assetStatus === "ready"
+        ? {
+            readyInputSha256: metadataString(
+              association.sourceMetadata,
+              "inputSha256",
+            ),
+          }
+        : {}),
+    });
+    const operation = await claimPartnerMediaFinalizeOperation(tx, {
+      accountId,
+      membershipId,
+      idempotencyKeyHash: input.idempotencyKeyHash,
+      requestHash,
+      parentKind: input.parentKind,
+      parentId: input.parentId,
+      associationId: input.associationId,
+    });
     await assertSubmittedDraftAssetTransferred(tx, {
       parentKind: input.parentKind,
       parentState: parent.state,
       accountId,
       assetId: association.assetId,
     });
-    if (association.assetStatus === "ready") return association;
+    if (operation.replayed && association.assetStatus !== "ready") {
+      throw new PartnerPortalMediaError("media_integrity_conflict", 409);
+    }
+    if (association.assetStatus === "ready") {
+      if (!operation.replayed) {
+        await completePartnerMediaFinalizeOperation(tx, {
+          id: operation.id,
+          claimToken: operation.claimToken,
+          status: "succeeded",
+        });
+      }
+      return { row: association, operation, expectedChecksum: null };
+    }
     if (!["staging", "failed"].includes(association.assetStatus)) {
       throw new PartnerPortalMediaError("conflict", 409);
     }
+    const sourceMetadata = {
+      ...(association.sourceMetadata ?? {}),
+      ...checksum.metadataPatch,
+      replacementRequired: false,
+    };
     const [claimed] = await tx
       .update(mediaAssets)
       .set({
         status: "processing",
         processingError: null,
+        sourceMetadata,
         updatedAt: new Date(),
       })
       .where(
         and(
           eq(mediaAssets.id, association.assetId),
+          eq(mediaAssets.partnerAccountId, accountId),
           inArray(mediaAssets.status, ["staging", "failed"]),
+          isNull(mediaAssets.deletedAt),
         ),
       )
       .returning({ id: mediaAssets.id });
     if (!claimed) throw new PartnerPortalMediaError("conflict", 409);
-    return association;
+    return {
+      row: { ...association, sourceMetadata },
+      operation,
+      expectedChecksum: checksum.expectedChecksum,
+    };
   });
+  const row = prepared.row;
   if (row.assetStatus === "ready") {
-    const expected = input.checksumSha256?.toLowerCase();
-    const actual = metadataString(
-      row.sourceMetadata,
-      "inputSha256",
-    )?.toLowerCase();
-    if (expected && actual && expected !== actual) {
-      throw new PartnerPortalMediaError("idempotency_conflict", 409);
-    }
     return createMediaDto(row);
   }
 
@@ -1126,7 +1453,10 @@ export async function finalizePartnerMedia(input: {
   const displayKey = `${finalPrefix}/display.jpg`;
   const thumbnailKey = `${finalPrefix}/thumbnail.jpg`;
   try {
-    const head = await headMediaObject(stagingKey);
+    const head = await tryHeadMediaObject(stagingKey);
+    if (!head) {
+      throw new PartnerPortalMediaError("upload_incomplete", 409);
+    }
     const declaredLength =
       metadataNumber(row.sourceMetadata, "declaredByteLength") ?? row.byteSize;
     if (
@@ -1139,33 +1469,48 @@ export async function finalizePartnerMedia(input: {
     }
     const bytes = await getMediaObject(stagingKey, MAX_APPOINTMENT_IMAGE_BYTES);
     const actualSha256 = createHash("sha256").update(bytes).digest("hex");
-    const expectedSha256 =
-      input.checksumSha256?.toLowerCase() ??
-      metadataString(row.sourceMetadata, "expectedSha256")?.toLowerCase();
-    if (expectedSha256 && expectedSha256 !== actualSha256) {
+    if (
+      prepared.expectedChecksum &&
+      prepared.expectedChecksum !== actualSha256
+    ) {
       throw new PartnerPortalMediaError("invalid_fields", 422);
     }
-    const normalized = await normalizeAppointmentImage(
-      bytes,
-      head.contentType ?? row.contentType,
-    );
-    await Promise.all([
-      putImmutableMediaObject({
-        key: originalKey,
-        body: normalized.original,
-        contentType: normalized.contentType,
-      }),
-      putImmutableMediaObject({
-        key: displayKey,
-        body: normalized.display,
-        contentType: normalized.contentType,
-      }),
-      putImmutableMediaObject({
-        key: thumbnailKey,
-        body: normalized.thumbnail,
-        contentType: normalized.contentType,
-      }),
-    ]);
+    let normalized;
+    try {
+      normalized = await normalizeAppointmentImage(
+        bytes,
+        head.contentType ?? row.contentType,
+      );
+    } catch {
+      throw new PartnerPortalMediaError("invalid_fields", 422);
+    }
+    try {
+      await Promise.all([
+        putImmutableMediaObject({
+          key: originalKey,
+          body: normalized.original,
+          contentType: normalized.contentType,
+        }),
+        putImmutableMediaObject({
+          key: displayKey,
+          body: normalized.display,
+          contentType: normalized.contentType,
+        }),
+        putImmutableMediaObject({
+          key: thumbnailKey,
+          body: normalized.thumbnail,
+          contentType: normalized.contentType,
+        }),
+      ]);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "media_immutable_object_conflict"
+      ) {
+        throw new PartnerPortalMediaError("media_integrity_conflict", 409);
+      }
+      throw new PartnerPortalMediaError("service_unavailable", 503);
+    }
     const now = new Date();
     await db.transaction(async (tx) => {
       const parent = await lockParentForMediaMutation(tx, {
@@ -1197,6 +1542,7 @@ export async function finalizePartnerMedia(input: {
             inputContentType: normalized.inputContentType,
             inputByteSize: bytes.byteLength,
             inputSha256: normalized.inputSha256,
+            replacementRequired: false,
           },
           stagingExpiresAt: null,
           readyAt: now,
@@ -1206,11 +1552,18 @@ export async function finalizePartnerMedia(input: {
         .where(
           and(
             eq(mediaAssets.id, row.assetId),
+            eq(mediaAssets.partnerAccountId, accountId),
             eq(mediaAssets.status, "processing"),
+            isNull(mediaAssets.deletedAt),
           ),
         )
         .returning({ id: mediaAssets.id });
       if (!updated) throw new Error("partner_media_finalize_race");
+      await completePartnerMediaFinalizeOperation(tx, {
+        id: prepared.operation.id,
+        claimToken: prepared.operation.claimToken,
+        status: "succeeded",
+      });
       await tx.insert(auditLogs).values({
         actorType: "human",
         actorId: input.principal.partnerUserId,
@@ -1219,6 +1572,7 @@ export async function finalizePartnerMedia(input: {
         sessionId: input.principal.session.id,
         authMethod: "partner_session",
         correlationId: input.correlationId,
+        idempotencyKeyHash: input.idempotencyKeyHash,
         requiredPermissions: ["media.upload"],
         surface: "partner_portal_v2",
         action: "partner.media.finalized",
@@ -1240,16 +1594,39 @@ export async function finalizePartnerMedia(input: {
       await deleteMediaObject(stagingKey).catch(() => undefined);
     }
   } catch (error) {
-    await db
-      .update(mediaAssets)
-      .set({
+    const portalError =
+      error instanceof PartnerPortalMediaError
+        ? error
+        : new PartnerPortalMediaError("service_unavailable", 503);
+    const failedAt = new Date();
+    await db.transaction(async (tx) => {
+      await tx
+        .update(mediaAssets)
+        .set({
+          status: "failed",
+          processingError: safeProcessingError(error),
+          sourceMetadata: {
+            ...(row.sourceMetadata ?? {}),
+            replacementRequired: portalError.status === 422,
+          },
+          updatedAt: failedAt,
+        })
+        .where(
+          and(
+            eq(mediaAssets.id, row.assetId),
+            eq(mediaAssets.partnerAccountId, accountId),
+            eq(mediaAssets.status, "processing"),
+            isNull(mediaAssets.deletedAt),
+          ),
+        );
+      await completePartnerMediaFinalizeOperation(tx, {
+        id: prepared.operation.id,
+        claimToken: prepared.operation.claimToken,
         status: "failed",
-        processingError: safeProcessingError(error),
-        updatedAt: new Date(),
-      })
-      .where(eq(mediaAssets.id, row.assetId));
-    if (error instanceof PartnerPortalMediaError) throw error;
-    throw new PartnerPortalMediaError("invalid_fields", 422);
+        errorCode: portalError.code,
+      });
+    });
+    throw portalError;
   }
   const [completed] = await loadAssociationRows({
     parentKind: input.parentKind,

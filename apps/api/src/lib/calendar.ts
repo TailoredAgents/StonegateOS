@@ -39,6 +39,51 @@ export interface AppointmentCalendarPayload {
   rescheduleUrl?: string;
 }
 
+export type AppointmentCalendarContent = Readonly<{
+  services: readonly string[];
+  notes: string | null;
+}>;
+
+function boundedCalendarText(value: unknown, maximum: number): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.normalize("NFKC").trim();
+  return normalized ? normalized.slice(0, maximum) : null;
+}
+
+/**
+ * Resolves one safe calendar projection for both lead-backed and canonical
+ * partner jobs. Partner jobs do not require a lead, and only their public
+ * service key plus quoted scope cross the provider boundary.
+ */
+export function resolveAppointmentCalendarContent(input: {
+  leadServices: unknown;
+  leadNotes: unknown;
+  partnerServiceKey: unknown;
+  quotedScopeText: unknown;
+}): AppointmentCalendarContent {
+  const leadServices = Array.isArray(input.leadServices)
+    ? input.leadServices
+        .map((service) => boundedCalendarText(service, 120))
+        .filter((service): service is string => service !== null)
+        .filter((service, index, values) => values.indexOf(service) === index)
+        .slice(0, 20)
+    : [];
+  const partnerServiceKey = boundedCalendarText(input.partnerServiceKey, 120);
+  const services =
+    leadServices.length > 0
+      ? leadServices
+      : partnerServiceKey
+        ? [partnerServiceKey]
+        : [];
+
+  return Object.freeze({
+    services: Object.freeze(services),
+    notes:
+      boundedCalendarText(input.leadNotes, 4_000) ??
+      boundedCalendarText(input.quotedScopeText, 4_000),
+  });
+}
+
 let cachedToken:
   | {
       accessToken: string;

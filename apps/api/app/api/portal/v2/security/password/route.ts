@@ -193,7 +193,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           alternatives: [
             {
               action: "reauthenticate",
-              label: "Sign in again with a new secure link",
+              label: "Sign in again with your password",
               href: "/partners/login?returnTo=%2Fpartners%2Fsettings",
             },
           ],

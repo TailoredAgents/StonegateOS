@@ -43,22 +43,33 @@ function humanAction(
   };
 }
 
+function recentHumanAction(
+  requiredPermissions: TeamPermission[],
+  risk: MutationRisk,
+  auditAction: TeamActionAuditName,
+): ActionPolicy {
+  return {
+    ...humanAction(requiredPermissions, risk, true, auditAction),
+    maxAuthenticationAgeSeconds: 15 * 60,
+  };
+}
+
 /**
  * One explicit entry for every exported mutation in the files named by
  * `TEAM_SERVER_ACTION_MANIFEST_SCOPE`. Keep entries in source order so a
  * reviewer can compare the registry with the action implementation easily.
  */
 export const TEAM_SERVER_ACTION_POLICIES = {
-  updateApptStatus: humanAction(
+  updateApptStatus: recentHumanAction(
     [
       "appointments.update",
+      "appointment_media.manage",
       "payments.collect",
       "payments.manage",
       "commissions.manage",
       "messages.send",
     ],
-    "financial",
-    true,
+    "destructive",
     "team_action.updateApptStatus",
   ),
   updateAppointmentEtaStatusAction: humanAction(
@@ -668,7 +679,7 @@ export const TEAM_SERVER_ACTION_POLICIES = {
     "team_action.partnerLogReferralAction",
   ),
   partnerAccessApplicationDecisionAction: humanAction(
-    ["partners.invite"],
+    ["partners.applications.read"],
     "destructive",
     true,
     "team_action.partnerAccessApplicationDecisionAction",
@@ -680,10 +691,135 @@ export const TEAM_SERVER_ACTION_POLICIES = {
     "team_action.partnerPortalInviteUserAction",
   ),
   partnerPortalSetUserActiveAction: humanAction(
-    ["partners.invite"],
+    ["partners.identities.disable"],
     "destructive",
     true,
     "team_action.partnerPortalSetUserActiveAction",
+  ),
+  partnerMembershipLifecycleAction: recentHumanAction(
+    ["partners.memberships.suspend"],
+    "destructive",
+    "team_action.partnerMembershipLifecycleAction",
+  ),
+  partnerMembershipRoleAction: recentHumanAction(
+    ["partners.memberships.manage"],
+    "destructive",
+    "team_action.partnerMembershipRoleAction",
+  ),
+  partnerAccountSchedulingPolicyAction: recentHumanAction(
+    ["partners.accounts.manage"],
+    "external",
+    "team_action.partnerAccountSchedulingPolicyAction",
+  ),
+  partnerAccountCancellationPolicyAction: recentHumanAction(
+    ["partners.accounts.manage"],
+    "external",
+    "team_action.partnerAccountCancellationPolicyAction",
+  ),
+  partnerAccountServiceAgreementAction: recentHumanAction(
+    ["partners.commercial.manage"],
+    "financial",
+    "team_action.partnerAccountServiceAgreementAction",
+  ),
+  partnerAccountLifecycleAction: recentHumanAction(
+    ["partners.accounts.lifecycle"],
+    "destructive",
+    "team_action.partnerAccountLifecycleAction",
+  ),
+  partnerAccountCloseAction: recentHumanAction(
+    ["partners.accounts.close"],
+    "destructive",
+    "team_action.partnerAccountCloseAction",
+  ),
+  partnerAdministratorRecoveryAction: recentHumanAction(
+    ["partners.memberships.recover_admin"],
+    "destructive",
+    "team_action.partnerAdministratorRecoveryAction",
+  ),
+  partnerLocationAddressReviewDecisionAction: recentHumanAction(
+    ["partners.accounts.manage"],
+    "destructive",
+    "team_action.partnerLocationAddressReviewDecisionAction",
+  ),
+  partnerAccountMergePrepareAction: recentHumanAction(
+    ["partners.accounts.merge"],
+    "destructive",
+    "team_action.partnerAccountMergePrepareAction",
+  ),
+  partnerAccountMergeCompleteAction: recentHumanAction(
+    ["partners.accounts.merge"],
+    "destructive",
+    "team_action.partnerAccountMergeCompleteAction",
+  ),
+  partnerApprovalRuleCreateAction: recentHumanAction(
+    ["partners.commercial.manage"],
+    "financial",
+    "team_action.partnerApprovalRuleCreateAction",
+  ),
+  partnerApprovalRuleUpdateAction: recentHumanAction(
+    ["partners.commercial.manage"],
+    "financial",
+    "team_action.partnerApprovalRuleUpdateAction",
+  ),
+  partnerCancellationRequestDecisionAction: recentHumanAction(
+    ["partners.cancellation_requests.decide"],
+    "destructive",
+    "team_action.partnerCancellationRequestDecisionAction",
+  ),
+  partnerBillingDisputeDecisionAction: recentHumanAction(
+    ["partners.billing_disputes.decide"],
+    "financial",
+    "team_action.partnerBillingDisputeDecisionAction",
+  ),
+  partnerJobChangeRequestDecisionAction: recentHumanAction(
+    ["partners.change_requests.decide"],
+    "destructive",
+    "team_action.partnerJobChangeRequestDecisionAction",
+  ),
+  partnerMembershipScopeAction: recentHumanAction(
+    ["partners.memberships.manage"],
+    "destructive",
+    "team_action.partnerMembershipScopeAction",
+  ),
+  partnerMembershipMigrationReviewAction: recentHumanAction(
+    ["partners.memberships.migration.review"],
+    "destructive",
+    "team_action.partnerMembershipMigrationReviewAction",
+  ),
+  partnerAccountDomainCreateAction: recentHumanAction(
+    ["partners.domains.manage"],
+    "destructive",
+    "team_action.partnerAccountDomainCreateAction",
+  ),
+  partnerAccountDomainVerifyAction: recentHumanAction(
+    ["partners.domains.verify"],
+    "destructive",
+    "team_action.partnerAccountDomainVerifyAction",
+  ),
+  partnerAccountDomainRevokeAction: recentHumanAction(
+    ["partners.domains.revoke"],
+    "destructive",
+    "team_action.partnerAccountDomainRevokeAction",
+  ),
+  partnerSecuritySessionRevokeAction: recentHumanAction(
+    ["partners.security.sessions.revoke"],
+    "destructive",
+    "team_action.partnerSecuritySessionRevokeAction",
+  ),
+  partnerIdentityDisableAction: recentHumanAction(
+    ["partners.identities.disable"],
+    "destructive",
+    "team_action.partnerIdentityDisableAction",
+  ),
+  partnerMfaResetAction: recentHumanAction(
+    ["partners.security.mfa.reset"],
+    "destructive",
+    "team_action.partnerMfaResetAction",
+  ),
+  partnerQuarantineResolveAction: recentHumanAction(
+    ["partners.quarantine.release"],
+    "destructive",
+    "team_action.partnerQuarantineResolveAction",
   ),
   partnerPortalSaveRatesAction: humanAction(
     ["partners.rates"],

@@ -166,6 +166,12 @@ services:
         sync: false
       - key: TEAM_AUTH_RATE_LIMIT_SECRET
         sync: false
+      - key: TEAM_MFA_SECRET_KEYS_JSON
+        sync: false
+      - key: TEAM_MFA_SECRET_KEY_BASE64
+        sync: false
+      - key: TEAM_MFA_SECRET_KEY_VERSION
+        sync: false
       - key: TEAM_BREAK_GLASS_OWNER_MEMBER_ID
         sync: false
       - key: TEAM_BREAK_GLASS_CREW_MEMBER_ID
@@ -204,11 +210,19 @@ services:
         sync: false
       - key: PARTNER_PORTAL_V2_WRITES_ENABLED
         sync: false
+      - key: PARTNER_PORTAL_PURPOSE_AUTH_ENABLED
+        sync: false
+      - key: PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED
+        value: "false"
+      - key: PARTNER_PORTAL_INTERNAL_TEST_MODE
+        value: "false"
       - key: PARTNER_PORTAL_V2_CANARY_ACCOUNT_IDS
         sync: false
       - key: PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED
         sync: false
       - key: PARTNER_PORTAL_EMBEDDED_PAYMENTS_ENABLED
+        sync: false
+      - key: PARTNER_PORTAL_EMBEDDED_ACH_ENABLED
         sync: false
       - key: PARTNER_PORTAL_HOSTED_PAYMENTS_ENABLED
         sync: false
@@ -271,6 +285,8 @@ services:
       - key: SQUARE_ACCESS_TOKEN
         sync: false
       - key: SQUARE_LOCATION_ID
+        sync: false
+      - key: SQUARE_ACH_ENABLED
         sync: false
       - key: SQUARE_POS_CALLBACK_URL
         sync: false
@@ -451,11 +467,19 @@ services:
         sync: false
       - key: PARTNER_PORTAL_V2_WRITES_ENABLED
         sync: false
+      - key: PARTNER_PORTAL_PURPOSE_AUTH_ENABLED
+        sync: false
+      - key: PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED
+        value: "false"
+      - key: PARTNER_PORTAL_INTERNAL_TEST_MODE
+        value: "false"
       - key: PARTNER_PORTAL_V2_CANARY_ACCOUNT_IDS
         sync: false
       - key: PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED
         sync: false
       - key: PARTNER_PORTAL_EMBEDDED_PAYMENTS_ENABLED
+        sync: false
+      - key: PARTNER_PORTAL_EMBEDDED_ACH_ENABLED
         sync: false
       - key: PARTNER_PORTAL_HOSTED_PAYMENTS_ENABLED
         sync: false

@@ -94,7 +94,7 @@ export type VerifiedSquarePayment = {
   totalAmountCents: number;
   refundedAmountCents: number;
   currency: "USD";
-  tenderType: "card";
+  tenderType: "card" | "bank_account";
   entryMethod: string | null;
   cardBrand: string | null;
   last4: string | null;
@@ -636,9 +636,11 @@ export async function retrieveAndVerifySquarePayment(input: {
   expectedAttemptId: string;
   expectedJobAmountCents: number;
   expectedLocationId: string;
+  expectedSourceType?: "CARD" | "BANK_ACCOUNT";
   accessToken?: string;
   fetchImpl?: typeof fetch;
 }): Promise<VerifiedSquarePayment> {
+  const expectedSourceType = input.expectedSourceType ?? "CARD";
   const order = await getSquareOrder(input.orderId, input);
   if (order.id !== input.orderId) throw new Error("square_order_id_mismatch");
   if (extractSquareAttemptIdFromOrder(order) !== input.expectedAttemptId) {
@@ -651,13 +653,17 @@ export async function retrieveAndVerifySquarePayment(input: {
     throw new Error("square_order_not_completed");
   }
 
-  const cardTenders = (order.tenders ?? []).filter(
-    (tender) => tender.type?.toUpperCase() === "CARD",
+  const expectedTenders = (order.tenders ?? []).filter(
+    (tender) => tender.type?.toUpperCase() === expectedSourceType,
   );
-  if (cardTenders.length !== 1) {
-    throw new Error("square_card_tender_count_mismatch");
+  if (expectedTenders.length !== 1) {
+    throw new Error(
+      expectedSourceType === "BANK_ACCOUNT"
+        ? "square_bank_account_tender_count_mismatch"
+        : "square_card_tender_count_mismatch",
+    );
   }
-  const tender = cardTenders[0]!;
+  const tender = expectedTenders[0]!;
   const tenderId = tender.id?.trim();
   const tenderPaymentId = tender.payment_id?.trim();
   if (tenderId && tenderPaymentId && tenderId !== tenderPaymentId) {
@@ -679,8 +685,12 @@ export async function retrieveAndVerifySquarePayment(input: {
   if (payment.status?.toUpperCase() !== "COMPLETED") {
     throw new Error("square_payment_not_completed");
   }
-  if (payment.source_type?.toUpperCase() !== "CARD") {
-    throw new Error("square_payment_not_card");
+  if (payment.source_type?.toUpperCase() !== expectedSourceType) {
+    throw new Error(
+      expectedSourceType === "BANK_ACCOUNT"
+        ? "square_payment_not_bank_account"
+        : "square_payment_not_card",
+    );
   }
 
   const jobAmountCents = parseSquareMoneyAmount(payment.amount_money);
@@ -748,10 +758,19 @@ export async function retrieveAndVerifySquarePayment(input: {
     totalAmountCents,
     refundedAmountCents,
     currency: "USD",
-    tenderType: "card",
-    entryMethod: payment.card_details?.entry_method ?? null,
-    cardBrand: payment.card_details?.card?.card_brand ?? null,
-    last4: payment.card_details?.card?.last_4 ?? null,
+    tenderType: expectedSourceType === "BANK_ACCOUNT" ? "bank_account" : "card",
+    entryMethod:
+      expectedSourceType === "CARD"
+        ? (payment.card_details?.entry_method ?? null)
+        : null,
+    cardBrand:
+      expectedSourceType === "CARD"
+        ? (payment.card_details?.card?.card_brand ?? null)
+        : null,
+    last4:
+      expectedSourceType === "CARD"
+        ? (payment.card_details?.card?.last_4 ?? null)
+        : null,
     receiptUrl: payment.receipt_url ?? null,
     locationId: input.expectedLocationId,
     providerCreatedAt: parseDate(payment.created_at),

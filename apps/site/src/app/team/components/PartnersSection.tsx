@@ -39,7 +39,6 @@ import {
   teamButtonClass,
 } from "./team-ui";
 import { PartnerRatesEditor } from "./PartnerRatesEditor";
-import { PartnerAccessApplicationsQueue } from "./PartnerAccessApplicationsQueue";
 import { PartnerPortalReadOnlyPreview } from "./PartnerPortalReadOnlyPreview";
 
 type TeamMember = { id: string; name: string; active?: boolean };
@@ -133,6 +132,10 @@ export async function PartnersSection({
   const canImportOutbound = hasTeamPermission(principal, "outbound.import");
   const canWritePartners = hasTeamPermission(principal, "partners.write");
   const canInvitePartners = hasTeamPermission(principal, "partners.invite");
+  const canDisablePartnerIdentities = hasTeamPermission(
+    principal,
+    "partners.identities.disable",
+  );
   const canManagePartnerRates = hasTeamPermission(principal, "partners.rates");
   const resolvedFilters: PartnerFilters = filters ?? {};
   const selectedId = normalizeFilter(resolvedFilters.selectedId);
@@ -341,10 +344,20 @@ export async function PartnersSection({
         </div>
       </header>
 
-      <PartnerAccessApplicationsQueue
-        principal={principal}
-        canDecide={canInvitePartners}
-      />
+      <aside className={TEAM_CARD_PADDED}>
+        <h3 className={TEAM_SECTION_TITLE}>Partner Portal access</h3>
+        <p className={TEAM_SECTION_SUBTITLE}>
+          Applications, identities, company memberships, invitations, and
+          security are managed from the canonical Partner Administration
+          workspace.
+        </p>
+        <Link
+          className={`${teamButtonClass("secondary", "sm")} mt-4`}
+          href="/team/partners?p_admin=applications"
+        >
+          Open access applications
+        </Link>
+      </aside>
 
       {directoryUnavailable ? (
         <div
@@ -607,16 +620,18 @@ export async function PartnersSection({
                             </SubmitButton>
                           </form>
                         ) : null}
-                        {canInvitePartners &&
+                        {canDisablePartnerIdentities &&
                         portalOrganizationStatus === "partner" ? (
                           user.active ? (
                             <details className="mt-3 rounded-xl border border-rose-200 bg-rose-50/70 p-3">
                               <summary className="min-h-[44px] cursor-pointer py-2 text-[11px] font-semibold text-rose-800">
-                                Disable portal access
+                                Disable identity across all companies
                               </summary>
                               <p className="mt-1 text-[11px] text-rose-800">
-                                This immediately revokes active sessions and
-                                unused login links. It does not delete the user.
+                                This owner-only containment action immediately
+                                revokes access to every company, active session,
+                                and unused login link. Prefer suspending one
+                                company membership in Partner administration.
                               </p>
                               <form
                                 action={partnerPortalSetUserActiveAction}

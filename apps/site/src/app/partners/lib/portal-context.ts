@@ -20,10 +20,20 @@ export type PartnerPortalPermissions = {
   updateJobs: boolean;
   cancelJobs: boolean;
   manageLocations: boolean;
+  exportOperationalReports: boolean;
   uploadMedia: boolean;
   shareProof: boolean;
   readMessages: boolean;
   sendMessages: boolean;
+};
+
+export type PartnerPortalAccount = {
+  id: string;
+  membershipId: string;
+  name: string;
+  roleKey: string;
+  current: boolean;
+  defaultAccount: boolean;
 };
 
 export type PartnerPortalContext = {
@@ -31,6 +41,7 @@ export type PartnerPortalContext = {
   accountId: string;
   membershipId: string;
   accountLabel: string;
+  accounts: PartnerPortalAccount[];
   partnerType: string | null;
   user: {
     name: string;
@@ -72,6 +83,7 @@ type V2MePayload = {
     persona: string | null;
     capabilities: string[];
     current: boolean;
+    defaultAccount: boolean;
   }>;
 };
 
@@ -156,6 +168,7 @@ function parseV2MePayload(value: unknown): V2MePayload | null {
     const candidatePersona = candidate["persona"];
     const candidateCapabilities = candidate["capabilities"];
     const current = candidate["current"];
+    const defaultAccount = candidate["defaultAccount"];
     if (
       !isUuid(id) ||
       !isBoundedText(candidateName, 200) ||
@@ -170,7 +183,8 @@ function parseV2MePayload(value: unknown): V2MePayload | null {
       !candidateCapabilities.every((capability) =>
         isBoundedText(capability, 120),
       ) ||
-      typeof current !== "boolean"
+      typeof current !== "boolean" ||
+      typeof defaultAccount !== "boolean"
     ) {
       return [];
     }
@@ -183,6 +197,7 @@ function parseV2MePayload(value: unknown): V2MePayload | null {
         persona: candidatePersona,
         capabilities: candidateCapabilities,
         current,
+        defaultAccount,
       },
     ];
   });
@@ -235,11 +250,16 @@ function navigationCapabilities(
     overview: hasAny("account.read", "bookings.read", "jobs.read"),
     schedule: hasAny("bookings.create"),
     jobs: hasAny("bookings.read", "jobs.read"),
-    approvals: hasAny("bookings.approve"),
+    approvals: hasAny("approvals.read", "approvals.decide"),
     locations: hasAny("properties.read", "properties.manage"),
     proof: hasAny("media.read", "proof.read", "proof.request"),
-    billing: hasAny("rates.read", "invoices.read", "documents.read"),
-    reports: hasAny("reports.read", "reports.export"),
+    billing: hasAny("rates.read", "invoices.read", "documents.financial.read"),
+    reports: hasAny(
+      "reports.operational.read",
+      "reports.operational.export",
+      "reports.financial.read",
+      "reports.financial.export",
+    ),
     help: true,
     settings: hasAny("portal.session.read", "account.read"),
   };
@@ -256,6 +276,7 @@ function actionPermissions(
     updateJobs: capabilities.has("bookings.update"),
     cancelJobs: capabilities.has("bookings.cancel"),
     manageLocations: capabilities.has("properties.manage"),
+    exportOperationalReports: capabilities.has("reports.operational.export"),
     uploadMedia: capabilities.has("media.upload"),
     shareProof: capabilities.has("proof.request"),
     readMessages: capabilities.has("messages.read"),
@@ -294,6 +315,14 @@ export async function resolvePartnerPortalContext(
     accountId: payload.account.id,
     membershipId: payload.membership.id,
     accountLabel: payload.account.name.trim(),
+    accounts: payload.accounts.map((account) => ({
+      id: account.id,
+      membershipId: account.membershipId,
+      name: account.name.trim(),
+      roleKey: account.roleKey,
+      current: account.current,
+      defaultAccount: account.defaultAccount,
+    })),
     partnerType: payload.membership.persona?.trim() || null,
     user: {
       name: payload.partnerUser.name.trim() || email,

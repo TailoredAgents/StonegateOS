@@ -29,10 +29,24 @@ import {
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const STATES = new Set(["all", "unread", "read"] as const);
+const SAFE_NOTIFICATION_ACTION_PATHS = new Set([
+  "/partners",
+  "/partners/overview",
+  "/partners/book",
+  "/partners/bookings",
+  "/partners/properties",
+  "/partners/photos",
+  "/partners/approvals",
+  "/partners/billing",
+  "/partners/reports",
+  "/partners/settings",
+  "/partners/help",
+]);
 type NotificationState = "all" | "unread" | "read";
 type NotificationCursor = {
   accessScopeKey: string;
   accountId: string;
+  jobId: string | null;
   membershipId: string;
   state: NotificationState;
   createdAt: string;
@@ -44,13 +58,15 @@ function isNotificationCursor(value: unknown): value is NotificationCursor {
   const row = value as Record<string, unknown>;
   return (
     Object.keys(row).sort().join(",") ===
-      "accessScopeKey,accountId,createdAt,id,membershipId,state" &&
+      "accessScopeKey,accountId,createdAt,id,jobId,membershipId,state" &&
     typeof row["accessScopeKey"] === "string" &&
     /^(?:account|scoped:[A-Za-z0-9_-]{43})$/u.test(row["accessScopeKey"]) &&
     typeof row["accountId"] === "string" &&
     UUID_PATTERN.test(row["accountId"]) &&
     typeof row["membershipId"] === "string" &&
     UUID_PATTERN.test(row["membershipId"]) &&
+    (row["jobId"] === null ||
+      (typeof row["jobId"] === "string" && UUID_PATTERN.test(row["jobId"]))) &&
     typeof row["id"] === "string" &&
     UUID_PATTERN.test(row["id"]) &&
     typeof row["createdAt"] === "string" &&
@@ -61,7 +77,13 @@ function isNotificationCursor(value: unknown): value is NotificationCursor {
 }
 
 function safeActionPath(value: string | null): string | null {
-  return value?.startsWith("/partners/") ? value : null;
+  if (!value || value.includes("?") || value.includes("#")) return null;
+  if (SAFE_NOTIFICATION_ACTION_PATHS.has(value)) return value;
+  return /^\/partners\/(?:bookings|approvals)\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+    value,
+  )
+    ? value
+    : null;
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -103,12 +125,21 @@ export async function GET(request: NextRequest): Promise<Response> {
       correlationId,
     );
   }
+  const jobIdValues = request.nextUrl.searchParams.getAll("jobId");
+  const jobId = jobIdValues[0]?.trim().toLowerCase() || null;
+  if (jobIdValues.length > 1 || (jobId !== null && !UUID_PATTERN.test(jobId))) {
+    return createPartnerPortalV2ErrorResponse(
+      "invalid_fields",
+      422,
+      correlationId,
+    );
+  }
   const pagination = parsePortalV2Pagination(request.nextUrl.searchParams, {
     cursorKind: "partner_notifications",
     validateCursorPayload: isNotificationCursor,
     defaultLimit: 25,
     maximumLimit: 100,
-    allowedQueryKeys: new Set(["state"]),
+    allowedQueryKeys: new Set(["state", "jobId"]),
   });
   if (!pagination.ok) {
     return createPartnerPortalV2DescriptorResponse(
@@ -122,6 +153,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     (pagination.cursor.payload.accountId !== accountId ||
       pagination.cursor.payload.membershipId !== membershipId ||
       pagination.cursor.payload.state !== state ||
+      pagination.cursor.payload.jobId !== jobId ||
       pagination.cursor.payload.accessScopeKey !== accessScopeKey)
   ) {
     return createPartnerPortalV2ErrorResponse(
@@ -165,6 +197,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         and(
           createPartnerNotificationAccessCondition(principal),
           eq(partnerNotifications.membershipId, membershipId),
+          jobId ? eq(partnerNotifications.partnerBookingId, jobId) : undefined,
           state === "unread"
             ? isNull(partnerNotifications.readAt)
             : state === "read"
@@ -197,6 +230,7 @@ export async function GET(request: NextRequest): Promise<Response> {
             payload: {
               accessScopeKey,
               accountId,
+              jobId,
               membershipId,
               state,
               createdAt: last.createdAt.toISOString(),

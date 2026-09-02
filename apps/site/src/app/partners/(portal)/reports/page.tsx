@@ -34,7 +34,7 @@ export default async function PartnerReportsPage() {
         description="Review invoice totals and generated period summaries by currency. These reports are account-scoped and separate from job estimates."
         actions={readyReports ? <PartnerReportExportButton /> : undefined}
         breadcrumbs={[
-          { label: "Overview", href: "/partners" },
+          { label: "Overview", href: "/partners/overview" },
           { label: "Reports", href: "/partners/reports" },
         ]}
       />

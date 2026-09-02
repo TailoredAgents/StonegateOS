@@ -20,7 +20,10 @@ export async function GET(request: NextRequest): Promise<Response> {
       { status: 401, headers: NO_STORE_HEADERS },
     );
   }
-  const permissionError = await requirePermission(request, "partners.read");
+  const permissionError = await requirePermission(
+    request,
+    "partners.applications.read",
+  );
   if (permissionError) return permissionError;
 
   try {

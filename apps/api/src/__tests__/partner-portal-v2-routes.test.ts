@@ -187,6 +187,9 @@ describe("partner portal v2 identity routes", () => {
     expect(JSON.stringify(body)).not.toContain(
       "55555555-5555-4555-8555-555555555555",
     );
+    expect(body["accounts"]).toEqual([
+      expect.objectContaining({ defaultAccount: true, current: true }),
+    ]);
   });
 
   it("requires the intrinsic session-read capability", async () => {
@@ -282,6 +285,7 @@ describe("partner portal v2 identity routes", () => {
       ok: true,
       accountId: "22222222-2222-4222-8222-222222222222",
       membershipId: "33333333-3333-4333-8333-333333333333",
+      defaultAccount: false,
     });
     const validRequest = new NextRequest(
       "http://localhost/api/portal/v2/session/account",
@@ -302,12 +306,51 @@ describe("partner portal v2 identity routes", () => {
     expect(mockSwitchPartnerSessionAccount).toHaveBeenCalledWith(
       authentication,
       "22222222-2222-4222-8222-222222222222",
+      { correlationId: CORRELATION_ID, makeDefault: false },
     );
     await expect(validResponse.json()).resolves.toEqual({
       ok: true,
       currentAccountId: "22222222-2222-4222-8222-222222222222",
       currentMembershipId: "33333333-3333-4333-8333-333333333333",
+      defaultAccount: false,
       correlationId: CORRELATION_ID,
     });
+  });
+
+  it("accepts an explicit default-account preference with the account switch", async () => {
+    const authentication = authenticatedSession();
+    mockRequirePartnerSession.mockResolvedValue(authentication);
+    mockSwitchPartnerSessionAccount.mockResolvedValue({
+      ok: true,
+      accountId: "22222222-2222-4222-8222-222222222222",
+      membershipId: "33333333-3333-4333-8333-333333333333",
+      defaultAccount: true,
+    });
+    const request = new NextRequest(
+      "http://localhost/api/portal/v2/session/account",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-correlation-id": CORRELATION_ID,
+        },
+        body: JSON.stringify({
+          accountId: "22222222-2222-4222-8222-222222222222",
+          makeDefault: true,
+        }),
+      },
+    );
+
+    const response = await switchAccount(request);
+
+    expect(response.status).toBe(200);
+    expect(mockSwitchPartnerSessionAccount).toHaveBeenCalledWith(
+      authentication,
+      "22222222-2222-4222-8222-222222222222",
+      { correlationId: CORRELATION_ID, makeDefault: true },
+    );
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({ defaultAccount: true }),
+    );
   });
 });

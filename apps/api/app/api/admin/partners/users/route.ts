@@ -670,15 +670,15 @@ export async function PATCH(request: NextRequest): Promise<Response> {
     request,
     {
       principalTypes: ["human"],
-      requiredPermissions: ["partners.invite"],
+      requiredPermissions: ["partners.identities.disable"],
       risk: "destructive",
       requiresIdempotency: true,
       auditAction: "partner_user.access_changed",
     },
     {
-      // `partners.invite` is shared with the provider-send action, but changing
-      // access performs no send. Keep this operation behind the destructive
-      // safety boundary so an external-send freeze cannot block revocation.
+      // Global identity lifecycle is owner-only and performs no provider send.
+      // Keep it behind the destructive boundary so an external-send freeze
+      // cannot block emergency containment or a deliberate reactivation.
       ignoredPermissionKillSwitches: ["external_sends"],
     },
   );
@@ -1382,7 +1382,13 @@ export async function POST(request: NextRequest): Promise<Response> {
               ),
             )
             .returning(USER_SELECTION);
-          user = updated ?? null;
+          if (!updated?.orgContactId) {
+            throw new TeamMutationFailure(
+              "conflict",
+              "This legacy contact-scoped portal user no longer has a partner contact. Use the canonical account administration workspace.",
+            );
+          }
+          user = { ...updated, orgContactId: updated.orgContactId };
         } else {
           const [created] = await tx
             .insert(partnerUsers)
@@ -1397,7 +1403,13 @@ export async function POST(request: NextRequest): Promise<Response> {
               updatedAt: now,
             })
             .returning(USER_SELECTION);
-          user = created ?? null;
+          if (!created?.orgContactId) {
+            throw new TeamMutationFailure(
+              "internal",
+              "The legacy contact-scoped portal user could not be prepared. No invite was sent.",
+            );
+          }
+          user = { ...created, orgContactId: created.orgContactId };
         }
         if (!user) {
           throw new TeamMutationFailure(

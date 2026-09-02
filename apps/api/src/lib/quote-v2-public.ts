@@ -599,11 +599,21 @@ export function safeQuoteV2ResponseMetadata(input: {
   requestHash: string;
   capabilityId: string;
   evidenceQuality: "exact" | "basic";
+  certificateIntent?: boolean;
 }): Record<string, unknown> {
   return {
     requestHash: input.requestHash,
     capabilityId: input.capabilityId,
     evidenceQuality: input.evidenceQuality,
+    ...(input.certificateIntent
+      ? {
+          certificateIntent: {
+            schemaVersion: 1,
+            state: "pending",
+            source: "immutable_quote_response",
+          },
+        }
+      : {}),
   };
 }
 

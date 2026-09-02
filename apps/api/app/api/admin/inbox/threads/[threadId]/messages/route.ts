@@ -11,6 +11,7 @@ import {
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { requireActiveContactForDirectOutbound } from "@/lib/contact-outbound-safety";
+import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import {
   TeamMutationFailure,
   teamMutationExceptionResponse,
@@ -119,7 +120,12 @@ export async function POST(
         })
         .from(conversationThreads)
         .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
-        .where(eq(conversationThreads.id, threadId))
+        .where(
+          and(
+            eq(conversationThreads.id, threadId),
+            genericInboxThreadScopeCondition(),
+          ),
+        )
         .limit(1);
 
       if (!thread) {
@@ -337,7 +343,12 @@ export async function POST(
           lastMessageAt: now,
           updatedAt: now,
         })
-        .where(eq(conversationThreads.id, threadId));
+        .where(
+          and(
+            eq(conversationThreads.id, threadId),
+            genericInboxThreadScopeCondition(),
+          ),
+        );
 
       if (direction === "outbound") {
         await tx.insert(outboxEvents).values({

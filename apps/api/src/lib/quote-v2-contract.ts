@@ -199,6 +199,17 @@ export const QuoteV2CreateCommandSchema = z
     audience: QuoteAudienceSchema,
     documentType: QuoteDocumentTypeSchema,
     schedulingMode: QuoteSchedulingModeSchema,
+    partnerContext: z
+      .object({
+        accountId: z.string().uuid(),
+        target: z.discriminatedUnion("type", [
+          z.object({ type: z.literal("booking"), id: z.string().uuid() }).strict(),
+          z.object({ type: z.literal("draft"), id: z.string().uuid() }).strict(),
+          z.object({ type: z.literal("location"), id: z.string().uuid() }).strict(),
+        ]),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

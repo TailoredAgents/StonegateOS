@@ -58,11 +58,16 @@ export async function POST(request: NextRequest): Promise<Response> {
       throw error;
     }
 
+    const payloadKeys = isRecord(rawPayload) ? Object.keys(rawPayload) : [];
     if (
       !isRecord(rawPayload) ||
-      Object.keys(rawPayload).length !== 1 ||
+      payloadKeys.length < 1 ||
+      payloadKeys.length > 2 ||
+      payloadKeys.some((key) => !["accountId", "makeDefault"].includes(key)) ||
       typeof rawPayload["accountId"] !== "string" ||
-      !UUID_PATTERN.test(rawPayload["accountId"].trim())
+      !UUID_PATTERN.test(rawPayload["accountId"].trim()) ||
+      ("makeDefault" in rawPayload &&
+        typeof rawPayload["makeDefault"] !== "boolean")
     ) {
       return createPartnerPortalV2ErrorResponse(
         "invalid_fields",
@@ -74,6 +79,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     const switched = await switchPartnerSessionAccount(
       authentication,
       rawPayload["accountId"].trim().toLowerCase(),
+      {
+        makeDefault: rawPayload["makeDefault"] === true,
+        correlationId,
+      },
     );
     if (!switched.ok) {
       return createPartnerPortalV2ErrorResponse(
@@ -88,6 +97,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         ok: true,
         currentAccountId: switched.accountId,
         currentMembershipId: switched.membershipId,
+        defaultAccount: switched.defaultAccount,
       },
       correlationId,
     );

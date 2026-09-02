@@ -6,7 +6,7 @@ import {
 const INTENT_ID = "11111111-1111-4111-8111-111111111111";
 const APPOINTMENT_ID = "22222222-2222-4222-8222-222222222222";
 
-describe("provider-neutral partner embedded card adapter", () => {
+describe("provider-neutral partner embedded payment adapter", () => {
   it("creates an exact order then completes it with a one-use card token", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const fetchImpl: typeof fetch = (request, init) => {
@@ -68,7 +68,7 @@ describe("provider-neutral partner embedded card adapter", () => {
       environment: "sandbox",
       sdkUrl: "https://sandbox.web.squarecdn.com/v1/square.js",
       methods: { card: true, ach: false },
-      achUnavailableReason: "merchant_and_return_configuration_required",
+      achUnavailableReason: "merchant_and_webhook_configuration_required",
     });
     await expect(
       provider.createOrder({
@@ -91,6 +91,7 @@ describe("provider-neutral partner embedded card adapter", () => {
         appointmentId: APPOINTMENT_ID,
         providerOrderId: "ORDER-1",
         sourceToken,
+        paymentMethod: "card",
         amountMinor: 7_500,
         currency: "USD",
       }),
@@ -100,6 +101,7 @@ describe("provider-neutral partner embedded card adapter", () => {
       providerPaymentId: "PAYMENT-1",
       locationId: "LOCATION-1",
       providerStatus: "COMPLETED",
+      paymentMethod: "card",
     });
 
     expect(calls).toHaveLength(2);
@@ -193,6 +195,7 @@ describe("provider-neutral partner embedded card adapter", () => {
         appointmentId: APPOINTMENT_ID,
         providerOrderId: "ORDER-1",
         sourceToken: "cnon:single-use-browser-token",
+        paymentMethod: "card",
         amountMinor: 7_500,
         currency: "USD",
       }),
@@ -201,5 +204,64 @@ describe("provider-neutral partner embedded card adapter", () => {
       retryable: true,
       indeterminate: true,
     });
+  });
+
+  it("creates only a pending ACH payment from a one-use bank authorization", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const provider = createSquarePartnerEmbeddedPaymentProvider({
+      applicationId: "sandbox-sq0idb-example",
+      accessToken: "sandbox-access-token",
+      locationId: "LOCATION-1",
+      achEnabled: true,
+      environment: {
+        NODE_ENV: "test",
+        SQUARE_ENVIRONMENT: "sandbox",
+        SQUARE_API_BASE_URL: "https://square-gateway.example.test/provider",
+      },
+      fetchImpl: (_request, init) => {
+        if (typeof init?.body !== "string") throw new Error("expected body");
+        calls.push(JSON.parse(init.body) as Record<string, unknown>);
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              payment: {
+                id: "ACH-PAYMENT-1",
+                order_id: "ORDER-ACH-1",
+                location_id: "LOCATION-1",
+                status: "PENDING",
+                source_type: "BANK_ACCOUNT",
+                amount_money: { amount: 7_500, currency: "USD" },
+              },
+            }),
+            { status: 200 },
+          ),
+        );
+      },
+    });
+
+    expect(provider.webPayments.methods.ach).toBe(true);
+    expect(provider.webPayments.achUnavailableReason).toBeNull();
+    await expect(
+      provider.createPayment({
+        intentId: INTENT_ID,
+        appointmentId: APPOINTMENT_ID,
+        providerOrderId: "ORDER-ACH-1",
+        sourceToken: "bauth:single-use-bank-token",
+        paymentMethod: "ach",
+        amountMinor: 7_500,
+        currency: "USD",
+      }),
+    ).resolves.toMatchObject({
+      providerPaymentId: "ACH-PAYMENT-1",
+      providerStatus: "PENDING",
+      paymentMethod: "ach",
+    });
+    expect(calls).toEqual([
+      expect.objectContaining({
+        source_id: "bauth:single-use-bank-token",
+        autocomplete: true,
+        order_id: "ORDER-ACH-1",
+      }),
+    ]);
   });
 });

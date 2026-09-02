@@ -93,6 +93,7 @@ const DISCOVERED_ACTIONS = ACTION_FILES.flatMap(exportedActions);
 const DISCOVERED_ACTION_NAMES = DISCOVERED_ACTIONS.map(({ name }) => name);
 
 const DESTRUCTIVE_ACTIONS = new Set([
+  "updateApptStatus",
   "approveMergeSuggestionAction",
   "deleteCallCoachingAction",
   "deleteContactAction",
@@ -105,6 +106,25 @@ const DESTRUCTIVE_ACTIONS = new Set([
   "deleteTeamMemberAction",
   "manualMergeContactsAction",
   "partnerAccessApplicationDecisionAction",
+  "partnerAccountDomainCreateAction",
+  "partnerAccountDomainRevokeAction",
+  "partnerAccountDomainVerifyAction",
+  "partnerCancellationRequestDecisionAction",
+  "partnerAccountCloseAction",
+  "partnerAccountLifecycleAction",
+  "partnerAccountMergeCompleteAction",
+  "partnerAccountMergePrepareAction",
+  "partnerAdministratorRecoveryAction",
+  "partnerJobChangeRequestDecisionAction",
+  "partnerLocationAddressReviewDecisionAction",
+  "partnerMembershipLifecycleAction",
+  "partnerMembershipMigrationReviewAction",
+  "partnerMembershipRoleAction",
+  "partnerMembershipScopeAction",
+  "partnerIdentityDisableAction",
+  "partnerMfaResetAction",
+  "partnerSecuritySessionRevokeAction",
+  "partnerQuarantineResolveAction",
   "resetSalesHqAction",
   "updateTeamMemberAction",
   "partnerPortalSetUserActiveAction",
@@ -119,6 +139,8 @@ const EXTERNAL_ACTIONS = new Set([
   "createCanvassFollowupAction",
   "draftOutboundFirstTouchAction",
   "draftOutboundFollowupAction",
+  "partnerAccountSchedulingPolicyAction",
+  "partnerAccountCancellationPolicyAction",
   "partnerPortalInviteUserAction",
   "rescheduleAppointmentAction",
   "rescheduleInboxAppointmentAction",
@@ -145,10 +167,13 @@ const FINANCIAL_ACTIONS = new Set([
   "convertAppointmentToJobAction",
   "detachPaymentAction",
   "partnerPortalSaveRatesAction",
+  "partnerAccountServiceAgreementAction",
+  "partnerApprovalRuleCreateAction",
+  "partnerApprovalRuleUpdateAction",
+  "partnerBillingDisputeDecisionAction",
   "paymentReconciliationAction",
   "updateAppointmentBookingDetailsAction",
   "updateAppointmentSoldByAction",
-  "updateApptStatus",
 ]);
 
 function expectedRisk(name: string): ActionRisk {
@@ -252,18 +277,76 @@ describe("Site Team server action policy manifest", () => {
     }
   });
 
+  it("requires recent authentication for canonical partner authority changes", () => {
+    const expectedPermissions = {
+      partnerMembershipLifecycleAction: ["partners.memberships.suspend"],
+      partnerMembershipRoleAction: ["partners.memberships.manage"],
+      partnerMembershipScopeAction: ["partners.memberships.manage"],
+      partnerMembershipMigrationReviewAction: [
+        "partners.memberships.migration.review",
+      ],
+      partnerAccountDomainCreateAction: ["partners.domains.manage"],
+      partnerAccountDomainVerifyAction: ["partners.domains.verify"],
+      partnerAccountDomainRevokeAction: ["partners.domains.revoke"],
+      partnerSecuritySessionRevokeAction: ["partners.security.sessions.revoke"],
+      partnerIdentityDisableAction: ["partners.identities.disable"],
+      partnerMfaResetAction: ["partners.security.mfa.reset"],
+      partnerQuarantineResolveAction: ["partners.quarantine.release"],
+    } as const;
+
+    for (const [name, requiredPermissions] of Object.entries(
+      expectedPermissions,
+    )) {
+      expect(
+        TEAM_SERVER_ACTION_POLICIES[
+          name as keyof typeof TEAM_SERVER_ACTION_POLICIES
+        ],
+      ).toEqual(
+        expect.objectContaining({
+          requiredPermissions: [...requiredPermissions],
+          risk: "destructive",
+          requiresIdempotency: true,
+          maxAuthenticationAgeSeconds: 15 * 60,
+        }),
+      );
+    }
+
+    expect(
+      TEAM_SERVER_ACTION_POLICIES.partnerAccountSchedulingPolicyAction,
+    ).toEqual(
+      expect.objectContaining({
+        requiredPermissions: ["partners.accounts.manage"],
+        risk: "external",
+        requiresIdempotency: true,
+        maxAuthenticationAgeSeconds: 15 * 60,
+      }),
+    );
+    expect(
+      TEAM_SERVER_ACTION_POLICIES.partnerAccountCancellationPolicyAction,
+    ).toEqual(
+      expect.objectContaining({
+        requiredPermissions: ["partners.accounts.manage"],
+        risk: "external",
+        requiresIdempotency: true,
+        maxAuthenticationAgeSeconds: 15 * 60,
+      }),
+    );
+  });
+
   it("declares the appointment-status action's maximum conditional capability", () => {
     expect(TEAM_SERVER_ACTION_POLICIES.updateApptStatus).toEqual(
       expect.objectContaining({
         requiredPermissions: [
           "appointments.update",
+          "appointment_media.manage",
           "payments.collect",
           "payments.manage",
           "commissions.manage",
           "messages.send",
         ],
-        risk: "financial",
+        risk: "destructive",
         requiresIdempotency: true,
+        maxAuthenticationAgeSeconds: 15 * 60,
       }),
     );
   });

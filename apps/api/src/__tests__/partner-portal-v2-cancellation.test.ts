@@ -13,8 +13,11 @@ describe("partner portal V2 cancellation policy", () => {
     expect(policy).toEqual({
       cutoffMinutes: DEFAULT_PARTNER_CANCELLATION_CUTOFF_MINUTES,
       timezone: "America/New_York",
+      directCancellationEnabled: true,
+      lateCancellationDisposition: "staff_review",
       automaticFeeMinor: null,
       source: "launch_default",
+      revision: null,
     });
     expect(
       resolvePartnerCancellationPolicy({
@@ -24,6 +27,32 @@ describe("partner portal V2 cancellation policy", () => {
       cutoffMinutes: 24 * 60,
       timezone: "America/New_York",
       automaticFeeMinor: null,
+    });
+  });
+
+  it("fails a missing persisted account policy closed to staff review", () => {
+    const missingPolicy = resolvePartnerCancellationPolicy({
+      timezone: "America/New_York",
+      accountPolicy: null,
+    });
+    expect(missingPolicy).toMatchObject({
+      cutoffMinutes: 24 * 60,
+      directCancellationEnabled: false,
+      source: "unconfigured",
+      automaticFeeMinor: null,
+    });
+    expect(
+      evaluatePartnerCancellation({
+        status: "confirmed",
+        promisedArrivalStartAt: new Date("2026-09-10T14:00:00.000Z"),
+        now: new Date("2026-09-08T12:00:00.000Z"),
+        canCancel: true,
+        reviewPending: false,
+        policy: missingPolicy,
+      }),
+    ).toMatchObject({
+      action: "request_cancellation_review",
+      reason: { code: "policy_review_required" },
     });
   });
 

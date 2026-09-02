@@ -161,6 +161,7 @@ describe("Quote V2 staff lifecycle monotonicity", () => {
 
 describe("Quote V2 staff lifecycle persistence boundaries", () => {
   const lifecycle = source("src/lib/quote-v2-staff-lifecycle.ts");
+  const terminal = source("src/lib/quote-v2-terminal-decision.ts");
   const route = source("src/lib/quote-v2-staff-lifecycle-route.ts");
   const migration = source(
     "src/db/migrations/0124_quote_v2_change_resolution.sql",
@@ -172,18 +173,19 @@ describe("Quote V2 staff lifecycle persistence boundaries", () => {
     expect(lifecycle).toContain(
       "issuedPdfHash: acceptedEvidence.issuedPdfHash",
     );
-    expect(lifecycle).toContain('type: "quote.response_recorded.v2"');
-    expect(lifecycle).toContain(
-      "eq(quotes.aggregateRevision, quote.aggregateRevision)",
+    expect(lifecycle).toContain("persistQuoteV2TerminalDecision");
+    expect(terminal).toContain('type: "quote.response_recorded.v2"');
+    expect(terminal).toContain(
+      "eq(quotes.aggregateRevision, context.quoteRevision)",
     );
-    const eventStart = lifecycle.indexOf(
+    const eventStart = terminal.indexOf(
       "async function insertResponseOutboxEvent",
     );
-    const eventEnd = lifecycle.indexOf(
-      "async function insertActivity",
+    const eventEnd = terminal.indexOf(
+      "function centsToLegacyNumeric",
       eventStart,
     );
-    const eventSource = lifecycle.slice(eventStart, eventEnd);
+    const eventSource = terminal.slice(eventStart, eventEnd);
     expect(eventSource).not.toMatch(/token|email|phone|address|signer|notes/iu);
   });
 

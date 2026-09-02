@@ -3,6 +3,7 @@ import Link from "next/link";
 import { CalendarClock, MapPin, PhoneCall } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
 import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
+import { getPartnerPersonaPresentation } from "@/app/partners/lib/persona-presentation";
 import type {
   PartnerDraft,
   PartnerLocation,
@@ -11,6 +12,7 @@ import {
   PartnerBookingWizard,
   type BookingWizardAddOn,
   type BookingWizardBaseOption,
+  type BookingWizardCancellationPolicy,
   type BookingWizardLocation,
   type BookingWizardMoney,
   type BookingWizardService,
@@ -33,6 +35,12 @@ type CatalogItem = {
   label?: string | null;
   description?: string | null;
   pricingStatus?: string;
+  bookable?: unknown;
+  priceState?: unknown;
+  agreement?: unknown;
+  inclusions?: unknown;
+  exclusions?: unknown;
+  quoteRule?: unknown;
   basePrice?: unknown;
   baseOptions?: unknown;
   addOns?: unknown;
@@ -113,6 +121,60 @@ function parsePricingStatus(
     : "review_required";
 }
 
+function parsePriceState(
+  value: unknown,
+): "contracted" | "estimate" | "quote_required" | "standard_rate" | null {
+  return value === "contracted" ||
+    value === "estimate" ||
+    value === "quote_required" ||
+    value === "standard_rate"
+    ? value
+    : null;
+}
+
+function parseRateBearingPriceState(
+  value: unknown,
+): "contracted" | "estimate" | "standard_rate" {
+  const state = parsePriceState(value);
+  return state === "contracted" || state === "standard_rate"
+    ? state
+    : "estimate";
+}
+
+function parseBoundedTextList(value: unknown): string[] {
+  return Array.isArray(value) && value.length <= 40
+    ? value.filter(
+        (item): item is string =>
+          typeof item === "string" &&
+          item.trim() === item &&
+          item.length > 0 &&
+          item.length <= 500,
+      )
+    : [];
+}
+
+function parseAgreement(value: unknown): BookingWizardService["agreement"] {
+  if (!isRecord(value)) return null;
+  const label = value["label"];
+  const currency = value["currency"];
+  const effectiveFrom = value["effectiveFrom"];
+  const effectiveTo = value["effectiveTo"];
+  if (
+    typeof label !== "string" ||
+    !label.trim() ||
+    typeof currency !== "string" ||
+    !/^[A-Z]{3}$/u.test(currency) ||
+    typeof effectiveFrom !== "string" ||
+    Number.isNaN(new Date(effectiveFrom).getTime()) ||
+    (effectiveTo !== null &&
+      (typeof effectiveTo !== "string" ||
+        Number.isNaN(new Date(effectiveTo).getTime())))
+  ) {
+    return null;
+  }
+  return { label: label.trim(), currency, effectiveFrom, effectiveTo };
+}
+
 function parseCatalogAddOns(value: unknown): BookingWizardAddOn[] {
   if (!Array.isArray(value)) return [];
   const result: BookingWizardAddOn[] = [];
@@ -150,6 +212,7 @@ function parseCatalogAddOns(value: unknown): BookingWizardAddOn[] {
     result.push({
       key,
       label,
+      priceState: parseRateBearingPriceState(raw["priceState"]),
       ...(typeof raw["description"] === "string" && raw["description"].trim()
         ? { detail: raw["description"].trim() }
         : {}),
@@ -185,6 +248,7 @@ function parseCatalogBaseOptions(value: unknown): BookingWizardBaseOption[] {
     result.push({
       tierKey,
       label,
+      priceState: parseRateBearingPriceState(raw["priceState"]),
       pricingStatus: parsePricingStatus(raw["pricingStatus"]),
       price: parseMoney(raw["price"]),
     });
@@ -206,6 +270,15 @@ function parseCatalogServices(payload: unknown): BookingWizardService[] {
       label,
       ...(item.description?.trim() ? { detail: item.description.trim() } : {}),
       pricingStatus: parsePricingStatus(item.pricingStatus),
+      bookable: item.bookable === true,
+      priceState: parsePriceState(item.priceState) ?? "quote_required",
+      agreement: parseAgreement(item.agreement),
+      inclusions: parseBoundedTextList(item.inclusions),
+      exclusions: parseBoundedTextList(item.exclusions),
+      quoteRule:
+        typeof item.quoteRule === "string" && item.quoteRule.trim()
+          ? item.quoteRule.trim().slice(0, 1_000)
+          : null,
       basePrice: parseMoney(item.basePrice),
       baseOptions: parseCatalogBaseOptions(item.baseOptions),
       addOns: parseCatalogAddOns(item.addOns),
@@ -214,6 +287,69 @@ function parseCatalogServices(payload: unknown): BookingWizardService[] {
   return [...services.values()].sort((left, right) =>
     left.label.localeCompare(right.label),
   );
+}
+
+function parseProofDefaults(payload: unknown): {
+  before: number;
+  after: number;
+} {
+  const defaults = { before: 1, after: 1 };
+  if (!isRecord(payload) || !Array.isArray(payload["requirements"])) {
+    return defaults;
+  }
+  for (const raw of payload["requirements"]) {
+    if (!isRecord(raw)) continue;
+    const category = raw["category"];
+    const minimumCount = raw["minimumCount"];
+    const required = raw["required"];
+    if (
+      (category === "before" || category === "after") &&
+      typeof minimumCount === "number" &&
+      Number.isSafeInteger(minimumCount) &&
+      minimumCount >= 0 &&
+      minimumCount <= 40 &&
+      typeof required === "boolean"
+    ) {
+      defaults[category] = required ? minimumCount : 0;
+    }
+  }
+  return defaults;
+}
+
+function parseCancellationPolicy(
+  payload: unknown,
+): BookingWizardCancellationPolicy | null {
+  if (!isRecord(payload) || !isRecord(payload["policy"])) return null;
+  const policy = payload["policy"];
+  const minimumNoticeMinutes = policy["minimumNoticeMinutes"];
+  const revision = policy["revision"];
+  const source = policy["source"];
+  if (
+    typeof minimumNoticeMinutes !== "number" ||
+    !Number.isSafeInteger(minimumNoticeMinutes) ||
+    minimumNoticeMinutes < 1_440 ||
+    minimumNoticeMinutes > 525_600 ||
+    typeof policy["directCancellationEnabled"] !== "boolean" ||
+    policy["lateCancellationDisposition"] !== "staff_review" ||
+    policy["automaticFeeMinor"] !== null ||
+    !["configured", "unconfigured", "launch_default"].includes(
+      String(source),
+    ) ||
+    (revision !== null &&
+      (typeof revision !== "number" ||
+        !Number.isSafeInteger(revision) ||
+        revision < 1))
+  ) {
+    return null;
+  }
+  return {
+    minimumNoticeMinutes,
+    directCancellationEnabled: policy["directCancellationEnabled"],
+    lateCancellationDisposition: "staff_review",
+    automaticFeeMinor: null,
+    source: source as BookingWizardCancellationPolicy["source"],
+    revision,
+  };
 }
 
 export default async function PartnerBookPage({
@@ -228,16 +364,19 @@ export default async function PartnerBookPage({
 }) {
   const params = (await searchParams) ?? {};
   const context = await getPartnerPortalContext();
+  const personaPresentation = getPartnerPersonaPresentation(
+    context.status === "authenticated" ? context.partnerType : null,
+  );
   const company = getPublicCompanyProfile();
   if (context.status !== "authenticated" || !context.permissions.scheduleJobs) {
     return (
       <div className="space-y-5 sm:space-y-6">
         <PartnerPageHeader
           eyebrow="Service scheduling"
-          title="Schedule a job"
+          title={personaPresentation.taskLabels.schedule}
           description="Your current portal role doesn’t include permission to create service requests."
           breadcrumbs={[
-            { label: "Overview", href: "/partners" },
+            { label: "Overview", href: "/partners/overview" },
             { label: "Schedule job", href: "/partners/book" },
           ]}
         />
@@ -253,9 +392,16 @@ export default async function PartnerBookPage({
     );
   }
 
-  const [locationsResponse, catalogResponse] = await Promise.all([
+  const [
+    locationsResponse,
+    catalogResponse,
+    proofDefaultsResponse,
+    cancellationPolicyResponse,
+  ] = await Promise.all([
     callPartnerApi("/api/portal/v2/locations?limit=100").catch(() => null),
     callPartnerApi("/api/portal/v2/service-catalog").catch(() => null),
+    callPartnerApi("/api/portal/v2/proof-requirements").catch(() => null),
+    callPartnerApi("/api/portal/v2/cancellation-policy").catch(() => null),
   ]);
 
   if (!locationsResponse?.ok) {
@@ -266,10 +412,10 @@ export default async function PartnerBookPage({
       <div className="space-y-5 sm:space-y-6">
         <PartnerPageHeader
           eyebrow="Service scheduling"
-          title="Schedule a job"
+          title={personaPresentation.taskLabels.schedule}
           description="Create a saved request, choose a live service time, and send the complete job details to Stonegate."
           breadcrumbs={[
-            { label: "Overview", href: "/partners" },
+            { label: "Overview", href: "/partners/overview" },
             { label: "Schedule job", href: "/partners/book" },
           ]}
         />
@@ -301,6 +447,35 @@ export default async function PartnerBookPage({
     ? ((await catalogResponse.json().catch(() => null)) as unknown)
     : null;
   const services = parseCatalogServices(catalogPayload);
+  const proofDefaultsPayload = proofDefaultsResponse?.ok
+    ? ((await proofDefaultsResponse.json().catch(() => null)) as unknown)
+    : null;
+  const defaultProofRequirements = parseProofDefaults(proofDefaultsPayload);
+  const cancellationPolicyPayload = cancellationPolicyResponse?.ok
+    ? ((await cancellationPolicyResponse.json().catch(() => null)) as unknown)
+    : null;
+  const cancellationPolicy = parseCancellationPolicy(cancellationPolicyPayload);
+
+  if (!cancellationPolicy) {
+    return (
+      <div className="space-y-5 sm:space-y-6">
+        <PartnerPageHeader
+          eyebrow="Service scheduling"
+          title={personaPresentation.taskLabels.schedule}
+          description="Create a saved request, choose a live service time, and send the complete job details to Stonegate."
+          breadcrumbs={[
+            { label: "Overview", href: "/partners/overview" },
+            { label: "Schedule job", href: "/partners/book" },
+          ]}
+        />
+        <PartnerErrorState
+          title="Cancellation terms are temporarily unavailable"
+          description="No request has been submitted. Refresh before booking so the account’s current cancellation and schedule-change terms can be reviewed safely."
+          retryHref="/partners/book"
+        />
+      </div>
+    );
+  }
 
   const draftId =
     typeof params.draftId === "string" ? params.draftId.trim() : "";
@@ -335,10 +510,10 @@ export default async function PartnerBookPage({
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
         eyebrow="Live service scheduling"
-        title="Schedule a job"
+        title={personaPresentation.taskLabels.schedule}
         description="Build a saved request and choose a capacity-backed window. Eligible work confirms instantly; anything uncertain is saved as a clearly labeled review request."
         breadcrumbs={[
-          { label: "Overview", href: "/partners" },
+          { label: "Overview", href: "/partners/overview" },
           { label: "Schedule job", href: "/partners/book" },
         ]}
       >
@@ -356,7 +531,7 @@ export default async function PartnerBookPage({
           </span>
           <a
             href={`tel:${company.phoneE164}`}
-            className="font-semibold text-primary-800 underline-offset-4 hover:underline"
+            className="inline-flex min-h-11 items-center font-semibold text-primary-800 underline-offset-4 hover:underline"
           >
             Need help? {company.phoneDisplay}
           </a>
@@ -370,7 +545,10 @@ export default async function PartnerBookPage({
         </PartnerNotice>
       ) : null}
 
-      <PartnerRepeatWorkManager />
+      <PartnerRepeatWorkManager
+        canManageSeries={context.permissions.updateJobs}
+        persona={context.partnerType}
+      />
 
       {locations.length === 0 && !context.permissions.manageLocations ? (
         <PartnerPanel>
@@ -407,6 +585,11 @@ export default async function PartnerBookPage({
           }
           canUploadPhotos={context.permissions.uploadMedia}
           canManageLocations={context.permissions.manageLocations}
+          defaultProofRequirements={defaultProofRequirements}
+          cancellationPolicy={cancellationPolicy}
+          persona={context.partnerType}
+          supportPhoneE164={company.phoneE164}
+          supportPhoneDisplay={company.phoneDisplay}
         />
       )}
 

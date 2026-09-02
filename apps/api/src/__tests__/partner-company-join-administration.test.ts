@@ -22,13 +22,13 @@ describe("partner verified-domain join administration", () => {
   it("accepts bounded exact approve, decline, and needs-information decisions", () => {
     expect(PartnerJoinDecisionSchema.safeParse({
       action: "approve",
-      roleKey: "scheduler",
+      roleKey: "operations",
       persona: "property_manager",
       note: null,
     }).success).toBe(true);
     expect(PartnerJoinDecisionSchema.safeParse({
       action: "approve",
-      roleKey: "owner",
+      roleKey: "administrator",
       persona: "other",
       partnerAccountId: "cross-account-override",
     }).success).toBe(false);

@@ -14,7 +14,7 @@ describe("Quote V2 acceptance certificate boundary", () => {
       decisionStart,
     );
     const certificateCall = service.indexOf(
-      "ensureQuoteAcceptanceCertificate(db",
+      "reconcileQuoteAcceptanceCertificate(db",
       transactionStart,
     );
     expect(transactionStart).toBeGreaterThan(decisionStart);
@@ -22,6 +22,35 @@ describe("Quote V2 acceptance certificate boundary", () => {
     expect(service.slice(transactionStart, certificateCall)).toContain(
       "responseType",
     );
+  });
+
+  it("returns truthful pending state and retries derived evidence on every actor replay", () => {
+    const certificate = source("src/lib/quote-v2-acceptance-certificate.ts");
+    const publicCore = source("src/lib/quote-v2-public.ts");
+    const publicService = source("src/lib/quote-v2-public-service.ts");
+    const partnerService = source("src/lib/partner-portal-v2-quotes.ts");
+    const partnerRoute = source(
+      "app/api/portal/v2/quotes/[partnerQuoteId]/decision/route.ts",
+    );
+    const staffService = source("src/lib/quote-v2-staff-lifecycle.ts");
+    const staffRoute = source("src/lib/quote-v2-staff-lifecycle-route.ts");
+    expect(certificate).toContain('state: "pending"');
+    expect(certificate).toContain(
+      "every fresh or idempotent replay can safely retry",
+    );
+    expect(publicService).toContain("certificateState: certificate.state");
+    expect(partnerService).toContain('certificateState: "pending"');
+    expect(partnerRoute).toContain("reconcileQuoteAcceptanceCertificate");
+    expect(staffService).toContain('certificateState: "pending"');
+    expect(staffRoute).toContain(
+      "receipt.certificateState = certificate.state",
+    );
+    for (const actorService of [publicService, partnerService, staffService]) {
+      expect(actorService).toContain("certificateIntent");
+    }
+    for (const intentSource of [publicCore, partnerService, staffService]) {
+      expect(intentSource).toContain('source: "immutable_quote_response"');
+    }
   });
 
   it("serves certificates only through authenticated staff quote access", () => {

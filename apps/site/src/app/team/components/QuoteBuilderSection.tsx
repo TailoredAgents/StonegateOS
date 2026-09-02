@@ -85,10 +85,16 @@ export async function QuoteBuilderSection({
   initialContactId,
   initialPropertyId,
   instantQuoteId,
+  partnerAccountId,
+  partnerTargetType,
+  partnerTargetId,
 }: {
   initialContactId?: string;
   initialPropertyId?: string;
   instantQuoteId?: string;
+  partnerAccountId?: string;
+  partnerTargetType?: string;
+  partnerTargetId?: string;
   workflow?: "canvass" | null;
 }): Promise<ReactElement> {
   const principal = await requireCurrentTeamPrincipal();
@@ -102,6 +108,23 @@ export async function QuoteBuilderSection({
     );
   }
 
+  const partnerContextValues = [
+    partnerAccountId,
+    partnerTargetType,
+    partnerTargetId,
+  ].filter((value) => Boolean(value));
+  if (
+    partnerContextValues.length > 0 &&
+    (partnerContextValues.length !== 3 || !isQuoteV2StaffFeatureEnabled())
+  ) {
+    return (
+      <QuoteBuilderUnavailable
+        title="Partner quote context is incomplete"
+        detail="Open the quote from Partner Administration again. No unbound Partner quote was created."
+      />
+    );
+  }
+
   // Instant-quote conversion remains on the compatibility adapter until the
   // verified handoff can create a V2 opportunity and immutable draft.
   if (isQuoteV2StaffFeatureEnabled() && !instantQuoteId) {
@@ -110,6 +133,14 @@ export async function QuoteBuilderSection({
       principal,
       initialContactId,
       initialPropertyId,
+      initialPartnerContext:
+        partnerAccountId && partnerTargetType && partnerTargetId
+          ? {
+              accountId: partnerAccountId,
+              targetType: partnerTargetType,
+              targetId: partnerTargetId,
+            }
+          : undefined,
     });
   }
 

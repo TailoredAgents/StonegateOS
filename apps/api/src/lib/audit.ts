@@ -15,8 +15,16 @@ export type AuditActor = {
     | "team_session"
     | "break_glass"
     | "partner_session"
+    | "partner_pre_auth"
+    | "magic_link"
+    | "password"
+    | "mfa_step_up"
+    | "verified_email_session"
     | "service"
     | null;
+  authenticatedAt?: string | null;
+  assuranceLevel?: "aal1" | "aal2" | null;
+  mfaVerifiedAt?: string | null;
 };
 
 export type AuditOutcome = "attempted" | "succeeded" | "denied" | "failed";
@@ -31,6 +39,9 @@ export function getAuditActorFromRequest(request: NextRequest): AuditActor {
       label: verified.label,
       sessionId: verified.sessionId,
       authMethod: verified.authMethod,
+      authenticatedAt: verified.authenticatedAt,
+      assuranceLevel: verified.assuranceLevel,
+      mfaVerifiedAt: verified.mfaVerifiedAt,
     };
   }
 

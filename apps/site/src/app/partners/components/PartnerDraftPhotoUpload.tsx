@@ -11,8 +11,18 @@ import {
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
 import type { PartnerProofMedia } from "../lib/portal-v2";
-import { createPortalOperationKey, partnerPortalFetch } from "../lib/portal-v2";
-import { uploadPortalFileWithProgress } from "../lib/upload-with-progress";
+import {
+  createPortalOperationKey,
+  partnerPortalFetch,
+  portalSupportReferenceFromResponse,
+  withPortalSupportReference,
+} from "../lib/portal-v2";
+import { trackPartnerFunnelEvent } from "../lib/product-analytics";
+import {
+  PortalFileUploadError,
+  preparePortalImageForUpload,
+  uploadPortalFileWithProgress,
+} from "../lib/upload-with-progress";
 import { PartnerSelectedPhotoPreviews } from "./PartnerSelectedPhotoPreviews";
 import {
   PartnerNotice,
@@ -73,10 +83,12 @@ export function PartnerDraftPhotoUpload({
   draftId,
   canUpload,
   onCountChange,
+  persona,
 }: {
   draftId: string;
   canUpload: boolean;
   onCountChange: (count: number) => void;
+  persona?: string | null;
 }) {
   const [state, setState] = React.useState<MediaState>("loading");
   const [media, setMedia] = React.useState<PartnerProofMedia[]>([]);
@@ -85,6 +97,7 @@ export function PartnerDraftPhotoUpload({
   const [category, setCategory] = React.useState("intake");
   const [caption, setCaption] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [preparingFiles, setPreparingFiles] = React.useState(false);
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [message, setMessage] = React.useState<{
     tone: "success" | "error";
@@ -134,7 +147,7 @@ export function PartnerDraftPhotoUpload({
     void refresh();
   }, [refresh]);
 
-  const chooseFiles = (list: FileList | null): void => {
+  const chooseFiles = async (list: FileList | null): Promise<void> => {
     const selected = Array.from(list ?? []);
     if (selected.length > 10) {
       setFiles([]);
@@ -161,13 +174,30 @@ export function PartnerDraftPhotoUpload({
       if (inputRef.current) inputRef.current.value = "";
       return;
     }
-    setFiles(selected);
-    setUploadProgress(selected.map(() => 0));
+    setPreparingFiles(true);
+    setMessage(null);
+    const prepared = await Promise.all(
+      selected.map((file) => preparePortalImageForUpload(file)),
+    );
+    const uploadFiles = prepared.map((item) => item.file);
+    setFiles(uploadFiles);
+    setUploadProgress(uploadFiles.map(() => 0));
     uploadClientIdsRef.current = selected.map(
       () => `photo_${crypto.randomUUID().replace(/-/gu, "")}`,
     );
     resetUploadAttempt();
-    setMessage(null);
+    setPreparingFiles(false);
+    const compressedCount = prepared.filter((item) => item.compressed).length;
+    if (compressedCount > 0) {
+      setMessage({
+        tone: "success",
+        text:
+          String(compressedCount) +
+          " large photo" +
+          (compressedCount === 1 ? " was" : "s were") +
+          " optimized for a faster private upload.",
+      });
+    }
   };
 
   const upload = async (): Promise<void> => {
@@ -182,6 +212,11 @@ export function PartnerDraftPhotoUpload({
     setBusy(true);
     setUploadAttemptStarted(true);
     setMessage(null);
+    trackPartnerFunnelEvent({
+      stage: "upload_started",
+      persona,
+      surface: "draft_upload",
+    });
     const operationKey =
       uploadOperationKeyRef.current ??
       createPortalOperationKey("draft-photo-upload");
@@ -209,6 +244,11 @@ export function PartnerDraftPhotoUpload({
       }),
     }).catch(() => null);
     if (!result?.ok) {
+      trackPartnerFunnelEvent({
+        stage: "upload_failed",
+        persona,
+        surface: "draft_upload",
+      });
       setBusy(false);
       setMessage({
         tone: "error",
@@ -217,6 +257,10 @@ export function PartnerDraftPhotoUpload({
       return;
     }
 
+    const supportReference = portalSupportReferenceFromResponse(
+      result.response,
+    );
+    let finalizedFailure: string | null = null;
     try {
       if (result.data.intents.length !== files.length) {
         throw new Error("upload_intent_count_mismatch");
@@ -264,14 +308,32 @@ export function PartnerDraftPhotoUpload({
           },
           body: JSON.stringify({ checksumSha256: null }),
         });
-        if (!finalized.ok) throw new Error(finalized.error.message);
+        if (!finalized.ok) {
+          finalizedFailure = finalized.error.message;
+          throw new Error("finalize_failed");
+        }
       }
-    } catch {
+    } catch (error) {
+      const interrupted =
+        error instanceof PortalFileUploadError &&
+        error.code === "storage_upload_interrupted";
+      trackPartnerFunnelEvent({
+        stage: interrupted ? "upload_interrupted" : "upload_failed",
+        persona,
+        surface: "draft_upload",
+      });
       setBusy(false);
       await refresh();
       setMessage({
         tone: "error",
-        text: "One or more photos did not finish. Attached photos are shown below; retry the others.",
+        text:
+          finalizedFailure ??
+          withPortalSupportReference(
+            interrupted
+              ? "The photo transfer was interrupted. Attached photos are shown below; retry the unfinished files."
+              : "One or more photos did not finish. Attached photos are shown below; retry the others.",
+            supportReference,
+          ),
       });
       return;
     }
@@ -287,6 +349,11 @@ export function PartnerDraftPhotoUpload({
     setMessage({
       tone: "success",
       text: "Photos attached to this saved request.",
+    });
+    trackPartnerFunnelEvent({
+      stage: "upload_completed",
+      persona,
+      surface: "draft_upload",
     });
   };
 
@@ -394,8 +461,8 @@ export function PartnerDraftPhotoUpload({
               type="file"
               multiple
               accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
-              onChange={(event) => chooseFiles(event.target.files)}
-              disabled={busy}
+              onChange={(event) => void chooseFiles(event.target.files)}
+              disabled={busy || preparingFiles}
               className={`${partnerFieldClass} file:mr-3 file:rounded-lg file:border-0 file:bg-primary-50 file:px-3 file:py-2 file:font-semibold file:text-primary-800`}
             />
           </label>
@@ -445,11 +512,11 @@ export function PartnerDraftPhotoUpload({
             <button
               type="button"
               onClick={() => void upload()}
-              disabled={busy || !files.length}
+              disabled={busy || preparingFiles || !files.length}
               className={cn(partnerPrimaryButtonClass, "mt-3 w-full sm:w-auto")}
               data-partner-analytics="draft_photo_upload"
             >
-              {busy ? (
+              {busy || preparingFiles ? (
                 <LoaderCircle
                   className="h-4 w-4 animate-spin motion-reduce:animate-none"
                   aria-hidden="true"
@@ -457,11 +524,13 @@ export function PartnerDraftPhotoUpload({
               ) : (
                 <Upload className="h-4 w-4" aria-hidden="true" />
               )}
-              {busy
-                ? "Uploading…"
-                : uploadAttemptStarted
-                  ? "Retry photos"
-                  : "Attach photos"}
+              {preparingFiles
+                ? "Preparing photos…"
+                : busy
+                  ? "Uploading…"
+                  : uploadAttemptStarted
+                    ? "Retry photos"
+                    : "Attach photos"}
             </button>
           </div>
         </div>

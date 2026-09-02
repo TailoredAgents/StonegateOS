@@ -127,7 +127,9 @@ describe("partner recurring horizon scheduler", () => {
     expect(scheduler).toContain('state: "evaluating"');
     expect(scheduler).toContain("EVALUATION_LEASE_MINUTES");
     expect(scheduler).toContain("arePartnerPortalV2WritesEnabled");
-    expect(scheduler).toContain("PARTNER_PORTAL_V2_CANARY_ACCOUNT_IDS");
+    expect(scheduler).toContain(
+      "configuredPartnerPortalInternalAccountIds",
+    );
     expect(scheduler).toContain(
       '"PARTNER_RECURRING_HORIZON_EVALUATOR_ENABLED"',
     );

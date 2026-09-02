@@ -71,6 +71,7 @@ function policyFixture(): SchedulePolicySnapshot {
     bookingWindowDays: 30,
     defaultTravelBufferMinutes: 30,
     maxJobsPerDay: 6,
+    maxJobsPerCrew: 3,
     weeklyHours: weekdays,
     dateOverrides: [],
     capacityPools: {
@@ -515,6 +516,7 @@ describe("schedule policy snapshots and safe failures", () => {
     ]);
     expect(policy.bookingWindowDays).toBe(30);
     expect(policy.defaultTravelBufferMinutes).toBe(30);
+    expect(policy.maxJobsPerCrew).toBe(3);
     expect(policy.capacityPools["field_service"]?.capacityUnits).toBe(2);
   });
 

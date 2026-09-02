@@ -135,7 +135,7 @@ export default async function PartnerApprovalsPage({
       title="Approvals"
       description="Review account requests, captured rules, schedule holds, commercial amounts, and immutable decision history."
       breadcrumbs={[
-        { label: "Overview", href: "/partners" },
+          { label: "Overview", href: "/partners/overview" },
         { label: "Approvals", href: "/partners/approvals" },
       ]}
       actions={

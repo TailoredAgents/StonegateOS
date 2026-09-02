@@ -22,8 +22,10 @@ import {
   appointmentTasks,
   crmPipeline,
   crmTasks,
+  partnerBookings,
   quotes,
 } from "@/db";
+import { resolveAppointmentCalendarContent } from "@/lib/calendar";
 import { requirePermission } from "@/lib/permissions";
 import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
 import {
@@ -142,6 +144,9 @@ export async function GET(request: NextRequest): Promise<Response> {
       lat: properties.lat,
       lng: properties.lng,
       servicesRequested: leads.servicesRequested,
+      partnerBookingId: partnerBookings.id,
+      partnerServiceKey: partnerBookings.serviceKey,
+      quotedScopeText: appointments.quotedScopeText,
       rescheduleToken: appointments.rescheduleToken,
       calendarEventId: appointments.calendarEventId,
       crew: appointments.crew,
@@ -150,7 +155,11 @@ export async function GET(request: NextRequest): Promise<Response> {
     .from(appointments)
     .leftJoin(contacts, eq(appointments.contactId, contacts.id))
     .leftJoin(properties, eq(appointments.propertyId, properties.id))
-    .leftJoin(leads, eq(appointments.leadId, leads.id));
+    .leftJoin(leads, eq(appointments.leadId, leads.id))
+    .leftJoin(
+      partnerBookings,
+      eq(partnerBookings.appointmentId, appointments.id),
+    );
 
   const conditions = [];
   if (statusFilter && statusFilter.length > 0) {
@@ -372,6 +381,12 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const appointmentsDto = baseRows.map((row) => {
     const bookingDetails = parseAppointmentBookingDetails(row.bookingDetails);
+    const operationalContent = resolveAppointmentCalendarContent({
+      leadServices: row.servicesRequested,
+      leadNotes: null,
+      partnerServiceKey: row.partnerServiceKey,
+      quotedScopeText: row.quotedScopeText,
+    });
     const contactName =
       row.contactFirstName && row.contactLastName
         ? `${row.contactFirstName} ${row.contactLastName}`
@@ -393,11 +408,13 @@ export async function GET(request: NextRequest): Promise<Response> {
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       leadId: row.leadId,
+      partnerBookingId: row.partnerBookingId ?? null,
       quotedTotalCents: row.quotedTotalCents ?? null,
+      quotedScopeText: row.quotedScopeText ?? null,
       finalTotalCents: row.finalTotalCents ?? null,
       bookingDetails,
       soldByMemberId: row.soldByMemberId ?? null,
-      services: row.servicesRequested ?? [],
+      services: [...operationalContent.services],
       contact: {
         id: row.contactId ?? "unknown",
         name: contactName,

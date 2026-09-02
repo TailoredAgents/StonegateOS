@@ -2,8 +2,33 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   PortalFileUploadError,
+  shouldCompressPortalImage,
   uploadPortalFileWithProgress,
 } from "./upload-with-progress";
+
+void test("compresses only large browser-decodable images", () => {
+  assert.equal(
+    shouldCompressPortalImage({
+      contentType: "image/jpeg",
+      byteLength: 2 * 1024 * 1024,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldCompressPortalImage({
+      contentType: "image/heic",
+      byteLength: 8 * 1024 * 1024,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldCompressPortalImage({
+      contentType: "image/png",
+      byteLength: 512 * 1024,
+    }),
+    false,
+  );
+});
 
 type Listener = (event: ProgressEvent) => void;
 
@@ -23,6 +48,7 @@ class FakeEventTarget {
 
 class FakeXmlHttpRequest extends FakeEventTarget {
   static responseStatus = 204;
+  static responseEvent: "load" | "abort" | "error" | "timeout" = "load";
   static last: FakeXmlHttpRequest | null = null;
 
   readonly upload = new FakeEventTarget();
@@ -57,7 +83,11 @@ class FakeXmlHttpRequest extends FakeEventTarget {
       total: 10,
     });
     this.status = FakeXmlHttpRequest.responseStatus;
-    this.emit("load");
+    this.emit(FakeXmlHttpRequest.responseEvent);
+  }
+
+  abort(): void {
+    this.emit("abort");
   }
 }
 
@@ -73,11 +103,12 @@ function installFakeRequest(): () => void {
   };
 }
 
-test("uploads the selected file with intent headers and reports real byte progress", async () => {
+void test("uploads the selected file with intent headers and reports real byte progress", async () => {
   const restore = installFakeRequest();
   const file = { size: 10 } as File;
   const progress: number[] = [];
   FakeXmlHttpRequest.responseStatus = 204;
+  FakeXmlHttpRequest.responseEvent = "load";
   try {
     await uploadPortalFileWithProgress({
       url: "https://storage.test/private-upload",
@@ -101,10 +132,11 @@ test("uploads the selected file with intent headers and reports real byte progre
   assert.deepEqual(progress, [0, 50, 100]);
 });
 
-test("rejects a non-success storage response without reporting completion", async () => {
+void test("rejects a non-success storage response without reporting completion", async () => {
   const restore = installFakeRequest();
   const progress: number[] = [];
   FakeXmlHttpRequest.responseStatus = 403;
+  FakeXmlHttpRequest.responseEvent = "load";
   try {
     await assert.rejects(
       uploadPortalFileWithProgress({
@@ -119,6 +151,31 @@ test("rejects a non-success storage response without reporting completion", asyn
         error.code === "storage_upload_failed",
     );
   } finally {
+    restore();
+  }
+  assert.deepEqual(progress, [0, 50]);
+});
+
+void test("an interrupted storage request rejects promptly without reporting completion", async () => {
+  const restore = installFakeRequest();
+  const progress: number[] = [];
+  FakeXmlHttpRequest.responseStatus = 0;
+  FakeXmlHttpRequest.responseEvent = "abort";
+  try {
+    await assert.rejects(
+      uploadPortalFileWithProgress({
+        url: "https://storage.test/interrupted-intent",
+        method: "PUT",
+        headers: {},
+        file: { size: 10 } as File,
+        onProgress: (event) => progress.push(event.percent),
+      }),
+      (error) =>
+        error instanceof PortalFileUploadError &&
+        error.code === "storage_upload_interrupted",
+    );
+  } finally {
+    FakeXmlHttpRequest.responseEvent = "load";
     restore();
   }
   assert.deepEqual(progress, [0, 50]);

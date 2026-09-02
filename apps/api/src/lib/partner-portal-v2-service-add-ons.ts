@@ -30,7 +30,12 @@ export type PartnerAddOnSnapshot = Readonly<{
 }>;
 
 export type PartnerBookingPriceResolution = Readonly<{
-  status: "contracted" | "review_required";
+  status:
+    | "contracted"
+    | "estimate"
+    | "quote_required"
+    | "standard_rate"
+    | "review_required";
   baseAmountMinor: number | null;
   addOnTotalMinor: number | null;
   totalAmountMinor: number | null;
@@ -61,6 +66,11 @@ function normalizedCurrency(value: string | null): string | null {
 export function resolvePartnerBookingPrice(input: {
   baseAmountMinor: number | null;
   baseCurrency: string | null;
+  priceState?:
+    | "contracted"
+    | "estimate"
+    | "quote_required"
+    | "standard_rate";
   selectedAddOns: readonly PartnerSelectedAddOn[];
   configuredAddOns: readonly PartnerConfiguredAddOn[];
 }): PartnerBookingPriceResolution {
@@ -135,9 +145,15 @@ export function resolvePartnerBookingPrice(input: {
       ? null
       : baseAmountMinor + addOnTotalMinor;
   const totalAmountMinor = safeMoney(rawTotal) ? rawTotal : null;
-  const contracted = totalAmountMinor !== null;
+  const configuredPrice = totalAmountMinor !== null;
+  const requestedState = input.priceState ?? "contracted";
   return Object.freeze({
-    status: contracted ? "contracted" : "review_required",
+    status:
+      requestedState === "quote_required"
+        ? "quote_required"
+        : configuredPrice
+          ? requestedState
+          : "review_required",
     baseAmountMinor,
     addOnTotalMinor: allAddOnsPriced ? addOnTotalMinor : null,
     totalAmountMinor,

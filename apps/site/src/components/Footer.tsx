@@ -39,13 +39,13 @@ export function Footer() {
               {locationLine ? ` — ${locationLine}` : ""}
             </p>
           </div>
-          <div>
+          <nav aria-label="Contact Stonegate">
             <p className="font-semibold text-neutral-800">Contact</p>
-            <ul className="mt-2 space-y-1">
+            <ul className="mt-2">
               <li>
                 <a
                   href={`tel:${company.phoneE164}`}
-                  className="text-neutral-700 hover:text-primary-700"
+                  className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
                   data-cta="footer-call"
                 >
                   {company.phoneDisplay}
@@ -54,7 +54,7 @@ export function Footer() {
               <li>
                 <a
                   href={`sms:${company.phoneE164}`}
-                  className="text-neutral-700 hover:text-primary-700"
+                  className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
                 >
                   Text the crew
                 </a>
@@ -62,24 +62,24 @@ export function Footer() {
               <li>
                 <a
                   href={`mailto:${company.email}`}
-                  className="text-neutral-700 hover:text-primary-700"
+                  className="inline-flex min-h-11 items-center break-all text-neutral-700 hover:text-primary-700"
                 >
                   {company.email}
                 </a>
               </li>
             </ul>
-          </div>
+          </nav>
           <div>
             <p className="font-semibold text-neutral-800">Hours</p>
             <p className="mt-2">{company.hoursSummary}</p>
           </div>
-          <div>
+          <nav aria-label="Partner resources">
             <p className="font-semibold text-neutral-800">For partners</p>
-            <ul className="mt-2 space-y-1">
+            <ul className="mt-2">
               <li>
                 <Link
-                  href="/partners/login"
-                  className="text-neutral-700 hover:text-primary-700"
+                  href="/partners"
+                  className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
                 >
                   Partner Portal
                 </Link>
@@ -87,41 +87,43 @@ export function Footer() {
               <li>
                 <Link
                   href="/partners/request-access"
-                  className="text-neutral-700 hover:text-primary-700"
+                  className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
                 >
                   Request partner access
                 </Link>
               </li>
             </ul>
-          </div>
+          </nav>
         </div>
-        <p className="mt-12 text-xs text-neutral-600">
-          <span>
+        <div className="mt-10 flex flex-col gap-2 text-xs text-neutral-600 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5">
+          <p>
             Copyright {new Date().getFullYear()} {company.name}. Licensed &
             insured. All rights reserved.
-          </span>
-          <span className="mx-2 text-neutral-400">•</span>
-          <Link
-            href="/privacy"
-            className="text-neutral-700 hover:text-primary-700"
+          </p>
+          <nav
+            aria-label="Legal"
+            className="flex flex-wrap gap-x-5 text-neutral-700"
           >
-            Privacy Policy
-          </Link>
-          <span className="mx-2 text-neutral-400">•</span>
-          <Link
-            href="/terms"
-            className="text-neutral-700 hover:text-primary-700"
-          >
-            Terms
-          </Link>
-          <span className="mx-2 text-neutral-400">•</span>
-          <Link
-            href="/service-agreement"
-            className="text-neutral-700 hover:text-primary-700"
-          >
-            Service Agreement
-          </Link>
-        </p>
+            <Link
+              href="/privacy"
+              className="inline-flex min-h-11 items-center hover:text-primary-700"
+            >
+              Privacy Policy
+            </Link>
+            <Link
+              href="/terms"
+              className="inline-flex min-h-11 items-center hover:text-primary-700"
+            >
+              Terms
+            </Link>
+            <Link
+              href="/service-agreement"
+              className="inline-flex min-h-11 items-center hover:text-primary-700"
+            >
+              Service Agreement
+            </Link>
+          </nav>
+        </div>
       </div>
     </footer>
   );

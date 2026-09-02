@@ -14,6 +14,7 @@ import {
 
 type AccessApplication = {
   id: string;
+  flowVersion: number;
   status: "submitted" | "under_review" | "needs_information";
   version: string;
   applicant: {
@@ -29,6 +30,8 @@ type AccessApplication = {
     persona: string;
     serviceAreas: string[];
     requestedNeeds: string[];
+    resolutionChoice: "join_existing" | "create_new" | "manual_review" | null;
+    requestedPartnerAccountId: string | null;
   };
   account: {
     name: string | null;
@@ -59,8 +62,10 @@ function parseApplication(value: unknown): AccessApplication | null {
   const account = value["account"];
   const review = value["review"];
   const allowedActions = value["allowedActions"];
+  const resolutionChoice = company["resolutionChoice"];
   if (
     typeof value["id"] !== "string" ||
+    typeof value["flowVersion"] !== "number" ||
     !["submitted", "under_review", "needs_information"].includes(
       String(status),
     ) ||
@@ -80,6 +85,17 @@ function parseApplication(value: unknown): AccessApplication | null {
     !company["serviceAreas"].every((item) => typeof item === "string") ||
     !Array.isArray(company["requestedNeeds"]) ||
     !company["requestedNeeds"].every((item) => typeof item === "string") ||
+    !(
+      resolutionChoice === null ||
+      (typeof resolutionChoice === "string" &&
+        ["join_existing", "create_new", "manual_review"].includes(
+          resolutionChoice,
+        ))
+    ) ||
+    !(
+      company["requestedPartnerAccountId"] === null ||
+      typeof company["requestedPartnerAccountId"] === "string"
+    ) ||
     !isRecord(review) ||
     !(review["note"] === null || typeof review["note"] === "string") ||
     !Array.isArray(allowedActions) ||
@@ -119,10 +135,14 @@ function label(value: string): string {
 
 export async function PartnerAccessApplicationsQueue({
   principal,
-  canDecide,
+  canReview,
+  canApprove,
+  canDecline,
 }: {
   principal: TeamRequestPrincipal;
-  canDecide: boolean;
+  canReview: boolean;
+  canApprove: boolean;
+  canDecline: boolean;
 }): Promise<React.ReactElement> {
   let applications: AccessApplication[] = [];
   let loadError = "";
@@ -165,8 +185,9 @@ export async function PartnerAccessApplicationsQueue({
             Partner Portal access applications
           </h3>
           <p className={TEAM_SECTION_SUBTITLE}>
-            Review new company workspaces. Approval grants an administrator role
-            that requires MFA; pricing and instant confirmation remain separate.
+            Review verified applications. New companies start with an
+            Administrator; existing-company joins require an explicit role and
+            access scope.
           </p>
         </div>
         <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
@@ -189,11 +210,16 @@ export async function PartnerAccessApplicationsQueue({
         <ul className="mt-4 grid gap-4 xl:grid-cols-2">
           {applications.map((application) => {
             const canRequestInformation =
+              canReview &&
               application.allowedActions.includes("needs_information");
-            const canApprove =
+            const applicationCanApprove =
+              canApprove &&
               application.allowedActions.includes("approve") &&
               Boolean(application.applicant.emailVerifiedAt);
-            const canDecline = application.allowedActions.includes("decline");
+            const applicationCanDecline =
+              canDecline && application.allowedActions.includes("decline");
+            const joinsExistingCompany =
+              application.company.resolutionChoice === "join_existing";
             return (
               <li
                 key={application.id}
@@ -277,7 +303,7 @@ export async function PartnerAccessApplicationsQueue({
                   </div>
                 ) : null}
 
-                {canDecide ? (
+                {canReview || canApprove || canDecline ? (
                   <div className="mt-4 grid gap-3">
                     {canRequestInformation ? (
                       <details className="rounded-xl border border-[color:var(--team-border)] p-3">
@@ -333,15 +359,18 @@ export async function PartnerAccessApplicationsQueue({
                         </form>
                       </details>
                     ) : null}
-                    {canApprove ? (
+                    {applicationCanApprove ? (
                       <details className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3">
                         <summary className="min-h-11 cursor-pointer py-2 text-sm font-semibold text-emerald-900">
-                          Approve administrator access
+                          {joinsExistingCompany
+                            ? "Approve company membership"
+                            : "Approve new company workspace"}
                         </summary>
                         <p className="text-xs text-emerald-900">
-                          This promotes the generated applicant membership to
-                          Administrator and requires MFA. It does not create
-                          rates or guarantee an available slot.
+                          {joinsExistingCompany
+                            ? "Choose the exact role and whether access is account-wide or limited to validated resources."
+                            : "The first member of a new company is an account-wide Administrator and must enroll in MFA."}{" "}
+                          Pricing and instant confirmation remain separate.
                         </p>
                         <form
                           action={partnerAccessApplicationDecisionAction}
@@ -367,6 +396,90 @@ export async function PartnerAccessApplicationsQueue({
                             name="idempotencyKey"
                             value={`partner-access-decision:${application.id}:${randomUUID()}`}
                           />
+                          {joinsExistingCompany ? (
+                            <>
+                              <label className="block text-xs font-semibold text-emerald-950">
+                                Role
+                                <select
+                                  name="roleKey"
+                                  required
+                                  defaultValue=""
+                                  className={`${TEAM_INPUT_COMPACT} mt-1 w-full`}
+                                >
+                                  <option value="" disabled>
+                                    Choose one role
+                                  </option>
+                                  <option value="administrator">
+                                    Administrator
+                                  </option>
+                                  <option value="operations">Operations</option>
+                                  <option value="billing_approver">
+                                    Billing / Approver
+                                  </option>
+                                  <option value="viewer">Viewer</option>
+                                </select>
+                              </label>
+                              <label className="block text-xs font-semibold text-emerald-950">
+                                Access
+                                <select
+                                  name="accessLevel"
+                                  required
+                                  defaultValue=""
+                                  className={`${TEAM_INPUT_COMPACT} mt-1 w-full`}
+                                >
+                                  <option value="" disabled>
+                                    Choose access level
+                                  </option>
+                                  <option value="account">Account-wide</option>
+                                  <option value="scoped">
+                                    Selected locations / cost centers
+                                  </option>
+                                </select>
+                              </label>
+                              <p className="text-xs text-emerald-900">
+                                For scoped access, enter validated resource IDs
+                                separated by commas. Leave both lists blank for
+                                account-wide access.
+                              </p>
+                              <label className="block text-xs font-semibold text-emerald-950">
+                                Location IDs
+                                <textarea
+                                  name="locationIds"
+                                  maxLength={9000}
+                                  rows={2}
+                                  className={`${TEAM_INPUT_COMPACT} mt-1 w-full font-mono`}
+                                />
+                              </label>
+                              <label className="block text-xs font-semibold text-emerald-950">
+                                Cost-center IDs
+                                <textarea
+                                  name="costCenterIds"
+                                  maxLength={9000}
+                                  rows={2}
+                                  className={`${TEAM_INPUT_COMPACT} mt-1 w-full font-mono`}
+                                />
+                              </label>
+                            </>
+                          ) : (
+                            <>
+                              <input
+                                type="hidden"
+                                name="roleKey"
+                                value="administrator"
+                              />
+                              <input
+                                type="hidden"
+                                name="accessLevel"
+                                value="account"
+                              />
+                              <input type="hidden" name="locationIds" value="" />
+                              <input
+                                type="hidden"
+                                name="costCenterIds"
+                                value=""
+                              />
+                            </>
+                          )}
                           <label className="block text-xs font-semibold text-emerald-950">
                             Optional review note
                             <textarea
@@ -399,10 +512,10 @@ export async function PartnerAccessApplicationsQueue({
                         their email.
                       </p>
                     ) : null}
-                    {canDecline ? (
+                    {applicationCanDecline ? (
                       <details className="rounded-xl border border-rose-200 bg-rose-50/50 p-3">
                         <summary className="min-h-11 cursor-pointer py-2 text-sm font-semibold text-rose-900">
-                          Decline and disable limited access
+                          Decline application
                         </summary>
                         <form
                           action={partnerAccessApplicationDecisionAction}
@@ -460,7 +573,7 @@ export async function PartnerAccessApplicationsQueue({
                   </div>
                 ) : (
                   <p className="mt-4 text-xs text-[color:var(--team-text-soft)]">
-                    This queue is read-only. Partner Invite permission is
+                    This queue is read-only. Application review permissions are
                     required to make a decision.
                   </p>
                 )}

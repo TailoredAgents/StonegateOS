@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { jest } from "@jest/globals";
 import postgres from "postgres";
 
 const describeWithDatabase = process.env["DATABASE_URL"]
@@ -7,7 +6,6 @@ const describeWithDatabase = process.env["DATABASE_URL"]
   : describe.skip;
 
 const HASH = "a".repeat(64);
-jest.setTimeout(30_000);
 
 function sslOptions(connectionString: string) {
   return process.env["DATABASE_SSL"] === "true" ||
@@ -41,9 +39,9 @@ describeWithDatabase("Quote V2 response appointment binding trigger", () => {
     const otherPropertyId = randomUUID();
     const opportunityId = randomUUID();
     const quoteId = randomUUID();
-    const versionIds = [randomUUID(), randomUUID(), randomUUID()];
-    const responseIds = [randomUUID(), randomUUID(), randomUUID()];
-    const appointmentIds = [randomUUID(), randomUUID(), randomUUID()];
+    const versionIds = [randomUUID(), randomUUID(), randomUUID()] as const;
+    const responseIds = [randomUUID(), randomUUID(), randomUUID()] as const;
+    const appointmentIds = [randomUUID(), randomUUID(), randomUUID()] as const;
     const now = new Date("2031-01-15T15:00:00.000Z");
     const expiresAt = new Date("2031-02-15T15:00:00.000Z");
 
@@ -130,7 +128,7 @@ describeWithDatabase("Quote V2 response appointment binding trigger", () => {
           )
         `;
       }
-      for (const index of [0, 1]) {
+      for (const index of [0, 1] as const) {
         await connection`
           INSERT INTO quote_responses (
             id, quote_id, quote_version_id, response_type, source,
@@ -159,7 +157,7 @@ describeWithDatabase("Quote V2 response appointment binding trigger", () => {
           ARRAY[]::text[], ${now}, ${now}
         )
       `;
-      for (const index of [0, 1, 2]) {
+      for (const index of [0, 1, 2] as const) {
         const appointmentContactId = index === 1 ? otherContactId : contactId;
         const appointmentPropertyId =
           index === 1 ? otherPropertyId : propertyId;
@@ -240,5 +238,5 @@ describeWithDatabase("Quote V2 response appointment binding trigger", () => {
       await connection`ROLLBACK`;
       connection.release();
     }
-  });
+  }, 30_000);
 });

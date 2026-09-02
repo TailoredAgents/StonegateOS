@@ -1268,6 +1268,23 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
     sendCustomerNotification,
     sendReviewRequest,
   };
+  const proofOverrideReasonRaw = formData.get("proofOverrideReason");
+  const proofOverrideReason =
+    typeof proofOverrideReasonRaw === "string"
+      ? proofOverrideReasonRaw.trim()
+      : "";
+  if (
+    proofOverrideReason &&
+    (proofOverrideReason.length < 10 || proofOverrideReason.length > 500)
+  ) {
+    redirect(
+      `${redirectPath}&error=${encodeURIComponent("A proof exception reason must be between 10 and 500 characters.")}` as Route,
+    );
+  }
+  if (proofOverrideReason) {
+    await requireMobilePermission("appointment_media.manage");
+    payload["proofOverrideReason"] = proofOverrideReason;
+  }
   if (status === "completed") {
     const appointmentTypeRaw = formData.get("appointmentType");
     const appointmentType =

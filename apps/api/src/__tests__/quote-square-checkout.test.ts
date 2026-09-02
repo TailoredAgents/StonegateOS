@@ -1,4 +1,3 @@
-import { jest } from "@jest/globals";
 import {
   createQuoteCheckoutReturnState,
   createQuoteDepositPaymentLink,
@@ -14,6 +13,26 @@ const PROVIDER_ENVIRONMENT = {
 const ACCESS_TOKEN = "square-access-token-for-tests";
 const STATE_SECRET = "state-secret-with-more-than-thirty-two-bytes";
 const NOW = new Date("2026-08-30T12:00:00.000Z");
+
+type FetchCall = Parameters<typeof fetch>;
+
+interface RecordedFetch {
+  (...call: FetchCall): ReturnType<typeof fetch>;
+  readonly calls: FetchCall[];
+}
+
+function recordedFetch(
+  implementation: (...call: FetchCall) => ReturnType<typeof fetch>,
+): RecordedFetch {
+  const calls: FetchCall[] = [];
+  return Object.assign(
+    (...call: FetchCall) => {
+      calls.push(call);
+      return implementation(...call);
+    },
+    { calls },
+  );
+}
 
 function paymentLinkResponse(): Response {
   return new Response(
@@ -42,13 +61,13 @@ function providerFetch(input?: {
   locationId?: string;
   paymentOrderId?: string;
   paymentCreatedAt?: string;
-}): typeof fetch {
+}): RecordedFetch {
   const orderId = input?.orderId ?? "stored-order-1";
   const paymentIds = input?.paymentIds ?? ["payment-1"];
   const amount = input?.paymentAmount ?? 12_500;
   const tip = input?.tipAmount ?? 0;
   const locationId = input?.locationId ?? "LOCATION-1";
-  return jest.fn((request: string | URL | Request) => {
+  return recordedFetch((request) => {
     const url =
       typeof request === "string"
         ? request
@@ -106,12 +125,12 @@ function providerFetch(input?: {
       );
     }
     return Promise.resolve(new Response("not found", { status: 404 }));
-  }) as typeof fetch;
+  });
 }
 
 describe("Quote Square hosted Checkout", () => {
   it("creates an idempotent exact-USD Quick Pay link without persisted buyer data or capabilities", async () => {
-    const fetchImpl = jest.fn(
+    const fetchImpl = recordedFetch(
       (_request: string | URL | Request, init?: RequestInit) => {
         expect(init?.method).toBe("POST");
         expect((init?.headers as Record<string, string>)["Authorization"]).toBe(
@@ -119,7 +138,7 @@ describe("Quote Square hosted Checkout", () => {
         );
         return Promise.resolve(paymentLinkResponse());
       },
-    ) as typeof fetch;
+    );
 
     const created = await createQuoteDepositPaymentLink({
       amountCents: 12_500,
@@ -139,11 +158,8 @@ describe("Quote Square hosted Checkout", () => {
       randomBytesImpl: () => new Uint8Array(32).fill(7),
     });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [request, init] = (fetchImpl as jest.Mock).mock.calls[0] as [
-      string,
-      RequestInit,
-    ];
+    expect(fetchImpl.calls).toHaveLength(1);
+    const [request, init] = fetchImpl.calls[0]!;
     expect(request).toBe(
       "https://square-gateway.example.test/provider/v2/online-checkout/payment-links",
     );
@@ -302,9 +318,7 @@ describe("Quote Square hosted Checkout", () => {
     });
 
     expect(result.status).toBe("captured");
-    const providerCalls = (fetchImpl as jest.MockedFunction<typeof fetch>).mock
-      .calls;
-    const requestedUrls = providerCalls.map(([request]) =>
+    const requestedUrls = fetchImpl.calls.map(([request]) =>
       typeof request === "string"
         ? request
         : request instanceof URL

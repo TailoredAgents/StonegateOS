@@ -1,12 +1,29 @@
 import { createHash } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, desc, eq, gte, ilike, lte, lt, or } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  lte,
+  lt,
+  or,
+  sql,
+} from "drizzle-orm";
 import {
   appointments,
   getDb,
+  partnerAccountCancellationPolicies,
   partnerAccountLocations,
   partnerBookings,
+  partnerCancellationRequestReconciliationCases,
+  partnerCancellationRequests,
+  partnerJobChangeRequests,
+  partnerProofPackages,
+  partnerRescheduleRequests,
   properties,
 } from "@/db";
 import {
@@ -16,8 +33,12 @@ import {
 import {
   evaluatePartnerCancellation,
   resolvePartnerCancellationPolicy,
-  type PartnerCancellationAction,
+  resolvePersistedPartnerAccountCancellationPolicy,
 } from "@/lib/partner-portal-v2-cancellation";
+import {
+  allowedPartnerJobActions,
+  resolvePartnerJobActionAvailability,
+} from "@/lib/partner-portal-v2-job-actions";
 import { arePartnerPortalV2ReadsEnabled } from "@/lib/partner-portal-feature-flags";
 import {
   createPartnerJobAccessCondition,
@@ -95,21 +116,18 @@ function singleQueryValue(
   return values[0]?.trim() || null;
 }
 
-function publicJobActions(input: {
-  status: string;
-  canUpdate: boolean;
-  cancellationAction: PartnerCancellationAction;
-  canMessage: boolean;
-  canReadProof: boolean;
-}): string[] {
-  const terminal = ["completed", "canceled", "declined"].includes(input.status);
-  return [
-    ...(input.canUpdate && !terminal ? ["request_change", "reschedule"] : []),
-    ...(input.cancellationAction ? [input.cancellationAction] : []),
-    ...(input.canMessage ? ["message"] : []),
-    ...(input.canReadProof ? ["view_proof"] : []),
-    "duplicate",
-  ];
+function statusQueryValues(value: string | null): string[] | null {
+  if (!value) return null;
+  const statuses = value.split(",").map((entry) => entry.trim());
+  if (
+    statuses.length === 0 ||
+    statuses.length > JOB_STATUSES.size ||
+    statuses.some((status) => !status || !JOB_STATUSES.has(status)) ||
+    new Set(statuses).size !== statuses.length
+  ) {
+    return null;
+  }
+  return statuses.sort();
 }
 
 function descriptorResponse(
@@ -180,8 +198,12 @@ export async function GET(request: NextRequest): Promise<Response> {
       correlationId,
     );
   }
+  const statuses =
+    status && status !== DUPLICATE_QUERY_VALUE
+      ? statusQueryValues(status)
+      : null;
   if (
-    (status && status !== DUPLICATE_QUERY_VALUE && !JOB_STATUSES.has(status)) ||
+    (status && status !== DUPLICATE_QUERY_VALUE && !statuses) ||
     (serviceKey &&
       serviceKey !== DUPLICATE_QUERY_VALUE &&
       !/^[a-z][a-z0-9_-]{1,79}$/u.test(serviceKey)) ||
@@ -212,7 +234,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const normalizedFilters = {
-    status: status === DUPLICATE_QUERY_VALUE ? null : status,
+    statuses,
     serviceKey: serviceKey === DUPLICATE_QUERY_VALUE ? null : serviceKey,
     locationId: locationId === DUPLICATE_QUERY_VALUE ? null : locationId,
     from: fromDate?.toISOString() ?? null,
@@ -257,7 +279,16 @@ export async function GET(request: NextRequest): Promise<Response> {
         poNumber: partnerBookings.poNumber,
         costCenter: partnerBookings.costCenter,
         projectReference: partnerBookings.projectReference,
-        cancelOperationKeyHash: partnerBookings.cancelOperationKeyHash,
+        cancellationMinimumNoticeMinutes:
+          partnerAccountCancellationPolicies.minimumNoticeMinutes,
+        cancellationDirectEnabled:
+          partnerAccountCancellationPolicies.directCancellationEnabled,
+        cancellationLateDisposition:
+          partnerAccountCancellationPolicies.lateCancellationDisposition,
+        cancellationAutomaticFeeMinor:
+          partnerAccountCancellationPolicies.automaticFeeMinor,
+        cancellationPolicyRevision: partnerAccountCancellationPolicies.revision,
+        appointmentStatus: appointments.status,
         arrivalStartAt: partnerBookings.arrivalWindowStartAt,
         arrivalEndAt: partnerBookings.arrivalWindowEndAt,
         createdAt: partnerBookings.createdAt,
@@ -270,6 +301,25 @@ export async function GET(request: NextRequest): Promise<Response> {
         state: properties.state,
         postalCode: properties.postalCode,
         completedAt: appointments.completedAt,
+        pendingRescheduleRequestId: partnerRescheduleRequests.id,
+        pendingChangeRequestId: partnerJobChangeRequests.id,
+        pendingChangeRequestReason: partnerJobChangeRequests.reason,
+        pendingChangeRequestRevision: partnerJobChangeRequests.revision,
+        pendingChangeRequestCreatedAt: partnerJobChangeRequests.createdAt,
+        pendingCancellationRequestId: partnerCancellationRequests.id,
+        pendingCancellationRequestReason: partnerCancellationRequests.reason,
+        pendingCancellationRequestRevision:
+          partnerCancellationRequests.revision,
+        pendingCancellationRequestCreatedAt:
+          partnerCancellationRequests.createdAt,
+        cancellationReconciliationCaseId:
+          partnerCancellationRequestReconciliationCases.id,
+        proofAvailable: sql<boolean>`exists (
+          select 1
+          from ${partnerProofPackages}
+          where ${partnerProofPackages.partnerAccountId} = ${partnerBookings.partnerAccountId}
+            and ${partnerProofPackages.partnerBookingId} = ${partnerBookings.id}
+        )`,
       })
       .from(partnerBookings)
       .innerJoin(
@@ -281,11 +331,65 @@ export async function GET(request: NextRequest): Promise<Response> {
         partnerAccountLocations,
         createPartnerJobLocationJoinCondition(),
       )
+      .leftJoin(
+        partnerAccountCancellationPolicies,
+        eq(
+          partnerAccountCancellationPolicies.partnerAccountId,
+          partnerBookings.partnerAccountId,
+        ),
+      )
+      .leftJoin(
+        partnerRescheduleRequests,
+        and(
+          eq(
+            partnerRescheduleRequests.partnerAccountId,
+            partnerBookings.partnerAccountId,
+          ),
+          eq(partnerRescheduleRequests.partnerBookingId, partnerBookings.id),
+          eq(partnerRescheduleRequests.state, "pending"),
+        ),
+      )
+      .leftJoin(
+        partnerCancellationRequests,
+        and(
+          eq(
+            partnerCancellationRequests.partnerAccountId,
+            partnerBookings.partnerAccountId,
+          ),
+          eq(partnerCancellationRequests.partnerBookingId, partnerBookings.id),
+          eq(partnerCancellationRequests.state, "pending"),
+        ),
+      )
+      .leftJoin(
+        partnerJobChangeRequests,
+        and(
+          eq(
+            partnerJobChangeRequests.partnerAccountId,
+            partnerBookings.partnerAccountId,
+          ),
+          eq(partnerJobChangeRequests.partnerBookingId, partnerBookings.id),
+          eq(partnerJobChangeRequests.state, "pending"),
+        ),
+      )
+      .leftJoin(
+        partnerCancellationRequestReconciliationCases,
+        and(
+          eq(
+            partnerCancellationRequestReconciliationCases.partnerAccountId,
+            partnerBookings.partnerAccountId,
+          ),
+          eq(
+            partnerCancellationRequestReconciliationCases.partnerBookingId,
+            partnerBookings.id,
+          ),
+          eq(partnerCancellationRequestReconciliationCases.state, "open"),
+        ),
+      )
       .where(
         and(
           createPartnerJobAccessCondition(principal),
-          normalizedFilters.status
-            ? eq(partnerBookings.publicStatus, normalizedFilters.status)
+          normalizedFilters.statuses
+            ? inArray(partnerBookings.publicStatus, normalizedFilters.statuses)
             : undefined,
           normalizedFilters.serviceKey
             ? eq(partnerBookings.serviceKey, normalizedFilters.serviceKey)
@@ -329,18 +433,61 @@ export async function GET(request: NextRequest): Promise<Response> {
     const hasMore = rows.length > pagination.limit;
     const page = hasMore ? rows.slice(0, pagination.limit) : rows;
     const last = page.at(-1);
-    const canReadRates = hasPartnerCapability(principal, "rates.read");
+    const canReadRates =
+      hasPartnerCapability(principal, "bookings.pricing.read") ||
+      hasPartnerCapability(principal, "rates.read");
     const canCancel = hasPartnerCapability(principal, "bookings.cancel");
+    const actionCapabilities = {
+      update: hasPartnerCapability(principal, "bookings.update"),
+      requestChange: hasPartnerCapability(principal, "jobs.change_request"),
+      editReferences: hasPartnerCapability(principal, "commercial.edit"),
+      cancel: canCancel,
+      message: hasPartnerCapability(principal, "messages.send"),
+      uploadMedia: hasPartnerCapability(principal, "media.upload"),
+      shareProof: hasPartnerCapability(principal, "proof.read"),
+      duplicate: hasPartnerCapability(principal, "bookings.create"),
+    };
     const evaluatedAt = new Date();
     const jobs = page.map((row) => {
+      const cancellationReviewPending = Boolean(
+        row.pendingCancellationRequestId ||
+          row.cancellationReconciliationCaseId,
+      );
       const cancellation = evaluatePartnerCancellation({
         status: row.status,
         promisedArrivalStartAt: row.arrivalStartAt,
         now: evaluatedAt,
         canCancel,
-        reviewPending:
-          Boolean(row.cancelOperationKeyHash) && row.status !== "canceled",
-        policy: resolvePartnerCancellationPolicy({ timezone: row.timezone }),
+        reviewPending: cancellationReviewPending,
+        policy: resolvePartnerCancellationPolicy({
+          timezone: row.timezone,
+          accountPolicy: resolvePersistedPartnerAccountCancellationPolicy(
+            row.cancellationPolicyRevision !== null &&
+              row.cancellationMinimumNoticeMinutes !== null &&
+              row.cancellationDirectEnabled !== null &&
+              row.cancellationLateDisposition !== null
+              ? {
+                  minimumNoticeMinutes: row.cancellationMinimumNoticeMinutes,
+                  directCancellationEnabled: row.cancellationDirectEnabled,
+                  lateCancellationDisposition: row.cancellationLateDisposition,
+                  automaticFeeMinor: row.cancellationAutomaticFeeMinor,
+                  revision: row.cancellationPolicyRevision,
+                }
+              : null,
+          ),
+        }),
+      });
+      const actionAvailability = resolvePartnerJobActionAvailability({
+        status: row.status,
+        appointmentStatus: row.appointmentStatus,
+        hasPromisedWindow: Boolean(row.arrivalStartAt && row.arrivalEndAt),
+        proofAvailable: row.proofAvailable,
+        revisionAvailable: true,
+        changeRequestPending: Boolean(row.pendingChangeRequestId),
+        rescheduleReviewPending: Boolean(row.pendingRescheduleRequestId),
+        cancellationReviewPending,
+        capabilities: actionCapabilities,
+        cancellation,
       });
       return {
         id: row.id,
@@ -382,16 +529,41 @@ export async function GET(request: NextRequest): Promise<Response> {
         },
         financial:
           canReadRates && row.amountCents !== null
-            ? createPortalV2MoneyDto(row.amountCents)
+            ? createPortalV2MoneyDto(row.amountCents, row.currency)
             : null,
         cancellation,
-        allowedActions: publicJobActions({
-          status: row.status,
-          canUpdate: hasPartnerCapability(principal, "bookings.update"),
-          cancellationAction: cancellation.action,
-          canMessage: hasPartnerCapability(principal, "messages.send"),
-          canReadProof: hasPartnerCapability(principal, "proof.read"),
-        }),
+        cancellationRequest: row.pendingCancellationRequestId
+          ? {
+              id: row.pendingCancellationRequestId,
+              state: "pending" as const,
+              reason: row.pendingCancellationRequestReason,
+              revision: row.pendingCancellationRequestRevision,
+              createdAt:
+                row.pendingCancellationRequestCreatedAt?.toISOString() ?? null,
+            }
+          : row.cancellationReconciliationCaseId
+            ? {
+                id: null,
+                state: "reconciliation_required" as const,
+                reason: null,
+                revision: null,
+                createdAt: null,
+              }
+            : null,
+        changeRequest: row.pendingChangeRequestId
+          ? {
+              id: row.pendingChangeRequestId,
+              state: "pending" as const,
+              reason: row.pendingChangeRequestReason,
+              revision: row.pendingChangeRequestRevision,
+              createdAt:
+                row.pendingChangeRequestCreatedAt?.toISOString() ?? null,
+              consequence:
+                "The current job, price, proof requirements, and schedule remain unchanged while Stonegate reviews this request.",
+            }
+          : null,
+        actionAvailability,
+        allowedActions: allowedPartnerJobActions(actionAvailability),
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
       };

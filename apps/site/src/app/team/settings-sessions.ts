@@ -1,6 +1,8 @@
 export type PersonalSessionSummary = {
   current: boolean;
   authMethod: "team_session" | "break_glass";
+  assuranceLevel: "aal1" | "aal2";
+  mfaVerifiedAt: string | null;
   createdAt: string;
   lastSeenAt: string;
   expiresAt: string;
@@ -34,6 +36,10 @@ function parseSession(value: unknown): PersonalSessionSummary | null {
     typeof session["current"] !== "boolean" ||
     (session["authMethod"] !== "team_session" &&
       session["authMethod"] !== "break_glass") ||
+    (session["assuranceLevel"] !== "aal1" &&
+      session["assuranceLevel"] !== "aal2") ||
+    (session["mfaVerifiedAt"] !== null &&
+      !isIsoDate(session["mfaVerifiedAt"])) ||
     !isIsoDate(session["createdAt"]) ||
     !isIsoDate(session["lastSeenAt"]) ||
     !isIsoDate(session["expiresAt"]) ||
@@ -44,6 +50,8 @@ function parseSession(value: unknown): PersonalSessionSummary | null {
   }
   const parsed = session as PersonalSessionSummary;
   if (
+    (parsed.assuranceLevel === "aal2") !== (parsed.mfaVerifiedAt !== null) ||
+    (parsed.authMethod === "break_glass" && parsed.assuranceLevel !== "aal1") ||
     (parsed.status === "revoked") !== (parsed.revokedAt !== null) ||
     (parsed.status !== "revoked" && parsed.revokedAt !== null)
   ) {

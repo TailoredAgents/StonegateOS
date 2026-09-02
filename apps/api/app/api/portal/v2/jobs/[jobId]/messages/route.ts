@@ -11,6 +11,7 @@ import {
   getDb,
   partnerAccountLocations,
   partnerBookings,
+  partnerJobEvents,
 } from "@/db";
 import {
   hasPartnerCapability,
@@ -34,6 +35,12 @@ import {
   loadReadyPartnerJobMessageAttachments,
   normalizePartnerJobMessageAttachmentIds,
 } from "@/lib/partner-portal-v2-media";
+import {
+  PARTNER_JOB_ISSUE_CATEGORIES,
+  PARTNER_JOB_ISSUE_PRIORITIES,
+  partnerJobIssueCategoryLabel,
+  readPartnerJobIssueMetadata,
+} from "@/lib/partner-portal-v2-job-hub";
 import { isAllowedPartnerPortalMutationOrigin } from "@/lib/partner-portal-v2-security";
 import {
   createPortalV2ErrorResponse,
@@ -50,12 +57,26 @@ import {
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const MessageBodySchema = z
+const StandardMessageBodySchema = z
   .object({
+    kind: z.literal("message").optional().default("message"),
     body: z.string().trim().min(1).max(5_000),
     attachmentIds: z.array(z.string().uuid()).max(10).default([]),
   })
   .strict();
+const IssueMessageBodySchema = z
+  .object({
+    kind: z.literal("issue"),
+    body: z.string().trim().min(10).max(2_000),
+    attachmentIds: z.array(z.string().uuid()).max(10).default([]),
+    issueCategory: z.enum(PARTNER_JOB_ISSUE_CATEGORIES),
+    issuePriority: z.enum(PARTNER_JOB_ISSUE_PRIORITIES),
+  })
+  .strict();
+const MessageBodySchema = z.union([
+  IssueMessageBodySchema,
+  StandardMessageBodySchema,
+]);
 
 type MessageCursor = {
   accountId: string;
@@ -294,8 +315,11 @@ export async function GET(
             const attachment = attachmentById.get(id);
             return attachment ? [attachment] : [];
           });
+          const issue = readPartnerJobIssueMetadata(message.metadata);
           return {
             id: message.id,
+            kind: issue ? ("issue" as const) : ("message" as const),
+            issue,
             authorType: message.authorType,
             direction: message.direction,
             channel: message.channel,
@@ -421,12 +445,25 @@ export async function POST(
   const attachmentIds = normalizePartnerJobMessageAttachmentIds(
     parsed.data.attachmentIds,
   );
+  const issue =
+    parsed.data.kind === "issue"
+      ? {
+          category: parsed.data.issueCategory,
+          categoryLabel: partnerJobIssueCategoryLabel(
+            parsed.data.issueCategory,
+          ),
+          priority: parsed.data.issuePriority,
+        }
+      : null;
 
   const requestHash = createHash("sha256")
     .update(
       JSON.stringify({
+        kind: parsed.data.kind,
         body: parsed.data.body,
         attachmentIds: [...attachmentIds].sort(),
+        issueCategory: issue?.category ?? null,
+        issuePriority: issue?.priority ?? null,
       }),
       "utf8",
     )
@@ -569,6 +606,9 @@ export async function POST(
           participantId: participant.id,
           direction: "inbound",
           channel: "web",
+          subject: issue
+            ? `${issue.priority === "urgent" ? "Urgent " : ""}${issue.categoryLabel}`
+            : null,
           body: parsed.data.body,
           deliveryStatus: "delivered",
           portalVisible: true,
@@ -579,6 +619,13 @@ export async function POST(
             requestHash,
             membershipId: principal.membershipId,
             attachmentIds,
+            messageKind: issue ? "issue" : "message",
+            ...(issue
+              ? {
+                  issueCategory: issue.category,
+                  issuePriority: issue.priority,
+                }
+              : {}),
           },
         })
         .returning({
@@ -588,16 +635,46 @@ export async function POST(
           createdAt: conversationMessages.createdAt,
         });
       if (!message) throw new Error("partner_message_insert_failed");
+      const staffPreview = issue
+        ? `${issue.priority === "urgent" ? "URGENT " : ""}${issue.categoryLabel}: ${parsed.data.body}`
+        : parsed.data.body;
       await tx
         .update(conversationThreads)
         .set({
-          lastMessagePreview: parsed.data.body.slice(0, 280),
+          lastMessagePreview: staffPreview.slice(0, 280),
           lastMessageAt: now,
           status: "open",
+          ...(issue
+            ? {
+                attentionHandledAt: null,
+                attentionHandledBy: null,
+                closedReason: null,
+                closedAt: null,
+                closedBy: null,
+              }
+            : {}),
           stateUpdatedAt: now,
           updatedAt: now,
         })
         .where(eq(conversationThreads.id, thread.id));
+      if (issue) {
+        await tx.insert(partnerJobEvents).values({
+          partnerAccountId: principal.accountId!,
+          partnerBookingId: job.id,
+          eventType: "issue_reported",
+          publicLabel: "Issue reported",
+          publicDetail: `${issue.categoryLabel} · ${
+            issue.priority === "urgent" ? "Urgent" : "Standard priority"
+          }`,
+          effectiveAt: now,
+          actorType: "partner",
+          actorMembershipId: principal.membershipId,
+          metadata: {
+            category: issue.category,
+            priority: issue.priority,
+          },
+        });
+      }
       const auditId = randomUUID();
       await tx.insert(auditLogs).values({
         id: auditId,
@@ -607,7 +684,9 @@ export async function POST(
         outcome: "succeeded",
         surface: "/partners/jobs",
         idempotencyKeyHash: idempotency.keyHash,
-        action: "partner.job_message.created",
+        action: issue
+          ? "partner.job_issue.reported"
+          : "partner.job_message.created",
         entityType: "partner_booking",
         entityId: job.id,
         meta: sanitizeAuditMetadata({
@@ -618,6 +697,9 @@ export async function POST(
           messageId: message.id,
           threadId: thread.id,
           attachmentCount: attachmentIds.length,
+          messageKind: issue ? "issue" : "message",
+          issueCategory: issue?.category,
+          issuePriority: issue?.priority,
         }),
       });
       return {
@@ -657,6 +739,10 @@ export async function POST(
         threadId: result.threadId,
         message: {
           id: result.message.id,
+          kind: readPartnerJobIssueMetadata(result.message.metadata)
+            ? "issue"
+            : "message",
+          issue: readPartnerJobIssueMetadata(result.message.metadata),
           authorType: "partner",
           direction: "inbound",
           channel: "web",

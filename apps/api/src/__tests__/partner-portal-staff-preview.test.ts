@@ -99,28 +99,18 @@ describe("Partner Portal staff preview contracts", () => {
 
   it("uses one account-bound read model without partner-session impersonation", () => {
     const model = source("src/lib/partner-portal-staff-preview.ts");
-    expect(model).toContain(
-      "eq(partnerBookings.partnerAccountId, account.id)",
-    );
-    expect(model).toContain(
-      "eq(partnerBookings.partnerAccountId, accountId)",
-    );
-    expect(model).toContain(
-      "eq(partnerJobEvents.partnerAccountId, accountId)",
-    );
+    expect(model).toContain("eq(partnerBookings.partnerAccountId, account.id)");
+    expect(model).toContain("eq(partnerBookings.partnerAccountId, accountId)");
+    expect(model).toContain("eq(partnerJobEvents.partnerAccountId, accountId)");
     expect(model).toContain(
       "eq(partnerJobEvidence.partnerAccountId, accountId)",
     );
-    expect(model).toContain(
-      "eq(partnerDocuments.partnerAccountId, accountId)",
-    );
-    expect(model).toContain(
-      "eq(partnerInvoices.partnerAccountId, accountId)",
-    );
+    expect(model).toContain("eq(partnerDocuments.partnerAccountId, accountId)");
+    expect(model).toContain("eq(partnerInvoices.partnerAccountId, accountId)");
     expect(model).toContain("eq(conversationThreads.portalVisible, true)");
-    expect(model.match(/allowedActions: Object\.freeze\(\[\]\)/gu)).toHaveLength(
-      2,
-    );
+    expect(
+      model.match(/allowedActions: Object\.freeze\(\[\]\)/gu),
+    ).toHaveLength(2);
     expect(model).not.toContain("resolvePartnerPrincipal");
     expect(model).not.toContain("requirePartnerSession");
     expect(model).not.toContain("hostedPaymentUrl:");
@@ -133,7 +123,7 @@ describe("Partner Portal staff preview contracts", () => {
       "app/api/admin/partners/portal-preview/[orgContactId]/route.ts",
     );
     const permissionIndex = route.indexOf(
-      "await requirePermission(request, REQUIRED_PERMISSION)",
+      "const permissionError = await requirePermission(",
     );
     const loadIndex = route.indexOf("await loadPartnerStaffPreview(");
     const successAuditIndex = route.indexOf(
@@ -141,7 +131,7 @@ describe("Partner Portal staff preview contracts", () => {
     );
     const responseIndex = route.indexOf("return NextResponse.json(", loadIndex);
 
-    expect(route).toContain('const REQUIRED_PERMISSION = "partners.read"');
+    expect(route).toContain('"partners.preview.read"');
     expect(permissionIndex).toBeGreaterThan(0);
     expect(permissionIndex).toBeLessThan(loadIndex);
     expect(successAuditIndex).toBeGreaterThan(loadIndex);
@@ -164,10 +154,10 @@ describe("Partner Portal staff preview contracts", () => {
     const teamPage = source("../site/src/app/team/page.tsx");
 
     expect(component).toContain("Read-only support preview");
-    expect(component).toContain("It does not\n            create a partner session");
     expect(component).toContain(
-      'data-partner-preview-mutations="disabled"',
+      "It does not\n            create a partner session",
     );
+    expect(component).toContain('data-partner-preview-mutations="disabled"');
     expect(component).toContain("All job actions are disabled");
     expect(component).not.toContain("<form");
     expect(component).not.toContain("PartnerJobActions");

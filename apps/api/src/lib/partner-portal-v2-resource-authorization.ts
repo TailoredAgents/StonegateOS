@@ -56,6 +56,7 @@ export function normalizePartnerJobAccessScope(
 ): Readonly<{
   locationIds: readonly string[];
   propertyIds: readonly string[];
+  costCenterIds: readonly string[];
 }> {
   const rawScope: unknown = principal.accessScope;
   const scope =
@@ -65,6 +66,7 @@ export function normalizePartnerJobAccessScope(
   return Object.freeze({
     locationIds: Object.freeze(normalizeScopeIds(scope["locationIds"])),
     propertyIds: Object.freeze(normalizeScopeIds(scope["propertyIds"])),
+    costCenterIds: Object.freeze(normalizeScopeIds(scope["costCenterIds"])),
   });
 }
 
@@ -82,6 +84,7 @@ export function partnerJobAccessScopeKey(
       JSON.stringify({
         locationIds: scope.locationIds,
         propertyIds: scope.propertyIds,
+        costCenterIds: scope.costCenterIds,
       }),
       "utf8",
     )

@@ -31,6 +31,7 @@ export type WebEventName =
   | "partner_page_view"
   | "partner_action"
   | "partner_form_submit"
+  | "partner_funnel"
   | "web_vital";
 
 export type WebAnalyticsEvent = {

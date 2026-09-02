@@ -1,4 +1,7 @@
-const DEFAULT_PARTNER_RETURN = "/partners";
+const DEFAULT_PARTNER_RETURN = "/partners/overview";
+
+const PROTECTED_PARTNER_PATH =
+  /^\/partners\/(?:approvals|billing|book|bookings|help|overview|photos|properties|reports|settings)(?:\/|$|\?|#)/u;
 
 export function normalizePartnerReturnTo(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_PARTNER_RETURN;
@@ -8,8 +11,7 @@ export function normalizePartnerReturnTo(value: unknown): string {
     candidate.length > 1_024 ||
     candidate.startsWith("//") ||
     candidate.includes("\\") ||
-    !/^\/partners(?:\/|$|\?)/u.test(candidate) ||
-    /^\/partners\/(?:auth|logout|login)(?:\/|$|\?)/u.test(candidate)
+    !PROTECTED_PARTNER_PATH.test(candidate)
   ) {
     return DEFAULT_PARTNER_RETURN;
   }

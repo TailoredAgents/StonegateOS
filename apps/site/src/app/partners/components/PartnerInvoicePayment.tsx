@@ -7,6 +7,7 @@ import type { Route } from "next";
 import {
   ArrowUpRight,
   CreditCard,
+  Landmark,
   LoaderCircle,
   RefreshCw,
   ShieldCheck,
@@ -84,7 +85,20 @@ type SquareCard = {
   destroy?: () => Promise<void> | void;
 };
 
-type SquarePayments = { card(): Promise<SquareCard> };
+type SquareAch = {
+  tokenize(details: {
+    intent: "CHARGE";
+    accountHolderName: string;
+    amount: string;
+    currency: "USD";
+  }): Promise<SquareTokenResult>;
+  destroy?: () => Promise<void> | void;
+};
+
+type SquarePayments = {
+  card(): Promise<SquareCard>;
+  ach(options: { transactionId: string }): Promise<SquareAch>;
+};
 type SquareWebPaymentsGlobal = {
   payments(
     applicationId: string,
@@ -162,7 +176,7 @@ function paymentErrorMessage(error: string, status: number): Notice {
   if (error === "review_required") {
     return {
       tone: "warning",
-      text: "This invoice needs Stonegate review before an online card payment can be started.",
+      text: "This invoice needs Stonegate review before an online payment can be started.",
     };
   }
   if (error === "conflict" || status === 409) {
@@ -191,7 +205,7 @@ function paymentErrorMessage(error: string, status: number): Notice {
   }
   return {
     tone: "error",
-    text: "Online card payment is temporarily unavailable. The invoice has not been marked paid; try again shortly.",
+    text: "Online payment is temporarily unavailable. The invoice has not been marked paid; try again shortly.",
   };
 }
 
@@ -568,22 +582,29 @@ function PartnerHostedInvoicePaymentAction({
 }
 
 function embeddedIntentNotice(intent: PartnerEmbeddedPaymentIntent): Notice {
+  const isAch = intent.paymentMethod === "ach";
   switch (intent.status) {
     case "succeeded":
       return {
         tone: "success",
-        text: "Square confirmed the card payment and Stonegate applied it to the invoice.",
+        text: isAch
+          ? "Square confirmed the bank transfer and Stonegate applied it to the invoice."
+          : "Square confirmed the card payment and Stonegate applied it to the invoice.",
       };
     case "pending":
     case "provisioning":
       return {
         tone: "info",
-        text: "Square received the card payment, but verification is still in progress. The invoice remains due until Stonegate applies it.",
+        text: isAch
+          ? "Square received the ACH bank transfer. Settlement usually takes two to three business days, and the invoice remains due until a signed Square update confirms it."
+          : "Square received the card payment, but verification is still in progress. The invoice remains due until Stonegate applies it.",
       };
     case "ready":
       return {
         tone: "info",
-        text: "Enter the card details below. Square securely tokenizes the card; Stonegate does not receive or store the card number.",
+        text: isAch
+          ? "Connect a US bank account below. Square handles authorization and gives Stonegate only a one-use payment token; bank credentials are never sent to Stonegate."
+          : "Enter the card details below. Square securely tokenizes the card; Stonegate does not receive or store the card number.",
       };
     case "requires_review":
       return {
@@ -593,17 +614,17 @@ function embeddedIntentNotice(intent: PartnerEmbeddedPaymentIntent): Notice {
     case "failed":
       return {
         tone: "error",
-        text: "Square did not complete this card payment. The invoice remains due; you can start a new attempt.",
+        text: `Square did not complete this ${isAch ? "bank transfer" : "card payment"}. The invoice remains due; you can start a new attempt.`,
       };
     case "canceled":
       return {
         tone: "warning",
-        text: "This card payment was canceled. The invoice remains due.",
+        text: `This ${isAch ? "bank transfer" : "card payment"} was canceled. The invoice remains due.`,
       };
     case "expired":
       return {
         tone: "warning",
-        text: "This secure card form expired. The invoice remains due; start a new deposit payment.",
+        text: `This secure ${isAch ? "bank-transfer session" : "card form"} expired. The invoice remains due; start a new deposit payment.`,
       };
   }
 }
@@ -621,12 +642,14 @@ function PartnerEmbeddedDepositPaymentAction({
   canManagePayments,
   initialSecurity,
   payerEmail,
+  payerName,
 }: {
   invoice: PartnerInvoice;
   depositAmount: PartnerInvoice["amounts"]["deposit"];
   canManagePayments: boolean;
   initialSecurity: PartnerPaymentSecurity | null;
   payerEmail: string | null;
+  payerName: string | null;
 }) {
   const router = useRouter();
   const cardContainerId = React.useId().replace(/[^A-Za-z0-9_-]/gu, "");
@@ -639,11 +662,16 @@ function PartnerEmbeddedDepositPaymentAction({
   const [cardStatus, setCardStatus] = React.useState<
     "idle" | "loading" | "ready" | "error"
   >("idle");
+  const [achStatus, setAchStatus] = React.useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
   const [busy, setBusy] = React.useState(false);
   const [notice, setNotice] = React.useState<Notice | null>(null);
-  const prepareKey = React.useRef<string | null>(null);
+  const prepareKeys = React.useRef<Partial<Record<"card" | "ach", string>>>({});
   const completeKey = React.useRef<string | null>(null);
   const card = React.useRef<SquareCard | null>(null);
+  const ach = React.useRef<SquareAch | null>(null);
+  const pendingMethod = React.useRef<"card" | "ach">("card");
   const pollCount = React.useRef(0);
 
   React.useEffect(() => {
@@ -663,7 +691,13 @@ function PartnerEmbeddedDepositPaymentAction({
   }, []);
 
   React.useEffect(() => {
-    if (!intent || intent.status !== "ready") return;
+    if (
+      !intent ||
+      intent.status !== "ready" ||
+      intent.paymentMethod !== "card"
+    ) {
+      return;
+    }
     let active = true;
     let attachedCard: SquareCard | null = null;
     setCardStatus("loading");
@@ -701,83 +735,147 @@ function PartnerEmbeddedDepositPaymentAction({
     };
   }, [cardContainerId, intent]);
 
-  const preparePayment = React.useCallback(async (): Promise<void> => {
-    setBusy(true);
-    setNotice(null);
-    if (!prepareKey.current) {
-      prepareKey.current = createPortalOperationKey(
-        `invoice-deposit-${invoice.id}`,
-      );
-    }
-    const result = await partnerPortalFetch<CreatedPaymentIntentPayload>(
-      "payment-intents",
-      {
-        method: "POST",
-        headers: { "Idempotency-Key": prepareKey.current },
-        body: JSON.stringify({
-          invoiceId: invoice.id,
-          purpose: "deposit",
-          paymentMethod: "card",
-          amount: depositAmount,
-        }),
-      },
-    ).catch(() => null);
-    setBusy(false);
-    if (!result?.ok) {
-      const code = result?.error.error ?? "service_unavailable";
-      if (code === "mfa_step_up_required") {
-        setSecuritySatisfied(false);
-        setShowVerification(true);
-      }
-      if (
-        ["conflict", "invalid_fields", "review_required", "not_found"].includes(
-          code,
-        )
-      ) {
-        prepareKey.current = null;
-      }
-      setNotice(paymentErrorMessage(code, result?.response.status ?? 503));
-      return;
-    }
-    const nextIntent = result.data.paymentIntent;
+  React.useEffect(() => {
     if (
-      !isPartnerEmbeddedPaymentIntent(nextIntent) ||
-      nextIntent.invoiceId !== invoice.id ||
-      nextIntent.purpose !== "deposit" ||
-      nextIntent.amount.amountMinor !== depositAmount.amountMinor ||
-      nextIntent.amount.currency !== depositAmount.currency ||
-      nextIntent.amount.minorUnit !== depositAmount.minorUnit
+      !intent ||
+      intent.status !== "ready" ||
+      intent.paymentMethod !== "ach"
     ) {
-      prepareKey.current = null;
-      setNotice({
-        tone: "error",
-        text: "The payment service returned an invalid deposit response. No card details were submitted.",
-      });
       return;
     }
-    completeKey.current = null;
-    setIntent(nextIntent);
-    setNotice(embeddedIntentNotice(nextIntent));
-  }, [depositAmount, invoice.id]);
+    let active = true;
+    let initializedAch: SquareAch | null = null;
+    setAchStatus("loading");
+    void (async () => {
+      try {
+        const square = await loadSquareWebPaymentsSdk(
+          intent.webPayments.sdkUrl,
+        );
+        const payments = await square.payments(
+          intent.webPayments.applicationId,
+          intent.webPayments.locationId,
+        );
+        initializedAch = await payments.ach({ transactionId: intent.id });
+        if (!active) {
+          await initializedAch.destroy?.();
+          return;
+        }
+        ach.current = initializedAch;
+        setAchStatus("ready");
+      } catch {
+        if (!active) return;
+        ach.current = null;
+        setAchStatus("error");
+        setNotice({
+          tone: "error",
+          text: "Square’s secure bank connection could not load. No bank credentials or payment were submitted; try again later.",
+        });
+      }
+    })();
+    return () => {
+      active = false;
+      if (ach.current === initializedAch) ach.current = null;
+      void initializedAch?.destroy?.();
+    };
+  }, [intent]);
 
-  const beginPayment = React.useCallback(async (): Promise<void> => {
-    if (initialSecurity && !initialSecurity.enrolled) {
-      setNotice({
-        tone: "warning",
-        text: "Set up two-step verification in Account & security before starting a card payment.",
-      });
-      return;
-    }
-    if (initialSecurity?.enrolled && !securitySatisfied) {
-      setShowVerification(true);
-      setNotice({
-        tone: "warning",
-        text: "Verify this session before using account billing actions.",
-      });
-      return;
-    }
-    await preparePayment();
-  }, [initialSecurity, preparePayment, securitySatisfied]);
+  const preparePayment = React.useCallback(
+    async (paymentMethod: "card" | "ach"): Promise<void> => {
+      setBusy(true);
+      setNotice(null);
+      if (!prepareKeys.current[paymentMethod]) {
+        prepareKeys.current[paymentMethod] = createPortalOperationKey(
+          `invoice-deposit-${paymentMethod}-${invoice.id}`,
+        );
+      }
+      const result = await partnerPortalFetch<CreatedPaymentIntentPayload>(
+        "payment-intents",
+        {
+          method: "POST",
+          headers: {
+            "Idempotency-Key": prepareKeys.current[paymentMethod],
+          },
+          body: JSON.stringify({
+            invoiceId: invoice.id,
+            purpose: "deposit",
+            paymentMethod,
+            amount: depositAmount,
+          }),
+        },
+      ).catch(() => null);
+      setBusy(false);
+      if (!result?.ok) {
+        const code = result?.error.error ?? "service_unavailable";
+        if (code === "mfa_step_up_required") {
+          setSecuritySatisfied(false);
+          setShowVerification(true);
+        }
+        if (
+          [
+            "conflict",
+            "invalid_fields",
+            "review_required",
+            "not_found",
+          ].includes(code)
+        ) {
+          delete prepareKeys.current[paymentMethod];
+        }
+        setNotice(
+          paymentMethod === "ach" && code === "invalid_fields"
+            ? {
+                tone: "warning",
+                text: "ACH bank transfer is not enabled for this account. No payment was started; choose card or contact Stonegate.",
+              }
+            : paymentErrorMessage(code, result?.response.status ?? 503),
+        );
+        return;
+      }
+      const nextIntent = result.data.paymentIntent;
+      if (
+        !isPartnerEmbeddedPaymentIntent(nextIntent) ||
+        nextIntent.paymentMethod !== paymentMethod ||
+        nextIntent.invoiceId !== invoice.id ||
+        nextIntent.purpose !== "deposit" ||
+        nextIntent.amount.amountMinor !== depositAmount.amountMinor ||
+        nextIntent.amount.currency !== depositAmount.currency ||
+        nextIntent.amount.minorUnit !== depositAmount.minorUnit
+      ) {
+        delete prepareKeys.current[paymentMethod];
+        setNotice({
+          tone: "error",
+          text: "The payment service returned an invalid deposit response. No payment details were submitted.",
+        });
+        return;
+      }
+      completeKey.current = null;
+      setIntent(nextIntent);
+      setNotice(embeddedIntentNotice(nextIntent));
+    },
+    [depositAmount, invoice.id],
+  );
+
+  const beginPayment = React.useCallback(
+    async (paymentMethod: "card" | "ach"): Promise<void> => {
+      pendingMethod.current = paymentMethod;
+      if (initialSecurity && !initialSecurity.enrolled) {
+        setNotice({
+          tone: "warning",
+          text: "Set up two-step verification in Account & security before starting a payment.",
+        });
+        return;
+      }
+      if (initialSecurity?.enrolled && !securitySatisfied) {
+        setShowVerification(true);
+        setNotice({
+          tone: "warning",
+          text: "Verify this session before using account billing actions.",
+        });
+        return;
+      }
+      await preparePayment(paymentMethod);
+    },
+    [initialSecurity, preparePayment, securitySatisfied],
+  );
 
   async function submitCard(
     event: React.FormEvent<HTMLFormElement>,
@@ -789,6 +887,7 @@ function PartnerEmbeddedDepositPaymentAction({
     if (
       !currentIntent ||
       currentIntent.status !== "ready" ||
+      currentIntent.paymentMethod !== "card" ||
       !currentCard ||
       cardStatus !== "ready" ||
       !verificationAmount
@@ -852,7 +951,10 @@ function PartnerEmbeddedDepositPaymentAction({
       {
         method: "POST",
         headers: { "Idempotency-Key": completeKey.current },
-        body: JSON.stringify({ sourceToken: oneUseToken }),
+        body: JSON.stringify({
+          sourceToken: oneUseToken,
+          paymentMethod: "card",
+        }),
       },
     ).catch(() => null);
     // Do not retain the opaque one-use provider token in state, storage, logs,
@@ -868,7 +970,7 @@ function PartnerEmbeddedDepositPaymentAction({
       completeKey.current = null;
       if (code === "invalid_fields") {
         setIntent(null);
-        prepareKey.current = null;
+        delete prepareKeys.current.card;
         setCardStatus("idle");
         setNotice({
           tone: "error",
@@ -889,6 +991,7 @@ function PartnerEmbeddedDepositPaymentAction({
     const nextIntent = result.data.paymentIntent;
     if (
       !isPartnerEmbeddedPaymentIntent(nextIntent) ||
+      nextIntent.paymentMethod !== "card" ||
       nextIntent.id !== currentIntent.id ||
       nextIntent.invoiceId !== invoice.id ||
       nextIntent.amount.amountMinor !== depositAmount.amountMinor
@@ -903,6 +1006,155 @@ function PartnerEmbeddedDepositPaymentAction({
     setIntent(nextIntent);
     setNotice(embeddedIntentNotice(nextIntent));
     if (nextIntent.status === "succeeded") router.refresh();
+  }
+
+  async function submitAch(
+    event: React.FormEvent<HTMLFormElement>,
+  ): Promise<void> {
+    event.preventDefault();
+    const currentIntent = intent;
+    const currentAch = ach.current;
+    const verificationAmount = squareVerificationAmount(depositAmount);
+    const formData = new FormData(event.currentTarget);
+    const rawName = formData.get("accountHolderName");
+    const accountHolderName =
+      typeof rawName === "string"
+        ? rawName.normalize("NFKC").replace(/\s+/gu, " ").trim()
+        : "";
+    if (
+      !currentIntent ||
+      currentIntent.status !== "ready" ||
+      currentIntent.paymentMethod !== "ach" ||
+      !currentAch ||
+      achStatus !== "ready" ||
+      !verificationAmount
+    ) {
+      setNotice({
+        tone: "error",
+        text: "The secure Square bank connection is not ready. No payment was submitted.",
+      });
+      return;
+    }
+    if (
+      accountHolderName.length < 2 ||
+      accountHolderName.length > 128 ||
+      [...accountHolderName].some((character) => {
+        const point = character.codePointAt(0) ?? 0;
+        return point < 32 || point === 127;
+      })
+    ) {
+      setNotice({
+        tone: "error",
+        text: "Enter the bank account holder’s full name before continuing.",
+      });
+      return;
+    }
+    if (initialSecurity?.enrolled && !securitySatisfied) {
+      setShowVerification(true);
+      setNotice({
+        tone: "warning",
+        text: "Verify this session, then reconnect the bank account.",
+      });
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    let tokenResult: SquareTokenResult;
+    try {
+      tokenResult = await currentAch.tokenize({
+        intent: "CHARGE",
+        accountHolderName,
+        amount: verificationAmount,
+        currency: "USD",
+      });
+    } catch {
+      setBusy(false);
+      setNotice({
+        tone: "error",
+        text: "Square could not authorize the bank account. No payment was submitted; review the connection and try again.",
+      });
+      return;
+    }
+    if (
+      tokenResult.status !== "OK" ||
+      typeof tokenResult.token !== "string" ||
+      !tokenResult.token.startsWith("bauth:") ||
+      tokenResult.token.length > 2_048
+    ) {
+      setBusy(false);
+      setNotice({
+        tone: "error",
+        text: "Square did not authorize the bank account. No payment was submitted; reconnect it or choose card.",
+      });
+      return;
+    }
+    if (!completeKey.current) {
+      completeKey.current = createPortalOperationKey(
+        `embedded-ach-${currentIntent.id}`,
+      );
+    }
+    let oneUseToken = tokenResult.token;
+    tokenResult.token = undefined;
+    const result = await partnerPortalFetch<PaymentIntentPayload>(
+      `payment-intents/${encodeURIComponent(currentIntent.id)}/complete`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": completeKey.current },
+        body: JSON.stringify({
+          sourceToken: oneUseToken,
+          paymentMethod: "ach",
+        }),
+      },
+    ).catch(() => null);
+    // The one-use bank authorization token is never retained, logged, or
+    // exposed after the server request has been created.
+    oneUseToken = "";
+    setBusy(false);
+    if (!result?.ok) {
+      const code = result?.error.error ?? "service_unavailable";
+      if (code === "mfa_step_up_required") {
+        setSecuritySatisfied(false);
+        setShowVerification(true);
+      }
+      completeKey.current = null;
+      if (code === "invalid_fields") {
+        setIntent(null);
+        delete prepareKeys.current.ach;
+        setAchStatus("idle");
+        setNotice({
+          tone: "error",
+          text: "Square did not start this bank transfer. The invoice remains due; reconnect the bank account or choose card.",
+        });
+      } else if (
+        code === "review_required" ||
+        code === "conflict" ||
+        code === "not_found"
+      ) {
+        setIntent({ ...currentIntent, status: "requires_review" });
+        setNotice(paymentErrorMessage(code, result?.response.status ?? 503));
+      } else {
+        setNotice(paymentErrorMessage(code, result?.response.status ?? 503));
+      }
+      return;
+    }
+    const nextIntent = result.data.paymentIntent;
+    if (
+      !isPartnerEmbeddedPaymentIntent(nextIntent) ||
+      nextIntent.paymentMethod !== "ach" ||
+      nextIntent.id !== currentIntent.id ||
+      nextIntent.invoiceId !== invoice.id ||
+      nextIntent.amount.amountMinor !== depositAmount.amountMinor ||
+      nextIntent.status === "succeeded"
+    ) {
+      setNotice({
+        tone: "warning",
+        text: "The bank-transfer response could not be safely verified in this browser. Do not submit again; use Check status or contact Stonegate.",
+      });
+      setIntent({ ...currentIntent, status: "requires_review" });
+      return;
+    }
+    setIntent(nextIntent);
+    setNotice(embeddedIntentNotice(nextIntent));
   }
 
   const checkEmbeddedStatus = React.useCallback(
@@ -944,6 +1196,7 @@ function PartnerEmbeddedDepositPaymentAction({
   React.useEffect(() => {
     if (
       !intent ||
+      intent.paymentMethod === "ach" ||
       !["pending", "provisioning"].includes(intent.status) ||
       pollCount.current >= 15
     ) {
@@ -960,28 +1213,49 @@ function PartnerEmbeddedDepositPaymentAction({
   return (
     <div className="basis-full">
       {!intent || ["failed", "canceled", "expired"].includes(intent.status) ? (
-        <button
-          type="button"
-          onClick={() => void beginPayment()}
-          disabled={busy}
-          className={partnerPrimaryButtonClass}
-        >
-          {busy ? (
-            <LoaderCircle
-              className="h-4 w-4 animate-spin motion-reduce:animate-none"
-              aria-hidden="true"
-            />
-          ) : (
-            <CreditCard className="h-4 w-4" aria-hidden="true" />
-          )}
-          {busy
-            ? "Preparing secure card form…"
-            : `Pay ${formatUsdMinor(depositAmount.amountMinor)} deposit by card`}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void beginPayment("card")}
+            disabled={busy}
+            className={partnerPrimaryButtonClass}
+          >
+            {busy && pendingMethod.current === "card" ? (
+              <LoaderCircle
+                className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                aria-hidden="true"
+              />
+            ) : (
+              <CreditCard className="h-4 w-4" aria-hidden="true" />
+            )}
+            {busy && pendingMethod.current === "card"
+              ? "Preparing card form…"
+              : `Pay ${formatUsdMinor(depositAmount.amountMinor)} by card`}
+          </button>
+          <button
+            type="button"
+            onClick={() => void beginPayment("ach")}
+            disabled={busy}
+            className={partnerSecondaryButtonClass}
+          >
+            {busy && pendingMethod.current === "ach" ? (
+              <LoaderCircle
+                className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                aria-hidden="true"
+              />
+            ) : (
+              <Landmark className="h-4 w-4" aria-hidden="true" />
+            )}
+            {busy && pendingMethod.current === "ach"
+              ? "Preparing bank connection…"
+              : "Pay by ACH bank transfer"}
+          </button>
+        </div>
       ) : null}
       <p className="mt-2 max-w-md text-xs leading-5 text-slate-600">
-        Required deposit only. Square securely tokenizes card details in this
-        page; Stonegate never stores the card number. ACH is not enabled.
+        Required deposit only. Square securely tokenizes card or bank details;
+        Stonegate never receives or stores account credentials. ACH starts only
+        when the account and signed-webhook integration are enabled.
       </p>
       {notice ? (
         <PartnerNotice tone={notice.tone} className="mt-3">
@@ -1004,12 +1278,12 @@ function PartnerEmbeddedDepositPaymentAction({
             setSecuritySatisfied(true);
             setShowVerification(false);
             if (intent) await checkEmbeddedStatus(intent.id);
-            else await preparePayment();
+            else await preparePayment(pendingMethod.current);
           }}
           onCancel={() => setShowVerification(false)}
         />
       ) : null}
-      {intent?.status === "ready" ? (
+      {intent?.status === "ready" && intent.paymentMethod === "card" ? (
         <form
           onSubmit={(event) => void submitCard(event)}
           className="mt-4 max-w-xl rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
@@ -1060,6 +1334,68 @@ function PartnerEmbeddedDepositPaymentAction({
           </p>
         </form>
       ) : null}
+      {intent?.status === "ready" && intent.paymentMethod === "ach" ? (
+        <form
+          onSubmit={(event) => void submitAch(event)}
+          className="mt-4 max-w-xl rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+          data-partner-analytics="embedded_ach_submit"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h4 className="font-semibold text-slate-950">
+                Secure ACH bank transfer
+              </h4>
+              <p className="mt-1 text-xs leading-5 text-slate-600">
+                Deposit amount: {formatUsdMinor(depositAmount.amountMinor)}
+              </p>
+            </div>
+            <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">
+              Powered by Square
+            </span>
+          </div>
+          <label className="mt-4 block">
+            <span className="text-sm font-semibold text-slate-800">
+              Bank account holder name
+            </span>
+            <input
+              name="accountHolderName"
+              type="text"
+              required
+              minLength={2}
+              maxLength={128}
+              autoComplete="name"
+              defaultValue={payerName ?? ""}
+              className={partnerFieldClass}
+            />
+          </label>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <button
+              type="submit"
+              disabled={busy || achStatus !== "ready"}
+              className={partnerPrimaryButtonClass}
+            >
+              {busy || achStatus === "loading" ? (
+                <LoaderCircle
+                  className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+              ) : (
+                <Landmark className="h-4 w-4" aria-hidden="true" />
+              )}
+              {busy
+                ? "Opening Square securely…"
+                : achStatus === "loading"
+                  ? "Loading bank connection…"
+                  : `Authorize ${formatUsdMinor(depositAmount.amountMinor)}`}
+            </button>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-slate-500">
+            Square provides the bank authorization flow. ACH remains pending,
+            typically for two to three business days. The invoice remains due
+            until a signed Square update is received and reconciled.
+          </p>
+        </form>
+      ) : null}
       {intent && ["pending", "provisioning"].includes(intent.status) ? (
         <p
           className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-slate-700"
@@ -1070,7 +1406,9 @@ function PartnerEmbeddedDepositPaymentAction({
             className="h-4 w-4 animate-spin motion-reduce:animate-none"
             aria-hidden="true"
           />
-          Verifying payment status…
+          {intent.paymentMethod === "ach"
+            ? "Bank transfer pending settlement…"
+            : "Verifying payment status…"}
         </p>
       ) : null}
       {intent &&
@@ -1089,7 +1427,9 @@ function PartnerEmbeddedDepositPaymentAction({
           Check payment status
         </button>
       ) : null}
-      {intent?.status === "ready" && cardStatus === "error" ? (
+      {intent?.status === "ready" &&
+      intent.paymentMethod === "card" &&
+      cardStatus === "error" ? (
         <button
           type="button"
           onClick={() => {
@@ -1102,6 +1442,21 @@ function PartnerEmbeddedDepositPaymentAction({
           Retry secure card form
         </button>
       ) : null}
+      {intent?.status === "ready" &&
+      intent.paymentMethod === "ach" &&
+      achStatus === "error" ? (
+        <button
+          type="button"
+          onClick={() => {
+            setNotice(embeddedIntentNotice(intent));
+            setIntent({ ...intent });
+          }}
+          className={cn(partnerSecondaryButtonClass, "mt-3")}
+        >
+          <RefreshCw className="h-4 w-4" aria-hidden="true" />
+          Retry secure bank connection
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -1111,11 +1466,13 @@ export function PartnerInvoicePaymentAction({
   canManagePayments,
   initialSecurity,
   payerEmail = null,
+  payerName = null,
 }: {
   invoice: PartnerInvoice;
   canManagePayments: boolean;
   initialSecurity: PartnerPaymentSecurity | null;
   payerEmail?: string | null;
+  payerName?: string | null;
 }) {
   const depositAmount = resolveEmbeddedDepositAmount({
     status: invoice.status,
@@ -1130,6 +1487,7 @@ export function PartnerInvoicePaymentAction({
       canManagePayments={canManagePayments}
       initialSecurity={initialSecurity}
       payerEmail={payerEmail}
+      payerName={payerName}
     />
   ) : (
     <PartnerHostedInvoicePaymentAction
@@ -1218,6 +1576,8 @@ export function PartnerPaymentReturnStatus({
     }
     if (
       POLLABLE_STATUSES.has(nextIntent.status) &&
+      (!isPartnerEmbeddedPaymentIntent(nextIntent) ||
+        nextIntent.paymentMethod === "card") &&
       pollCount.current < MAX_AUTOMATIC_POLLS
     ) {
       pollCount.current += 1;

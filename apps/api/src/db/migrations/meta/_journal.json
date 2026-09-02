@@ -897,6 +897,230 @@
       "when": 1792108800000,
       "tag": "0130_quote_v2_response_appointment_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1792195200000,
+      "tag": "0131_partner_verification_first_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1792281600000,
+      "tag": "0132_partner_launch_roles_and_approval_capabilities",
+      "breakpoints": true
+    },
+    {
+      "idx": 130,
+      "version": "7",
+      "when": 1792368000000,
+      "tag": "0133_partner_relational_membership_scopes",
+      "breakpoints": true
+    },
+    {
+      "idx": 131,
+      "version": "7",
+      "when": 1792454400000,
+      "tag": "0134_partner_verified_account_domains",
+      "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1792540800000,
+      "tag": "0135_partner_activation_membership_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 133,
+      "version": "7",
+      "when": 1792627200000,
+      "tag": "0136_partner_invitation_activation_and_identity_decoupling",
+      "breakpoints": true
+    },
+    {
+      "idx": 134,
+      "version": "7",
+      "when": 1792713600000,
+      "tag": "0137_partner_verified_notification_endpoints",
+      "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1792800000000,
+      "tag": "0138_team_mfa_assurance",
+      "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1792886400000,
+      "tag": "0139_partner_password_mfa_transactions",
+      "breakpoints": true
+    },
+    {
+      "idx": 137,
+      "version": "7",
+      "when": 1792972800000,
+      "tag": "0140_partner_notification_delivery_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 138,
+      "version": "7",
+      "when": 1793059200000,
+      "tag": "0141_partner_activation_mfa_gate",
+      "breakpoints": true
+    },
+    {
+      "idx": 139,
+      "version": "7",
+      "when": 1793145600000,
+      "tag": "0142_partner_email_change",
+      "breakpoints": true
+    },
+    {
+      "idx": 140,
+      "version": "7",
+      "when": 1793232000000,
+      "tag": "0143_contact_purge_task_intent_column_repair",
+      "breakpoints": true
+    },
+    {
+      "idx": 141,
+      "version": "7",
+      "when": 1793318400000,
+      "tag": "0144_partner_account_profile",
+      "breakpoints": true
+    },
+    {
+      "idx": 142,
+      "version": "7",
+      "when": 1793404800000,
+      "tag": "0145_partner_media_tenant_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 143,
+      "version": "7",
+      "when": 1793491200000,
+      "tag": "0146_partner_audit_auth_methods",
+      "breakpoints": true
+    },
+    {
+      "idx": 144,
+      "version": "7",
+      "when": 1793577600000,
+      "tag": "0147_partner_account_scheduling_policy",
+      "breakpoints": true
+    },
+    {
+      "idx": 145,
+      "version": "7",
+      "when": 1793664000000,
+      "tag": "0148_partner_account_cancellation_policy",
+      "breakpoints": true
+    },
+    {
+      "idx": 146,
+      "version": "7",
+      "when": 1793750400000,
+      "tag": "0149_partner_cancellation_request_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 147,
+      "version": "7",
+      "when": 1793836800000,
+      "tag": "0150_partner_approval_rule_administration",
+      "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1793923200000,
+      "tag": "0151_partner_quote_v2_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 149,
+      "version": "7",
+      "when": 1794009600000,
+      "tag": "0152_partner_job_change_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 150,
+      "version": "7",
+      "when": 1794096000000,
+      "tag": "0153_partner_quote_response_account_binding",
+      "breakpoints": true
+    },
+    {
+      "idx": 151,
+      "version": "7",
+      "when": 1794182400000,
+      "tag": "0154_partner_location_portfolio_controls",
+      "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "7",
+      "when": 1794268800000,
+      "tag": "0155_partner_job_change_request_cancellation_resolution",
+      "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1794355200000,
+      "tag": "0156_partner_account_lifecycle_and_auth_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1794441600000,
+      "tag": "0157_partner_named_resources_and_schedule_assistance",
+      "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1794528000000,
+      "tag": "0158_partner_location_verification_and_merge",
+      "breakpoints": true
+    },
+    {
+      "idx": 156,
+      "version": "7",
+      "when": 1794614400000,
+      "tag": "0159_partner_commercial_agreement_and_change_orders",
+      "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1794700800000,
+      "tag": "0160_partner_account_merge_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 158,
+      "version": "7",
+      "when": 1794787200000,
+      "tag": "0161_partner_portal_operations_query_budgets",
+      "breakpoints": true
+    },
+    {
+      "idx": 159,
+      "version": "7",
+      "when": 1794873600000,
+      "tag": "0162_partner_billing_dispute_requests",
+      "breakpoints": true
     }
   ]
 }

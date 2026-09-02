@@ -1,17 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
+import { sendEmailMessage } from "@/lib/messaging";
 import {
   auditLogs,
-  crmPipeline,
-  crmTasks,
   contacts,
   getDb,
   partnerInviteOperations,
   partnerUsers,
 } from "@/db";
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
@@ -19,14 +17,13 @@ import {
 import { consumeTeamAuthRateLimit } from "@/lib/team-auth-rate-limit";
 import {
   findActivePartnerUserByEmail,
-  findActivePartnerUserByPhone,
   getClientIp,
   getUserAgent,
   normalizeEmail,
-  normalizePhoneE164,
   replacePartnerLoginTokenInTransaction,
   resolvePublicSiteBaseUrl,
 } from "@/lib/partner-portal-auth";
+import { isPartnerRoutineMagicLinkLoginEnabled } from "@/lib/partner-portal-feature-flags";
 import {
   buildPartnerInviteOperationAuditRecord,
   capturePartnerInviteProviderResult,
@@ -110,7 +107,10 @@ async function preparePublicPartnerLoginLink(
       )
       .for("update")
       .limit(1);
-    if (!user?.id) return null;
+    // This retired compatibility path persists contact-scoped invite/outbox
+    // records. A canonical identity without a CRM projection is ineligible;
+    // never invent or infer a contact to make the legacy path work.
+    if (!user?.id || !user.orgContactId) return null;
 
     const [unresolved] = await tx
       .select({
@@ -189,7 +189,7 @@ async function preparePublicPartnerLoginLink(
       updatedAt: now,
     });
     return {
-      user,
+      user: { ...user, orgContactId: user.orgContactId },
       rawToken: token.rawToken,
       expiresAt: token.expiresAt,
       requestedAuditEventId: requested.auditEventId,
@@ -363,6 +363,12 @@ function isPartnerInviteOperationCollision(error: unknown): boolean {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
+  if (!isPartnerRoutineMagicLinkLoginEnabled()) {
+    return NextResponse.json(
+      { ok: false, error: "not_found" },
+      { status: 404, headers: { "Cache-Control": "no-store" } },
+    );
+  }
   let payload: unknown;
   try {
     payload = await readBoundedJsonRequest(request, { maximumBytes: 2 * 1024 });
@@ -385,7 +391,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     typeof payload !== "object" ||
     Array.isArray(payload) ||
     Object.keys(payload).some(
-      (key) => !["email", "phone", "rememberMe", "returnTo"].includes(key),
+      (key) => !["email", "rememberMe", "returnTo"].includes(key),
     )
   ) {
     return NextResponse.json(
@@ -418,14 +424,13 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const email = normalizeEmail(record["email"]);
-  const phoneE164 = normalizePhoneE164(record["phone"]);
   if (
-    (!email && !phoneE164) ||
-    (email !== null &&
-      (email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)))
+    !email ||
+    email.length > 320 ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)
   ) {
     return NextResponse.json(
-      { ok: false, error: "email_or_phone_required" },
+      { ok: false, error: "email_required" },
       { status: 400, headers: { "Cache-Control": "no-store" } },
     );
   }
@@ -435,9 +440,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     rateLimit = await consumeTeamAuthRateLimit({
       action: "partner_request_link",
       request,
-      identity: email
-        ? { kind: "email", value: email }
-        : { kind: "phone", value: phoneE164! },
+      identity: { kind: "email", value: email },
     });
   } catch {
     return NextResponse.json(
@@ -464,11 +467,10 @@ export async function POST(request: NextRequest): Promise<Response> {
   const siteBaseUrl = resolvePublicSiteBaseUrl();
   let user: PublicPartnerLoginUser | null = null;
   try {
-    user = email
-      ? await findActivePartnerUserByEmail(email)
-      : phoneE164
-        ? await findActivePartnerUserByPhone(phoneE164)
-        : null;
+    const candidate = await findActivePartnerUserByEmail(email);
+    user = candidate?.orgContactId
+      ? { ...candidate, orgContactId: candidate.orgContactId }
+      : null;
   } catch {
     // A valid public request remains non-enumerating even when the identity
     // store is temporarily unavailable.
@@ -477,121 +479,6 @@ export async function POST(request: NextRequest): Promise<Response> {
       { headers: { "Cache-Control": "no-store" } },
     );
   }
-
-  const alertSales = async () => {
-    const alertTo = (process.env["LEAD_ALERT_SMS"] ?? "").trim();
-    if (!alertTo) return;
-
-    const who = email ?? phoneE164 ?? "unknown";
-    const ip = getClientIp(request);
-    const message = [
-      "Partner portal access request",
-      `From: ${who}`,
-      ip ? `IP: ${ip}` : null,
-      "Invite them in Team -> Partners when ready.",
-    ]
-      .filter((line): line is string => Boolean(line))
-      .join("\n");
-
-    await sendSmsMessage(alertTo, message).catch(() => null);
-  };
-
-  const upsertAccessRequestTask = async () => {
-    const db = getDb();
-
-    const [existingContact] = await db
-      .select({
-        id: contacts.id,
-        partnerStatus: contacts.partnerStatus,
-        deletedAt: contacts.deletedAt,
-      })
-      .from(contacts)
-      .where(
-        or(
-          email ? eq(contacts.email, email) : sql`false`,
-          phoneE164 ? eq(contacts.phoneE164, phoneE164) : sql`false`,
-        ),
-      )
-      .limit(1);
-
-    if (existingContact?.deletedAt) return;
-
-    const now = new Date();
-    const contactId = existingContact?.id
-      ? existingContact.id
-      : ((
-          await db
-            .insert(contacts)
-            .values({
-              firstName: "Partner",
-              lastName: "Request",
-              email: email ?? null,
-              phone: phoneE164 ?? null,
-              phoneE164: phoneE164 ?? null,
-              partnerStatus: "prospect",
-              source: "partner_portal",
-            })
-            .returning({ id: contacts.id })
-        )[0]?.id ?? null);
-
-    if (!contactId) return;
-
-    if (!existingContact?.id || existingContact.partnerStatus === "none") {
-      await db
-        .update(contacts)
-        .set({
-          partnerStatus: "prospect",
-          updatedAt: now,
-        })
-        .where(eq(contacts.id, contactId));
-    }
-
-    // Bump the pipeline stage into "contacted" if they're requesting portal access.
-    await db
-      .insert(crmPipeline)
-      .values({
-        contactId,
-        stage: "contacted",
-        notes: "Partner portal access requested.",
-      })
-      .onConflictDoUpdate({
-        target: crmPipeline.contactId,
-        set: {
-          stage: "contacted",
-          updatedAt: now,
-        },
-      });
-
-    // Avoid spamming tasks if someone clicks repeatedly.
-    const [existingTask] = await db
-      .select({
-        id: crmTasks.id,
-        createdAt: crmTasks.createdAt,
-        title: crmTasks.title,
-      })
-      .from(crmTasks)
-      .where(eq(crmTasks.contactId, contactId))
-      .orderBy(desc(crmTasks.createdAt))
-      .limit(1);
-
-    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const isRecentDuplicate =
-      Boolean(existingTask?.id) &&
-      existingTask?.title === "Partner portal access request" &&
-      Boolean(existingTask?.createdAt && existingTask.createdAt >= oneDayAgo);
-    if (isRecentDuplicate) return;
-
-    await db.insert(crmTasks).values({
-      contactId,
-      title: "Partner portal access request",
-      status: "open",
-      dueAt: null,
-      assignedTo: null,
-      notes: `Requested via /partners/login. Email: ${email ?? "-"} Phone: ${phoneE164 ?? "-"}`,
-      createdAt: now,
-      updatedAt: now,
-    });
-  };
 
   if (user?.id && siteBaseUrl) {
     if (!getTeamOperationKillSwitchForRisk("external")) {
@@ -611,9 +498,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         operationId,
         risk: "external",
       };
-      const requestedChannels: PartnerInviteChannel[] = user.phoneE164
-        ? ["email", "sms"]
-        : ["email"];
+      const requestedChannels: PartnerInviteChannel[] = ["email"];
       let prepared: PreparedPublicPartnerLoginLink | null = null;
       let dispatchBoundaryCrossed = false;
       let evidence: PartnerInviteProviderEvidence[] = [];
@@ -647,8 +532,6 @@ export async function POST(request: NextRequest): Promise<Response> {
             "",
             "If you didn't request this, you can ignore this email.",
           ].join("\n");
-          const smsBody = `Stonegate Partner Portal login link: ${url.toString()} (expires ${prepared.expiresAt.toISOString()})`;
-
           evidence = await Promise.all([
             capturePartnerInviteProviderResult("email", () =>
               sendEmailMessage(prepared!.user.email, subject, body, {
@@ -658,18 +541,6 @@ export async function POST(request: NextRequest): Promise<Response> {
                 ),
               }),
             ),
-            ...(prepared.user.phoneE164
-              ? [
-                  capturePartnerInviteProviderResult("sms", () =>
-                    sendSmsMessage(prepared!.user.phoneE164!, smsBody, null, {
-                      idempotencyKey: partnerInviteProviderRequestKey(
-                        operationId,
-                        "sms",
-                      ),
-                    }),
-                  ),
-                ]
-              : []),
           ]);
           const summary = planPartnerInviteTerminal(
             requestedChannels,
@@ -753,10 +624,6 @@ export async function POST(request: NextRequest): Promise<Response> {
         }
       }
     }
-  } else {
-    // Never turn this public form into an email/SMS relay for an unrecognized
-    // recipient. Record one bounded internal follow-up instead.
-    await Promise.allSettled([upsertAccessRequestTask(), alertSales()]);
   }
 
   // Always return ok to avoid account enumeration.

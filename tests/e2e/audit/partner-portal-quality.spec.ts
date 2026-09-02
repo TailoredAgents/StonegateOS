@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
+import { PARTNER_APPLICATION_SESSION_COOKIE } from "../../../apps/site/src/lib/partner-application-session";
 import { PARTNER_SESSION_COOKIE } from "../../../apps/site/src/lib/partner-session";
 import { waitForMailhogMessage } from "../support/mailhog";
 import { expectTeamStateToPassAutomatedWcag } from "./accessibility";
@@ -7,13 +8,19 @@ import {
   cleanupPartnerBookingFixture,
   closePartnerBookingFixtures,
   createPartnerBookingFixture,
+  getNoLeadPartnerBookingSnapshot,
 } from "./partner-booking-fixtures";
 import {
   cleanupPartnerApplicantFixture,
   closePartnerAccessReviewFixtures,
+  findPartnerAccessReviewSnapshot,
+  resetPartnerAccessReviewRateLimits,
 } from "./partner-access-review-fixtures";
 
 test.use({ storageState: "tests/e2e/storage/visitor.json" });
+
+const BOOKING_SCOPE_LABEL =
+  /What (?:needs to be done|should be completed at the facility)\?/u;
 
 test.beforeEach(async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -43,7 +50,7 @@ test("Partner Portal public entry points are responsive and pass the automated W
     ["/partners/login", "Sign in to your portal", "partner-login"],
     [
       "/partners/request-access",
-      "Request partner access",
+      "Start with your verified work email.",
       "partner-request-access",
     ],
   ] as const) {
@@ -59,7 +66,7 @@ test("Partner Portal public entry points are responsive and pass the automated W
   }
 });
 
-test("a new applicant verifies email, enters the limited workspace, and cannot reuse the magic link", async ({
+test("a new applicant verifies email, submits an authority-free application, and cannot replay the link", async ({
   page,
   baseURL,
 }, testInfo) => {
@@ -72,27 +79,16 @@ test("a new applicant verifies email, enters the limited workspace, and cannot r
   const email = `partner-applicant-${marker}@mystos.test`;
 
   try {
+    await resetPartnerAccessReviewRateLimits();
     await page.goto("/partners/request-access");
-    await page.getByLabel("Full name").fill("Limited Portal Applicant");
+    await expect(page.getByLabel("Full name")).toHaveCount(0);
+    await expect(page.getByLabel("Company name")).toHaveCount(0);
     await page.getByLabel("Work email").fill(email);
-    await page.getByLabel("Company name").fill(`Applicant Company ${marker}`);
-    await page.getByLabel("Partner type").selectOption("property_manager");
     await page
-      .getByRole("checkbox", { name: "Schedule pickups and jobs" })
-      .check();
-    await page
-      .getByRole("checkbox", {
-        name: /I agree to the Terms and Service Agreement/u,
-      })
-      .check();
-    await page
-      .getByRole("checkbox", {
-        name: /I acknowledge the Privacy Policy/u,
-      })
-      .check();
-    await page.getByRole("button", { name: "Request partner access" }).click();
+      .getByRole("button", { name: "Email me a verification link" })
+      .click();
     await expect(
-      page.getByRole("heading", { name: "Check your email" }),
+      page.getByRole("heading", { name: "Check your work email" }),
     ).toBeVisible();
 
     const message = await waitForMailhogMessage(
@@ -106,42 +102,99 @@ test("a new applicant verifies email, enters the limited workspace, and cannot r
       /=3D/gu,
       "=",
     );
-    const loginUrl = decodedBody.match(
-      /https?:\/\/[^\s<>]+\/partners\/auth\?token=[A-Za-z0-9_-]{32,256}/u,
+    const verificationUrl = decodedBody.match(
+      /https?:\/\/[^\s<>]+\/partners\/verify\?token=[A-Za-z0-9_-]{32,256}/u,
     )?.[0];
-    if (!loginUrl)
-      throw new Error("The applicant email omitted its sign-in URL.");
-    const token = new URL(loginUrl).searchParams.get("token");
-    if (!token) throw new Error("The applicant sign-in URL omitted its token.");
+    if (!verificationUrl) {
+      throw new Error("The applicant email omitted its verification URL.");
+    }
+    const token = new URL(verificationUrl).searchParams.get("token");
+    if (!token) {
+      throw new Error("The applicant verification URL omitted its token.");
+    }
 
     // Transactional email uses the configured public production-shaped host.
     // Keep the exact signed path/token while routing the browser through the
     // local Site origin used by this isolated E2E environment.
-    const mailedLoginUrl = new URL(loginUrl);
-    const localLoginUrl = new URL(
-      `${mailedLoginUrl.pathname}${mailedLoginUrl.search}`,
+    const mailedVerificationUrl = new URL(verificationUrl);
+    const localVerificationUrl = new URL(
+      `${mailedVerificationUrl.pathname}${mailedVerificationUrl.search}`,
       baseURL,
     );
-    await page.goto(localLoginUrl.toString());
-    await expect(page).toHaveURL(/\/partners\?setup=1$/u);
+    await page.goto(localVerificationUrl.toString());
+    await expect(page).toHaveURL(/\/partners\/application\?verified=1$/u);
     await expect(
-      page.getByRole("heading", { name: /Welcome back,/u, level: 1 }),
+      page.getByRole("heading", {
+        name: "Complete your partner application",
+        level: 1,
+      }),
     ).toBeVisible();
     await expect(
-      page.getByRole("link", { name: "Schedule job" }).first(),
+      page.getByText(
+        "Email verified. Complete the application below; no company workspace or membership exists until approval.",
+      ),
     ).toBeVisible();
+    const applicantCookies = await page.context().cookies();
+    expect(
+      applicantCookies.some(
+        (cookie) =>
+          cookie.name === PARTNER_APPLICATION_SESSION_COOKIE &&
+          cookie.value.length > 0,
+      ),
+    ).toBe(true);
+    expect(
+      applicantCookies.some((cookie) => cookie.name === PARTNER_SESSION_COOKIE),
+    ).toBe(false);
+
+    await page.getByLabel("Full name").fill("Limited Portal Applicant");
+    await page.getByLabel("Company name").fill(`Applicant Company ${marker}`);
+    await page.getByLabel("Partner type").selectOption("property_manager");
+    await page
+      .getByRole("checkbox", { name: "Schedule pickups and jobs" })
+      .check();
+    await page
+      .getByRole("radio", {
+        name: /Create a company workspace if approved/u,
+      })
+      .check();
+    await page.locator("#application-termsAccepted").check();
+    await page.locator("#application-privacyAccepted").check();
+    await page.getByRole("button", { name: "Submit for review" }).click();
     await expect(
-      page.getByRole("link", { name: "Billing & documents" }),
-    ).toHaveCount(0);
+      page.getByRole("heading", { name: "Application submitted", level: 1 }),
+    ).toBeVisible();
+
+    await expect
+      .poll(() => findPartnerAccessReviewSnapshot(email))
+      .toMatchObject({
+        applicationStatus: "submitted",
+        applicationFlowVersion: 2,
+        emailVerified: true,
+        applicantSessionActive: true,
+        verificationChallengeStatus: "consumed",
+        bootstrapAccountId: null,
+        requestedAccountId: null,
+        approvedAccountId: null,
+        authorityAccountCount: 0,
+        canonicalIdentityCount: 0,
+        partnerUserId: null,
+        membershipCount: 0,
+        membershipId: null,
+        crmContactCount: 0,
+        portalSessionCount: 0,
+        activationChallengeCount: 0,
+      });
 
     const apiBase = (
-      process.env["NEXT_PUBLIC_API_BASE_URL"] ?? "http://localhost:3001"
+      process.env["API_BASE_URL"] ??
+      process.env["NEXT_PUBLIC_API_BASE_URL"] ??
+      "http://localhost:3001"
     ).replace(/\/+$/u, "");
     const replay = await page.request.post(
-      `${apiBase}/api/portal/v2/auth/magic-link/consume`,
+      `${apiBase}/api/portal/v2/onboarding/email-challenges/consume`,
       {
         headers: { Origin: new URL(baseURL).origin },
-        data: { token, rememberMe: false },
+        data: { token },
       },
     );
     expect(replay.status()).toBe(401);
@@ -155,6 +208,9 @@ test("Partner Portal authenticated shell, overview, and scheduler are responsive
   baseURL,
 }, testInfo) => {
   if (!baseURL) throw new Error("The audit Site base URL is required.");
+  if (testInfo.project.name === "chromium-1440-light") {
+    testInfo.setTimeout(180_000);
+  }
   const fixture = await createPartnerBookingFixture();
   const siteUrl = new URL(baseURL);
 
@@ -211,7 +267,10 @@ test("Partner Portal authenticated shell, overview, and scheduler are responsive
       `/partners/book?locationId=${fixture.locationId}&serviceKey=junk-removal`,
     );
     await expect(
-      page.getByRole("heading", { name: "Schedule a job", level: 1 }),
+      page.getByRole("heading", {
+        name: "Schedule facility service",
+        level: 1,
+      }),
     ).toBeVisible();
     await expect(page.getByText("All changes saved")).toBeVisible();
     await expectNoHorizontalOverflow(page);
@@ -221,6 +280,79 @@ test("Partner Portal authenticated shell, overview, and scheduler are responsive
       surface: "partner-schedule-job",
       state: "normal",
     });
+
+    if (testInfo.project.name === "chromium-1440-light") {
+      const scopeText = `Remove staged furniture and boxed material. Quality ${fixture.marker}`;
+      await page.getByRole("button", { name: "Continue" }).click();
+      await expect(
+        page.getByRole("heading", { name: "Service & scope" }),
+      ).toBeVisible();
+      await page
+        .getByRole("textbox", { name: BOOKING_SCOPE_LABEL })
+        .fill(scopeText);
+      await page.getByRole("button", { name: "Continue" }).click();
+
+      await expect(
+        page.getByRole("heading", { name: "Contact & access" }),
+      ).toBeVisible();
+      await page.getByLabel("On-site contact name").fill("Quality Site Lead");
+      await page.getByLabel("Mobile phone").fill(fixture.partnerPhoneE164);
+      await page.getByRole("button", { name: "Continue" }).click();
+
+      await expect(
+        page.getByRole("heading", { name: "Photos & proof" }),
+      ).toBeVisible();
+      await page.getByRole("button", { name: "Continue" }).click();
+
+      await expect(
+        page.getByRole("heading", { name: "Choose an arrival window" }),
+      ).toBeVisible();
+      const arrivalWindows = page.locator("fieldset button[aria-pressed]");
+      await expect(arrivalWindows.first()).toBeVisible();
+      await arrivalWindows.last().click();
+      await expect(page.getByText(/Arrival window held:/u)).toBeVisible();
+      await page.getByRole("button", { name: "Continue" }).click();
+
+      await expect(
+        page.getByRole("heading", { name: "Review & send" }),
+      ).toBeVisible();
+      await page.getByRole("button", { name: "Send service request" }).click();
+      await expect(page).toHaveURL(
+        /\/partners\/bookings\/[0-9a-f-]+\?created=1$/iu,
+      );
+      const bookingId = new URL(page.url()).pathname.split("/").at(-1);
+      if (!bookingId) throw new Error("Partner booking ID was not returned.");
+
+      await expect
+        .poll(() => getNoLeadPartnerBookingSnapshot(fixture, bookingId), {
+          timeout: 20_000,
+        })
+        .not.toBeNull();
+      const snapshot = await getNoLeadPartnerBookingSnapshot(
+        fixture,
+        bookingId,
+      );
+      if (!snapshot) throw new Error("Partner booking snapshot was not found.");
+      expect(snapshot).toMatchObject({
+        appointmentLeadId: null,
+        appointmentPartnerAccountId: fixture.partnerAccountId,
+        appointmentQuotedTotalCents: 25_000,
+        appointmentQuotedScopeText: scopeText,
+        bookingPartnerAccountId: fixture.partnerAccountId,
+        bookingServiceKey: "junk-removal",
+        bookingAmountCents: 25_000,
+        bookingScopeDescription: scopeText,
+      });
+      expect(snapshot.appointmentPartnerAccountId).toBe(
+        snapshot.bookingPartnerAccountId,
+      );
+      expect(snapshot.appointmentQuotedTotalCents).toBe(
+        snapshot.bookingAmountCents,
+      );
+      expect(snapshot.appointmentQuotedScopeText).toBe(
+        snapshot.bookingScopeDescription,
+      );
+    }
   } finally {
     await cleanupPartnerBookingFixture(fixture);
   }

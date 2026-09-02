@@ -4,6 +4,7 @@ import { callPartnerApi, callPartnerPublicApi } from "@/app/partners/lib/api";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const SAFE_SEGMENT = /^[A-Za-z0-9_-]{1,100}$/u;
+const SAFE_CORRELATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
 const FORWARDED_REQUEST_HEADERS = [
   "content-type",
   "idempotency-key",
@@ -17,9 +18,44 @@ const FORWARDED_RESPONSE_HEADERS = [
   "location",
   "retry-after",
   "x-next-cursor",
-  "x-correlation-id",
+  "x-location-directory-etag",
   "idempotency-replayed",
 ] as const;
+
+function resolveCorrelationId(request: NextRequest): string {
+  const requested = request.headers.get("x-correlation-id")?.trim() ?? "";
+  if (SAFE_CORRELATION_ID.test(requested)) return requested;
+  return `portal_${crypto.randomUUID().replace(/-/gu, "")}`;
+}
+
+function proxyError(
+  correlationId: string,
+  status: number,
+  error: string,
+  message: string,
+  extraHeaders?: HeadersInit,
+): NextResponse {
+  const headers = new Headers({
+    "Cache-Control": "private, no-store, max-age=0",
+    "x-correlation-id": correlationId,
+  });
+  if (extraHeaders) {
+    new Headers(extraHeaders).forEach((value, key) => headers.set(key, value));
+  }
+  return NextResponse.json(
+    {
+      ok: false,
+      error,
+      message,
+      correlationId,
+      ...(status >= 500 ? { retryable: true } : {}),
+    },
+    {
+      status,
+      headers,
+    },
+  );
+}
 
 function mutationOriginIsAllowed(request: NextRequest): boolean {
   const origin = request.headers.get("origin");
@@ -74,25 +110,23 @@ async function proxyPartnerPortalRequest(
   request: NextRequest,
   context: { params: Promise<{ segments: string[] }> },
 ): Promise<Response> {
+  const correlationId = resolveCorrelationId(request);
   const method = request.method.toUpperCase();
   if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "method_not_allowed",
-        message: "This request method is not supported.",
-      },
-      { status: 405, headers: { Allow: "GET, POST, PUT, PATCH, DELETE" } },
+    return proxyError(
+      correlationId,
+      405,
+      "method_not_allowed",
+      "This request method is not supported.",
+      { Allow: "GET, POST, PUT, PATCH, DELETE" },
     );
   }
   if (method !== "GET" && !mutationOriginIsAllowed(request)) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "forbidden",
-        message: "The request origin could not be verified.",
-      },
-      { status: 403 },
+    return proxyError(
+      correlationId,
+      403,
+      "forbidden",
+      "The request origin could not be verified.",
     );
   }
 
@@ -103,27 +137,28 @@ async function proxyPartnerPortalRequest(
     segments.length > 8 ||
     segments.some((segment) => !SAFE_SEGMENT.test(segment))
   ) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "invalid_request",
-        message: "The portal path is invalid.",
-      },
-      { status: 400 },
+    return proxyError(
+      correlationId,
+      400,
+      "invalid_request",
+      "The portal path is invalid.",
     );
   }
 
   let body: ArrayBuffer | undefined;
-  if (method === "POST" || method === "PUT" || method === "PATCH") {
+  if (
+    method === "POST" ||
+    method === "PUT" ||
+    method === "PATCH" ||
+    method === "DELETE"
+  ) {
     const parsed = await readBoundedBody(request);
     if (!parsed) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "invalid_body",
-          message: "The request body is too large.",
-        },
-        { status: 413 },
+      return proxyError(
+        correlationId,
+        413,
+        "invalid_body",
+        "The request body is too large.",
       );
     }
     body = parsed.byteLength > 0 ? parsed : undefined;
@@ -134,6 +169,7 @@ async function proxyPartnerPortalRequest(
     const value = request.headers.get(name);
     if (value) requestHeaders.set(name, value);
   }
+  requestHeaders.set("x-correlation-id", correlationId);
   // The API connection can use internal HTTP even when the browser-facing
   // portal request is HTTPS. Set this from Next's parsed request URL only;
   // never relay an untrusted incoming forwarding header.
@@ -161,20 +197,20 @@ async function proxyPartnerPortalRequest(
   ).catch(() => null);
 
   if (!upstream) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "service_unavailable",
-        message:
-          "The partner service is temporarily unavailable. Try again shortly.",
-        retryable: true,
-      },
-      { status: 503 },
+    console.warn("[partner.portal.proxy] upstream_unavailable", {
+      correlationId,
+    });
+    return proxyError(
+      correlationId,
+      503,
+      "service_unavailable",
+      "The partner service is temporarily unavailable. Try again shortly.",
     );
   }
 
   const responseHeaders = new Headers({
     "Cache-Control": "private, no-store, max-age=0",
+    "x-correlation-id": correlationId,
   });
   for (const name of FORWARDED_RESPONSE_HEADERS) {
     const value = upstream.headers.get(name);

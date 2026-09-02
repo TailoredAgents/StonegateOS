@@ -4,6 +4,7 @@ import {
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
 import { requirePartnerCapability } from "@/lib/partner-account-authorization";
+import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
 import {
   createPartnerAccountInvitation,
   listPartnerAccountInvitations,
@@ -32,32 +33,64 @@ import {
 
 export async function GET(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
-  const authorization = await requirePartnerCapability(request, "account.members.manage");
+  const authorization = await requirePartnerCapability(
+    request,
+    "account.members.manage",
+  );
   if (!authorization.ok) {
-    return createPartnerPortalV2ErrorResponse(authorization.error, authorization.status, correlationId);
+    return createPartnerPortalV2ErrorResponse(
+      authorization.error,
+      authorization.status,
+      correlationId,
+    );
   }
   const { principal } = authorization;
   if (!principal.accountId || !principal.membershipId) {
-    return createPartnerPortalV2ErrorResponse("legacy_scope_unavailable", 409, correlationId);
+    return createPartnerPortalV2ErrorResponse(
+      "legacy_scope_unavailable",
+      409,
+      correlationId,
+    );
   }
   if (principal.accessLevel !== "account") {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
   if (!arePartnerPortalV2ReadsEnabled(principal.accountId)) {
-    return createPartnerPortalV2ErrorResponse("service_unavailable", 503, correlationId);
+    return createPartnerPortalV2ErrorResponse(
+      "service_unavailable",
+      503,
+      correlationId,
+    );
   }
   const keys = [...request.nextUrl.searchParams.keys()];
   const rawLimit = request.nextUrl.searchParams.get("limit") ?? "50";
-  if (keys.some((key) => key !== "limit") || request.nextUrl.searchParams.getAll("limit").length > 1) {
-    return createPartnerPortalV2ErrorResponse("invalid_request", 400, correlationId);
+  if (
+    keys.some((key) => key !== "limit") ||
+    request.nextUrl.searchParams.getAll("limit").length > 1
+  ) {
+    return createPartnerPortalV2ErrorResponse(
+      "invalid_request",
+      400,
+      correlationId,
+    );
   }
   const limit = Number(rawLimit);
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-    return createPartnerPortalV2ErrorResponse("invalid_fields", 422, correlationId);
+    return createPartnerPortalV2ErrorResponse(
+      "invalid_fields",
+      422,
+      correlationId,
+    );
   }
   try {
-    const invitations = await listPartnerAccountInvitations({ principal, limit });
-    return createPartnerPortalV2SuccessResponse({ ok: true, invitations }, correlationId);
+    const invitations = await listPartnerAccountInvitations({
+      principal,
+      limit,
+    });
+    return createPartnerPortalV2SuccessResponse(
+      { ok: true, invitations },
+      correlationId,
+    );
   } catch (error) {
     console.error("[partner-portal-v2] invitation list failed", {
       correlationId,
@@ -71,25 +104,52 @@ export async function GET(request: NextRequest): Promise<Response> {
 export async function POST(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
   try {
-    const authorization = await requirePartnerCapability(request, "account.members.manage");
+    const authorization = await requireRecentPartnerMfaCapability(
+      request,
+      "account.members.manage",
+    );
     if (!authorization.ok) {
-      return createPartnerPortalV2ErrorResponse(authorization.error, authorization.status, correlationId);
+      return createPartnerPortalV2ErrorResponse(
+        authorization.error,
+        authorization.status,
+        correlationId,
+      );
     }
     if (!isAllowedPartnerPortalMutationOrigin(request)) {
-      return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
+      return createPartnerPortalV2ErrorResponse(
+        "forbidden",
+        403,
+        correlationId,
+      );
     }
     const { principal } = authorization;
     if (!principal.accountId || !principal.membershipId) {
-      return createPartnerPortalV2ErrorResponse("legacy_scope_unavailable", 409, correlationId);
+      return createPartnerPortalV2ErrorResponse(
+        "legacy_scope_unavailable",
+        409,
+        correlationId,
+      );
     }
     if (principal.accessLevel !== "account") {
-      return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
+      return createPartnerPortalV2ErrorResponse(
+        "forbidden",
+        403,
+        correlationId,
+      );
     }
     if (!arePartnerPortalV2WritesEnabled(principal.accountId)) {
-      return createPartnerPortalV2ErrorResponse("service_unavailable", 503, correlationId);
+      return createPartnerPortalV2ErrorResponse(
+        "service_unavailable",
+        503,
+        correlationId,
+      );
     }
     if (request.nextUrl.search.length > 0) {
-      return createPartnerPortalV2ErrorResponse("invalid_request", 400, correlationId);
+      return createPartnerPortalV2ErrorResponse(
+        "invalid_request",
+        400,
+        correlationId,
+      );
     }
     const idempotency = readPortalV2IdempotencyKey(request.headers);
     if (!idempotency.ok) {
@@ -100,7 +160,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     let raw: unknown;
     try {
       raw = await readBoundedJsonRequest(request, {
-        maximumBytes: 2_048,
+        maximumBytes: 16_384,
         deadlineMs: 10_000,
         rejectDuplicateObjectKeys: true,
       });
@@ -121,6 +181,9 @@ export async function POST(request: NextRequest): Promise<Response> {
             name: "Enter the teammate’s full name.",
             roleKey: "Choose an available role.",
             persona: "Choose the teammate’s partner type.",
+            accessLevel: "Choose account-wide or scoped access.",
+            locationIds: "Choose valid active locations for this account.",
+            costCenterIds: "Choose valid active cost centers for this account.",
           },
         }),
       );
@@ -156,7 +219,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     if (run.kind === "conflict") {
       return createPartnerPortalV2DescriptorResponse(
         createPortalV2ErrorResponse(
-          run.reason === "different_request" ? "idempotency_conflict" : "conflict",
+          run.reason === "different_request"
+            ? "idempotency_conflict"
+            : "conflict",
           correlationId,
         ),
       );

@@ -9,15 +9,28 @@ describe("partner portal V2 cancellation route contracts", () => {
   it("serializes cancel versus confirm and rechecks both appointment state and job revision", () => {
     const route = source("app/api/portal/v2/jobs/[jobId]/cancel/route.ts");
     const lock = route.indexOf("await acquireScheduleConflictLock(tx)");
+    const jobLock = route.indexOf(
+      "await acquirePartnerJobMutationLock(tx",
+      lock,
+    );
     const lockedRead = route.indexOf(".from(partnerBookings)", lock);
     const appointmentWrite = route.indexOf(".update(appointments)", lockedRead);
 
     expect(lock).toBeGreaterThan(0);
-    expect(lockedRead).toBeGreaterThan(lock);
+    expect(jobLock).toBeGreaterThan(lock);
+    expect(lockedRead).toBeGreaterThan(jobLock);
     expect(appointmentWrite).toBeGreaterThan(lockedRead);
     expect(route).toContain("eq(appointments.status, row.appointmentStatus)");
     expect(route).toContain("eq(partnerBookings.version, row.bookingVersion)");
     expect(route).toContain('throw new Error("partner_cancel_revision_race")');
+    expect(route).toContain(
+      "supersedePendingPartnerJobChangeRequestForCancellation(tx",
+    );
+    expect(
+      route.indexOf(
+        "supersedePendingPartnerJobChangeRequestForCancellation(tx",
+      ),
+    ).toBeGreaterThan(route.indexOf('publicStatus: "canceled"'));
   });
 
   it("keeps origin, tenant-safe access, idempotency, and revision checks ahead of mutation", () => {
@@ -62,7 +75,11 @@ describe("partner portal V2 cancellation route contracts", () => {
     expect(route).toContain("automaticFeeMinor: null");
     expect(processor).toContain('case "partner.cancellation_review_requested"');
     expect(processor).toContain("Review partner cancellation request");
-    expect(processor).toContain("isNotNull(partnerBookings.cancelRequestHash)");
+    expect(route).toContain(".insert(partnerCancellationRequests)");
+    expect(processor).toContain(
+      'eq(partnerCancellationRequests.state, "pending")',
+    );
+    expect(processor).toContain("cancellationRequestId");
   });
 
   it("publishes the same policy decision in list/detail DTOs and accessible job actions", () => {
@@ -77,7 +94,8 @@ describe("partner portal V2 cancellation route contracts", () => {
       expect(route).toContain("evaluatePartnerCancellation({");
       expect(route).toContain("resolvePartnerCancellationPolicy");
       expect(route).toContain("cancellation,");
-      expect(route).toContain("cancellationAction: cancellation.action");
+      expect(route).toContain("resolvePartnerJobActionAvailability({");
+      expect(route).toContain("allowedPartnerJobActions(actionAvailability)");
     }
     expect(actions).toContain(
       'aria-labelledby="partner-cancellation-policy-title"',

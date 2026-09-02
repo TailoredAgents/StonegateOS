@@ -11,6 +11,10 @@ const mockRequirePartnerCapability = jest.fn<
   [unknown, string]
 >();
 const mockListPartnerServiceCatalog = jest.fn<Promise<unknown>, [unknown]>();
+const mockLoadPartnerAgreementPresentation = jest.fn<
+  Promise<unknown>,
+  [unknown]
+>();
 const mockReadsEnabled = jest.fn<boolean, [string]>();
 
 mockModule("@/lib/partner-account-authorization", () => ({
@@ -22,6 +26,9 @@ mockModule("@/lib/partner-portal-feature-flags", () => ({
 mockModule("@/lib/partner-portal-v2-service-catalog", () => ({
   listPartnerServiceCatalog: mockListPartnerServiceCatalog,
 }));
+mockModule("@/lib/partner-account-service-agreement-service", () => ({
+  loadPartnerAgreementPresentation: mockLoadPartnerAgreementPresentation,
+}));
 
 const { GET } = await import("../../app/api/portal/v2/service-catalog/route");
 
@@ -32,6 +39,12 @@ function request(): NextRequest {
   return new NextRequest("http://localhost/api/portal/v2/service-catalog", {
     headers: { "x-correlation-id": CORRELATION_ID },
   });
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 describe("partner portal V2 service catalog route", () => {
@@ -52,6 +65,20 @@ describe("partner portal V2 service catalog route", () => {
         addOns: [{ key: "mattress_disposal", minimumQuantity: 1 }],
       },
     ]);
+    mockLoadPartnerAgreementPresentation.mockResolvedValue({
+      label: "2026 commercial agreement",
+      currency: "USD",
+      active: true,
+      effectiveFrom: "2026-01-01T00:00:00.000Z",
+      effectiveTo: null,
+      inclusions: [],
+      exclusions: [],
+      quoteRules: null,
+      services: [],
+      document: null,
+      revision: 1,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
   });
 
   it("loads exactly the selected account and reveals prices only with rates.read", async () => {
@@ -67,17 +94,22 @@ describe("partner portal V2 service catalog route", () => {
       accountId: ACCOUNT_ID,
       revealPrices: true,
     });
-    await expect(response.json()).resolves.toEqual(
-      expect.objectContaining({
-        ok: true,
-        services: [
-          expect.objectContaining({
-            key: "junk-removal",
-            addOns: [expect.objectContaining({ key: "mattress_disposal" })],
-          }),
-        ],
-      }),
-    );
+    expect(mockLoadPartnerAgreementPresentation).toHaveBeenCalledWith({
+      accountId: ACCOUNT_ID,
+    });
+    const body: unknown = await response.json();
+    const payload = record(body);
+    const services = Array.isArray(payload?.["services"])
+      ? payload["services"]
+      : [];
+    const service = record(services[0]);
+    const addOns = Array.isArray(service?.["addOns"]) ? service["addOns"] : [];
+    const agreement = record(payload?.["agreement"]);
+    expect(payload?.["ok"]).toBe(true);
+    expect(service?.["key"]).toBe("junk-removal");
+    expect(record(addOns[0])?.["key"]).toBe("mattress_disposal");
+    expect(agreement?.["label"]).toBe("2026 commercial agreement");
+    expect(agreement?.["currency"]).toBe("USD");
   });
 
   it("keeps the same account-scoped choices but hides negotiated prices for limited users", async () => {

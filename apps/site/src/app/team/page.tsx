@@ -40,6 +40,10 @@ import {
   type PersonalSessionInventory,
 } from "./settings-sessions";
 import {
+  parseTeamMfaSecurityStatus,
+  type TeamMfaSecurityStatus,
+} from "./team-mfa-security";
+import {
   parseInboxNewLeadFeed,
   type InboxNewLeadFeed,
 } from "./inbox-new-leads";
@@ -117,6 +121,10 @@ export default async function TeamPage({
     p_selected?: string;
     p_preview?: string;
     p_preview_job?: string;
+    p_admin?: string;
+    p_admin_cursor?: string;
+    p_admin_q?: string;
+    p_admin_status?: string;
     quoteMode?: string;
     view?: string;
     subview?: string;
@@ -137,6 +145,9 @@ export default async function TeamPage({
     zip?: string;
     propertyId?: string;
     instantQuoteId?: string;
+    partnerAccountId?: string;
+    partnerTargetType?: string;
+    partnerTargetId?: string;
     action?: string;
     setup?: string;
     saved?: string;
@@ -309,6 +320,18 @@ export default async function TeamPage({
     typeof params?.instantQuoteId === "string"
       ? params.instantQuoteId
       : undefined;
+  const partnerAccountIdParam =
+    typeof params?.partnerAccountId === "string"
+      ? params.partnerAccountId
+      : undefined;
+  const partnerTargetTypeParam =
+    typeof params?.partnerTargetType === "string"
+      ? params.partnerTargetType
+      : undefined;
+  const partnerTargetIdParam =
+    typeof params?.partnerTargetId === "string"
+      ? params.partnerTargetId
+      : undefined;
   const bookingRequested = params?.action === "book";
   const gaReportIdParam =
     typeof params?.gaReportId === "string" ? params.gaReportId : undefined;
@@ -425,6 +448,17 @@ export default async function TeamPage({
   };
 
   const partnerFilters = {
+    adminView: typeof params?.p_admin === "string" ? params.p_admin : undefined,
+    adminCursor:
+      typeof params?.p_admin_cursor === "string"
+        ? params.p_admin_cursor
+        : undefined,
+    adminQuery:
+      typeof params?.p_admin_q === "string" ? params.p_admin_q : undefined,
+    adminStatus:
+      typeof params?.p_admin_status === "string"
+        ? params.p_admin_status
+        : undefined,
     status: typeof params?.p_status === "string" ? params.p_status : undefined,
     ownerId: typeof params?.p_owner === "string" ? params.p_owner : undefined,
     type: typeof params?.p_type === "string" ? params.p_type : undefined,
@@ -545,6 +579,8 @@ export default async function TeamPage({
 
   let personalSessions: PersonalSessionInventory | null = null;
   let personalSessionsError: string | null = null;
+  let mfaSecurity: TeamMfaSecurityStatus | null = null;
+  let mfaSecurityError: string | null = null;
   if (tab === "settings") {
     if (!hasPermission("sessions.manage_self")) {
       personalSessionsError =
@@ -571,6 +607,25 @@ export default async function TeamPage({
         personalSessionsError =
           "Session inventory is temporarily unavailable. No sessions were changed.";
       }
+    }
+    try {
+      const response = await callAdminApiAs(principal, "/api/admin/team/mfa", {
+        timeoutMs: 8_000,
+      });
+      if (!response.ok) {
+        mfaSecurityError = `Multi-factor security is unavailable (HTTP ${response.status}).`;
+      } else {
+        mfaSecurity = parseTeamMfaSecurityStatus(
+          await response.json().catch(() => null),
+        );
+        if (!mfaSecurity) {
+          mfaSecurityError =
+            "Multi-factor security returned an invalid response. No settings were changed.";
+        }
+      }
+    } catch {
+      mfaSecurityError =
+        "Multi-factor security is temporarily unavailable. No settings were changed.";
     }
   }
 
@@ -627,6 +682,9 @@ export default async function TeamPage({
       contactId: contactIdParam,
       propertyId: propertyIdParam,
       instantQuoteId: instantQuoteIdParam,
+      partnerAccountId: partnerAccountIdParam,
+      partnerTargetType: partnerTargetTypeParam,
+      partnerTargetId: partnerTargetIdParam,
       memberId: memberIdParam,
     },
     expenses: {
@@ -723,6 +781,8 @@ export default async function TeamPage({
       calendarBadge,
       personalSessions,
       personalSessionsError,
+      mfaSecurity,
+      mfaSecurityError,
     },
   };
 
