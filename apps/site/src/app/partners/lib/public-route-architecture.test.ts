@@ -61,6 +61,52 @@ void test("the shared marketing menu is a conditional, inert, focus-managed dial
   assert.match(header, /min-h-11/u);
 });
 
+void test("the marketing navigation has one clear partner entry point", () => {
+  const header = source("../../../components/Header.tsx");
+  const footer = source("../../../components/Footer.tsx");
+  const landing = source("../(public)/page.tsx");
+
+  assert.match(header, /\{ href: "\/partners", label: "For Partners" \}/u);
+  assert.doesNotMatch(
+    header,
+    /\{ href: "\/(?:contact|blog|contractors|partners\/request-access)"/u,
+  );
+  assert.doesNotMatch(header, /if \(href === "\/partners"\) return false/u);
+
+  for (const destination of [
+    "/contact",
+    "/blog",
+    "/contractors",
+    "/partners/login",
+    "/partners/request-access",
+  ]) {
+    assert.match(
+      footer,
+      new RegExp(`href="${destination.replaceAll("/", "\\/")}"`, "u"),
+      `${destination} should remain discoverable in the footer`,
+    );
+  }
+
+  assert.match(landing, /aria-label="Partner access options"/u);
+  assert.match(landing, /Already approved\? Sign in/u);
+  assert.match(landing, /New company or teammate\? Request access/u);
+});
+
+void test("marketing actions do not duplicate or cover the navigation", () => {
+  const header = source("../../../components/Header.tsx");
+  const siteLayout = source("../../(site)/layout.tsx");
+  const homePage = source("../../(site)/page.tsx");
+  const stickyActions = source("../../../components/StickyCtaBar.tsx");
+
+  assert.match(header, /sticky top-0 z-\[60\]/u);
+  assert.match(siteLayout, /<StickyCtaBar \/>/u);
+  assert.doesNotMatch(homePage, /StickyCtaBar/u);
+  assert.doesNotMatch(stickyActions, /hidden md:block/u);
+  assert.doesNotMatch(stickyActions, /href=\{`sms:/u);
+  assert.match(stickyActions, />Call<\/a>/u);
+  assert.match(stickyActions, /<StickyGetQuoteButton/u);
+});
+
 void test("query errors become only locally controlled partner copy", () => {
   const portalUi = source("../components/PartnerPortalUi.tsx");
   const actions = source("../actions.ts");

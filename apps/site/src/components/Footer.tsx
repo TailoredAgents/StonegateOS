@@ -38,6 +38,26 @@ export function Footer() {
               {hqLabel}
               {locationLine ? ` — ${locationLine}` : ""}
             </p>
+            <nav aria-label="Company" className="mt-3">
+              <ul>
+                <li>
+                  <Link
+                    href="/about"
+                    className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
+                  >
+                    About Stonegate
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    href="/blog"
+                    className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
+                  >
+                    Blog
+                  </Link>
+                </li>
+              </ul>
+            </nav>
           </div>
           <nav aria-label="Contact Stonegate">
             <p className="font-semibold text-neutral-800">Contact</p>
@@ -67,6 +87,14 @@ export function Footer() {
                   {company.email}
                 </a>
               </li>
+              <li>
+                <Link
+                  href="/contact"
+                  className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
+                >
+                  Contact form
+                </Link>
+              </li>
             </ul>
           </nav>
           <div>
@@ -81,7 +109,15 @@ export function Footer() {
                   href="/partners"
                   className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
                 >
-                  Partner Portal
+                  For Partners
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/partners/login"
+                  className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
+                >
+                  Partner sign in
                 </Link>
               </li>
               <li>
@@ -90,6 +126,14 @@ export function Footer() {
                   className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
                 >
                   Request partner access
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/contractors"
+                  className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
+                >
+                  Contractor services
                 </Link>
               </li>
             </ul>

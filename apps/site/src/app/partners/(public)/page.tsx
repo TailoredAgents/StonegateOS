@@ -136,20 +136,23 @@ function PartnerLanding({
             proof, communicate with Stonegate, and keep commercial records
             together in one secure workspace.
           </p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <p className="mt-8 text-sm font-medium text-slate-700">
+            Already approved? Sign in. New company or teammate? Request access.
+          </p>
+          <div
+            className="mt-4 flex flex-col gap-3 sm:flex-row"
+            aria-label="Partner access options"
+          >
+            <Link href="/partners/login" className={partnerPrimaryButtonClass}>
+              <KeyRound className="h-4 w-4" aria-hidden="true" />
+              Sign in
+            </Link>
             <Link
               href="/partners/request-access"
-              className={partnerPrimaryButtonClass}
+              className={partnerSecondaryButtonClass}
             >
               Request partner access
               <ArrowRight className="h-4 w-4" aria-hidden="true" />
-            </Link>
-            <Link
-              href="/partners/login"
-              className={partnerSecondaryButtonClass}
-            >
-              <KeyRound className="h-4 w-4" aria-hidden="true" />
-              Sign in
             </Link>
           </div>
           <ul

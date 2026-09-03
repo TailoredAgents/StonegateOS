@@ -35,21 +35,14 @@ function normalizePhoneE164(value: string): string {
 
 const navItems = [
   { href: "/services", label: "Services" },
-  { href: "/contractors", label: "For Contractors" },
-  { href: "/areas", label: "Service Areas" },
   { href: "/pricing", label: "Pricing" },
-  { href: "/blog", label: "Blog" },
+  { href: "/areas", label: "Service Areas" },
   { href: "/about", label: "About" },
-  { href: "/contact", label: "Contact" },
-  { href: "/partners", label: "Partner Portal" },
-  { href: "/partners/request-access", label: "Request Access" },
+  { href: "/partners", label: "For Partners" },
 ] satisfies Array<{ href: Route; label: string }>;
 
 function isActiveNavItem(pathname: string, href: Route): boolean {
   if (pathname === href) return true;
-  // The partner landing is exact; otherwise every partner subroute would mark
-  // two marketing links as the current page.
-  if (href === "/partners") return false;
   return pathname.startsWith(`${href}/`);
 }
 
@@ -172,7 +165,7 @@ export function Header() {
   return (
     <header
       ref={headerRef}
-      className="sticky top-0 z-50 border-b border-neutral-300/50 bg-white/95"
+      className="sticky top-0 z-[60] border-b border-neutral-300/50 bg-white/95"
     >
       <div
         inert={isMenuOpen ? true : undefined}

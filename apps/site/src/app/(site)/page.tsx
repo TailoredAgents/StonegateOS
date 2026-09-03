@@ -14,7 +14,6 @@ import {
 import { HeroV2 } from "@/components/HeroV2";
 import { LeadForm } from "@/components/LeadForm";
 import { MdxContent } from "@/components/MdxContent";
-import { StickyCtaBar } from "@/components/StickyCtaBar";
 import { createPageMetadata } from "@/lib/metadata";
 import { DEFAULT_LEAD_SERVICE_OPTIONS } from "@/lib/lead-services";
 
@@ -547,7 +546,6 @@ export default function HomePage() {
             ))}
           </div>
         </Section>
-        <StickyCtaBar />
       </div>
     </>
   );
