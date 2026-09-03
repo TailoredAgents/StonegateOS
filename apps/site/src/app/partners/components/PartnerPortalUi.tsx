@@ -12,14 +12,16 @@ import {
 import { cn } from "@myst-os/ui";
 import { Breadcrumbs, type BreadcrumbItem } from "@/components/Breadcrumbs";
 
+export { PartnerStatusBadge } from "./PartnerStatusBadge";
+
 export const partnerFieldClass =
   "mt-1.5 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500";
 
 export const partnerPrimaryButtonClass =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60";
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 motion-reduce:transition-none disabled:cursor-wait disabled:opacity-60";
 
 export const partnerSecondaryButtonClass =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-primary-300 hover:bg-primary-50 hover:text-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-primary-300 hover:bg-primary-50 hover:text-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-60";
 
 const PARTNER_ERROR_MESSAGES: Record<string, string> = {
   booking_operation_expired:
@@ -279,63 +281,5 @@ export function PartnerStatCard({
       </p>
       {detail ? <p className="mt-1 text-xs text-slate-500">{detail}</p> : null}
     </div>
-  );
-}
-
-function normalizeStatus(status: string): string {
-  return status
-    .trim()
-    .replace(/[_-]+/gu, " ")
-    .replace(/\b\w/gu, (letter) => letter.toUpperCase());
-}
-
-export function PartnerStatusBadge({ status }: { status: string }) {
-  const normalized = status.trim().toLowerCase();
-  const tone = [
-    "completed",
-    "confirmed",
-    "paid",
-    "accepted",
-    "approved",
-  ].includes(normalized)
-    ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
-    : [
-          "canceled",
-          "cancelled",
-          "declined",
-          "failed",
-          "overdue",
-          "void",
-        ].includes(normalized)
-      ? "bg-rose-50 text-rose-800 ring-rose-200"
-      : [
-            "approval_needed",
-            "needs_information",
-            "requested",
-            "requested_review",
-            "review",
-            "under_review",
-          ].includes(normalized)
-        ? "bg-amber-50 text-amber-900 ring-amber-200"
-        : [
-              "en_route",
-              "in_progress",
-              "issued",
-              "partially_paid",
-              "pending",
-              "scheduled",
-            ].includes(normalized)
-          ? "bg-sky-50 text-sky-800 ring-sky-200"
-          : "bg-slate-100 text-slate-700 ring-slate-200";
-
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset",
-        tone,
-      )}
-    >
-      {normalizeStatus(status || "Unknown")}
-    </span>
   );
 }

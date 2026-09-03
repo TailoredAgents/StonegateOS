@@ -43,6 +43,204 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
     .toBe(true);
 }
 
+test(
+  "Partner Portal landing prioritizes sign-in and presents an accessible product record",
+  {
+    tag: "@partner-landing-public",
+  },
+  async ({ page }, testInfo) => {
+    const navigationResponse = await page.goto("/partners");
+    expect(navigationResponse?.status()).toBe(200);
+    const serverHtml = await navigationResponse?.text();
+    expect(serverHtml).toContain(
+      "Schedule, track, and document every Stonegate job.",
+    );
+    expect(serverHtml).toContain('rel="canonical"');
+    expect(serverHtml).toContain('property="og:image"');
+
+    await expect(page).toHaveTitle("For Partners | Stonegate Partner Portal");
+    await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+      "content",
+      /junk removal[\s\S]*locations[\s\S]*photos[\s\S]*proof[\s\S]*billing/u,
+    );
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      /\/partners$/u,
+    );
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+      "content",
+      /index/u,
+    );
+    const socialImageUrl = await page
+      .locator('meta[property="og:image"]')
+      .getAttribute("content");
+    expect(socialImageUrl).toMatch(/\/partners\/social-image$/u);
+
+    if (testInfo.project.name === "chromium-1440-light") {
+      if (!socialImageUrl) {
+        throw new Error("Partner social image URL is missing");
+      }
+      const socialImageResponse = await page.request.get(socialImageUrl);
+      expect(socialImageResponse.status()).toBe(200);
+      expect(socialImageResponse.headers()["content-type"]).toMatch(
+        /^image\/png/u,
+      );
+    }
+
+    await expect(
+      page.getByRole("heading", {
+        name: "Schedule, track, and document every Stonegate job.",
+        level: 1,
+      }),
+    ).toBeVisible();
+
+    const accessOptions = page.getByRole("navigation", {
+      name: "Partner access options",
+    });
+    const signIn = accessOptions.getByRole("link", { name: "Sign in" });
+    const requestAccess = accessOptions.getByRole("link", {
+      name: "Request access",
+    });
+    await expect(signIn).toHaveAttribute("href", "/partners/login");
+    await expect(signIn).toHaveClass(/bg-primary-900/u);
+    await expect(requestAccess).toHaveAttribute(
+      "href",
+      "/partners/request-access",
+    );
+
+    const preview = page.getByRole("figure");
+    await expect(
+      preview.getByText("Property cleanout", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      preview.getByText("Sample property", { exact: true }),
+    ).toBeVisible();
+    await expect(preview.getByText("Completion report ready")).toBeVisible();
+    const proofImage = preview.getByRole("img", {
+      name: "Before and after view of a completed garage cleanout",
+    });
+    await expect(proofImage).toBeVisible();
+    await expect
+      .poll(() =>
+        proofImage.evaluate((image: HTMLImageElement) => image.naturalWidth),
+      )
+      .toBe(720);
+
+    const brandHeader = page.locator("header").first();
+    await expect(brandHeader.locator('a[href="/"]')).toHaveCount(1);
+    await expect(
+      brandHeader.getByRole("link", { name: "Partner Portal", exact: true }),
+    ).toHaveAttribute("href", "/partners");
+
+    const firstQuestion = page.locator("details").first();
+    const firstSummary = firstQuestion.locator("summary");
+    await firstSummary.focus();
+    await firstSummary.press("Enter");
+    await expect(firstQuestion).toHaveAttribute("open", "");
+
+    await expectNoHorizontalOverflow(page);
+    await expectTeamStateToPassAutomatedWcag({
+      page,
+      testInfo,
+      surface: "partner-landing",
+      state: "normal",
+    });
+
+    if (testInfo.project.name === "chromium-1440-light") {
+      for (const [name, locator] of [
+        [
+          "partner-landing-hero",
+          page.locator('section[aria-labelledby="partner-landing-title"]'),
+        ],
+        ["partner-landing-example-workspace", preview],
+        [
+          "partner-landing-access-and-faq",
+          page.locator('section[aria-labelledby="partner-access-heading"]'),
+        ],
+      ] as const) {
+        await testInfo.attach(name, {
+          body: await locator.screenshot({ animations: "disabled" }),
+          contentType: "image/png",
+        });
+      }
+      await testInfo.attach("partner-landing-full-page", {
+        body: await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+        }),
+        contentType: "image/png",
+      });
+    }
+
+    if (testInfo.project.name === "chromium-375-light") {
+      await testInfo.attach("partner-landing-mobile-header", {
+        body: await brandHeader.screenshot({ animations: "disabled" }),
+        contentType: "image/png",
+      });
+    }
+  },
+);
+
+test(
+  "Partner Portal landing remains complete without client JavaScript",
+  { tag: "@partner-landing-public" },
+  async ({ browser, baseURL }, testInfo) => {
+    test.skip(
+      testInfo.project.name !== "chromium-1440-light",
+      "One representative no-JavaScript pass is sufficient.",
+    );
+    if (!baseURL) throw new Error("The audit Site base URL is required.");
+
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    const page = await context.newPage();
+    try {
+      const response = await page.goto(
+        new URL("/partners", baseURL).toString(),
+      );
+      expect(response?.status()).toBe(200);
+      await expect(
+        page.getByRole("heading", {
+          name: "Schedule, track, and document every Stonegate job.",
+          level: 1,
+        }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("link", { name: "Sign in", exact: true }),
+      ).toHaveCount(3);
+      await expect(
+        page.getByRole("link", { name: "Request access", exact: true }),
+      ).toHaveCount(2);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      await context.close();
+    }
+  },
+);
+
+test(
+  "Partner Portal landing reflows at 200 and 400 percent effective zoom",
+  { tag: "@partner-zoom" },
+  async ({ page }) => {
+    await page.goto("/partners");
+    await expect(
+      page.getByRole("heading", {
+        name: "Schedule, track, and document every Stonegate job.",
+        level: 1,
+      }),
+    ).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    const accessOptions = page.getByRole("navigation", {
+      name: "Partner access options",
+    });
+    for (const action of await accessOptions.getByRole("link").all()) {
+      const box = await action.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+  },
+);
+
 test("Partner Portal public entry points are responsive and pass the automated WCAG gate", async ({
   page,
 }, testInfo) => {

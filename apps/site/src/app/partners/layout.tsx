@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: {
-    default: "Partner Portal",
-    template: "%s | Partner Portal",
+    default: "Stonegate Partner Portal",
+    template: "%s | Stonegate Partner Portal",
   },
   description:
     "Schedule service, manage locations, and keep track of Stonegate jobs in one place.",

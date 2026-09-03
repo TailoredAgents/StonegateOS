@@ -278,6 +278,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           path: rawPath,
           key: evt.key,
           meta: evt.meta,
+          value: evt.value,
         })
       : null;
     // Unknown or malformed Partner events are ignored instead of allowing a
@@ -329,6 +330,10 @@ export async function POST(request: NextRequest): Promise<Response> {
       : evt.key?.trim()
         ? evt.key.trim().slice(0, 120)
         : null;
+    const value =
+      partnerProductEvent?.event === "web_vital"
+        ? partnerProductEvent.value
+        : evt.value;
 
     inserts.push({
       sessionId,
@@ -349,15 +354,15 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     if (
       event === "web_vital" &&
-      typeof evt.value === "number" &&
-      Number.isFinite(evt.value)
+      typeof value === "number" &&
+      Number.isFinite(value)
     ) {
       vitalsInserts.push({
         sessionId,
         visitId,
         path,
         metric: key ?? "unknown",
-        value: evt.value,
+        value,
         rating:
           typeof meta["rating"] === "string"
             ? String(meta["rating"]).slice(0, 20)

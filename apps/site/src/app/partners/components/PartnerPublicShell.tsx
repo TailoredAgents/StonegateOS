@@ -1,10 +1,7 @@
-"use client";
-
-import Image from "next/image";
 import Link from "next/link";
-import type { Route } from "next";
-import { usePathname } from "next/navigation";
+import { Phone } from "lucide-react";
 import type { PublicCompanyProfile } from "@/lib/company";
+import { PartnerPublicHeaderAction } from "./PartnerPublicHeaderAction";
 
 export function PartnerPublicShell({
   company,
@@ -15,59 +12,61 @@ export function PartnerPublicShell({
   children: React.ReactNode;
   showSignIn?: boolean;
 }) {
-  const pathname = usePathname();
-  const entryLink: { href: Route; label: string } =
-    pathname === "/partners/login"
-      ? { href: "/partners/request-access", label: "Request access" }
-      : { href: "/partners/login", label: "Sign in" };
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50 text-slate-950">
+    <div className="flex min-h-screen flex-col bg-white text-slate-950">
       <a
         href="#partner-public-main"
-        className="sr-only fixed left-4 top-4 z-50 rounded-lg bg-primary-800 px-4 py-3 font-semibold text-white shadow-xl focus:not-sr-only"
+        className="sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:not-sr-only focus:rounded-lg focus:bg-primary-900 focus:px-4 focus:py-3 focus:font-semibold focus:text-white focus:shadow-xl"
       >
         Skip to main content
       </a>
-      <header className="border-b border-slate-200 bg-white">
+      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex min-h-16 w-full max-w-6xl items-center justify-between gap-4 px-4 py-2 sm:px-6 lg:px-8">
-          <Link
-            href="/partners"
-            className="flex min-w-0 items-center gap-3 rounded-lg"
-          >
-            <Image
-              src={company.logoPath}
-              alt=""
-              width={48}
-              height={48}
-              className="h-11 w-11 object-contain"
-              priority
-            />
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold text-slate-950">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <Link
+              href="/"
+              className="flex min-w-0 items-center gap-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
+              aria-label={`${company.name} home`}
+            >
+              {/* This source is a dedicated 96 px WebP; explicit dimensions reserve layout space without a client image wrapper. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/images/brand/stonegate-partner-mark-96.webp"
+                alt=""
+                width="48"
+                height="48"
+                decoding="async"
+                className="h-12 w-12 shrink-0 object-contain"
+              />
+              <span className="hidden truncate text-sm font-semibold text-slate-950 md:block">
                 {company.name}
               </span>
-              <span className="block text-xs text-slate-500">
-                Partner Portal
-              </span>
-            </span>
-          </Link>
-          <div className="flex items-center gap-2">
+            </Link>
+            <span
+              className="h-7 w-px shrink-0 bg-slate-200"
+              aria-hidden="true"
+            />
+            <Link
+              href="/partners"
+              className="inline-flex min-h-11 items-center whitespace-nowrap rounded-lg px-1 text-xs font-semibold text-primary-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 sm:text-sm"
+            >
+              Partner Portal
+            </Link>
+          </div>
+          <nav
+            className="flex items-center gap-2"
+            aria-label="Partner account actions"
+          >
             <a
               href={`tel:${company.phoneE164}`}
-              className="inline-flex min-h-11 items-center rounded-xl px-3 text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-primary-800"
+              className="hidden min-h-11 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-primary-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 sm:inline-flex"
+              data-partner-analytics="landing_call_support"
             >
-              <span className="hidden sm:inline">Need help? </span>
-              <span className="sm:ml-1">Call</span>
+              <Phone className="h-4 w-4" aria-hidden="true" />
+              Call {company.phoneDisplay}
             </a>
-            {showSignIn ? (
-              <Link
-                href={entryLink.href}
-                className="inline-flex min-h-11 items-center rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:border-primary-300 hover:text-primary-800"
-              >
-                {entryLink.label}
-              </Link>
-            ) : null}
-          </div>
+            <PartnerPublicHeaderAction enabled={showSignIn} />
+          </nav>
         </div>
       </header>
       <main
@@ -83,20 +82,27 @@ export function PartnerPublicShell({
             © {new Date().getFullYear()} {company.name}. Licensed and insured.
           </p>
           <nav aria-label="Legal" className="flex flex-wrap gap-x-4 gap-y-2">
+            <a
+              className="inline-flex min-h-11 min-w-11 items-center justify-center px-1 font-semibold text-primary-900 underline-offset-4 hover:underline sm:hidden"
+              href={`tel:${company.phoneE164}`}
+              data-partner-analytics="landing_call_support"
+            >
+              Call
+            </a>
             <Link
-              className="inline-flex min-h-11 items-center underline-offset-4 hover:underline"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center px-1 underline-offset-4 hover:underline"
               href="/privacy"
             >
               Privacy
             </Link>
             <Link
-              className="inline-flex min-h-11 items-center underline-offset-4 hover:underline"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center px-1 underline-offset-4 hover:underline"
               href="/terms"
             >
               Terms
             </Link>
             <Link
-              className="inline-flex min-h-11 items-center underline-offset-4 hover:underline"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center px-1 underline-offset-4 hover:underline"
               href="/service-agreement"
             >
               Service agreement

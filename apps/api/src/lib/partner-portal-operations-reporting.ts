@@ -14,6 +14,8 @@ export type PartnerOperationsRangeDays =
   (typeof PARTNER_OPERATIONS_RANGE_DAYS)[number];
 
 const STAGE_LABELS: Readonly<Record<PartnerFunnelStage, string>> = {
+  access_request_started: "Access request started",
+  verification_request_accepted: "Verification request accepted",
   booking_started: "Booking started",
   availability_requested: "Availability requested",
   availability_available: "Bookable windows returned",

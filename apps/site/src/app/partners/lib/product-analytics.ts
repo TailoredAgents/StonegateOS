@@ -1,6 +1,8 @@
 import { flushWebAnalytics, trackWebEvent } from "@/lib/web-analytics";
 
 export const PARTNER_FUNNEL_STAGES = [
+  "access_request_started",
+  "verification_request_accepted",
   "booking_started",
   "availability_requested",
   "availability_available",
@@ -30,10 +32,15 @@ export const PARTNER_FUNNEL_PERSONAS = [
 
 export type PartnerFunnelStage = (typeof PARTNER_FUNNEL_STAGES)[number];
 export type PartnerFunnelPersona = (typeof PARTNER_FUNNEL_PERSONAS)[number];
-export type PartnerFunnelSurface = "booking" | "draft_upload" | "proof_upload";
+export type PartnerFunnelSurface =
+  | "access"
+  | "booking"
+  | "draft_upload"
+  | "proof_upload";
 
 const PERSONAS = new Set<string>(PARTNER_FUNNEL_PERSONAS);
 const SURFACE_PATH: Record<PartnerFunnelSurface, string> = {
+  access: "/partners/request-access",
   booking: "/partners/book",
   draft_upload: "/partners/book",
   proof_upload: "/partners/bookings/[job]/proof",

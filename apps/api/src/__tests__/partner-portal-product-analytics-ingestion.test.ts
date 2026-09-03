@@ -23,6 +23,7 @@ const webEventCountsDaily = {
   utmContent: "web_event_counts_daily.utm_content",
 };
 const insertedEvents: Array<Record<string, unknown>> = [];
+const insertedVitals: Array<Record<string, unknown>> = [];
 const insertedCounts: Array<Record<string, unknown>> = [];
 const deletedTables: unknown[] = [];
 const mockGetServiceAreaPolicy = jest.fn();
@@ -40,6 +41,7 @@ const database = {
         Record<string, unknown>
       >;
       if (table === webEvents) insertedEvents.push(...rows);
+      if (table === webVitals) insertedVitals.push(...rows);
       if (table === webEventCountsDaily) insertedCounts.push(...rows);
       return { onConflictDoUpdate: jest.fn(() => Promise.resolve()) };
     }),
@@ -75,6 +77,7 @@ function request(event: Record<string, unknown>): NextRequest {
 describe("Partner product analytics ingestion", () => {
   beforeEach(() => {
     insertedEvents.length = 0;
+    insertedVitals.length = 0;
     insertedCounts.length = 0;
     deletedTables.length = 0;
     mockGetServiceAreaPolicy.mockReset();
@@ -169,6 +172,81 @@ describe("Partner product analytics ingestion", () => {
 
     expect(response.status).toBe(200);
     expect(insertedEvents).toEqual([]);
+    expect(insertedCounts).toEqual([]);
+  });
+
+  it("normalizes Partner web vitals and derives ratings on the server", async () => {
+    const response = await POST(
+      request({
+        sessionId: "session_12345678",
+        visitId: "visit_12345678",
+        event: "web_vital",
+        path: "/partners?account=private",
+        key: "lcp",
+        value: 2_600.4,
+        meta: {
+          rating: "good",
+          address: "1 Private Street",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(insertedEvents).toEqual([
+      expect.objectContaining({
+        event: "web_vital",
+        path: "/partners",
+        key: "LCP",
+        meta: { rating: "needs_improvement" },
+      }),
+    ]);
+    expect(insertedVitals).toEqual([
+      expect.objectContaining({
+        path: "/partners",
+        metric: "LCP",
+        value: 2_600,
+        rating: "needs_improvement",
+      }),
+    ]);
+    expect(insertedCounts).toEqual([
+      expect.objectContaining({
+        event: "web_vital",
+        path: "/partners",
+        key: "LCP",
+      }),
+    ]);
+    expect(JSON.stringify(insertedEvents)).not.toMatch(
+      /Private Street|session_12345678|visit_12345678/iu,
+    );
+  });
+
+  it("drops unsupported and out-of-bounds Partner web vitals", async () => {
+    const response = await POST(
+      request({
+        events: [
+          {
+            sessionId: "session_12345678",
+            visitId: "visit_12345678",
+            event: "web_vital",
+            path: "/partners",
+            key: "FCP",
+            value: 1_000,
+          },
+          {
+            sessionId: "session_12345678",
+            visitId: "visit_12345678",
+            event: "web_vital",
+            path: "/partners",
+            key: "CLS",
+            value: 10.0001,
+          },
+        ],
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(insertedEvents).toEqual([]);
+    expect(insertedVitals).toEqual([]);
     expect(insertedCounts).toEqual([]);
   });
 });

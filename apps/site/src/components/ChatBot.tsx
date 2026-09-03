@@ -301,7 +301,7 @@ export function ChatBot() {
                 <button
                   key={s}
                   type="button"
-                  className="rounded-full border border-neutral-300 px-2 py-1 text-xs text-neutral-600 transition hover:border-accent-400 hover:text-accent-600"
+                  className="rounded-full border border-neutral-300 px-2 py-1 text-xs text-neutral-600 transition hover:border-accent-500 hover:text-accent-600"
                   onClick={() => void handleSend(s)}
                 >
                   {s}

@@ -1,4 +1,6 @@
 export const PARTNER_FUNNEL_STAGES = [
+  "access_request_started",
+  "verification_request_accepted",
   "booking_started",
   "availability_requested",
   "availability_available",
@@ -29,15 +31,35 @@ export const PARTNER_FUNNEL_PERSONAS = [
 export type PartnerFunnelStage = (typeof PARTNER_FUNNEL_STAGES)[number];
 export type PartnerFunnelPersona = (typeof PARTNER_FUNNEL_PERSONAS)[number];
 
+export const PARTNER_WEB_VITAL_METRICS = ["LCP", "INP", "CLS"] as const;
+export type PartnerWebVitalMetric = (typeof PARTNER_WEB_VITAL_METRICS)[number];
+export type PartnerWebVitalRating = "good" | "needs_improvement" | "poor";
+
 const PARTNER_EVENTS = new Set([
   "partner_page_view",
   "partner_action",
   "partner_form_submit",
   "partner_funnel",
+  "web_vital",
 ]);
 const FUNNEL_STAGES = new Set<string>(PARTNER_FUNNEL_STAGES);
 const FUNNEL_PERSONAS = new Set<string>(PARTNER_FUNNEL_PERSONAS);
-const FUNNEL_SURFACES = new Set(["booking", "draft_upload", "proof_upload"]);
+const ACCESS_FUNNEL_STAGES = new Set<string>([
+  "access_request_started",
+  "verification_request_accepted",
+]);
+const FUNNEL_SURFACES = new Set([
+  "access",
+  "booking",
+  "draft_upload",
+  "proof_upload",
+]);
+const WEB_VITAL_METRICS = new Set<string>(PARTNER_WEB_VITAL_METRICS);
+const WEB_VITAL_MAX_VALUE: Readonly<Record<PartnerWebVitalMetric, number>> = {
+  LCP: 120_000,
+  INP: 120_000,
+  CLS: 10,
+};
 const SAFE_ACTION_KEY = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
 const SAFE_PARTNER_PATH_SEGMENTS = new Set([
   "activate",
@@ -73,16 +95,24 @@ const DYNAMIC_PARTNER_PATH_LABELS: Readonly<Record<string, string>> = {
   quotes: "[quote]",
 };
 
-export type NormalizedPartnerProductEvent = Readonly<{
-  event:
-    | "partner_page_view"
-    | "partner_action"
-    | "partner_form_submit"
-    | "partner_funnel";
-  path: string;
-  key: string | null;
-  meta: Record<string, unknown>;
-}>;
+export type NormalizedPartnerProductEvent =
+  | Readonly<{
+      event:
+        | "partner_page_view"
+        | "partner_action"
+        | "partner_form_submit"
+        | "partner_funnel";
+      path: string;
+      key: string | null;
+      meta: Record<string, unknown>;
+    }>
+  | Readonly<{
+      event: "web_vital";
+      path: string;
+      key: PartnerWebVitalMetric;
+      value: number;
+      meta: Readonly<{ rating: PartnerWebVitalRating }>;
+    }>;
 
 export function isPartnerAnalyticsSurface(
   event: string,
@@ -127,14 +157,70 @@ export function parsePartnerFunnelKey(
   };
 }
 
+function partnerWebVitalRating(
+  metric: PartnerWebVitalMetric,
+  value: number,
+): PartnerWebVitalRating {
+  if (metric === "LCP") {
+    return value <= 2_500
+      ? "good"
+      : value <= 4_000
+        ? "needs_improvement"
+        : "poor";
+  }
+  if (metric === "INP") {
+    return value <= 200 ? "good" : value <= 500 ? "needs_improvement" : "poor";
+  }
+  return value <= 0.1 ? "good" : value <= 0.25 ? "needs_improvement" : "poor";
+}
+
+function normalizePartnerWebVital(input: {
+  path: string;
+  key?: string | null;
+  value?: number;
+}): NormalizedPartnerProductEvent | null {
+  const candidate = input.key?.trim().toUpperCase() ?? "";
+  if (!WEB_VITAL_METRICS.has(candidate)) return null;
+  const metric = candidate as PartnerWebVitalMetric;
+  const value = input.value;
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > WEB_VITAL_MAX_VALUE[metric]
+  ) {
+    return null;
+  }
+  const normalizedValue =
+    metric === "CLS" ? Number(value.toFixed(4)) : Math.round(value);
+  return {
+    event: "web_vital",
+    path: sanitizePartnerAnalyticsPath(input.path),
+    key: metric,
+    value: normalizedValue,
+    meta: { rating: partnerWebVitalRating(metric, normalizedValue) },
+  };
+}
+
 export function normalizePartnerProductEvent(input: {
   event: string;
   path: string;
   key?: string | null;
   meta?: Record<string, unknown>;
+  value?: number;
 }): NormalizedPartnerProductEvent | null {
   if (!PARTNER_EVENTS.has(input.event)) return null;
-  const event = input.event as NormalizedPartnerProductEvent["event"];
+  if (input.event === "web_vital") {
+    if (!/^\/partners(?:\/|$)/u.test(input.path.split("?", 1)[0] ?? "")) {
+      return null;
+    }
+    return normalizePartnerWebVital(input);
+  }
+  if (input.value !== undefined) return null;
+  const event = input.event as Exclude<
+    NormalizedPartnerProductEvent["event"],
+    "web_vital"
+  >;
   const path = sanitizePartnerAnalyticsPath(input.path);
 
   if (event === "partner_page_view") {
@@ -150,6 +236,9 @@ export function normalizePartnerProductEvent(input: {
   const surface = input.meta?.["surface"];
   const step = input.meta?.["step"];
   if (typeof surface !== "string" || !FUNNEL_SURFACES.has(surface)) {
+    return null;
+  }
+  if (ACCESS_FUNNEL_STAGES.has(funnel.stage) !== (surface === "access")) {
     return null;
   }
   return {

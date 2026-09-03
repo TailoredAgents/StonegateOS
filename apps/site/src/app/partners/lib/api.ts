@@ -1,11 +1,10 @@
 import { cookies } from "next/headers";
-import { PARTNER_SESSION_COOKIE } from "@/lib/partner-session";
+import {
+  isValidPartnerSessionToken,
+  PARTNER_SESSION_COOKIE,
+} from "@/lib/partner-session";
 import { PARTNER_APPLICATION_SESSION_COOKIE } from "@/lib/partner-application-session";
-
-const API_BASE_URL =
-  process.env["API_BASE_URL"] ??
-  process.env["NEXT_PUBLIC_API_BASE_URL"] ??
-  "http://localhost:3001";
+import { resolvePartnerApiUrl } from "./api-origin";
 
 type CallApiInit = RequestInit & { timeoutMs?: number };
 
@@ -28,7 +27,13 @@ export async function callPartnerPublicApi(
   path: string,
   init?: CallApiInit,
 ): Promise<Response> {
-  const base = API_BASE_URL.replace(/\/$/, "");
+  if (!path.startsWith("/")) {
+    throw new Error("Partner API paths must be absolute.");
+  }
+  const apiUrl = resolvePartnerApiUrl(path as `/${string}`);
+  if (!apiUrl) {
+    throw new Error("Partner API base URL is unavailable.");
+  }
   const { timeoutMs = 25_000, ...requestInit } = init ?? {};
   const isFormDataBody =
     typeof FormData !== "undefined" && requestInit?.body instanceof FormData;
@@ -40,7 +45,7 @@ export async function callPartnerPublicApi(
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(`${base}${path}`, {
+    return await fetch(apiUrl, {
       ...requestInit,
       signal: controller.signal,
       headers: mergeHeaders(defaultHeaders, requestInit.headers),
@@ -57,7 +62,7 @@ export async function callPartnerApi(
 ): Promise<Response> {
   const jar = await cookies();
   const token = jar.get(PARTNER_SESSION_COOKIE)?.value ?? "";
-  if (!token) {
+  if (!isValidPartnerSessionToken(token)) {
     return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },

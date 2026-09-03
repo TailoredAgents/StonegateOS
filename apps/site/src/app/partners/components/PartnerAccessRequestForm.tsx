@@ -15,6 +15,10 @@ import {
   partnerOnboardingFetch,
 } from "../lib/onboarding";
 import {
+  flushPartnerFunnelEvents,
+  trackPartnerFunnelEvent,
+} from "../lib/product-analytics";
+import {
   PartnerNotice,
   partnerFieldClass,
   partnerPrimaryButtonClass,
@@ -51,6 +55,10 @@ export function PartnerAccessRequestForm({
     if (!form.reportValidity()) return;
     const email = new FormData(form).get("email");
     if (typeof email !== "string") return;
+    trackPartnerFunnelEvent({
+      stage: "access_request_started",
+      surface: "access",
+    });
     setPending(true);
     setMessage(null);
     const result = await partnerOnboardingFetch<{ ok: true; message?: string }>(
@@ -73,6 +81,11 @@ export function PartnerAccessRequestForm({
       );
       return;
     }
+    trackPartnerFunnelEvent({
+      stage: "verification_request_accepted",
+      surface: "access",
+    });
+    flushPartnerFunnelEvents();
     setComplete(true);
   }
 
@@ -179,7 +192,7 @@ export function PartnerAccessRequestForm({
         <form
           onSubmit={(event) => void submit(event)}
           className="mt-6 space-y-5"
-          data-partner-analytics="access_email_verification"
+          data-partner-analytics="access_email_submit"
         >
           <label className="block" htmlFor="partner-request-email">
             <span className="text-sm font-semibold text-slate-700">

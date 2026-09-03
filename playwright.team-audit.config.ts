@@ -102,6 +102,45 @@ const partnerZoomProjects = [
   },
 ] as const;
 
+const partnerLandingBrowserProjects = [
+  {
+    name: "edge-partner-landing-1440-light",
+    grep: /@partner-landing-public/u,
+    metadata: { auditTheme: "light", partnerBrowser: "edge" },
+    use: {
+      ...devices["Desktop Edge"],
+      viewport: { width: 1440, height: 1000 },
+    },
+  },
+  {
+    name: "firefox-partner-landing-1440-light",
+    grep: /@partner-landing-public/u,
+    metadata: { auditTheme: "light", partnerBrowser: "firefox" },
+    use: {
+      ...devices["Desktop Firefox"],
+      viewport: { width: 1440, height: 1000 },
+    },
+  },
+  {
+    name: "webkit-partner-landing-1440-light",
+    grep: /@partner-landing-public/u,
+    metadata: { auditTheme: "light", partnerBrowser: "safari" },
+    use: {
+      ...devices["Desktop Safari"],
+      viewport: { width: 1440, height: 1000 },
+    },
+  },
+  {
+    name: "webkit-partner-landing-ios-light",
+    grep: /@partner-landing-public/u,
+    metadata: { auditTheme: "light", partnerBrowser: "ios-safari" },
+    use: {
+      ...devices["iPhone 13"],
+      viewport: { width: 375, height: 812 },
+    },
+  },
+] as const;
+
 export default defineConfig({
   testDir: path.join(__dirname, "tests/e2e/audit"),
   timeout: 60_000,
@@ -137,6 +176,7 @@ export default defineConfig({
     ...accessibilityProjects,
     ...partnerStatefulProjects,
     ...partnerZoomProjects,
+    ...partnerLandingBrowserProjects,
   ],
   outputDir: "artifacts/team-crm-audit/playwright-test-results",
 });
