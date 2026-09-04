@@ -4,7 +4,7 @@ import { PartnerCredentialSetupForm } from "@/app/partners/components/PartnerCre
 import { PARTNER_PASSWORD_RESET_TOKEN_COOKIE } from "@/lib/partner-application-session";
 
 export const metadata: Metadata = {
-  title: "Choose a new partner password",
+  title: "Create a new partner password",
   robots: { index: false, follow: false, nocache: true },
   referrer: "no-referrer",
 };

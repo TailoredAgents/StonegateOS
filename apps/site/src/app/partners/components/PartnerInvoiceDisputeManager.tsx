@@ -1,8 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
-import type { Route } from "next";
 import { createPortalOperationKey, partnerPortalFetch } from "../lib/portal-v2";
 import {
   PartnerNotice,
@@ -294,15 +292,13 @@ export function PartnerInvoiceDisputeManager({
     if (!result?.ok) {
       const code = result?.error.error ?? "service_unavailable";
       setNotice({
-        tone: code === "mfa_step_up_required" ? "warning" : "error",
+        tone: code === "billing_request_pending" ? "warning" : "error",
         text:
-          code === "mfa_step_up_required"
-            ? "Verify this secure session in Account & security, then return and submit again. No billing request was recorded."
-            : code === "billing_request_pending"
-              ? "This invoice already has a request under review. Refresh its history before trying again."
-              : [409, 412].includes(result?.response.status ?? 0)
-                ? "The invoice or request history changed. Refresh and review it before submitting again."
-                : "The request could not be submitted. No adjustment or refund was started.",
+          code === "billing_request_pending"
+            ? "This invoice already has a request under review. Refresh its history before trying again."
+            : [409, 412].includes(result?.response.status ?? 0)
+              ? "The invoice or request history changed. Refresh and review it before submitting again."
+              : "The request could not be submitted. No adjustment or refund was started.",
       });
       requestAnimationFrame(() => feedbackRef.current?.focus());
       return;
@@ -325,7 +321,7 @@ export function PartnerInvoiceDisputeManager({
         aria-expanded={open}
         onClick={() => void toggle()}
       >
-        {open ? "Hide billing requests" : "Ask about this invoice"}
+        {open ? "Close invoice questions" : "Question this invoice"}
       </button>
       {open ? (
         <div className="mt-4 space-y-4">
@@ -334,14 +330,6 @@ export function PartnerInvoiceDisputeManager({
               <PartnerNotice tone={notice.tone}>{notice.text}</PartnerNotice>
             ) : null}
           </div>
-          {notice?.text.includes("Account & security") ? (
-            <Link
-              href={"/partners/settings" as Route}
-              className={partnerSecondaryButtonClass}
-            >
-              Verify secure session
-            </Link>
-          ) : null}
           {loading ? (
             <p className="text-sm text-slate-600" role="status">
               Loading billing-request history…
@@ -418,7 +406,7 @@ export function PartnerInvoiceDisputeManager({
                 </ol>
               ) : (
                 <p className="text-sm text-slate-600">
-                  No billing requests have been submitted for this invoice.
+                  No questions have been submitted for this invoice yet.
                 </p>
               )}
               {history.page.hasMore && history.page.nextCursor ? (
@@ -455,7 +443,7 @@ export function PartnerInvoiceDisputeManager({
                     </select>
                   </label>
                   <label className="text-sm font-semibold text-slate-800">
-                    What should Stonegate review?
+                    What would you like Stonegate to review?
                     <textarea
                       className={`${partnerFieldClass} mt-1 min-h-28 resize-y`}
                       name="reason"

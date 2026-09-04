@@ -97,7 +97,6 @@ export async function POST(request: NextRequest): Promise<Response> {
   try {
     result = await loginWithPassword(email, password, request, {
       rememberMe,
-      correlationId,
     });
   } catch {
     return NextResponse.json(
@@ -112,34 +111,6 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  if (result.kind === "mfa_enrollment_required") {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "mfa_enrollment_required",
-        message:
-          "This account requires an authenticator but setup is incomplete. Contact Stonegate support to recover access.",
-        recovery: "contact_support",
-        correlationId,
-      },
-      { status: 409, headers: { "Cache-Control": "no-store" } },
-    );
-  }
-
-  if (result.kind === "mfa_required") {
-    return NextResponse.json(
-      {
-        ok: true,
-        status: "mfa_required",
-        transactionToken: result.transactionToken,
-        expiresAt: result.expiresAt.toISOString(),
-        methods: { totp: true, recoveryCode: true },
-        correlationId,
-      },
-      { status: 202, headers: { "Cache-Control": "no-store" } },
-    );
-  }
-
   return NextResponse.json(
     {
       ok: true,
@@ -147,7 +118,6 @@ export async function POST(request: NextRequest): Promise<Response> {
       sessionToken: result.sessionToken,
       expiresAt: result.expiresAt.toISOString(),
       persistent: rememberMe,
-      mfaRequired: false,
       correlationId,
     },
     { headers: { "Cache-Control": "no-store" } },

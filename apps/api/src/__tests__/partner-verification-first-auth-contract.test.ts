@@ -82,9 +82,7 @@ describe("partner verification-first authentication contracts", () => {
       "src/lib/partner-access-application-administration.ts",
     );
     expect(administration).toContain("row.flowVersion === 2 || tenantBound");
-    expect(administration).toContain(
-      "row.flowVersion !== 2 && !tenantBound",
-    );
+    expect(administration).toContain("row.flowVersion !== 2 && !tenantBound");
   });
 
   it("removes phone delivery and gates every routine magic-link adapter", () => {
@@ -101,7 +99,7 @@ describe("partner verification-first authentication contracts", () => {
     expect(requestLink).not.toContain('requestedChannels: ["email", "sms"]');
   });
 
-  it("uses versioned Argon2id and limits privileged activation to security setup", () => {
+  it("uses versioned Argon2id and completes activation directly into the portal", () => {
     const crypto = source("src/lib/partner-password-crypto.ts");
     const auth = source("src/lib/partner-portal-auth.ts");
     const passwordManagement = source("src/lib/partner-password-management.ts");
@@ -117,7 +115,9 @@ describe("partner verification-first authentication contracts", () => {
     expect(passwordManagement).not.toContain(
       'input.authMethod === "magic_link"',
     );
-    expect(activation).toContain('"mfa_setup_required"');
-    expect(activation).toContain('"pre_authentication_only"');
+    expect(activation).not.toContain('"mfa_setup_required"');
+    expect(activation).not.toContain('"pre_authentication_only"');
+    expect(activation).toContain('nextAction: "portal_ready"');
+    expect(activation).toContain('authority: "portal"');
   });
 });

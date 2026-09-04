@@ -8,7 +8,7 @@ export const PORTAL_V2_ERROR_CODES = [
   "session_expired",
   "session_revoked",
   "forbidden",
-  "mfa_step_up_required",
+  "recent_authentication_required",
   "account_access_required",
   "account_inactive",
   "legacy_scope_unavailable",
@@ -86,9 +86,9 @@ const ERROR_DEFINITIONS: Readonly<Record<PortalV2ErrorCode, ErrorDefinition>> =
       message: "You do not have access to this action.",
       retryable: false,
     },
-    mfa_step_up_required: {
+    recent_authentication_required: {
       status: 403,
-      message: "Complete the additional security check to continue.",
+      message: "Sign in again to continue.",
       retryable: false,
     },
     account_access_required: {

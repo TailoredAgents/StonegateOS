@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
-import { and, asc, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull } from "drizzle-orm";
 import {
   auditLogs,
   getDb,
@@ -8,14 +8,15 @@ import {
   partnerAccounts,
   partnerAuthTransactions,
   partnerLoginTokens,
-  partnerMfaMethods,
   partnerRoleTemplates,
   partnerSessions,
   partnerUsers,
 } from "@/db";
+import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 import { normalizePhone } from "../../app/api/web/utils";
 import { resolvePublicSiteBaseUrl as resolvePublicSiteBaseUrlInternal } from "@/lib/public-site-url";
 import { isPartnerRoutineMagicLinkLoginEnabled } from "@/lib/partner-portal-feature-flags";
+import { activePartnerSessionAuthMethod } from "@/lib/partner-session-auth-policy";
 import {
   getPartnerDummyPasswordHash,
   hashPartnerPassword,
@@ -23,24 +24,10 @@ import {
   verifyPartnerPassword,
 } from "@/lib/partner-password-crypto";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
-import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 
 const PARTNER_SESSION_LAST_SEEN_TOUCH_MS = 5 * 60 * 1000;
-export const PARTNER_PASSWORD_MFA_TRANSACTION_TTL_MS = 5 * 60 * 1_000;
-export const PARTNER_PASSWORD_MFA_MAX_ATTEMPTS = 8;
 const PARTNER_STANDARD_SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
 const PARTNER_REMEMBERED_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const PARTNER_MFA_REQUIRED_ROLES = new Set([
-  "administrator",
-  "billing_approver",
-]);
-const PARTNER_MFA_REQUIRED_CAPABILITIES = [
-  "account.members.manage",
-  "account.security.manage",
-  "approvals.decide",
-  "commercial.edit",
-  "payments.initiate",
-] as const;
 
 type InitialPartnerAccountBinding = {
   accountId: string;
@@ -50,41 +37,6 @@ type InitialPartnerAccountBinding = {
   capabilityDenies: string[];
   roleCapabilities: string[];
 };
-
-function capabilityPatternMatches(pattern: string, required: string): boolean {
-  const normalized = pattern.trim().toLowerCase();
-  return (
-    normalized === "*" ||
-    normalized === required ||
-    (normalized.endsWith(".*") &&
-      required.startsWith(`${normalized.slice(0, -2)}.`))
-  );
-}
-
-export function partnerPasswordLoginRequiresMfa(input: {
-  userMfaRequired: boolean;
-  userMfaEnrolled: boolean;
-  roleKey: string;
-  roleCapabilities: readonly string[];
-  capabilityGrants: readonly string[];
-  capabilityDenies: readonly string[];
-}): boolean {
-  if (input.userMfaRequired || input.userMfaEnrolled) return true;
-  if (PARTNER_MFA_REQUIRED_ROLES.has(input.roleKey.trim().toLowerCase())) {
-    return true;
-  }
-  const denied = (capability: string) =>
-    input.capabilityDenies.some((pattern) =>
-      capabilityPatternMatches(pattern, capability),
-    );
-  return PARTNER_MFA_REQUIRED_CAPABILITIES.some(
-    (capability) =>
-      !denied(capability) &&
-      [...input.roleCapabilities, ...input.capabilityGrants].some((pattern) =>
-        capabilityPatternMatches(pattern, capability),
-      ),
-  );
-}
 
 async function findInitialPartnerAccountBinding(
   tx: TeamMutationTransaction,
@@ -135,6 +87,158 @@ async function findInitialPartnerAccountBinding(
           : [],
       }
     : null;
+}
+
+async function recoverRetiredActivationHandoff(
+  tx: TeamMutationTransaction,
+  input: {
+    partnerUserId: string;
+    email: string;
+    identityStatus: string;
+    active: boolean;
+    securityVersion: number;
+    correlationId: string;
+    now: Date;
+  },
+): Promise<boolean> {
+  const alreadyActive = input.active && input.identityStatus === "active";
+  const awaitingActivation =
+    !input.active && input.identityStatus === "pending_activation";
+  if (!alreadyActive && !awaitingActivation) {
+    return false;
+  }
+
+  const [handoff] = await tx
+    .select({
+      id: partnerAuthTransactions.id,
+      partnerAccountId: partnerAuthTransactions.partnerAccountId,
+      partnerMembershipId: partnerAuthTransactions.partnerMembershipId,
+      securityVersion: partnerAuthTransactions.securityVersion,
+    })
+    .from(partnerAuthTransactions)
+    .where(
+      and(
+        eq(partnerAuthTransactions.partnerUserId, input.partnerUserId),
+        eq(partnerAuthTransactions.purpose, "activation_mfa_setup"),
+        eq(partnerAuthTransactions.securityVersion, input.securityVersion),
+        isNull(partnerAuthTransactions.consumedAt),
+      ),
+    )
+    .for("update")
+    .limit(1);
+  if (!handoff) return alreadyActive;
+
+  const [binding] = await tx
+    .select({
+      membershipId: partnerAccountMemberships.id,
+      membershipStatus: partnerAccountMemberships.status,
+      roleKey: partnerAccountMemberships.roleKey,
+    })
+    .from(partnerAccountMemberships)
+    .innerJoin(
+      partnerAccounts,
+      eq(partnerAccountMemberships.partnerAccountId, partnerAccounts.id),
+    )
+    .where(
+      and(
+        eq(partnerAccountMemberships.id, handoff.partnerMembershipId),
+        eq(
+          partnerAccountMemberships.partnerAccountId,
+          handoff.partnerAccountId,
+        ),
+        eq(partnerAccountMemberships.partnerUserId, input.partnerUserId),
+        inArray(partnerAccountMemberships.status, ["invited", "active"]),
+        inArray(partnerAccountMemberships.migrationReviewStatus, [
+          "not_required",
+          "approved",
+        ]),
+        eq(partnerAccounts.portalAccessEnabled, true),
+        eq(partnerAccounts.portalLifecycleStatus, "active"),
+      ),
+    )
+    .for("update")
+    .limit(1);
+  if (!binding) return alreadyActive;
+
+  if (binding.membershipStatus === "invited") {
+    const [membership] = await tx
+      .update(partnerAccountMemberships)
+      .set({
+        status: "active",
+        acceptedAt: input.now,
+        suspendedAt: null,
+        removedAt: null,
+        updatedAt: input.now,
+      })
+      .where(
+        and(
+          eq(partnerAccountMemberships.id, binding.membershipId),
+          eq(partnerAccountMemberships.status, "invited"),
+        ),
+      )
+      .returning({ id: partnerAccountMemberships.id });
+    if (!membership) return false;
+  }
+
+  if (awaitingActivation) {
+    const [identity] = await tx
+      .update(partnerUsers)
+      .set({
+        active: true,
+        identityStatus: "active",
+        updatedAt: input.now,
+      })
+      .where(
+        and(
+          eq(partnerUsers.id, input.partnerUserId),
+          eq(partnerUsers.active, false),
+          eq(partnerUsers.identityStatus, "pending_activation"),
+          eq(partnerUsers.securityVersion, input.securityVersion),
+        ),
+      )
+      .returning({ id: partnerUsers.id });
+    if (!identity) {
+      throw new Error("retired_activation_identity_changed");
+    }
+  }
+
+  const [consumed] = await tx
+    .update(partnerAuthTransactions)
+    .set({ consumedAt: input.now })
+    .where(
+      and(
+        eq(partnerAuthTransactions.id, handoff.id),
+        isNull(partnerAuthTransactions.consumedAt),
+      ),
+    )
+    .returning({ id: partnerAuthTransactions.id });
+  if (!consumed) throw new Error("retired_activation_handoff_changed");
+
+  const auditId = crypto.randomUUID();
+  await tx.insert(auditLogs).values({
+    id: auditId,
+    actorType: "human",
+    actorId: input.partnerUserId,
+    actorLabel: input.email,
+    actorRole: binding.roleKey,
+    sessionId: null,
+    authMethod: "password",
+    correlationId: input.correlationId,
+    requiredPermissions: [],
+    outcome: "succeeded",
+    surface: "/partners/login",
+    action: "partner.auth.retired_activation_handoff_recovered",
+    entityType: "partner_user",
+    entityId: input.partnerUserId,
+    meta: sanitizeAuditMetadata({
+      eventId: auditId,
+      partnerAccountId: handoff.partnerAccountId,
+      partnerMembershipId: binding.membershipId,
+      retiredAuthTransactionId: handoff.id,
+    }),
+    createdAt: input.now,
+  });
+  return true;
 }
 
 function readString(value: unknown): string | null {
@@ -503,21 +607,12 @@ export async function requirePartnerSession(request: NextRequest): Promise<
         email: string;
         name: string;
         passwordSet: boolean;
-        mfaRequired: boolean;
-        mfaEnrolledAt: Date | null;
       };
       session: {
         id: string;
         activePartnerAccountId: string | null;
         activeMembershipId: string | null;
-        authMethod:
-          | "legacy"
-          | "magic_link"
-          | "password"
-          | "passkey"
-          | "mfa_step_up";
-        assuranceLevel: "aal1" | "aal2";
-        mfaVerifiedAt: Date | null;
+        authMethod: "legacy" | "magic_link" | "password" | "passkey";
         securityVersion: number;
         deviceName: string | null;
         createdAt: Date;
@@ -545,8 +640,6 @@ export async function requirePartnerSession(request: NextRequest): Promise<
         activePartnerAccountId: partnerSessions.activePartnerAccountId,
         activeMembershipId: partnerSessions.activeMembershipId,
         authMethod: partnerSessions.authMethod,
-        assuranceLevel: partnerSessions.assuranceLevel,
-        mfaVerifiedAt: partnerSessions.mfaVerifiedAt,
         securityVersion: partnerSessions.securityVersion,
         deviceName: partnerSessions.deviceName,
         createdAt: partnerSessions.createdAt,
@@ -568,6 +661,27 @@ export async function requirePartnerSession(request: NextRequest): Promise<
       return { ok: false as const, status: 401, error: "session_expired" };
     }
 
+    // Password authentication is the production portal boundary. Retire every
+    // historical session shape that may not have proved the user's password.
+    // The dormant routine magic-link path is accepted only while its explicit
+    // feature flag is on and receives read-only capabilities when the account
+    // principal is materialized.
+    const normalizedAuthMethod = activePartnerSessionAuthMethod(
+      sessionHint.authMethod,
+    );
+    if (!normalizedAuthMethod) {
+      await tx
+        .update(partnerSessions)
+        .set({ revokedAt: now })
+        .where(
+          and(
+            eq(partnerSessions.id, sessionHint.id),
+            isNull(partnerSessions.revokedAt),
+          ),
+        );
+      return { ok: false as const, status: 401, error: "session_revoked" };
+    }
+
     // A session read must revalidate the user and organization, but it does not
     // need to lock the identity row. Security-version changes are checked again
     // against the session below before returning the principal.
@@ -580,8 +694,6 @@ export async function requirePartnerSession(request: NextRequest): Promise<
         active: partnerUsers.active,
         identityStatus: partnerUsers.identityStatus,
         passwordHash: partnerUsers.passwordHash,
-        mfaRequired: partnerUsers.mfaRequired,
-        mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
         securityVersion: partnerUsers.securityVersion,
       })
       .from(partnerUsers)
@@ -656,16 +768,12 @@ export async function requirePartnerSession(request: NextRequest): Promise<
         email: userRow.email,
         name: userRow.name,
         passwordSet: Boolean(userRow.passwordHash),
-        mfaRequired: userRow.mfaRequired,
-        mfaEnrolledAt: userRow.mfaEnrolledAt ?? null,
       },
       session: {
         id: sessionHint.id,
         activePartnerAccountId: sessionHint.activePartnerAccountId ?? null,
         activeMembershipId: sessionHint.activeMembershipId ?? null,
-        authMethod: sessionHint.authMethod,
-        assuranceLevel: sessionHint.assuranceLevel,
-        mfaVerifiedAt: sessionHint.mfaVerifiedAt ?? null,
+        authMethod: normalizedAuthMethod,
         securityVersion: sessionHint.securityVersion,
         deviceName: sessionHint.deviceName ?? null,
         createdAt: sessionHint.createdAt,
@@ -729,70 +837,19 @@ export async function setPartnerPassword(
   });
 }
 
-export type PartnerPasswordLoginResult =
-  | {
-      kind: "authenticated";
-      sessionToken: string;
-      partnerUserId: string;
-      orgContactId: string | null;
-      mfaRequired: false;
-      expiresAt: Date;
-    }
-  | {
-      kind: "mfa_required";
-      transactionToken: string;
-      expiresAt: Date;
-      mfaRequired: true;
-    }
-  | {
-      kind: "mfa_enrollment_required";
-      mfaRequired: true;
-    };
-
-function passwordAuthAuditValues(input: {
-  action: string;
-  outcome: "succeeded" | "denied";
+export type PartnerPasswordLoginResult = {
+  kind: "authenticated";
+  sessionToken: string;
   partnerUserId: string;
-  email: string;
-  roleKey: string;
-  correlationId: string;
-  entityType: string;
-  entityId: string;
-  accountId: string;
-  membershipId: string;
-  meta?: Record<string, unknown>;
-}) {
-  const id = crypto.randomUUID();
-  return {
-    id,
-    actorType: "human" as const,
-    actorId: input.partnerUserId,
-    actorLabel: input.email,
-    actorRole: input.roleKey,
-    sessionId: null,
-    authMethod: "partner_pre_auth",
-    correlationId: input.correlationId,
-    requiredPermissions: [] as string[],
-    outcome: input.outcome,
-    surface: "/partners/login",
-    action: input.action,
-    entityType: input.entityType,
-    entityId: input.entityId,
-    meta: sanitizeAuditMetadata({
-      eventId: id,
-      correlationId: input.correlationId,
-      partnerAccountId: input.accountId,
-      partnerMembershipId: input.membershipId,
-      ...input.meta,
-    }),
-  };
-}
+  orgContactId: string | null;
+  expiresAt: Date;
+};
 
 export async function loginWithPassword(
   email: string,
   password: string,
   request: NextRequest,
-  options: { rememberMe?: boolean; now?: Date; correlationId?: string } = {},
+  options: { rememberMe?: boolean; now?: Date } = {},
 ): Promise<PartnerPasswordLoginResult | null> {
   const db = getDb();
   const [candidate] = await db
@@ -805,8 +862,6 @@ export async function loginWithPassword(
       passwordHash: partnerUsers.passwordHash,
       passwordHashVersion: partnerUsers.passwordHashVersion,
       securityVersion: partnerUsers.securityVersion,
-      mfaRequired: partnerUsers.mfaRequired,
-      mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
     })
     .from(partnerUsers)
     .where(eq(partnerUsers.normalizedEmail, email))
@@ -817,8 +872,10 @@ export async function loginWithPassword(
   );
   if (
     !candidate?.id ||
-    !candidate.active ||
-    candidate.identityStatus !== "active" ||
+    !(
+      (candidate.active && candidate.identityStatus === "active") ||
+      (!candidate.active && candidate.identityStatus === "pending_activation")
+    ) ||
     !candidate.passwordHash ||
     !verification.valid
   ) {
@@ -830,6 +887,7 @@ export async function loginWithPassword(
     : null;
 
   return db.transaction(async (tx) => {
+    const now = options.now ?? new Date();
     const [userRow] = await tx
       .select({
         id: partnerUsers.id,
@@ -840,16 +898,17 @@ export async function loginWithPassword(
         passwordHash: partnerUsers.passwordHash,
         passwordHashVersion: partnerUsers.passwordHashVersion,
         securityVersion: partnerUsers.securityVersion,
-        mfaRequired: partnerUsers.mfaRequired,
-        mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
       })
       .from(partnerUsers)
       .where(eq(partnerUsers.id, candidate.id))
       .for("update")
       .limit(1);
     if (
-      !userRow?.active ||
-      userRow.identityStatus !== "active" ||
+      !userRow ||
+      !(
+        (userRow.active && userRow.identityStatus === "active") ||
+        (!userRow.active && userRow.identityStatus === "pending_activation")
+      ) ||
       userRow.passwordHash !== candidatePasswordHash ||
       userRow.securityVersion !== candidate.securityVersion
     ) {
@@ -861,7 +920,7 @@ export async function loginWithPassword(
         .set({
           passwordHash: replacementHash,
           passwordHashVersion: PARTNER_PASSWORD_HASH_VERSION_ARGON2ID,
-          updatedAt: new Date(),
+          updatedAt: now,
         })
         .where(
           and(
@@ -874,110 +933,58 @@ export async function loginWithPassword(
       if (!rehashUpdated) return null;
     }
 
+    const identityIsActive = await recoverRetiredActivationHandoff(tx, {
+      partnerUserId: userRow.id,
+      email: userRow.email,
+      identityStatus: userRow.identityStatus,
+      active: userRow.active,
+      securityVersion: userRow.securityVersion,
+      correlationId: resolvePartnerAuthCorrelationId(request),
+      now,
+    });
+    if (!identityIsActive) return null;
+
     const accountBinding = await findInitialPartnerAccountBinding(
       tx,
       userRow.id,
     );
     if (!accountBinding) return null;
 
-    const now = options.now ?? new Date();
-    const correlationId =
-      options.correlationId ?? resolvePartnerAuthCorrelationId(request);
-    const [activeTotpMethod] = await tx
-      .select({ id: partnerMfaMethods.id })
-      .from(partnerMfaMethods)
+    // A verified password supersedes every retired pre-session handoff and
+    // outstanding routine login link for this identity. This also cleans up
+    // artifacts an older instance may have written during a rolling deploy.
+    await tx
+      .update(partnerAuthTransactions)
+      .set({ consumedAt: now })
       .where(
         and(
-          eq(partnerMfaMethods.partnerUserId, userRow.id),
-          eq(partnerMfaMethods.methodType, "totp"),
-          eq(partnerMfaMethods.enabled, true),
+          eq(partnerAuthTransactions.partnerUserId, userRow.id),
+          isNull(partnerAuthTransactions.consumedAt),
         ),
-      )
-      .limit(1);
-    const mfaRequired = partnerPasswordLoginRequiresMfa({
-      userMfaRequired: userRow.mfaRequired,
-      userMfaEnrolled:
-        Boolean(userRow.mfaEnrolledAt) || Boolean(activeTotpMethod?.id),
-      roleKey: accountBinding.roleKey,
-      roleCapabilities: accountBinding.roleCapabilities,
-      capabilityGrants: accountBinding.capabilityGrants,
-      capabilityDenies: accountBinding.capabilityDenies,
-    });
-    if (mfaRequired && !activeTotpMethod?.id) {
-      await tx.insert(auditLogs).values(
-        passwordAuthAuditValues({
-          action: "partner.auth.password_mfa_enrollment_required",
-          outcome: "denied",
-          partnerUserId: userRow.id,
-          email: userRow.email,
-          roleKey: accountBinding.roleKey,
-          correlationId,
-          entityType: "partner_user",
-          entityId: userRow.id,
-          accountId: accountBinding.accountId,
-          membershipId: accountBinding.membershipId,
-          meta: { reason: "active_totp_method_missing" },
-        }),
       );
-      return { kind: "mfa_enrollment_required", mfaRequired: true };
-    }
-
-    if (mfaRequired) {
-      const transactionToken = randomToken(32);
-      const transactionId = crypto.randomUUID();
-      const expiresAt = new Date(
-        now.getTime() + PARTNER_PASSWORD_MFA_TRANSACTION_TTL_MS,
+    await tx
+      .update(partnerLoginTokens)
+      .set({ usedAt: now })
+      .where(
+        and(
+          eq(partnerLoginTokens.partnerUserId, userRow.id),
+          isNull(partnerLoginTokens.usedAt),
+        ),
       );
-      const binding = getPartnerAuthRequestBinding(request);
-      await tx
-        .update(partnerAuthTransactions)
-        .set({ consumedAt: now })
-        .where(
-          and(
-            eq(partnerAuthTransactions.partnerUserId, userRow.id),
-            isNull(partnerAuthTransactions.consumedAt),
-          ),
-        );
-      await tx.insert(partnerAuthTransactions).values({
-        id: transactionId,
-        partnerUserId: userRow.id,
-        partnerAccountId: accountBinding.accountId,
-        partnerMembershipId: accountBinding.membershipId,
-        tokenHash: sha256Base64Url(transactionToken),
-        purpose: "password_login_mfa",
-        securityVersion: userRow.securityVersion,
-        rememberMe: options.rememberMe === true,
-        requestedIp: binding.requestedIp,
-        requestedUserAgent: binding.requestedUserAgent,
-        attemptCount: 0,
-        expiresAt,
-        createdAt: now,
-      });
-      await tx.insert(auditLogs).values(
-        passwordAuthAuditValues({
-          action: "partner.auth.password_mfa_challenge_created",
-          outcome: "succeeded",
-          partnerUserId: userRow.id,
-          email: userRow.email,
-          roleKey: accountBinding.roleKey,
-          correlationId,
-          entityType: "partner_auth_transaction",
-          entityId: transactionId,
-          accountId: accountBinding.accountId,
-          membershipId: accountBinding.membershipId,
-          meta: {
-            expiresAt: expiresAt.toISOString(),
-            rememberMe: options.rememberMe === true,
-          },
-        }),
+    await tx
+      .update(partnerSessions)
+      .set({ revokedAt: now })
+      .where(
+        and(
+          eq(partnerSessions.partnerUserId, userRow.id),
+          inArray(partnerSessions.authMethod, [
+            "legacy",
+            "magic_link",
+            "mfa_step_up",
+          ]),
+          isNull(partnerSessions.revokedAt),
+        ),
       );
-      return {
-        kind: "mfa_required",
-        transactionToken,
-        expiresAt,
-        mfaRequired: true,
-      };
-    }
 
     const sessionToken = randomToken(32);
     const sessionHash = sha256Base64Url(sessionToken);
@@ -1008,7 +1015,6 @@ export async function loginWithPassword(
       sessionToken,
       partnerUserId: userRow.id,
       orgContactId: userRow.orgContactId,
-      mfaRequired: false,
       expiresAt,
     };
   });

@@ -256,8 +256,8 @@ export default async function PartnerSharedProofPage({
     return (
       <div className="mx-auto max-w-2xl">
         <PartnerErrorState
-          title="This proof package is temporarily unavailable"
-          description="The link was not changed. Try it again shortly or ask the sender for help."
+          title="We couldn’t open this completion record"
+          description="Try the link again shortly, or ask the sender for a new one."
         />
       </div>
     );
@@ -270,8 +270,8 @@ export default async function PartnerSharedProofPage({
     return (
       <div className="mx-auto max-w-2xl">
         <PartnerErrorState
-          title="This proof package was incomplete"
-          description="Ask the sender to generate a new completion-proof link."
+          title="This completion record is incomplete"
+          description="Ask the sender to create a new completion-proof link."
         />
       </div>
     );
@@ -302,7 +302,7 @@ export default async function PartnerSharedProofPage({
                 Verified service record
               </p>
               <h1 className="mt-2 break-words text-2xl font-semibold tracking-tight sm:text-3xl">
-                Completion proof for {locationName}
+                Service proof for {locationName}
               </h1>
               <p className="mt-2 text-sm text-primary-100">
                 {humanize(serviceKey)} · completed{" "}
@@ -351,8 +351,8 @@ export default async function PartnerSharedProofPage({
       </header>
 
       <PartnerNotice tone="info">
-        This read-only link contains only the completion record selected by the
-        sender. It does not provide access to the partner account or other jobs.
+        This private, read-only link shows only this completed job. It cannot
+        open the partner account or any other jobs.
       </PartnerNotice>
 
       {proof.downloads.pdf || proof.downloads.originalMediaZip ? (
@@ -412,7 +412,7 @@ export default async function PartnerSharedProofPage({
               </div>
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                  Photo evidence
+                  Service photos
                 </p>
                 <h2 className="mt-0.5 text-lg font-semibold text-slate-950">
                   {humanize(category)}
@@ -486,8 +486,8 @@ export default async function PartnerSharedProofPage({
       ) : (
         <PartnerPanel>
           <PartnerEmptyState
-            title="No evidence is available in this package"
-            description="Ask the sender to verify the proof requirements and generate a new package."
+            title="No service photos were included"
+            description="Ask the sender to check the proof requirements and create a new completion record."
             icon={<Camera className="h-6 w-6" aria-hidden="true" />}
           />
         </PartnerPanel>
@@ -500,7 +500,9 @@ export default async function PartnerSharedProofPage({
             aria-hidden="true"
           />
           <div className="min-w-0">
-            <h2 className="font-semibold text-slate-950">Package integrity</h2>
+            <h2 className="font-semibold text-slate-950">
+              Record verification
+            </h2>
             <p className="mt-1 text-sm leading-6 text-slate-600">
               Checksum:{" "}
               <code className="break-all rounded bg-slate-100 px-1 py-0.5 text-xs">
@@ -508,9 +510,8 @@ export default async function PartnerSharedProofPage({
               </code>
             </p>
             <p className="mt-2 text-xs leading-5 text-slate-500">
-              The checksum identifies the immutable manifest used when this
-              package was generated. Media links are short-lived and may need
-              the proof page refreshed after five minutes.
+              This code identifies the fixed record created for this job. Photo
+              links are short-lived; refresh the page if one expires.
             </p>
           </div>
         </div>
@@ -524,8 +525,8 @@ function ExpiredProofState() {
     <div className="mx-auto max-w-2xl">
       <PartnerPanel>
         <PartnerEmptyState
-          title="This proof link is unavailable"
-          description="It may have expired, been revoked, or been copied incorrectly. Ask the sender to create a new private link."
+          title="This completion link is no longer available"
+          description="It may have expired, been turned off, or been copied incorrectly. Ask the sender for a new private link."
           icon={<ShieldCheck className="h-6 w-6" aria-hidden="true" />}
         />
       </PartnerPanel>

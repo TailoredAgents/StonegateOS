@@ -108,7 +108,6 @@ export const TEAM_PERMISSION_CATALOG = [
   "partners.cancellation_requests.decide",
   "partners.change_requests.decide",
   "partners.identities.disable",
-  "partners.security.mfa.reset",
   "partners.memberships.recover_admin",
   "partners.domains.override",
   "partners.accounts.merge",
@@ -213,7 +212,6 @@ export const TEAM_OWNER_ONLY_PERMISSION_CATALOG = [
   "financials.read",
   "ad_spend.write",
   "partners.identities.disable",
-  "partners.security.mfa.reset",
   "partners.memberships.recover_admin",
   "partners.domains.override",
   "partners.accounts.merge",
@@ -430,8 +428,6 @@ export type TeamPrincipal = {
   permissions: Permission[];
   label: string;
   authMethod: "team_session" | "break_glass";
-  assuranceLevel?: "aal1" | "aal2";
-  mfaVerifiedAt?: string | null;
 };
 
 export type TeamSurfaceGroup =

@@ -84,9 +84,9 @@ export default async function PartnerPropertiesPage() {
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
-        eyebrow="Account address book"
+        eyebrow="Saved service locations"
         title="Locations"
-        description="Manage jobsites, listings, properties, contacts, public access instructions, and encrypted gate details."
+        description="Save each site’s address, contact, parking, and access details once so future bookings are faster and clearer."
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Locations", href: "/partners/properties" },
@@ -97,8 +97,8 @@ export default async function PartnerPropertiesPage() {
             className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700"
             aria-hidden="true"
           />
-          Sensitive access codes are stored separately from ordinary directions
-          and are never shown back after saving.
+          Private access codes stay separate from ordinary directions, are
+          encrypted, and are never shown back after saving.
         </div>
       </PartnerPageHeader>
 
@@ -106,8 +106,8 @@ export default async function PartnerPropertiesPage() {
         <PartnerPanel>
           <PartnerEmptyState
             title="Location access is limited"
-            description="Your current role does not include access to this account’s saved locations. Ask an account administrator if you need location access."
-            action={{ href: "/partners/help", label: "Contact Stonegate" }}
+            description="Your role cannot view this account’s saved locations. Ask an account administrator for access, or contact Stonegate for help with a booking."
+            action={{ href: "/partners/help", label: "Get help" }}
             icon={<MapPin className="h-6 w-6" aria-hidden="true" />}
           />
         </PartnerPanel>
@@ -134,7 +134,7 @@ export default async function PartnerPropertiesPage() {
       ) : (
         <PartnerErrorState
           title="We couldn’t load your locations"
-          description="We couldn’t verify this account’s location directory. No address was shown or changed. Try again in a moment."
+          description="We couldn’t verify this account’s saved locations. No address was shown or changed. Try again in a moment."
           retryHref="/partners/properties"
         />
       )}

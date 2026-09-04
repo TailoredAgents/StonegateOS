@@ -431,14 +431,14 @@ function assertDraftStateMutable(draft: DraftRow, now = new Date()): void {
   ) {
     throw new PartnerPortalSchedulingError(
       "conflict",
-      "This booking draft can no longer be changed.",
+      "This saved service request can no longer be changed.",
       { status: 409 },
     );
   }
   if (draft.expiresAt && draft.expiresAt.getTime() <= now.getTime()) {
     throw new PartnerPortalSchedulingError(
       "conflict",
-      "This booking draft expired. Start a new booking.",
+      "This saved service request expired. Start a new request.",
       { status: 409 },
     );
   }
@@ -478,7 +478,7 @@ function assertDraftAccess(
   if (draft.partnerAccountId !== actor.accountId) {
     throw new PartnerPortalSchedulingError(
       "not_found",
-      "The booking draft was not found.",
+      "The saved service request was not found.",
       { status: 404 },
     );
   }
@@ -487,7 +487,7 @@ function assertDraftAccess(
     if (draft.createdByMembershipId === actor.membershipId) return;
     throw new PartnerPortalSchedulingError(
       "not_found",
-      "The booking draft was not found.",
+      "The saved service request was not found.",
       { status: 404 },
     );
   }
@@ -533,7 +533,7 @@ async function loadDraft(
   if (!draft)
     throw new PartnerPortalSchedulingError(
       "not_found",
-      "The booking draft was not found.",
+      "The saved service request was not found.",
       { status: 404 },
     );
   const location = await loadLocation(tx, actor.accountId, draft.locationId);

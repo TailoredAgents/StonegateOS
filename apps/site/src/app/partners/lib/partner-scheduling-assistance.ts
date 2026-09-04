@@ -8,19 +8,18 @@ export type PartnerScheduleAssistancePreference =
 export const PARTNER_SCHEDULE_ASSISTANCE_OPTIONS = Object.freeze([
   Object.freeze({
     value: "waitlist" as const,
-    label: "Join the scheduling waitlist",
-    detail:
-      "Keep this request queued for an opening that matches my preferences.",
+    label: "Let me know if a matching window opens",
+    detail: "Keep this request queued for an opening that fits my choices.",
   }),
   Object.freeze({
     value: "callback" as const,
-    label: "Request a scheduling callback",
-    detail: "Ask Stonegate to contact me to work through timing options.",
+    label: "Call me about timing",
+    detail: "Ask Stonegate to contact me about other scheduling options.",
   }),
   Object.freeze({
     value: "none" as const,
-    label: "No additional follow-up",
-    detail: "Submit the normal review request with my preferred dates.",
+    label: "No extra follow-up",
+    detail: "Send the request with my preferred dates for normal review.",
   }),
 ]);
 

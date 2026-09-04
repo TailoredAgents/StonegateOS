@@ -65,7 +65,7 @@ export function PartnerPortalPreview() {
               <div className="border-t border-slate-200 pt-3 sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0">
                 <p className="font-semibold text-slate-950">Latest update</p>
                 <p className="mt-1 text-slate-600">
-                  Work completed and proof added
+                  Service finished and proof added
                 </p>
               </div>
             </div>

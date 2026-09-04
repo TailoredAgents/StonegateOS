@@ -11,7 +11,7 @@ import {
 import { PARTNER_INVITATION_TOKEN_COOKIE } from "@/lib/partner-application-session";
 
 export const metadata: Metadata = {
-  title: "Accept team invitation",
+  title: "Join your company’s partner account",
   robots: { index: false, follow: false, nocache: true },
   referrer: "no-referrer",
 };
@@ -37,21 +37,25 @@ export default async function PartnerInvitationAcceptancePage({
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary-50 text-primary-700 ring-1 ring-primary-100">
           <MailCheck className="h-6 w-6" aria-hidden="true" />
         </div>
-        <h1 className="mt-5 text-2xl font-semibold tracking-tight text-slate-950">
-          {accepted ? "Invitation accepted" : "Join your company workspace"}
+        <p className="mt-5 text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">
+          Easy access to partner service
+        </p>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+          {accepted
+            ? "Invitation accepted"
+            : "Accept your invite and get started"}
         </h1>
         <p className="mt-2 text-sm leading-6 text-slate-600">
           {accepted
-            ? "Check your email for the separate activation link that completes your secure account setup."
-            : "Accepting confirms the company and role invitation. It does not activate portal access; we’ll email a separate one-use activation link after acceptance."}
+            ? "Check your email for the separate activation link, then finish your secure setup."
+            : "Accept the invitation now. We’ll then email a separate, one-use link so you can finish setup securely."}
         </p>
 
         {accepted ? (
           <PartnerNotice tone="success" className="mt-5">
-            Your invitation has been recorded. Use the activation email to set
-            or confirm your password and complete required two-step
-            verification. Your portal access is not active until those security
-            steps are finished.
+            Your place on the company account is ready for activation. Use the
+            email to set or confirm your password. Your portal access becomes
+            active after that step is finished.
           </PartnerNotice>
         ) : recoverableError ? (
           <PartnerNotice tone="warning" className="mt-5">
@@ -61,8 +65,8 @@ export default async function PartnerInvitationAcceptancePage({
           </PartnerNotice>
         ) : params.error || !validToken ? (
           <PartnerNotice tone="error" className="mt-5">
-            This invitation is invalid, expired, revoked, or already used. Ask
-            your account administrator to send a new invitation.
+            This invitation is invalid, expired, canceled, or already used. Ask
+            your company administrator to send a new one.
           </PartnerNotice>
         ) : null}
 
@@ -82,8 +86,11 @@ export default async function PartnerInvitationAcceptancePage({
 
         <div className="mt-4 flex flex-col gap-3 sm:flex-row">
           {accepted ? (
-            <Link href="/partners/activate" className={partnerPrimaryButtonClass}>
-              Request another activation link
+            <Link
+              href="/partners/activate"
+              className={partnerPrimaryButtonClass}
+            >
+              Get another activation link
             </Link>
           ) : null}
           <Link

@@ -1223,7 +1223,7 @@ function MobileCompleteAppointmentForm({
             <label className="mt-2 block">
               <span className="block text-xs leading-5">
                 Use only if required partner proof cannot be captured. This is
-                audited and requires recent MFA.
+                recorded in the job history.
               </span>
               <textarea
                 name="proofOverrideReason"

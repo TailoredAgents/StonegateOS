@@ -11,50 +11,28 @@ function source(relativePath: string): string {
 describe("Partner email-change assurance", () => {
   const now = new Date("2035-09-01T16:00:00.000Z");
 
-  it("requires recent AAL2 for an MFA-required identity", () => {
+  it("accepts only a recent password-authenticated session", () => {
     expect(
       isRecentPartnerEmailChangeAuthentication({
-        mfaRequired: true,
-        authMethod: "mfa_step_up",
-        assuranceLevel: "aal2",
-        sessionCreatedAt: new Date(now.getTime() - 60 * 60_000),
-        mfaVerifiedAt: new Date(now.getTime() - 14 * 60_000),
-        now,
-      }),
-    ).toBe(true);
-    expect(
-      isRecentPartnerEmailChangeAuthentication({
-        mfaRequired: true,
         authMethod: "password",
-        assuranceLevel: "aal1",
-        sessionCreatedAt: now,
-        mfaVerifiedAt: null,
-        now,
-      }),
-    ).toBe(false);
-    expect(
-      isRecentPartnerEmailChangeAuthentication({
-        mfaRequired: true,
-        authMethod: "mfa_step_up",
-        assuranceLevel: "aal2",
-        sessionCreatedAt: now,
-        mfaVerifiedAt: new Date(now.getTime() - 16 * 60_000),
-        now,
-      }),
-    ).toBe(false);
-  });
-
-  it("accepts a recent password session for a non-MFA identity", () => {
-    expect(
-      isRecentPartnerEmailChangeAuthentication({
-        mfaRequired: false,
-        authMethod: "password",
-        assuranceLevel: "aal1",
         sessionCreatedAt: new Date(now.getTime() - 14 * 60_000),
-        mfaVerifiedAt: null,
         now,
       }),
     ).toBe(true);
+    expect(
+      isRecentPartnerEmailChangeAuthentication({
+        authMethod: "magic_link",
+        sessionCreatedAt: now,
+        now,
+      }),
+    ).toBe(false);
+    expect(
+      isRecentPartnerEmailChangeAuthentication({
+        authMethod: "password",
+        sessionCreatedAt: new Date(now.getTime() - 16 * 60_000),
+        now,
+      }),
+    ).toBe(false);
   });
 });
 

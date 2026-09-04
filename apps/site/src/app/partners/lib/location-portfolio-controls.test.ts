@@ -21,7 +21,7 @@ void test("the location workspace presents portfolio controls without exposing s
   assert.match(manager, /Parent group/u);
   assert.match(manager, /Grouped under/u);
   assert.match(manager, /Review archive impact/u);
-  assert.match(manager, /active versioned quotes/u);
+  assert.match(manager, /active quotes/u);
   assert.match(manager, /issued quotes awaiting a/u);
   assert.match(manager, /Archiving is blocked/u);
   assert.match(manager, /impact\.issuedActionableQuoteV2Count > 0/u);

@@ -12,12 +12,36 @@ import {
 } from "./PartnerPortalUi";
 
 const CATEGORIES = [
-  { key: "intake", label: "Intake", description: "Condition and scope supplied before arrival." },
-  { key: "before", label: "Before", description: "Starting condition before work begins." },
-  { key: "after", label: "After", description: "Final condition after the work is complete." },
-  { key: "completion", label: "Completion", description: "Additional completion or handoff evidence." },
-  { key: "issue", label: "Issue", description: "Exceptions, damage, or blocked work." },
-  { key: "document", label: "Document", description: "Receipts, manifests, or other job documents." },
+  {
+    key: "intake",
+    label: "Intake",
+    description: "Condition and scope supplied before arrival.",
+  },
+  {
+    key: "before",
+    label: "Before",
+    description: "Starting condition before work begins.",
+  },
+  {
+    key: "after",
+    label: "After",
+    description: "Final condition after the work is complete.",
+  },
+  {
+    key: "completion",
+    label: "Completion",
+    description: "Additional completion or handoff evidence.",
+  },
+  {
+    key: "issue",
+    label: "Issue",
+    description: "Exceptions, damage, or blocked work.",
+  },
+  {
+    key: "document",
+    label: "Document",
+    description: "Receipts, manifests, or other job documents.",
+  },
 ] as const;
 
 type Category = (typeof CATEGORIES)[number]["key"];
@@ -151,12 +175,13 @@ export function PartnerProofDefaultsManager({
           <div className="flex items-center gap-2">
             <Camera className="h-5 w-5 text-primary-700" aria-hidden="true" />
             <h2 className="text-lg font-semibold text-slate-950">
-              Default job proof
+              Default photo requirements
             </h2>
           </div>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-            New booking drafts start with these requirements. An authorized
-            scheduler can still tailor proof for a specific job.
+            Set the usual photo requirements once. New bookings start with these
+            choices, and an authorized scheduler can still adjust a specific
+            job.
           </p>
         </div>
         {!canEdit ? (
@@ -242,8 +267,14 @@ export function PartnerProofDefaultsManager({
 
       {canEdit ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4">
-          <span className="text-sm text-slate-600" role="status" aria-live="polite">
-            {changed ? "Unsaved proof-default changes" : "All changes saved"}
+          <span
+            className="text-sm text-slate-600"
+            role="status"
+            aria-live="polite"
+          >
+            {changed
+              ? "Photo defaults have unsaved changes"
+              : "Photo defaults saved"}
           </span>
           <button
             type="button"
@@ -259,7 +290,7 @@ export function PartnerProofDefaultsManager({
             ) : (
               <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
             )}
-            {saving ? "Saving…" : "Save proof defaults"}
+            {saving ? "Saving…" : "Save photo defaults"}
           </button>
         </div>
       ) : null}

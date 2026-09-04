@@ -6,7 +6,7 @@ export const metadata: Metadata = {
     template: "%s | Stonegate Partner Portal",
   },
   description:
-    "Schedule service, manage locations, and keep track of Stonegate jobs in one place.",
+    "Quickly request Stonegate service, reuse saved locations, choose eligible arrival windows, and keep updates, proof, and billing easy to find.",
 };
 
 export default function PartnersLayout({

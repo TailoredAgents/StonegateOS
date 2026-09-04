@@ -175,7 +175,7 @@ export function PartnerRescheduleFlow({
       if (result.data.draft.rescheduleFromJobId !== jobId) {
         setLoading(false);
         setMessage(
-          "The schedule-change draft did not match this job. No schedule was changed.",
+          "The saved schedule change did not match this job. No schedule was changed.",
         );
         return;
       }
@@ -418,12 +418,12 @@ export function PartnerRescheduleFlow({
             id="partner-reschedule-policy-title"
             className="font-semibold text-slate-950"
           >
-            Schedule-change consequence
+            What happens to your current window
           </h2>
           <p className="mt-1 text-sm leading-6 text-slate-700">
             {scheduleChangeRequiresReview
-              ? "This request is at or after the account cutoff, or the account requires staff review. Your current arrival window will stay scheduled while Stonegate reviews the replacement window."
-              : `This request is before the account’s ${cancellation.cutoffMinutes / 60}-hour cutoff and can update immediately if every live scheduling gate still passes.`}
+              ? "Stonegate needs to review this change. Your current arrival window will stay scheduled while Stonegate reviews the new window."
+              : `This change is before the account’s ${cancellation.cutoffMinutes / 60}-hour cutoff and can confirm now if the new window is still available.`}
           </p>
           <p className="mt-1 text-sm font-medium leading-6 text-slate-800">
             No fee is applied automatically for requesting this schedule change.
@@ -436,7 +436,7 @@ export function PartnerRescheduleFlow({
             </h2>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
               Select a two-hour window that works for your site. Stonegate plans
-              the exact crew timing inside that window.
+              the crew’s exact start inside that window.
             </p>
           </div>
           <button
@@ -460,8 +460,8 @@ export function PartnerRescheduleFlow({
           <PartnerNotice tone="warning" className="mt-4">
             Calendar availability is{" "}
             {availability?.calendar.state ?? "being checked"}. You may still
-            request a window, but your existing schedule will remain in place
-            while Stonegate reviews it.
+            choose a window, but your current schedule stays in place while
+            Stonegate reviews the change.
           </PartnerNotice>
         ) : null}
         {message ? (
@@ -553,8 +553,8 @@ export function PartnerRescheduleFlow({
                 {heldDay}, {holdWindow}
               </h2>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                This window is held while you submit the change. The exact crew
-                start remains internal to Stonegate’s schedule.
+                This window is held while you send the change. Stonegate plans
+                the crew’s exact start inside it.
               </p>
             </div>
             <div

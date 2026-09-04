@@ -92,7 +92,7 @@ describe("Partner cancellation request lifecycle contract", () => {
     );
   });
 
-  it("requires granular recent-MFA Staff authority and immutable typed decisions", () => {
+  it("requires granular recent Staff authentication and immutable typed decisions", () => {
     const route = source(
       "app/api/admin/partner-management/v1/cancellation-requests/[requestId]/decision/route.ts",
     );

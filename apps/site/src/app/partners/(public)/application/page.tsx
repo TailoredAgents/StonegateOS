@@ -6,7 +6,7 @@ import { callPartnerApplicantApi } from "@/app/partners/lib/api";
 import { parsePartnerOnboardingApplicationResponse } from "@/app/partners/lib/onboarding";
 
 export const metadata: Metadata = {
-  title: "Partner access application",
+  title: "Request partner access",
   robots: { index: false, follow: false, nocache: true },
   referrer: "no-referrer",
 };
@@ -28,7 +28,7 @@ export default async function PartnerApplicationPage({
     return (
       <div className="mx-auto max-w-2xl">
         <PartnerErrorState
-          title="We couldn’t load your application"
+          title="We couldn’t open your request"
           description="No application information was changed. Try again, or request a new verification link if your session expired."
           retryHref="/partners/application"
         />
@@ -44,8 +44,8 @@ export default async function PartnerApplicationPage({
     return (
       <div className="mx-auto max-w-2xl">
         <PartnerErrorState
-          title="Your application response was incomplete"
-          description="No information was changed. Refresh before continuing or contact Stonegate for onboarding help."
+          title="We couldn’t show all of your request"
+          description="Nothing was changed. Refresh before continuing or contact Stonegate for help getting set up."
           retryHref="/partners/application"
         />
       </div>

@@ -15,7 +15,6 @@ export const PARTNER_PORTAL_E2E_MEMBER_MATRIX = [
     persona: "property_manager",
     account: "primary",
     status: "active",
-    mfaRequired: true,
   },
   {
     key: "scheduler",
@@ -23,7 +22,6 @@ export const PARTNER_PORTAL_E2E_MEMBER_MATRIX = [
     persona: "contractor",
     account: "primary",
     status: "active",
-    mfaRequired: false,
   },
   {
     key: "requester",
@@ -31,7 +29,6 @@ export const PARTNER_PORTAL_E2E_MEMBER_MATRIX = [
     persona: "real_estate_agent",
     account: "primary",
     status: "active",
-    mfaRequired: false,
   },
   {
     key: "approver",
@@ -39,7 +36,6 @@ export const PARTNER_PORTAL_E2E_MEMBER_MATRIX = [
     persona: "commercial_client",
     account: "primary",
     status: "active",
-    mfaRequired: true,
   },
   {
     key: "billing",
@@ -47,7 +43,6 @@ export const PARTNER_PORTAL_E2E_MEMBER_MATRIX = [
     persona: "commercial_client",
     account: "primary",
     status: "active",
-    mfaRequired: true,
   },
   {
     key: "viewer",
@@ -55,7 +50,6 @@ export const PARTNER_PORTAL_E2E_MEMBER_MATRIX = [
     persona: "property_manager",
     account: "secondary",
     status: "active",
-    mfaRequired: false,
   },
   {
     key: "suspended",
@@ -63,7 +57,6 @@ export const PARTNER_PORTAL_E2E_MEMBER_MATRIX = [
     persona: "real_estate_agent",
     account: "primary",
     status: "suspended",
-    mfaRequired: false,
   },
   {
     key: "limited",
@@ -71,7 +64,6 @@ export const PARTNER_PORTAL_E2E_MEMBER_MATRIX = [
     persona: "contractor",
     account: "limited",
     status: "active",
-    mfaRequired: false,
   },
 ] as const;
 
@@ -342,36 +334,6 @@ export async function assertPartnerPortalE2EMatrix(
     );
   }
 
-  const mfaUserIds = [
-    summary.userIds.admin,
-    summary.userIds.approver,
-    summary.userIds.billing,
-  ];
-  const mfaUsers = await database
-    .select({
-      id: db.partnerUsers.id,
-      required: db.partnerUsers.mfaRequired,
-      enrolledAt: db.partnerUsers.mfaEnrolledAt,
-      methodId: db.partnerMfaMethods.id,
-    })
-    .from(db.partnerUsers)
-    .leftJoin(
-      db.partnerMfaMethods,
-      and(
-        eq(db.partnerMfaMethods.partnerUserId, db.partnerUsers.id),
-        eq(db.partnerMfaMethods.enabled, true),
-      ),
-    )
-    .where(inArray(db.partnerUsers.id, mfaUserIds));
-  if (
-    mfaUsers.length !== mfaUserIds.length ||
-    mfaUsers.some((row) => !row.required || !row.enrolledAt || !row.methodId)
-  ) {
-    throw new Error(
-      "The reusable E2E partner MFA matrix is incomplete. Recreate the isolated E2E database.",
-    );
-  }
-
   const bookings = await database
     .select({
       id: db.partnerBookings.id,
@@ -519,8 +481,6 @@ export async function seedPartnerPortalE2E(
             `${runId}:${member.key}`,
           ),
           passwordSetAt: now,
-          mfaRequired: member.mfaRequired,
-          mfaEnrolledAt: member.mfaRequired ? now : null,
           securityVersion: 1,
           createdAt: now,
           updatedAt: now,
@@ -629,25 +589,8 @@ export async function seedPartnerPortalE2E(
       throw new Error("Unable to seed E2E multi-account membership.");
     membershipIds.admin_secondary = adminSecondary.id;
 
-    for (const memberKey of ["admin", "approver", "billing"] as const) {
-      await tx.insert(db.partnerMfaMethods).values({
-        partnerUserId: userIds[memberKey],
-        methodType: "webauthn",
-        label: "E2E authenticator metadata",
-        credentialIdHash: hexHash(
-          `e2e-credential:${runId}:${memberKey}:${userIds[memberKey]}`,
-        ),
-        credentialReference: `e2e-test-only:${slug}:${memberKey}`,
-        enabled: true,
-        enrolledAt: now,
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-
     for (const member of PARTNER_PORTAL_E2E_MEMBER_MATRIX) {
       const hasActiveMembership = member.status === "active";
-      const mfaVerified = member.mfaRequired ? now : null;
       await tx.insert(db.partnerSessions).values({
         partnerUserId: userIds[member.key],
         activePartnerAccountId: hasActiveMembership
@@ -657,9 +600,8 @@ export async function seedPartnerPortalE2E(
           ? membershipIds[member.key]
           : null,
         sessionHash: sessionHash(partnerPortalSessionToken(runId, member.key)),
-        authMethod: member.mfaRequired ? "mfa_step_up" : "password",
-        assuranceLevel: member.mfaRequired ? "aal2" : "aal1",
-        mfaVerifiedAt: mfaVerified,
+        authMethod: "password",
+        assuranceLevel: "aal1",
         securityVersion: 1,
         deviceName: `E2E ${member.key}`,
         accountSelectedAt: hasActiveMembership ? now : null,

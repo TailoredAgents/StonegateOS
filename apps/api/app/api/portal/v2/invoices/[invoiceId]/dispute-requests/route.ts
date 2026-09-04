@@ -20,7 +20,6 @@ import {
   arePartnerPortalV2WritesEnabled,
 } from "@/lib/partner-portal-feature-flags";
 import { isAllowedPartnerPortalMutationOrigin } from "@/lib/partner-portal-v2-security";
-import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
 import {
   readPortalV2CorrelationId,
   readPortalV2IdempotencyKey,
@@ -142,7 +141,7 @@ export async function POST(
   if (!isAllowedPartnerPortalMutationOrigin(request)) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
-  const authorization = await requireRecentPartnerMfaCapability(
+  const authorization = await requirePartnerCapability(
     request,
     "invoices.disputes.request",
   );

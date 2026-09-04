@@ -1,9 +1,7 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { Route } from "next";
 import {
   ArrowUpRight,
   CreditCard,
@@ -38,11 +36,6 @@ import {
   partnerPrimaryButtonClass,
   partnerSecondaryButtonClass,
 } from "./PartnerPortalUi";
-
-export type PartnerPaymentSecurity = {
-  enrolled: boolean;
-  satisfied: boolean;
-};
 
 type Notice = {
   tone: "success" | "error" | "warning" | "info";
@@ -161,12 +154,6 @@ function loadSquareWebPaymentsSdk(
 }
 
 function paymentErrorMessage(error: string, status: number): Notice {
-  if (error === "mfa_step_up_required") {
-    return {
-      tone: "warning",
-      text: "Verify this session before using account billing actions.",
-    };
-  }
   if (error === "rate_limited" || status === 429) {
     return {
       tone: "warning",
@@ -264,138 +251,14 @@ function navigateToSquareCheckout(intent: PartnerHostedPaymentIntent): boolean {
   return true;
 }
 
-function PartnerPaymentStepUp({
-  onVerified,
-  onCancel,
-}: {
-  onVerified: () => void | Promise<void>;
-  onCancel: () => void;
-}) {
-  const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-
-  async function verify(
-    event: React.FormEvent<HTMLFormElement>,
-  ): Promise<void> {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    const method = data.get("verificationMethod");
-    const verification = data.get("verification");
-    if (typeof verification !== "string" || !verification.trim()) return;
-    setBusy(true);
-    setError(null);
-    const result = await partnerPortalFetch<{
-      ok: true;
-      session: { assuranceLevel: "aal2"; verifiedAt: string };
-    }>("mfa/step-up", {
-      method: "POST",
-      body: JSON.stringify(
-        method === "recovery"
-          ? { recoveryCode: verification.trim() }
-          : { code: verification.trim() },
-      ),
-    }).catch(() => null);
-    setBusy(false);
-    if (!result?.ok) {
-      setError(
-        result?.error.error === "invalid_fields"
-          ? "That verification value was not accepted. Check it and try again."
-          : (result?.error.message ??
-              "We couldn’t verify this session. No payment was started."),
-      );
-      return;
-    }
-    if (result.data.session?.assuranceLevel !== "aal2") {
-      setError(
-        "The security service did not confirm verification. No payment was started.",
-      );
-      return;
-    }
-    form.reset();
-    window.dispatchEvent(new Event("partner-session-security-changed"));
-    await onVerified();
-  }
-
-  return (
-    <form
-      onSubmit={(event) => void verify(event)}
-      className="mt-3 rounded-xl border border-amber-200 bg-amber-50/80 p-4"
-      data-partner-analytics="payment_mfa_verify"
-    >
-      <h4 className="font-semibold text-amber-950">Verify before payment</h4>
-      <p className="mt-1 text-xs leading-5 text-amber-900">
-        Enter a current authenticator code or one unused recovery code. Card
-        checkout starts only after verification succeeds.
-      </p>
-      <div className="mt-3 grid gap-3 sm:grid-cols-[0.8fr_1.2fr]">
-        <label>
-          <span className="text-xs font-semibold text-slate-700">Method</span>
-          <select name="verificationMethod" className={partnerFieldClass}>
-            <option value="totp">Authenticator code</option>
-            <option value="recovery">Recovery code</option>
-          </select>
-        </label>
-        <label>
-          <span className="text-xs font-semibold text-slate-700">
-            Verification value
-          </span>
-          <input
-            name="verification"
-            required
-            autoComplete="one-time-code"
-            className={partnerFieldClass}
-          />
-        </label>
-      </div>
-      {error ? (
-        <p className="mt-3 text-xs leading-5 text-rose-800" role="alert">
-          {error}
-        </p>
-      ) : null}
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          type="submit"
-          disabled={busy}
-          className={partnerPrimaryButtonClass}
-        >
-          {busy ? (
-            <LoaderCircle
-              className="h-4 w-4 animate-spin motion-reduce:animate-none"
-              aria-hidden="true"
-            />
-          ) : (
-            <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-          )}
-          {busy ? "Verifying…" : "Verify and continue"}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={busy}
-          className={partnerSecondaryButtonClass}
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
-  );
-}
-
 function PartnerHostedInvoicePaymentAction({
   invoice,
   canManagePayments,
-  initialSecurity,
 }: {
   invoice: PartnerInvoice;
   canManagePayments: boolean;
-  initialSecurity: PartnerPaymentSecurity | null;
 }) {
   const router = useRouter();
-  const [securitySatisfied, setSecuritySatisfied] = React.useState(
-    initialSecurity?.satisfied ?? false,
-  );
-  const [showVerification, setShowVerification] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [notice, setNotice] = React.useState<Notice | null>(null);
   const operationKey = React.useRef<string | null>(null);
@@ -404,22 +267,6 @@ function PartnerHostedInvoicePaymentAction({
     status: invoice.status,
     balance: invoice.amounts.balance,
   });
-
-  React.useEffect(() => {
-    const securityChanged = () => {
-      setSecuritySatisfied(true);
-      setShowVerification(false);
-    };
-    window.addEventListener(
-      "partner-session-security-changed",
-      securityChanged,
-    );
-    return () =>
-      window.removeEventListener(
-        "partner-session-security-changed",
-        securityChanged,
-      );
-  }, []);
 
   const createCheckout = React.useCallback(async (): Promise<void> => {
     setBusy(true);
@@ -444,10 +291,6 @@ function PartnerHostedInvoicePaymentAction({
     setBusy(false);
     if (!result?.ok) {
       const code = result?.error.error ?? "service_unavailable";
-      if (code === "mfa_step_up_required") {
-        setSecuritySatisfied(false);
-        setShowVerification(true);
-      }
       if (
         ["conflict", "invalid_fields", "review_required", "not_found"].includes(
           code,
@@ -473,22 +316,6 @@ function PartnerHostedInvoicePaymentAction({
   }, [invoice.amounts.balance, invoice.id, router]);
 
   const beginPayment = React.useCallback(async (): Promise<void> => {
-    if (initialSecurity && !initialSecurity.enrolled) {
-      setNotice({
-        tone: "warning",
-        text: "Set up two-step verification in Account & security before starting a card payment.",
-      });
-      return;
-    }
-    if (initialSecurity?.enrolled && !securitySatisfied) {
-      setShowVerification(true);
-      setNotice({
-        tone: "warning",
-        text: "Verify this session before using account billing actions.",
-      });
-      return;
-    }
-
     setBusy(true);
     setNotice(null);
     const existing = await partnerPortalFetch<InvoicePaymentLinkPayload>(
@@ -497,10 +324,6 @@ function PartnerHostedInvoicePaymentAction({
     setBusy(false);
     if (!existing?.ok) {
       const code = existing?.error.error ?? "service_unavailable";
-      if (code === "mfa_step_up_required") {
-        setSecuritySatisfied(false);
-        setShowVerification(true);
-      }
       setNotice(paymentErrorMessage(code, existing?.response.status ?? 503));
       return;
     }
@@ -525,7 +348,7 @@ function PartnerHostedInvoicePaymentAction({
       return;
     }
     await createCheckout();
-  }, [createCheckout, initialSecurity, invoice.id, router, securitySatisfied]);
+  }, [createCheckout, invoice.id, router]);
 
   if (!canManagePayments || !eligible) return null;
 
@@ -554,28 +377,8 @@ function PartnerHostedInvoicePaymentAction({
       </p>
       {notice ? (
         <PartnerNotice tone={notice.tone} className="mt-3">
-          <div>
-            <p>{notice.text}</p>
-            {initialSecurity && !initialSecurity.enrolled ? (
-              <Link
-                href={"/partners/settings" as Route}
-                className="mt-2 inline-flex min-h-11 items-center font-semibold underline underline-offset-4"
-              >
-                Set up two-step verification
-              </Link>
-            ) : null}
-          </div>
+          {notice.text}
         </PartnerNotice>
-      ) : null}
-      {showVerification && (initialSecurity?.enrolled ?? true) ? (
-        <PartnerPaymentStepUp
-          onVerified={async () => {
-            setSecuritySatisfied(true);
-            setShowVerification(false);
-            await createCheckout();
-          }}
-          onCancel={() => setShowVerification(false)}
-        />
       ) : null}
     </div>
   );
@@ -640,23 +443,17 @@ function PartnerEmbeddedDepositPaymentAction({
   invoice,
   depositAmount,
   canManagePayments,
-  initialSecurity,
   payerEmail,
   payerName,
 }: {
   invoice: PartnerInvoice;
   depositAmount: PartnerInvoice["amounts"]["deposit"];
   canManagePayments: boolean;
-  initialSecurity: PartnerPaymentSecurity | null;
   payerEmail: string | null;
   payerName: string | null;
 }) {
   const router = useRouter();
   const cardContainerId = React.useId().replace(/[^A-Za-z0-9_-]/gu, "");
-  const [securitySatisfied, setSecuritySatisfied] = React.useState(
-    initialSecurity?.satisfied ?? false,
-  );
-  const [showVerification, setShowVerification] = React.useState(false);
   const [intent, setIntent] =
     React.useState<PartnerEmbeddedPaymentIntent | null>(null);
   const [cardStatus, setCardStatus] = React.useState<
@@ -673,22 +470,6 @@ function PartnerEmbeddedDepositPaymentAction({
   const ach = React.useRef<SquareAch | null>(null);
   const pendingMethod = React.useRef<"card" | "ach">("card");
   const pollCount = React.useRef(0);
-
-  React.useEffect(() => {
-    const securityChanged = () => {
-      setSecuritySatisfied(true);
-      setShowVerification(false);
-    };
-    window.addEventListener(
-      "partner-session-security-changed",
-      securityChanged,
-    );
-    return () =>
-      window.removeEventListener(
-        "partner-session-security-changed",
-        securityChanged,
-      );
-  }, []);
 
   React.useEffect(() => {
     if (
@@ -806,10 +587,6 @@ function PartnerEmbeddedDepositPaymentAction({
       setBusy(false);
       if (!result?.ok) {
         const code = result?.error.error ?? "service_unavailable";
-        if (code === "mfa_step_up_required") {
-          setSecuritySatisfied(false);
-          setShowVerification(true);
-        }
         if (
           [
             "conflict",
@@ -857,24 +634,9 @@ function PartnerEmbeddedDepositPaymentAction({
   const beginPayment = React.useCallback(
     async (paymentMethod: "card" | "ach"): Promise<void> => {
       pendingMethod.current = paymentMethod;
-      if (initialSecurity && !initialSecurity.enrolled) {
-        setNotice({
-          tone: "warning",
-          text: "Set up two-step verification in Account & security before starting a payment.",
-        });
-        return;
-      }
-      if (initialSecurity?.enrolled && !securitySatisfied) {
-        setShowVerification(true);
-        setNotice({
-          tone: "warning",
-          text: "Verify this session before using account billing actions.",
-        });
-        return;
-      }
       await preparePayment(paymentMethod);
     },
-    [initialSecurity, preparePayment, securitySatisfied],
+    [preparePayment],
   );
 
   async function submitCard(
@@ -895,14 +657,6 @@ function PartnerEmbeddedDepositPaymentAction({
       setNotice({
         tone: "error",
         text: "The secure card form is not ready. No payment was submitted.",
-      });
-      return;
-    }
-    if (initialSecurity?.enrolled && !securitySatisfied) {
-      setShowVerification(true);
-      setNotice({
-        tone: "warning",
-        text: "Verify this session, then re-enter and submit the card details.",
       });
       return;
     }
@@ -963,10 +717,6 @@ function PartnerEmbeddedDepositPaymentAction({
     setBusy(false);
     if (!result?.ok) {
       const code = result?.error.error ?? "service_unavailable";
-      if (code === "mfa_step_up_required") {
-        setSecuritySatisfied(false);
-        setShowVerification(true);
-      }
       completeKey.current = null;
       if (code === "invalid_fields") {
         setIntent(null);
@@ -1049,14 +799,6 @@ function PartnerEmbeddedDepositPaymentAction({
       });
       return;
     }
-    if (initialSecurity?.enrolled && !securitySatisfied) {
-      setShowVerification(true);
-      setNotice({
-        tone: "warning",
-        text: "Verify this session, then reconnect the bank account.",
-      });
-      return;
-    }
     setBusy(true);
     setNotice(null);
     let tokenResult: SquareTokenResult;
@@ -1112,10 +854,6 @@ function PartnerEmbeddedDepositPaymentAction({
     setBusy(false);
     if (!result?.ok) {
       const code = result?.error.error ?? "service_unavailable";
-      if (code === "mfa_step_up_required") {
-        setSecuritySatisfied(false);
-        setShowVerification(true);
-      }
       completeKey.current = null;
       if (code === "invalid_fields") {
         setIntent(null);
@@ -1165,10 +903,6 @@ function PartnerEmbeddedDepositPaymentAction({
       pollCount.current += 1;
       if (!result?.ok) {
         const code = result?.error.error ?? "service_unavailable";
-        if (code === "mfa_step_up_required") {
-          setSecuritySatisfied(false);
-          setShowVerification(true);
-        }
         setNotice(paymentErrorMessage(code, result?.response.status ?? 503));
         return;
       }
@@ -1259,29 +993,8 @@ function PartnerEmbeddedDepositPaymentAction({
       </p>
       {notice ? (
         <PartnerNotice tone={notice.tone} className="mt-3">
-          <div>
-            <p>{notice.text}</p>
-            {initialSecurity && !initialSecurity.enrolled ? (
-              <Link
-                href={"/partners/settings" as Route}
-                className="mt-2 inline-flex min-h-11 items-center font-semibold underline underline-offset-4"
-              >
-                Set up two-step verification
-              </Link>
-            ) : null}
-          </div>
+          {notice.text}
         </PartnerNotice>
-      ) : null}
-      {showVerification && (initialSecurity?.enrolled ?? true) ? (
-        <PartnerPaymentStepUp
-          onVerified={async () => {
-            setSecuritySatisfied(true);
-            setShowVerification(false);
-            if (intent) await checkEmbeddedStatus(intent.id);
-            else await preparePayment(pendingMethod.current);
-          }}
-          onCancel={() => setShowVerification(false)}
-        />
       ) : null}
       {intent?.status === "ready" && intent.paymentMethod === "card" ? (
         <form
@@ -1464,13 +1177,11 @@ function PartnerEmbeddedDepositPaymentAction({
 export function PartnerInvoicePaymentAction({
   invoice,
   canManagePayments,
-  initialSecurity,
   payerEmail = null,
   payerName = null,
 }: {
   invoice: PartnerInvoice;
   canManagePayments: boolean;
-  initialSecurity: PartnerPaymentSecurity | null;
   payerEmail?: string | null;
   payerName?: string | null;
 }) {
@@ -1485,7 +1196,6 @@ export function PartnerInvoicePaymentAction({
       invoice={invoice}
       depositAmount={depositAmount}
       canManagePayments={canManagePayments}
-      initialSecurity={initialSecurity}
       payerEmail={payerEmail}
       payerName={payerName}
     />
@@ -1493,7 +1203,6 @@ export function PartnerInvoicePaymentAction({
     <PartnerHostedInvoicePaymentAction
       invoice={invoice}
       canManagePayments={canManagePayments}
-      initialSecurity={initialSecurity}
     />
   );
 }
@@ -1505,30 +1214,15 @@ export function PartnerPaymentReturnStatus({
   paymentIntentId,
   accessAvailable,
   canManagePayments,
-  initialSecurity,
 }: {
   paymentIntentId: string | null;
   accessAvailable: boolean;
   canManagePayments: boolean;
-  initialSecurity: PartnerPaymentSecurity | null;
 }) {
   const router = useRouter();
-  const [securitySatisfied, setSecuritySatisfied] = React.useState(
-    initialSecurity?.satisfied ?? false,
-  );
   const [intent, setIntent] = React.useState<PartnerPaymentIntent | null>(null);
-  const [notice, setNotice] = React.useState<Notice | null>(
-    initialSecurity?.enrolled && !initialSecurity.satisfied
-      ? {
-          tone: "warning",
-          text: "Verify this session before checking the protected payment status.",
-        }
-      : null,
-  );
+  const [notice, setNotice] = React.useState<Notice | null>(null);
   const [busy, setBusy] = React.useState(false);
-  const [showVerification, setShowVerification] = React.useState(
-    Boolean(initialSecurity?.enrolled && !initialSecurity.satisfied),
-  );
   const mounted = React.useRef(true);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollCount = React.useRef(0);
@@ -1545,10 +1239,6 @@ export function PartnerPaymentReturnStatus({
     setBusy(false);
     if (!result?.ok) {
       const code = result?.error.error ?? "service_unavailable";
-      if (code === "mfa_step_up_required") {
-        setSecuritySatisfied(false);
-        setShowVerification(true);
-      }
       setNotice(paymentErrorMessage(code, result?.response.status ?? 503));
       return;
     }
@@ -1594,40 +1284,17 @@ export function PartnerPaymentReturnStatus({
   }, []);
 
   React.useEffect(() => {
-    const securityChanged = () => {
-      setSecuritySatisfied(true);
-      setShowVerification(false);
-    };
-    window.addEventListener(
-      "partner-session-security-changed",
-      securityChanged,
-    );
-    return () =>
-      window.removeEventListener(
-        "partner-session-security-changed",
-        securityChanged,
-      );
-  }, []);
-
-  React.useEffect(() => {
     if (
       paymentIntentId &&
       isPartnerPaymentIntentId(paymentIntentId) &&
-      canManagePayments &&
-      (!initialSecurity || securitySatisfied)
+      canManagePayments
     ) {
       void checkStatus();
     }
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [
-    canManagePayments,
-    checkStatus,
-    initialSecurity,
-    paymentIntentId,
-    securitySatisfied,
-  ]);
+  }, [canManagePayments, checkStatus, paymentIntentId]);
 
   if (!paymentIntentId || !isPartnerPaymentIntentId(paymentIntentId))
     return null;
@@ -1647,25 +1314,6 @@ export function PartnerPaymentReturnStatus({
       <PartnerNotice tone="warning" className="mb-4">
         This payment return belongs to a protected billing action. Switch to an
         authorized account or ask an account billing user to verify its status.
-      </PartnerNotice>
-    );
-  }
-
-  if (initialSecurity && !initialSecurity.enrolled) {
-    return (
-      <PartnerNotice tone="warning" className="mb-4">
-        <div>
-          <p>
-            Set up two-step verification before checking this protected payment
-            status. The invoice has not been treated as paid.
-          </p>
-          <Link
-            href={"/partners/settings" as Route}
-            className="mt-2 inline-flex min-h-11 items-center font-semibold underline underline-offset-4"
-          >
-            Set up two-step verification
-          </Link>
-        </div>
       </PartnerNotice>
     );
   }
@@ -1698,17 +1346,6 @@ export function PartnerPaymentReturnStatus({
           {notice.text}
         </PartnerNotice>
       ) : null}
-      {showVerification ? (
-        <PartnerPaymentStepUp
-          onVerified={async () => {
-            setSecuritySatisfied(true);
-            setShowVerification(false);
-            pollCount.current = 0;
-            await checkStatus();
-          }}
-          onCancel={() => setShowVerification(false)}
-        />
-      ) : null}
       <div className="mt-3 flex flex-wrap gap-2">
         {intent?.status === "ready" &&
         isPartnerHostedPaymentIntent(intent) &&
@@ -1723,7 +1360,7 @@ export function PartnerPaymentReturnStatus({
             <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
           </button>
         ) : null}
-        {!showVerification && intent?.status !== "succeeded" ? (
+        {intent?.status !== "succeeded" ? (
           <button
             type="button"
             onClick={() => {

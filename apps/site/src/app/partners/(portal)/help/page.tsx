@@ -16,9 +16,9 @@ export default function PartnerHelpPage() {
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
-        eyebrow="Partner support"
-        title="How can we help?"
-        description="Reach the Stonegate team for scheduling questions, access help, special materials, or documentation."
+        eyebrow="A direct line to Stonegate"
+        title="Get help quickly"
+        description="Choose the easiest way to reach us for scheduling, account access, special materials, or job documents."
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Help", href: "/partners/help" },
@@ -29,7 +29,7 @@ export default function PartnerHelpPage() {
             className={partnerPrimaryButtonClass}
           >
             <Phone className="h-4 w-4" aria-hidden="true" />
-            Call {company.phoneDisplay}
+            Call Stonegate
           </a>
         }
       />
@@ -39,7 +39,7 @@ export default function PartnerHelpPage() {
           <Phone className="h-6 w-6 text-primary-700" aria-hidden="true" />
           <h2 className="mt-4 font-semibold text-slate-950">Call</h2>
           <p className="mt-1 flex-1 text-sm leading-6 text-slate-600">
-            Best for same-day needs, schedule changes, or material questions.
+            Use for same-day needs, schedule changes, or material questions.
           </p>
           <a
             href={`tel:${company.phoneE164}`}
@@ -55,7 +55,8 @@ export default function PartnerHelpPage() {
           />
           <h2 className="mt-4 font-semibold text-slate-950">Text</h2>
           <p className="mt-1 flex-1 text-sm leading-6 text-slate-600">
-            Send a quick question or identify the job you need help with.
+            Send a quick question. Include the job or location name when you
+            can.
           </p>
           <a
             href={`sms:${company.phoneE164}`}
@@ -68,7 +69,7 @@ export default function PartnerHelpPage() {
           <Mail className="h-6 w-6 text-primary-700" aria-hidden="true" />
           <h2 className="mt-4 font-semibold text-slate-950">Email</h2>
           <p className="mt-1 flex-1 text-sm leading-6 text-slate-600">
-            Use email for documents, account details, or a less urgent request.
+            Best for documents, account details, or anything that is not urgent.
           </p>
           <a
             href={`mailto:${company.email}`}
@@ -95,9 +96,7 @@ export default function PartnerHelpPage() {
       </PartnerPanel>
 
       <PartnerPanel>
-        <h2 className="text-lg font-semibold text-slate-950">
-          Common questions
-        </h2>
+        <h2 className="text-lg font-semibold text-slate-950">Quick answers</h2>
         <div className="mt-4 divide-y divide-slate-200">
           {[
             {
@@ -108,7 +107,7 @@ export default function PartnerHelpPage() {
             {
               question: "What if a location is gated or hard to access?",
               answer:
-                "Use Locations to save ordinary access, parking, loading, and site-contact details. Save a gate or lockbox code only in the separate private-access field, which is encrypted and never shown back.",
+                "Save the site once in Locations with its parking, loading, access, and contact details. Put a gate or lockbox code only in the separate private-access field, which is encrypted and never shown back.",
             },
             {
               question: "Can I change a scheduled job?",
@@ -118,7 +117,7 @@ export default function PartnerHelpPage() {
             {
               question: "Where do I request before-and-after photos?",
               answer:
-                "During Schedule job, use the Photos & proof step to request before photos, after photos, or a formal package and attach reference images. After submission, use Photos & proof to add or review job-linked evidence.",
+                "Use the Photos & proof step while requesting service to ask for before photos, after photos, or a formal package. After submission, open Photos & proof to add images or review everything linked to that job.",
             },
           ].map((item) => (
             <details

@@ -13,11 +13,9 @@ import {
 export function PartnerEmailChangeForm({
   currentEmail,
   passwordSet,
-  mfaRequired,
 }: {
   currentEmail: string;
   passwordSet: boolean;
-  mfaRequired: boolean;
 }) {
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState<{
@@ -32,8 +30,7 @@ export function PartnerEmailChangeForm({
     const form = new FormData(formElement);
     const newEmailRaw = form.get("newEmail");
     const currentPasswordRaw = form.get("currentPassword");
-    const newEmail =
-      typeof newEmailRaw === "string" ? newEmailRaw.trim() : "";
+    const newEmail = typeof newEmailRaw === "string" ? newEmailRaw.trim() : "";
     const currentPassword =
       typeof currentPasswordRaw === "string" ? currentPasswordRaw : "";
     setBusy(true);
@@ -56,16 +53,11 @@ export function PartnerEmailChangeForm({
       const currentPasswordError =
         result?.error.fieldErrors?.["currentPassword"];
       setMessage({
-        tone:
-          result?.error.error === "mfa_step_up_required" ? "warning" : "error",
+        tone: "error",
         text:
           currentPasswordError ??
-          (result?.error.error === "mfa_step_up_required"
-            ? mfaRequired
-              ? "Verify this session in Two-step verification below, then submit the email change again."
-              : "Sign in again, then submit the email change."
-            : (result?.error.message ??
-              "We couldn’t request that email change.")),
+          result?.error.message ??
+          "We couldn’t request that email change.",
       });
       return;
     }
@@ -84,13 +76,12 @@ export function PartnerEmailChangeForm({
         </div>
         <div>
           <h2 className="text-lg font-semibold text-slate-950">
-            Change sign-in email
+            Change the email you use to sign in
           </h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
             Current email: <span className="font-semibold">{currentEmail}</span>
-            . We’ll verify the new mailbox before changing your identity. The
-            confirmation signs out every portal session and never signs you in
-            automatically.
+            . We verify the new address first. Confirming it signs you out on
+            every device and does not sign you back in automatically.
           </p>
         </div>
       </div>
@@ -147,7 +138,7 @@ export function PartnerEmailChangeForm({
             ) : (
               <MailCheck className="h-4 w-4" aria-hidden="true" />
             )}
-            {busy ? "Requesting…" : "Verify a new email"}
+            {busy ? "Requesting…" : "Send confirmation link"}
           </button>
         </div>
       </form>

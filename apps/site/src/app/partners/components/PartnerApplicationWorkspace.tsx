@@ -40,12 +40,12 @@ import {
 } from "./PartnerPortalUi";
 
 const NEED_LABELS: Record<PartnerRequestedNeed, string> = {
-  schedule_jobs: "Schedule pickups and jobs",
-  manage_locations: "Manage multiple locations",
-  photos_and_proof: "Upload photos and receive completion proof",
-  invoices_and_documents: "Access invoices and documents",
-  reporting: "Review account reporting",
-  recurring_service: "Coordinate recurring service",
+  schedule_jobs: "Request service and choose available times",
+  manage_locations: "Save and reuse service locations",
+  photos_and_proof: "Share photos and receive completion proof",
+  invoices_and_documents: "Find invoices and documents",
+  reporting: "Download account reports",
+  recurring_service: "Request recurring service",
 };
 
 type FormState = {
@@ -189,49 +189,49 @@ function statusCopy(application: PartnerOnboardingApplication): {
       return {
         icon: CheckCircle2,
         title: "Application submitted",
-        body: "Stonegate has your verified application. We’ll email you when review begins or if more information is needed.",
+        body: "Stonegate has your company and service details. We’ll email you if anything else is needed and when a decision is ready.",
         tone: "bg-emerald-50 text-emerald-800 ring-emerald-200",
       };
     case "under_review":
       return {
         icon: Clock3,
         title: "Application under review",
-        body: "Stonegate is reviewing the correct company and access path. No portal membership has been created yet.",
+        body: "Stonegate is checking your company details so we can connect you to the right account. You can’t sign in yet.",
         tone: "bg-sky-50 text-sky-800 ring-sky-200",
       };
     case "approved_pending_activation":
       return {
         icon: ShieldCheck,
-        title: "Approved—activation required",
-        body: "Your access was approved. Use the activation email to create your password before signing in.",
+        title: "You’re approved—finish setup",
+        body: "Use the activation email to create your password. Once setup is complete, you can sign in and start requesting service.",
         tone: "bg-emerald-50 text-emerald-800 ring-emerald-200",
       };
     case "approved":
       return {
         icon: ShieldCheck,
         title: "Application approved",
-        body: "Use the activation email to create your password. If you already activated, sign in to open your company workspace.",
+        body: "Use the activation email to create your password. If setup is already complete, sign in to start using your company account.",
         tone: "bg-emerald-50 text-emerald-800 ring-emerald-200",
       };
     case "declined":
       return {
         icon: XCircle,
         title: "Application closed",
-        body: "Stonegate could not approve this request. Contact the team if your company details or access needs have changed.",
+        body: "Stonegate could not approve this request. Contact us if your company details or service needs have changed.",
         tone: "bg-slate-100 text-slate-700 ring-slate-200",
       };
     case "withdrawn":
       return {
         icon: XCircle,
         title: "Application withdrawn",
-        body: "This request is closed and no portal access was created.",
+        body: "This request is closed. No account access was created.",
         tone: "bg-slate-100 text-slate-700 ring-slate-200",
       };
     default:
       return {
         icon: CircleHelp,
-        title: "Application needs information",
-        body: "Review Stonegate’s request below, update your application if needed, and send a response.",
+        title: "A little more information is needed",
+        body: "See what Stonegate needs below, update your details if needed, and send your response.",
         tone: "bg-amber-50 text-amber-900 ring-amber-200",
       };
   }
@@ -257,12 +257,12 @@ function PartnerApplicationPersonaGuidance({
         <div className="max-w-2xl">
           <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-primary-700">
             <Sparkles className="h-4 w-4" aria-hidden="true" />
-            Presentation tailored for {presentation.label}
+            Helpful setup for {presentation.label}
           </p>
           <h2 id={headingId} className="mt-2 font-semibold text-slate-950">
             {mode === "confirmation"
               ? presentation.onboarding.confirmationTitle
-              : `Plan your ${presentation.label.toLowerCase()} workspace`}
+              : `Make future ${presentation.label.toLowerCase()} requests easier`}
           </h2>
           <p className="mt-1 text-sm leading-6 text-slate-700">
             {mode === "confirmation"
@@ -291,8 +291,8 @@ function PartnerApplicationPersonaGuidance({
         ))}
       </ul>
       <p className="mt-3 text-xs leading-5 text-slate-600">
-        Suggestions do not select requested features, create access, or change
-        the information you entered.
+        Suggestions do not select requested features, change your choices, or
+        submit anything for you.
       </p>
     </aside>
   );
@@ -320,7 +320,7 @@ export function PartnerApplicationWorkspace({
     justVerified
       ? {
           tone: "success",
-          text: "Email verified. Complete the application below; no company workspace or membership exists until approval.",
+          text: "Email verified. Complete the form below. Company access starts only after Stonegate approves your request.",
         }
       : null,
   );
@@ -422,7 +422,7 @@ export function PartnerApplicationWorkspace({
             : "error",
         text:
           result?.response.status === 412
-            ? "Your application changed in another tab. Refresh before continuing."
+            ? "Your request changed in another tab. Refresh before continuing."
             : (result?.error.message ?? "We couldn’t save your application."),
       });
       if (Object.keys(serverErrors).length) {
@@ -438,7 +438,7 @@ export function PartnerApplicationWorkspace({
     ) {
       setNotice({
         tone: "warning",
-        text: "The application was saved, but the updated status could not be displayed. Refresh this page.",
+        text: "Your information was saved, but we couldn’t show the new status. Refresh this page.",
       });
       return;
     }
@@ -446,8 +446,8 @@ export function PartnerApplicationWorkspace({
       tone: "success",
       text:
         action === "save"
-          ? "Draft saved. You can safely return using a new verification link."
-          : "Application submitted. Stonegate will review the correct company and access path.",
+          ? "Application saved. You can return later using a new verification link."
+          : "Application submitted. Stonegate will confirm your company details before setting up access.",
     });
     setFieldErrors({});
   }
@@ -510,7 +510,7 @@ export function PartnerApplicationWorkspace({
     if (action === "resend") {
       setNotice({
         tone: "success",
-        text: "If activation is still pending, a new email will arrive shortly. Only the newest link will work.",
+        text: "If activation is still pending, check for a new email. Only the newest link will work.",
       });
       return;
     }
@@ -521,7 +521,7 @@ export function PartnerApplicationWorkspace({
       text:
         action === "respond"
           ? "Your response was sent for review."
-          : "Application withdrawn. No portal access was created.",
+          : "Application withdrawn. No account access was created.",
     });
   }
 
@@ -542,7 +542,7 @@ export function PartnerApplicationWorkspace({
             <Icon className="h-7 w-7" aria-hidden="true" />
           </div>
           <p className="mt-6 text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">
-            Partner access
+            Your service access
           </p>
           <h1
             id="application-status-heading"
@@ -638,18 +638,18 @@ export function PartnerApplicationWorkspace({
           <li className="text-emerald-700">1. Email verified</li>
           <li aria-hidden="true">/</li>
           <li aria-current="step" className="text-primary-800">
-            2. Company application
+            2. Company & service details
           </li>
           <li aria-hidden="true">/</li>
-          <li>3. Staff review</li>
+          <li>3. Approval</li>
         </ol>
         <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
-          Complete your partner application
+          Set up quicker service for your company
         </h1>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
-          Tell us how your company works so Stonegate can approve the correct
-          workspace and role. Your draft is private and creates no portal
-          membership.
+          Share your company and service needs once so future requests are
+          easier. Your information stays private, and access begins only after
+          approval.
         </p>
       </header>
 
@@ -921,7 +921,7 @@ export function PartnerApplicationWorkspace({
             id="application-needs-heading"
             className="text-lg font-semibold text-slate-950"
           >
-            What should the portal help with?
+            What would make service easier?
           </h2>
           <div className="mt-4 grid gap-2 sm:grid-cols-2">
             {PARTNER_REQUESTED_NEEDS.map((need) => (
@@ -956,19 +956,17 @@ export function PartnerApplicationWorkspace({
             id="application-company-path-heading"
             className="text-lg font-semibold text-slate-950"
           >
-            Company workspace path
+            Where should your access go?
           </h2>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            Stonegate makes the final company match during review. A verified
-            email domain alone never creates membership.
+            Choose the option that looks right. Stonegate confirms the company
+            before anyone can sign in.
           </p>
           <fieldset
             id="application-companyCandidateId"
             className="mt-4 space-y-3"
           >
-            <legend className="sr-only">
-              Requested company workspace path
-            </legend>
+            <legend className="sr-only">Choose company access</legend>
             {application.companyResolution.accountLabel ? (
               <label className="flex items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm">
                 <input
@@ -983,11 +981,11 @@ export function PartnerApplicationWorkspace({
                 />
                 <span>
                   <span className="block font-semibold text-slate-900">
-                    Request to join {application.companyResolution.accountLabel}
+                    Connect me with {application.companyResolution.accountLabel}
                   </span>
                   <span className="mt-1 block text-slate-600">
-                    Stonegate will verify the company and approve the correct
-                    role.
+                    Stonegate will confirm the company and the right level of
+                    access.
                   </span>
                 </span>
               </label>
@@ -1023,7 +1021,7 @@ export function PartnerApplicationWorkspace({
               />
               <span>
                 <span className="block font-semibold text-slate-900">
-                  I’m not sure—have Stonegate review it
+                  I’m not sure—have Stonegate check
                 </span>
                 <span className="mt-1 block text-slate-600">
                   Use this if the suggested company is unfamiliar or your
@@ -1225,7 +1223,7 @@ export function PartnerApplicationWorkspace({
         {application.status === "draft" ? (
           <div className="sticky bottom-3 z-10 flex flex-col-reverse gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-lg backdrop-blur sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs leading-5 text-slate-500">
-              Your verified draft is account-free until Stonegate approval.
+              Save now and return later. Access starts only after approval.
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
               <button

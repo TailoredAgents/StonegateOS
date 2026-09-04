@@ -67,17 +67,10 @@ function principal(): PartnerPrincipal {
     session: {
       id: "55555555-5555-4555-8555-555555555555",
       authMethod: "password",
-      assuranceLevel: "aal1",
-      mfaVerifiedAt: null,
       deviceName: "Safari on macOS",
       createdAt,
       lastSeenAt: new Date("2026-08-30T12:30:00.000Z"),
       expiresAt: new Date("2026-09-30T12:00:00.000Z"),
-    },
-    security: {
-      mfaRequired: false,
-      mfaEnrolled: false,
-      mfaSatisfied: true,
     },
     availableAccounts: [
       {
@@ -118,16 +111,12 @@ function authenticatedSession() {
       email: context.email,
       name: context.name,
       passwordSet: context.passwordSet,
-      mfaRequired: false,
-      mfaEnrolledAt: null,
     },
     session: {
       id: context.session.id,
       activePartnerAccountId: context.accountId,
       activeMembershipId: context.membershipId,
       authMethod: context.session.authMethod,
-      assuranceLevel: context.session.assuranceLevel,
-      mfaVerifiedAt: null,
       securityVersion: 1,
       deviceName: context.session.deviceName,
       createdAt: context.session.createdAt,

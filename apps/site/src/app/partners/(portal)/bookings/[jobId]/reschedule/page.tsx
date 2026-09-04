@@ -115,7 +115,7 @@ export default async function PartnerReschedulePage({
       <PartnerPageHeader
         eyebrow={`Job ${job.id.slice(0, 8).toUpperCase()}`}
         title="Change arrival window"
-        description={`Choose a new two-hour arrival window for ${locationName}. Your current schedule stays in place until the change is confirmed.`}
+        description={`Choose another two-hour arrival window for ${locationName}. Your current window stays in place until the new one is confirmed.`}
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Jobs", href: "/partners/bookings" },

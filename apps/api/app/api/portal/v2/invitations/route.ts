@@ -4,7 +4,6 @@ import {
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
 import { requirePartnerCapability } from "@/lib/partner-account-authorization";
-import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
 import {
   createPartnerAccountInvitation,
   listPartnerAccountInvitations,
@@ -104,7 +103,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 export async function POST(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
   try {
-    const authorization = await requireRecentPartnerMfaCapability(
+    const authorization = await requirePartnerCapability(
       request,
       "account.members.manage",
     );

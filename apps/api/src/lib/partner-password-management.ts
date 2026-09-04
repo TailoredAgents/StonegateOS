@@ -18,7 +18,6 @@ import {
 export const PARTNER_PASSWORD_MIN_LENGTH = 15;
 export const PARTNER_PASSWORD_MAX_LENGTH = 128;
 const RECENT_PASSWORD_MS = 15 * 60 * 1_000;
-const RECENT_MFA_MS = 15 * 60 * 1_000;
 
 class PartnerPasswordMutationUnavailable extends Error {}
 
@@ -51,18 +50,9 @@ export type PartnerPasswordChangeResult =
 
 export function isRecentPartnerPasswordAuthentication(input: {
   authMethod: string;
-  assuranceLevel: string;
   sessionCreatedAt: Date;
-  mfaVerifiedAt: Date | null;
   now: Date;
 }): boolean {
-  if (
-    input.assuranceLevel === "aal2" &&
-    input.mfaVerifiedAt &&
-    input.now.getTime() - input.mfaVerifiedAt.getTime() <= RECENT_MFA_MS
-  ) {
-    return true;
-  }
   return (
     input.authMethod === "password" &&
     input.now.getTime() - input.sessionCreatedAt.getTime() <= RECENT_PASSWORD_MS
@@ -161,8 +151,6 @@ export async function changePartnerPassword(input: {
         .select({
           id: partnerSessions.id,
           authMethod: partnerSessions.authMethod,
-          assuranceLevel: partnerSessions.assuranceLevel,
-          mfaVerifiedAt: partnerSessions.mfaVerifiedAt,
           createdAt: partnerSessions.createdAt,
         })
         .from(partnerSessions)
@@ -181,9 +169,7 @@ export async function changePartnerPassword(input: {
 
       const recentlyAuthenticated = isRecentPartnerPasswordAuthentication({
         authMethod: session.authMethod,
-        assuranceLevel: session.assuranceLevel,
         sessionCreatedAt: session.createdAt,
-        mfaVerifiedAt: session.mfaVerifiedAt,
         now,
       });
       const hadPassword = Boolean(user.passwordHash);

@@ -542,7 +542,7 @@ export function PartnerLocationManager({
         tone: "error",
         text:
           result?.error.message ??
-          "The locations could not be merged. Resolve linked drafts, templates, or quotes and try again.",
+          "The locations could not be merged. Resolve linked saved requests, templates, or quotes and try again.",
       });
       return false;
     }
@@ -844,11 +844,11 @@ export function PartnerLocationManager({
             id="partner-add-location-heading"
             className="text-lg font-semibold text-slate-950"
           >
-            Add a service location
+            Save a service location
           </h2>
           <p className="mt-1 text-sm leading-6 text-slate-600">
-            Save public address and instructions here. Gate codes and other
-            secrets are encrypted separately.
+            Add the site details once, then select this location on future
+            bookings. Gate codes and other secrets are encrypted separately.
           </p>
           <LocationFormFields
             initial={EMPTY_LOCATION}
@@ -907,7 +907,7 @@ export function PartnerLocationManager({
             search
               ? "Try a different name, address, or property ID."
               : canManage
-                ? "Add a location to begin scheduling service."
+                ? "Save your first service location now so future bookings need less typing."
                 : "No service locations are currently visible to your role."
           }
           icon={<MapPin className="h-6 w-6" aria-hidden="true" />}
@@ -1083,7 +1083,7 @@ export function PartnerLocationManager({
                       className={partnerSecondaryButtonClass}
                     >
                       <CalendarPlus2 className="h-4 w-4" aria-hidden="true" />
-                      Schedule here
+                      Request service here
                     </Link>
                   ) : null}
                   {canManage && location.active ? (
@@ -1165,9 +1165,9 @@ export function PartnerLocationManager({
                       ) : (
                         <>
                           <p className="mt-2 text-sm leading-6 text-rose-800">
-                            Review linked jobs, drafts, groups, and the account
-                            default before this location is removed from new
-                            scheduling.
+                            Review linked jobs, saved requests, groups, and the
+                            account default before this location is removed from
+                            new scheduling.
                           </p>
                           <button
                             type="button"
@@ -1569,7 +1569,8 @@ function MergeLocationForm({
       <p className="mt-2 text-sm leading-6 text-amber-950">
         Use this only when two records represent the same physical service site.
         The duplicate is archived; job, quote, proof, and financial history is
-        preserved. Linked drafts or active quotes must be resolved first.
+        preserved. Linked saved requests or active quotes must be resolved
+        first.
       </p>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label htmlFor={`${fieldId}-target`}>
@@ -1717,11 +1718,11 @@ function ArchiveLocationForm({
       }}
     >
       <div className="rounded-lg bg-white/70 p-3 text-sm leading-6 text-rose-900">
-        <p className="font-semibold">Archive impact</p>
+        <p className="font-semibold">What archiving affects</p>
         <ul className="mt-1 list-disc pl-5">
-          <li>{impact.openDraftCount} open booking drafts</li>
+          <li>{impact.openDraftCount} open service requests</li>
           <li>{impact.activeTemplateCount} active saved templates</li>
-          <li>{impact.canonicalQuoteV2Count} active versioned quotes</li>
+          <li>{impact.canonicalQuoteV2Count} active quotes</li>
           <li>
             {impact.issuedActionableQuoteV2Count} issued quotes awaiting a
             response
@@ -1988,10 +1989,13 @@ function LocationImportPanel({
     <section className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="font-semibold text-slate-950">Portfolio import</h2>
+          <h2 className="font-semibold text-slate-950">
+            Add many locations at once
+          </h2>
           <p className="mt-1 text-sm leading-6 text-slate-600">
-            Validate up to 500 locations before one atomic import. CSV files
-            never include gate codes or access secrets.
+            Use a CSV to check and add up to 500 locations in one batch. The
+            first check does not import anything.{" "}
+            <span>CSV files never include gate codes or access secrets.</span>
           </p>
         </div>
         <button

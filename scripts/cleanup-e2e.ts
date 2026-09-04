@@ -32,7 +32,6 @@ async function main() {
     partnerAccountMemberships,
     partnerAccounts,
     partnerAccessApplications,
-    partnerMfaMethods,
     partnerSessions,
     partnerUsers,
   } = await import("../apps/api/src/db");
@@ -64,7 +63,6 @@ async function main() {
   );
   let partnerSessionsRevoked = 0;
   let partnerMembershipsSuspended = 0;
-  let partnerMfaMethodsDisabled = 0;
   let partnerApplicationsWithdrawn = 0;
   if (partnerUserIds.length) {
     const fixtureSessions = await db
@@ -89,17 +87,6 @@ async function main() {
         .where(eq(partnerSessions.id, session.id));
     }
     partnerSessionsRevoked = fixtureSessions.length;
-    const disabledMfa = await db
-      .update(partnerMfaMethods)
-      .set({ enabled: false, disabledAt: archivedAt, updatedAt: archivedAt })
-      .where(
-        and(
-          inArray(partnerMfaMethods.partnerUserId, partnerUserIds),
-          eq(partnerMfaMethods.enabled, true),
-        ),
-      )
-      .returning({ id: partnerMfaMethods.id });
-    partnerMfaMethodsDisabled = disabledMfa.length;
     const withdrawnApplications = await db
       .update(partnerAccessApplications)
       .set({
@@ -184,7 +171,6 @@ async function main() {
         partnerAccountsDisabled,
         partnerApplicationsWithdrawn,
         partnerMembershipsSuspended,
-        partnerMfaMethodsDisabled,
         partnerSessionsRevoked,
         partnerUsersDeactivated: fixtureUsers.length,
       },

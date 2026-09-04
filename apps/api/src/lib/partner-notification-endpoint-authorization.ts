@@ -3,9 +3,6 @@ import {
   requirePartnerCapability,
   type PartnerPrincipalResult,
 } from "@/lib/partner-account-authorization";
-import { hasRecentPartnerMfa } from "@/lib/partner-recent-mfa";
-
-export const hasRecentPartnerNotificationEndpointMfa = hasRecentPartnerMfa;
 
 export async function requirePartnerNotificationEndpointMutationAccess(
   request: NextRequest,
@@ -15,8 +12,5 @@ export async function requirePartnerNotificationEndpointMutationAccess(
     "account.security.manage",
   );
   if (!authorization.ok) return authorization;
-  if (!hasRecentPartnerMfa(authorization.principal)) {
-    return { ok: false, status: 403, error: "mfa_step_up_required" };
-  }
   return authorization;
 }

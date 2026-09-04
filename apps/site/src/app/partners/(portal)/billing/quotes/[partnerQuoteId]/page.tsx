@@ -112,7 +112,11 @@ function lineAmount(line: PartnerQuoteLineItem, currency: string): string {
   return moneyRange(minimum, maximum);
 }
 
-function DetailFallback({ status }: { status: Exclude<LoadState["status"], "ready"> }) {
+function DetailFallback({
+  status,
+}: {
+  status: Exclude<LoadState["status"], "ready">;
+}) {
   return (
     <PartnerPanel>
       <PartnerNotice tone={status === "forbidden" ? "info" : "error"}>
@@ -148,11 +152,14 @@ export default async function PartnerQuoteDetailPage({
         <PartnerPageHeader
           eyebrow="Account proposal"
           title="Quote details"
-          description="Review the exact proposal and its current response state."
+          description="See the exact scope, price, terms, and current response in one place."
           breadcrumbs={[
             { label: "Overview", href: "/partners/overview" },
             { label: "Billing & documents", href: "/partners/billing" },
-            { label: "Quote details", href: `/partners/billing/quotes/${partnerQuoteId}` },
+            {
+              label: "Quote details",
+              href: `/partners/billing/quotes/${partnerQuoteId}`,
+            },
           ]}
         />
         <DetailFallback status={state.status} />
@@ -169,17 +176,24 @@ export default async function PartnerQuoteDetailPage({
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
         eyebrow="Account proposal"
-        title={quote.quoteNumber ? `Quote ${quote.quoteNumber}` : "Quote details"}
-        description="Review scope, pricing, terms, proposal evidence, and the current response state in one place."
+        title={
+          quote.quoteNumber ? `Quote ${quote.quoteNumber}` : "Quote details"
+        }
+        description="Review the scope, price, terms, and response, then take the next available action in one place."
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Billing & documents", href: "/partners/billing" },
-          { label: quote.quoteNumber ?? "Quote", href: `/partners/billing/quotes/${quote.id}` },
+          {
+            label: quote.quoteNumber ?? "Quote",
+            href: `/partners/billing/quotes/${quote.id}`,
+          },
         ]}
       >
         <div className="flex flex-wrap items-center gap-3">
           <PartnerStatusBadge status={quote.status} />
-          <span className="text-sm text-slate-600">Version {quote.version}</span>
+          <span className="text-sm text-slate-600">
+            Version {quote.version}
+          </span>
         </div>
       </PartnerPageHeader>
 
@@ -198,10 +212,13 @@ export default async function PartnerQuoteDetailPage({
               Current version
             </p>
             <h2 className="mt-1 text-xl font-semibold text-slate-950">
-              {quote.projectName || document?.parties.projectName || "Service proposal"}
+              {quote.projectName ||
+                document?.parties.projectName ||
+                "Service proposal"}
             </h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              {document?.parties.serviceAddress || "Service location not included in this historical record."}
+              {document?.parties.serviceAddress ||
+                "Service location not included in this historical record."}
             </p>
           </div>
           {quote.proposalDocument ? (
@@ -255,7 +272,9 @@ export default async function PartnerQuoteDetailPage({
       {document ? (
         <>
           <PartnerPanel>
-            <h2 className="text-lg font-semibold text-slate-950">Scope of work</h2>
+            <h2 className="text-lg font-semibold text-slate-950">
+              Scope of work
+            </h2>
             <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">
               {document.scope}
             </p>
@@ -268,13 +287,17 @@ export default async function PartnerQuoteDetailPage({
 
           <PartnerPanel>
             <div className="flex items-center gap-3">
-              <FileClock className="h-5 w-5 text-primary-700" aria-hidden="true" />
+              <FileClock
+                className="h-5 w-5 text-primary-700"
+                aria-hidden="true"
+              />
               <div>
                 <h2 className="text-lg font-semibold text-slate-950">
-                  Pricing and selections
+                  Price and options
                 </h2>
                 <p className="mt-1 text-sm text-slate-600">
-                  Unit prices are shown before quantity and captured adjustments.
+                  Review each unit price, quantity, adjustment, and required
+                  choice before responding.
                 </p>
               </div>
             </div>
@@ -295,7 +318,9 @@ export default async function PartnerQuoteDetailPage({
                   Choose {group.minimumSelections}
                   {group.maximumSelections !== group.minimumSelections
                     ? `–${group.maximumSelections}`
-                    : ""} option{group.maximumSelections === 1 ? "" : "s"} when accepting.
+                    : ""}{" "}
+                  option{group.maximumSelections === 1 ? "" : "s"} when
+                  accepting.
                 </p>
                 <LineList
                   lines={document.pricing.lineItems.filter(
@@ -310,11 +335,14 @@ export default async function PartnerQuoteDetailPage({
 
           <PartnerPanel>
             <h2 className="text-lg font-semibold text-slate-950">
-              Terms and payment
+              Terms, payment & changes
             </h2>
             <div className="mt-4 grid gap-5 lg:grid-cols-3">
               <TermBlock title="Proposal terms" body={document.terms.terms} />
-              <TermBlock title="Payment terms" body={document.terms.paymentTerms} />
+              <TermBlock
+                title="Payment terms"
+                body={document.terms.paymentTerms}
+              />
               <TermBlock
                 title="Change-order rules"
                 body={document.terms.changeOrderRules}
@@ -333,8 +361,8 @@ export default async function PartnerQuoteDetailPage({
         </PartnerPanel>
       ) : (
         <PartnerNotice tone="warning">
-          The proposal document could not be verified. Do not rely on this
-          quote for scope or terms; contact Stonegate for a reconciled copy.
+          The proposal document could not be verified. Do not rely on this quote
+          for scope or terms; contact Stonegate for a reconciled copy.
         </PartnerNotice>
       )}
 
@@ -349,7 +377,9 @@ export default async function PartnerQuoteDetailPage({
                 Response recorded
               </h2>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                This version was {quote.response.decision} on {formatPartnerDate(quote.response.respondedAt)}. The response is immutable.
+                This version was {quote.response.decision} on{" "}
+                {formatPartnerDate(quote.response.respondedAt)}. That response
+                is part of the account record and cannot be changed.
               </p>
             </div>
           </div>
@@ -370,7 +400,9 @@ export default async function PartnerQuoteDetailPage({
       ) : null}
 
       <PartnerPanel>
-        <h2 className="text-lg font-semibold text-slate-950">Version history</h2>
+        <h2 className="text-lg font-semibold text-slate-950">
+          Version history
+        </h2>
         {quote.history.length === 0 ? (
           <p className="mt-2 text-sm text-slate-600">
             Version history is not available for this historical snapshot.
@@ -384,10 +416,12 @@ export default async function PartnerQuoteDetailPage({
               >
                 <div>
                   <p className="font-semibold text-slate-950">
-                    Version {version.version}{version.current ? " · Current" : ""}
+                    Version {version.version}
+                    {version.current ? " · Current" : ""}
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    Issued {formatPartnerDate(version.issuedAt)} · Expires {formatPartnerDate(version.expiresAt)}
+                    Issued {formatPartnerDate(version.issuedAt)} · Expires{" "}
+                    {formatPartnerDate(version.expiresAt)}
                   </p>
                 </div>
                 <PartnerStatusBadge status={version.state} />
@@ -411,7 +445,9 @@ function ProposalList({ title, items }: { title: string; items: string[] }) {
     <section>
       <h3 className="font-semibold text-slate-950">{title}</h3>
       {items.length === 0 ? (
-        <p className="mt-2 text-sm text-slate-500">None listed.</p>
+        <p className="mt-2 text-sm text-slate-500">
+          Nothing listed for this section.
+        </p>
       ) : (
         <ul className="mt-2 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-700">
           {items.map((item, index) => (
@@ -436,18 +472,24 @@ function LineList({
 }) {
   if (lines.length === 0) {
     return compact ? (
-      <p className="mt-3 text-sm text-slate-500">No selectable lines.</p>
+      <p className="mt-3 text-sm text-slate-500">
+        No options are listed in this group.
+      </p>
     ) : null;
   }
   return (
-    <ul className={`${compact ? "mt-3" : "mt-5"} divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white`}>
+    <ul
+      className={`${compact ? "mt-3" : "mt-5"} divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white`}
+    >
       {lines.map((line) => (
         <li
           key={line.id}
           className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between"
         >
           <div className="min-w-0">
-            <p className="break-words font-semibold text-slate-950">{line.name}</p>
+            <p className="break-words font-semibold text-slate-950">
+              {line.name}
+            </p>
             {line.description ? (
               <p className="mt-1 break-words text-xs leading-5 text-slate-600">
                 {line.description}

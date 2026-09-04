@@ -15,8 +15,6 @@ const mockGetVerifiedRequestActor = jest.fn(() => ({
   label: "Private Owner Name",
   sessionId: "22222222-2222-4222-8222-222222222222",
   authMethod: "team_session" as const,
-  assuranceLevel: "aal2" as const,
-  mfaVerifiedAt: new Date().toISOString(),
 }));
 
 const mockTables = {

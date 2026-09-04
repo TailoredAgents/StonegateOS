@@ -34,7 +34,9 @@ type TeamPayload = {
 
 export default async function PartnerTeamSettingsPage() {
   const [response, invitationResponse, joinResponse] = await Promise.all([
-    callPartnerApi("/api/portal/v2/members?status=all&limit=100").catch(() => null),
+    callPartnerApi("/api/portal/v2/members?status=all&limit=100").catch(
+      () => null,
+    ),
     callPartnerApi("/api/portal/v2/invitations?limit=100").catch(() => null),
     callPartnerApi("/api/portal/v2/join-requests?limit=100").catch(() => null),
   ]);
@@ -42,10 +44,16 @@ export default async function PartnerTeamSettingsPage() {
     ? ((await response.json().catch(() => null)) as TeamPayload | null)
     : null;
   const invitationPayload = invitationResponse?.ok
-    ? ((await invitationResponse.json().catch(() => null)) as { ok: true; invitations: PartnerInvitation[] } | null)
+    ? ((await invitationResponse.json().catch(() => null)) as {
+        ok: true;
+        invitations: PartnerInvitation[];
+      } | null)
     : null;
   const joinPayload = joinResponse?.ok
-    ? ((await joinResponse.json().catch(() => null)) as { ok: true; joinRequests: PartnerAdminJoinRequest[] } | null)
+    ? ((await joinResponse.json().catch(() => null)) as {
+        ok: true;
+        joinRequests: PartnerAdminJoinRequest[];
+      } | null)
     : null;
 
   if (!payload?.ok) {
@@ -59,8 +67,8 @@ export default async function PartnerTeamSettingsPage() {
         }
         description={
           forbidden
-            ? "Ask an account administrator to review team membership and roles. Your own portal access is unchanged."
-            : "No membership settings were changed. Try again, or contact Stonegate if the problem continues."
+            ? "Ask an account administrator to review your team access and role. Your own portal access is unchanged."
+            : "No team-access settings were changed. Try again, or contact Stonegate if the problem continues."
         }
         retryHref={forbidden ? "/partners/settings" : "/partners/settings/team"}
       />
@@ -74,9 +82,9 @@ export default async function PartnerTeamSettingsPage() {
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
-        eyebrow="Account administration"
+        eyebrow="Clear access for every teammate"
         title="Team access"
-        description="Review who can use this account, assign roles within your own authority, and suspend or restore account access."
+        description="Invite teammates, give each person the right role, and update access without sharing sign-ins."
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Account & security", href: "/partners/settings" },
@@ -102,8 +110,8 @@ export default async function PartnerTeamSettingsPage() {
             <div>
               <h2 className="font-semibold text-slate-950">Read-only access</h2>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                You can review account members. An account administrator must
-                make role or access changes.
+                You can see who has account access. An account administrator
+                must invite people or change their role or access.
               </p>
             </div>
           </div>
@@ -116,12 +124,12 @@ export default async function PartnerTeamSettingsPage() {
             </div>
             <div>
               <h2 className="font-semibold text-slate-950">
-                Protected administration
+                Team changes follow account roles
               </h2>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                Role and access changes require a verified MFA session. The
-                final account administrator cannot be demoted or suspended, and
-                you cannot suspend your own current membership.
+                Only account administrators can change access. The final account
+                administrator cannot be demoted or suspended, and you cannot
+                suspend your own access.
               </p>
             </div>
           </div>

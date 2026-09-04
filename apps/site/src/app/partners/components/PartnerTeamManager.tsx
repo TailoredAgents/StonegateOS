@@ -1,15 +1,12 @@
 "use client";
 
 import * as React from "react";
-import type { Route } from "next";
-import Link from "next/link";
 import {
   Ban,
   CheckCircle2,
   LoaderCircle,
   RefreshCw,
   Search,
-  ShieldCheck,
   UserRoundCog,
   UsersRound,
 } from "lucide-react";
@@ -35,7 +32,6 @@ export type PartnerTeamMember = {
   accessLevel: "account" | "scoped";
   currentUser: boolean;
   defaultAccount: boolean;
-  security: { mfaRequired: boolean; mfaEnrolled: boolean };
   dates: {
     invitedAt: string;
     acceptedAt: string | null;
@@ -51,7 +47,6 @@ export type PartnerTeamRole = {
   name: string;
   description: string;
   system: boolean;
-  mfaRequired: boolean;
 };
 
 type TeamPayload = {
@@ -133,14 +128,7 @@ function MemberCard({
       if (result?.error.error === "revision_mismatch") {
         setMessage({
           tone: "warning",
-          text: "This member changed in another session. Refresh the team list before trying again.",
-        });
-        return;
-      }
-      if (result?.error.error === "mfa_step_up_required") {
-        setMessage({
-          tone: "warning",
-          text: "Verify this session in Account & security before managing team access.",
+          text: "This teammate changed in another session. Refresh the team list before trying again.",
         });
         return;
       }
@@ -211,14 +199,6 @@ function MemberCard({
       {message ? (
         <PartnerNotice tone={message.tone} className="mt-4">
           {message.text}
-          {message.text.startsWith("Verify this session") ? (
-            <Link
-              href={"/partners/settings" as Route}
-              className="ml-1 font-semibold underline underline-offset-4"
-            >
-              Open security settings
-            </Link>
-          ) : null}
         </PartnerNotice>
       ) : null}
 
@@ -244,21 +224,6 @@ function MemberCard({
       </dl>
 
       <div className="mt-4 flex flex-wrap gap-2 text-xs">
-        {member.security.mfaRequired ? (
-          <span
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-semibold ring-1 ring-inset",
-              member.security.mfaEnrolled
-                ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
-                : "bg-amber-50 text-amber-900 ring-amber-200",
-            )}
-          >
-            <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-            {member.security.mfaEnrolled
-              ? "MFA enrolled"
-              : "MFA setup required"}
-          </span>
-        ) : null}
         {member.defaultAccount ? (
           <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
             Default account
@@ -288,7 +253,6 @@ function MemberCard({
                   {roles.map((role) => (
                     <option value={role.key} key={role.key}>
                       {role.name}
-                      {role.mfaRequired ? " · MFA required" : ""}
                     </option>
                   ))}
                 </select>
@@ -331,7 +295,7 @@ function MemberCard({
                     <div>
                       <strong>Suspend {member.user.name}?</strong> They will
                       immediately lose access to this account, but any other
-                      account memberships remain unchanged.
+                      company access will remain available.
                       <div className="mt-3 flex flex-wrap gap-2">
                         <button
                           type="button"
@@ -458,11 +422,11 @@ export function PartnerTeamManager({ initial }: { initial: TeamPayload }) {
           </div>
           <div>
             <h2 className="text-lg font-semibold text-slate-950">
-              Find a team member
+              Keep the right teammates connected
             </h2>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Search the members loaded for this account or narrow by access
-              status.
+              Find people by name, email, or role and keep their access current
+              so the right team can request and manage service.
             </p>
           </div>
         </div>
@@ -502,9 +466,9 @@ export function PartnerTeamManager({ initial }: { initial: TeamPayload }) {
 
       {!initial.invitation.available ? (
         <PartnerNotice tone="info">
-          <strong>New invitations are staff-assisted for now.</strong>{" "}
-          {initial.invitation.reason} Contact an account administrator to add a
-          new teammate; no invitation has been sent from this page.
+          <strong>Need to add someone?</strong> {initial.invitation.reason}{" "}
+          Contact an account administrator to add a new teammate; no invitation
+          has been sent from this page.
         </PartnerNotice>
       ) : null}
 
@@ -533,10 +497,10 @@ export function PartnerTeamManager({ initial }: { initial: TeamPayload }) {
               aria-hidden="true"
             />
             <h2 className="mt-3 font-semibold text-slate-950">
-              No members match these filters
+              No teammates match these filters
             </h2>
             <p className="mt-1 text-sm text-slate-600">
-              Clear the search or choose another status.
+              Clear the search or choose another status to see more teammates.
             </p>
           </div>
         </PartnerPanel>
@@ -558,7 +522,7 @@ export function PartnerTeamManager({ initial }: { initial: TeamPayload }) {
             ) : (
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
             )}
-            {loadingMore ? "Loading…" : "Load more members"}
+            {loadingMore ? "Loading…" : "Load more teammates"}
           </button>
         </div>
       ) : null}

@@ -1,19 +1,14 @@
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import {
   getDb,
   partnerAccountMemberships,
   partnerAccounts,
   partnerAuthChallenges,
-  partnerAuthTransactions,
   partnerLoginTokens,
-  partnerMfaEnrollmentChallenges,
-  partnerMfaMethods,
-  partnerMfaRecoveryCodes,
   partnerSessions,
   partnerUsers,
 } from "@/db";
-import { createPartnerActivationChallengeInTransaction } from "@/lib/partner-purpose-auth";
 import {
   assertTeamMutationExpectedVersion,
   TeamMutationFailure,
@@ -43,8 +38,6 @@ export type PartnerIdentitySecurityImpact = {
     active: boolean;
     status: string;
     passwordSet: boolean;
-    mfaRequired: boolean;
-    mfaEnrolledAt: string | null;
     securityVersion: number;
     version: string;
   };
@@ -53,12 +46,7 @@ export type PartnerIdentitySecurityImpact = {
   membershipSnapshot: string;
   allMembershipsEnumerated: boolean;
   activeSessionCount: number;
-  enabledMfaMethodCount: number;
-  unusedRecoveryCodeCount: number;
-  recoveryMembership: PartnerIdentitySecurityMembership | null;
   canDisable: boolean;
-  canResetMfa: boolean;
-  mfaRecoveryPending: boolean;
 };
 
 type IdentityRow = {
@@ -69,8 +57,6 @@ type IdentityRow = {
   active: boolean;
   identityStatus: string;
   passwordHash: string | null;
-  mfaRequired: boolean;
-  mfaEnrolledAt: Date | null;
   securityVersion: number;
   updatedAt: Date;
 };
@@ -138,8 +124,6 @@ async function loadImpactInTransaction(
       active: partnerUsers.active,
       identityStatus: partnerUsers.identityStatus,
       passwordHash: partnerUsers.passwordHash,
-      mfaRequired: partnerUsers.mfaRequired,
-      mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
       securityVersion: partnerUsers.securityVersion,
       updatedAt: partnerUsers.updatedAt,
     })
@@ -199,75 +183,6 @@ async function loadImpactInTransaction(
         gt(partnerSessions.expiresAt, options.now),
       ),
     );
-  const [methodCountRow] = await tx
-    .select({ count: sql<number>`count(*)::integer`.mapWith(Number) })
-    .from(partnerMfaMethods)
-    .where(
-      and(
-        eq(partnerMfaMethods.partnerUserId, partnerUserId),
-        eq(partnerMfaMethods.enabled, true),
-      ),
-    );
-  const [recoveryCodeCountRow] = await tx
-    .select({ count: sql<number>`count(*)::integer`.mapWith(Number) })
-    .from(partnerMfaRecoveryCodes)
-    .innerJoin(
-      partnerMfaMethods,
-      eq(partnerMfaRecoveryCodes.methodId, partnerMfaMethods.id),
-    )
-    .where(
-      and(
-        eq(partnerMfaMethods.partnerUserId, partnerUserId),
-        isNull(partnerMfaRecoveryCodes.usedAt),
-      ),
-    );
-  const [pendingRecoveryRow] = await tx
-    .select({ count: sql<number>`count(*)::integer`.mapWith(Number) })
-    .from(partnerAuthChallenges)
-    .innerJoin(
-      partnerAccountMemberships,
-      and(
-        eq(
-          partnerAuthChallenges.partnerMembershipId,
-          partnerAccountMemberships.id,
-        ),
-        eq(
-          partnerAuthChallenges.partnerAccountId,
-          partnerAccountMemberships.partnerAccountId,
-        ),
-      ),
-    )
-    .where(
-      and(
-        eq(partnerAuthChallenges.partnerUserId, partnerUserId),
-        eq(partnerAuthChallenges.purpose, "account_activation"),
-        eq(partnerAuthChallenges.status, "pending"),
-        eq(partnerAccountMemberships.status, "active"),
-        eq(
-          partnerAuthChallenges.securityVersionSnapshot,
-          identity.securityVersion,
-        ),
-      ),
-    );
-
-  const recoveryMembership =
-    safeMemberships.find(
-      (membership) =>
-        membership.status === "active" && membership.portalAccessEnabled,
-    ) ?? null;
-  const enabledMfaMethodCount = exactCount(methodCountRow?.count);
-  const mfaRecoveryPending =
-    identity.active &&
-    identity.identityStatus === "active" &&
-    identity.mfaRequired &&
-    identity.mfaEnrolledAt === null &&
-    enabledMfaMethodCount === 0 &&
-    exactCount(pendingRecoveryRow?.count) > 0;
-  const mfaWasConfigured =
-    enabledMfaMethodCount > 0 ||
-    identity.mfaEnrolledAt !== null ||
-    identity.mfaRequired;
-
   return {
     identity: {
       id: identity.id,
@@ -277,8 +192,6 @@ async function loadImpactInTransaction(
       active: identity.active,
       status: identity.identityStatus,
       passwordSet: Boolean(identity.passwordHash),
-      mfaRequired: identity.mfaRequired,
-      mfaEnrolledAt: identity.mfaEnrolledAt?.toISOString() ?? null,
       securityVersion: identity.securityVersion,
       version: identity.updatedAt.toISOString(),
     },
@@ -290,22 +203,10 @@ async function loadImpactInTransaction(
     ),
     allMembershipsEnumerated,
     activeSessionCount: exactCount(sessionCountRow?.count),
-    enabledMfaMethodCount,
-    unusedRecoveryCodeCount: exactCount(recoveryCodeCountRow?.count),
-    recoveryMembership,
     canDisable:
       allMembershipsEnumerated &&
       identity.identityStatus !== "disabled" &&
       identity.identityStatus !== "quarantined",
-    canResetMfa:
-      allMembershipsEnumerated &&
-      identity.active &&
-      identity.identityStatus === "active" &&
-      Boolean(identity.passwordHash) &&
-      Boolean(identity.normalizedEmail) &&
-      Boolean(recoveryMembership) &&
-      mfaWasConfigured,
-    mfaRecoveryPending,
   };
 }
 
@@ -372,9 +273,7 @@ async function invalidatePartnerCredentials(
 ): Promise<{
   sessionsRevoked: number;
   loginTokensRevoked: number;
-  authTransactionsRevoked: number;
   authChallengesRevoked: number;
-  enrollmentChallengesDeleted: number;
 }> {
   const sessions = await tx
     .update(partnerSessions)
@@ -396,16 +295,6 @@ async function invalidatePartnerCredentials(
       ),
     )
     .returning({ id: partnerLoginTokens.id });
-  const authTransactions = await tx
-    .update(partnerAuthTransactions)
-    .set({ consumedAt: now })
-    .where(
-      and(
-        eq(partnerAuthTransactions.partnerUserId, partnerUserId),
-        isNull(partnerAuthTransactions.consumedAt),
-      ),
-    )
-    .returning({ id: partnerAuthTransactions.id });
   const authChallenges = await tx
     .update(partnerAuthChallenges)
     .set({
@@ -421,16 +310,10 @@ async function invalidatePartnerCredentials(
       ),
     )
     .returning({ id: partnerAuthChallenges.id });
-  const enrollmentChallenges = await tx
-    .delete(partnerMfaEnrollmentChallenges)
-    .where(eq(partnerMfaEnrollmentChallenges.partnerUserId, partnerUserId))
-    .returning({ id: partnerMfaEnrollmentChallenges.id });
   return {
     sessionsRevoked: sessions.length,
     loginTokensRevoked: loginTokens.length,
-    authTransactionsRevoked: authTransactions.length,
     authChallengesRevoked: authChallenges.length,
-    enrollmentChallengesDeleted: enrollmentChallenges.length,
   };
 }
 
@@ -446,9 +329,7 @@ export type PartnerIdentityDisableResult = {
   recordsPreserved: true;
   sessionsRevoked: number;
   loginTokensRevoked: number;
-  authTransactionsRevoked: number;
   authChallengesRevoked: number;
-  enrollmentChallengesDeleted: number;
   before: Record<string, unknown>;
   after: Record<string, unknown>;
 };
@@ -549,215 +430,6 @@ export async function disablePartnerIdentityAsTeamOwner(
       membershipSnapshot: impact.membershipSnapshot,
       membershipsChanged: false,
       recordsPreserved: true,
-      version,
-    },
-  };
-}
-
-export type PartnerMfaResetResult = {
-  partnerUserId: string;
-  status: "re_enrollment_required";
-  version: string;
-  securityVersion: number;
-  membershipCount: number;
-  membershipSnapshot: string;
-  membershipsChanged: false;
-  recordsPreserved: true;
-  sessionsRevoked: number;
-  loginTokensRevoked: number;
-  authTransactionsRevoked: number;
-  authChallengesRevoked: number;
-  enrollmentChallengesDeleted: number;
-  mfaMethodsRevoked: number;
-  recoveryCodesRevoked: number;
-  recoveryAccountId: string;
-  recoveryMembershipId: string;
-  recoveryChallengeId: string;
-  recoveryChallengeExpiresAt: string;
-  recoveryDelivery: "queued";
-  before: Record<string, unknown>;
-  after: Record<string, unknown>;
-};
-
-export async function resetPartnerMfaAsTeamOwner(
-  tx: TeamMutationTransaction,
-  input: {
-    partnerUserId: string;
-    expectedVersion: string;
-    membershipSnapshot: string;
-    confirmation: string;
-    correlationId: string;
-    now?: Date;
-  },
-): Promise<PartnerMfaResetResult> {
-  const now = input.now ?? new Date();
-  const impact = await lockPartnerIdentitySecurityImpact(
-    tx,
-    input.partnerUserId,
-    now,
-  );
-  assertReviewedImpact(impact, input);
-  const expectedConfirmation = `RESET ${impact.identity.email} MFA`.normalize(
-    "NFKC",
-  );
-  if (input.confirmation !== expectedConfirmation) {
-    throw new TeamMutationFailure(
-      "invalid",
-      "Type the exact MFA reset confirmation shown in the workspace.",
-      {
-        fieldErrors: {
-          confirmation: `Enter ${expectedConfirmation} exactly.`,
-        },
-      },
-    );
-  }
-  if (!impact.canResetMfa || !impact.recoveryMembership) {
-    throw new TeamMutationFailure(
-      "conflict",
-      "MFA cannot be reset safely for this identity. It must be active, have a password, and have at least one active portal-enabled company membership for purpose-bound re-enrollment.",
-    );
-  }
-  if (!impact.identity.normalizedEmail) {
-    throw new TeamMutationFailure(
-      "conflict",
-      "MFA recovery requires a canonical verified email address.",
-    );
-  }
-  const [recoveryAccount] = await tx
-    .select({
-      id: partnerAccounts.id,
-      portalAccessEnabled: partnerAccounts.portalAccessEnabled,
-    })
-    .from(partnerAccounts)
-    .where(eq(partnerAccounts.id, impact.recoveryMembership.partnerAccountId))
-    .for("update")
-    .limit(1);
-  if (!recoveryAccount?.portalAccessEnabled) {
-    throw new TeamMutationFailure(
-      "conflict",
-      "The recovery company is no longer portal-enabled. Refresh and choose a safe active membership before resetting MFA.",
-      { status: 412 },
-    );
-  }
-
-  const methodRows = await tx
-    .select({ id: partnerMfaMethods.id })
-    .from(partnerMfaMethods)
-    .where(eq(partnerMfaMethods.partnerUserId, input.partnerUserId))
-    .for("update");
-  const methodIds = methodRows.map((method) => method.id);
-  let recoveryCodesRevoked = 0;
-  if (methodIds.length > 0) {
-    const recoveryCodes = await tx
-      .update(partnerMfaRecoveryCodes)
-      .set({ usedAt: now })
-      .where(
-        and(
-          inArray(partnerMfaRecoveryCodes.methodId, methodIds),
-          isNull(partnerMfaRecoveryCodes.usedAt),
-        ),
-      )
-      .returning({ id: partnerMfaRecoveryCodes.id });
-    recoveryCodesRevoked = recoveryCodes.length;
-    await tx
-      .update(partnerMfaMethods)
-      .set({
-        enabled: false,
-        disabledAt: now,
-        credentialIdHash: null,
-        credentialReference: null,
-        totpSecretCiphertext: null,
-        totpSecretKeyVersion: null,
-        lastTotpCounter: null,
-        updatedAt: now,
-      })
-      .where(inArray(partnerMfaMethods.id, methodIds));
-  }
-
-  const invalidated = await invalidatePartnerCredentials(
-    tx,
-    input.partnerUserId,
-    now,
-  );
-  const nextSecurityVersion = impact.identity.securityVersion + 1;
-  const [updated] = await tx
-    .update(partnerUsers)
-    .set({
-      mfaRequired: true,
-      mfaEnrolledAt: null,
-      securityVersion: nextSecurityVersion,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(partnerUsers.id, input.partnerUserId),
-        eq(partnerUsers.active, true),
-        eq(partnerUsers.identityStatus, "active"),
-        eq(partnerUsers.updatedAt, new Date(impact.identity.version)),
-        eq(partnerUsers.securityVersion, impact.identity.securityVersion),
-      ),
-    )
-    .returning({ updatedAt: partnerUsers.updatedAt });
-  if (!updated) {
-    throw new TeamMutationFailure(
-      "conflict",
-      "The identity changed during MFA reset. Refresh and review it again.",
-      { status: 412, retryable: true },
-    );
-  }
-
-  const recoveryChallenge = await createPartnerActivationChallengeInTransaction(
-    tx,
-    {
-      partnerUserId: input.partnerUserId,
-      partnerAccountId: impact.recoveryMembership.partnerAccountId,
-      partnerMembershipId: impact.recoveryMembership.id,
-      applicationId: null,
-      normalizedEmail: impact.identity.normalizedEmail,
-      securityVersion: nextSecurityVersion,
-      correlationId: input.correlationId,
-      now,
-    },
-  );
-  const version = updated.updatedAt.toISOString();
-  return {
-    partnerUserId: input.partnerUserId,
-    status: "re_enrollment_required",
-    version,
-    securityVersion: nextSecurityVersion,
-    membershipCount: impact.membershipCount,
-    membershipSnapshot: impact.membershipSnapshot,
-    membershipsChanged: false,
-    recordsPreserved: true,
-    ...invalidated,
-    mfaMethodsRevoked: methodIds.length,
-    recoveryCodesRevoked,
-    recoveryAccountId: impact.recoveryMembership.partnerAccountId,
-    recoveryMembershipId: impact.recoveryMembership.id,
-    recoveryChallengeId: recoveryChallenge.challengeId,
-    recoveryChallengeExpiresAt: recoveryChallenge.expiresAt.toISOString(),
-    recoveryDelivery: "queued",
-    before: {
-      mfaRequired: impact.identity.mfaRequired,
-      mfaEnrolledAt: impact.identity.mfaEnrolledAt,
-      securityVersion: impact.identity.securityVersion,
-      enabledMfaMethodCount: impact.enabledMfaMethodCount,
-      unusedRecoveryCodeCount: impact.unusedRecoveryCodeCount,
-      membershipCount: impact.membershipCount,
-      membershipSnapshot: impact.membershipSnapshot,
-    },
-    after: {
-      mfaRequired: true,
-      mfaEnrolledAt: null,
-      securityVersion: nextSecurityVersion,
-      enabledMfaMethodCount: 0,
-      unusedRecoveryCodeCount: 0,
-      membershipCount: impact.membershipCount,
-      membershipSnapshot: impact.membershipSnapshot,
-      membershipsChanged: false,
-      recordsPreserved: true,
-      reEnrollmentRequired: true,
-      recoveryDelivery: "queued",
       version,
     },
   };

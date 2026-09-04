@@ -319,9 +319,9 @@ export function parseApprovalRuleSnapshots(
     if (
       rawRoles !== undefined &&
       (!Array.isArray(rawRoles) ||
-      rawRoles.some(
-        (role) => typeof role !== "string" || !ROLE_KEY_PATTERN.test(role),
-      ))
+        rawRoles.some(
+          (role) => typeof role !== "string" || !ROLE_KEY_PATTERN.test(role),
+        ))
     ) {
       return null;
     }
@@ -345,8 +345,8 @@ export function parseApprovalRuleSnapshots(
     // migration shape and are converted to the stable approval capability.
     const capabilities = [
       ...new Set(
-        ((rawCapabilities as string[] | undefined) ??
-          (roles.length ? ["approvals.decide"] : [])),
+        (rawCapabilities as string[] | undefined) ??
+          (roles.length ? ["approvals.decide"] : []),
       ),
     ];
     const rawCount = firstDefined(record, [
@@ -412,12 +412,12 @@ export function evaluateAllMatchingApprovalRules(input: {
       !isPortalV2Uuid(decision.membershipId) ||
       !ROLE_KEY_PATTERN.test(decision.roleKey) ||
       (decision.capabilities !== undefined &&
-      (!Array.isArray(decision.capabilities) ||
-      decision.capabilities.some(
-        (capability) =>
-          typeof capability !== "string" ||
-          !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u.test(capability),
-      ))) ||
+        (!Array.isArray(decision.capabilities) ||
+          decision.capabilities.some(
+            (capability) =>
+              typeof capability !== "string" ||
+              !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u.test(capability),
+          ))) ||
       !["approved", "declined"].includes(decision.decision) ||
       decisionsByMembership.has(decision.membershipId)
     ) {
@@ -446,8 +446,7 @@ export function evaluateAllMatchingApprovalRules(input: {
     };
   });
   const actorCapabilities =
-    input.actorCapabilities ??
-    (input.actorRoleKey ? ["approvals.decide"] : []);
+    input.actorCapabilities ?? (input.actorRoleKey ? ["approvals.decide"] : []);
   const eligibleRuleIds = actorCapabilities.length
     ? rules
         .filter((rule) =>
@@ -480,16 +479,16 @@ export type PartnerApprovalTransaction = Parameters<
 export type PartnerApprovalRuleCandidate = Readonly<
   Omit<
     Pick<
-    typeof partnerApprovalRules.$inferSelect,
-    | "id"
-    | "partnerAccountId"
-    | "name"
-    | "conditions"
-    | "requiredApproverCapabilities"
-    | "requiredApproverRoleKeys"
-    | "requiredDecisionCount"
-    | "active"
-    | "version"
+      typeof partnerApprovalRules.$inferSelect,
+      | "id"
+      | "partnerAccountId"
+      | "name"
+      | "conditions"
+      | "requiredApproverCapabilities"
+      | "requiredApproverRoleKeys"
+      | "requiredDecisionCount"
+      | "active"
+      | "version"
     >,
     "requiredApproverCapabilities"
   > & {
@@ -642,8 +641,7 @@ function activeApprovalRuleSnapshot(
 ): Readonly<ApprovalRuleSnapshot> {
   const ruleId = isPortalV2Uuid(row.id) ? row.id : null;
   const name = safeText(row.name, 10_000);
-  const capabilities =
-    row.requiredApproverCapabilities ?? ["approvals.decide"];
+  const capabilities = row.requiredApproverCapabilities ?? ["approvals.decide"];
   const roles = row.requiredApproverRoleKeys;
   const conditions = parsePartnerApprovalRuleConditions(row.conditions);
   if (
@@ -1037,9 +1035,7 @@ export function buildPartnerApprovalRequestInsert(input: {
       id: rule.id,
       name: rule.name,
       version: rule.version,
-      requiredApproverCapabilities: [
-        ...rule.requiredApproverCapabilities,
-      ],
+      requiredApproverCapabilities: [...rule.requiredApproverCapabilities],
       requiredApproverRoleKeys: [...rule.requiredApproverRoleKeys],
       requiredDecisionCount: rule.requiredDecisionCount,
       conditions: {
@@ -2302,7 +2298,7 @@ export async function decidePartnerApprovalRequest(
           capabilities: ["approvals.decide"],
           eligibleRuleIds: eligibility.eligibleRuleIds,
           requestRevision: requestRow.revision,
-          assuranceLevel: "aal2",
+          assuranceLevel: "aal1",
           lifecycle: lifecycle.plan.kind,
         },
         createdAt: now,

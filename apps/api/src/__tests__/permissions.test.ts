@@ -54,7 +54,6 @@ describe("team role permissions", () => {
         "financials.read",
         "ad_spend.write",
         "partners.identities.disable",
-        "partners.security.mfa.reset",
         "partners.memberships.recover_admin",
         "partners.accounts.close",
       ]),
@@ -102,7 +101,6 @@ describe("team role permissions", () => {
     expect(nonOwner).not.toEqual(
       expect.arrayContaining([
         "partners.identities.disable",
-        "partners.security.mfa.reset",
         "partners.memberships.recover_admin",
         "partners.accounts.close",
       ]),

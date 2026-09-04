@@ -5,10 +5,7 @@ import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
-import {
-  disablePartnerIdentityAsTeamOwner,
-  resetPartnerMfaAsTeamOwner,
-} from "@/lib/partner-identity-security-administration";
+import { disablePartnerIdentityAsTeamOwner } from "@/lib/partner-identity-security-administration";
 import {
   claimTeamMutationIdempotency,
   completeTeamMutationIdempotency,
@@ -41,7 +38,7 @@ export async function handleTeamOwnerPartnerIdentitySecurityMutation(input: {
   request: NextRequest;
   context: RouteContext;
   mutation: TeamMutationContext;
-  action: "disable" | "mfa_reset";
+  action: "disable";
 }): Promise<Response> {
   const { userId: rawUserId } = await input.context.params;
   const partnerUserId = rawUserId?.trim().toLowerCase() ?? "";
@@ -107,9 +104,7 @@ export async function handleTeamOwnerPartnerIdentitySecurityMutation(input: {
   let claim: TeamMutationIdempotencyClaim | null = null;
   try {
     const route =
-      input.action === "disable"
-        ? "POST /api/admin/partner-management/v1/security/identities/:userId/disable"
-        : "POST /api/admin/partner-management/v1/security/identities/:userId/mfa/reset";
+      "POST /api/admin/partner-management/v1/security/identities/:userId/disable";
     const claimed = await claimTeamMutationIdempotency(db, input.mutation, {
       route,
       entityType: "partner_user",
@@ -122,21 +117,12 @@ export async function handleTeamOwnerPartnerIdentitySecurityMutation(input: {
     claim = claimed.claim;
 
     const result = await db.transaction(async (tx) => {
-      const changed =
-        input.action === "disable"
-          ? await disablePartnerIdentityAsTeamOwner(tx, {
-              partnerUserId,
-              expectedVersion: input.mutation.expectedVersion!,
-              membershipSnapshot: parsed.data.membershipSnapshot,
-              confirmation: parsed.data.confirmation,
-            })
-          : await resetPartnerMfaAsTeamOwner(tx, {
-              partnerUserId,
-              expectedVersion: input.mutation.expectedVersion!,
-              membershipSnapshot: parsed.data.membershipSnapshot,
-              confirmation: parsed.data.confirmation,
-              correlationId: input.mutation.correlationId,
-            });
+      const changed = await disablePartnerIdentityAsTeamOwner(tx, {
+        partnerUserId,
+        expectedVersion: input.mutation.expectedVersion!,
+        membershipSnapshot: parsed.data.membershipSnapshot,
+        confirmation: parsed.data.confirmation,
+      });
       const audit = await input.mutation.audit.insertSuccess(tx, {
         entityType: "partner_user",
         entityId: partnerUserId,
@@ -151,58 +137,20 @@ export async function handleTeamOwnerPartnerIdentitySecurityMutation(input: {
           accountJobFinancialRecordsPreserved: true,
           sessionsRevoked: changed.sessionsRevoked,
           loginTokensRevoked: changed.loginTokensRevoked,
-          authTransactionsRevoked: changed.authTransactionsRevoked,
           authChallengesRevoked: changed.authChallengesRevoked,
-          enrollmentChallengesDeleted: changed.enrollmentChallengesDeleted,
-          ...(input.action === "mfa_reset" && "mfaMethodsRevoked" in changed
-            ? {
-                mfaMethodsRevoked: changed.mfaMethodsRevoked,
-                recoveryCodesRevoked: changed.recoveryCodesRevoked,
-                recoveryAccountId: changed.recoveryAccountId,
-                recoveryMembershipId: changed.recoveryMembershipId,
-                recoveryChallengeId: changed.recoveryChallengeId,
-                recoveryDelivery: changed.recoveryDelivery,
-                insecureBypassCreated: false,
-              }
-            : {}),
         },
       });
-      const data =
-        input.action === "disable" && changed.status === "disabled"
-          ? {
-              partnerUserId,
-              status: changed.status,
-              active: changed.active,
-              securityVersion: changed.securityVersion,
-              membershipCount: changed.membershipCount,
-              membershipsChanged: changed.membershipsChanged,
-              recordsPreserved: changed.recordsPreserved,
-              sessionsRevoked: changed.sessionsRevoked,
-              version: changed.version,
-            }
-          : changed.status === "re_enrollment_required" &&
-              "recoveryChallengeExpiresAt" in changed
-            ? {
-                partnerUserId,
-                status: changed.status,
-                securityVersion: changed.securityVersion,
-                membershipCount: changed.membershipCount,
-                membershipsChanged: changed.membershipsChanged,
-                recordsPreserved: changed.recordsPreserved,
-                sessionsRevoked: changed.sessionsRevoked,
-                mfaMethodsRevoked: changed.mfaMethodsRevoked,
-                recoveryCodesRevoked: changed.recoveryCodesRevoked,
-                recoveryDelivery: changed.recoveryDelivery,
-                recoveryChallengeExpiresAt: changed.recoveryChallengeExpiresAt,
-                version: changed.version,
-              }
-            : null;
-      if (!data) {
-        throw new TeamMutationFailure(
-          "internal",
-          "The partner identity security result was incomplete.",
-        );
-      }
+      const data = {
+        partnerUserId,
+        status: changed.status,
+        active: changed.active,
+        securityVersion: changed.securityVersion,
+        membershipCount: changed.membershipCount,
+        membershipsChanged: changed.membershipsChanged,
+        recordsPreserved: changed.recordsPreserved,
+        sessionsRevoked: changed.sessionsRevoked,
+        version: changed.version,
+      };
       const mutationResult = teamMutationSuccessResult(input.mutation, data, {
         auditEventId: audit.auditEventId,
         committedAt: audit.committedAt,

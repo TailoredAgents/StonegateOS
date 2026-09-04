@@ -166,12 +166,6 @@ services:
         sync: false
       - key: TEAM_AUTH_RATE_LIMIT_SECRET
         sync: false
-      - key: TEAM_MFA_SECRET_KEYS_JSON
-        sync: false
-      - key: TEAM_MFA_SECRET_KEY_BASE64
-        sync: false
-      - key: TEAM_MFA_SECRET_KEY_VERSION
-        sync: false
       - key: TEAM_BREAK_GLASS_OWNER_MEMBER_ID
         sync: false
       - key: TEAM_BREAK_GLASS_CREW_MEMBER_ID
@@ -235,12 +229,6 @@ services:
       - key: PARTNER_LOCATION_SECRET_KEY_VERSION
         sync: false
       - key: PARTNER_PROOF_SHARE_TOKEN_KEY_BASE64
-        sync: false
-      - key: PARTNER_MFA_SECRET_KEYS_JSON
-        sync: false
-      - key: PARTNER_MFA_SECRET_KEY_BASE64
-        sync: false
-      - key: PARTNER_MFA_SECRET_KEY_VERSION
         sync: false
       - key: EXPENSE_RECEIPT_CAPTURE_ENABLED
         sync: false

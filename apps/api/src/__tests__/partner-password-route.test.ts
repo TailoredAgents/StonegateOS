@@ -151,7 +151,7 @@ describe("partner V2 password route", () => {
     expect(response.status).toBe(403);
     const body: unknown = await response.json();
     expect(body).toEqual(
-      expect.objectContaining({ error: "mfa_step_up_required" }),
+      expect.objectContaining({ error: "recent_authentication_required" }),
     );
     expect(body).toEqual(
       expect.objectContaining({

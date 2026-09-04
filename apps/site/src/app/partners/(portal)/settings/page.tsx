@@ -15,7 +15,6 @@ import {
 import {
   PartnerAccountSecurityManager,
   type PartnerSettingsAccount,
-  type PartnerSettingsMfa,
   type PartnerSettingsPreference,
   type PartnerSettingsSession,
 } from "@/app/partners/components/PartnerAccountSecurityManager";
@@ -39,7 +38,7 @@ import {
 } from "@/app/partners/components/PartnerProofDefaultsManager";
 import { parsePartnerSmsEndpoints } from "@/app/partners/lib/notification-endpoints";
 
-export const metadata: Metadata = { title: "Account & security" };
+export const metadata: Metadata = { title: "Account, updates & security" };
 
 type MePayload = {
   ok: true;
@@ -81,7 +80,6 @@ export default async function PartnerSettingsPage({
 
   const [
     meResponse,
-    mfaResponse,
     sessionsResponse,
     preferencesResponse,
     smsEndpointsResponse,
@@ -90,7 +88,6 @@ export default async function PartnerSettingsPage({
     personalProfileResponse,
   ] = await Promise.all([
     callPartnerApi("/api/portal/v2/me").catch(() => null),
-    callPartnerApi("/api/portal/v2/mfa").catch(() => null),
     callPartnerApi("/api/portal/v2/sessions").catch(() => null),
     callPartnerApi("/api/portal/v2/notification-preferences").catch(() => null),
     callPartnerApi("/api/portal/v2/notification-endpoints").catch(() => null),
@@ -101,7 +98,6 @@ export default async function PartnerSettingsPage({
 
   const [
     payload,
-    mfaPayload,
     sessionsPayload,
     preferencesPayload,
     smsEndpointsPayload,
@@ -110,7 +106,6 @@ export default async function PartnerSettingsPage({
     personalProfilePayload,
   ] = await Promise.all([
     readJson<MePayload>(meResponse),
-    readJson<PartnerSettingsMfa & { ok: true }>(mfaResponse),
     readJson<{ ok: true; sessions: PartnerSettingsSession[] }>(
       sessionsResponse,
     ),
@@ -158,9 +153,9 @@ export default async function PartnerSettingsPage({
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
-        eyebrow="Your account"
-        title="Account & security"
-        description="Manage your working account, sign-in security, active devices, and notification delivery."
+        eyebrow="Your portal setup"
+        title="Account, updates & security"
+        description="Set your account defaults once, choose how Stonegate sends updates, and keep every sign-in protected."
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Account & security", href: "/partners/settings" },
@@ -172,7 +167,7 @@ export default async function PartnerSettingsPage({
               className={partnerSecondaryButtonClass}
             >
               <UsersRound className="h-4 w-4" aria-hidden="true" />
-              Team access
+              Manage team access
             </Link>
           ) : undefined
         }
@@ -236,13 +231,13 @@ export default async function PartnerSettingsPage({
                   aria-hidden="true"
                 />
                 <h2 className="text-lg font-semibold text-slate-950">
-                  Portal password
+                  Sign-in password
                 </h2>
               </div>
               <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
                 {passwordSet
-                  ? "Enter your current password and choose a replacement. Saving revokes every other portal session; this device stays signed in."
-                  : "First-time setup requires a recent password sign-in or MFA verification. If that verification is no longer recent, you’ll be asked to sign in again. Saving signs out every other device."}
+                  ? "Change your password here. Saving signs out every other portal session; this device stays signed in."
+                  : "Create your password here. If your security check is no longer recent, you’ll be asked to verify again. Saving signs out every other device."}
               </p>
             </div>
             <span
@@ -267,7 +262,6 @@ export default async function PartnerSettingsPage({
       <PartnerEmailChangeForm
         currentEmail={userEmail}
         passwordSet={passwordSet}
-        mfaRequired={Boolean(mfaPayload?.security.required)}
       />
 
       <PartnerAccountProfileManager
@@ -277,7 +271,6 @@ export default async function PartnerSettingsPage({
 
       <PartnerAccountSecurityManager
         accounts={accounts}
-        mfa={mfaPayload}
         sessions={sessionsPayload?.sessions ?? null}
         sessionsEtag={sessionsResponse?.headers.get("etag") ?? null}
         preferences={preferencesPayload?.preferences ?? null}

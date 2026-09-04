@@ -2,13 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import {
-  CheckCircle2,
-  KeyRound,
-  LoaderCircle,
-  ShieldCheck,
-} from "lucide-react";
-import { cn } from "@myst-os/ui";
+import { CheckCircle2, LoaderCircle, ShieldCheck } from "lucide-react";
 import type {
   PartnerQuoteLineItem,
   PartnerQuoteOptionGroup,
@@ -29,16 +23,10 @@ type Message = Readonly<{
 }>;
 
 function quoteDecisionError(code: string, status: number): Message {
-  if (code === "mfa_step_up_required") {
-    return {
-      tone: "warning",
-      text: "Verify this secure session before responding. No quote decision was recorded.",
-    };
-  }
   if (code === "approval_required") {
     return {
       tone: "warning",
-      text: "This account’s approval policy has not been satisfied. Obtain the required account approval before accepting this quote.",
+      text: "This quote still needs account approval. Complete the required approval before accepting it.",
     };
   }
   if (
@@ -57,7 +45,7 @@ function quoteDecisionError(code: string, status: number): Message {
   if (code === "invalid_acceptance_evidence") {
     return {
       tone: "error",
-      text: "The selected options do not satisfy this proposal. Review each option group and try again.",
+      text: "Your selections do not meet this quote’s requirements. Review each option group and try again.",
     };
   }
   if (code === "rate_limited") {
@@ -111,118 +99,6 @@ function validateSelections(
   return null;
 }
 
-function MfaStepUp({ onVerified }: { onVerified: () => void }) {
-  const [method, setMethod] = React.useState<"totp" | "recovery">("totp");
-  const [busy, setBusy] = React.useState(false);
-  const [message, setMessage] = React.useState<string | null>(null);
-  const inputRef = React.useRef<HTMLInputElement>(null);
-
-  async function verify(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const rawVerification = new FormData(form).get("verification");
-    const verification =
-      typeof rawVerification === "string" ? rawVerification.trim() : "";
-    setBusy(true);
-    setMessage(null);
-    const result = await partnerPortalFetch<{
-      ok: true;
-      session: { assuranceLevel: "aal2"; verifiedAt: string };
-    }>("mfa/step-up", {
-      method: "POST",
-      body: JSON.stringify(
-        method === "recovery"
-          ? { recoveryCode: verification.toUpperCase() }
-          : { code: verification },
-      ),
-    }).catch(() => null);
-    setBusy(false);
-    if (!result?.ok || result.data.session?.assuranceLevel !== "aal2") {
-      const errorCode = result && !result.ok ? result.error.error : null;
-      setMessage(
-        errorCode === "invalid_fields"
-          ? "That verification value was not accepted. Check it and try again."
-          : "We couldn’t verify this session. No quote decision was recorded.",
-      );
-      inputRef.current?.focus();
-      return;
-    }
-    form.reset();
-    window.dispatchEvent(new Event("partner-session-security-changed"));
-    onVerified();
-  }
-
-  return (
-    <form
-      onSubmit={(event) => void verify(event)}
-      className="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 p-4"
-      aria-labelledby="quote-mfa-title"
-    >
-      <fieldset disabled={busy}>
-        <legend id="quote-mfa-title" className="font-semibold text-amber-950">
-          Verify before responding
-        </legend>
-        <p className="mt-1 text-xs leading-5 text-amber-900">
-          Enter a current authenticator code or one unused recovery code. Your
-          quote response remains unsent until verification succeeds.
-        </p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-[0.8fr_1.2fr]">
-          <label>
-            <span className="text-xs font-semibold text-slate-700">Method</span>
-            <select
-              value={method}
-              onChange={(event) =>
-                setMethod(
-                  event.target.value === "recovery" ? "recovery" : "totp",
-                )
-              }
-              className={partnerFieldClass}
-            >
-              <option value="totp">Authenticator code</option>
-              <option value="recovery">Recovery code</option>
-            </select>
-          </label>
-          <label>
-            <span className="text-xs font-semibold text-slate-700">
-              Verification value
-            </span>
-            <input
-              ref={inputRef}
-              name="verification"
-              required
-              inputMode={method === "totp" ? "numeric" : "text"}
-              autoComplete="one-time-code"
-              pattern={method === "totp" ? "[0-9]{6}" : undefined}
-              maxLength={method === "totp" ? 6 : 40}
-              className={partnerFieldClass}
-            />
-          </label>
-        </div>
-        {message ? (
-          <p className="mt-3 text-xs leading-5 text-rose-800" role="alert">
-            {message}
-          </p>
-        ) : null}
-        <button
-          type="submit"
-          disabled={busy}
-          className={cn(partnerPrimaryButtonClass, "mt-3")}
-        >
-          {busy ? (
-            <LoaderCircle
-              className="h-4 w-4 animate-spin motion-reduce:animate-none"
-              aria-hidden="true"
-            />
-          ) : (
-            <KeyRound className="h-4 w-4" aria-hidden="true" />
-          )}
-          {busy ? "Verifying…" : "Verify session"}
-        </button>
-      </fieldset>
-    </form>
-  );
-}
-
 export function PartnerQuoteDecisionForm({
   quoteId,
   initialEtag,
@@ -264,7 +140,6 @@ export function PartnerQuoteDecisionForm({
   const [busy, setBusy] = React.useState(false);
   const [resolved, setResolved] = React.useState<Decision | null>(null);
   const [message, setMessage] = React.useState<Message | null>(null);
-  const [needsMfa, setNeedsMfa] = React.useState(false);
   const feedbackRef = React.useRef<HTMLDivElement>(null);
   const operationRef = React.useRef<{
     fingerprint: string;
@@ -363,7 +238,6 @@ export function PartnerQuoteDecisionForm({
       };
     }
     setBusy(true);
-    setNeedsMfa(false);
     setMessage(null);
     const result = await partnerPortalFetch<{
       ok: true;
@@ -387,7 +261,6 @@ export function PartnerQuoteDecisionForm({
     if (!result?.ok) {
       const code = result?.error.error ?? "service_unavailable";
       const status = result?.response.status ?? 503;
-      setNeedsMfa(code === "mfa_step_up_required");
       setMessage(quoteDecisionError(code, status));
       if ([409, 412].includes(status)) router.refresh();
       requestAnimationFrame(() => feedbackRef.current?.focus());
@@ -402,9 +275,9 @@ export function PartnerQuoteDecisionForm({
       text:
         committed === "accepted"
           ? result.data.data.certificateState === "ready"
-            ? "Quote accepted. Your immutable response and acceptance certificate are ready."
-            : "Quote accepted. Your immutable response is recorded; the acceptance certificate is still being prepared."
-          : "Quote declined. Your immutable response has been recorded.",
+            ? "Quote accepted. Your response and acceptance certificate are ready."
+            : "Quote accepted. Your response is saved; the acceptance certificate is still being prepared."
+          : "Quote declined. Your response has been saved.",
     });
     requestAnimationFrame(() => feedbackRef.current?.focus());
     router.refresh();
@@ -416,15 +289,15 @@ export function PartnerQuoteDecisionForm({
     <PartnerPanel>
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-700">
-          Authorized response
+          Keep service moving
         </p>
         <h2 className="mt-1 text-lg font-semibold text-slate-950">
-          Accept or decline this quote
+          Review and respond to this quote
         </h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-          Review the exact current proposal before responding. Your decision,
-          signer details, selected options, and proposal hash become an
-          immutable commercial record.
+          Accept or decline this version here. Your name, selections, and
+          decision are saved with this exact quote and cannot be changed
+          afterward.
         </p>
       </div>
 
@@ -437,18 +310,6 @@ export function PartnerQuoteDecisionForm({
           <PartnerNotice tone={message.tone}>{message.text}</PartnerNotice>
         </div>
       ) : null}
-      {needsMfa ? (
-        <MfaStepUp
-          onVerified={() => {
-            setNeedsMfa(false);
-            setMessage({
-              tone: "success",
-              text: "Session verified. Review and submit the quote response again.",
-            });
-          }}
-        />
-      ) : null}
-
       <form
         onSubmit={(event) => void submit(event)}
         className="mt-5 space-y-5"
@@ -541,7 +402,7 @@ export function PartnerQuoteDecisionForm({
         <div className="grid gap-4 sm:grid-cols-2">
           <label>
             <span className="text-sm font-semibold text-slate-700">
-              Responding person
+              Name of person responding
             </span>
             <input
               value={name}
@@ -679,7 +540,7 @@ export function PartnerQuoteDecisionForm({
               : resolved
                 ? "Response recorded"
                 : decision === "accepted"
-                  ? "Accept this exact quote"
+                  ? "Accept this quote"
                   : "Decline this quote"}
           </button>
           <button

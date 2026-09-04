@@ -42,7 +42,7 @@ export function PartnerPersonaOverviewGuide({
           <div className="max-w-3xl">
             <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-primary-700">
               <Sparkles className="h-4 w-4" aria-hidden="true" />
-              Suggested next actions
+              Suggested shortcuts
             </p>
             <h2
               id="partner-persona-next-actions-heading"
@@ -78,7 +78,7 @@ export function PartnerPersonaOverviewGuide({
                   {action.description}
                 </span>
                 <span className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-primary-800">
-                  Open
+                  Start
                   <ArrowRight className="h-4 w-4" aria-hidden="true" />
                 </span>
               </Link>
@@ -86,8 +86,8 @@ export function PartnerPersonaOverviewGuide({
           ))}
         </ul>
         <p className="mt-3 text-xs leading-5 text-slate-600">
-          Suggestions change presentation only. Your role and account access
-          stay the same.
+          These shortcuts are based on how your team uses Stonegate. Suggestions
+          change presentation only; they do not change your account access.
         </p>
       </PartnerPanel>
     </section>

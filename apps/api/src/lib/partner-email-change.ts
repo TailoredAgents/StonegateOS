@@ -22,8 +22,6 @@ import {
 } from "@/lib/partner-portal-auth";
 import { createPartnerPurposeChallengeInTransaction } from "@/lib/partner-purpose-auth";
 
-const RECENT_EMAIL_CHANGE_ASSURANCE_MS = 15 * 60 * 1_000;
-
 type PartnerEmailChangeActor = {
   partnerUserId: string;
   email: string;
@@ -31,7 +29,6 @@ type PartnerEmailChangeActor = {
   accountId: string;
   membershipId: string;
   sessionId: string;
-  mfaRequired: boolean;
   correlationId: string;
 };
 
@@ -43,7 +40,6 @@ export type RequestPartnerEmailChangeResult =
         | "current_password_required"
         | "invalid_current_password"
         | "recent_authentication_required"
-        | "recent_mfa_required"
         | "session_unavailable"
         | "user_unavailable";
     };
@@ -75,21 +71,10 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 export function isRecentPartnerEmailChangeAuthentication(input: {
-  mfaRequired: boolean;
   authMethod: string;
-  assuranceLevel: string;
   sessionCreatedAt: Date;
-  mfaVerifiedAt: Date | null;
   now: Date;
 }): boolean {
-  if (input.mfaRequired) {
-    return Boolean(
-      input.assuranceLevel === "aal2" &&
-        input.mfaVerifiedAt &&
-        input.now.getTime() - input.mfaVerifiedAt.getTime() <=
-          RECENT_EMAIL_CHANGE_ASSURANCE_MS,
-    );
-  }
   return isRecentPartnerPasswordAuthentication(input);
 }
 
@@ -198,8 +183,6 @@ export async function requestPartnerEmailChange(input: {
       .select({
         id: partnerSessions.id,
         authMethod: partnerSessions.authMethod,
-        assuranceLevel: partnerSessions.assuranceLevel,
-        mfaVerifiedAt: partnerSessions.mfaVerifiedAt,
         createdAt: partnerSessions.createdAt,
       })
       .from(partnerSessions)
@@ -241,11 +224,8 @@ export async function requestPartnerEmailChange(input: {
       return { kind: "same_email" } as const;
     }
     const recentlyAuthenticated = isRecentPartnerEmailChangeAuthentication({
-      mfaRequired: input.actor.mfaRequired,
       authMethod: session.authMethod,
-      assuranceLevel: session.assuranceLevel,
       sessionCreatedAt: session.createdAt,
-      mfaVerifiedAt: session.mfaVerifiedAt,
       now,
     });
     if (input.currentPassword && user.passwordHash) {
@@ -260,17 +240,7 @@ export async function requestPartnerEmailChange(input: {
         return { kind: "invalid_current_password" } as const;
       }
     }
-    if (input.actor.mfaRequired && !recentlyAuthenticated) {
-      await tx.insert(auditLogs).values(
-        requestAudit(input.actor, {
-          outcome: "denied",
-          targetEmail,
-          reason: "recent_mfa_required",
-        }),
-      );
-      return { kind: "recent_mfa_required" } as const;
-    }
-    if (!input.actor.mfaRequired && !recentlyAuthenticated) {
+    if (!recentlyAuthenticated) {
       if (!user.passwordHash) {
         await tx.insert(auditLogs).values(
           requestAudit(input.actor, {
@@ -338,11 +308,9 @@ export async function requestPartnerEmailChange(input: {
         targetEmail,
         challengeId: challenge.challengeId,
         meta: {
-          assurance: input.actor.mfaRequired
-            ? "recent_mfa"
-            : recentlyAuthenticated
-              ? "recent_session"
-              : "current_password",
+          assurance: recentlyAuthenticated
+            ? "recent_session"
+            : "current_password",
           expiresAt: challenge.expiresAt.toISOString(),
         },
       }),

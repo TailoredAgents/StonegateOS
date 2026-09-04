@@ -61,8 +61,6 @@ function humanActor() {
     label: "Verified Owner",
     sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     authMethod: "team_session" as const,
-    assuranceLevel: "aal2" as const,
-    mfaVerifiedAt: new Date().toISOString(),
   };
 }
 

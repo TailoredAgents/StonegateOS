@@ -60,7 +60,7 @@ function recentHumanAction(
  * reviewer can compare the registry with the action implementation easily.
  */
 export const TEAM_SERVER_ACTION_POLICIES = {
-  updateApptStatus: recentHumanAction(
+  updateApptStatus: humanAction(
     [
       "appointments.update",
       "appointment_media.manage",
@@ -70,6 +70,7 @@ export const TEAM_SERVER_ACTION_POLICIES = {
       "messages.send",
     ],
     "destructive",
+    true,
     "team_action.updateApptStatus",
   ),
   updateAppointmentEtaStatusAction: humanAction(
@@ -810,11 +811,6 @@ export const TEAM_SERVER_ACTION_POLICIES = {
     ["partners.identities.disable"],
     "destructive",
     "team_action.partnerIdentityDisableAction",
-  ),
-  partnerMfaResetAction: recentHumanAction(
-    ["partners.security.mfa.reset"],
-    "destructive",
-    "team_action.partnerMfaResetAction",
   ),
   partnerQuarantineResolveAction: recentHumanAction(
     ["partners.quarantine.release"],

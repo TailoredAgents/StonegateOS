@@ -9,6 +9,3 @@ const PARTNER_SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 export function isValidPartnerSessionToken(value: string): boolean {
   return PARTNER_SESSION_TOKEN_PATTERN.test(value);
 }
-
-/** Password verified; grants only the public MFA completion exchange. */
-export const PARTNER_AUTH_TRANSACTION_COOKIE = "myst-partner-auth-transaction";

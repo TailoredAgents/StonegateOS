@@ -1138,48 +1138,6 @@ export async function partnerIdentityDisableAction(
   });
 }
 
-export async function partnerMfaResetAction(formData: FormData): Promise<void> {
-  const principal = await requireCurrentTeamPrincipal();
-  const common = commonIdentitySecurityInput(formData);
-  if (
-    !hasTeamPermission(principal, "partners.security.mfa.reset") ||
-    !common ||
-    !common.confirmation.startsWith("RESET ") ||
-    !common.confirmation.endsWith(" MFA")
-  ) {
-    return reject(
-      "The partner MFA reset is unauthorized, incomplete, stale, or not exactly confirmed. Refresh the identity security review and try again.",
-    );
-  }
-  return performPartnerAdminMutation<{
-    partnerUserId?: unknown;
-    status?: unknown;
-    membershipsChanged?: unknown;
-    recordsPreserved?: unknown;
-    recoveryDelivery?: unknown;
-  }>({
-    principal,
-    path: `/api/admin/partner-management/v1/security/identities/${encodeURIComponent(common.partnerUserId)}/mfa/reset`,
-    method: "POST",
-    expectedVersion: common.expectedVersion,
-    idempotencyKey: common.idempotencyKey,
-    body: {
-      membershipSnapshot: common.membershipSnapshot,
-      reason: common.reason,
-      confirmation: common.confirmation,
-    },
-    failureMessage: "Unable to reset partner MFA",
-    successMessage:
-      "Partner MFA and sessions revoked. A purpose-bound re-enrollment email was queued; no company membership or business record changed.",
-    validate: (data) =>
-      data.partnerUserId === common.partnerUserId &&
-      data.status === "re_enrollment_required" &&
-      data.membershipsChanged === false &&
-      data.recordsPreserved === true &&
-      data.recoveryDelivery === "queued",
-  });
-}
-
 export async function partnerAccountLifecycleAction(
   formData: FormData,
 ): Promise<void> {
@@ -1323,7 +1281,7 @@ export async function partnerAdministratorRecoveryAction(
     body: { membershipId, reason, confirmation },
     failureMessage: "Unable to recover partner Administrator",
     successMessage:
-      "Administrator access recovered. The member is account-wide, MFA remains required, and all of their previous sessions were revoked.",
+      "Administrator access recovered. The member is account-wide, and all of their previous sessions were revoked.",
     validate: (data) =>
       data.partnerAccountId === accountId &&
       data.membershipId === membershipId &&

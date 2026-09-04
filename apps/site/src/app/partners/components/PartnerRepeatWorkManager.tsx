@@ -330,8 +330,8 @@ export function PartnerRepeatWorkManager({
     setMessage({
       tone: result.data.import.errorCount ? "warning" : "success",
       text: dryRun
-        ? "Dry run complete. Review every row before creating drafts. No job or capacity reservation was created."
-        : "Valid rows were converted to drafts. Open each draft to choose a live arrival window and confirm; bulk intake never silently reserves capacity.",
+        ? "File check complete. Review every row before saving requests. No job or capacity reservation was created."
+        : "Valid rows were saved as service requests. Open each request to choose a live arrival window and confirm; bulk intake never silently reserves capacity.",
     });
   };
 
@@ -352,8 +352,9 @@ export function PartnerRepeatWorkManager({
               {personaPresentation.taskLabels.repeat_work}
             </h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-              {personaPresentation.repeatWork.lead} You can also validate up to
-              100 CSV rows before anything is submitted.
+              Save time by starting from details you already trust. Use a
+              template, create recurring work, or check up to 100 CSV rows
+              before anything is submitted.
             </p>
           </div>
           <button
@@ -388,7 +389,7 @@ export function PartnerRepeatWorkManager({
               <div className="max-w-3xl">
                 <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-primary-700">
                   <Sparkles className="h-4 w-4" aria-hidden="true" />
-                  Safe starter ideas
+                  Faster starting points
                 </p>
                 <h3
                   id="partner-starter-templates-heading"
@@ -398,8 +399,8 @@ export function PartnerRepeatWorkManager({
                 </h3>
                 <p className="mt-1 text-sm leading-6 text-slate-700">
                   These ideas do not create a template or select a service. Open
-                  a reviewed job and save it explicitly only when its details
-                  are safe to reuse.
+                  a job and save it as a template when its details are safe to
+                  reuse.
                 </p>
               </div>
               <button
@@ -447,8 +448,8 @@ export function PartnerRepeatWorkManager({
               Saved templates
             </h3>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Templates exclude access secrets, media, pricing, approvals,
-              holds, and payment details.
+              Reuse the service, location, and routine instructions. Access
+              secrets, photos, prices, approvals, and payments stay out.
             </p>
             {loading ? (
               <p className="mt-4 inline-flex items-center gap-2 text-sm text-slate-600">
@@ -704,7 +705,7 @@ export function PartnerRepeatWorkManager({
                             className="mt-1 text-xs leading-5 text-slate-600"
                           >
                             Only future tentative occurrences change. Existing
-                            jobs and review drafts remain unchanged. Resuming
+                            jobs and review requests remain unchanged. Resuming
                             does not reserve capacity outside the 30-day
                             horizon.
                           </p>
@@ -786,11 +787,12 @@ export function PartnerRepeatWorkManager({
                 className="h-5 w-5 text-primary-700"
                 aria-hidden="true"
               />
-              Bulk CSV intake
+              Request several jobs
             </h3>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Dry-run validation is required in the interface before creating
-              drafts. Rows never bypass live slot selection.
+              Upload a CSV to check several requests at once. You review errors
+              before requests are saved, and each job still needs a service
+              window.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
@@ -825,7 +827,7 @@ export function PartnerRepeatWorkManager({
                 disabled={!csvText || Boolean(busy)}
                 className={partnerPrimaryButtonClass}
               >
-                {busy === "bulk-dry-run" ? "Validating…" : "Run dry check"}
+                {busy === "bulk-dry-run" ? "Checking…" : "Check file"}
               </button>
               <button
                 type="button"
@@ -834,8 +836,8 @@ export function PartnerRepeatWorkManager({
                 className={partnerSecondaryButtonClass}
               >
                 {busy === "bulk-commit"
-                  ? "Creating drafts…"
-                  : "Create valid drafts"}
+                  ? "Saving requests…"
+                  : "Save ready requests"}
               </button>
             </div>
             {bulkResult ? (
@@ -869,7 +871,7 @@ export function PartnerRepeatWorkManager({
                             className="inline-flex min-h-11 items-center font-semibold text-primary-800 underline-offset-4 hover:underline"
                             href={`/partners/book?draftId=${encodeURIComponent(row.draftId!)}`}
                           >
-                            Open row {row.rowNumber} draft
+                            Open row {row.rowNumber} request
                           </a>
                         </li>
                       ))}

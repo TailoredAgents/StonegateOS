@@ -79,7 +79,7 @@ async function createFixture(): Promise<Fixture> {
       passwordHash: "$argon2id$v=19$m=65536,t=3,p=1$fixture$fixture",
       passwordSetAt: now,
       mfaRequired: false,
-      mfaEnrolledAt: now,
+      mfaEnrolledAt: null,
     });
     await tx.insert(partnerAccountMemberships).values({
       id: membershipId,
@@ -195,7 +195,7 @@ describeWithDatabase("Partner account lifecycle PostgreSQL integrity", () => {
     ).resolves.toHaveLength(1);
   });
 
-  it("recovers exactly one reviewed MFA-enrolled member when no Administrator exists", async () => {
+  it("recovers exactly one reviewed password-enabled member when no Administrator exists", async () => {
     const fixture = await createFixture();
     fixtures.push(fixture);
     // PostgreSQL retains microseconds while JavaScript Date retains only
@@ -244,7 +244,7 @@ describeWithDatabase("Partner account lifecycle PostgreSQL integrity", () => {
     expect(updated).toEqual({
       roleKey: "administrator",
       accessLevel: "account",
-      mfaRequired: true,
+      mfaRequired: false,
     });
   });
 

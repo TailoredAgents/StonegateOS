@@ -29,8 +29,6 @@ export async function GET(request: NextRequest): Promise<Response> {
         session: {
           current: true,
           authMethod: principal.session.authMethod,
-          assuranceLevel: principal.session.assuranceLevel,
-          mfaVerifiedAt: principal.session.mfaVerifiedAt?.toISOString() ?? null,
           deviceName: principal.session.deviceName,
           createdAt: principal.session.createdAt.toISOString(),
           lastSeenAt: principal.session.lastSeenAt.toISOString(),

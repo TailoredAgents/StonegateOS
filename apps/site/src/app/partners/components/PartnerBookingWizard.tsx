@@ -176,16 +176,16 @@ type WizardForm = {
 };
 
 const STEPS = [
-  { label: "Location", shortLabel: "Location", icon: MapPin },
-  { label: "Service & scope", shortLabel: "Scope", icon: Truck },
-  { label: "Contact & access", shortLabel: "Access", icon: UserRound },
-  { label: "Photos & proof", shortLabel: "Proof", icon: Camera },
+  { label: "Choose location", shortLabel: "Location", icon: MapPin },
+  { label: "Add service details", shortLabel: "Details", icon: Truck },
+  { label: "Confirm contact & access", shortLabel: "Access", icon: UserRound },
+  { label: "Add photos & proof", shortLabel: "Photos", icon: Camera },
   {
     label: "Choose an arrival window",
     shortLabel: "Window",
     icon: CalendarClock,
   },
-  { label: "Review & send", shortLabel: "Review", icon: ShieldCheck },
+  { label: "Check & send", shortLabel: "Check", icon: ShieldCheck },
 ] as const;
 
 const DEFAULT_FORM: WizardForm = {
@@ -574,7 +574,7 @@ function localErrorsForStep(
     if (!form.serviceKey) errors["serviceKey"] = "Choose a service.";
     else if (service && !service.bookable) {
       errors["serviceKey"] =
-        "This account service is not currently configured for a booking request.";
+        "This service is not currently available for an online request.";
     }
     if ((service?.baseOptions?.length ?? 0) > 0 && !form.tierKey) {
       errors["tierKey"] = "Choose a base service option.";
@@ -765,7 +765,7 @@ export function PartnerBookingWizard({
         setSaveStatus("error");
         setMessage(
           result?.error.message ??
-            "We couldn’t start a secure booking draft. Try again or contact Stonegate.",
+            "We couldn’t start your saved request. Try again or contact Stonegate.",
         );
         return;
       }
@@ -1068,7 +1068,7 @@ export function PartnerBookingWizard({
       const errors = validated?.error.fieldErrors ?? {};
       setFieldErrors(errors);
       setMessage(
-        validated?.error.message ?? "We couldn’t validate this booking draft.",
+        validated?.error.message ?? "We couldn’t check this saved request.",
       );
       if (Object.keys(errors).length) {
         const targetStep = Math.min(...Object.keys(errors).map(fieldStep));
@@ -1083,7 +1083,7 @@ export function PartnerBookingWizard({
       setAvailabilityLoading(false);
       setFieldErrors(errors);
       setMessage(
-        "Complete the highlighted details before choosing an arrival window.",
+        "Add the highlighted details so we can show the right arrival windows.",
       );
       const targetStep = Math.min(...Object.keys(errors).map(fieldStep));
       setStep(Number.isFinite(targetStep) ? targetStep : 1);
@@ -1113,7 +1113,7 @@ export function PartnerBookingWizard({
       setAvailability(null);
       setMessage(
         withPortalSupportReference(
-          "Live confirmation is not available for this scope right now. Your draft is saved; choose preferred dates and Stonegate will review the request without reserving a slot.",
+          "This request needs a schedule review. Your details are saved; choose preferred dates and Stonegate will review them without reserving a slot.",
           result?.error.correlationId,
         ),
       );
@@ -1154,7 +1154,7 @@ export function PartnerBookingWizard({
       );
       if (Object.keys(localErrors).length) {
         setFieldErrors(localErrors);
-        setMessage("Complete the highlighted details to continue.");
+        setMessage("Add the highlighted details to continue.");
         focusErrorSummary(localErrors);
         return;
       }
@@ -1290,7 +1290,7 @@ export function PartnerBookingWizard({
       setSubmitting(false);
       setMessage(
         result?.error.message ??
-          "The job was not submitted. Your draft is still saved.",
+          "The job was not submitted. Your request is still saved.",
       );
       if (result?.response.status === 409) {
         if (hold) {
@@ -1379,7 +1379,7 @@ export function PartnerBookingWizard({
         <div className="border-b border-slate-200 bg-slate-50 px-4 py-4 sm:px-6">
           <ol
             className="grid grid-cols-3 gap-2 sm:grid-cols-6"
-            aria-label="Booking progress"
+            aria-label="Service request progress"
           >
             {STEPS.map((item, index) => {
               const Icon = item.icon;
@@ -1466,12 +1466,12 @@ export function PartnerBookingWizard({
                     className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none"
                     aria-hidden="true"
                   />
-                  {saveStatus === "creating" ? "Starting draft…" : "Saving…"}
+                  {saveStatus === "creating" ? "Starting request…" : "Saving…"}
                 </span>
               ) : saveStatus === "saved" ? (
                 <span className="inline-flex items-center gap-1.5 text-emerald-700">
                   <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  All changes saved
+                  Saved
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 text-rose-700">
@@ -1494,7 +1494,7 @@ export function PartnerBookingWizard({
                 id="partner-book-error-summary-heading"
                 className="font-semibold"
               >
-                Review the highlighted details
+                Check the highlighted details
               </h3>
               {message ? <p className="mt-1">{message}</p> : null}
               <ul className="mt-2 list-disc space-y-1 pl-5">
@@ -1530,11 +1530,11 @@ export function PartnerBookingWizard({
             {step === 0 ? (
               <fieldset>
                 <legend className="text-base font-semibold text-slate-950">
-                  Where should the crew go?
+                  Where do you need service?
                 </legend>
                 <p className="mt-1 text-sm leading-6 text-slate-600">
-                  Choose an active location from your account. Its access
-                  details remain editable on the next step.
+                  Choose a saved location to reuse its details, or add a new
+                  one. You can confirm access information in a later step.
                 </p>
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   {availableLocations.map((item, index) => {
@@ -1665,8 +1665,8 @@ export function PartnerBookingWizard({
                       )}
                     </ul>
                     <p className="mt-3 text-xs leading-5 text-slate-600">
-                      These are optional prompts only. They do not change your
-                      service, account access, or saved draft.
+                      Use this checklist if it saves time. It does not change
+                      your service, account access, or saved request.
                     </p>
                   </aside>
                 ) : null}
@@ -1945,8 +1945,8 @@ export function PartnerBookingWizard({
                     id="partner-book-description-help"
                     className="mt-1 block text-xs text-slate-500"
                   >
-                    Clear detail helps us confirm the right crew, equipment, and
-                    arrival window.
+                    A few clear details help us match the right crew, equipment,
+                    and arrival window without extra back-and-forth.
                   </span>
                   {fieldErrors["description"] ? (
                     <span
@@ -2518,12 +2518,11 @@ export function PartnerBookingWizard({
             {step === 3 ? (
               <fieldset>
                 <legend className="text-base font-semibold text-slate-950">
-                  What completion evidence do you need?
+                  What photos or proof do you need?
                 </legend>
                 <p className="mt-1 text-sm leading-6 text-slate-600">
-                  These requirements travel with the job so the team knows what
-                  to capture. You can also attach current-condition or reference
-                  photos to this request.
+                  Choose the completion record once and it stays with the job.
+                  You can also attach current-condition or reference photos now.
                 </p>
                 {showPersonaSuggestions ? (
                   <aside
@@ -2575,8 +2574,9 @@ export function PartnerBookingWizard({
                       )}
                     </div>
                     <p className="mt-3 text-xs leading-5 text-slate-600">
-                      Nothing is applied until you choose a preset. The controls
-                      below always override the suggestion.
+                      Nothing is applied until you choose a preset. Use one to
+                      fill these options quickly.{" "}
+                      {"The controls below always override the suggestion."}
                     </p>
                     {personaFeedback ? (
                       <p
@@ -2674,7 +2674,7 @@ export function PartnerBookingWizard({
                   </div>
                 ) : (
                   <PartnerNotice tone="info" className="mt-5">
-                    The photo uploader will appear as soon as this saved draft
+                    The photo uploader will appear as soon as your saved request
                     is ready.
                   </PartnerNotice>
                 )}
@@ -2686,12 +2686,12 @@ export function PartnerBookingWizard({
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <h3 className="font-semibold text-slate-950">
-                      Live service availability
+                      Choose a service window
                     </h3>
                     <p className="mt-1 text-sm leading-6 text-slate-600">
-                      Select a two-hour arrival window. Stonegate keeps the
-                      exact planned crew start internal. Windows are shown in{" "}
-                      {selectedTimezone.replace(/_/gu, " ")}.
+                      Pick a two-hour arrival window that works for you. The
+                      exact crew start is planned inside that window. Times are
+                      shown in {selectedTimezone.replace(/_/gu, " ")}.
                     </p>
                   </div>
                   <button
@@ -2739,13 +2739,12 @@ export function PartnerBookingWizard({
                       />
                       <div>
                         <h3 className="font-semibold text-slate-950">
-                          Request a reviewed schedule
+                          Tell us which dates work
                         </h3>
                         <p className="mt-1 text-sm leading-6 text-slate-700">
-                          Live confirmation is unavailable for this request.
-                          Choose up to three preferred dates. Stonegate will
-                          review the scope and contact you before any arrival
-                          window is confirmed or capacity is reserved.
+                          This request needs a schedule review. Choose up to
+                          three preferred dates and Stonegate will follow up
+                          before any arrival window is confirmed.
                         </p>
                       </div>
                     </div>
@@ -2756,10 +2755,10 @@ export function PartnerBookingWizard({
                       {rankedAlternatives.length ? (
                         <div className="mt-3 rounded-xl border border-amber-200 bg-white p-3">
                           <p className="text-sm font-semibold text-slate-900">
-                            Suggested dates from current capacity
+                            Dates worth considering
                           </p>
                           <p className="mt-1 text-xs leading-5 text-slate-600">
-                            These are ranked alternatives for review only. They
+                            These dates may help us review the request, but they
                             do not reserve a crew, truck, or arrival window.
                           </p>
                           <div className="mt-2 flex flex-wrap gap-2">
@@ -2868,8 +2867,8 @@ export function PartnerBookingWizard({
                         Scheduling follow-up
                       </legend>
                       <p className="mt-1 text-sm leading-6 text-slate-700">
-                        Choose whether this request should enter Stonegate’s
-                        scheduling queue after you send it.
+                        Choose how you would like Stonegate to help after you
+                        send this request.
                       </p>
                       <div className="mt-3 grid gap-2">
                         {PARTNER_SCHEDULE_ASSISTANCE_OPTIONS.map(
@@ -2929,7 +2928,7 @@ export function PartnerBookingWizard({
                           Recommended available windows
                         </h3>
                         <p className="mt-1 text-sm leading-6 text-slate-600">
-                          Ranked by your preferred dates, earliest availability,
+                          Based on your preferred dates, earliest availability,
                           and remaining capacity.
                         </p>
                         <div className="mt-3 grid gap-2 sm:grid-cols-3">
@@ -3042,12 +3041,12 @@ export function PartnerBookingWizard({
               <div className="space-y-5">
                 <PartnerNotice tone="info">
                   {hold
-                    ? "Review the request before sending it. Submission will use the live arrival window currently held for this draft."
-                    : "Review the request before sending it. This is a review request only: preferred dates will be sent without reserving capacity or promising an arrival window."}
+                    ? "Check the details below, then send your request with the arrival window currently held for you."
+                    : "Check the details below, then send your preferred dates for review. No arrival window is reserved yet."}
                 </PartnerNotice>
                 <nav aria-label="Edit booking sections">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Edit before sending
+                    Need to change something?
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {[
@@ -3174,7 +3173,7 @@ export function PartnerBookingWizard({
                           {availability.pricing.status === "hidden"
                             ? "Your role can submit this scope, but account pricing is available only to authorized billing and rate users."
                             : availability.pricing.status === "quote_required"
-                              ? "This entitled service requires a Quote V2. Stonegate will review the request and issue a proposal before any price becomes final."
+                              ? "This service needs a written quote. Stonegate will review the request and send one before the price becomes final."
                               : "Stonegate will confirm the complete service and add-on price during review before it becomes final."}
                         </dd>
                       )}
@@ -3348,8 +3347,8 @@ export function PartnerBookingWizard({
                   </p>
                   {cancellationPolicy.source === "unconfigured" ? (
                     <p className="mt-2 text-sm font-medium text-amber-900">
-                      This account’s persisted policy is unavailable, so
-                      confirmed-job changes default to staff review.
+                      This account’s saved policy is unavailable, so Stonegate
+                      must review changes to confirmed jobs.
                     </p>
                   ) : null}
                   <p className="mt-2 text-sm leading-6 text-slate-700">
@@ -3427,7 +3426,7 @@ export function PartnerBookingWizard({
                       className="h-4 w-4 animate-spin motion-reduce:animate-none"
                       aria-hidden="true"
                     />
-                    Sending request…
+                    Sending…
                   </>
                 ) : (
                   <>

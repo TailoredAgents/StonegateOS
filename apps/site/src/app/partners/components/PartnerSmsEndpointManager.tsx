@@ -45,12 +45,7 @@ function endpointError(
   correlationId?: string | null,
 ): Notice {
   let notice: Notice;
-  if (error === "mfa_step_up_required") {
-    notice = {
-      tone: "warning",
-      text: "Verify this session again in Two-step verification, then retry the SMS security change.",
-    };
-  } else if (error === "rate_limited" || status === 429) {
+  if (error === "rate_limited" || status === 429) {
     notice = {
       tone: "warning",
       text: "Too many SMS verification attempts were made. Wait before trying again.",
@@ -68,7 +63,7 @@ function endpointError(
   } else if (status === 403) {
     notice = {
       tone: "error",
-      text: "Your current portal session cannot change SMS delivery settings.",
+      text: "You do not have permission to change text-message settings.",
     };
   } else {
     notice = {
@@ -418,11 +413,11 @@ export function PartnerSmsEndpointManager({
           </div>
           <div>
             <h2 className="text-lg font-semibold text-slate-950">
-              Verified SMS number
+              Get useful updates by text
             </h2>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
-              Verify a mobile number before enabling text-message notifications.
-              Saved numbers are shown only by their final four digits.
+              Verify a mobile number once, then choose the job updates you want
+              by text. Saved numbers are shown only by their final four digits.
             </p>
           </div>
         </div>
@@ -493,19 +488,19 @@ export function PartnerSmsEndpointManager({
         </form>
       ) : (
         <PartnerNotice tone="info" className="mt-5">
-          An account security manager must add, verify, or remove SMS delivery
-          numbers.
+          Someone with account security access must add, verify, or remove
+          text-message numbers.
         </PartnerNotice>
       )}
 
       {endpoints === null ? (
         <PartnerNotice tone="warning" className="mt-5">
-          SMS endpoint status is temporarily unavailable. SMS preference
-          controls remain disabled.
+          Text-message status is temporarily unavailable. Text preferences
+          remain disabled.
         </PartnerNotice>
       ) : endpoints.length === 0 ? (
         <p className="mt-5 text-sm leading-6 text-slate-600">
-          No SMS number has been verified.
+          No mobile number is ready for text updates yet.
         </p>
       ) : (
         <ul className="mt-5 space-y-3" aria-label="SMS delivery numbers">

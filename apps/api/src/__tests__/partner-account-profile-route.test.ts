@@ -289,8 +289,6 @@ describe("partner account profile route", () => {
       ok: true,
       principal: principal({
         capabilities: ["account.read", "account.update"],
-        assuranceLevel: "aal2",
-        mfaVerifiedAt: new Date(),
       }),
     });
     const response = await PATCH(
@@ -337,10 +335,6 @@ describe("partner account profile route", () => {
       ok: true,
       principal: principal({
         capabilities: ["account.read", "commercial.edit"],
-        mfaRequired: true,
-        mfaSatisfied: true,
-        assuranceLevel: "aal2",
-        mfaVerifiedAt: new Date(),
       }),
     });
     const response = await PATCH(
@@ -382,15 +376,13 @@ describe("partner account profile route", () => {
     ]);
   });
 
-  it("requires recent AAL2 verification for an MFA-required editor", async () => {
+  it("allows an authorized AAL1 editor", async () => {
     mockResolvePartnerPrincipal.mockResolvedValue({
       ok: true,
       principal: principal({
         capabilities: ["account.update"],
-        mfaRequired: true,
-        mfaSatisfied: true,
-        assuranceLevel: "aal2",
-        mfaVerifiedAt: new Date(Date.now() - 16 * 60 * 1_000),
+        assuranceLevel: "aal1",
+        mfaVerifiedAt: null,
       }),
     });
     const response = await PATCH(
@@ -400,11 +392,10 @@ describe("partner account profile route", () => {
         body: { organization: { name: "Acme", website: null } },
       }),
     );
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toEqual(
-      expect.objectContaining({ error: "mfa_step_up_required" }),
+    expect(response.status).toBe(200);
+    expect(updateValues).toEqual(
+      expect.objectContaining({ name: "Acme", normalizedName: "acme" }),
     );
-    expect(updateValues).toBeNull();
   });
 
   it.each([
@@ -450,16 +441,6 @@ describe("partner account profile route", () => {
       },
       error: "forbidden",
     },
-    {
-      label: "unsatisfied required MFA",
-      capabilities: ["account.read", "account.update"],
-      accessLevel: "account" as const,
-      security: { mfaRequired: true, mfaSatisfied: false },
-      body: {
-        organization: { name: "Unauthorized", website: null },
-      },
-      error: "mfa_step_up_required",
-    },
   ])("fails closed for $label", async (testCase) => {
     mockResolvePartnerPrincipal.mockResolvedValue({
       ok: true,
@@ -488,8 +469,6 @@ describe("partner account profile route", () => {
       ok: true,
       principal: principal({
         capabilities: ["account.update"],
-        assuranceLevel: "aal2",
-        mfaVerifiedAt: new Date(),
       }),
     });
     const missing = await PATCH(

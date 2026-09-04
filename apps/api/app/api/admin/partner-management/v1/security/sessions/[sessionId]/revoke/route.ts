@@ -21,6 +21,7 @@ import {
   teamMutationResultResponse,
   teamMutationSuccessResult,
 } from "@/lib/team-mutation";
+import { publicPartnerSessionAuthMethod } from "@/lib/partner-session-auth-policy";
 
 type RouteContext = { params: Promise<{ sessionId?: string }> };
 
@@ -130,7 +131,6 @@ export async function POST(
           partnerUserId: partnerSessions.partnerUserId,
           activePartnerAccountId: partnerSessions.activePartnerAccountId,
           activeMembershipId: partnerSessions.activeMembershipId,
-          assuranceLevel: partnerSessions.assuranceLevel,
           authMethod: partnerSessions.authMethod,
           createdAt: partnerSessions.createdAt,
           lastSeenAt: partnerSessions.lastSeenAt,
@@ -206,14 +206,12 @@ export async function POST(
         before: {
           revokedAt: null,
           expiresAt: target.expiresAt.toISOString(),
-          assuranceLevel: target.assuranceLevel,
-          authMethod: target.authMethod,
+          authMethod: publicPartnerSessionAuthMethod(target.authMethod),
         },
         after: {
           revokedAt: version,
           expiresAt: target.expiresAt.toISOString(),
-          assuranceLevel: target.assuranceLevel,
-          authMethod: target.authMethod,
+          authMethod: publicPartnerSessionAuthMethod(target.authMethod),
         },
         metadata: {
           partnerUserId: target.partnerUserId,
@@ -261,23 +259,15 @@ export async function POST(
   } catch (error) {
     if (claim) {
       try {
-        await settleTeamMutationIdempotencyFailure(
-          db,
-          mutation,
-          claim,
-          error,
-        );
+        await settleTeamMutationIdempotencyFailure(db, mutation, claim, error);
       } catch (settlementError) {
-        console.error(
-          "[partner-management] session_revoke_settlement_failed",
-          {
-            correlationId: mutation.correlationId,
-            errorName:
-              settlementError instanceof Error
-                ? settlementError.name
-                : "UnknownError",
-          },
-        );
+        console.error("[partner-management] session_revoke_settlement_failed", {
+          correlationId: mutation.correlationId,
+          errorName:
+            settlementError instanceof Error
+              ? settlementError.name
+              : "UnknownError",
+        });
       }
     }
     return teamMutationExceptionResponse(error, mutation);

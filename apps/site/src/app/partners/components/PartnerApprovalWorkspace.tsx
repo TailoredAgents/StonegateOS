@@ -1,15 +1,8 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  CheckCircle2,
-  KeyRound,
-  LoaderCircle,
-  ShieldAlert,
-  ThumbsDown,
-} from "lucide-react";
+import { CheckCircle2, LoaderCircle, ThumbsDown } from "lucide-react";
 import { cn } from "@myst-os/ui";
 import {
   approvalDecisionAvailability,
@@ -30,194 +23,7 @@ import {
 type DecisionMessage = {
   tone: "success" | "warning" | "error";
   text: string;
-  showMfaLink?: boolean;
 };
-
-export function PartnerApprovalMfaGate({
-  enrolled,
-}: {
-  enrolled: boolean | null;
-}) {
-  const router = useRouter();
-  const [method, setMethod] = React.useState<"totp" | "recovery">("totp");
-  const [busy, setBusy] = React.useState(false);
-  const [message, setMessage] = React.useState<{
-    tone: "success" | "error";
-    text: string;
-  } | null>(null);
-  const verificationInputRef = React.useRef<HTMLInputElement>(null);
-
-  async function verify(
-    event: React.FormEvent<HTMLFormElement>,
-  ): Promise<void> {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const rawValue = new FormData(form).get("verification");
-    const value = typeof rawValue === "string" ? rawValue.trim() : "";
-    setBusy(true);
-    setMessage(null);
-    const result = await partnerPortalFetch<{
-      ok: true;
-      session: {
-        assuranceLevel: "aal2";
-        verifiedAt: string;
-        recoveryCodeUsed: boolean;
-      };
-    }>("mfa/step-up", {
-      method: "POST",
-      body: JSON.stringify(
-        method === "recovery"
-          ? { recoveryCode: value.toUpperCase() }
-          : { code: value },
-      ),
-    }).catch(() => null);
-    setBusy(false);
-    if (!result?.ok) {
-      setMessage({
-        tone: "error",
-        text:
-          result?.error.error === "invalid_fields"
-            ? "That verification value was not accepted. Check the current code and try again."
-            : result?.error.error === "rate_limited"
-              ? "Too many verification attempts were made. Wait a moment, then try again."
-              : "We couldn’t verify this session. No approval decision was recorded.",
-      });
-      verificationInputRef.current?.focus();
-      return;
-    }
-    form.reset();
-    setMessage({
-      tone: "success",
-      text: result.data.session.recoveryCodeUsed
-        ? "Session verified. That recovery code has been used. Loading approvals…"
-        : "Session verified. Loading approvals…",
-    });
-    window.dispatchEvent(new Event("partner-session-security-changed"));
-    router.refresh();
-  }
-
-  return (
-    <PartnerPanel>
-      <div className="flex items-start gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-800 ring-1 ring-amber-200">
-          <ShieldAlert className="h-5 w-5" aria-hidden="true" />
-        </div>
-        <div>
-          <h2 className="text-xl font-semibold text-slate-950">
-            Verify this secure session
-          </h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
-            Approval requests contain commercial and scheduling decisions. MFA
-            verification is required before they can be viewed or changed.
-          </p>
-        </div>
-      </div>
-
-      {message ? (
-        <PartnerNotice tone={message.tone} className="mt-5">
-          {message.text}
-        </PartnerNotice>
-      ) : null}
-
-      {enrolled === false ? (
-        <div className="mt-5">
-          <PartnerNotice tone="warning">
-            Set up an authenticator before opening approvals. No request data
-            has been exposed and no decision has been recorded.
-          </PartnerNotice>
-          <Link
-            href="/partners/settings#two-step-verification"
-            className={cn(partnerPrimaryButtonClass, "mt-4")}
-          >
-            <KeyRound className="h-4 w-4" aria-hidden="true" />
-            Set up MFA
-          </Link>
-        </div>
-      ) : enrolled === true ? (
-        <form
-          onSubmit={(event) => void verify(event)}
-          className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:p-5"
-        >
-          <fieldset disabled={busy}>
-            <legend className="font-semibold text-slate-950">
-              Verification method
-            </legend>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-800">
-                <input
-                  type="radio"
-                  name="verificationMethod"
-                  value="totp"
-                  checked={method === "totp"}
-                  onChange={() => setMethod("totp")}
-                />
-                Authenticator code
-              </label>
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-800">
-                <input
-                  type="radio"
-                  name="verificationMethod"
-                  value="recovery"
-                  checked={method === "recovery"}
-                  onChange={() => setMethod("recovery")}
-                />
-                Recovery code
-              </label>
-            </div>
-            <label htmlFor="approval-mfa-value" className="mt-4 block">
-              <span className="text-sm font-semibold text-slate-700">
-                {method === "totp" ? "Six-digit code" : "Recovery code"}
-              </span>
-              <input
-                ref={verificationInputRef}
-                id="approval-mfa-value"
-                name="verification"
-                required
-                inputMode={method === "totp" ? "numeric" : "text"}
-                autoComplete="one-time-code"
-                pattern={
-                  method === "totp"
-                    ? "[0-9]{6}"
-                    : "(?:[A-Za-z2-7]{4}-){3}[A-Za-z2-7]{4}"
-                }
-                maxLength={method === "totp" ? 6 : 19}
-                className={partnerFieldClass}
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={busy}
-              className={cn(partnerPrimaryButtonClass, "mt-4")}
-            >
-              {busy ? (
-                <LoaderCircle
-                  className="h-4 w-4 animate-spin motion-reduce:animate-none"
-                  aria-hidden="true"
-                />
-              ) : (
-                <KeyRound className="h-4 w-4" aria-hidden="true" />
-              )}
-              {busy ? "Verifying…" : "Verify and open approvals"}
-            </button>
-          </fieldset>
-        </form>
-      ) : (
-        <div className="mt-5">
-          <PartnerNotice tone="warning">
-            MFA status is temporarily unavailable. Your approvals remain
-            unchanged.
-          </PartnerNotice>
-          <Link
-            href="/partners/settings#two-step-verification"
-            className={cn(partnerSecondaryButtonClass, "mt-4")}
-          >
-            Review security settings
-          </Link>
-        </div>
-      )}
-    </PartnerPanel>
-  );
-}
 
 export function PartnerApprovalDecisionForm({
   requestId,
@@ -327,7 +133,6 @@ export function PartnerApprovalDecisionForm({
       const code = result?.error.error ?? "service_unavailable";
       setMessage({
         tone:
-          code === "mfa_step_up_required" ||
           code === "hold_expired" ||
           status === 409 ||
           status === 410 ||
@@ -335,7 +140,6 @@ export function PartnerApprovalDecisionForm({
             ? "warning"
             : "error",
         text: approvalDecisionErrorMessage(code, status),
-        showMfaLink: code === "mfa_step_up_required",
       });
       if ([409, 410, 412].includes(status)) router.refresh();
       requestAnimationFrame(() => errorRef.current?.focus());
@@ -353,7 +157,7 @@ export function PartnerApprovalDecisionForm({
       nextState === "approved_needs_reschedule"
         ? {
             tone: "warning",
-            text: "Your approval was recorded, but the arrival-window hold expired. The request is approved and now needs rescheduling; no slot is being promised.",
+            text: "Your approval was recorded, but the temporary arrival window expired. The job now needs another available window before it can be confirmed.",
           }
         : nextState === "pending"
           ? {
@@ -377,9 +181,9 @@ export function PartnerApprovalDecisionForm({
       : availability.reason === "already_decided"
         ? `Your ${currentMemberDecision ?? "prior"} decision is already recorded and cannot be changed.`
         : availability.reason === "not_pending"
-          ? "This approval request is resolved. Decisions are immutable and cannot be changed here."
+          ? "This approval is complete. Its decision is saved and cannot be changed here."
           : !rulesValid
-            ? "The captured approval rules could not be verified. Stonegate must review this request before an account decision can be accepted."
+            ? "The approval requirements could not be verified. Stonegate must review this request before an account decision can be accepted."
             : !etag
               ? "The request revision could not be verified. Refresh before making a decision."
               : null;
@@ -394,22 +198,15 @@ export function PartnerApprovalDecisionForm({
           Approve or decline this request
         </h2>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-          Decisions are permanent audit records. Review the request, amount,
-          schedule hold, and every matching rule before submitting.
+          Review the job, amount, schedule, and approval requirements. Your
+          decision becomes part of the account’s audit history after you submit
+          it.
         </p>
       </div>
 
       {message ? (
         <div ref={errorRef} tabIndex={-1} className="mt-5 focus:outline-none">
           <PartnerNotice tone={message.tone}>{message.text}</PartnerNotice>
-          {message.showMfaLink ? (
-            <Link
-              href="/partners/settings#two-step-verification"
-              className={cn(partnerSecondaryButtonClass, "mt-3")}
-            >
-              Verify session in security settings
-            </Link>
-          ) : null}
         </div>
       ) : null}
 
@@ -429,9 +226,9 @@ export function PartnerApprovalDecisionForm({
         <form onSubmit={(event) => void submit(event)} className="mt-5">
           {holdExpired ? (
             <PartnerNotice tone="warning" className="mb-5">
-              The arrival-window hold expired. You may still approve or decline
-              this request. An approval will be recorded, but no slot will be
-              confirmed until the work is rescheduled.
+              The temporary arrival window expired.{" "}
+              {"You may still approve or decline this request"}, but another
+              window is needed before the job can be confirmed.
             </PartnerNotice>
           ) : null}
           <fieldset disabled={busy}>
@@ -464,7 +261,8 @@ export function PartnerApprovalDecisionForm({
                     Approve
                   </span>
                   <span className="mt-1 block text-sm leading-5 text-slate-600">
-                    Authorize this request under the captured account rules.
+                    Approve the request under the account requirements shown
+                    above.
                   </span>
                 </span>
               </label>
@@ -493,7 +291,7 @@ export function PartnerApprovalDecisionForm({
                     Decline
                   </span>
                   <span className="mt-1 block text-sm leading-5 text-slate-600">
-                    Stop this request and explain what needs to change.
+                    Decline the request and explain what needs to change.
                   </span>
                 </span>
               </label>

@@ -113,13 +113,10 @@ export function PartnerInvitationManager({
     setBusy(null);
     if (!result?.ok) {
       setNotice({
-        tone:
-          result?.error.error === "mfa_step_up_required" ? "warning" : "error",
+        tone: "error",
         text:
-          result?.error.error === "mfa_step_up_required"
-            ? "Verify this session with MFA in Account & security before inviting teammates."
-            : (result?.error.message ??
-              "We couldn’t queue this invitation. No access was granted."),
+          result?.error.message ??
+          "We couldn’t create this invitation. No access was granted.",
       });
       return;
     }
@@ -127,7 +124,7 @@ export function PartnerInvitationManager({
     setEmail("");
     setNotice({
       tone: "success",
-      text: "If the address is eligible, a one-time invitation has been queued. It expires after 30 minutes.",
+      text: "Invitation request accepted. If the address can be invited, the one-time link expires after 30 minutes.",
     });
     await refresh();
   }
@@ -175,7 +172,7 @@ export function PartnerInvitationManager({
       tone: "success",
       text:
         action === "resend"
-          ? "A fresh one-time invitation was queued; the previous link no longer works."
+          ? "A new one-time invitation was requested; the previous link no longer works."
           : "Invitation revoked. Its link can no longer be used.",
     });
   }
@@ -188,11 +185,12 @@ export function PartnerInvitationManager({
         </div>
         <div>
           <h2 className="text-lg font-semibold text-slate-950">
-            Invite a teammate
+            Add a teammate
           </h2>
           <p className="mt-1 text-sm leading-6 text-slate-600">
-            Choose only roles within your authority. The email link is
-            company-bound, one-use, and valid for 30 minutes.
+            Add the people who help request or manage service. Choose the right
+            role carefully; each invitation works only for this company, can be
+            used once, and expires after 30 minutes.
           </p>
         </div>
       </div>
@@ -244,7 +242,6 @@ export function PartnerInvitationManager({
             {roles.map((role) => (
               <option value={role.key} key={role.key}>
                 {role.name}
-                {role.mfaRequired ? " · MFA required" : ""}
               </option>
             ))}
           </select>
@@ -279,14 +276,14 @@ export function PartnerInvitationManager({
             ) : (
               <MailPlus className="h-4 w-4" aria-hidden="true" />
             )}
-            {busy === "create" ? "Queueing…" : "Send invitation"}
+            {busy === "create" ? "Sending…" : "Send invitation"}
           </button>
         </div>
       </form>
 
       <div className="mt-7 border-t border-slate-200 pt-5">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="font-semibold text-slate-950">Invitation history</h3>
+          <h3 className="font-semibold text-slate-950">Recent invitations</h3>
           <button
             type="button"
             onClick={() => void refresh()}
@@ -345,7 +342,7 @@ export function PartnerInvitationManager({
                     >
                       <RotateCw className="h-4 w-4" aria-hidden="true" />{" "}
                       {busy === `${invitation.id}:resend`
-                        ? "Queueing…"
+                        ? "Sending…"
                         : "Resend"}
                     </button>
                   ) : null}
@@ -368,7 +365,7 @@ export function PartnerInvitationManager({
           ))}
           {!invitations.length ? (
             <p className="py-4 text-sm text-slate-600">
-              No invitations have been sent from this account.
+              No invitations have been sent from this account yet.
             </p>
           ) : null}
         </div>

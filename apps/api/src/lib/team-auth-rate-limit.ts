@@ -7,12 +7,8 @@ export type TeamAuthRateLimitAction =
   | "request_link"
   | "password_login"
   | "break_glass_exchange"
-  | "team_mfa_enrollment"
-  | "team_mfa_verification"
-  | "team_mfa_revocation"
   | "partner_request_link"
   | "partner_password_login"
-  | "partner_password_mfa"
   | "partner_magic_link_exchange"
   | "partner_access_application"
   | "partner_application_mutation"
@@ -22,8 +18,6 @@ export type TeamAuthRateLimitAction =
   | "partner_notification_endpoint_request"
   | "partner_notification_endpoint_verify"
   | "partner_notification_endpoint_revoke"
-  | "partner_mfa_enrollment"
-  | "partner_mfa_verification"
   | "partner_approval_decision"
   | "partner_quote_decision"
   | "partner_document_download"
@@ -76,18 +70,6 @@ export const TEAM_AUTH_RATE_LIMIT_POLICIES: Record<
     ip: { limit: 5, windowMs: 15 * 60 * 1_000 },
     identity: { limit: 3, windowMs: 15 * 60 * 1_000 },
   },
-  team_mfa_enrollment: {
-    ip: { limit: 20, windowMs: 60 * 60 * 1_000 },
-    identity: { limit: 5, windowMs: 60 * 60 * 1_000 },
-  },
-  team_mfa_verification: {
-    ip: { limit: 30, windowMs: 15 * 60 * 1_000 },
-    identity: { limit: 10, windowMs: 15 * 60 * 1_000 },
-  },
-  team_mfa_revocation: {
-    ip: { limit: 10, windowMs: 60 * 60 * 1_000 },
-    identity: { limit: 5, windowMs: 60 * 60 * 1_000 },
-  },
   partner_request_link: {
     ip: { limit: 10, windowMs: 15 * 60 * 1_000 },
     identity: { limit: 3, windowMs: 15 * 60 * 1_000 },
@@ -95,10 +77,6 @@ export const TEAM_AUTH_RATE_LIMIT_POLICIES: Record<
   partner_password_login: {
     ip: { limit: 30, windowMs: 15 * 60 * 1_000 },
     identity: { limit: 5, windowMs: 15 * 60 * 1_000 },
-  },
-  partner_password_mfa: {
-    ip: { limit: 30, windowMs: 15 * 60 * 1_000 },
-    identity: { limit: 8, windowMs: 15 * 60 * 1_000 },
   },
   partner_magic_link_exchange: {
     ip: { limit: 30, windowMs: 15 * 60 * 1_000 },
@@ -135,14 +113,6 @@ export const TEAM_AUTH_RATE_LIMIT_POLICIES: Record<
   partner_notification_endpoint_revoke: {
     ip: { limit: 30, windowMs: 60 * 60 * 1_000 },
     identity: { limit: 15, windowMs: 60 * 60 * 1_000 },
-  },
-  partner_mfa_enrollment: {
-    ip: { limit: 20, windowMs: 60 * 60 * 1_000 },
-    identity: { limit: 5, windowMs: 60 * 60 * 1_000 },
-  },
-  partner_mfa_verification: {
-    ip: { limit: 30, windowMs: 15 * 60 * 1_000 },
-    identity: { limit: 10, windowMs: 15 * 60 * 1_000 },
   },
   partner_approval_decision: {
     ip: { limit: 60, windowMs: 60 * 60 * 1_000 },

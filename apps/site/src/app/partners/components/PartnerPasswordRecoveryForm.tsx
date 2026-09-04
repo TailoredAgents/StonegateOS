@@ -79,9 +79,9 @@ export function PartnerPasswordRecoveryForm() {
           Check your email
         </h1>
         <p className="mt-3 text-sm leading-6 text-slate-600">
-          If the address belongs to an active partner account, we sent a one-use
-          password-reset link. For security, this message is the same for every
-          address.
+          If that address matches an active partner account, we sent a one-use
+          password reset link. Open it to choose a new password and return to
+          your account.
         </p>
         <Link
           href="/partners/login"
@@ -98,12 +98,15 @@ export function PartnerPasswordRecoveryForm() {
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary-50 text-primary-700 ring-1 ring-primary-100">
         <MailCheck className="h-6 w-6" aria-hidden="true" />
       </div>
-      <h1 className="mt-5 text-3xl font-semibold tracking-tight text-slate-950">
-        Reset your portal password
+      <p className="mt-5 text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">
+        Get back to service
+      </p>
+      <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
+        Get back into your account
       </h1>
       <p className="mt-3 text-sm leading-6 text-slate-600">
-        Enter the email for your activated partner account. We’ll send a secure,
-        one-use reset link if the account is eligible.
+        Enter your work email. If it matches an active partner account, we’ll
+        send a secure, one-use reset link.
       </p>
       {error ? (
         <PartnerNotice tone="error" className="mt-5">

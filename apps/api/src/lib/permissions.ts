@@ -31,8 +31,6 @@ export type PermissionContext = {
   principalLabel: string | null;
   sessionId: string | null;
   authenticatedAt: Date | null;
-  assuranceLevel: "aal1" | "aal2" | null;
-  mfaVerifiedAt: Date | null;
 };
 
 type MemberPermissionRow = {
@@ -217,8 +215,6 @@ function unauthenticatedContext(): PermissionContext {
     principalLabel: null,
     sessionId: null,
     authenticatedAt: null,
-    assuranceLevel: null,
-    mfaVerifiedAt: null,
   };
 }
 
@@ -236,8 +232,6 @@ function rememberVerifiedPrincipal(
     sessionId: context.sessionId,
     authMethod: context.source,
     authenticatedAt: context.authenticatedAt?.toISOString() ?? null,
-    assuranceLevel: context.assuranceLevel,
-    mfaVerifiedAt: context.mfaVerifiedAt?.toISOString() ?? null,
   });
   return context;
 }
@@ -317,8 +311,6 @@ async function resolveForwardedTeamSession(
       sessionId: teamSessions.id,
       authMethod: teamSessions.authMethod,
       authenticatedAt: teamSessions.createdAt,
-      assuranceLevel: teamSessions.assuranceLevel,
-      mfaVerifiedAt: teamSessions.mfaVerifiedAt,
       memberId: teamMembers.id,
       memberName: teamMembers.name,
       expiresAt: teamSessions.expiresAt,
@@ -354,8 +346,6 @@ async function resolveForwardedTeamSession(
     principalLabel: row.memberName,
     sessionId: row.sessionId,
     authenticatedAt: row.authenticatedAt,
-    assuranceLevel: row.assuranceLevel,
-    mfaVerifiedAt: row.mfaVerifiedAt,
   };
 }
 
@@ -377,8 +367,6 @@ function resolveExplicitServiceContext(
     principalLabel: label,
     sessionId: null,
     authenticatedAt: null,
-    assuranceLevel: null,
-    mfaVerifiedAt: null,
   };
 }
 

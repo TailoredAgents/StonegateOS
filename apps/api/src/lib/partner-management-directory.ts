@@ -8,6 +8,7 @@ import {
   isNull,
   lt,
   lte,
+  notInArray,
   or,
   sql,
   type SQL,
@@ -56,6 +57,11 @@ import {
   hasAcceptedPartnerInviteProviderEvidence,
   partnerQuarantineCaseId,
 } from "@/lib/partner-management-quarantine";
+import {
+  isRetiredPartnerSessionAuthMethod,
+  publicPartnerSessionAuthMethod,
+  retiredPartnerSessionAuthMethods,
+} from "@/lib/partner-session-auth-policy";
 
 function cursorCondition(
   query: PartnerManagementListQuery,
@@ -999,8 +1005,6 @@ async function listPeople(query: PartnerManagementListQuery) {
       phone: partnerUsers.phoneE164,
       active: partnerUsers.active,
       passwordSetAt: partnerUsers.passwordSetAt,
-      mfaRequired: partnerUsers.mfaRequired,
-      mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
       securityVersion: partnerUsers.securityVersion,
       createdAt: partnerUsers.createdAt,
       updatedAt: partnerUsers.updatedAt,
@@ -1029,7 +1033,6 @@ async function listPeople(query: PartnerManagementListQuery) {
     items: page.items.map((row) => ({
       ...row,
       passwordSetAt: iso(row.passwordSetAt),
-      mfaEnrolledAt: iso(row.mfaEnrolledAt),
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     })),
@@ -1046,6 +1049,10 @@ function partnerSessionStatusCondition(
       return and(
         isNull(partnerSessions.revokedAt),
         gt(partnerSessions.expiresAt, now),
+        notInArray(
+          partnerSessions.authMethod,
+          retiredPartnerSessionAuthMethods(),
+        ),
       )!;
     case "expired":
       return and(
@@ -1076,8 +1083,6 @@ async function listSecuritySessions(query: PartnerManagementListQuery) {
       membershipStatus: partnerAccountMemberships.status,
       roleKey: partnerAccountMemberships.roleKey,
       authMethod: partnerSessions.authMethod,
-      assuranceLevel: partnerSessions.assuranceLevel,
-      mfaVerifiedAt: partnerSessions.mfaVerifiedAt,
       deviceName: partnerSessions.deviceName,
       accountSelectedAt: partnerSessions.accountSelectedAt,
       expiresAt: partnerSessions.expiresAt,
@@ -1134,16 +1139,20 @@ async function listSecuritySessions(query: PartnerManagementListQuery) {
     .limit(query.limit + 1);
   const page = buildPartnerManagementPage(rows, query);
   return {
-    items: page.items.map((row) => ({
-      ...row,
-      mfaVerifiedAt: iso(row.mfaVerifiedAt),
-      accountSelectedAt: iso(row.accountSelectedAt),
-      expiresAt: row.expiresAt.toISOString(),
-      revokedAt: iso(row.revokedAt),
-      createdAt: row.createdAt.toISOString(),
-      lastSeenAt: row.lastSeenAt.toISOString(),
-      version: row.lastSeenAt.toISOString(),
-    })),
+    items: page.items.map((row) => {
+      const retired = isRetiredPartnerSessionAuthMethod(row.authMethod);
+      return {
+        ...row,
+        status: retired && row.status === "active" ? "retired" : row.status,
+        authMethod: publicPartnerSessionAuthMethod(row.authMethod),
+        accountSelectedAt: iso(row.accountSelectedAt),
+        expiresAt: row.expiresAt.toISOString(),
+        revokedAt: iso(row.revokedAt),
+        createdAt: row.createdAt.toISOString(),
+        lastSeenAt: row.lastSeenAt.toISOString(),
+        version: row.lastSeenAt.toISOString(),
+      };
+    }),
     page: page.page,
   };
 }
@@ -1727,7 +1736,6 @@ async function listMemberships(query: PartnerManagementListQuery) {
       identityActive: partnerUsers.active,
       identityStatus: partnerUsers.identityStatus,
       passwordSetAt: partnerUsers.passwordSetAt,
-      mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
       roleKey: partnerAccountMemberships.roleKey,
       status: partnerAccountMemberships.status,
       persona: partnerAccountMemberships.persona,
@@ -1806,7 +1814,6 @@ async function listMemberships(query: PartnerManagementListQuery) {
       suspendedAt: iso(row.suspendedAt),
       removedAt: iso(row.removedAt),
       passwordSetAt: iso(row.passwordSetAt),
-      mfaEnrolledAt: iso(row.mfaEnrolledAt),
       migrationReviewedAt: iso(row.migrationReviewedAt),
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),

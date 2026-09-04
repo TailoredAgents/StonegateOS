@@ -18,15 +18,23 @@ export default function PartnerPortalError({
       <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-50 text-rose-700 ring-1 ring-rose-200">
         <AlertTriangle className="h-6 w-6" aria-hidden="true" />
       </div>
-      <h1 className="mt-4 text-xl font-semibold text-slate-950">Something went wrong</h1>
+      <h1 className="mt-4 text-xl font-semibold text-slate-950">
+        We couldn’t load this page
+      </h1>
       <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-600">
-        Your account and jobs are unchanged. Try loading this view again.
+        Your account and service requests are unchanged. Try this page again.
       </p>
-      <button type="button" onClick={reset} className={`${partnerPrimaryButtonClass} mt-5`}>
+      <button
+        type="button"
+        onClick={reset}
+        className={`${partnerPrimaryButtonClass} mt-5`}
+      >
         <RotateCcw className="h-4 w-4" aria-hidden="true" />
-        Try again
+        Try this page again
       </button>
-      {error.digest ? <p className="mt-4 text-xs text-slate-400">Reference: {error.digest}</p> : null}
+      {error.digest ? (
+        <p className="mt-4 text-xs text-slate-400">Reference: {error.digest}</p>
+      ) : null}
     </section>
   );
 }

@@ -7,7 +7,6 @@ import {
   requirePartnerCapability,
   type PartnerPrincipal,
 } from "@/lib/partner-account-authorization";
-import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
 import { arePartnerPortalHostedPaymentsEnabled } from "@/lib/partner-portal-feature-flags";
 import { runPortalV2IdempotentMutation } from "@/lib/partner-portal-v2-idempotency";
 import { isSecurePartnerPaymentRequest } from "@/lib/partner-portal-v2-payment-security";
@@ -39,14 +38,14 @@ async function authorizeInvoicePaymentRequest(
   request: NextRequest,
   invoiceId: string,
   correlationId: string,
-  recentMfaRequired: boolean,
 ): Promise<PartnerPrincipal | Response> {
   if (!isSecurePartnerPaymentRequest(request)) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
-  const authorization = recentMfaRequired
-    ? await requireRecentPartnerMfaCapability(request, "payments.initiate")
-    : await requirePartnerCapability(request, "payments.initiate");
+  const authorization = await requirePartnerCapability(
+    request,
+    "payments.initiate",
+  );
   if (!authorization.ok) {
     return createPartnerPortalV2ErrorResponse(
       authorization.error,
@@ -55,13 +54,6 @@ async function authorizeInvoicePaymentRequest(
     );
   }
   const { principal } = authorization;
-  if (!recentMfaRequired && principal.session.assuranceLevel !== "aal2") {
-    return createPartnerPortalV2ErrorResponse(
-      "mfa_step_up_required",
-      403,
-      correlationId,
-    );
-  }
   if (
     !principal.accountId ||
     !principal.membershipId ||
@@ -92,7 +84,6 @@ export async function GET(
     request,
     invoiceId,
     correlationId,
-    false,
   );
   if (authorization instanceof Response) return authorization;
   if (request.nextUrl.search.length > 0) {
@@ -140,7 +131,6 @@ export async function POST(
     request,
     invoiceId,
     correlationId,
-    true,
   );
   if (authorization instanceof Response) return authorization;
   if (request.nextUrl.search.length > 0) {

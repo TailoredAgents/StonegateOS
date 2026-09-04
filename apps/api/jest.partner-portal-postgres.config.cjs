@@ -14,7 +14,7 @@ module.exports = {
     "<rootDir>/src/__tests__/partner-approval-rule-administration-postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-billing-dispute-requests-postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-account-scheduling-policy-postgres.integration.test.ts",
-    "<rootDir>/src/__tests__/partner-activation-mfa-postgres.integration.test.ts",
+    "<rootDir>/src/__tests__/partner-password-cutover-postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-cancellation-request-lifecycle-postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-job-change-request-lifecycle-postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-location-portfolio-controls-postgres.integration.test.ts",

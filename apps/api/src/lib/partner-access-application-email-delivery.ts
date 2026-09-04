@@ -90,11 +90,11 @@ export function buildPartnerAccessApplicationDecisionEmail(input: {
   const companyName = safeDisplayText(input.companyName, "your company", 120);
   if (input.status === "declined") {
     return {
-      subject: "Update on your Stonegate Partner Portal application",
+      subject: "Update on your Stonegate partner access request",
       text: [
         `Hi ${name},`,
         "",
-        `Stonegate could not approve the Partner Portal application for ${companyName}. No Partner Portal account or company access was activated.`,
+        `Stonegate could not approve the partner access request for ${companyName}. No partner account or company access was activated.`,
         "",
         "If you believe your company information has changed, contact Stonegate support before submitting another request.",
         "",
@@ -109,11 +109,11 @@ export function buildPartnerAccessApplicationDecisionEmail(input: {
     2_000,
   );
   return {
-    subject: "More information is needed for your Partner Portal application",
+    subject: "More information is needed for your partner access request",
     text: [
       `Hi ${name},`,
       "",
-      `Stonegate needs more information before deciding the Partner Portal application for ${companyName}.`,
+      `Stonegate needs a little more information before reviewing the partner access request for ${companyName}.`,
       "",
       "Requested information:",
       informationRequest,
@@ -121,7 +121,7 @@ export function buildPartnerAccessApplicationDecisionEmail(input: {
         ? ["", "Return to your application:", input.applicationUrl]
         : []),
       "",
-      "If your applicant session expired, verify the same email address again to resume this application.",
+      "If your access link expired, verify the same email address again to continue.",
       "",
       "This is a transactional update about your Partner Portal application.",
     ].join("\n"),

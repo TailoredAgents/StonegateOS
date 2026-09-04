@@ -10,21 +10,16 @@ import {
   partnerAccounts,
   partnerApplicantSessions,
   partnerAuthChallenges,
-  partnerAuthTransactions,
   partnerLoginTokens,
-  partnerMfaMethods,
   partnerSessions,
   partnerUsers,
   type PartnerAuthChallengePurpose,
 } from "@/db";
 import {
   getClientIp,
-  getPartnerAuthRequestBinding,
   getUserAgent,
   normalizeEmail,
-  randomToken,
   resolvePublicSiteBaseUrl,
-  sha256Base64Url,
 } from "@/lib/partner-portal-auth";
 import {
   hashPartnerPassword,
@@ -44,7 +39,6 @@ const EMAIL_CHANGE_TTL_MS = 30 * 60 * 1_000;
 const APPLICANT_SESSION_TTL_MS = 24 * 60 * 60 * 1_000;
 const STANDARD_SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
 const REMEMBERED_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const ACTIVATION_MFA_TRANSACTION_TTL_MS = 10 * 60 * 1_000;
 
 class PartnerPurposeMutationUnavailable extends Error {}
 
@@ -535,8 +529,6 @@ async function loadPendingActivationByToken(
         active: partnerUsers.active,
         identityStatus: partnerUsers.identityStatus,
         securityVersion: partnerUsers.securityVersion,
-        mfaRequired: partnerUsers.mfaRequired,
-        mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
         passwordHash: partnerUsers.passwordHash,
       },
       account: {
@@ -592,13 +584,9 @@ export function partnerActivationStateKind(input: {
   user: {
     active: boolean;
     identityStatus: string;
-    mfaRequired: boolean;
-    mfaEnrolledAt: Date | null;
-    passwordHash: string | null;
   };
   membershipStatus: string;
-  hasEnabledMfaMethod: boolean;
-}): "invitation" | "mfa_recovery" | null {
+}): "invitation" | null {
   const identityCanAcceptInvitation =
     (input.user.identityStatus === "pending_activation" &&
       !input.user.active) ||
@@ -606,37 +594,7 @@ export function partnerActivationStateKind(input: {
   if (input.membershipStatus === "invited" && identityCanAcceptInvitation) {
     return "invitation";
   }
-  if (
-    input.membershipStatus === "active" &&
-    input.user.identityStatus === "active" &&
-    input.user.active &&
-    input.user.mfaRequired &&
-    input.user.mfaEnrolledAt === null &&
-    Boolean(input.user.passwordHash) &&
-    !input.hasEnabledMfaMethod
-  ) {
-    return "mfa_recovery";
-  }
   return null;
-}
-
-async function hasEnabledPartnerMfaMethod(
-  tx: TeamMutationTransaction,
-  partnerUserId: string,
-  lock: boolean,
-): Promise<boolean> {
-  const query = tx
-    .select({ id: partnerMfaMethods.id })
-    .from(partnerMfaMethods)
-    .where(
-      and(
-        eq(partnerMfaMethods.partnerUserId, partnerUserId),
-        eq(partnerMfaMethods.enabled, true),
-      ),
-    )
-    .limit(1);
-  const rows = lock ? await query.for("update") : await query;
-  return Boolean(rows[0]?.id);
 }
 
 export async function inspectPartnerActivationToken(rawToken: string): Promise<
@@ -645,7 +603,6 @@ export async function inspectPartnerActivationToken(rawToken: string): Promise<
       email: string;
       name: string;
       accountName: string;
-      mfaRequired: boolean;
       passwordAlreadySet: boolean;
       expiresAt: Date;
     }
@@ -659,11 +616,6 @@ export async function inspectPartnerActivationToken(rawToken: string): Promise<
     const activationKind = partnerActivationStateKind({
       user: row.user,
       membershipStatus: row.membership.status,
-      hasEnabledMfaMethod: await hasEnabledPartnerMfaMethod(
-        tx,
-        row.user.id,
-        false,
-      ),
     });
     const valid =
       row.challenge.expiresAt > now &&
@@ -677,9 +629,6 @@ export async function inspectPartnerActivationToken(rawToken: string): Promise<
       email: row.user.email,
       name: row.user.name,
       accountName: row.account.name,
-      mfaRequired:
-        row.user.mfaRequired ||
-        ["administrator", "billing_approver"].includes(row.membership.roleKey),
       passwordAlreadySet: Boolean(row.user.passwordHash),
       expiresAt: row.challenge.expiresAt,
     };
@@ -697,14 +646,6 @@ export async function completePartnerActivation(input: {
       kind: "success";
       sessionToken: string;
       expiresAt: Date;
-      mfaRequired: boolean;
-    }
-  | {
-      kind: "mfa_setup_required";
-      transactionToken: string;
-      expiresAt: Date;
-      setupMode: "enroll" | "verify";
-      mfaRequired: true;
     }
   | { kind: "invalid" | "password_policy" | "unavailable" }
 > {
@@ -714,17 +655,10 @@ export async function completePartnerActivation(input: {
     loadPendingActivationByToken(tx, digest, false),
   );
   if (!preview) return { kind: "invalid" as const };
-  const previewActivationKind = await getDb().transaction(async (tx) =>
-    partnerActivationStateKind({
-      user: preview.user,
-      membershipStatus: preview.membership.status,
-      hasEnabledMfaMethod: await hasEnabledPartnerMfaMethod(
-        tx,
-        preview.user.id,
-        false,
-      ),
-    }),
-  );
+  const previewActivationKind = partnerActivationStateKind({
+    user: preview.user,
+    membershipStatus: preview.membership.status,
+  });
   if (
     preview.challenge.expiresAt <= now ||
     previewActivationKind === null ||
@@ -765,13 +699,7 @@ export async function completePartnerActivation(input: {
       const activationKind = partnerActivationStateKind({
         user: row.user,
         membershipStatus: row.membership.status,
-        hasEnabledMfaMethod: await hasEnabledPartnerMfaMethod(
-          tx,
-          row.user.id,
-          true,
-        ),
       });
-      const isMfaRecovery = activationKind === "mfa_recovery";
       const valid =
         row.challenge.expiresAt > now &&
         activationKind !== null &&
@@ -784,14 +712,10 @@ export async function completePartnerActivation(input: {
       const rehashingPassword =
         Boolean(row.user.passwordHash) &&
         existingPasswordVerification?.needsRehash === true;
-      const mfaGateRequired =
-        isMfaRecovery ||
-        row.user.mfaRequired ||
-        ["administrator", "billing_approver"].includes(row.membership.roleKey);
       const nextSecurityVersion =
         row.user.securityVersion + (settingPassword ? 1 : 0);
       let userUpdated = true;
-      if (settingPassword || rehashingPassword || mfaGateRequired) {
+      if (settingPassword || rehashingPassword) {
         if ((settingPassword || rehashingPassword) && !preparedPasswordHash) {
           return { kind: "unavailable" as const };
         }
@@ -800,12 +724,8 @@ export async function completePartnerActivation(input: {
           .set({
             ...(settingPassword
               ? {
-                  ...(mfaGateRequired
-                    ? {}
-                    : {
-                        active: true,
-                        identityStatus: "active" as const,
-                      }),
+                  active: true,
+                  identityStatus: "active" as const,
                   emailVerifiedAt: now,
                   passwordSetAt: now,
                 }
@@ -816,7 +736,6 @@ export async function completePartnerActivation(input: {
                   passwordHashVersion: PARTNER_PASSWORD_HASH_VERSION_ARGON2ID,
                 }
               : {}),
-            ...(mfaGateRequired ? { mfaRequired: true } : {}),
             securityVersion: nextSecurityVersion,
             updatedAt: now,
           })
@@ -831,8 +750,8 @@ export async function completePartnerActivation(input: {
           .returning({ id: partnerUsers.id });
         userUpdated = Boolean(user);
       }
-      let membershipActivated = mfaGateRequired;
-      if (!mfaGateRequired) {
+      let membershipActivated = row.membership.status === "active";
+      if (row.membership.status === "invited") {
         const [membership] = await tx
           .update(partnerAccountMemberships)
           .set({
@@ -901,86 +820,6 @@ export async function completePartnerActivation(input: {
             ne(partnerAuthChallenges.id, row.challenge.id),
           ),
         );
-      if (mfaGateRequired) {
-        await tx
-          .update(partnerAuthTransactions)
-          .set({ consumedAt: now })
-          .where(
-            and(
-              eq(partnerAuthTransactions.partnerUserId, row.user.id),
-              isNull(partnerAuthTransactions.consumedAt),
-            ),
-          );
-        const transactionToken = randomToken(32);
-        const expiresAt = new Date(
-          now.getTime() + ACTIVATION_MFA_TRANSACTION_TTL_MS,
-        );
-        const requestBinding = getPartnerAuthRequestBinding(input.request);
-        const [activeTotp] = await tx
-          .select({ id: partnerMfaMethods.id })
-          .from(partnerMfaMethods)
-          .where(
-            and(
-              eq(partnerMfaMethods.partnerUserId, row.user.id),
-              eq(partnerMfaMethods.methodType, "totp"),
-              eq(partnerMfaMethods.enabled, true),
-            ),
-          )
-          .limit(1);
-        const [transaction] = await tx
-          .insert(partnerAuthTransactions)
-          .values({
-            partnerUserId: row.user.id,
-            partnerAccountId: row.account.id,
-            partnerMembershipId: row.membership.id,
-            tokenHash: sha256Base64Url(transactionToken),
-            purpose: "activation_mfa_setup",
-            sourceAuthChallengeId: row.challenge.id,
-            securityVersion: nextSecurityVersion,
-            rememberMe: input.rememberMe,
-            requestedIp: requestBinding.requestedIp,
-            requestedUserAgent: requestBinding.requestedUserAgent,
-            attemptCount: 0,
-            expiresAt,
-            createdAt: now,
-          })
-          .returning({ id: partnerAuthTransactions.id });
-        if (!transaction?.id) {
-          throw new PartnerPurposeMutationUnavailable(
-            "partner_activation_mfa_transaction_not_created",
-          );
-        }
-        await tx.insert(auditLogs).values(
-          challengeAuditValues({
-            action: "partner.auth.account_activation.mfa_setup_required",
-            outcome: "attempted",
-            challengeId: row.challenge.id,
-            purpose: "account_activation",
-            normalizedEmail: row.challenge.normalizedEmail,
-            correlationId: input.correlationId,
-            partnerUserId: row.user.id,
-            meta: {
-              partnerAccountId: row.account.id,
-              partnerMembershipId: row.membership.id,
-              authTransactionId: transaction.id,
-              setupMode: activeTotp ? "verify" : "enroll",
-              identityStillPending: isPendingIdentity,
-              membershipStillInvited: row.membership.status === "invited",
-              mfaRecovery: isMfaRecovery,
-              passwordChanged: settingPassword,
-              passwordRehashed: rehashingPassword,
-              expiresAt: expiresAt.toISOString(),
-            },
-          }),
-        );
-        return {
-          kind: "mfa_setup_required" as const,
-          transactionToken,
-          expiresAt,
-          setupMode: activeTotp ? ("verify" as const) : ("enroll" as const),
-          mfaRequired: true as const,
-        };
-      }
       const sessionToken = randomBytes(32).toString("base64url");
       const expiresAt = new Date(
         now.getTime() +
@@ -1014,7 +853,6 @@ export async function completePartnerActivation(input: {
           meta: {
             partnerAccountId: row.account.id,
             partnerMembershipId: row.membership.id,
-            mfaRequired: row.user.mfaRequired,
             existingIdentity: isActiveIdentity,
             passwordChanged: settingPassword,
             passwordRehashed: rehashingPassword,
@@ -1025,7 +863,6 @@ export async function completePartnerActivation(input: {
         kind: "success" as const,
         sessionToken,
         expiresAt,
-        mfaRequired: row.user.mfaRequired,
       };
     });
   } catch (error) {

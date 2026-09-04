@@ -205,7 +205,7 @@ describe("partner V2 member route security contract", () => {
   );
   const service = source("apps/api/src/lib/partner-portal-v2-members.ts");
 
-  it("requires account capabilities, MFA-backed management, and write controls", () => {
+  it("requires account capabilities and write controls", () => {
     expect(listRoute).toContain('"account.members.read"');
     expect(mutationRoute).toContain('"account.members.manage"');
     expect(mutationRoute).toContain("isAllowedPartnerPortalMutationOrigin");
@@ -233,7 +233,9 @@ describe("partner V2 member route security contract", () => {
   });
 
   it("advertises invitations only through the separate capability-derived lifecycle", () => {
-    expect(listRoute).toContain('principal.capabilities.includes("account.members.manage")');
+    expect(listRoute).toContain(
+      'principal.capabilities.includes("account.members.manage")',
+    );
     expect(listRoute).not.toContain("sendEmail");
     expect(listRoute).not.toContain("sendSms");
     expect(mutationRoute).not.toContain("invite");

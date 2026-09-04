@@ -48,7 +48,6 @@ export async function GET(request: NextRequest): Promise<Response> {
           preferences: principal.preferences,
           capabilities: principal.capabilities,
         },
-        security: principal.security,
         accounts: principal.availableAccounts.map((access) => ({
           id: access.accountId,
           name: access.accountName,

@@ -422,7 +422,7 @@ export function PartnerJobActions({
     event.currentTarget.reset();
     setMessage({
       tone: "success",
-      text: "Reusable scope saved. One-time access, pricing, approvals, media, holds, and payment details were not copied.",
+      text: "Template saved for next time. One-time access, pricing, approvals, photos, schedule holds, and payment details were not copied.",
     });
   };
 
@@ -491,10 +491,9 @@ export function PartnerJobActions({
             id="partner-job-change-consequence"
             className="mt-2 text-sm leading-6 text-slate-700"
           >
-            Stonegate must review this request. Submitting it does not change or
-            promise acceptance of the current price, schedule, service, proof
-            requirements, or job details. Sensitive changes require a separate
-            change order.
+            Tell us what needs to change. Submitting it does not change or
+            promise acceptance of the current price, schedule, service, proof,
+            or job details. Sensitive changes require a separate change order.
           </p>
           <form
             onSubmit={(event) => void requestJobChange(event)}
@@ -519,7 +518,7 @@ export function PartnerJobActions({
             <div className="grid gap-3 sm:grid-cols-2">
               <label htmlFor="partner-job-change-description">
                 <span className="text-sm font-semibold text-slate-700">
-                  Public scope note
+                  Updated work description
                 </span>
                 <textarea
                   id="partner-job-change-description"
@@ -543,7 +542,7 @@ export function PartnerJobActions({
               </label>
               <label htmlFor="partner-job-change-access">
                 <span className="text-sm font-semibold text-slate-700">
-                  Job access details
+                  Updated access details
                 </span>
                 <textarea
                   id="partner-job-change-access"
@@ -595,7 +594,7 @@ export function PartnerJobActions({
                 Could this affect any of these?
               </legend>
               <p className="text-sm leading-6 text-slate-600">
-                Select every impact so Stonegate can route the request safely.
+                Select everything that may change so it reaches the right team.
               </p>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 {[
@@ -648,8 +647,8 @@ export function PartnerJobActions({
             id="partner-job-references-help"
             className="mt-2 text-sm leading-6 text-slate-600"
           >
-            This changes only the PO, cost center, and project reference. It
-            does not alter price, invoices, scope, or schedule.
+            Update the PO, cost center, or project reference.{" "}
+            {"This does not alter price, invoices, scope, or schedule."}
           </p>
           <form
             onSubmit={(event) => void updateReferences(event)}
@@ -732,11 +731,12 @@ export function PartnerJobActions({
         <details className="rounded-xl border border-slate-200 bg-slate-50 p-4">
           <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg font-semibold text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 [&::-webkit-details-marker]:hidden">
             <Save className="h-4 w-4" aria-hidden="true" />
-            Save as reusable template
+            Save details for next time
           </summary>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            Saves service, location, reusable scope, crew notes, contact, and
-            proof preferences. You will re-enter access and commercial details.
+            Reuses the service, location, work description, crew notes, contact,
+            and proof choices. You will add current access and billing details
+            next time.
           </p>
           <form
             onSubmit={(event) => void saveTemplate(event)}
@@ -784,20 +784,19 @@ export function PartnerJobActions({
           id="partner-cancellation-policy-title"
           className="text-sm font-semibold text-slate-950"
         >
-          Cancellation policy
+          Cancel or change the schedule
         </h3>
         <p className="mt-1 text-sm leading-6 text-slate-700">
           {cancellation.policySource === "unconfigured"
-            ? "This account’s persisted policy is unavailable, so confirmed-job changes require staff review."
+            ? "This account’s policy is unavailable, so Stonegate must review changes to confirmed jobs."
             : cancellation.directCancellationEnabled
-              ? `This account uses a ${cancellation.cutoffMinutes / 60}-hour cutoff for direct confirmed-job changes.`
-              : "This account requires staff review for every confirmed-job cancellation or schedule change."}{" "}
+              ? `You can directly change a confirmed job until the account’s ${cancellation.cutoffMinutes / 60}-hour cutoff.`
+              : "Stonegate must review every cancellation or schedule change for a confirmed job."}{" "}
           {cancellation.reason.label}
         </p>
         {cancellationDeadline ? (
           <p className="mt-1 text-sm leading-6 text-slate-700">
-            Direct-cancellation deadline: {cancellationDeadline} (
-            {cancellation.timezone}).
+            Change deadline: {cancellationDeadline} ({cancellation.timezone}).
           </p>
         ) : null}
         <p

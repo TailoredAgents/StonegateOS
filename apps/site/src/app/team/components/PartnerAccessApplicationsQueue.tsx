@@ -369,7 +369,7 @@ export async function PartnerAccessApplicationsQueue({
                         <p className="text-xs text-emerald-900">
                           {joinsExistingCompany
                             ? "Choose the exact role and whether access is account-wide or limited to validated resources."
-                            : "The first member of a new company is an account-wide Administrator and must enroll in MFA."}{" "}
+                            : "The first member of a new company is an account-wide Administrator."}{" "}
                           Pricing and instant confirmation remain separate.
                         </p>
                         <form
@@ -472,7 +472,11 @@ export async function PartnerAccessApplicationsQueue({
                                 name="accessLevel"
                                 value="account"
                               />
-                              <input type="hidden" name="locationIds" value="" />
+                              <input
+                                type="hidden"
+                                name="locationIds"
+                                value=""
+                              />
                               <input
                                 type="hidden"
                                 name="costCenterIds"

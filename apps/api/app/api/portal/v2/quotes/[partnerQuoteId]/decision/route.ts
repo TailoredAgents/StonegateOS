@@ -5,7 +5,7 @@ import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
-import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
+import { requirePartnerCapability } from "@/lib/partner-account-authorization";
 import { arePartnerPortalV2WritesEnabled } from "@/lib/partner-portal-feature-flags";
 import {
   portalV2RequestHash,
@@ -77,7 +77,7 @@ export async function POST(
   if (!isAllowedPartnerPortalMutationOrigin(request)) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
-  const authorization = await requireRecentPartnerMfaCapability(
+  const authorization = await requirePartnerCapability(
     request,
     "quotes.respond",
   );

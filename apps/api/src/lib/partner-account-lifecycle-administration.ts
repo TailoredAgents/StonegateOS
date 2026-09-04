@@ -291,7 +291,6 @@ export async function recoverPartnerAdministratorAsTeamOwner(
       identityStatus: partnerUsers.identityStatus,
       active: partnerUsers.active,
       passwordHash: partnerUsers.passwordHash,
-      mfaEnrolledAt: partnerUsers.mfaEnrolledAt,
       securityVersion: partnerUsers.securityVersion,
     })
     .from(partnerAccountMemberships)
@@ -323,17 +322,15 @@ export async function recoverPartnerAdministratorAsTeamOwner(
     target.identityStatus !== "active" ||
     !target.active ||
     !target.passwordHash ||
-    !target.mfaEnrolledAt ||
     target.migrationReviewStatus === "pending" ||
     target.migrationReviewStatus === "quarantined"
   ) {
     throw new TeamMutationFailure(
       "conflict",
-      "Administrator recovery requires an active, reviewed membership with a password and enrolled MFA.",
+      "Administrator recovery requires an active, reviewed membership with a password.",
       {
         fieldErrors: {
-          membershipId:
-            "Finish activation, migration review, and MFA recovery first.",
+          membershipId: "Finish activation and migration review first.",
         },
       },
     );
@@ -438,7 +435,6 @@ export async function recoverPartnerAdministratorAsTeamOwner(
   const [updatedUser] = await tx
     .update(partnerUsers)
     .set({
-      mfaRequired: true,
       securityVersion: sql`${partnerUsers.securityVersion} + 1`,
       updatedAt: now,
     })

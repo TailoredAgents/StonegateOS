@@ -4,10 +4,9 @@ import { getPublicCompanyProfile } from "@/lib/company";
 import { absoluteUrl } from "@/lib/metadata";
 
 const title = "For Partners";
-const socialTitle =
-  "Stonegate Partner Portal — Schedule. Coordinate. Document.";
+const socialTitle = "Stonegate Partner Portal — Quick and Easy Service";
 const description =
-  "Request Stonegate junk removal, manage locations, share photos, follow completion proof, and keep billing organized in one secure partner workspace.";
+  "Request Stonegate junk removal with saved locations, simple scheduling, shared photos, job updates, completion proof, and organized billing.";
 const socialImage = absoluteUrl("/partners/social-image");
 
 export const dynamic = "force-static";

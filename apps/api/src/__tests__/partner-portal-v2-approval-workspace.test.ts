@@ -11,22 +11,20 @@ describe("partner portal V2 approval workspace contract", () => {
   it.each([
     "app/api/portal/v2/approval-requests/route.ts",
     "app/api/portal/v2/approval-requests/[requestId]/route.ts",
-  ])("requires approval-read capability and an AAL2 session in %s", (file) => {
+  ])("requires approval-read capability without an MFA gate in %s", (file) => {
     const route = source(file);
     expect(route).toContain('"approvals.read"');
-    expect(route).toContain('assuranceLevel !== "aal2"');
-    expect(route).toContain('"mfa_step_up_required"');
+    expect(route).toContain("requirePartnerCapability");
+    expect(route).not.toMatch(/mfa|aal2/iu);
   });
 
-  it("requires a recent MFA proof for an approval decision", () => {
+  it("requires approval-decision capability without an MFA gate", () => {
     const route = source(
       "app/api/portal/v2/approval-requests/[requestId]/decision/route.ts",
     );
-    const helper = source("src/lib/partner-recent-mfa.ts");
     expect(route).toContain('"approvals.decide"');
-    expect(route).toContain("requireRecentPartnerMfaCapability");
-    expect(helper).toContain('error: "mfa_step_up_required"');
-    expect(helper).toContain("PARTNER_RECENT_MFA_WINDOW_MS");
+    expect(route).toContain("requirePartnerCapability");
+    expect(route).not.toMatch(/mfa|aal2/iu);
   });
 
   it("uses account-scoped reads and a safe request-snapshot allowlist", () => {

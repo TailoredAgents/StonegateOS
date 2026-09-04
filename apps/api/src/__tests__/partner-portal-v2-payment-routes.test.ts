@@ -17,22 +17,27 @@ describe("partner portal V2 payment route guards", () => {
     "app/api/portal/v2/invoices/[invoiceId]/payment-link/route.ts";
 
   it.each([createIntent, completeIntent])(
-    "requires billing authority, recent MFA, embedded rollout eligibility, and HTTPS in %s",
+    "requires billing authority, embedded rollout eligibility, and HTTPS in %s",
     (relativePath) => {
       const route = source(relativePath);
       expect(route).toContain('"payments.initiate"');
-      expect(route).toContain("requireRecentPartnerMfaCapability");
+      expect(route).toContain("requirePartnerCapability");
+      expect(route).not.toContain("requireRecentPartnerMfaCapability");
+      expect(route).not.toContain('"mfa_step_up_required"');
+      expect(route).not.toContain('assuranceLevel !== "aal2"');
       expect(route).toContain("arePartnerPortalEmbeddedPaymentsEnabled");
       expect(route).toContain("isSecurePartnerPaymentRequest");
       expect(route).toContain('accessLevel !== "account"');
     },
   );
 
-  it("keeps the read-only payment-intent route on ordinary AAL2", () => {
+  it("keeps the read-only payment-intent route capability-gated at AAL1", () => {
     const route = source(getIntent);
     expect(route).toContain('"payments.initiate"');
-    expect(route).toContain('assuranceLevel !== "aal2"');
-    expect(route).toContain('"mfa_step_up_required"');
+    expect(route).toContain("requirePartnerCapability");
+    expect(route).not.toContain("requireRecentPartnerMfaCapability");
+    expect(route).not.toContain('"mfa_step_up_required"');
+    expect(route).not.toContain('assuranceLevel !== "aal2"');
     expect(route).toContain("arePartnerPortalEmbeddedPaymentsEnabled");
     expect(route).toContain("isSecurePartnerPaymentRequest");
     expect(route).toContain('accessLevel !== "account"');
@@ -41,7 +46,10 @@ describe("partner portal V2 payment route guards", () => {
   it("uses the independent hosted-payment rollout for invoice links", () => {
     const route = source(invoiceLink);
     expect(route).toContain('"payments.initiate"');
-    expect(route).toContain("requireRecentPartnerMfaCapability");
+    expect(route).toContain("requirePartnerCapability");
+    expect(route).not.toContain("requireRecentPartnerMfaCapability");
+    expect(route).not.toContain('"mfa_step_up_required"');
+    expect(route).not.toContain('assuranceLevel !== "aal2"');
     expect(route).toContain("arePartnerPortalHostedPaymentsEnabled");
     expect(route).toContain("isSecurePartnerPaymentRequest");
   });

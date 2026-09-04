@@ -131,13 +131,12 @@ describe("partner verification-first onboarding routes", () => {
     expect(mockGetApplication).toHaveBeenCalledWith(PRINCIPAL);
   });
 
-  it("exposes whether activation must verify an existing password", async () => {
+  it("exposes whether activation must verify an existing password without an MFA gate", async () => {
     mockInspectActivation.mockResolvedValue({
       kind: "success",
       email: PRINCIPAL.normalizedEmail,
       name: "Pat Partner",
       accountName: "Verified Property Group",
-      mfaRequired: true,
       passwordAlreadySet: true,
       expiresAt: PRINCIPAL.expiresAt,
     });
@@ -159,11 +158,11 @@ describe("partner verification-first onboarding routes", () => {
           email: PRINCIPAL.normalizedEmail,
           name: "Pat Partner",
           accountName: "Verified Property Group",
-          mfaRequired: true,
           passwordAlreadySet: true,
           expiresAt: PRINCIPAL.expiresAt.toISOString(),
         },
       }),
     );
+    expect(JSON.stringify(body)).not.toContain("mfaRequired");
   });
 });

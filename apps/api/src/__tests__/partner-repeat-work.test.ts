@@ -158,12 +158,13 @@ describe("partner repeat-work safety", () => {
     const jobActions = source(
       "apps/site/src/app/partners/components/PartnerJobActions.tsx",
     );
-    expect(ui).toContain("Dry-run validation");
+    expect(ui).toContain("File check complete");
+    expect(ui).toContain("Review every row before saving requests");
     expect(ui).toContain("0</strong> capacity reservations");
     expect(ui).toContain('aria-live="polite"');
     expect(jobActions).toContain("Book again");
     expect(jobActions).toContain(
-      "access, pricing, approvals, media, holds, and payment details were not copied",
+      "One-time access, pricing, approvals, photos, schedule holds, and payment details were not copied",
     );
   });
 });

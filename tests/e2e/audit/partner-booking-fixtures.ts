@@ -339,7 +339,7 @@ export async function createPartnerBookingFixture(): Promise<PartnerBookingFixtu
         expires_at, created_at, last_seen_at
       ) VALUES (
         ${partnerUserId}, ${partnerAccountId}, ${membershipId},
-        ${sessionHash(sessionToken)}, 'magic_link', 'aal1', now(),
+        ${sessionHash(sessionToken)}, 'password', 'aal1', now(),
         now() + interval '1 day', now(), now()
       ) RETURNING id
     `;
@@ -556,7 +556,7 @@ export async function createPartnerJobActionFixture(): Promise<PartnerJobActionF
         ) VALUES (
           ${viewerUserId}, ${requester.partnerAccountId},
           ${viewerMembershipId}, ${sessionHash(viewerSessionToken)},
-          'magic_link', 'aal1', now(), now() + interval '1 day', now(), now()
+          'password', 'aal1', now(), now() + interval '1 day', now(), now()
         ) RETURNING id
       `;
       const viewerSessionId = viewerSessions[0]?.id;
@@ -695,11 +695,11 @@ export async function configurePartnerApprovalFixture(
   return sql.begin(async (tx) => {
     const users = await tx<Array<{ id: string }>>`
       INSERT INTO partner_users (
-        org_contact_id, email, name, active, mfa_required, mfa_enrolled_at,
-        created_at, updated_at
+        org_contact_id, email, normalized_email, name, active,
+        identity_status, email_verified_at, created_at, updated_at
       ) VALUES (
-        ${requester.contactId}, ${approverEmail}, 'Audit Account Approver',
-        true, true, now(), now(), now()
+        ${requester.contactId}, ${approverEmail}, ${approverEmail},
+        'Audit Account Approver', true, 'active', now(), now(), now()
       ) RETURNING id
     `;
     const approverUserId = users[0]?.id;
@@ -742,11 +742,11 @@ export async function configurePartnerApprovalFixture(
       INSERT INTO partner_sessions (
         partner_user_id, active_partner_account_id, active_membership_id,
         session_hash, auth_method, assurance_level, account_selected_at,
-        expires_at, created_at, last_seen_at, mfa_verified_at
+        expires_at, created_at, last_seen_at
       ) VALUES (
         ${approverUserId}, ${requester.partnerAccountId},
         ${approverMembershipId}, ${sessionHash(approverSessionToken)},
-        'magic_link', 'aal2', now(), now() + interval '1 day', now(), now(), now()
+        'password', 'aal1', now(), now() + interval '1 day', now(), now()
       ) RETURNING id
     `;
     const approverSessionId = sessions[0]?.id;

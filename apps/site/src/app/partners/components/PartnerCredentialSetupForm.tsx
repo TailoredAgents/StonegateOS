@@ -58,7 +58,6 @@ export function PartnerCredentialSetupForm({
         accountName?: string;
         email?: string;
         expiresAt?: string;
-        mfaRequired?: boolean;
         name?: string;
         passwordAlreadySet?: boolean;
       };
@@ -130,9 +129,6 @@ export function PartnerCredentialSetupForm({
     const result = await partnerOnboardingFetch<{
       ok: true;
       redirectTo?: string;
-      mfaRequired?: boolean;
-      nextAction?: "mfa_setup_required" | "portal_ready";
-      authority?: "pre_authentication_only" | "portal";
     }>(path, {
       method: "POST",
       headers: {
@@ -162,9 +158,7 @@ export function PartnerCredentialSetupForm({
     }
     if (mode === "activation") {
       const destination = (result.data.redirectTo ??
-        (result.data.mfaRequired
-          ? "/partners/settings#two-step-verification"
-          : "/partners/overview")) as Route;
+        "/partners/overview") as Route;
       router.replace(destination);
       router.refresh();
       return;
@@ -217,9 +211,9 @@ export function PartnerCredentialSetupForm({
   const description =
     mode === "activation"
       ? confirmsExistingPassword
-        ? "Enter your current portal password to accept this approved company membership. Your existing password will not be changed."
-        : "Create the password you’ll use after approval. Your membership does not become active until this step is complete."
-      : "Create a new password for your active partner account. Other sessions may be signed out for your security.";
+        ? "Enter your current portal password to add this approved company to your sign-in. Your password will not change."
+        : "Create your password to finish activation and open your partner workspace."
+      : "Choose a new password so you can get back to requesting and managing service. Other signed-in devices may be signed out for security.";
 
   return (
     <div className="mx-auto max-w-xl rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/60 sm:p-10">
@@ -230,7 +224,10 @@ export function PartnerCredentialSetupForm({
           <KeyRound className="h-6 w-6" aria-hidden="true" />
         )}
       </div>
-      <h1 className="mt-5 text-3xl font-semibold tracking-tight text-slate-950">
+      <p className="mt-5 text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">
+        Quick and easy partner service
+      </p>
+      <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
         {title}
       </h1>
       <p className="mt-3 text-sm leading-6 text-slate-600">{description}</p>
@@ -297,7 +294,7 @@ export function PartnerCredentialSetupForm({
               className="mt-1 block text-xs text-slate-500"
             >
               {confirmsExistingPassword
-                ? "Use the password for your existing Partner Portal identity."
+                ? "Use the password for your existing Partner Portal account."
                 : "Use 15–128 characters and a password unique to this portal."}
             </span>
           </label>
@@ -375,8 +372,8 @@ export function PartnerCredentialSetupForm({
           {mode === "activation" ? (
             resendSent ? (
               <PartnerNotice tone="success">
-                If activation is pending for that address, a fresh one-use link
-                has been queued. Check your inbox and spam folder.
+                If that address is ready for activation, we sent a fresh one-use
+                link. Check your inbox and spam folder.
               </PartnerNotice>
             ) : (
               <form
@@ -429,7 +426,7 @@ export function PartnerCredentialSetupForm({
                 href={"/partners/application" as Route}
                 className={partnerSecondaryButtonClass}
               >
-                Open application status
+                Check application status
               </Link>
             ) : null}
             <Link

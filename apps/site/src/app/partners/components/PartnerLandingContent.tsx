@@ -28,54 +28,57 @@ const PERSONAS = [
 const OUTCOMES = [
   {
     icon: CalendarCheck2,
-    title: "Schedule accurately",
-    body: "Use saved sites, instructions, photos, references, and windows.",
+    title: "Request service quickly",
+    body: "Choose a saved site, add photos and instructions, and send the request.",
   },
   {
     icon: MessageSquareText,
-    title: "Stay coordinated",
-    body: "Track status, changes, and one shared conversation.",
+    title: "Pick the right time",
+    body: "See eligible arrival windows and choose the one that works best.",
   },
   {
     icon: FileCheck2,
-    title: "Close the record",
-    body: "Keep proof, quotes, invoices, receipts, and job downloads.",
+    title: "Stay updated",
+    body: "Find job progress, messages, proof, and billing in one place.",
   },
 ] as const;
 
 const JOB_STEPS = [
   [
-    "Request",
-    "Add the site, scope, contacts, instructions, photos, and references.",
+    "Request service",
+    "Choose a saved location and add the details, photos, and instructions.",
   ],
-  ["Schedule", "Select an eligible two-hour arrival window."],
-  ["Track", "Follow confirmation, status, changes, and messages."],
-  ["Close", "Review proof, the completion record, and billing documents."],
+  ["Choose a window", "Select an eligible two-hour arrival window."],
+  ["Stay updated", "See confirmation, status, changes, and messages."],
+  [
+    "Get the records",
+    "Review proof, completion details, and billing documents.",
+  ],
 ] as const;
 
 const ACCESS_STEPS = [
   [
-    "Verify and apply",
-    "Verify your work email, then tell us about your company.",
+    "Verify your email",
+    "Confirm your work email and tell us about your company.",
   ],
   [
-    "Confirm the company",
+    "Get approved",
     "Stonegate reviews new companies. Your company administrator or Stonegate reviews requests to join an existing workspace.",
   ],
-  ["Activate securely", "Create a password and enroll role-required MFA."],
+  ["Activate your access", "Create a password and sign in to your workspace."],
 ] as const;
 
 const FAQS = [
   [
-    "Does email verification grant access?",
+    "Can I use the portal after verifying my email?",
     "No. Verification opens only the application. Access begins after approval and secure activation.",
   ],
   [
-    "What happens when a job needs review?",
+    "What if my job needs review?",
     "Stonegate reviews the saved request and preferred windows without promising a slot.",
   ],
   [
-    "Can one login manage multiple approved accounts or locations?",
+    "Can I manage more than one company or location?",
     "Yes. Approved accounts stay separate, while permitted locations remain organized inside each account.",
   ],
 ] as const;
@@ -149,13 +152,13 @@ export function PartnerLandingContent({
             id="partner-landing-title"
             className="mt-4 max-w-3xl text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl lg:text-6xl"
           >
-            Schedule, track, and document every Stonegate job.
+            Quick and easy service for our partners.
           </h1>
           <p className="mt-6 max-w-2xl text-base leading-7 text-slate-600 sm:text-lg">
-            A secure workspace for contractors, real estate teams, property
-            managers, and commercial clients to request junk removal, manage
-            locations, share photos, follow progress, and keep proof and billing
-            together.
+            Request Stonegate junk removal without the usual back-and-forth.
+            Reuse saved locations, add photos and instructions, choose an
+            eligible arrival window, and find updates, proof, and billing in one
+            place.
           </p>
           <nav
             className="mt-7 flex flex-col gap-3 sm:flex-row"
@@ -215,7 +218,7 @@ export function PartnerLandingContent({
             id="partner-outcomes-heading"
             className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl"
           >
-            One workspace for the work around every job.
+            Less back-and-forth from request to completion.
           </h2>
         </div>
         <div className="mt-9 grid gap-8 md:grid-cols-3 md:gap-0">
@@ -245,13 +248,13 @@ export function PartnerLandingContent({
         className="rounded-3xl bg-sand-100 p-6 sm:p-8 lg:p-10"
       >
         <p className="text-sm font-semibold uppercase tracking-widest text-primary-900">
-          From request to close-out
+          One simple process
         </p>
         <h2
           id="partner-job-record-heading"
           className="mt-3 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl"
         >
-          Everything stays with the job.
+          Tell us what you need. We keep the rest organized.
         </h2>
         <ol className="mt-9 grid gap-6 md:grid-cols-4 md:gap-0">
           {JOB_STEPS.map(([title, body], index) => (
@@ -269,9 +272,9 @@ export function PartnerLandingContent({
           ))}
         </ol>
         <p className="mt-8 rounded-2xl border border-accent-200 bg-white p-4 text-sm leading-6 text-slate-700">
-          If pricing, territory, hazards, routing, capacity, or calendar details
-          are uncertain, the portal preserves your request and preferred windows
-          for review without promising a slot.
+          If a job needs a closer review for scope, service area, pricing, or
+          availability, we save your request and preferred windows. Stonegate
+          confirms the details before promising a time.
         </p>
       </section>
 
@@ -284,7 +287,7 @@ export function PartnerLandingContent({
             id="partner-access-heading"
             className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl"
           >
-            Simple to enter. Limited to the right team.
+            Easy to get started. Secure for your team.
           </h2>
           <ol className="mt-7 space-y-6">
             {ACCESS_STEPS.map(([title, body], index) => (
@@ -308,15 +311,15 @@ export function PartnerLandingContent({
               aria-hidden="true"
             />
             <p>
-              Each person sees only approved companies and locations. People who
-              manage access, approvals, or billing also complete MFA.
+              Each person sees only the approved companies, locations, and tools
+              assigned to their role.
             </p>
           </div>
         </div>
 
         <div>
           <h2 className="text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
-            Questions before joining
+            Common questions
           </h2>
           <div className="mt-6 divide-y divide-slate-200 border-y border-slate-200">
             {FAQS.map(([question, answer]) => (
@@ -353,10 +356,11 @@ export function PartnerLandingContent({
               id="partner-final-cta"
               className="text-3xl font-semibold tracking-tight text-white sm:text-4xl"
             >
-              Open your Stonegate partner workspace.
+              Make your next Stonegate service request easier.
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-200 sm:text-base">
-              Sign in, or verify your work email to request access.
+              Sign in to request service, or verify your work email to request
+              partner access.
             </p>
           </div>
           <nav

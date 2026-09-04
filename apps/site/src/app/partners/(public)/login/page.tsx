@@ -28,11 +28,8 @@ function loginError(code: string | null): string | null {
   if (code === "rate_limited") {
     return "Too many sign-in attempts were made. Wait a moment, then try again.";
   }
-  if (code === "mfa_transaction_expired" || code === "mfa_attempts_exhausted") {
-    return "That verification attempt expired or was used. Sign in again to continue.";
-  }
-  if (code === "mfa_enrollment_required") {
-    return "This account requires an authenticator, but setup is incomplete. Contact Stonegate support to recover access.";
+  if (code === "security_setup_updated") {
+    return "The sign-in process has been updated. Sign in with your email and password.";
   }
   if (code === "temporarily_unavailable" || code === "request_failed") {
     return "Sign-in is temporarily unavailable. Try again shortly or contact Stonegate.";
@@ -67,20 +64,20 @@ export default async function PartnerLoginPage({
         />
         <div className="relative">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent-200">
-            Approved partners
+            Quick and easy partner service
           </p>
           <h1 className="mt-3 max-w-lg text-3xl font-semibold tracking-tight sm:text-4xl">
-            Your jobs, locations, proof, and records in one place.
+            Request service without starting from scratch.
           </h1>
           <p className="mt-4 max-w-lg text-sm leading-6 text-primary-100 sm:text-base">
-            Sign in to schedule service, follow active work, communicate with
-            Stonegate, and keep company documents organized.
+            Use your saved locations and job details to request service, follow
+            the work, and find photos and documents when you need them.
           </p>
           <ul className="mt-8 space-y-4 text-sm text-primary-50">
             {[
-              "Account-scoped company access",
-              "Secure password and recovery controls",
-              "Multi-factor protection for privileged roles",
+              "Reuse saved locations and instructions",
+              "See clear scheduling and job updates",
+              "Keep photos and paperwork with each job",
             ].map((item) => (
               <li key={item} className="flex items-start gap-3">
                 <ShieldCheck
@@ -102,7 +99,7 @@ export default async function PartnerLoginPage({
             </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">
-                Partner access
+                Welcome back
               </p>
               <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
                 Sign in to your portal

@@ -150,7 +150,7 @@ describe("partner recurring-series lifecycle", () => {
     expect(ui).toContain('"If-Match": item.etag');
     expect(ui).toContain("Reason for schedule change");
     expect(ui).toContain("Existing");
-    expect(ui).toContain("jobs and review drafts remain unchanged");
+    expect(ui).toContain("jobs and review requests remain unchanged");
     expect(ui).toContain("aria-describedby={helpId}");
     expect(ui).toContain('role="status"');
   });

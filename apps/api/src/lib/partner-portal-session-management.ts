@@ -5,12 +5,14 @@ import {
   selfSessionStatus,
 } from "@/lib/self-session-management";
 import { portalV2SessionHandle } from "@/lib/partner-portal-v2-security";
+import {
+  isRetiredPartnerSessionAuthMethod,
+  publicPartnerSessionAuthMethod,
+} from "@/lib/partner-session-auth-policy";
 
 export type PartnerSelfSession = {
   id: string;
   authMethod: string;
-  assuranceLevel: string;
-  mfaVerifiedAt: Date | null;
   deviceName: string | null;
   userAgent: string | null;
   createdAt: Date;
@@ -26,8 +28,6 @@ export async function listPartnerSelfSessions(
     .select({
       id: partnerSessions.id,
       authMethod: partnerSessions.authMethod,
-      assuranceLevel: partnerSessions.assuranceLevel,
-      mfaVerifiedAt: partnerSessions.mfaVerifiedAt,
       deviceName: partnerSessions.deviceName,
       userAgent: partnerSessions.userAgent,
       createdAt: partnerSessions.createdAt,
@@ -52,13 +52,14 @@ export function serializePartnerSelfSession(
   currentSessionId: string,
   now = new Date(),
 ): Record<string, unknown> {
+  const retired = isRetiredPartnerSessionAuthMethod(session.authMethod);
+  const persistedStatus = selfSessionStatus(session, now);
   return {
     handle: portalV2SessionHandle(session.id),
     current: session.id === currentSessionId,
-    status: selfSessionStatus(session, now),
-    authMethod: session.authMethod,
-    assuranceLevel: session.assuranceLevel,
-    mfaVerifiedAt: session.mfaVerifiedAt?.toISOString() ?? null,
+    status:
+      retired && persistedStatus === "active" ? "retired" : persistedStatus,
+    authMethod: publicPartnerSessionAuthMethod(session.authMethod),
     deviceName: session.deviceName?.slice(0, 160) ?? null,
     userAgent: session.userAgent?.slice(0, 500) ?? null,
     createdAt: session.createdAt.toISOString(),

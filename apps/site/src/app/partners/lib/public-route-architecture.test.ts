@@ -44,13 +44,14 @@ void test("the public landing explains access, security, service review, FAQ, an
   const preview = source("../components/PartnerPortalPreview.tsx");
 
   assert.equal(landing.match(/<section(?:\s|>)/gu)?.length, 5);
-  assert.match(landing, /Simple to enter\. Limited to the right team\./u);
-  assert.match(landing, /Does email verification grant access\?/u);
+  assert.match(landing, /Quick and easy service for our partners\./u);
+  assert.match(landing, /Easy to get started\. Secure for your team\./u);
+  assert.match(landing, /Can I use the portal after verifying my email\?/u);
   assert.match(
     landing,
-    /calendar details[\s\S]*preferred windows[\s\S]*review/u,
+    /closer review[\s\S]*preferred windows[\s\S]*before promising a time/u,
   );
-  assert.match(landing, /Questions before joining/u);
+  assert.match(landing, /Common questions/u);
   assert.match(landing, /company\.phoneE164/u);
   assert.match(landing, /company\.email/u);
   assert.match(landing, /company\.hoursSummary/u);
@@ -78,6 +79,38 @@ void test("the public landing explains access, security, service review, FAQ, an
     ).size <= 60_000,
     "the landing proof preview must stay below 60 KB",
   );
+});
+
+void test("quick and easy service stays the partner platform throughline", () => {
+  const landing = source("../components/PartnerLandingContent.tsx");
+  const login = source("../(public)/login/page.tsx");
+  const shell = source("../components/PartnerAppShell.tsx");
+  const overview = source("../(portal)/overview/page.tsx");
+  const requestPage = source("../(portal)/book/page.tsx");
+  const requestWizard = source("../components/PartnerBookingWizard.tsx");
+  const jobs = source("../(portal)/bookings/page.tsx");
+  const locations = source("../(portal)/properties/page.tsx");
+  const photos = source("../(portal)/photos/page.tsx");
+  const settings = source("../(portal)/settings/page.tsx");
+
+  assert.match(landing, /Quick and easy service for our partners\./u);
+  assert.match(login, /Request service without starting from scratch\./u);
+  assert.match(shell, /label: "Request service"/u);
+  assert.doesNotMatch(shell, /label: "Schedule job"/u);
+  assert.match(overview, /Quick and easy service/u);
+  assert.match(overview, /reuse saved details/u);
+  assert.match(requestPage, /Quick service request/u);
+  assert.match(requestPage, /Choose a saved location/u);
+  assert.match(requestWizard, /Choose location/u);
+  assert.match(requestWizard, /Check & send/u);
+  assert.match(requestWizard, /Send service request/u);
+  assert.match(jobs, /<span className="font-semibold">Next:<\/span>/u);
+  assert.match(
+    locations,
+    /Save each site[^\n]*once so future bookings are faster/u,
+  );
+  assert.match(photos, /keep the finished record easy to find/u);
+  assert.match(settings, /Set your account defaults once/u);
 });
 
 void test("the partner public shell keeps route awareness in one small client action", () => {
@@ -248,10 +281,7 @@ void test("only the public landing is indexable within partner account routes", 
   assert.match(landing, /absoluteUrl\("\/partners\/social-image"\)/u);
   assert.match(landing, /const title = "For Partners"/u);
   assert.match(rootLayout, /template: "%s \| Stonegate Partner Portal"/u);
-  assert.match(
-    socialImage,
-    /Stonegate Partner Portal — Schedule\. Coordinate\. Document\./u,
-  );
+  assert.match(socialImage, /Quick and easy service for our partners\./u);
   assert.match(socialImage, /export function GET\(\)/u);
   assert.match(socialImage, /new ImageResponse/u);
   assert.ok(
@@ -332,7 +362,14 @@ void test("raw purpose tokens never enter client props or HTML", () => {
   assert.doesNotMatch(activationPage, /\btoken=\{/u);
   assert.doesNotMatch(activationMfaPage, /\btoken=\{/u);
   assert.doesNotMatch(activationMfaPage, /"use client"/u);
-  assert.match(activationMfaPage, /PARTNER_ACTIVATION_MFA_TRANSACTION_COOKIE/u);
+  assert.match(
+    activationMfaPage,
+    /redirect\("\/partners\/login\?error=security_setup_updated"\)/u,
+  );
+  assert.doesNotMatch(
+    activationMfaPage,
+    /MFA|authenticator|transaction cookie/iu,
+  );
   assert.doesNotMatch(resetPage, /\btoken=\{/u);
   assert.match(confirmEmailPage, /PARTNER_EMAIL_CHANGE_TOKEN_COOKIE/u);
   assert.doesNotMatch(confirmEmailPage, /\btoken=\{/u);
@@ -365,10 +402,11 @@ void test("raw purpose tokens never enter client props or HTML", () => {
 
   assert.match(onboardingProxy, /bodyWithPurposeToken/u);
   assert.match(onboardingProxy, /sessionToken:\s*undefined/u);
-  assert.match(onboardingProxy, /mfa_setup_required/u);
-  assert.match(onboardingProxy, /pre_authentication_only/u);
-  assert.match(onboardingProxy, /PARTNER_ACTIVATION_MFA_TRANSACTION_COOKIE/u);
-  assert.match(onboardingProxy, /headers\.set\("Authorization"/u);
+  assert.doesNotMatch(
+    onboardingProxy,
+    /mfa_setup_required|pre_authentication_only|PARTNER_ACTIVATION_MFA_TRANSACTION_COOKIE|activation\/mfa/iu,
+  );
+  assert.doesNotMatch(onboardingProxy, /headers\.set\("Authorization"/u);
   assert.match(onboardingProxy, /deletePurposeTokenCookie/u);
   assert.equal(
     existsSync(new URL("../../../../middleware.ts", import.meta.url)),

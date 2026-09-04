@@ -542,11 +542,12 @@ export function PartnerProofWorkspace({
                 id={`proof-upload-${jobId}`}
                 className="font-semibold text-slate-950"
               >
-                Upload job photos
+                Add photos to this job
               </h3>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                JPEG, PNG, WebP, HEIC, or HEIF. Up to 10 photos per batch and 10
-                MB each.
+                Choose a category once for this batch. You can add up to 10
+                JPEG, PNG, WebP, HEIC, or HEIF photos at a time, up to 10 MB
+                each.
               </p>
             </div>
           </div>
@@ -664,7 +665,8 @@ export function PartnerProofWorkspace({
               Photo gallery
             </h3>
             <p className="mt-1 text-sm text-slate-600">
-              Private, job-linked images available to this account.
+              Every image here stays linked to this job and visible only to
+              authorized account members.
             </p>
           </div>
           <button
@@ -769,10 +771,10 @@ export function PartnerProofWorkspace({
         ) : (
           <div className="mt-4">
             <PartnerEmptyState
-              title="No photos shared for this job"
+              title="No photos have been added to this job"
               description={
                 canUpload
-                  ? "Use the upload form to add intake, before, after, completion, or issue photos."
+                  ? "Choose a category above, select the photos, and upload them to keep the job record together."
                   : "Photos will appear here when an authorized account member or Stonegate shares them."
               }
               icon={<Camera className="h-6 w-6" aria-hidden="true" />}
@@ -796,11 +798,11 @@ export function PartnerProofWorkspace({
                 id={`proof-packages-${jobId}`}
                 className="font-semibold text-slate-950"
               >
-                Proof packages &amp; sharing
+                Download or share proof
               </h3>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                Formal packages are immutable completion records. Share links
-                can expire and never expose your portal session.
+                Create one fixed completion record, then download it or send an
+                expiring link without sharing portal access.
               </p>
             </div>
           </div>
@@ -819,7 +821,7 @@ export function PartnerProofWorkspace({
               ) : (
                 <FileArchive className="h-4 w-4" aria-hidden="true" />
               )}
-              {packageBusy ? "Generating…" : "Generate package"}
+              {packageBusy ? "Creating…" : "Create proof package"}
             </button>
           ) : null}
         </div>
@@ -923,7 +925,8 @@ export function PartnerProofWorkspace({
           </ul>
         ) : (
           <p className="mt-4 text-sm leading-6 text-slate-600">
-            No formal proof package has been generated for this job yet.
+            No proof package is ready yet. Create one when the job’s required
+            photos are complete.
           </p>
         )}
         {newShareUrl ? (

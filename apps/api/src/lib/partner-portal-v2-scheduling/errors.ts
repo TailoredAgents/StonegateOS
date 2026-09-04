@@ -42,7 +42,7 @@ function defaultStatus(code: PortalV2ErrorCode): number {
     case "forbidden":
     case "account_access_required":
     case "account_inactive":
-    case "mfa_step_up_required":
+    case "recent_authentication_required":
       return 403;
     case "not_found":
       return 404;

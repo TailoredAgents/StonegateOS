@@ -21,8 +21,7 @@ void test("Partner invoice review UI is explicit, accessible, and never promises
     component,
     /It does not change\s+the invoice or initiate a refund/u,
   );
-  assert.match(component, /mfa_step_up_required/u);
-  assert.match(component, /Verify secure session/u);
+  assert.doesNotMatch(component, /mfa_step_up_required|mfa\/step-up/iu);
   assert.match(component, /sm:grid-cols-2/u);
   assert.match(component, /Load older requests/u);
   assert.match(component, /encodeURIComponent\(cursor\)/u);

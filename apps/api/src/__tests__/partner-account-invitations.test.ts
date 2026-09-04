@@ -171,9 +171,10 @@ describe("partner invitation route and persistence contract", () => {
     );
   });
 
-  it("requires capability, AAL2 guard, origin, idempotency, rate limits, ETags, and opaque tenant misses", () => {
+  it("requires capability, origin, idempotency, rate limits, ETags, and opaque tenant misses", () => {
     expect(collectionRoute).toContain('"account.members.manage"');
-    expect(collectionRoute).toContain("requireRecentPartnerMfaCapability");
+    expect(collectionRoute).toContain("requirePartnerCapability");
+    expect(collectionRoute).not.toContain("requireRecentPartnerMfaCapability");
     expect(collectionRoute).toContain("isAllowedPartnerPortalMutationOrigin");
     expect(collectionRoute).toContain("readPortalV2IdempotencyKey");
     expect(collectionRoute).toContain(
@@ -184,7 +185,8 @@ describe("partner invitation route and persistence contract", () => {
       itemRoute.lastIndexOf("readPortalV2IdempotencyKey"),
     );
     expect(itemRoute).toContain('request.headers.get("if-match")');
-    expect(itemRoute).toContain("requireRecentPartnerMfaCapability");
+    expect(itemRoute).toContain("requirePartnerCapability");
+    expect(itemRoute).not.toContain("requireRecentPartnerMfaCapability");
     expect(itemRoute).toMatch(/"not_found",\s*404/gu);
     expect(acceptRoute).toContain("isAllowedPartnerPortalMutationOrigin");
     expect(acceptRoute).toContain("readPortalV2IdempotencyKey");

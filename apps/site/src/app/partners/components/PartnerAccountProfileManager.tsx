@@ -152,15 +152,12 @@ export function PartnerAccountProfileManager({
     setBusy(null);
     if (!result?.ok) {
       const changedElsewhere = result?.response.status === 412;
-      const needsMfa = result?.error.error === "mfa_step_up_required";
       setMessage({
-        tone: changedElsewhere || needsMfa ? "warning" : "error",
+        tone: changedElsewhere ? "warning" : "error",
         text: withPortalSupportReference(
           changedElsewhere
             ? "These account settings changed elsewhere. We refreshed them; review the latest values before saving again."
-            : needsMfa
-              ? "Verify this session with MFA again, then retry this account change."
-              : (result?.error.message ??
+            : (result?.error.message ??
                 "We couldn’t save these account settings."),
           result?.error.correlationId,
         ),
@@ -176,8 +173,8 @@ export function PartnerAccountProfileManager({
       tone: "success",
       text:
         section === "organization"
-          ? "Organization and primary service contact saved."
-          : "Billing contact and booking guidance saved.",
+          ? "Company and main service contact saved."
+          : "Billing details saved for future bookings.",
     });
     router.refresh();
   }
@@ -210,12 +207,12 @@ export function PartnerAccountProfileManager({
           </div>
           <div>
             <h2 className="text-lg font-semibold text-slate-950">
-              Organization & service contact
+              Company details for smoother service
             </h2>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
-              Keep the partner-facing organization and the primary person for
-              service coordination current. These values do not grant portal
-              permissions or rewrite CRM contacts.
+              Keep your company name and main contact current so questions about
+              a job reach the right person. Updating these details does not
+              change who can access this account.
             </p>
           </div>
         </div>
@@ -325,7 +322,7 @@ export function PartnerAccountProfileManager({
                 ) : (
                   <Save className="h-4 w-4" aria-hidden="true" />
                 )}
-                {busy === "organization" ? "Saving…" : "Save organization"}
+                {busy === "organization" ? "Saving…" : "Save company details"}
               </button>
             </div>
           ) : null}
@@ -339,20 +336,21 @@ export function PartnerAccountProfileManager({
           </div>
           <div>
             <h2 className="text-lg font-semibold text-slate-950">
-              Billing contact & booking guidance
+              Billing defaults for faster booking
             </h2>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
-              Set the billing recipient, remittance address, and defaults shown
-              during job scheduling. Contract rates, terms, processor details,
-              and internal adjustments are never exposed here.
+              Save the billing recipient, address, PO default, and cost-center
+              guidance once so future bookings are quicker and more consistent.
+              These defaults do not change contracted rates, terms, or existing
+              invoices.
             </p>
           </div>
         </div>
         {!profile.permissions.canViewBilling || !billing ? (
           <PartnerNotice tone="warning" className="mt-5">
-            Billing details are limited to account administrators and
-            Billing/Approver members. No financial contact or address data is
-            shown for this role.
+            Only account administrators and Billing/Approver users can view
+            billing details. No financial contact or address data is shown for
+            your role.
           </PartnerNotice>
         ) : (
           <>

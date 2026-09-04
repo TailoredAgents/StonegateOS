@@ -103,6 +103,31 @@ function formatMoney(job: PartnerJobSummary): string | null {
   }).format(job.financial.amountMinor / 10 ** job.financial.minorUnit);
 }
 
+function nextStep(status: string): string {
+  switch (status) {
+    case "requested":
+      return "Stonegate is checking the request";
+    case "approval_needed":
+      return "An account approval is needed";
+    case "under_review":
+      return "Stonegate is reviewing the details";
+    case "confirmed":
+      return "Check the arrival window and site contact";
+    case "en_route":
+      return "Keep the on-site contact available";
+    case "in_progress":
+      return "Follow updates here";
+    case "completed":
+      return "Review proof and documents";
+    case "canceled":
+      return "No further action is required";
+    case "declined":
+      return "Review the job or contact Stonegate";
+    default:
+      return "Open the job for current details";
+  }
+}
+
 function isJobSummary(value: unknown): value is PartnerJobSummary {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -162,9 +187,9 @@ export default async function PartnerBookingsPage({
     return (
       <div className="space-y-5 sm:space-y-6">
         <PartnerPageHeader
-          eyebrow="Service workspace"
+          eyebrow="Your service requests"
           title="Jobs"
-          description="Track requests, active work, completion records, and account references."
+          description="See the status and next step for every Stonegate job in this account."
           breadcrumbs={[
             { label: "Overview", href: "/partners/overview" },
             { label: "Jobs", href: "/partners/bookings" },
@@ -204,9 +229,9 @@ export default async function PartnerBookingsPage({
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
-        eyebrow="Service workspace"
+        eyebrow="Your service requests"
         title="Jobs"
-        description="Open a job to review its request, live status, timeline, proof, documents, and billing context."
+        description="Find any job quickly, see what happens next, and keep updates, proof, and documents together."
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Jobs", href: "/partners/bookings" },
@@ -215,15 +240,14 @@ export default async function PartnerBookingsPage({
           permissions?.scheduleJobs ? (
             <Link href="/partners/book" className={partnerPrimaryButtonClass}>
               <CalendarPlus2 className="h-4 w-4" aria-hidden="true" />
-              Schedule job
+              Request service
             </Link>
           ) : undefined
         }
       >
         {params.created === "1" ? (
           <PartnerNotice tone="success">
-            Your request was sent. Open the job below to see whether it was
-            confirmed instantly or needs review.
+            Your request was sent. Its status and next step are shown below.
           </PartnerNotice>
         ) : null}
       </PartnerPageHeader>
@@ -334,13 +358,13 @@ export default async function PartnerBookingsPage({
             description={
               status || search || view !== "all" || from || to
                 ? "Try a different view, status, date range, or search term."
-                : "Schedule your first service request and it will stay organized here."
+                : "Request service and its status, updates, proof, and documents will stay organized here."
             }
             action={
               status || search || view !== "all" || from || to
                 ? { href: "/partners/bookings", label: "Clear filters" }
                 : permissions?.scheduleJobs
-                  ? { href: "/partners/book", label: "Schedule a job" }
+                  ? { href: "/partners/book", label: "Request service" }
                   : undefined
             }
             icon={<BriefcaseBusiness className="h-6 w-6" aria-hidden="true" />}
@@ -370,6 +394,10 @@ export default async function PartnerBookingsPage({
                       </div>
                       <p className="mt-1 text-sm font-medium text-slate-700">
                         {humanize(job.service.key)}
+                      </p>
+                      <p className="mt-2 text-sm text-primary-800">
+                        <span className="font-semibold">Next:</span>{" "}
+                        {nextStep(job.status)}
                       </p>
                       <div className="mt-3 flex flex-col gap-2 text-sm text-slate-600 sm:flex-row sm:flex-wrap sm:gap-x-5">
                         <span className="inline-flex items-center gap-2">
@@ -414,7 +442,7 @@ export default async function PartnerBookingsPage({
                       href={detailHref}
                       className={`${partnerSecondaryButtonClass} w-full shrink-0 sm:w-auto`}
                     >
-                      View job{" "}
+                      View details{" "}
                       <ArrowRight className="h-4 w-4" aria-hidden="true" />
                     </Link>
                   </div>

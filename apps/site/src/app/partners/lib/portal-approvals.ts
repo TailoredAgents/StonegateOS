@@ -342,9 +342,6 @@ export function approvalDecisionErrorMessage(
   error: string,
   status: number,
 ): string {
-  if (error === "mfa_step_up_required") {
-    return "Your secure session verification expired. Verify with MFA, then return and review the request again. No decision was recorded.";
-  }
   if (error === "hold_expired" || status === 410) {
     return "The approval hold expired before this decision was saved. The request now needs a new arrival window; no slot is being promised.";
   }

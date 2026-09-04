@@ -4,7 +4,6 @@ import {
   maskPartnerSmsDestination,
   normalizePartnerSmsDestination,
 } from "@/lib/partner-notification-endpoints";
-import { hasRecentPartnerNotificationEndpointMfa } from "@/lib/partner-notification-endpoint-authorization";
 
 const apiRoot = path.resolve(process.cwd());
 
@@ -93,59 +92,9 @@ describe("partner notification endpoint route security contracts", () => {
       expect(route).toContain("membershipId");
     }
     expect(endpointAuthorization).toContain('"account.security.manage"');
-    expect(endpointAuthorization).toContain('"mfa_step_up_required"');
+    expect(endpointAuthorization).not.toMatch(/mfa|aal2/iu);
     expect(collectionRoute).toContain("listPartnerNotificationEndpoints");
     expect(collectionRoute).not.toContain("phoneE164");
-  });
-
-  it("denies AAL1 or stale privileged sessions and accepts recent AAL2", () => {
-    const now = new Date("2026-09-01T15:00:00.000Z");
-    const privileged = {
-      security: { mfaRequired: true },
-      session: {
-        assuranceLevel: "aal1" as const,
-        mfaVerifiedAt: null,
-      },
-    };
-    expect(hasRecentPartnerNotificationEndpointMfa(privileged, now)).toBe(
-      false,
-    );
-    expect(
-      hasRecentPartnerNotificationEndpointMfa(
-        {
-          ...privileged,
-          session: {
-            assuranceLevel: "aal2",
-            mfaVerifiedAt: new Date("2026-09-01T14:50:00.000Z"),
-          },
-        },
-        now,
-      ),
-    ).toBe(true);
-    expect(
-      hasRecentPartnerNotificationEndpointMfa(
-        {
-          ...privileged,
-          session: {
-            assuranceLevel: "aal2",
-            mfaVerifiedAt: new Date("2026-09-01T14:44:59.999Z"),
-          },
-        },
-        now,
-      ),
-    ).toBe(false);
-    expect(
-      hasRecentPartnerNotificationEndpointMfa(
-        {
-          ...privileged,
-          session: {
-            assuranceLevel: "aal2",
-            mfaVerifiedAt: new Date("2026-09-01T15:01:00.001Z"),
-          },
-        },
-        now,
-      ),
-    ).toBe(false);
   });
 
   it.each([

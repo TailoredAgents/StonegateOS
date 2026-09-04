@@ -57,8 +57,8 @@ void test("the accepted page explains activation without claiming live access", 
 
   assert.match(page, /Invitation accepted/u);
   assert.match(page, /separate activation link/u);
-  assert.match(page, /portal access is not active/u);
-  assert.match(page, /two-step/u);
+  assert.match(page, /portal access becomes\s+active after that step/u);
+  assert.doesNotMatch(page, /MFA|two-step|authenticator|recovery code/iu);
   assert.match(page, /index: false, follow: false, nocache: true/u);
   assert.match(page, /referrer: "no-referrer"/u);
   assert.doesNotMatch(page, /rememberMe/u);

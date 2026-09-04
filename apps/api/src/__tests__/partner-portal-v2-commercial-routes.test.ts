@@ -41,7 +41,8 @@ describe("partner portal V2 commercial route guards", () => {
     expect(documentRoute).toContain(
       'requirePartnerCapability(request, "quotes.read")',
     );
-    expect(decisionRoute).toContain("requireRecentPartnerMfaCapability");
+    expect(decisionRoute).toContain("requirePartnerCapability");
+    expect(decisionRoute).not.toContain("requireRecentPartnerMfaCapability");
     expect(decisionRoute).toContain('"quotes.respond"');
     expect(decisionRoute).toContain("isAllowedPartnerPortalMutationOrigin");
     expect(decisionRoute).toContain("readPortalV2IdempotencyKey");
@@ -121,12 +122,13 @@ describe("partner portal V2 commercial route guards", () => {
     );
   });
 
-  it("requires recent MFA, origin, idempotency, ETag and approval capability", () => {
+  it("requires origin, idempotency, ETag and approval capability", () => {
     const route = source(
       "app/api/portal/v2/approval-requests/[requestId]/decision/route.ts",
     );
     expect(route).toContain('"approvals.decide"');
-    expect(route).toContain("requireRecentPartnerMfaCapability");
+    expect(route).toContain("requirePartnerCapability");
+    expect(route).not.toContain("requireRecentPartnerMfaCapability");
     expect(route).toContain("isAllowedPartnerPortalMutationOrigin");
     expect(route).toContain("readPortalV2IdempotencyKey");
     expect(route).toContain('request.headers.get("if-match")');

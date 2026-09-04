@@ -39,7 +39,7 @@ const PARTNER_ERROR_MESSAGES: Record<string, string> = {
   current_password_incorrect: "The current password is incorrect.",
   password_reused: "Choose a password you are not already using.",
   recent_authentication_required:
-    "For your security, sign in again and complete multi-factor verification if required.",
+    "For your security, sign in again before making this change.",
   rate_limited:
     "Too many attempts were made. Wait a few minutes and try again.",
   logout_failed:
@@ -211,7 +211,7 @@ export function PartnerEmptyState({
 
 export function PartnerErrorState({
   title = "We couldn’t load this page",
-  description = "Your information is safe. Try again, or contact Stonegate if the problem continues.",
+  description = "Try again, or contact Stonegate if the problem continues.",
   retryHref,
 }: {
   title?: string;

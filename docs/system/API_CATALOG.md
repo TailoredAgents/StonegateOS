@@ -41,7 +41,20 @@ operational selected account, and an active account membership resolved by
 `partner-account-authorization.ts`. CRM contacts are downstream operational
 projections, not authentication or tenant authority. Public verification,
 activation, invitation, and reset endpoints consume purpose-bound credentials;
-routine login is email/password with TOTP step-up where required.
+routine login is email/password and creates a password-authenticated Partner
+session directly. There are no Team or Partner MFA runtime gates, UI flows, or
+API routes in this release.
+
+The expand-only pre-deploy phase leaves legacy MFA schema and historical
+method/recovery/enrollment/flag records in place so old and new releases can
+coexist during the rolling deployment. They are not consulted when creating or
+authorizing Team or Partner sessions. Normal runtime safety may consume stale
+pre-session transactions or login tokens and revoke retired session types, as
+described below. Once password-only activation is live or creates a user/session,
+the mandatory-MFA application is not a rollback target; recovery contains the
+new runtime with feature flags or maintenance/read-only mode and ships a forward
+fix. Bulk cleanup is deferred to a later contract migration after deployment
+verification.
 
 Partner product telemetry is accepted through the existing public web-event
 ingest, but the server independently recognizes every `/partners` surface and
@@ -60,34 +73,37 @@ carry a support correlation ID. The endpoint never returns sessions, visits,
 account/job IDs, addresses, notes, filenames, contacts, PO values, or billing
 data.
 
-Password authentication uses `POST /api/public/partners/login-password`. For
-an MFA-required or already-enrolled identity, its `202 mfa_required` response
-contains a five-minute pre-authentication bearer for the trusted Site adapter,
-not a partner session. The adapter stores it only in a Secure, HttpOnly,
-SameSite=Lax cookie and completes TOTP or single-use recovery verification via
-`POST /api/public/partners/login-password/mfa`. Only that successful atomic
-exchange returns an AAL2 partner session; the bearer is never accepted by
-Portal V1/V2 session gates.
+Password authentication uses `POST /api/public/partners/login-password`. It
+accepts a bounded email/password request plus an optional `rememberMe` flag,
+uses neutral invalid-credential responses and rate limiting, and returns a
+Partner session only after an eligible identity and account
+membership have been verified. A successful password login consumes stale
+pre-session authentication transactions and outstanding routine-login links
+for that identity and revokes sessions created by retired authentication
+methods before issuing the new password session. The HTTP 200 response has
+`status: authenticated`; there is no follow-up login endpoint or
+pre-authentication bearer.
 
 Sign-in-email changes use
 `POST /api/portal/v2/security/email-change/request` from an authenticated,
-recently assured settings session and
+selected-account settings session. The route requires `portal.session.read`,
+same-origin validation, an `Idempotency-Key`, enabled purpose-token and V2-write
+flags, rate limiting, and either a recent password session or current-password
+confirmation when the session is older. It pairs with
 `POST /api/portal/v2/onboarding/email-change/confirm` with the new mailbox's
 one-use 30-minute credential. Confirmation rotates the identity security
 version, revokes all sessions and outstanding credentials, changes no CRM
 record, and returns no login session.
 
-Privileged activation uses the same containment boundary. After
-`POST /api/portal/v2/onboarding/activation/complete` verifies the password, its
-`202 mfa_setup_required` response contains only a ten-minute setup bearer for
-the trusted Site adapter. The adapter stores it in a Secure, HttpOnly,
-SameSite=Lax cookie. It calls
-`POST /api/portal/v2/onboarding/activation/mfa/enrollment` to start a
-transaction-bound TOTP enrollment (or discover an existing method), then
-`POST /api/portal/v2/onboarding/activation/mfa/confirm` to verify TOTP or an
-existing recovery code. Only confirmation atomically activates the target
-identity/membership and returns an AAL2 session. Setup bearers are not accepted
-by portal session middleware and never appear in browser URLs or client props.
+Activation uses the same purpose-bound containment model.
+`POST /api/portal/v2/onboarding/activation/complete` requires the one-use
+activation credential, same-origin validation, `Idempotency-Key`, the enabled
+purpose-token flag, a bounded matching password pair, and activation rate
+limits. It atomically validates the identity/account/membership binding,
+activates an eligible invited membership and identity, consumes the activation
+credential and superseded credentials, and returns the password-authenticated
+Partner session with `nextAction: portal_ready`. There is no follow-on
+authentication-setup endpoint.
 
 Post-activation setup uses `GET /api/portal/v2/onboarding-checklist` and
 `PATCH /api/portal/v2/onboarding-checklist`. The checklist is selected-account and
@@ -121,9 +137,9 @@ payment-provider identifiers, staff notes, or internal commercial terms.
 `PATCH` is account-wide only, same-origin checked, strictly bounded, and
 requires the exact current `If-Match`. Organization and service-contact fields
 require `account.update`; billing fields require `commercial.edit`; a mixed
-request requires both. An MFA-required membership must have satisfied MFA.
-That verification must be AAL2 and no more than 15 minutes old. The account row
-is locked, its independent profile revision is incremented,
+request requires both. The selected identity, account, and active membership
+must remain eligible, and V2 writes must be enabled for the account. The account
+row is locked, its independent profile revision is incremented,
 and the field-section change receipt is audited in the same transaction. This
 profile is booking guidance and correspondence data, not an authorization,
 pricing, invoice, or provider-readiness source.
@@ -131,9 +147,10 @@ pricing, invoice, or provider-readiness source.
 Account-specific Partner scheduling limits are persisted in
 `partner_account_scheduling_policies` and managed through
 `PATCH /api/admin/partner-management/v1/accounts/[accountId]/scheduling-policy`.
-The Team mutation requires `partners.accounts.manage`, recent Team assurance,
-same-origin validation, `Idempotency-Key`, the exact integer-revision
-`If-Match`, a bounded reason, and the exact typed confirmation. It serializes
+The Team mutation requires `partners.accounts.manage`, a human Team session
+whose sign-in is no more than 15 minutes old, same-origin validation,
+`Idempotency-Key`, the exact integer-revision `If-Match`, a bounded reason, and
+the exact typed confirmation. It serializes
 with the global scheduling advisory lock and commits the compare-and-swap
 update, audit receipt, and idempotency receipt atomically. Effective Partner
 policy is always `max(global notice, account notice)`, `max(global local-day
@@ -149,10 +166,11 @@ principal with `bookings.create` may read the safe, current terms through
 includes a strong account/revision-bound `ETag`. Staff manage the record with
 `PATCH /api/admin/partner-management/v1/accounts/[accountId]/cancellation-policy`.
 
-That Team mutation requires `partners.accounts.manage`, recent Team assurance,
-same-origin validation, `Idempotency-Key`, exact revision `If-Match`, a bounded
-reason, and typed confirmation. Its compare-and-swap update, audit receipt, and
-idempotency receipt commit together while holding the global scheduling lock.
+That Team mutation requires `partners.accounts.manage`, a human Team session
+whose sign-in is no more than 15 minutes old, same-origin validation,
+`Idempotency-Key`, exact revision `If-Match`, a bounded reason, and typed
+confirmation. Its compare-and-swap update, audit receipt, and idempotency
+receipt commit together while holding the global scheduling lock.
 
 Effective notice uses `max(Stonegate notice, account notice)` and direct
 self-service eligibility uses `Stonegate direct && account direct`; an account
@@ -192,9 +210,10 @@ authenticated, audited, and purpose-confirmed.
 
 Canonical Partner commercial terms use
 `GET/PATCH /api/admin/partner-management/v1/accounts/[accountId]/service-agreement`.
-The Staff mutation requires `partners.commercial.manage`, recent Team MFA,
-same-origin/CSRF validation, `Idempotency-Key`, strong `If-Match`, and a
-bounded, duplicate-free service-entitlement body. `GET
+The Staff mutation requires `partners.commercial.manage`, a human Team session
+whose sign-in is no more than 15 minutes old, same-origin/CSRF validation,
+`Idempotency-Key`, strong `If-Match`, and a bounded, duplicate-free
+service-entitlement body. `GET
 /api/portal/v2/service-catalog` returns only services in the selected
 account's active, effective agreement and includes the safe currency,
 effective period, inclusions, exclusions, quote rules, and pricing state.
@@ -215,9 +234,10 @@ Staff use `GET /api/admin/partner-management/v1/cancellation-requests`,
 `GET /api/admin/partner-management/v1/cancellation-requests/[requestId]`, and
 `POST /api/admin/partner-management/v1/cancellation-requests/[requestId]/decision`.
 Reads require `partners.cancellation_requests.read`. A decision requires
-`partners.cancellation_requests.decide`, recent Team MFA, same-origin/CSRF
-validation, `Idempotency-Key`, exact integer `If-Match`, a bounded reason, and
-the decision-specific typed confirmation. Approval atomically cancels the
+`partners.cancellation_requests.decide`, a human Team session whose sign-in is
+no more than 15 minutes old, same-origin/CSRF validation, `Idempotency-Key`,
+exact integer `If-Match`, a bounded reason, and the decision-specific typed
+confirmation. Approval atomically cancels the
 still-eligible appointment/job and supersedes both a pending reschedule and a
 pending Partner job-change request; decline leaves the schedule intact and
 clears the Partner-facing pending marker. The request CAS, public timeline
@@ -228,9 +248,10 @@ Partner invoice questions, disputes, and refund-review intake use
 `GET/POST /api/portal/v2/invoices/[invoiceId]/dispute-requests`. The resource
 first applies the canonical selected-account invoice-access predicate, so
 foreign or out-of-scope invoices return opaque `404` before any request or
-thread is exposed. `POST` requires `invoices.disputes.request`, Partner MFA
-verified within 15 minutes, same-origin validation, `Idempotency-Key`, the
-current invoice `If-Match`, and a bounded duplicate-key-rejecting body. The
+thread is exposed. `POST` requires a current selected-account Partner session,
+`invoices.disputes.request`, same-origin validation, enabled V2 writes,
+`Idempotency-Key`, the current invoice `If-Match`, and a bounded
+duplicate-key-rejecting body. The
 cursor-paginated history creates one immutable pending request per
 account/invoice and always links it to a deterministic, account-bound financial
 billing thread. A related job remains immutable request linkage only; billing
@@ -241,9 +262,10 @@ Staff use `GET /api/admin/partner-management/v1/billing-disputes`,
 `GET /api/admin/partner-management/v1/billing-disputes/[requestId]`, and
 `POST /api/admin/partner-management/v1/billing-disputes/[requestId]/decision`.
 Reads require `partners.billing_disputes.read`; decisions require the
-Commercial Manager/Team Owner `partners.billing_disputes.decide` permission,
-recent Team MFA, same-origin/CSRF validation, idempotency, exact revision CAS,
-a bounded explanation, and outcome-specific typed confirmation. The immutable
+Commercial Manager/Team Owner `partners.billing_disputes.decide` permission, a
+human Team session whose sign-in is no more than 15 minutes old,
+same-origin/CSRF validation, idempotency, exact revision CAS, a bounded
+explanation, and outcome-specific typed confirmation. The immutable
 outcomes are information provided, adjustment required, refund review, or
 declined. They classify the next controlled workflow only: no automatic
 adjustment or refund is issued. Requested/resolved delivery uses the durable
@@ -265,10 +287,10 @@ with migration `0152_partner_job_change_requests`:
   When Staff selects `change_order_required`, the decision must bind one exact,
   current, issued, unexpired, fixed-price Quote V2 for that same account and
   job. The immutable offer is exposed in the safe job/quote DTOs.
-- `PATCH /api/portal/v2/jobs/[jobId]/references` requires `commercial.edit`
-  and Partner MFA verified within the previous 15 minutes. It accepts only PO
-  number, cost center, and project/reference fields, plus same-origin,
-  idempotency, and strong `If-Match` guards. It updates the account-owned
+- `PATCH /api/portal/v2/jobs/[jobId]/references` requires a current
+  selected-account Partner session and `commercial.edit`. It accepts only PO
+  number, cost center, and project/reference fields, plus enabled V2 writes,
+  same-origin, idempotency, and strong `If-Match` guards. It updates the account-owned
   booking revision, public timeline, audit, and outbox atomically. It cannot
   change price, invoices, scope, service, schedule, or proof.
 
@@ -287,9 +309,10 @@ Staff manage job changes with
 `GET /api/admin/partner-management/v1/change-requests/[requestId]`, and
 `POST /api/admin/partner-management/v1/change-requests/[requestId]/decision`.
 Reads require `partners.change_requests.read`; decisions require
-`partners.change_requests.decide`, recent Team MFA, same-origin/CSRF
-validation, `Idempotency-Key`, exact integer `If-Match`, a bounded reason, and
-the outcome-specific typed confirmation. Approval may apply only the validated
+`partners.change_requests.decide`, a human Team session whose sign-in is no
+more than 15 minutes old, same-origin/CSRF validation, `Idempotency-Key`, exact
+integer `If-Match`, a bounded reason, and the outcome-specific typed
+confirmation. Approval may apply only the validated
 public description/instruction/access/contact fields when their immutable
 snapshot still matches. A declared or Staff-discovered material impact must
 resolve as `change_order_required`, which changes no job field. Approval,
@@ -360,9 +383,10 @@ online response is possible.
     private/no-store, uses a sanitized attachment filename, and records the
     canonical quote/version download evidence.
 - `POST /api/portal/v2/quotes/[partnerQuoteId]/decision`
-  - Requires `quotes.respond`, AAL2 Partner MFA verified in the previous 15
-    minutes, same-origin validation, `Idempotency-Key`, the exact strong
-    `If-Match`, and a duplicate-key-rejecting body no larger than 8 KiB.
+  - Requires a current selected-account Partner session, `quotes.respond`,
+    enabled V2 writes, same-origin validation, rate limiting,
+    `Idempotency-Key`, the exact strong `If-Match`, and a
+    duplicate-key-rejecting body no larger than 8 KiB.
     Acceptance requires explicit signer authority, consent to the exact
     proposal version, valid option selections, intact issued-PDF evidence, and
     any account approval for the same target, currency, and exact accepted
@@ -391,17 +415,19 @@ or forged context fails closed instead of creating an unbound Partner quote.
     `expired`, and `revoked` filters plus bounded person/company/device search.
   - Optional filters: `accountId` and `userId`. Cursors are bound to the full
     filter set.
-  - Returns identity, selected-account, membership, role, device label,
-    assurance, and lifecycle timestamps. It never returns the session hash,
-    bearer credential, security version, IP address, or raw user-agent string.
+  - Returns identity, selected-account, membership, role, authentication
+    method, device label, and lifecycle timestamps. It never returns the
+    session hash, bearer credential, security version, IP address, or raw
+    user-agent string.
 
 - `POST /api/admin/partner-management/v1/security/sessions/[sessionId]/revoke`
   - Permission: `partners.security.sessions.revoke`.
   - Purpose: revoke exactly one active Partner session. It does not suspend a
     membership or disable the global identity.
-  - Requires recent Team TOTP assurance and sign-in, same-origin validation,
-    `Idempotency-Key`, `If-Match`, an account/user/membership-bound target,
-    a bounded reason, and the exact `REVOKE PARTNER SESSION` confirmation.
+  - Requires a human Team session whose sign-in is no more than 15 minutes old,
+    same-origin validation, `Idempotency-Key`, `If-Match`, an
+    account/user/membership-bound target, a bounded reason, and the exact
+    `REVOKE PARTNER SESSION` confirmation.
   - The session change, success audit receipt, and idempotency receipt commit
     atomically. A stale session revision returns `412` and requires refresh.
 
@@ -409,38 +435,23 @@ or forged context fails closed instead of creating an unbound Partner quote.
   - Owner-only permission: `partners.identities.disable`.
   - Purpose: load the bounded, safe impact review required before a global
     identity action. It enumerates every account membership (maximum 250),
-    identity/MFA posture, active-session count, and a membership snapshot.
-  - It returns no credential, TOTP secret, recovery-code digest, session hash,
-    provider payload, network fingerprint, job detail, or financial detail. If
-    the complete membership set cannot be enumerated, both global mutations
-    fail closed.
+    identity/password status, active-session count, and a membership snapshot.
+  - It returns no credential, dormant legacy authenticator/recovery material,
+    session hash, provider payload, network fingerprint, job detail, or
+    financial detail. If the complete membership set cannot be enumerated, the
+    global mutation fails closed.
 
 - `POST /api/admin/partner-management/v1/security/identities/[userId]/disable`
   - Owner-only permission: `partners.identities.disable`.
   - Purpose: disable one global partner identity across all of its companies.
-  - Requires recent Team TOTP, same-origin validation, `Idempotency-Key`, the
-    exact identity `If-Match`, the reviewed membership snapshot, a 20–1000
-    character reason, and `DISABLE [email]` typed exactly.
+  - Requires a human Team session whose sign-in is no more than 15 minutes old,
+    same-origin validation, `Idempotency-Key`, the exact identity `If-Match`,
+    the reviewed membership snapshot, a 20–1000 character reason, and the
+    exact typed confirmation `DISABLE [email]`.
   - Atomically sets the identity to `disabled`, increments its security
     version, revokes every partner session and pending credential, and records
     the audit/idempotency receipts. Account memberships remain unchanged, and
     account, job, document, payment, and financial records are preserved.
-
-- `POST /api/admin/partner-management/v1/security/identities/[userId]/mfa/reset`
-  - Owner-only permission: `partners.security.mfa.reset`.
-  - Purpose: revoke all MFA authenticators/recovery codes and require secure
-    re-enrollment without suspending or activating any membership.
-  - Requires recent Team TOTP, same-origin validation, `Idempotency-Key`, the
-    exact identity `If-Match`, membership snapshot, reason, and
-    `RESET [email] MFA` typed exactly. The identity must remain active, have an
-    existing password, and have an active portal-enabled recovery membership.
-  - Atomically revokes sessions and pending credentials, clears stored
-    authenticator secret/reference material, invalidates recovery codes,
-    increments the security version, and queues a one-use purpose-bound
-    activation challenge. No raw token is returned. The activation path first
-    verifies the existing password, then requires transaction-bound TOTP
-    enrollment before it creates an AAL2 session. Repeating a pending recovery
-    revokes the earlier link and queues a new security-version-bound challenge.
 
 - `GET /api/admin/partner-management/v1/quarantine`
   - Permission: `partners.quarantine.read`.
@@ -458,9 +469,10 @@ or forged context fails closed instead of creating an unbound Partner quote.
   - Owner-only permission: `partners.quarantine.release`.
   - Purpose: record conclusive provider evidence for an unresolved legacy
     invitation/access-link delivery and release its duplicate-send guard.
-  - Requires recent Team TOTP and sign-in, `Idempotency-Key`, `If-Match`, every
-    requested channel, evidence type, provider IDs for a confirmed send, a
-    bounded reason, and an outcome-specific typed confirmation.
+  - Requires a human Team session whose sign-in is no more than 15 minutes old,
+    same-origin validation, `Idempotency-Key`, `If-Match`, every requested
+    channel, evidence type, provider IDs for a confirmed send, a bounded
+    reason, and an outcome-specific typed confirmation.
   - The endpoint never calls or retries a provider. It preserves original
     provider evidence and atomically commits the resolution, audit, and
     idempotency receipt. Confirmed non-send also invalidates unused legacy
@@ -499,11 +511,12 @@ or forged context fails closed instead of creating an unbound Partner quote.
   - Permission: `partners.commercial.manage`.
   - Purpose: create one canonical account approval rule. All matching active
     rules apply and no more than 50 may be active for an account.
-  - Requires a human Team principal, recent financial-grade Team assurance,
-    same-origin validation, `Idempotency-Key`, a duplicate-key-rejecting body
-    no larger than 16 KiB, a 12–1000 character operational reason, and exact
-    `CREATE APPROVAL RULE` confirmation. The account lock, Team provenance,
-    success audit, and replay receipt commit atomically.
+  - Requires a human Team principal with a session whose sign-in is no more
+    than 15 minutes old, same-origin validation, `Idempotency-Key`, a
+    duplicate-key-rejecting body no larger than 16 KiB, a 12–1000 character
+    operational reason, and exact `CREATE APPROVAL RULE` confirmation. The
+    account lock, Team provenance, success audit, and replay receipt commit
+    atomically.
 
 - `GET /api/admin/partner-management/v1/accounts/[accountId]/approval-rules/[ruleId]`
   - Permission: `partners.commercial.read`.

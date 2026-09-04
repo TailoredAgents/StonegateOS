@@ -27,13 +27,6 @@ export async function GET(request: NextRequest): Promise<Response> {
     );
   }
   const { principal } = authorization;
-  if (principal.session.assuranceLevel !== "aal2") {
-    return createPartnerPortalV2ErrorResponse(
-      "mfa_step_up_required",
-      403,
-      correlationId,
-    );
-  }
   if (!principal.accountId || !principal.membershipId) {
     return createPartnerPortalV2ErrorResponse(
       "legacy_scope_unavailable",

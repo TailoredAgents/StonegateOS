@@ -9,10 +9,6 @@ export type VerifiedRequestActor = {
   authMethod: "team_session" | "break_glass" | "service";
   /** Server-derived session creation time; never accepted from actor headers. */
   authenticatedAt?: string | null;
-  /** Server-derived session assurance; never accepted from actor headers. */
-  assuranceLevel?: "aal1" | "aal2" | null;
-  /** Server-derived latest successful Team MFA verification time. */
-  mfaVerifiedAt?: string | null;
 };
 
 const verifiedActors = new WeakMap<object, VerifiedRequestActor>();

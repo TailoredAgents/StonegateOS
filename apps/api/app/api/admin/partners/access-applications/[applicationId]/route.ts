@@ -71,12 +71,7 @@ type ApplicationDecisionData = {
     reviewedAt: string;
   };
   access: {
-    state:
-      | "limited"
-      | "activation_required"
-      | "privileged_activation_required"
-      | "administrator_mfa_required"
-      | "disabled";
+    state: "limited" | "activation_required" | "disabled";
     roleKey: "applicant" | "admin" | PartnerLaunchRoleKey | null;
   };
 };
@@ -268,20 +263,20 @@ async function queueAccessDecisionNotifications(input: {
     input.status === "approved"
       ? {
           title: "Partner access approved",
-          body: `Stonegate approved your company workspace for ${companyName}. Complete account activation before signing in.`,
-          subject: "Your Stonegate Partner Portal access was approved",
+          body: `Your partner access for ${companyName} is approved. Finish setup before signing in.`,
+          subject: "Your Stonegate partner access is approved",
         }
       : input.status === "declined"
         ? {
-            title: "Partner access application declined",
-            body: `Stonegate could not approve the Partner Portal application for ${companyName}. The limited workspace is no longer active.`,
-            subject: "Update on your Stonegate Partner Portal application",
+            title: "Partner access request declined",
+            body: `Stonegate could not approve the partner access request for ${companyName}.`,
+            subject: "Update on your Stonegate partner access request",
           }
         : {
             title: "More information needed",
-            body: `Stonegate needs more information before deciding the Partner Portal application for ${companyName}.${informationRequest ? ` Requested: ${informationRequest}` : ""}`,
+            body: `Stonegate needs more information to continue the partner access request for ${companyName}.${informationRequest ? ` Requested: ${informationRequest}` : ""}`,
             subject:
-              "More information is needed for your Partner Portal application",
+              "More information is needed for your partner access request",
           };
   const { id, operationHash } = accessNotificationId(input);
   const inAppAccessible =
@@ -490,7 +485,6 @@ async function loadGeneratedTenantContext(
       id: partnerUsers.id,
       email: partnerUsers.email,
       active: partnerUsers.active,
-      mfaRequired: partnerUsers.mfaRequired,
       orgContactId: partnerUsers.orgContactId,
     })
     .from(partnerUsers)
@@ -759,11 +753,7 @@ async function applyDecision(
         );
       }
       access = {
-        state:
-          provisioned.roleKey === "administrator" ||
-          provisioned.roleKey === "billing_approver"
-            ? "privileged_activation_required"
-            : "activation_required",
+        state: "activation_required",
         roleKey: provisioned.roleKey,
       };
     } else {
@@ -873,7 +863,7 @@ async function applyDecision(
         .returning({ id: partnerAccountMemberships.id });
       const [userUpdated] = await tx
         .update(partnerUsers)
-        .set({ mfaRequired: true, updatedAt: now })
+        .set({ updatedAt: now })
         .where(
           and(
             eq(partnerUsers.id, tenant.user.id),
@@ -918,7 +908,7 @@ async function applyDecision(
           { retryable: true },
         );
       }
-      access = { state: "administrator_mfa_required", roleKey: "admin" };
+      access = { state: "activation_required", roleKey: "admin" };
     } else {
       const [accountUpdated] = await tx
         .update(partnerAccounts)
@@ -1075,11 +1065,6 @@ async function applyDecision(
         decision.action === "approve" && application.flowVersion === 2
           ? decision.costCenterIds.length
           : 0,
-      mfaRequired:
-        decision.action === "approve"
-          ? access.state === "privileged_activation_required" ||
-            access.state === "administrator_mfa_required"
-          : null,
     },
     metadata: {
       decision: decision.action,

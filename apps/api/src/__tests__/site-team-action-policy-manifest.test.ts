@@ -122,7 +122,6 @@ const DESTRUCTIVE_ACTIONS = new Set([
   "partnerMembershipRoleAction",
   "partnerMembershipScopeAction",
   "partnerIdentityDisableAction",
-  "partnerMfaResetAction",
   "partnerSecuritySessionRevokeAction",
   "partnerQuarantineResolveAction",
   "resetSalesHqAction",
@@ -290,7 +289,6 @@ describe("Site Team server action policy manifest", () => {
       partnerAccountDomainRevokeAction: ["partners.domains.revoke"],
       partnerSecuritySessionRevokeAction: ["partners.security.sessions.revoke"],
       partnerIdentityDisableAction: ["partners.identities.disable"],
-      partnerMfaResetAction: ["partners.security.mfa.reset"],
       partnerQuarantineResolveAction: ["partners.quarantine.release"],
     } as const;
 
@@ -346,8 +344,10 @@ describe("Site Team server action policy manifest", () => {
         ],
         risk: "destructive",
         requiresIdempotency: true,
-        maxAuthenticationAgeSeconds: 15 * 60,
       }),
     );
+    expect(
+      TEAM_SERVER_ACTION_POLICIES.updateApptStatus.maxAuthenticationAgeSeconds,
+    ).toBeUndefined();
   });
 });

@@ -6,14 +6,10 @@ import {
   BellRing,
   Building2,
   Check,
-  KeyRound,
   Laptop,
   LoaderCircle,
   LogOut,
   RefreshCw,
-  ShieldAlert,
-  ShieldCheck,
-  Smartphone,
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
 import {
@@ -46,31 +42,11 @@ export type PartnerSettingsAccount = {
   defaultAccount: boolean;
 };
 
-export type PartnerSettingsMfa = {
-  security: {
-    required: boolean;
-    enrolled: boolean;
-    satisfied: boolean;
-    assuranceLevel: string;
-    verifiedAt: string | null;
-  };
-  methods: Array<{
-    id: string;
-    type: "totp" | "webauthn";
-    label: string | null;
-    enrolledAt: string;
-    lastUsedAt: string | null;
-    recoveryCodesRemaining: number;
-  }>;
-};
-
 export type PartnerSettingsSession = {
   handle: string;
   current: boolean;
-  status: "active" | "expired" | "revoked";
+  status: "active" | "expired" | "revoked" | "retired";
   authMethod: string;
-  assuranceLevel: string;
-  mfaVerifiedAt: string | null;
   deviceName: string | null;
   userAgent: string | null;
   createdAt: string;
@@ -89,13 +65,6 @@ export type PartnerSettingsPreference = {
   quietHoursEnd: string | null;
   timezone: string;
   etag: string;
-};
-
-type Enrollment = {
-  challengeId: string;
-  secret: string;
-  otpauthUri: string;
-  expiresAt: string;
 };
 
 const EVENT_LABELS: Record<string, { title: string; description: string }> = {
@@ -137,7 +106,7 @@ const EVENT_LABELS: Record<string, { title: string; description: string }> = {
   },
   account_access: {
     title: "Account access",
-    description: "Company join-request and workspace-access decisions.",
+    description: "New teammate and company-access decisions.",
   },
 };
 
@@ -150,11 +119,6 @@ function dateLabel(value: string | null): string {
     timeStyle: "short",
     timeZone: "America/New_York",
   }).format(date);
-}
-
-function formString(form: FormData, name: string, fallback = ""): string {
-  const value = form.get(name);
-  return typeof value === "string" ? value.trim() : fallback;
 }
 
 function sessionLabel(session: PartnerSettingsSession): string {
@@ -237,11 +201,11 @@ function AccountSwitcher({ accounts }: { accounts: PartnerSettingsAccount[] }) {
         </div>
         <div>
           <h2 className="text-lg font-semibold text-slate-950">
-            Working account
+            Choose your company
           </h2>
           <p className="mt-1 text-sm leading-6 text-slate-600">
-            Jobs, locations, billing, and preferences are scoped to the selected
-            account.
+            Pick the company you want to work with now. Its jobs, locations,
+            billing, and preferences stay separate from every other company.
           </p>
         </div>
       </div>
@@ -311,473 +275,14 @@ function AccountSwitcher({ accounts }: { accounts: PartnerSettingsAccount[] }) {
             ) : (
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
             )}
-            {busy ? "Applying…" : "Apply account"}
+            {busy ? "Switching…" : "Switch account"}
           </button>
         </div>
       ) : (
         <PartnerNotice tone="warning" className="mt-5">
-          No approved account memberships are available for this sign-in.
+          No approved company accounts are available for this sign-in.
         </PartnerNotice>
       )}
-    </PartnerPanel>
-  );
-}
-
-function MfaManager({ initial }: { initial: PartnerSettingsMfa | null }) {
-  const [mfa, setMfa] = React.useState(initial);
-  const [enrollment, setEnrollment] = React.useState<Enrollment | null>(null);
-  const [recoveryCodes, setRecoveryCodes] = React.useState<string[]>([]);
-  const [busy, setBusy] = React.useState(false);
-  const [showStepUp, setShowStepUp] = React.useState(false);
-  const [message, setMessage] = React.useState<{
-    tone: "success" | "error" | "info";
-    text: string;
-  } | null>(null);
-
-  const refreshMfa = React.useCallback(async (): Promise<void> => {
-    const result = await partnerPortalFetch<PartnerSettingsMfa & { ok: true }>(
-      "mfa",
-    ).catch(() => null);
-    if (result?.ok) setMfa(result.data);
-  }, []);
-
-  async function beginEnrollment(): Promise<void> {
-    setBusy(true);
-    setMessage(null);
-    setRecoveryCodes([]);
-    setShowStepUp(false);
-    const result = await partnerPortalFetch<{
-      ok: true;
-      enrollment: Enrollment;
-    }>("mfa/totp/enrollment", {
-      method: "POST",
-      body: JSON.stringify({}),
-    }).catch(() => null);
-    setBusy(false);
-    if (!result?.ok) {
-      setMessage({
-        tone: "error",
-        text: withPortalSupportReference(
-          result?.error.error === "mfa_step_up_required"
-            ? "Verify your existing authenticator before replacing it."
-            : (result?.error.message ??
-                "We couldn’t start authenticator setup."),
-          result?.error.correlationId,
-        ),
-      });
-      return;
-    }
-    setEnrollment(result.data.enrollment);
-    setMessage({
-      tone: "info",
-      text: "Add the secret to your authenticator, then enter its current six-digit code.",
-    });
-  }
-
-  async function confirmEnrollment(
-    event: React.FormEvent<HTMLFormElement>,
-  ): Promise<void> {
-    event.preventDefault();
-    if (!enrollment) return;
-    const form = new FormData(event.currentTarget);
-    const code = formString(form, "code");
-    const label = formString(form, "label");
-    setBusy(true);
-    setMessage(null);
-    const result = await partnerPortalFetch<{
-      ok: true;
-      enrollment: {
-        methodId: string;
-        verifiedAt: string;
-        recoveryCodes: string[];
-        displayOnce: true;
-      };
-    }>(
-      `mfa/totp/enrollment/${encodeURIComponent(enrollment.challengeId)}/confirm`,
-      {
-        method: "POST",
-        body: JSON.stringify({ code, ...(label ? { label } : {}) }),
-      },
-    ).catch(() => null);
-    setBusy(false);
-    if (!result?.ok) {
-      setMessage({
-        tone: "error",
-        text: withPortalSupportReference(
-          result?.error.error === "invalid_fields"
-            ? "That code was not accepted. Enter the current code from your authenticator."
-            : (result?.error.message ??
-                "We couldn’t verify the authenticator."),
-          result?.error.correlationId,
-        ),
-      });
-      return;
-    }
-    setRecoveryCodes(result.data.enrollment.recoveryCodes);
-    setEnrollment(null);
-    setMessage({
-      tone: "success",
-      text: "Authenticator verification is active. Save the recovery codes below now.",
-    });
-    await refreshMfa();
-    window.dispatchEvent(new Event("partner-session-security-changed"));
-  }
-
-  async function stepUp(
-    event: React.FormEvent<HTMLFormElement>,
-  ): Promise<void> {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const method = formString(form, "verificationMethod", "totp");
-    const raw = formString(form, "verification");
-    setBusy(true);
-    setMessage(null);
-    const result = await partnerPortalFetch<{
-      ok: true;
-      session: {
-        assuranceLevel: "aal2";
-        verifiedAt: string;
-        recoveryCodeUsed: boolean;
-      };
-    }>("mfa/step-up", {
-      method: "POST",
-      body: JSON.stringify(
-        method === "recovery" ? { recoveryCode: raw } : { code: raw },
-      ),
-    }).catch(() => null);
-    setBusy(false);
-    if (!result?.ok) {
-      setMessage({
-        tone: "error",
-        text: withPortalSupportReference(
-          result?.error.error === "invalid_fields"
-            ? "That verification value was not accepted. Check it and try again."
-            : (result?.error.message ?? "We couldn’t verify this session."),
-          result?.error.correlationId,
-        ),
-      });
-      return;
-    }
-    formElement.reset();
-    setShowStepUp(false);
-    setMessage({
-      tone: "success",
-      text: result.data.session.recoveryCodeUsed
-        ? "Session verified. That recovery code has been permanently used."
-        : "Session verified. Protected account actions are now available.",
-    });
-    await refreshMfa();
-    window.dispatchEvent(new Event("partner-session-security-changed"));
-  }
-
-  const security = mfa?.security;
-  return (
-    <PartnerPanel id="two-step-verification" className="scroll-mt-24">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <div
-            className={cn(
-              "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1",
-              security?.enrolled
-                ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                : "bg-amber-50 text-amber-800 ring-amber-200",
-            )}
-          >
-            {security?.enrolled ? (
-              <ShieldCheck className="h-5 w-5" aria-hidden="true" />
-            ) : (
-              <ShieldAlert className="h-5 w-5" aria-hidden="true" />
-            )}
-          </div>
-          <div>
-            <h2 className="text-lg font-semibold text-slate-950">
-              Two-step verification
-            </h2>
-            <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
-              An authenticator protects account administration, approvals, and
-              billing actions.
-            </p>
-          </div>
-        </div>
-        {security ? (
-          <span
-            className={cn(
-              "rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset",
-              security.satisfied
-                ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
-                : security.enrolled
-                  ? "bg-amber-50 text-amber-900 ring-amber-200"
-                  : "bg-slate-100 text-slate-700 ring-slate-200",
-            )}
-          >
-            {security.satisfied
-              ? "Verified this session"
-              : security.enrolled
-                ? "Verification needed"
-                : security.required
-                  ? "Setup required"
-                  : "Not enabled"}
-          </span>
-        ) : null}
-      </div>
-
-      {message ? (
-        <PartnerNotice tone={message.tone} className="mt-5">
-          {message.text}
-        </PartnerNotice>
-      ) : null}
-
-      {!mfa ? (
-        <PartnerNotice tone="warning" className="mt-5">
-          Two-step verification status is temporarily unavailable. Your security
-          settings are unchanged.
-        </PartnerNotice>
-      ) : null}
-
-      {security?.required && !security.enrolled ? (
-        <PartnerNotice tone="warning" className="mt-5">
-          Your role requires two-step verification. Set it up before using
-          protected scheduling, approval, billing, or member-management actions.
-        </PartnerNotice>
-      ) : null}
-
-      {recoveryCodes.length ? (
-        <div className="mt-5 rounded-xl border border-amber-300 bg-amber-50 p-4">
-          <h3 className="font-semibold text-amber-950">
-            Save these recovery codes now
-          </h3>
-          <p className="mt-1 text-sm leading-6 text-amber-900">
-            Each code works once. Stonegate will not show this set again.
-          </p>
-          <ul
-            className="mt-4 grid gap-2 font-mono text-sm text-slate-950 sm:grid-cols-2"
-            aria-label="Recovery codes"
-          >
-            {recoveryCodes.map((code) => (
-              <li
-                key={code}
-                className="rounded-lg border border-amber-200 bg-white px-3 py-2"
-              >
-                {code}
-              </li>
-            ))}
-          </ul>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => setRecoveryCodes([])}
-              className={partnerPrimaryButtonClass}
-            >
-              <Check className="h-4 w-4" aria-hidden="true" />I saved them
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {enrollment ? (
-        <div className="mt-5 rounded-xl border border-primary-200 bg-primary-50/60 p-4 sm:p-5">
-          <h3 className="font-semibold text-slate-950">
-            Connect an authenticator app
-          </h3>
-          <ol className="mt-3 list-decimal space-y-3 pl-5 text-sm leading-6 text-slate-700">
-            <li>
-              Add an account manually using this secret:
-              <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-                <code className="min-w-0 break-all rounded-lg border border-primary-200 bg-white px-3 py-2 font-mono text-sm text-slate-950">
-                  {enrollment.secret}
-                </code>
-              </div>
-              <a
-                href={enrollment.otpauthUri}
-                className="mt-2 inline-flex min-h-11 items-center font-semibold text-primary-800 underline decoration-primary-300 underline-offset-4"
-              >
-                Open in an authenticator app
-              </a>
-            </li>
-            <li>Enter the current six-digit code to finish setup.</li>
-          </ol>
-          <form
-            onSubmit={(event) => void confirmEnrollment(event)}
-            className="mt-4 grid gap-4 sm:grid-cols-2"
-          >
-            <label>
-              <span className="text-sm font-semibold text-slate-700">
-                Authenticator label
-              </span>
-              <input
-                name="label"
-                maxLength={80}
-                placeholder="My phone"
-                autoComplete="off"
-                className={partnerFieldClass}
-              />
-            </label>
-            <label>
-              <span className="text-sm font-semibold text-slate-700">
-                Six-digit code
-              </span>
-              <input
-                name="code"
-                required
-                inputMode="numeric"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                autoComplete="one-time-code"
-                className={partnerFieldClass}
-              />
-            </label>
-            <div className="flex flex-wrap gap-2 sm:col-span-2">
-              <button
-                type="submit"
-                disabled={busy}
-                className={partnerPrimaryButtonClass}
-              >
-                {busy ? (
-                  <LoaderCircle
-                    className="h-4 w-4 animate-spin motion-reduce:animate-none"
-                    aria-hidden="true"
-                  />
-                ) : (
-                  <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-                )}
-                {busy ? "Verifying…" : "Verify and enable"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setEnrollment(null);
-                  setMessage(null);
-                }}
-                disabled={busy}
-                className={partnerSecondaryButtonClass}
-              >
-                Cancel setup
-              </button>
-            </div>
-          </form>
-          <p className="mt-3 text-xs text-slate-600">
-            Setup expires {dateLabel(enrollment.expiresAt)}. The secret is kept
-            only on this screen while setup is open.
-          </p>
-        </div>
-      ) : null}
-
-      {!enrollment &&
-      security?.enrolled &&
-      (!security.satisfied || showStepUp) ? (
-        <form
-          onSubmit={(event) => void stepUp(event)}
-          className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:p-5"
-        >
-          <h3 className="font-semibold text-slate-950">Verify this session</h3>
-          <p className="mt-1 text-sm leading-6 text-slate-600">
-            Use a current authenticator code or one unused recovery code.
-          </p>
-          <div className="mt-4 grid gap-4 sm:grid-cols-[0.7fr_1.3fr]">
-            <label>
-              <span className="text-sm font-semibold text-slate-700">
-                Method
-              </span>
-              <select name="verificationMethod" className={partnerFieldClass}>
-                <option value="totp">Authenticator code</option>
-                <option value="recovery">Recovery code</option>
-              </select>
-            </label>
-            <label>
-              <span className="text-sm font-semibold text-slate-700">
-                Verification value
-              </span>
-              <input
-                name="verification"
-                required
-                autoComplete="one-time-code"
-                className={partnerFieldClass}
-              />
-            </label>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              type="submit"
-              disabled={busy}
-              className={partnerPrimaryButtonClass}
-            >
-              {busy ? (
-                <LoaderCircle
-                  className="h-4 w-4 animate-spin motion-reduce:animate-none"
-                  aria-hidden="true"
-                />
-              ) : (
-                <KeyRound className="h-4 w-4" aria-hidden="true" />
-              )}
-              {busy ? "Verifying…" : "Verify session"}
-            </button>
-            {security.satisfied && showStepUp ? (
-              <button
-                type="button"
-                onClick={() => setShowStepUp(false)}
-                disabled={busy}
-                className={partnerSecondaryButtonClass}
-              >
-                Cancel
-              </button>
-            ) : null}
-          </div>
-        </form>
-      ) : null}
-
-      {!enrollment &&
-      !showStepUp &&
-      security &&
-      (!security.enrolled || security.satisfied) ? (
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-5">
-          <div className="text-sm text-slate-600">
-            {mfa.methods[0] ? (
-              <>
-                <span className="font-semibold text-slate-900">
-                  {mfa.methods[0].label || "Authenticator app"}
-                </span>
-                <span className="block mt-0.5">
-                  {mfa.methods[0].recoveryCodesRemaining} recovery codes remain.
-                </span>
-              </>
-            ) : (
-              "Use any app that supports time-based one-time passwords."
-            )}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {security.enrolled && security.satisfied ? (
-              <button
-                type="button"
-                onClick={() => setShowStepUp(true)}
-                disabled={busy}
-                className={partnerSecondaryButtonClass}
-              >
-                <KeyRound className="h-4 w-4" aria-hidden="true" />
-                Verify again
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => void beginEnrollment()}
-              disabled={busy}
-              className={partnerSecondaryButtonClass}
-            >
-              {busy ? (
-                <LoaderCircle
-                  className="h-4 w-4 animate-spin motion-reduce:animate-none"
-                  aria-hidden="true"
-                />
-              ) : (
-                <Smartphone className="h-4 w-4" aria-hidden="true" />
-              )}
-              {security.enrolled
-                ? "Replace authenticator"
-                : "Set up authenticator"}
-            </button>
-          </div>
-        </div>
-      ) : null}
     </PartnerPanel>
   );
 }
@@ -813,7 +318,7 @@ function SessionManager({
     const confirmed = window.confirm(
       session.current
         ? "Revoke this session and sign out now?"
-        : `Revoke access for ${sessionLabel(session)}?`,
+        : `Sign out ${sessionLabel(session)}?`,
     );
     if (!confirmed) return;
     setBusyHandle(session.handle);
@@ -850,24 +355,9 @@ function SessionManager({
       router.refresh();
       return;
     }
-    setMessage({ tone: "success", text: "The selected session was revoked." });
+    setMessage({ tone: "success", text: "The selected sign-in was ended." });
     await reload();
   }
-
-  React.useEffect(() => {
-    const reloadAfterSecurityChange = (): void => {
-      void reload();
-    };
-    window.addEventListener(
-      "partner-session-security-changed",
-      reloadAfterSecurityChange,
-    );
-    return () =>
-      window.removeEventListener(
-        "partner-session-security-changed",
-        reloadAfterSecurityChange,
-      );
-  }, [reload]);
 
   return (
     <PartnerPanel>
@@ -880,8 +370,8 @@ function SessionManager({
             Signed-in devices
           </h2>
           <p className="mt-1 text-sm leading-6 text-slate-600">
-            Review recent portal sessions and revoke any device you no longer
-            recognize.
+            Quickly check where your account is signed in and remove any device
+            you no longer recognize.
           </p>
         </div>
       </div>
@@ -921,11 +411,6 @@ function SessionManager({
                   >
                     {session.status}
                   </span>
-                  {session.assuranceLevel === "aal2" ? (
-                    <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-200">
-                      Two-step verified
-                    </span>
-                  ) : null}
                 </div>
                 <p className="mt-1 text-sm text-slate-600">
                   Last active {dateLabel(session.lastSeenAt)} · expires{" "}
@@ -950,7 +435,7 @@ function SessionManager({
                   ) : (
                     <LogOut className="h-4 w-4" aria-hidden="true" />
                   )}
-                  {session.current ? "Sign out here" : "Revoke"}
+                  {session.current ? "Sign out here" : "Sign out device"}
                 </button>
               ) : null}
             </li>
@@ -1120,11 +605,11 @@ function NotificationPreferences({
           </div>
           <div>
             <h2 className="text-lg font-semibold text-slate-950">
-              Notification preferences
+              Choose how Stonegate keeps you updated
             </h2>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
-              Choose where account updates arrive. Urgent same-day schedule
-              changes may bypass quiet hours.
+              Get the updates that help service keep moving, in the places you
+              prefer. Urgent same-day schedule changes may bypass quiet hours.
             </p>
           </div>
         </div>
@@ -1339,7 +824,6 @@ function NotificationPreferences({
 
 export function PartnerAccountSecurityManager({
   accounts,
-  mfa,
   sessions,
   sessionsEtag,
   preferences,
@@ -1347,7 +831,6 @@ export function PartnerAccountSecurityManager({
   canManageSmsEndpoints,
 }: {
   accounts: PartnerSettingsAccount[];
-  mfa: PartnerSettingsMfa | null;
   sessions: PartnerSettingsSession[] | null;
   sessionsEtag: string | null;
   preferences: PartnerSettingsPreference[] | null;
@@ -1375,7 +858,6 @@ export function PartnerAccountSecurityManager({
   return (
     <div className="space-y-5 sm:space-y-6">
       <AccountSwitcher accounts={accounts} />
-      <MfaManager initial={mfa} />
       <SessionManager initialSessions={sessions} initialEtag={sessionsEtag} />
       <PartnerSmsEndpointManager
         initialEndpoints={smsEndpoints}

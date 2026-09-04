@@ -91,7 +91,6 @@ export async function POST(request: NextRequest): Promise<Response> {
           email: result.email,
           name: result.name,
           accountName: result.accountName,
-          mfaRequired: result.mfaRequired,
           passwordAlreadySet: result.passwordAlreadySet,
           expiresAt: result.expiresAt.toISOString(),
         },

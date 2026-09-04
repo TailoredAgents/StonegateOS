@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import {
   hasTeamPermission,
   requireCurrentTeamPrincipal,
+  TeamSessionVerificationUnavailableError,
   type TeamRequestPrincipal,
 } from "@/lib/team-principal";
 import { callAdminApiAs } from "./lib/api";
@@ -162,7 +163,17 @@ async function setMutationFlash(feedback: TeamMutationFeedback): Promise<void> {
 }
 
 export async function updateApptStatus(formData: FormData) {
-  const principal = await requireCurrentTeamPrincipal();
+  let principal: TeamRequestPrincipal;
+  try {
+    principal = await requireCurrentTeamPrincipal();
+  } catch (error) {
+    if (error instanceof TeamSessionVerificationUnavailableError) {
+      await setMutationFlash({ ok: false, message: error.message });
+      revalidatePath("/team");
+      return;
+    }
+    throw error;
+  }
   const id = formData.get("appointmentId");
   const status = formData.get("status");
   const crew = formData.get("crew");

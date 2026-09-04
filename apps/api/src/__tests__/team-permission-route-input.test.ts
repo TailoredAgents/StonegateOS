@@ -82,8 +82,6 @@ jest.mock("@/lib/verified-actor-context", () => ({
     label: "Owner",
     sessionId: "session-1",
     authMethod: "team_session",
-    assuranceLevel: "aal2",
-    mfaVerifiedAt: new Date().toISOString(),
   })),
 }));
 

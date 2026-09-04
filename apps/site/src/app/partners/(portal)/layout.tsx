@@ -32,7 +32,7 @@ export default async function PartnerAuthenticatedLayout({
         <div className="mx-auto max-w-2xl">
           <PartnerErrorState
             title="The partner portal is temporarily unavailable"
-            description="We couldn’t verify your portal session right now. Your account and jobs are unchanged. Try again in a moment or call Stonegate for immediate help."
+            description="We couldn’t verify your portal session right now. Your account and jobs are unchanged. Try again in a moment or call Stonegate for help."
             retryHref="/partners/overview"
           />
         </div>

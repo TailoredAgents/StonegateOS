@@ -84,7 +84,6 @@ type StaffApplicationRow = {
   accountStatus: string | null;
   accountPortalAccessEnabled: boolean | null;
   userActive: boolean | null;
-  userMfaRequired: boolean | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -397,7 +396,6 @@ function applicationSelection() {
     accountStatus: partnerAccounts.status,
     accountPortalAccessEnabled: partnerAccounts.portalAccessEnabled,
     userActive: partnerUsers.active,
-    userMfaRequired: partnerUsers.mfaRequired,
   };
 }
 
@@ -422,7 +420,6 @@ function serializeApplication(
       phone: row.phone,
       identityActive: row.userActive === true,
       emailVerifiedAt: row.emailVerifiedAt?.toISOString() ?? null,
-      mfaRequired: row.userMfaRequired === true,
     },
     company: {
       name: row.companyName,

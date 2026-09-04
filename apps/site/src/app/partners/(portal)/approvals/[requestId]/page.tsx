@@ -24,10 +24,7 @@ import {
   type PartnerApprovalDetail,
   type PartnerApprovalState,
 } from "@/app/partners/lib/portal-approvals";
-import {
-  PartnerApprovalDecisionForm,
-  PartnerApprovalMfaGate,
-} from "@/app/partners/components/PartnerApprovalWorkspace";
+import { PartnerApprovalDecisionForm } from "@/app/partners/components/PartnerApprovalWorkspace";
 import {
   PartnerErrorState,
   PartnerNotice,
@@ -45,27 +42,6 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { requestId } = await params;
   return { title: `Approval ${requestId.slice(0, 8)}` };
-}
-
-async function responseErrorCode(response: Response): Promise<string> {
-  const payload = (await response.json().catch(() => null)) as {
-    error?: unknown;
-  } | null;
-  return typeof payload?.error === "string" ? payload.error : "unknown";
-}
-
-async function loadMfaEnrollment(): Promise<boolean | null> {
-  const response = await callPartnerApi("/api/portal/v2/mfa", {
-    timeoutMs: 12_000,
-  }).catch(() => null);
-  if (!response?.ok) return null;
-  const payload = (await response.json().catch(() => null)) as {
-    ok?: unknown;
-    security?: { enrolled?: unknown };
-  } | null;
-  return payload?.ok === true && typeof payload.security?.enrolled === "boolean"
-    ? payload.security.enrolled
-    : null;
 }
 
 function statusClass(state: PartnerApprovalState): string {
@@ -105,25 +81,24 @@ function ApprovalStateNotice({
   if (approval.state === "approved_needs_reschedule") {
     return (
       <PartnerNotice tone="warning">
-        This request is approved, but its arrival-window hold expired. A
-        scheduler must select a new available window before work can be
-        confirmed. No slot is currently promised.
+        This request is approved, but its temporary arrival window expired. A
+        scheduler needs to choose another available window before the job can be
+        confirmed.
       </PartnerNotice>
     );
   }
   if (approval.state === "expired") {
     return (
       <PartnerNotice tone="warning">
-        The decision hold expired. This request cannot be approved against the
-        old window and must be rescheduled or reviewed by Stonegate.
+        The temporary arrival window expired. This request needs another
+        available window or a Stonegate review.
       </PartnerNotice>
     );
   }
   if (approval.state === "approved") {
     return (
       <PartnerNotice tone="success">
-        All captured approval requirements were satisfied. The approval record
-        is immutable.
+        This request is approved. The decision is saved and cannot be edited.
       </PartnerNotice>
     );
   }
@@ -138,16 +113,15 @@ function ApprovalStateNotice({
   if (approval.state === "withdrawn") {
     return (
       <PartnerNotice tone="info">
-        The requester withdrew this approval request. It is retained as
-        read-only account history.
+        The requester withdrew this approval. It remains in the account history.
       </PartnerNotice>
     );
   }
   if (approval.requestedByCurrentMember) {
     return (
       <PartnerNotice tone="warning">
-        You submitted this request. Self-approval is prohibited, so a different
-        authorized account member must decide it.
+        You submitted this request, so another authorized person on the account
+        must decide it.
       </PartnerNotice>
     );
   }
@@ -161,8 +135,8 @@ function ApprovalStateNotice({
   }
   return (
     <PartnerNotice tone="warning">
-      This request needs an account decision before its approval hold expires.
-      Review every matching rule and the request details below.
+      This request needs your decision. Review the job, price, schedule, and
+      approval requirements below.
     </PartnerNotice>
   );
 }
@@ -179,7 +153,7 @@ export default async function PartnerApprovalDetailPage({
     return (
       <div className="space-y-5 sm:space-y-6">
         <PartnerPageHeader
-          eyebrow="Commercial controls"
+          eyebrow="Account approval"
           title="Approval request"
           description="Approval details are available only to authorized account approvers."
           breadcrumbs={[
@@ -204,25 +178,6 @@ export default async function PartnerApprovalDetailPage({
   ).catch(() => null);
 
   if (!response?.ok) {
-    const code = response ? await responseErrorCode(response) : "unavailable";
-    if (response?.status === 403 && code === "mfa_step_up_required") {
-      const enrolled = await loadMfaEnrollment();
-      return (
-        <div className="space-y-5 sm:space-y-6">
-          <PartnerPageHeader
-            eyebrow="Commercial controls"
-            title="Approval request"
-            description="Verify this secure session before viewing commercial request details."
-            breadcrumbs={[
-              { label: "Overview", href: "/partners/overview" },
-              { label: "Approvals", href: "/partners/approvals" },
-              { label: "Request", href: `/partners/approvals/${requestId}` },
-            ]}
-          />
-          <PartnerApprovalMfaGate enrolled={enrolled} />
-        </div>
-      );
-    }
     if (response?.status === 404) {
       return (
         <PartnerErrorState
@@ -286,7 +241,7 @@ export default async function PartnerApprovalDetailPage({
       <PartnerPageHeader
         eyebrow={`Approval ${approval.id.slice(0, 8).toUpperCase()}`}
         title={service ? humanizeApprovalValue(service) : "Service request"}
-        description="Review the immutable request snapshot and every matching account rule before making a decision."
+        description="Review the key job, schedule, price, and approval details, then make your decision."
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Approvals", href: "/partners/approvals" },
@@ -332,7 +287,7 @@ export default async function PartnerApprovalDetailPage({
             aria-hidden="true"
           />
           <h2 className="text-lg font-semibold text-slate-950">
-            Approval summary
+            What needs your decision
           </h2>
         </div>
         <dl className="mt-5 grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
@@ -401,13 +356,12 @@ export default async function PartnerApprovalDetailPage({
           <div className="flex items-center gap-2">
             <FileText className="h-5 w-5 text-primary-700" aria-hidden="true" />
             <h2 className="text-lg font-semibold text-slate-950">
-              Request snapshot
+              Job details at time of request
             </h2>
           </div>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            These partner-visible details were captured when approval was
-            requested. Internal notes, margins, provider data, and schedule IDs
-            are not included.
+            These details were saved when approval was requested, so later job
+            changes do not alter what you are deciding here.
           </p>
           <dl className="mt-5 grid gap-5 sm:grid-cols-2">
             <div>
@@ -505,17 +459,17 @@ export default async function PartnerApprovalDetailPage({
               aria-hidden="true"
             />
             <h2 className="text-lg font-semibold text-slate-950">
-              Matching approval rules
+              Why approval is needed
             </h2>
           </div>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            Every rule captured below applies independently. Rule changes made
-            later do not rewrite this request.
+            Each requirement below applies to this request. Later account-rule
+            changes will not alter this decision.
           </p>
           {!approval.rulesValid || approval.rules.length === 0 ? (
             <PartnerNotice tone="warning" className="mt-5">
-              The captured rules could not be verified. No account decision can
-              be safely accepted until Stonegate reviews this request.
+              The approval requirements could not be verified. Stonegate must
+              review this request before an account decision can be accepted.
             </PartnerNotice>
           ) : (
             <ol className="mt-5 space-y-3" aria-label="Matching approval rules">
@@ -565,8 +519,8 @@ export default async function PartnerApprovalDetailPage({
           </h2>
         </div>
         <p className="mt-2 text-sm leading-6 text-slate-600">
-          Decisions and their partner-visible reasons are immutable audit
-          records. Member names are intentionally minimized in this view.
+          Every decision and shared reason is kept in the account’s audit
+          history so your team has a clear record.
         </p>
         {approval.decisions.length === 0 ? (
           <p className="mt-5 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">

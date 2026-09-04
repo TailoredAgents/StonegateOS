@@ -3,7 +3,44 @@
 - Owner: Stonegate operations and engineering
 - Scope: authenticated Partner Portal V2, its public access/invitation/proof handoffs, and supporting staff workflows
 - Default posture: preserve accepted records, stop unsafe writes or promises, and route uncertain work to staff review
-- Last updated: 2026-09-01
+- Last updated: 2026-09-04
+
+## Authentication posture for the expand-only MFA runtime removal
+
+MFA is removed from both Team and Partner runtime. Partners authenticate with
+their password and a revocable server session. Team and Partner actions still
+require the current session, identity/account/membership eligibility, and the
+exact role, permission, capability, and scope assigned to the actor. Origin and
+CSRF validation, revision checks, idempotency, security-version invalidation,
+audit evidence, typed confirmations, and applicable recent-authentication
+policy remain in force. Removing MFA does not relax any of those controls.
+
+This is an expand-only runtime release. It removes MFA requirements, routes,
+prompts, step-up gates, and authorization dependencies without a pre-deploy
+cleanup or schema contract change. Historical method, recovery, enrollment, and
+required/enrolled-flag records remain in place and inert so old and new
+instances can coexist while the rolling deployment is in progress. No Team or
+Partner authorization decision may grant or deny access from that retained MFA
+state. Normal runtime safety may consume stale pre-session transactions or
+login tokens and revoke retired legacy, magic-link, or step-up sessions when
+they are presented or replaced by successful password login. Once password-only
+activation is live or creates a user/session, the former mandatory-MFA
+application is not a valid rollback target.
+
+Do not add a destructive MFA cleanup to the pre-deploy migration phase. Render
+may run that phase while the prior application release is still serving, so a
+cleanup or write guard could break the live old release before traffic switches.
+Cleanup, constraint changes, and schema removal belong in a separate contract
+migration only after the runtime removal has been deployed, observed, and
+explicitly verified and the rolling-deployment overlap has ended.
+
+Legacy MFA data is not authentication or authorization evidence. Do not ask a
+user to enroll an authenticator, supply a one-time or recovery code, or complete
+an MFA step-up. Do not re-enable, disable, consume, or delete legacy MFA state
+manually as part of this release; let the supported credential/session runtime
+perform its scoped invalidation. This runbook records repository behavior only;
+it does not claim that the runtime removal has been rehearsed or deployed in
+production.
 
 ## Incident priorities
 
@@ -42,7 +79,7 @@ Never delete V2 data as an incident response. Feature switches stop exposure or 
 | `PARTNER_RECURRING_HORIZON_INTERVAL_MS`                                      | Controls evaluator cadence; default is 300,000 ms and values below 60,000 ms fall back to the safe default.                                                                                                |
 | Provider/outbox kill switches                                                | Prevent worker dispatch before provider calls. Verify the worker service has the same values as the API service.                                                                                           |
 
-Rollback sequence for an unknown production defect:
+Containment and forward-repair sequence for an unknown production defect:
 
 1. Disable instant confirmation.
 2. Disable V2 writes.
@@ -52,13 +89,16 @@ Rollback sequence for an unknown production defect:
    partner accounts.
 4. Disable V2 reads only for a suspected tenant or serialization exposure.
 5. Keep workers stopped for the affected provider until queued operations are inspected; do not discard queued rows.
+6. Keep the password/session runtime deployed and ship a forward fix. Never
+   restore the former mandatory-MFA application after password-only activation
+   is live or has created a user/session.
 
 Re-enable in reverse order after staging/internal-account validation and a
 production smoke check with Stonegate-owned accounts. Partner traffic returns
-globally only after the cutover gate is re-approved. A rollback is incomplete
+globally only after the cutover gate is re-approved. Recovery is incomplete
 until accepted bookings, holds, payments, and outbox rows created around the
-incident have been reconciled. Authorization must never roll back to CRM
-contacts or routine magic-link login.
+incident have been reconciled. Authorization must never revert to the old
+mandatory-MFA runtime, CRM contacts, or routine magic-link login.
 
 ## Privacy-safe portal telemetry
 
@@ -207,12 +247,13 @@ or authorize a provider operation. Before reading its history or thread,
 always re-run the canonical Partner invoice-access predicate for the selected
 account and membership scope.
 
-Only a Commercial Manager or Team Owner with recent Team MFA may record one of
-the terminal classifications: information provided, adjustment required,
-refund review, or declined. **Adjustment required** and **refund review** are
-handoffs, not execution. Complete any later invoice correction or provider
-refund through its separate controlled workflow and never infer completion
-from the request state.
+Only a Commercial Manager or Team Owner with the delegated billing-dispute
+permission and a current Team session may record one of the terminal
+classifications: information provided, adjustment required, refund review, or
+declined. **Adjustment required** and **refund review** are handoffs, not
+execution. Complete any later invoice correction or provider refund through
+its separate controlled workflow and never infer completion from the request
+state.
 
 If creation or classification appears inconsistent:
 
@@ -251,8 +292,9 @@ proof effects remain visibly pending until Staff performs them through their
 canonical operational workflows.
 
 Approval, decline, and change-order routing require the current request
-revision, a fresh idempotency key, recent Team MFA, a bounded operational
-reason, and the exact typed confirmation shown in the UI. A successful outcome
+revision, a fresh idempotency key, the delegated Staff permission and current
+Team session, a bounded operational reason, and the exact typed confirmation
+shown in the UI. A successful outcome
 increments the request revision exactly once, increments the job revision,
 writes a public timeline event, creates an in-app Partner notification and
 outbox record, and commits the Staff audit/idempotency receipt. The database
@@ -274,9 +316,9 @@ still be declined or routed to change-order review, but its changes must never
 be approved or applied.
 
 Direct commercial-reference editing is a different Partner action. Only an
-Administrator or Billing/Approver with `commercial.edit` and MFA verified in
-the previous 15 minutes may update the PO number, cost center, or project
-reference. Operations users must not be granted this path. The mutation uses
+Administrator or Billing/Approver with `commercial.edit` and a current eligible
+Partner session may update the PO number, cost center, or project reference.
+Operations users must not be granted this path. The mutation uses
 the current strong job `ETag`, an idempotency key, and the same account/job
 lock; it cannot change job scope, price, invoice data, schedule, service, or
 proof.
@@ -569,7 +611,7 @@ Requests caused by missing slots, uncertain scope, stale calendar coverage, miss
 When approval or review state disagrees:
 
 1. Disable instant confirmation, preserve the draft, approval request/decision, hold, job, appointment, audit, and outbox rows, and do not recreate a decision.
-2. Verify the requester and decision maker are different active memberships in the same account and that the approver completed MFA step-up.
+2. Verify the requester and decision maker are different active memberships in the same account and that the decision maker has the current `approvals.decide` capability and eligible session.
 3. Compare the captured rule snapshot with the version that applied at submission. Later rule edits must not rewrite it.
 4. For a valid approval hold, reconcile one consumed hold, one scheduled appointment, one confirmed partner job, and one calendar-sync request with reason `partner.portal.v2.booking.approval_confirmed`.
 5. For an expired approval hold, verify the appointment remains unscheduled and route the approved request through the normal reschedule/availability workflow.
@@ -587,8 +629,9 @@ To contain one lost or untrusted device:
 
 1. Verify the person, selected company, membership, device label, last-active
    time, and expiry in the Security view.
-2. Complete Team TOTP step-up if the current assurance is not recent, record a
-   specific reason, type `REVOKE PARTNER SESSION`, and submit once.
+2. Confirm the current Team session and delegated session-revocation
+   permission, record a specific reason, type `REVOKE PARTNER SESSION`, and
+   submit once.
 3. Confirm the response and audit receipt describe
    `scope=single_partner_session`, with both identity and membership state
    unchanged. Confirm that session moves to `Revoked` and cannot call a Portal
@@ -614,8 +657,8 @@ To disable the identity globally:
 
 1. Decide that every company really must lose this person's sign-in access. If
    only one company is affected, suspend that membership instead.
-2. Complete recent Team TOTP, enter a specific 20–1000 character reason, and
-   type `DISABLE [displayed email]` exactly.
+2. Confirm the current Team Owner session, enter a specific 20–1000 character
+   reason, and type `DISABLE [displayed email]` exactly.
 3. Submit once. The API binds `If-Match`, the membership snapshot, actor, route,
    target, and payload to the idempotency receipt under one transaction.
 4. Confirm the identity is `disabled`, its security version increased, and all
@@ -629,37 +672,46 @@ Never use global disable to release a quarantined identity or repair tenant
 binding. A stale identity revision or membership snapshot returns `412`; reload
 and review every company again rather than resubmitting the old evidence.
 
-### Team Owner partner MFA recovery
+### Retired MFA runtime and deferred data cleanup
 
-MFA reset is available only for an active identity with an existing password
-and at least one active membership on a portal-enabled company. It is not an
-authentication bypass and does not alter any membership.
+The former Team Owner MFA-reset workflow and its routes are retired. Do not use
+legacy MFA records to recover an identity, and do not create a replacement
+authenticator or recovery-code enrollment. Normal password recovery remains
+purpose-bound and must not automatically sign the user in.
 
-1. Confirm the partner's identity through the approved support/security
-   process without requesting their password, TOTP, recovery code, session
-   cookie, or activation token.
-2. Review the complete membership impact, complete recent Team TOTP, enter the
-   incident/recovery reason, and type `RESET [displayed email] MFA` exactly.
-3. Confirm the receipt reports `re_enrollment_required` and `queued`, not
-   “sent.” The same transaction must revoke all sessions, login tokens,
-   pre-auth transactions, pending purpose credentials, enrollment challenges,
-   authenticators, and unused recovery codes; increment the identity security
-   version; and queue one new purpose-bound activation challenge.
-4. The partner opens that one-use link, verifies the existing password, and
-   enrolls a new TOTP authenticator. Only successful transaction-bound TOTP
-   confirmation may create the new AAL2 session. An active membership is
-   accepted by activation only while the identity is in the exact recovery
-   state: active, MFA required but unenrolled, password present, no enabled MFA
-   method, matching challenge subject, and matching current security version.
-5. Confirm new recovery codes are displayed once and the security audit records
-   the recovery membership/challenge without a raw token or authenticator
-   secret. If delivery is disabled or fails, keep the identity unable to sign
-   in and use another owner-authorized reset to revoke/reissue the pending link;
-   never create a session or mark MFA enrolled manually.
+Use this release procedure:
 
-If no active portal-enabled membership or password exists, stop. Restore a
-legitimate account/recovery path through the appropriate account lifecycle; do
-not weaken the activation eligibility checks.
+1. Confirm the deployment contains no MFA cleanup, contract migration, database
+   trigger, or destructive backfill. Inventory legacy state only if needed for
+   later planning; record counts, never secrets, and do not mutate it.
+2. Rehearse the new runtime against a representative non-production database
+   that still contains legacy MFA rows and flags. Verify password login,
+   activation, Partner scheduling and commercial actions, and Team CRM actions
+   depend on the current session and exact permissions but never request MFA.
+3. Exercise old-release/new-release overlap in staging before traffic switches.
+   The prior release must remain able to read the untouched schema while it is
+   still serving, and the new release must ignore retained MFA data for
+   authorization. Separately rehearse flags/maintenance/read-only containment
+   and a forward fix; do not treat the old runtime as the rollback target after
+   password-only activation begins.
+4. Verify suspended/removed membership denial, cross-account `404`, session
+   revocation, password reset, final Administrator protection, and Team
+   permission denial still fail closed without an MFA branch.
+5. If an identity or membership is stranded in a former activation handoff,
+   leave it contained for explicit account-access reconciliation through the
+   supported password activation and Staff administration paths. Do not repair
+   it by changing MFA, identity, membership, transaction, or session fields in
+   SQL during this expand release.
+6. After the runtime removal is deployed and its production behavior and
+   containment/forward-fix posture are explicitly verified, open a separate
+   reviewed contract change for any legacy-data cleanup. Rehearse that later
+   migration against a production-sized snapshot before scheduling it.
+
+The presence of enabled methods, recovery rows, challenges, required flags,
+historical AAL2 sessions, or former activation transactions is expected
+compatibility state during this phase, not evidence that MFA remains active. It
+becomes a cleanup input only for the later contract change. A runtime path that
+consults that state to grant, block, or elevate access is an incident.
 
 ## Partner quarantine and provider reconciliation
 
@@ -678,8 +730,8 @@ and history to investigate, then follow an explicitly approved recovery or
 migration workflow outside this queue. Do not edit a status directly.
 
 An unresolved legacy provider-delivery case has one schema-backed resolution
-path. A Team Owner may use it only after recent TOTP verification and a direct
-provider review:
+path. A Team Owner may use it only with the dedicated permission, a current
+Team session, and a direct provider review:
 
 1. Compare every requested channel with provider delivery/search/support
    records. Preserve the provider evidence outside Stonegate before deciding.
@@ -733,10 +785,10 @@ billing contact/address, and default PO/cost-center guidance through
 contact. Organization/service-contact edits require account-wide
 `account.update`, billing edits require account-wide `commercial.edit`, and a
 mixed request requires both. Billing fields are redacted unless the reader has
-`commercial.edit` or `invoices.read`. Required MFA must be AAL2 and no more
-than 15 minutes old. Same-origin validation, the strong
-`If-Match`, account row lock, revision increment, and success audit are all
-fail-closed controls.
+`commercial.edit` or `invoices.read`. The current Partner session, membership,
+scope, and required capabilities remain authoritative; MFA is not required.
+Same-origin validation, the strong `If-Match`, account row lock, revision
+increment, and success audit are all fail-closed controls.
 
 For a profile-update incident:
 
@@ -750,8 +802,8 @@ For a profile-update incident:
    the submitted sections. A billing-only role must never change organization
    data, and `account.update` alone must never change billing data.
 4. If the portal account is disabled, or the membership is scoped, suspended,
-   removed, or missing required MFA, keep the write rejected. Do not restore
-   access from a legacy contact link.
+   removed, or missing a required capability, keep the write rejected. Do not
+   restore access from a legacy contact link.
 5. Validate that returned/audited data excludes staff notes, CRM records,
    negotiated rates, internal terms, provider identifiers, and payment data.
    The default PO and cost-center text are partner booking guidance only.
@@ -934,8 +986,9 @@ Operational response:
    refresh, inspect the new rule, then decide whether to submit a new change.
 3. A 50-active-rule conflict requires deactivating an obsolete rule before
    activating another. Do not bypass the cap in SQL.
-4. A recent-authentication/MFA response requires the operator to complete the
-   Team security prompt and resubmit with a fresh idempotency key.
+4. A recent-authentication response requires the operator to renew the normal
+   Team session through the supported sign-in flow and resubmit with a fresh
+   idempotency key. There is no MFA step-up path.
 5. If a service/location selector is unavailable, keep the rule inactive while
    reconciling the catalog or account location. Never substitute a location
    from another company.
@@ -1039,9 +1092,9 @@ proof.
    address, bounded provider suggestion, account, requester, and duplicate
    evidence.
 2. Staff verification requires independently established latitude/longitude,
-   an explicit eligible/outside-area decision, a durable note, recent MFA, and
-   exact confirmation. A correction request or dismissal never invents trusted
-   coordinates.
+   an explicit eligible/outside-area decision, the delegated permission and
+   current Team session, a durable note, and exact confirmation. A correction
+   request or dismissal never invents trusted coordinates.
 3. A location merge is same-account and non-destructive: history remains bound
    to the archived source, the default can move to the destination, and the
    source records a recoverable merge pointer. Open drafts, templates,
@@ -1065,14 +1118,15 @@ preflight. These operations preserve jobs, proof, documents, messages,
 invoices, payments, and audit evidence.
 
 - Suspend when access must stop temporarily; it revokes account-bound sessions,
-  MFA-pending authentication transactions, and pending authentication
-  challenges without affecting the identity's other accounts. Invitations are
+  pending authentication transactions, and pending purpose challenges without
+  affecting the identity's other accounts. Invitations are
   ineligible while the account is suspended and are revoked if it is closed.
 - Close only after the Team Owner reviews the durable reason and downstream
   obligations. Closure is access containment, not record deletion.
 - Recover a lost Administrator only into an active, portal-enabled account and
-  only for an active, password-set, MFA-enrolled, migration-reviewed member.
-  Existing sessions are revoked and MFA remains mandatory.
+  only for an active, password-set, migration-reviewed member. Existing
+  sessions are revoked; the recovered user signs in with the normal password
+  and session flow.
 - Prepare a merge from the source company row, then inspect
   `/team/partners?p_admin=account-merges`. The live database function enumerates
   every nonzero account-owned binding. Populated accounts stay in
@@ -1115,14 +1169,16 @@ Open the Partner Portal preview only from Team partner management and only for a
 
 1. Record the support case, selected account, optional partner job, UTC time, and correlation ID. Confirm a `partner_portal.staff_preview.viewed` audit event was durably written before relying on the response.
 2. Treat malformed, missing, and account-invalid job references as the same `404`; do not use alternate searches to infer another tenant's records.
-3. Verify the banner says **Read-only support preview**, every returned job has an empty action set, and downloads, payments, messages, and other mutations remain disabled. Never ask the partner for their magic link, password, MFA code, recovery code, or session cookie.
+3. Verify the banner says **Read-only support preview**, every returned job has an empty action set, and downloads, payments, messages, and other mutations remain disabled. Never ask the partner for their password, purpose-link token, legacy authentication secret, or session cookie.
 4. If the success audit cannot be persisted, the preview must fail closed without returning account data. If any mutation control, internal identifier/secret, foreign-account record, or unaudited successful view appears, stop using the preview, preserve route/audit evidence, revoke the affected staff session as appropriate, and treat possible tenant exposure as P0.
 
-## Account access, invitations, sessions, and MFA
+## Account access, invitations, passwords, and sessions
 
 Alert signals:
 
-- Cross-account membership, token replay, suspicious invitation acceptance, admin without MFA, repeated account switching, or a logout/session-revocation failure.
+- Cross-account membership, token replay, suspicious invitation acceptance,
+  unexpected privileged access, repeated account switching, a runtime path
+  consulting legacy MFA state, or a logout/session-revocation failure.
 
 Response:
 
@@ -1135,28 +1191,30 @@ Response:
 4. Confirm each purpose-bound token hash, normalized invited email, account,
    role, scope, issuer, generation, expiry, and one-use consumption all match.
    Invitation acceptance must revalidate current issuer authority and must not
-   create an authenticated session before password and required MFA activation.
-5. For password MFA incidents, reconcile the hashed
-   `partner_auth_transactions` row, its exact account/membership/security
-   version and IP/user-agent binding, attempt count, expiry, one-use consumption,
-   recovery-code use, completion audit, and resulting AAL2 session. A pre-auth
-   bearer must never appear in a URL, client prop, analytics event, log, or
-   Portal API authorization lookup.
-6. For privileged activation incidents, verify the source activation challenge
-   is consumed, the `activation_mfa_setup` transaction matches its exact
-   account/membership/security version and request binding, and any encrypted
-   enrollment challenge points back to that transaction. Before confirmation,
-   a new identity must remain `pending_activation`, the membership must remain
-   `invited`, and no partner session may exist. Confirmation must consume the
-   transaction, activate both records, create recovery codes when enrolling,
-   and create exactly one AAL2 session in the same database transaction.
-7. For an email-change incident, verify the request used recent MFA or password
-   assurance, the target address remained unique, the challenge matched the
-   exact user/account/membership/security version, and confirmation rotated the
-   security version and revoked every session without issuing an automatic
-   login or changing CRM contacts.
-8. Preserve the final administrator rule. Staff recovery must be audited; support preview remains read-only.
-9. Test tenant-substituted IDs return `404`, MFA step-up is required for administrator/approver/billing operations, and revoked sessions fail immediately before reopening.
+   create an authenticated session before password activation completes.
+5. For password-login incidents, reconcile the normalized identity, password
+   verification outcome, current security version, account/membership
+   eligibility, rate-limit outcome, completion audit, and resulting AAL1
+   session. A password, session token, or purpose credential must never appear
+   in a URL, client prop, analytics event, or log.
+6. For activation incidents, verify the source activation challenge is
+   purpose-bound and consumed once, password setup or confirmation succeeded,
+   the selected account and membership remain eligible, and exactly one normal
+   session is created. If the identity or membership was stranded in the former
+   activation-MFA handoff, contain it and use the supported password activation
+   and Staff reconciliation paths above; do not restore the retired enrollment
+   path or perform ad hoc SQL cleanup.
+7. For an email-change incident, verify the request used the current password
+   or eligible recent session, the target address remained unique, the
+   challenge matched the exact user/account/membership/security version, and
+   confirmation rotated the security version and revoked every session without
+   issuing an automatic login or changing CRM contacts.
+8. Preserve the final Administrator rule. Staff recovery must be audited;
+   support preview remains read-only.
+9. Before reopening, test that tenant-substituted IDs return `404`, every
+   privileged operation requires its exact role/capability/scope, suspended or
+   removed memberships fail, and revoked sessions fail immediately. No test or
+   runbook step should expect an MFA prompt.
 
 ## Portal funnel, support reference, and large-account operations
 
@@ -1178,7 +1236,8 @@ Operational response:
    correlation ID. For a later provider-delivery failure, use the opaque job or
    document reference plus the Staff delivery ledger; delivery-history rows do
    not expose correlation IDs. Do not request an address, notes, filename, PO
-   value, password, MFA code, or session token for correlation.
+   value, password, legacy authentication secret, or session token for
+   correlation.
 3. Upload interruption keeps the selected local batch and stable intent/finalize
    keys for retry. Reconcile ready media before asking the partner to retry;
    never create a replacement job or attach from a CRM contact pool.
@@ -1236,7 +1295,17 @@ corepack pnpm test:e2e:partner-portal
 
 Real-PostgreSQL Partner Portal evidence was refreshed on 2026-09-02 against
 disposable PostgreSQL 16.14 migrated through `0162`. Run the source inventory
-and the complete database gate with a fresh, non-production URL:
+and the complete database gate with a fresh, non-production URL.
+
+That migration replay reaches the intended expand-release database boundary but
+must not be presented as evidence that the MFA runtime removal works. Before
+release, run the new application against a representative non-production
+snapshot with legacy MFA state left intact, exercise old/new runtime overlap and
+pre-cutover coexistence, confirm both Team and Partner password/session flows
+ignore that state, rehearse flag/maintenance/read-only containment plus a
+forward fix, and rerun the complete authentication and authorization gate. Do
+not add or run a cleanup migration in this phase, and do not rehearse restoring
+the mandatory-MFA runtime as a valid post-activation rollback.
 
 ```sh
 corepack pnpm --filter api exec jest --config jest.config.cjs --runInBand src/__tests__/schedule-writer-inventory.test.ts

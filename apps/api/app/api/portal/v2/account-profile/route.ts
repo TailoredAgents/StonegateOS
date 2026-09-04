@@ -15,7 +15,6 @@ import {
   type PartnerPrincipal,
 } from "@/lib/partner-account-authorization";
 import { normalizePartnerAccountName } from "@/lib/partner-accounts";
-import { hasRecentPartnerMfa } from "@/lib/partner-recent-mfa";
 import {
   arePartnerPortalV2ReadsEnabled,
   arePartnerPortalV2WritesEnabled,
@@ -307,9 +306,6 @@ function capabilityFailure(
     required.some((capability) => !hasPartnerCapability(principal, capability))
   ) {
     return { status: 403, error: "forbidden" };
-  }
-  if (!hasRecentPartnerMfa(principal)) {
-    return { status: 403, error: "mfa_step_up_required" };
   }
   return null;
 }

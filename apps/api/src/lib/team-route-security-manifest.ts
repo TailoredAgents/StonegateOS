@@ -106,7 +106,6 @@ const HUMAN_ONLY_ROUTE_KEYS = new Set([
   "app/api/admin/partner-management/v1/memberships/[membershipId]/migration-review/route.ts#PATCH",
   "app/api/admin/partner-management/v1/security/sessions/[sessionId]/revoke/route.ts#POST",
   "app/api/admin/partner-management/v1/security/identities/[userId]/disable/route.ts#POST",
-  "app/api/admin/partner-management/v1/security/identities/[userId]/mfa/reset/route.ts#POST",
   "app/api/admin/partner-management/v1/quarantine/[caseId]/resolve/route.ts#POST",
   "app/api/admin/partner-management/v1/billing-disputes/[requestId]/decision/route.ts#POST",
   "app/api/admin/partner-management/v1/cancellation-requests/[requestId]/decision/route.ts#POST",
@@ -153,8 +152,6 @@ const RISK_OVERRIDES: Readonly<Record<string, TeamActionRisk>> = {
   "app/api/admin/partner-management/v1/security/sessions/[sessionId]/revoke/route.ts#POST":
     "destructive",
   "app/api/admin/partner-management/v1/security/identities/[userId]/disable/route.ts#POST":
-    "destructive",
-  "app/api/admin/partner-management/v1/security/identities/[userId]/mfa/reset/route.ts#POST":
     "destructive",
   "app/api/admin/partner-management/v1/quarantine/[caseId]/resolve/route.ts#POST":
     "destructive",

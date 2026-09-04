@@ -141,12 +141,14 @@ export function PartnerOnboardingChecklist({
                 id="partner-setup-heading"
                 className="text-lg font-semibold text-slate-950"
               >
-                {complete ? "Account setup complete" : "Finish account setup"}
+                {complete
+                  ? "You’re ready for easier service"
+                  : "Finish setup for easier service"}
               </h2>
             </div>
             <p className="mt-1 text-sm leading-6 text-slate-600">
               {complete
-                ? "Your workspace has the essentials for scheduling and handoff."
+                ? "Your saved details are ready to make future requests simpler."
                 : `${checklist.completedCount} of ${checklist.totalCount} setup steps complete`}
             </p>
             {!complete ? (
@@ -234,7 +236,7 @@ export function PartnerOnboardingChecklist({
                     href={step.href}
                     className={cn(partnerSecondaryButtonClass, "min-h-11")}
                   >
-                    {step.completed ? "Review" : "Open"}
+                    {step.completed ? "Review" : "Set up"}
                     <ArrowRight className="h-4 w-4" aria-hidden="true" />
                   </Link>
                   {!step.completed && step.completion === "acknowledged" ? (

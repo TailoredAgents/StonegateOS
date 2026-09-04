@@ -13,7 +13,6 @@ import { PartnerDocumentDownloadButton } from "@/app/partners/components/Partner
 import {
   PartnerInvoicePaymentAction,
   PartnerPaymentReturnStatus,
-  type PartnerPaymentSecurity,
 } from "@/app/partners/components/PartnerInvoicePayment";
 import { PartnerInvoiceDisputeManager } from "@/app/partners/components/PartnerInvoiceDisputeManager";
 import {
@@ -53,7 +52,6 @@ type PaymentAccess = {
   available: boolean;
   canManagePayments: boolean;
   canRequestBillingDisputes: boolean;
-  security: PartnerPaymentSecurity | null;
   payerEmail: string | null;
   payerName: string | null;
 };
@@ -82,7 +80,6 @@ async function loadPaymentAccess(): Promise<PaymentAccess> {
       available: false,
       canManagePayments: false,
       canRequestBillingDisputes: false,
-      security: null,
       payerEmail: null,
       payerName: null,
     };
@@ -91,7 +88,6 @@ async function loadPaymentAccess(): Promise<PaymentAccess> {
     ok?: unknown;
     partnerUser?: { email?: unknown; name?: unknown };
     membership?: { capabilities?: unknown; accessLevel?: unknown };
-    security?: { mfaEnrolled?: unknown; mfaSatisfied?: unknown };
   } | null;
   const capabilities = payload?.membership?.capabilities;
   const canManagePayments =
@@ -104,7 +100,6 @@ async function loadPaymentAccess(): Promise<PaymentAccess> {
       available: false,
       canManagePayments: false,
       canRequestBillingDisputes: false,
-      security: null,
       payerEmail: null,
       payerName: null,
     };
@@ -115,14 +110,6 @@ async function loadPaymentAccess(): Promise<PaymentAccess> {
     canRequestBillingDisputes: capabilities.includes(
       "invoices.disputes.request",
     ),
-    security:
-      typeof payload?.security?.mfaEnrolled === "boolean" &&
-      typeof payload.security.mfaSatisfied === "boolean"
-        ? {
-            enrolled: payload.security.mfaEnrolled,
-            satisfied: payload.security.mfaSatisfied,
-          }
-        : null,
     payerEmail:
       typeof payload.partnerUser?.email === "string" &&
       payload.partnerUser.email.length <= 320
@@ -183,8 +170,8 @@ function CollectionFallback({
 function MoreRecordsNotice() {
   return (
     <PartnerNotice tone="info" className="mt-4">
-      This view shows the 100 most recent records. Contact Stonegate if you need
-      older account history while portal pagination is being completed.
+      This page shows the 100 newest records. Contact Stonegate if you need
+      older account history.
     </PartnerNotice>
   );
 }
@@ -221,9 +208,9 @@ export default async function PartnerBillingPage({
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
-        eyebrow="Account financial records"
+        eyebrow="Pricing, bills & records"
         title="Billing & documents"
-        description="Review account pricing, quotes, invoices, statements, and secure documents without mixing them with operational job totals."
+        description="Find current rates, review quotes, pay eligible invoices, and download account records in one place. Job estimates stay separate."
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Billing & documents", href: "/partners/billing" },
@@ -233,8 +220,8 @@ export default async function PartnerBillingPage({
           {!paymentAccess.available
             ? "Protected payment controls are temporarily unavailable. Invoice records remain visible, but no payment has been started or treated as complete."
             : paymentAccess.canManagePayments
-              ? "Required deposits can be paid by card or, when enabled for the account, ACH through Square’s secure form. ACH remains pending until Square confirms settlement. Remaining invoice balances open on Square’s hosted payment page."
-              : "Invoice status is read-only for your current role. An authorized account billing user can pay eligible balances by card on Square, or contact Stonegate for assistance."}
+              ? "Pay eligible deposits securely by card or, when enabled, ACH through Square. ACH stays pending until Square confirms settlement. Remaining invoice balances open on Square’s hosted payment page."
+              : "Billing is read-only for your role. An authorized billing user can pay eligible balances through Square, or you can contact Stonegate for help."}
         </PartnerNotice>
       </PartnerPageHeader>
 
@@ -268,9 +255,9 @@ export default async function PartnerBillingPage({
             )}
             {rates.items.length === 0 ? (
               <PartnerEmptyState
-                title="No fixed online rates available"
-                description="One or more entitled services may require a quote. Review the agreement terms above or contact Stonegate before scheduling."
-                action={{ href: "/partners/help", label: "Contact Stonegate" }}
+                title="A quote may be needed for your service"
+                description="No fixed online rates are available here. Review the agreement above or ask Stonegate for current pricing before requesting service."
+                action={{ href: "/partners/help", label: "Ask about pricing" }}
                 icon={
                   <CircleDollarSign className="h-6 w-6" aria-hidden="true" />
                 }
@@ -293,14 +280,13 @@ export default async function PartnerBillingPage({
             paymentIntentId={paymentIntentId}
             accessAvailable={paymentAccess.available}
             canManagePayments={paymentAccess.canManagePayments}
-            initialSecurity={paymentAccess.security}
           />
           {invoices.status !== "ready" ? (
             <CollectionFallback state={invoices} resource="invoices" />
           ) : invoices.items.length === 0 ? (
             <PartnerEmptyState
-              title="No invoices shared"
-              description="Account invoices will appear here after they are issued and shared with your role."
+              title="No invoices available here"
+              description="Invoices will appear here after Stonegate issues them and shares them with your role."
               icon={<ReceiptText className="h-6 w-6" aria-hidden="true" />}
             />
           ) : (
@@ -323,8 +309,8 @@ export default async function PartnerBillingPage({
             <CollectionFallback state={quotes} resource="quotes" />
           ) : quotes.items.length === 0 ? (
             <PartnerEmptyState
-              title="No quotes shared"
-              description="New account quotes will appear here when Stonegate sends them."
+              title="No quotes to review"
+              description="New quotes will appear here when Stonegate sends them to this account."
               icon={<FileClock className="h-6 w-6" aria-hidden="true" />}
             />
           ) : (
@@ -347,8 +333,8 @@ export default async function PartnerBillingPage({
             <CollectionFallback state={statements} resource="statements" />
           ) : statements.items.length === 0 ? (
             <PartnerEmptyState
-              title="No statements shared"
-              description="Generated account statements will appear here by period."
+              title="No statements available here"
+              description="Generated account statements will appear here by billing period."
               icon={<ScrollText className="h-6 w-6" aria-hidden="true" />}
             />
           ) : (
@@ -371,9 +357,9 @@ export default async function PartnerBillingPage({
             <CollectionFallback state={documents} resource="documents" />
           ) : documents.items.length === 0 ? (
             <PartnerEmptyState
-              title="No documents shared"
-              description="Generated invoices, statements, proof files, and other account documents will appear here."
-              action={{ href: "/partners/help", label: "Request a document" }}
+              title="No account documents available here"
+              description="Invoices, statements, proof files, and other shared records will appear here when they are ready."
+              action={{ href: "/partners/help", label: "Ask for a document" }}
               icon={<FileText className="h-6 w-6" aria-hidden="true" />}
             />
           ) : (
@@ -459,10 +445,10 @@ function RateCard({
         ))}
       </div>
       <p className="mt-5 text-xs leading-5 text-slate-500">
-        A displayed rate is final only for the described contracted scope.
-        Material scope discrepancies require an explicit revised quote or change
-        order before the new price is accepted; schedule, service, and proof
-        changes remain subject to separate Stonegate confirmation.
+        A rate applies only to the contracted scope shown here. Material scope
+        discrepancies require an explicit revised quote or change order before
+        the new price is accepted. Schedule, service, and proof changes still
+        need separate Stonegate confirmation.
       </p>
     </>
   );
@@ -580,9 +566,9 @@ function AgreementSummary({
         </p>
       ) : null}
       <p className="mt-4 text-xs leading-5 text-slate-600">
-        If the requested or on-site scope differs from these terms, stop and
-        request clarification. The portal will not treat a mismatched service,
-        currency, estimate, or quote-required item as contracted final pricing.
+        If the requested or on-site work differs from these terms, ask Stonegate
+        before proceeding. The portal will not treat a mismatched service,
+        currency, estimate, or quote-required item as final contracted pricing.
       </p>
     </section>
   );
@@ -690,7 +676,6 @@ function InvoiceList({
             <PartnerInvoicePaymentAction
               invoice={invoice}
               canManagePayments={paymentAccess.canManagePayments}
-              initialSecurity={paymentAccess.security}
               payerEmail={paymentAccess.payerEmail}
               payerName={paymentAccess.payerName}
             />

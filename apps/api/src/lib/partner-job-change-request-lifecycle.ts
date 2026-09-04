@@ -360,9 +360,9 @@ export async function createPartnerJobChangeRequest(
       partnerAccountId: accountId,
       partnerBookingId: job.id,
       eventType: "job.change_requested",
-      publicLabel: "Job change requested",
+      publicLabel: "Service change requested",
       publicDetail:
-        "Stonegate will review the request. The current price, proof requirements, and schedule remain unchanged.",
+        "Stonegate will review the request. The current price, proof, and service time stay unchanged for now.",
       effectiveAt: now,
       actorType: "partner",
       actorMembershipId: membershipId,
@@ -381,8 +381,8 @@ export async function createPartnerJobChangeRequest(
     membershipId,
     partnerBookingId: job.id,
     eventKey: "job.change_requested",
-    title: "Job change request received",
-    body: "The current job remains unchanged while Stonegate reviews your request.",
+    title: "Service change request received",
+    body: "The current service details stay in place while Stonegate reviews your request.",
     actionPath: `/partners/bookings/${job.id}`,
     createdAt: now,
   });
@@ -567,9 +567,9 @@ export async function supersedePendingPartnerJobChangeRequestForCancellation(
       partnerAccountId: input.accountId,
       partnerBookingId: input.jobId,
       eventType: "job.change_request_superseded",
-      publicLabel: "Job change request closed",
+      publicLabel: "Service change request closed",
       publicDetail:
-        "The job was canceled, so the pending change request was closed without being applied.",
+        "The service was canceled, so the pending change request was closed without being applied.",
       effectiveAt: input.now,
       actorType: input.actorType,
       actorTeamMemberId:
@@ -587,8 +587,8 @@ export async function supersedePendingPartnerJobChangeRequestForCancellation(
     membershipId: pending.requestedByMembershipId,
     partnerBookingId: input.jobId,
     eventKey: "job.change_request_superseded",
-    title: "Job change request closed",
-    body: "The job was canceled, so the pending change request was closed without being applied.",
+    title: "Service change request closed",
+    body: "The service was canceled, so the pending change request was closed without being applied.",
     actionPath: `/partners/bookings/${input.jobId}`,
     createdAt: input.now,
   });
@@ -721,10 +721,7 @@ export async function decidePartnerJobChangeRequestAsStaff(
       { status: 409 },
     );
   }
-  if (
-    input.decision === "change_order_required" &&
-    !input.partnerQuoteId
-  ) {
+  if (input.decision === "change_order_required" && !input.partnerQuoteId) {
     throw new TeamMutationFailure(
       "invalid",
       "Choose the issued Quote V2 that contains the fixed change-order price.",
@@ -734,10 +731,7 @@ export async function decidePartnerJobChangeRequestAsStaff(
       },
     );
   }
-  if (
-    input.decision !== "change_order_required" &&
-    input.partnerQuoteId
-  ) {
+  if (input.decision !== "change_order_required" && input.partnerQuoteId) {
     throw new TeamMutationFailure(
       "invalid",
       "A quote may be attached only when a change order is required.",
@@ -902,28 +896,28 @@ export async function decidePartnerJobChangeRequestAsStaff(
     input.decision === "approved"
       ? {
           eventType: "job.change_request_approved",
-          label: "Job change approved",
+          label: "Service change approved",
           detail:
-            "Stonegate approved the requested public job details. Price, schedule, and proof requirements were not changed.",
-          title: "Job change approved",
-          body: "The approved public job details are now visible on the job.",
+            "Stonegate approved the requested service details. Price, schedule, and proof requirements were not changed.",
+          title: "Service change approved",
+          body: "The approved details are now visible on the job.",
         }
       : input.decision === "declined"
         ? {
             eventType: "job.change_request_declined",
-            label: "Job change declined",
+            label: "Service change declined",
             detail:
-              "Stonegate declined the request. The current job remains unchanged.",
-            title: "Job change request declined",
-            body: "The current job remains unchanged.",
+              "Stonegate declined the request. The current service details stay unchanged.",
+            title: "Service change request declined",
+            body: "The current service details stay unchanged.",
           }
         : {
             eventType: "job.change_order_required",
             label: "Change order required",
             detail:
-              "Stonegate needs to review pricing or scheduling before this change can be accepted. The current job remains unchanged.",
+              "Stonegate needs to review pricing or scheduling before this change can be accepted. The current service details stay unchanged.",
             title: "Change order required",
-            body: "The current job remains unchanged while Stonegate prepares the next step.",
+            body: "The current service details stay unchanged while Stonegate prepares the next step.",
           };
   await tx.insert(partnerJobEvents).values({
     partnerAccountId: current.partnerAccountId,

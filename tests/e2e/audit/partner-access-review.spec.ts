@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { expect, test, type BrowserContext } from "@playwright/test";
 import {
   PARTNER_ACTIVATION_TOKEN_COOKIE,
@@ -9,7 +9,6 @@ import {
   cleanupPartnerAccessReviewFixture,
   closePartnerAccessReviewFixtures,
   findPartnerAccessReviewSnapshot,
-  markAuditOwnerSessionMfaVerifiedForPartnerReview,
   resetPartnerAccessReviewRateLimits,
 } from "./partner-access-review-fixtures";
 import { waitForMailhogMessage } from "../support/mailhog";
@@ -41,44 +40,6 @@ function localPurposeUrl(mailedUrl: string, baseURL: string): URL {
   return new URL(`${parsed.pathname}${parsed.search}`, baseURL);
 }
 
-function decodeBase32(secret: string): Buffer {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  const normalized = secret.trim().toUpperCase().replace(/=+$/u, "");
-  if (!/^[A-Z2-7]{16,128}$/u.test(normalized)) {
-    throw new Error("The activation page returned an invalid TOTP secret.");
-  }
-  let accumulator = 0;
-  let bits = 0;
-  const bytes: number[] = [];
-  for (const character of normalized) {
-    const value = alphabet.indexOf(character);
-    if (value < 0) throw new Error("The TOTP secret is not base32.");
-    accumulator = (accumulator << 5) | value;
-    bits += 5;
-    if (bits >= 8) {
-      bytes.push((accumulator >>> (bits - 8)) & 255);
-      bits -= 8;
-    }
-  }
-  return Buffer.from(bytes);
-}
-
-function currentTotp(secret: string): string {
-  const counter = Math.floor(Date.now() / 1_000 / 30);
-  const counterBytes = Buffer.alloc(8);
-  counterBytes.writeBigUInt64BE(BigInt(counter));
-  const digest = createHmac("sha1", decodeBase32(secret))
-    .update(counterBytes)
-    .digest();
-  const offset = (digest.at(-1) ?? 0) & 0x0f;
-  const binary =
-    (((digest[offset] ?? 0) & 0x7f) << 24) |
-    ((digest[offset + 1] ?? 0) << 16) |
-    ((digest[offset + 2] ?? 0) << 8) |
-    (digest[offset + 3] ?? 0);
-  return String(binary % 1_000_000).padStart(6, "0");
-}
-
 async function assertApplicantOnlyCookies(
   context: BrowserContext,
 ): Promise<void> {
@@ -97,7 +58,7 @@ async function assertApplicantOnlyCookies(
   ).toBe(false);
 }
 
-test("verification-first applicant becomes an active MFA administrator only after approval and activation", async ({
+test("verification-first applicant becomes an active administrator only after approval and password activation", async ({
   browser,
   page,
   baseURL,
@@ -224,7 +185,6 @@ test("verification-first applicant becomes an active MFA administrator only afte
     );
     expect(replay.status()).toBe(401);
 
-    await markAuditOwnerSessionMfaVerifiedForPartnerReview();
     staffContext = await browser.newContext({
       baseURL,
       storageState: "tests/e2e/storage/audit-owner.json",
@@ -282,8 +242,6 @@ test("verification-first applicant becomes an active MFA administrator only afte
         identityStatus: "pending_activation",
         identityOrgContactId: null,
         passwordSet: false,
-        mfaRequired: true,
-        mfaEnrolled: false,
         membershipCount: 1,
         membershipStatus: "invited",
         membershipAccepted: false,
@@ -366,28 +324,6 @@ test("verification-first applicant becomes an active MFA administrator only afte
     await page.locator("#activation-confirm-password").fill(password);
     await page.getByRole("button", { name: "Activate account" }).click();
 
-    await expect(page).toHaveURL(/\/partners\/activate\/mfa$/u);
-    await expect(
-      page.getByRole("heading", {
-        name: "Secure your partner access",
-        level: 1,
-      }),
-    ).toBeVisible();
-    const secretLocator = page.locator("code").first();
-    await expect(secretLocator).toBeVisible();
-    const secret = (await secretLocator.textContent())?.trim();
-    if (!secret) throw new Error("The MFA setup page omitted its secret.");
-    if (Date.now() % 30_000 > 27_000) await page.waitForTimeout(3_100);
-    await page
-      .getByLabel("Six-digit authenticator code")
-      .fill(currentTotp(secret));
-    await page
-      .getByRole("button", { name: "Verify and activate access" })
-      .click();
-    await expect(
-      page.getByRole("heading", { name: "Save your recovery codes" }),
-    ).toBeVisible();
-    await page.getByRole("button", { name: "I saved these codes" }).click();
     await expect(page).toHaveURL(/\/partners\/overview$/u);
     await expect(
       page.getByRole("heading", { name: /Welcome back,/u, level: 1 }),
@@ -400,8 +336,6 @@ test("verification-first applicant becomes an active MFA administrator only afte
         identityActive: true,
         identityStatus: "active",
         passwordSet: true,
-        mfaRequired: true,
-        mfaEnrolled: true,
         membershipStatus: "active",
         membershipAccepted: true,
         membershipRoleKey: "administrator",
@@ -424,14 +358,11 @@ test("verification-first applicant becomes an active MFA administrator only afte
 
     const meResponse = await page.request.get("/api/partners/portal/me");
     expect(meResponse.status()).toBe(200);
-    expect(await meResponse.json()).toMatchObject({
+    const mePayload = await meResponse.json();
+    expect(mePayload).toMatchObject({
       membership: { roleKey: "administrator", accessLevel: "account" },
-      security: {
-        mfaRequired: true,
-        mfaEnrolled: true,
-        mfaSatisfied: true,
-      },
     });
+    expect(mePayload).not.toHaveProperty("security");
   } finally {
     await staffContext?.close();
     await cleanupPartnerAccessReviewFixture(email);

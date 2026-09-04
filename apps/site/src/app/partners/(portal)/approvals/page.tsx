@@ -18,7 +18,6 @@ import {
   type PartnerApprovalState,
   type PartnerApprovalSummary,
 } from "@/app/partners/lib/portal-approvals";
-import { PartnerApprovalMfaGate } from "@/app/partners/components/PartnerApprovalWorkspace";
 import {
   PartnerEmptyState,
   PartnerErrorState,
@@ -57,27 +56,6 @@ type ApprovalListPayload = {
   };
 };
 
-async function responseErrorCode(response: Response): Promise<string> {
-  const payload = (await response.json().catch(() => null)) as {
-    error?: unknown;
-  } | null;
-  return typeof payload?.error === "string" ? payload.error : "unknown";
-}
-
-async function loadMfaEnrollment(): Promise<boolean | null> {
-  const response = await callPartnerApi("/api/portal/v2/mfa", {
-    timeoutMs: 12_000,
-  }).catch(() => null);
-  if (!response?.ok) return null;
-  const payload = (await response.json().catch(() => null)) as {
-    ok?: unknown;
-    security?: { enrolled?: unknown };
-  } | null;
-  return payload?.ok === true && typeof payload.security?.enrolled === "boolean"
-    ? payload.security.enrolled
-    : null;
-}
-
 function statusClass(state: PartnerApprovalState): string {
   if (state === "approved") {
     return "bg-emerald-50 text-emerald-800 ring-emerald-200";
@@ -110,7 +88,7 @@ function ApprovalStatus({ state }: { state: PartnerApprovalState }) {
 function requestHeadline(approval: PartnerApprovalSummary): string {
   return approval.target.kind === "booking"
     ? `Job ${approval.target.id.slice(0, 8).toUpperCase()}`
-    : `Booking request ${approval.target.id.slice(0, 8).toUpperCase()}`;
+    : `Service request ${approval.target.id.slice(0, 8).toUpperCase()}`;
 }
 
 export default async function PartnerApprovalsPage({
@@ -131,11 +109,11 @@ export default async function PartnerApprovalsPage({
 
   const header = (
     <PartnerPageHeader
-      eyebrow="Commercial controls"
+      eyebrow="Jobs waiting on your decision"
       title="Approvals"
-      description="Review account requests, captured rules, schedule holds, commercial amounts, and immutable decision history."
+      description="See what needs your decision, review the key job and price details, and approve or decline in one place."
       breadcrumbs={[
-          { label: "Overview", href: "/partners/overview" },
+        { label: "Overview", href: "/partners/overview" },
         { label: "Approvals", href: "/partners/approvals" },
       ]}
       actions={
@@ -175,16 +153,6 @@ export default async function PartnerApprovalsPage({
   ).catch(() => null);
 
   if (!response?.ok) {
-    const code = response ? await responseErrorCode(response) : "unavailable";
-    if (response?.status === 403 && code === "mfa_step_up_required") {
-      const enrolled = await loadMfaEnrollment();
-      return (
-        <div className="space-y-5 sm:space-y-6">
-          {header}
-          <PartnerApprovalMfaGate enrolled={enrolled} />
-        </div>
-      );
-    }
     if (response?.status === 403) {
       return (
         <div className="space-y-5 sm:space-y-6">
@@ -221,7 +189,7 @@ export default async function PartnerApprovalsPage({
         {header}
         <PartnerErrorState
           title="We couldn’t load approvals"
-          description="No decision or schedule hold was changed. Try again before relying on this list."
+          description="Nothing was changed. Try again to see the current requests that need a decision."
           retryHref="/partners/approvals"
         />
       </div>
@@ -298,7 +266,7 @@ export default async function PartnerApprovalsPage({
             }
             description={
               selectedFilter === "pending"
-                ? "New account approval requests will appear here after secure MFA verification."
+                ? "You’re all caught up. New requests will appear here when your decision is needed."
                 : "Choose a different state to review account approval history."
             }
             action={
@@ -407,7 +375,7 @@ export default async function PartnerApprovalsPage({
                       {approval.state === "pending" ? (
                         <p className="mt-3 text-sm text-slate-600">
                           {approval.requestedByCurrentMember
-                            ? "Self-approval is prohibited; another authorized approver must decide."
+                            ? "You requested this job, so another authorized person must decide."
                             : approval.currentMemberDecision
                               ? `Your ${approval.currentMemberDecision} decision is recorded. ${remaining} approval decision${remaining === 1 ? "" : "s"} remain.`
                               : `${remaining} approval decision${remaining === 1 ? "" : "s"} remain.`}

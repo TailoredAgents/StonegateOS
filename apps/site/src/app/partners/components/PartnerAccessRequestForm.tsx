@@ -103,8 +103,8 @@ export function PartnerAccessRequestForm({
           Check your work email
         </h1>
         <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">
-          If that address can start or resume a partner request, we sent a
-          one-use verification link. It expires in 30 minutes.
+          If that address can start or continue a partner request, check the
+          inbox for a one-use link. Open it within 30 minutes to continue.
         </p>
         <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
           <button
@@ -132,21 +132,20 @@ export function PartnerAccessRequestForm({
         />
         <div className="relative">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent-200">
-            Partner with Stonegate
+            Easy partner service starts here
           </p>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight">
-            Start with your verified work email.
+            Set up simpler service for your team.
           </h1>
           <p className="mt-4 text-sm leading-6 text-primary-100 sm:text-base">
-            Verification keeps company requests connected to the right people.
-            No company workspace or portal membership is created before
-            Stonegate approval.
+            Verify your work email, then tell us what your company needs. Once
+            approved, you can reuse those details whenever you request service.
           </p>
           <ul className="mt-8 space-y-4 text-sm text-primary-50">
             {[
-              "One-use link valid for 30 minutes",
-              "A short, resumable application after verification",
-              "Password activation only after approval",
+              "Open a secure email link within 30 minutes",
+              "Complete a short application you can save",
+              "Create your password after approval",
             ].map((item) => (
               <li key={item} className="flex items-start gap-3">
                 <ShieldCheck
@@ -170,7 +169,7 @@ export function PartnerAccessRequestForm({
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-700">
-              Step 1 of 2
+              First step
             </p>
             <h2
               id="partner-access-heading"
@@ -181,8 +180,8 @@ export function PartnerAccessRequestForm({
           </div>
         </div>
         <p className="mt-4 text-sm leading-6 text-slate-600">
-          Use the work address you want connected to your company. You’ll enter
-          company and service details after opening the link.
+          Use the work address you want connected to your company. The email
+          link opens a short form about your service needs.
         </p>
         {message ? (
           <PartnerNotice tone="error" className="mt-5">

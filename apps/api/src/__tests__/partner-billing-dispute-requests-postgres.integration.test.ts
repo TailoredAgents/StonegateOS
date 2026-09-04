@@ -184,17 +184,17 @@ async function createFixture(label: string): Promise<Fixture> {
     accessSource: "membership",
     session: Object.freeze({
       id: randomUUID(),
-      authMethod: "mfa_step_up",
-      assuranceLevel: "aal2",
-      mfaVerifiedAt: now,
+      authMethod: "password",
+      assuranceLevel: "aal1",
+      mfaVerifiedAt: null,
       deviceName: "PostgreSQL integration",
       createdAt: now,
       lastSeenAt: now,
       expiresAt: new Date(now.getTime() + 60 * 60_000),
     }),
     security: Object.freeze({
-      mfaRequired: true,
-      mfaEnrolled: true,
+      mfaRequired: false,
+      mfaEnrolled: false,
       mfaSatisfied: true,
     }),
     availableAccounts: [accountAccess],
@@ -641,7 +641,10 @@ describeWithDatabase("Partner billing-dispute PostgreSQL lifecycle", () => {
   it("suppresses a delayed requested event after the dispute is resolved", async () => {
     const fixture = await createFixture("Stale billing notification");
     fixtures.push(fixture);
-    const created = await createRequest(fixture, "stale-notification-operation");
+    const created = await createRequest(
+      fixture,
+      "stale-notification-operation",
+    );
     await getDb().transaction((tx) =>
       decidePartnerBillingDisputeAsStaff(tx, {
         requestId: created.item.id,

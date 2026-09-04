@@ -104,10 +104,6 @@ describe("staff Partner administration mutation contract", () => {
       "partners.identities.disable",
     ],
     [
-      "app/api/admin/partner-management/v1/security/identities/[userId]/mfa/reset/route.ts",
-      "partners.security.mfa.reset",
-    ],
-    [
       "app/api/admin/partner-management/v1/quarantine/[caseId]/resolve/route.ts",
       "partners.quarantine.release",
     ],

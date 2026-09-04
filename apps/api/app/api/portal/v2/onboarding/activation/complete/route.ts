@@ -113,23 +113,6 @@ export async function POST(request: NextRequest): Promise<Response> {
       request,
       correlationId,
     });
-    if (result.kind === "mfa_setup_required") {
-      return createPartnerPortalV2SuccessResponse(
-        {
-          ok: true,
-          status: "mfa_setup_required",
-          transactionToken: result.transactionToken,
-          expiresAt: result.expiresAt.toISOString(),
-          mfaRequired: true,
-          setupMode: result.setupMode,
-          nextAction: "mfa_setup_required",
-          authority: "pre_authentication_only",
-          persistent: rememberMe,
-        },
-        correlationId,
-        202,
-      );
-    }
     if (result.kind !== "success") {
       return createPartnerPortalV2ErrorResponse(
         result.kind === "invalid"
@@ -150,7 +133,6 @@ export async function POST(request: NextRequest): Promise<Response> {
         ok: true,
         sessionToken: result.sessionToken,
         expiresAt: result.expiresAt.toISOString(),
-        mfaRequired: result.mfaRequired,
         nextAction: "portal_ready",
         authority: "portal",
         persistent: rememberMe,

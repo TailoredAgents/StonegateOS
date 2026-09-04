@@ -98,15 +98,15 @@ test("Partner Portal V2 books, replays safely, reschedules atomically, and cance
     );
     await expect(
       page.getByRole("heading", {
-        name: "Schedule facility service",
+        name: "Request facility service",
         level: 1,
       }),
     ).toBeVisible();
-    await expect(page.getByText("All changes saved")).toBeVisible();
+    await expect(page.getByText("Saved", { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(
-      page.getByRole("heading", { name: "Service & scope" }),
+      page.getByRole("heading", { name: "Add service details" }),
     ).toBeVisible();
     await page
       .getByRole("textbox", { name: BOOKING_SCOPE_LABEL })
@@ -118,7 +118,7 @@ test("Partner Portal V2 books, replays safely, reschedules atomically, and cance
     await page.getByRole("button", { name: "Continue" }).click();
 
     await expect(
-      page.getByRole("heading", { name: "Contact & access" }),
+      page.getByRole("heading", { name: "Confirm contact & access" }),
     ).toBeVisible();
     await page.getByLabel("On-site contact name").fill("E2E Site Lead");
     await page.getByLabel("Mobile phone").fill(fixture.partnerPhoneE164);
@@ -128,7 +128,7 @@ test("Partner Portal V2 books, replays safely, reschedules atomically, and cance
     await page.getByRole("button", { name: "Continue" }).click();
 
     await expect(
-      page.getByRole("heading", { name: "Photos & proof" }),
+      page.getByRole("heading", { name: "Add photos & proof" }),
     ).toBeVisible();
     await page.getByLabel("Formal proof package").check();
     await page.getByRole("button", { name: "Continue" }).click();
@@ -144,7 +144,7 @@ test("Partner Portal V2 books, replays safely, reschedules atomically, and cance
     await page.getByRole("button", { name: "Continue" }).click();
 
     await expect(
-      page.getByRole("heading", { name: "Review & send" }),
+      page.getByRole("heading", { name: "Check & send" }),
     ).toBeVisible();
     await expect(page.getByText("PO-E2E-1042")).toBeVisible();
     const submitRequestPromise = page.waitForRequest(
@@ -309,10 +309,10 @@ test("Partner Portal V2 books, replays safely, reschedules atomically, and cance
     await page.goto(
       `/partners/book?locationId=${fixture.locationId}&serviceKey=junk_removal_primary`,
     );
-    await expect(page.getByText("All changes saved")).toBeVisible();
+    await expect(page.getByText("Saved", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(
-      page.getByRole("heading", { name: "Service & scope" }),
+      page.getByRole("heading", { name: "Add service details" }),
     ).toBeVisible();
     await page
       .getByRole("textbox", { name: BOOKING_SCOPE_LABEL })
@@ -333,7 +333,7 @@ test("Partner Portal V2 books, replays safely, reschedules atomically, and cance
     await page.getByLabel("Mobile phone").fill(fixture.partnerPhoneE164);
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(
-      page.getByRole("heading", { name: "Photos & proof" }),
+      page.getByRole("heading", { name: "Add photos & proof" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(
@@ -349,7 +349,7 @@ test("Partner Portal V2 books, replays safely, reschedules atomically, and cance
     await page.getByLabel("General time preference").selectOption("morning");
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(
-      page.getByRole("heading", { name: "Review & send" }),
+      page.getByRole("heading", { name: "Check & send" }),
     ).toBeVisible();
     await expect(
       page.getByText(/review request only.*without reserving capacity/iu),
@@ -433,7 +433,7 @@ test("account rules override client approval hints and a valid approval hold con
     await page.goto(
       `/partners/book?locationId=${requester.locationId}&serviceKey=junk-removal`,
     );
-    await expect(page.getByText("All changes saved")).toBeVisible();
+    await expect(page.getByText("Saved", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Continue" }).click();
     await page
       .getByRole("textbox", { name: BOOKING_SCOPE_LABEL })
@@ -443,7 +443,7 @@ test("account rules override client approval hints and a valid approval hold con
     await page.getByLabel("Mobile phone").fill(requester.partnerPhoneE164);
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(
-      page.getByRole("heading", { name: "Photos & proof" }),
+      page.getByRole("heading", { name: "Add photos & proof" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(

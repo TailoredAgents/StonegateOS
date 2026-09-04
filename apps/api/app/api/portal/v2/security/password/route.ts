@@ -188,16 +188,20 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
     if (changed.kind === "recent_authentication_required") {
       return createPartnerPortalV2DescriptorResponse(
-        createPortalV2ErrorResponse("mfa_step_up_required", correlationId, {
-          status: 403,
-          alternatives: [
-            {
-              action: "reauthenticate",
-              label: "Sign in again with your password",
-              href: "/partners/login?returnTo=%2Fpartners%2Fsettings",
-            },
-          ],
-        }),
+        createPortalV2ErrorResponse(
+          "recent_authentication_required",
+          correlationId,
+          {
+            status: 403,
+            alternatives: [
+              {
+                action: "reauthenticate",
+                label: "Sign in again with your password",
+                href: "/partners/login?returnTo=%2Fpartners%2Fsettings",
+              },
+            ],
+          },
+        ),
       );
     }
     if (changed.kind === "session_unavailable") {

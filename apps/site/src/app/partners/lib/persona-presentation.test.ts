@@ -141,7 +141,7 @@ void test("wires dismissible and explicit persona suggestions without replacing 
   assert.match(overview, /visiblePersonaTaskIds/u);
   assert.match(overview, /capabilities\?\.schedule/u);
   assert.match(overviewGuide, /Dismiss persona suggestions/u);
-  assert.match(overviewGuide, /Suggestions change presentation only/u);
+  assert.match(overviewGuide, /Suggestions\s+change presentation only/u);
 
   assert.match(booking, /onClick=\{\(\) => applyProofPreset\(preset\)\}/u);
   assert.match(booking, /type="button"[\s\S]*aria-pressed=\{selected\}/u);

@@ -4,9 +4,11 @@
 - Scope: the one production cutover from legacy partner access to canonical
   account memberships and Portal V2
 - Rollback posture: preserve accepted work and financial records; disable unsafe
-  features or enter maintenance/review-only mode; never restore CRM-contact
-  authorization or routine magic-link login
-- Last updated: 2026-09-01
+  features or enter maintenance/review-only mode and ship a forward fix. Once
+  password-only activation is live or creates a user/session, never restore the
+  former mandatory-MFA runtime, CRM-contact authorization, or routine magic-link
+  login
+- Last updated: 2026-09-04
 
 ## Release authority
 
@@ -28,8 +30,10 @@ Do not schedule the switch until all of these are attached to the release:
    implementation, automated, manual, operational, and superseding-decision
    evidence as applicable.
 2. A fresh PostgreSQL 16 database applies every migration and seeds all four
-   roles, every persona, multi-account users, restricted scopes, privileged MFA,
-   billing states, and representative job states.
+   roles, every persona, multi-account users, restricted scopes,
+   password/session states, billing states, and representative job states. It
+   also retains representative legacy MFA records and proves the new runtime
+   ignores them for authentication and authorization.
 3. A production-sized snapshot rehearsal completes normalization, backfill,
    quarantine, privileged-membership review, restore, and global flag switching
    within the approved maintenance window.
@@ -58,6 +62,13 @@ Record values without copying secrets into the cutover log. Confirm:
 - Purpose-bound verification, activation, invitation, and reset credentials are
   enabled, while routine portal magic login is explicitly disabled and absent
   from the UI.
+- Team and Partner MFA requirements, prompts, routes, and authorization gates
+  are absent. The release contains no MFA cleanup migration, destructive
+  backfill, or schema-contract change; historical MFA schema and
+  method/recovery/enrollment/flag records remain in place for safe old/new
+  coexistence during the rolling deployment. Normal runtime credential/session
+  invalidation remains active. This storage compatibility does not authorize a
+  post-cutover rollback to mandatory-MFA application code.
 - `PARTNER_PORTAL_INTERNAL_TEST_MODE` is disabled and
   `PARTNER_PORTAL_V2_CANARY_ACCOUNT_IDS` is empty in production.
 - Instant confirmation, hosted payments, embedded payments, external email,
@@ -74,7 +85,9 @@ Record values without copying secrets into the cutover log. Confirm:
 1. Announce the maintenance window and freeze legacy partner-authority writes.
 2. Capture the final backup, application revision, database revision, worker
    state, outbox age, provider webhook lag, and legacy/V2 comparison counts.
-3. Apply expand-only migrations. Run migration assertions before proceeding.
+3. Apply only reviewed expand migrations. Run migration assertions before
+   proceeding. Do not clean, constrain, or remove legacy MFA schema/data in this
+   release.
 4. Normalize identities, backfill only explicit account relationships, apply
    reviewed role/scope mappings, and leave every ambiguous record quarantined.
 5. Revoke legacy partner sessions, login tokens, and stale invitation
@@ -82,15 +95,21 @@ Record values without copying secrets into the cutover log. Confirm:
 6. Enable canonical password authentication, account memberships, V2 reads, and
    V2 writes globally. Keep routine magic login and contact-derived authority
    disabled.
-7. Run Stonegate-owned production smoke journeys: password plus MFA login,
-   account switch, standard booking, review-only request, reschedule,
-   cancellation, proof upload/package, message, approval separation, invoice
-   read, hosted payment link, embedded payment, report export, and staff preview.
+7. Run Stonegate-owned production smoke journeys: password login, account
+   switch, standard booking, review-only request, reschedule, cancellation,
+   proof upload/package, message, approval separation, invoice read, hosted
+   payment link, embedded payment, report export, staff preview, and a Team CRM
+   job-completion action. No journey may request MFA.
 8. Reconcile every smoke-side appointment, hold, audit, outbox, provider,
    document, payment, and notification record before enabling external delivery
    or instant confirmation.
 9. Open global partner traffic. Observe the high-signal checks below through the
    full maintenance/observation window.
+
+Step 6 is an authentication point of no return. Once password-only activation
+is live or any new identity/session is created by it, do not redeploy the former
+mandatory-MFA application. A failed smoke check enters the containment and
+forward-fix procedure below.
 
 ## Go/no-go checks
 
@@ -98,7 +117,11 @@ Abort or enter safe maintenance mode immediately for any of the following:
 
 - Cross-account or out-of-scope data is returned.
 - A session is issued for an inactive identity, ineligible account, or absent
-  membership, or an MFA-pending transaction reaches a portal API.
+  membership, or a non-session legacy authentication record reaches a portal
+  API.
+- Any Team or Partner page/API requires an MFA code, enrollment, recovery,
+  step-up, or retired MFA endpoint, or retained legacy MFA state changes an
+  authorization result.
 - A phone number authenticates a user or routine magic login succeeds.
 - A migrated privileged membership was not reviewed.
 - Any scheduling writer bypasses the canonical lock/capacity transaction, or a
@@ -108,9 +131,10 @@ Abort or enter safe maintenance mode immediately for any of the following:
 - Provider/webhook lag, outbox age, upload failure, or calendar freshness
   exceeds the documented safe threshold without review-only degradation.
 
-## Safe rollback
+## Safe rollback through containment and forward repair
 
-Rollback never restores legacy authorization. Apply the narrowest response:
+Rollback never restores the old authentication runtime or legacy authority.
+Apply the narrowest containment response:
 
 1. Disable instant confirmation and recurring evaluation; preserve review
    intake if writes remain safe.
@@ -121,9 +145,9 @@ Rollback never restores legacy authorization. Apply the narrowest response:
 4. Disable V2 reads only for suspected tenant or serialization exposure.
 5. Stop affected workers before changing queued records. Inspect and reconcile
    indeterminate operations rather than retrying them blindly.
-6. Restore application code only when it continues to use canonical identities,
-   memberships, account scopes, and purpose-bound credentials against the
-   expanded schema.
+6. Keep the password/session runtime in place and ship a forward fix. Do not
+   restore mandatory-MFA routes, prompts, transactions, or authorization gates,
+   even though historical method/recovery/enrollment/flag storage remains.
 
 Before service returns, reconcile all records created around the incident,
 repeat the failed gate with Stonegate-owned accounts, record the remediation and
@@ -131,14 +155,22 @@ evidence in the audit ledger, and obtain a new global go/no-go decision.
 
 ## Observation and closure
 
-During cutover, alert on tenant-safe authorization failures, authentication and
-MFA error rate, calendar freshness, availability latency, hold conflicts,
-schedule mismatches, outbox age, notification failures, webhook lag, payment
-allocation, uploads, and recurring-work failures. Product analytics must remain
-first-party and contain no addresses, notes, contacts, filenames, PO values,
-gate codes, account/member IDs, or billing data.
+During cutover, alert on tenant-safe authorization failures, password/session
+error rate, any unexpected MFA prompt or endpoint request, calendar freshness,
+availability latency, hold conflicts, schedule mismatches, outbox age,
+notification failures, webhook lag, payment allocation, uploads, and
+recurring-work failures. Product analytics must remain first-party and contain
+no addresses, notes, contacts, filenames, PO values, gate codes, account/member
+IDs, or billing data.
 
 Close the cutover only after the observation window has no unexplained tenant
 leak, double booking, payment discrepancy, silent notification loss, or legacy
 authorization request, and every production smoke operation has a documented
 reconciliation result.
+
+Legacy MFA cleanup is not part of this cutover. Open a separate contract-phase
+change only after the password/session runtime and containment/forward-fix
+posture have been verified in production and the rolling-deployment overlap has
+ended. That later change requires its own snapshot rehearsal, data-restoration
+plan, and go/no-go decision; its rollback plan may never restore the old
+mandatory-MFA application.

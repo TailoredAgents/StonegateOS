@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { TEAM_OWNER_ONLY_PERMISSION_CATALOG } from "@myst-os/sdk";
-import { partnerActivationStateKind } from "@/lib/partner-purpose-auth";
 import { partnerIdentityMembershipSnapshot } from "@/lib/partner-identity-security-administration";
 
 const ROOT = path.resolve(process.cwd(), "../..");
@@ -52,69 +51,20 @@ describe("Team Owner partner identity security", () => {
     expect(changed).not.toBe(first);
   });
 
-  it("allows active-membership activation only for the exact MFA recovery state", () => {
-    const recovery = {
-      user: {
-        active: true,
-        identityStatus: "active",
-        mfaRequired: true,
-        mfaEnrolledAt: null,
-        passwordHash: "$argon2id$test",
-      },
-      membershipStatus: "active",
-      hasEnabledMfaMethod: false,
-    } as const;
-    expect(partnerActivationStateKind(recovery)).toBe("mfa_recovery");
-    expect(
-      partnerActivationStateKind({
-        ...recovery,
-        hasEnabledMfaMethod: true,
-      }),
-    ).toBeNull();
-    expect(
-      partnerActivationStateKind({
-        ...recovery,
-        user: { ...recovery.user, passwordHash: null },
-      }),
-    ).toBeNull();
-    expect(
-      partnerActivationStateKind({
-        ...recovery,
-        user: { ...recovery.user, mfaRequired: false },
-      }),
-    ).toBeNull();
-    expect(
-      partnerActivationStateKind({
-        ...recovery,
-        membershipStatus: "suspended",
-      }),
-    ).toBeNull();
-  });
-
-  it("keeps both global actions non-delegable and behind recent Team MFA", () => {
-    expect(TEAM_OWNER_ONLY_PERMISSION_CATALOG).toEqual(
-      expect.arrayContaining([
-        "partners.identities.disable",
-        "partners.security.mfa.reset",
-      ]),
+  it("keeps global identity disable non-delegable and behind recent Team authentication", () => {
+    expect(TEAM_OWNER_ONLY_PERMISSION_CATALOG).toContain(
+      "partners.identities.disable",
     );
-    for (const [relativePath, permission] of [
-      [
-        "apps/api/app/api/admin/partner-management/v1/security/identities/[userId]/disable/route.ts",
-        "partners.identities.disable",
-      ],
-      [
-        "apps/api/app/api/admin/partner-management/v1/security/identities/[userId]/mfa/reset/route.ts",
-        "partners.security.mfa.reset",
-      ],
-    ] as const) {
-      const route = source(relativePath);
-      expect(route).toContain('principalTypes: ["human"]');
-      expect(route).toContain(`requiredPermissions: ["${permission}"]`);
-      expect(route).toContain('risk: "destructive"');
-      expect(route).toContain("requiresIdempotency: true");
-      expect(route).toContain("maxAuthenticationAgeSeconds: 15 * 60");
-    }
+    const route = source(
+      "apps/api/app/api/admin/partner-management/v1/security/identities/[userId]/disable/route.ts",
+    );
+    expect(route).toContain('principalTypes: ["human"]');
+    expect(route).toContain(
+      'requiredPermissions: ["partners.identities.disable"]',
+    );
+    expect(route).toContain('risk: "destructive"');
+    expect(route).toContain("requiresIdempotency: true");
+    expect(route).toContain("maxAuthenticationAgeSeconds: 15 * 60");
   });
 
   it("enumerates and version-binds every membership before a global mutation", () => {
@@ -147,16 +97,12 @@ describe("Team Owner partner identity security", () => {
     const disableStart = service.indexOf(
       "export async function disablePartnerIdentityAsTeamOwner",
     );
-    const resetStart = service.indexOf(
-      "export async function resetPartnerMfaAsTeamOwner",
-    );
-    const disable = service.slice(disableStart, resetStart);
+    const disable = service.slice(disableStart);
     expect(disable).toContain(".update(partnerUsers)");
     expect(disable).toContain('identityStatus: "disabled"');
     expect(disable).toContain("securityVersion: nextSecurityVersion");
     expect(service).toContain(".update(partnerSessions)");
     expect(service).toContain(".update(partnerLoginTokens)");
-    expect(service).toContain(".update(partnerAuthTransactions)");
     expect(service).toContain(".update(partnerAuthChallenges)");
     expect(disable).not.toContain(".update(partnerAccountMemberships)");
     expect(disable).not.toContain(".delete(partnerAccountMemberships)");
@@ -166,34 +112,7 @@ describe("Team Owner partner identity security", () => {
     expect(disable).toContain("membershipsChanged: false");
   });
 
-  it("revokes MFA material and creates only a purpose-bound recovery challenge", () => {
-    const service = source(
-      "apps/api/src/lib/partner-identity-security-administration.ts",
-    );
-    const activation = source("apps/api/src/lib/partner-purpose-auth.ts");
-    const activationMfa = source(
-      "apps/api/src/lib/partner-activation-mfa-auth.ts",
-    );
-    const routeHelper = source(
-      "apps/api/src/lib/partner-identity-security-mutation-route.ts",
-    );
-    expect(service).toContain("credentialIdHash: null");
-    expect(service).toContain("credentialReference: null");
-    expect(service).toContain("totpSecretCiphertext: null");
-    expect(service).toContain("totpSecretKeyVersion: null");
-    expect(service).toContain(".update(partnerMfaRecoveryCodes)");
-    expect(service).toContain(".delete(partnerMfaEnrollmentChallenges)");
-    expect(service).toContain("createPartnerActivationChallengeInTransaction");
-    expect(service).toContain('recoveryDelivery: "queued"');
-    expect(routeHelper).not.toContain("rawToken");
-    expect(activation).toContain('return "mfa_recovery"');
-    expect(activation).toContain("existingPasswordVerification");
-    expect(activationMfa).toContain("context.recovery");
-    expect(activationMfa).toContain("membershipActivated: !context.recovery");
-    expect(activationMfa).toContain('assuranceLevel: "aal2"');
-  });
-
-  it("presents high-friction owner controls with the full membership impact", () => {
+  it("presents the high-friction identity-disable control with full membership impact", () => {
     const workspace = source(
       "apps/site/src/app/team/components/PartnerAdministrationSection.tsx",
     );
@@ -203,21 +122,15 @@ describe("Team Owner partner identity security", () => {
     const manifest = source("apps/site/src/app/team/action-policy-manifest.ts");
     expect(workspace).toContain("Review every affected company membership");
     expect(workspace).toContain("DISABLE ${identity.email}");
-    expect(workspace).toContain("RESET ${identity.email} MFA");
     expect(workspace).toContain(
       "account, job, document, payment, and financial",
     );
     expect(workspace).toContain("partnerIdentityDisableAction");
-    expect(workspace).toContain("partnerMfaResetAction");
     expect(actions).toContain(
       'hasTeamPermission(principal, "partners.identities.disable")',
-    );
-    expect(actions).toContain(
-      'hasTeamPermission(principal, "partners.security.mfa.reset")',
     );
     expect(manifest).toContain(
       "partnerIdentityDisableAction: recentHumanAction",
     );
-    expect(manifest).toContain("partnerMfaResetAction: recentHumanAction");
   });
 });

@@ -17,7 +17,6 @@ import {
   computePartnerCapabilities,
   isPartnerLaunchRoleKey,
   PARTNER_LAUNCH_ROLE_KEYS,
-  partnerAccessRequiresMfa,
   type PartnerCapability,
   type PartnerPrincipal,
 } from "@/lib/partner-account-authorization";
@@ -121,8 +120,6 @@ type MembershipRow = {
   userName: string;
   userEmail: string;
   userActive: boolean;
-  userMfaRequired: boolean;
-  userMfaEnrolledAt: Date | null;
   roleName: string | null;
   roleDescription: string | null;
   roleCapabilities: string[] | null;
@@ -168,8 +165,6 @@ function memberSelection() {
     userName: partnerUsers.name,
     userEmail: partnerUsers.email,
     userActive: partnerUsers.active,
-    userMfaRequired: partnerUsers.mfaRequired,
-    userMfaEnrolledAt: partnerUsers.mfaEnrolledAt,
     roleName: partnerRoleTemplates.name,
     roleDescription: partnerRoleTemplates.description,
     roleCapabilities: partnerRoleTemplates.capabilities,
@@ -382,15 +377,6 @@ function memberDto(input: {
     accessLevel: input.row.accessLevel,
     currentUser: targetIsSelf,
     defaultAccount: input.row.isDefault,
-    security: {
-      mfaRequired:
-        input.row.userMfaRequired ||
-        partnerAccessRequiresMfa({
-          roleKey: input.row.roleKey,
-          capabilities,
-        }),
-      mfaEnrolled: Boolean(input.row.userMfaEnrolledAt),
-    },
     dates: {
       invitedAt: input.row.invitedAt.toISOString(),
       acceptedAt: input.row.acceptedAt?.toISOString() ?? null,
@@ -420,10 +406,6 @@ function roleDto(
     name: role.name,
     description: role.description,
     system: role.isSystem,
-    mfaRequired: partnerAccessRequiresMfa({
-      roleKey: role.key,
-      capabilities,
-    }),
   };
 }
 

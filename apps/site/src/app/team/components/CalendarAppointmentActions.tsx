@@ -467,10 +467,13 @@ export function CalendarAppointmentActions({
                   <summary className="min-h-11 cursor-pointer py-2 font-semibold">
                     Missing-proof exception
                   </summary>
-                  <label className="mt-2 block" htmlFor="calendar-proof-override-reason">
+                  <label
+                    className="mt-2 block"
+                    htmlFor="calendar-proof-override-reason"
+                  >
                     <span className="block text-sm leading-6">
                       Use only when required partner proof cannot be captured.
-                      The reason is audited and requires a recent MFA check.
+                      The reason is recorded in the job history.
                     </span>
                     <textarea
                       id="calendar-proof-override-reason"

@@ -1152,7 +1152,7 @@ function AppointmentCard({
                     <label className="mt-2 block">
                       <span className="block leading-6">
                         Use only when required partner proof cannot be captured.
-                        This reason is audited and requires recent MFA.
+                        This reason is recorded in the job history.
                       </span>
                       <textarea
                         name="proofOverrideReason"

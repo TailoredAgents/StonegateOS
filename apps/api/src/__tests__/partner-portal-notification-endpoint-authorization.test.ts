@@ -20,13 +20,10 @@ const request = new NextRequest(
   { method: "POST" },
 );
 
-function privilegedPrincipal(input: {
-  assuranceLevel: "aal1" | "aal2";
-  mfaVerifiedAt: Date | null;
-}) {
+function authorizedPrincipal() {
   return {
-    security: { mfaRequired: true },
-    session: input,
+    security: { mfaRequired: false },
+    session: { assuranceLevel: "aal1", mfaVerifiedAt: null },
   };
 }
 
@@ -35,33 +32,8 @@ describe("partner portal notification endpoint mutation authorization", () => {
     jest.resetAllMocks();
   });
 
-  it("denies an AAL1 privileged partner before endpoint mutation", async () => {
-    mockRequirePartnerCapability.mockResolvedValue({
-      ok: true,
-      principal: privilegedPrincipal({
-        assuranceLevel: "aal1",
-        mfaVerifiedAt: null,
-      }),
-    });
-
-    await expect(
-      requirePartnerNotificationEndpointMutationAccess(request),
-    ).resolves.toEqual({
-      ok: false,
-      status: 403,
-      error: "mfa_step_up_required",
-    });
-    expect(mockRequirePartnerCapability).toHaveBeenCalledWith(
-      request,
-      "account.security.manage",
-    );
-  });
-
-  it("accepts an explicitly authorized partner with recent AAL2", async () => {
-    const principal = privilegedPrincipal({
-      assuranceLevel: "aal2",
-      mfaVerifiedAt: new Date(),
-    });
+  it("accepts an AAL1 partner with explicit endpoint-management authority", async () => {
+    const principal = authorizedPrincipal();
     mockRequirePartnerCapability.mockResolvedValue({ ok: true, principal });
 
     await expect(
@@ -73,21 +45,16 @@ describe("partner portal notification endpoint mutation authorization", () => {
     );
   });
 
-  it("denies stale AAL2 instead of treating a long-lived session as recent", async () => {
-    mockRequirePartnerCapability.mockResolvedValue({
-      ok: true,
-      principal: privilegedPrincipal({
-        assuranceLevel: "aal2",
-        mfaVerifiedAt: new Date(Date.now() - 16 * 60 * 1_000),
-      }),
-    });
+  it("preserves a capability denial without opening the mutation", async () => {
+    const denied = { ok: false, status: 403, error: "forbidden" } as const;
+    mockRequirePartnerCapability.mockResolvedValue(denied);
 
     await expect(
       requirePartnerNotificationEndpointMutationAccess(request),
-    ).resolves.toEqual({
-      ok: false,
-      status: 403,
-      error: "mfa_step_up_required",
-    });
+    ).resolves.toEqual(denied);
+    expect(mockRequirePartnerCapability).toHaveBeenCalledWith(
+      request,
+      "account.security.manage",
+    );
   });
 });

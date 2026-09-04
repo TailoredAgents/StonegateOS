@@ -17,39 +17,24 @@ describe("partner password security policy", () => {
     expect(
       isRecentPartnerPasswordAuthentication({
         authMethod: "password",
-        assuranceLevel: "aal1",
         sessionCreatedAt: new Date(now.getTime() - 14 * 60_000),
-        mfaVerifiedAt: null,
         now,
       }),
     ).toBe(true);
     expect(
       isRecentPartnerPasswordAuthentication({
         authMethod: "magic_link",
-        assuranceLevel: "aal1",
         sessionCreatedAt: new Date(now.getTime() - 1_000),
-        mfaVerifiedAt: null,
         now,
       }),
     ).toBe(false);
   });
 
-  it("accepts only a recent AAL2 verification", () => {
+  it("rejects stale password sessions", () => {
     expect(
       isRecentPartnerPasswordAuthentication({
-        authMethod: "mfa_step_up",
-        assuranceLevel: "aal2",
-        sessionCreatedAt: new Date(now.getTime() - 60 * 60_000),
-        mfaVerifiedAt: new Date(now.getTime() - 14 * 60_000),
-        now,
-      }),
-    ).toBe(true);
-    expect(
-      isRecentPartnerPasswordAuthentication({
-        authMethod: "mfa_step_up",
-        assuranceLevel: "aal2",
-        sessionCreatedAt: new Date(now.getTime() - 60 * 60_000),
-        mfaVerifiedAt: new Date(now.getTime() - 16 * 60_000),
+        authMethod: "password",
+        sessionCreatedAt: new Date(now.getTime() - 16 * 60_000),
         now,
       }),
     ).toBe(false);

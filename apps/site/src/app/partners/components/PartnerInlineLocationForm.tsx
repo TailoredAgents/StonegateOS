@@ -174,7 +174,7 @@ export function PartnerInlineLocationForm({
                 Add and verify a service location
               </h3>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                Your saved booking draft stays open. The new location will be
+                Your saved service request stays open. The new location will be
                 selected automatically after the address check.
               </p>
             </div>

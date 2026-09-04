@@ -9,7 +9,7 @@ import { PARTNER_SESSION_COOKIE } from "@/lib/partner-session";
 export const metadata: Metadata = {
   title: "Request partner access",
   description:
-    "Verify your work email to request a Stonegate Partner Portal account.",
+    "Request access to quicker, easier Stonegate service for your company.",
   robots: { index: false, follow: false, nocache: true },
 };
 

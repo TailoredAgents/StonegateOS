@@ -5,6 +5,7 @@ import {
   hasTeamPermission,
   resolveTeamPrincipalFromRequest,
   type TeamRequestPrincipal,
+  type TeamSessionVerificationResult,
 } from "@/lib/team-principal";
 import { isSameOriginTeamRequest } from "@/lib/team-request-origin";
 
@@ -30,8 +31,10 @@ export type TeamPrincipalResult =
 export async function resolveTeamRoleFromRequest(
   request: NextRequest,
 ): Promise<string | null> {
-  const principal = await resolveTeamPrincipalFromRequest(request);
-  return principal?.roleSlug ?? null;
+  const verification = await resolveTeamPrincipalFromRequest(request);
+  return verification.kind === "valid"
+    ? (verification.principal.roleSlug ?? null)
+    : null;
 }
 
 function normalizeRequirements(values: readonly string[]): string[] {
@@ -72,6 +75,30 @@ function deniedResponse(
   return { ok: false, response };
 }
 
+function unavailableResponse(
+  verification: Extract<TeamSessionVerificationResult, { kind: "unavailable" }>,
+): TeamPrincipalResult {
+  const headers = new Headers({
+    "Cache-Control": "private, no-store, max-age=0",
+  });
+  if (verification.retryAfter) {
+    headers.set("Retry-After", verification.retryAfter);
+  }
+  return {
+    ok: false,
+    response: NextResponse.json(
+      {
+        ok: false,
+        error: "session_verification_unavailable",
+        message:
+          "Team services could not verify your session right now. Your sign-in is unchanged; wait a moment and try again.",
+        retryable: true,
+      },
+      { status: 503, headers },
+    ),
+  };
+}
+
 export async function requireTeamPrincipal(
   request: NextRequest,
   options: RequireTeamPrincipalOptions = {},
@@ -92,8 +119,14 @@ export async function requireTeamPrincipal(
     };
   }
 
-  const principal = await resolveTeamPrincipalFromRequest(request);
-  if (!principal) return deniedResponse(request, options, 401);
+  const verification = await resolveTeamPrincipalFromRequest(request);
+  if (verification.kind === "unavailable") {
+    return unavailableResponse(verification);
+  }
+  if (verification.kind === "invalid") {
+    return deniedResponse(request, options, 401);
+  }
+  const { principal } = verification;
 
   const allowedRoles = normalizeRequirements(options.roles ?? []);
   if (

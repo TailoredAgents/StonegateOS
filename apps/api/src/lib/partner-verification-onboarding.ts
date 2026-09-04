@@ -19,9 +19,7 @@ import {
   partnerUsers,
 } from "@/db";
 import {
-  computePartnerCapabilities,
   isPartnerLaunchRoleKey,
-  partnerAccessRequiresMfa,
   type PartnerLaunchRoleKey,
 } from "@/lib/partner-account-authorization";
 import {
@@ -440,15 +438,6 @@ export async function provisionVerificationFirstPartnerApplication(
   if (!selectedRole || !isPartnerLaunchRoleKey(selectedRole.key)) {
     throw new Error("partner_role_unavailable");
   }
-  const requiresMfa = partnerAccessRequiresMfa({
-    roleKey: selectedRole.key,
-    capabilities: computePartnerCapabilities({
-      roleCapabilities: selectedRole.capabilities,
-      grants: [],
-      denies: [],
-    }),
-  });
-
   let accountId: string;
   if (application.companyResolutionChoice === "join_existing") {
     const verifiedDomain = normalizedEmailDomain(application.normalizedEmail);
@@ -560,7 +549,6 @@ export async function provisionVerificationFirstPartnerApplication(
       active: partnerUsers.active,
       identityStatus: partnerUsers.identityStatus,
       securityVersion: partnerUsers.securityVersion,
-      mfaRequired: partnerUsers.mfaRequired,
     })
     .from(partnerUsers)
     .where(eq(partnerUsers.normalizedEmail, application.normalizedEmail))
@@ -582,7 +570,6 @@ export async function provisionVerificationFirstPartnerApplication(
     await tx
       .update(partnerUsers)
       .set({
-        mfaRequired: existingIdentity.mfaRequired || requiresMfa,
         emailVerifiedAt: application.emailVerifiedAt,
         updatedAt: input.now,
       })
@@ -600,7 +587,7 @@ export async function provisionVerificationFirstPartnerApplication(
         active: false,
         identityStatus: "pending_activation",
         emailVerifiedAt: application.emailVerifiedAt,
-        mfaRequired: requiresMfa,
+        mfaRequired: false,
         securityVersion: 1,
         createdAt: input.now,
         updatedAt: input.now,

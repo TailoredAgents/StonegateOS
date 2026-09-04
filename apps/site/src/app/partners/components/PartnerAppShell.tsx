@@ -60,8 +60,8 @@ const NAV_ITEMS: PartnerNavItem[] = [
   },
   {
     href: "/partners/book",
-    label: "Schedule job",
-    shortLabel: "Schedule",
+    label: "Request service",
+    shortLabel: "Request",
     capability: "schedule",
     icon: CalendarPlus2,
   },
@@ -112,7 +112,7 @@ const NAV_ITEMS: PartnerNavItem[] = [
 const PAGE_TITLES: Array<{ prefix: string; title: string }> = [
   { prefix: "/partners/approvals", title: "Approvals" },
   { prefix: "/partners/bookings", title: "Jobs" },
-  { prefix: "/partners/book", title: "Schedule job" },
+  { prefix: "/partners/book", title: "Request service" },
   { prefix: "/partners/properties", title: "Locations" },
   { prefix: "/partners/photos", title: "Photos & proof" },
   { prefix: "/partners/billing", title: "Billing & documents" },
@@ -478,7 +478,7 @@ export function PartnerAppShell({
                   className="mb-4 flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-800"
                 >
                   <CalendarPlus2 className="h-4 w-4" aria-hidden="true" />
-                  Schedule job
+                  Request service
                 </Link>
               ) : null}
               <PortalNavigation

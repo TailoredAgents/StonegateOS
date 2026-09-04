@@ -28,7 +28,7 @@ import {
 } from "@/app/partners/components/PartnerPortalUi";
 import { getPublicCompanyProfile } from "@/lib/company";
 
-export const metadata: Metadata = { title: "Schedule job" };
+export const metadata: Metadata = { title: "Request service" };
 
 type CatalogItem = {
   key?: string;
@@ -372,18 +372,18 @@ export default async function PartnerBookPage({
     return (
       <div className="space-y-5 sm:space-y-6">
         <PartnerPageHeader
-          eyebrow="Service scheduling"
+          eyebrow="Quick service request"
           title={personaPresentation.taskLabels.schedule}
-          description="Your current portal role doesn’t include permission to create service requests."
+          description="Your current role doesn’t include permission to request service."
           breadcrumbs={[
             { label: "Overview", href: "/partners/overview" },
-            { label: "Schedule job", href: "/partners/book" },
+            { label: "Request service", href: "/partners/book" },
           ]}
         />
         <PartnerPanel>
           <PartnerEmptyState
             title="Scheduling access is limited"
-            description="Ask an account administrator to update your role, or contact Stonegate for help with this job."
+            description="Ask your account administrator to update your role, or contact Stonegate for help requesting service."
             action={{ href: "/partners/help", label: "Contact Stonegate" }}
             icon={<CalendarClock className="h-6 w-6" aria-hidden="true" />}
           />
@@ -411,27 +411,27 @@ export default async function PartnerBookPage({
     return (
       <div className="space-y-5 sm:space-y-6">
         <PartnerPageHeader
-          eyebrow="Service scheduling"
+          eyebrow="Quick service request"
           title={personaPresentation.taskLabels.schedule}
-          description="Create a saved request, choose a live service time, and send the complete job details to Stonegate."
+          description="Choose a saved location, add what you need, and select an available service window."
           breadcrumbs={[
             { label: "Overview", href: "/partners/overview" },
-            { label: "Schedule job", href: "/partners/book" },
+            { label: "Request service", href: "/partners/book" },
           ]}
         />
         {unavailable ? (
           <PartnerPanel>
             <PartnerEmptyState
-              title="Live scheduling is not enabled for this account yet"
-              description="No request has been submitted. Your existing jobs are unchanged. Stonegate can schedule this service and confirm capacity by phone."
-              action={{ href: "/partners/help", label: "Get scheduling help" }}
+              title="Online requests are not available for this account yet"
+              description="Nothing was submitted and your existing jobs are unchanged. Contact Stonegate and we’ll help start the request."
+              action={{ href: "/partners/help", label: "Get help" }}
               icon={<PhoneCall className="h-6 w-6" aria-hidden="true" />}
             />
           </PartnerPanel>
         ) : (
           <PartnerErrorState
-            title="We couldn’t load live scheduling"
-            description="No request has been submitted. Try again in a moment or contact Stonegate for immediate scheduling help."
+            title="We couldn’t start your request"
+            description="Nothing was submitted. Try again in a moment or contact Stonegate for help."
             retryHref="/partners/book"
           />
         )}
@@ -460,17 +460,17 @@ export default async function PartnerBookPage({
     return (
       <div className="space-y-5 sm:space-y-6">
         <PartnerPageHeader
-          eyebrow="Service scheduling"
+          eyebrow="Quick service request"
           title={personaPresentation.taskLabels.schedule}
-          description="Create a saved request, choose a live service time, and send the complete job details to Stonegate."
+          description="Choose a saved location, add what you need, and select an available service window."
           breadcrumbs={[
             { label: "Overview", href: "/partners/overview" },
-            { label: "Schedule job", href: "/partners/book" },
+            { label: "Request service", href: "/partners/book" },
           ]}
         />
         <PartnerErrorState
           title="Cancellation terms are temporarily unavailable"
-          description="No request has been submitted. Refresh before booking so the account’s current cancellation and schedule-change terms can be reviewed safely."
+          description="Nothing was submitted. Refresh so you can review the current cancellation and schedule-change terms before sending your request."
           retryHref="/partners/book"
         />
       </div>
@@ -509,25 +509,25 @@ export default async function PartnerBookPage({
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
-        eyebrow="Live service scheduling"
+        eyebrow="Quick service request"
         title={personaPresentation.taskLabels.schedule}
-        description="Build a saved request and choose a capacity-backed window. Eligible work confirms instantly; anything uncertain is saved as a clearly labeled review request."
+        description="Choose a saved location, add only what this job needs, and select an available two-hour window. Your work saves as you go; requests that need review are labeled clearly before you send them."
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
-          { label: "Schedule job", href: "/partners/book" },
+          { label: "Request service", href: "/partners/book" },
         ]}
       >
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-600">
           <span className="inline-flex items-center gap-1.5">
             <ShieldCheckIcon />
-            Private account workspace
+            Details save as you go
           </span>
           <span className="inline-flex items-center gap-1.5">
             <CalendarClock
               className="h-4 w-4 text-primary-700"
               aria-hidden="true"
             />
-            Live schedule availability
+            Clear availability and review status
           </span>
           <a
             href={`tel:${company.phoneE164}`}
@@ -540,8 +540,8 @@ export default async function PartnerBookPage({
 
       {draftRecoveryFailed ? (
         <PartnerNotice tone="warning">
-          That saved-draft link is no longer available. A new draft will begin
-          below; no job has been submitted.
+          That saved request link is no longer available. A new request will
+          begin below; nothing has been submitted.
         </PartnerNotice>
       ) : null}
 
@@ -553,8 +553,8 @@ export default async function PartnerBookPage({
       {locations.length === 0 && !context.permissions.manageLocations ? (
         <PartnerPanel>
           <PartnerEmptyState
-            title="Add a service location first"
-            description="A verified account location is required before Stonegate can calculate service availability."
+            title="Choose or add a location first"
+            description="Save the location once so Stonegate can check service availability and you can reuse its details next time."
             action={{ href: "/partners/properties", label: "Manage locations" }}
             icon={<MapPin className="h-6 w-6" aria-hidden="true" />}
           />
@@ -562,8 +562,8 @@ export default async function PartnerBookPage({
       ) : services.length === 0 ? (
         <PartnerPanel>
           <PartnerEmptyState
-            title="Your service catalog is not ready"
-            description="No configured services are currently available for online scheduling. Contact Stonegate to prepare this request safely."
+            title="Online service choices are not ready"
+            description="No services are currently available for online requests. Contact Stonegate and we’ll help start the request."
             action={{ href: "/partners/help", label: "Contact Stonegate" }}
             icon={<CalendarClock className="h-6 w-6" aria-hidden="true" />}
           />

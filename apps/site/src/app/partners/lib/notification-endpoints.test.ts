@@ -134,8 +134,7 @@ void test("settings UI keeps SMS verification private, explicit, and idempotent"
   assert.match(component, /confirmation: "STOP SMS"/u);
   assert.match(component, /Yes, remove SMS number/u);
   assert.match(component, /canManage/u);
-  assert.match(component, /mfa_step_up_required/u);
-  assert.match(component, /Verify this session again/u);
+  assert.doesNotMatch(component, /mfa_step_up_required|mfa\/step-up/iu);
   assert.match(component, /form\.reset\(\)/u);
   assert.doesNotMatch(component, /localStorage|sessionStorage/u);
   assert.doesNotMatch(component, /useState[^\n]*phone/iu);

@@ -73,21 +73,21 @@ async function openPartnerDraftAtProof(input: {
   );
   await expect(
     input.page.getByRole("heading", {
-      name: "Schedule facility service",
+      name: "Request facility service",
       level: 1,
     }),
   ).toBeVisible();
-  await expect(input.page.getByText("All changes saved")).toBeVisible();
+  await expect(input.page.getByText("Saved", { exact: true })).toBeVisible();
   await input.page.getByRole("button", { name: "Continue" }).click();
   await expect(
-    input.page.getByRole("heading", { name: "Service & scope" }),
+    input.page.getByRole("heading", { name: "Add service details" }),
   ).toBeVisible();
   await input.page
     .getByRole("textbox", { name: BOOKING_SCOPE_LABEL })
     .fill(input.description);
   await input.page.getByRole("button", { name: "Continue" }).click();
   await expect(
-    input.page.getByRole("heading", { name: "Contact & access" }),
+    input.page.getByRole("heading", { name: "Confirm contact & access" }),
   ).toBeVisible();
   await input.page.getByLabel("On-site contact name").fill("E2E Site Lead");
   await input.page
@@ -95,7 +95,7 @@ async function openPartnerDraftAtProof(input: {
     .fill(input.fixture.partnerPhoneE164);
   await input.page.getByRole("button", { name: "Continue" }).click();
   await expect(
-    input.page.getByRole("heading", { name: "Photos & proof" }),
+    input.page.getByRole("heading", { name: "Add photos & proof" }),
   ).toBeVisible();
 }
 
@@ -121,14 +121,14 @@ test(
       );
       await expect(
         page.getByRole("heading", {
-          name: "Schedule facility service",
+          name: "Request facility service",
           level: 1,
         }),
       ).toBeVisible();
-      await expect(page.getByText("All changes saved")).toBeVisible();
+      await expect(page.getByText("Saved", { exact: true })).toBeVisible();
       await page.getByRole("button", { name: "Continue" }).click();
       await expect(
-        page.getByRole("heading", { name: "Service & scope" }),
+        page.getByRole("heading", { name: "Add service details" }),
       ).toBeVisible();
 
       const service = page.locator("#partner-book-service");
@@ -190,7 +190,7 @@ test(
       }
       await page.getByRole("button", { name: "Continue" }).click();
       await expect(
-        page.getByRole("heading", { name: "Contact & access" }),
+        page.getByRole("heading", { name: "Confirm contact & access" }),
       ).toBeVisible();
       await page.getByRole("button", { name: "Continue" }).click();
 
@@ -213,9 +213,9 @@ test(
         "aria-describedby",
         "partner-book-contact-method-error",
       );
-      await expect(
-        page.locator("#partner-book-contact-name-error"),
-      ).toHaveText("Add the on-site contact’s name.");
+      await expect(page.locator("#partner-book-contact-name-error")).toHaveText(
+        "Add the on-site contact’s name.",
+      );
       await expect(
         page.locator("#partner-book-contact-method-error"),
       ).toHaveText("Add a phone number or email for the on-site contact.");
@@ -300,31 +300,33 @@ test(
         page.locator('button[aria-label$="arrival window"]'),
       ).toHaveCount(0);
       const availabilityPanel = page
-        .getByRole("heading", { name: "Live service availability" })
+        .getByRole("heading", { name: "Choose a service window" })
         .locator("..")
         .locator("..");
       await expect(
         availabilityPanel.getByRole("button", { name: "Refresh" }),
       ).toBeVisible();
-      await expect(page.getByText("All changes saved")).toBeVisible();
+      await expect(page.getByText("Saved", { exact: true })).toBeVisible();
 
       await page.reload();
-      expect(new URL(page.url()).searchParams.get("draftId")).toBe(savedDraftId);
+      expect(new URL(page.url()).searchParams.get("draftId")).toBe(
+        savedDraftId,
+      );
       await expect(
-        page.getByRole("heading", { name: "Location" }),
+        page.getByRole("heading", { name: "Choose location" }),
       ).toBeVisible();
-      await expect(page.getByText("All changes saved")).toBeVisible();
+      await expect(page.getByText("Saved", { exact: true })).toBeVisible();
       await page.getByRole("button", { name: "Continue" }).click();
       await expect(
         page.getByRole("textbox", { name: BOOKING_SCOPE_LABEL }),
       ).toHaveValue(description);
       await page.getByRole("button", { name: "Continue" }).click();
       await expect(
-        page.getByRole("heading", { name: "Contact & access" }),
+        page.getByRole("heading", { name: "Confirm contact & access" }),
       ).toBeVisible();
       await page.getByRole("button", { name: "Continue" }).click();
       await expect(
-        page.getByRole("heading", { name: "Photos & proof" }),
+        page.getByRole("heading", { name: "Add photos & proof" }),
       ).toBeVisible();
       await page.getByRole("button", { name: "Continue" }).click();
 
@@ -385,7 +387,7 @@ test(
       await expect(waitlist).toBeChecked();
       await page.getByRole("button", { name: "Continue" }).click();
       await expect(
-        page.getByRole("heading", { name: "Review & send" }),
+        page.getByRole("heading", { name: "Check & send" }),
       ).toBeVisible();
       await expect(
         page.getByText("Scheduling waitlist requested", { exact: true }),
@@ -706,7 +708,10 @@ test(
       await usePartnerSession(page, baseURL, fixture);
       await page.goto("/partners/settings");
       await expect(
-        page.getByRole("heading", { name: "Account & security", level: 1 }),
+        page.getByRole("heading", {
+          name: "Account, updates & security",
+          level: 1,
+        }),
       ).toBeVisible();
       await page.route("**/partners/logout", async (route) => {
         if (route.request().method() !== "POST") {
@@ -740,7 +745,10 @@ test(
       );
       expect(sessionCookie?.value).toBe(fixture.sessionToken);
       await expect(
-        page.getByRole("heading", { name: "Account & security", level: 1 }),
+        page.getByRole("heading", {
+          name: "Account, updates & security",
+          level: 1,
+        }),
       ).toBeVisible();
     } finally {
       await cleanupPartnerBookingFixture(fixture);

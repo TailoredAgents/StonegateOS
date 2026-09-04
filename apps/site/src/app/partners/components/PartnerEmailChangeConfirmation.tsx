@@ -58,11 +58,11 @@ export function PartnerEmailChangeConfirmation({
           aria-hidden="true"
         />
         <h1 className="mt-5 text-2xl font-semibold text-slate-950">
-          Sign-in email updated
+          Email updated—you’re ready to sign in
         </h1>
         <p className="mt-3 text-sm leading-6 text-slate-600">
-          Every portal session was revoked. Sign in with the new email and your
-          existing password; this confirmation did not sign you in.
+          Sign in with your new email and existing password. For security, all
+          other signed-in devices were signed out.
         </p>
         <Link
           href="/partners/login?emailChanged=1"
@@ -77,12 +77,15 @@ export function PartnerEmailChangeConfirmation({
   return (
     <div className="mx-auto max-w-xl rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/60 sm:p-10">
       <MailCheck className="h-12 w-12 text-primary-700" aria-hidden="true" />
-      <h1 className="mt-5 text-3xl font-semibold tracking-tight text-slate-950">
+      <p className="mt-5 text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">
+        Keep sign-in simple
+      </p>
+      <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
         Confirm your new sign-in email
       </h1>
       <p className="mt-3 text-sm leading-6 text-slate-600">
-        Confirming changes your Partner Portal identity, revokes every signed-in
-        device, and returns you to sign in. It does not change company records.
+        This makes the new email the one you use to sign in and signs out other
+        devices for security. Your company information will not change.
       </p>
       {error || !hasToken ? (
         <PartnerNotice tone="error" className="mt-5">

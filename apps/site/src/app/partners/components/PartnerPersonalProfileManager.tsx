@@ -119,16 +119,17 @@ export function PartnerPersonalProfileManager({
           </div>
           <div>
             <h2 className="text-lg font-semibold text-slate-950">
-              Personal profile
+              How your name appears
             </h2>
             <p
               id="partner-display-name-help"
               className="mt-1 max-w-2xl text-sm leading-6 text-slate-600"
             >
-              This name identifies you in partner messages and activity. It
-              follows your identity across every Stonegate partner account you
-              can access; it does not change your sign-in email, permissions, or
-              CRM contacts.
+              Set this once so teammates and Stonegate can recognize your
+              messages and activity.{" "}
+              {
+                "It follows you across every Stonegate partner account you can access; changing it does not change your sign-in email, permissions, or CRM contacts."
+              }
             </p>
           </div>
         </div>
@@ -175,7 +176,7 @@ export function PartnerPersonalProfileManager({
             ) : (
               <Save className="h-4 w-4" aria-hidden="true" />
             )}
-            {busy ? "Saving…" : "Save display name"}
+            {busy ? "Saving…" : "Save name"}
           </button>
         </form>
       </PartnerPanel>

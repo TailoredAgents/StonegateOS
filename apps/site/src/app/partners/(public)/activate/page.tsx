@@ -4,7 +4,7 @@ import { PartnerCredentialSetupForm } from "@/app/partners/components/PartnerCre
 import { PARTNER_ACTIVATION_TOKEN_COOKIE } from "@/lib/partner-application-session";
 
 export const metadata: Metadata = {
-  title: "Activate partner access",
+  title: "Finish setting up partner access",
   robots: { index: false, follow: false, nocache: true },
   referrer: "no-referrer",
 };

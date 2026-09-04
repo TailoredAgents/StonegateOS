@@ -9,7 +9,6 @@ import {
   hasPartnerCapability,
   isPartnerV2MembershipEligible,
   normalizePartnerPersona,
-  partnerAccessRequiresMfa,
   selectPartnerAccountAccess,
   type PartnerAccountAccess,
   type PartnerPrincipal,
@@ -106,30 +105,6 @@ describe("partner account capability authorization", () => {
     const context = principal();
     expect(hasPartnerCapability(context, "bookings.read")).toBe(true);
     expect(hasPartnerCapability(context, "bookings.create")).toBe(false);
-  });
-
-  it("requires MFA for privileged role templates and equivalent custom authority", () => {
-    expect(
-      partnerAccessRequiresMfa({ roleKey: "administrator", capabilities: [] }),
-    ).toBe(true);
-    expect(
-      partnerAccessRequiresMfa({
-        roleKey: "custom_finance",
-        capabilities: ["payments.initiate"],
-      }),
-    ).toBe(true);
-    expect(
-      partnerAccessRequiresMfa({
-        roleKey: "custom_commercial",
-        capabilities: ["commercial.edit"],
-      }),
-    ).toBe(true);
-    expect(
-      partnerAccessRequiresMfa({
-        roleKey: "operations",
-        capabilities: ["bookings.create"],
-      }),
-    ).toBe(false);
   });
 
   it("maps legacy persona labels into the account membership vocabulary", () => {

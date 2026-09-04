@@ -86,6 +86,7 @@ const mockLockCompletedPayoutPeriod = jest.fn();
 const mockRecalculateCommissions = jest.fn();
 const mockEvaluatePartnerProofCompletion = jest.fn();
 const mockRecordPartnerProofCompletionOverride = jest.fn();
+const mockAcquireScheduleConflictLock = jest.fn();
 
 function selectBuilder() {
   return {
@@ -287,6 +288,11 @@ jest.mock("@/lib/appointment-media", () => ({
     mockAssertAppointmentStatusTransitionAllowed(...args) as unknown,
 }));
 
+jest.mock("@/lib/appointment-schedule-conflicts", () => ({
+  acquireScheduleConflictLock: (...args: unknown[]): unknown =>
+    mockAcquireScheduleConflictLock(...args) as unknown,
+}));
+
 jest.mock("@/lib/payment-schema", () => ({
   isPaymentLedgerSchemaAvailable: (...args: unknown[]): unknown =>
     mockIsPaymentLedgerSchemaAvailable(...args) as unknown,
@@ -446,6 +452,7 @@ describe("appointment status mutation integrity", () => {
       kind: "not_partner_job",
     });
     mockRecordPartnerProofCompletionOverride.mockResolvedValue(undefined);
+    mockAcquireScheduleConflictLock.mockResolvedValue(undefined);
     mockKillSwitch.mockReturnValue(null);
     mockResolveConfiguredCrewPayout.mockImplementation(
       (_database: unknown, memberIds: string[]) =>
@@ -548,6 +555,38 @@ describe("appointment status mutation integrity", () => {
     );
     expect(appointmentUpdateCount).toBe(0);
     expect(mockClaim).not.toHaveBeenCalled();
+  });
+
+  it("lets an owner complete a normal job with a final total and crew", async () => {
+    const response = await updateAppointmentStatus(
+      request(
+        {
+          status: "completed",
+          expectedVersion: currentVersion.toISOString(),
+          finalTotalCents: 47_500,
+          expectedFinalTotalCents: null,
+          crewMembers: [{ memberId: crewMemberId, splitBps: 10_000 }],
+        },
+        { role: "owner" },
+      ),
+      context(),
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      data: {
+        appointmentId,
+        status: "completed",
+      },
+    });
+    expect(appointment.finalTotalCents).toBe(47_500);
+    expect(crewRows).toEqual([{ memberId: crewMemberId, splitBps: 10_000 }]);
+    expect(mockAcquireScheduleConflictLock).toHaveBeenCalledWith(
+      mockTransaction,
+    );
+    expect(mockRecalculateCommissions).toHaveBeenCalledTimes(1);
   });
 
   it("lets an appointments.update-only actor change status without sending anything", async () => {

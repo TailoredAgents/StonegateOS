@@ -259,10 +259,10 @@ export default async function PartnersHomePage() {
   }> = [
     {
       href: "/partners/book",
-      label: personaPresentation.taskLabels.schedule,
+      label: "Request service",
       description:
         personaActionDescriptions.get("schedule") ??
-        "Choose a location, add scope and photos, then select live availability.",
+        "Use a saved location, add what is different, and choose an available window.",
       icon: CalendarPlus2,
       capability: "schedule",
     },
@@ -271,7 +271,7 @@ export default async function PartnersHomePage() {
       label: personaPresentation.taskLabels.jobs,
       description:
         personaActionDescriptions.get("jobs") ??
-        "Track status, change timing, share proof, or message Stonegate.",
+        "See each job’s status, next step, messages, and completion record.",
       icon: BriefcaseBusiness,
       capability: "jobs",
     },
@@ -280,7 +280,7 @@ export default async function PartnersHomePage() {
       label: personaPresentation.taskLabels.locations,
       description:
         personaActionDescriptions.get("locations") ??
-        "Reuse site contacts, access notes, parking, and loading details.",
+        "Save site contacts and access details once for faster requests.",
       icon: MapPin,
       capability: "locations",
     },
@@ -289,7 +289,7 @@ export default async function PartnersHomePage() {
       label: personaPresentation.taskLabels.proof,
       description:
         personaActionDescriptions.get("proof") ??
-        "Review intake, before, after, and completion documentation.",
+        "Find before-and-after photos and completion records in one place.",
       icon: Camera,
       capability: "proof",
     },
@@ -304,14 +304,14 @@ export default async function PartnersHomePage() {
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
-        eyebrow={personaPresentation.overview.eyebrow}
-        title={`Welcome back, ${firstName}`}
-        description={`${personaPresentation.overview.description} Current account: ${accountLabel}.`}
+        eyebrow="Your partner workspace"
+        title={`Quick and easy service, ${firstName}`}
+        description={`Request service, reuse saved details, and see what happens next for ${accountLabel}.`}
         actions={
           capabilities?.schedule ? (
             <Link href="/partners/book" className={partnerPrimaryButtonClass}>
               <CalendarPlus2 className="h-4 w-4" aria-hidden="true" />
-              {personaPresentation.taskLabels.schedule}
+              Request service
             </Link>
           ) : undefined
         }
@@ -350,22 +350,22 @@ export default async function PartnersHomePage() {
         <PartnerStatCard
           label="Upcoming jobs"
           value={`${activeJobs.length}${jobsPayload?.page?.hasMore ? "+" : ""}`}
-          detail="Confirmed or awaiting action"
+          detail="Confirmed or waiting for the next step"
         />
         <PartnerStatCard
-          label="Actions & approvals"
+          label="Needs attention"
           value={actionJobCount + approvalCount}
-          detail="Review, scope, or approval needed"
+          detail="Review or approval needed"
         />
         <PartnerStatCard
           label="Unread updates"
           value={`${notifications.length}${notificationsPayload?.page?.hasMore ? "+" : ""}`}
-          detail="Messages, proof, schedules, and billing"
+          detail="Messages, schedule changes, proof, and billing"
         />
         <PartnerStatCard
           label="Outstanding balance"
           value={outstandingBalance(invoices)}
-          detail="Across issued account invoices"
+          detail="Unpaid account invoices"
         />
       </section>
 
@@ -408,7 +408,7 @@ export default async function PartnersHomePage() {
           id="quick-actions-heading"
           className="mb-3 text-lg font-semibold text-slate-950"
         >
-          Quick actions
+          Get things done
         </h2>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {quickActions
@@ -431,7 +431,7 @@ export default async function PartnersHomePage() {
                     {action.description}
                   </p>
                   <span className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-primary-800">
-                    Open <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                    Start <ArrowRight className="h-4 w-4" aria-hidden="true" />
                   </span>
                 </Link>
               );
@@ -466,16 +466,17 @@ export default async function PartnersHomePage() {
               href={`/partners/bookings/${nextJob.id}` as Route}
               className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-800"
             >
-              Open job <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              View next step{" "}
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
             </Link>
           </div>
         ) : (
           <PartnerEmptyState
             title="No upcoming jobs"
-            description={`You have ${completedCount} completed job${completedCount === 1 ? "" : "s"} in this account. New work will appear here after it is requested.`}
+            description={`You have ${completedCount} completed job${completedCount === 1 ? "" : "s"} in this account. Request service and its status and next step will appear here.`}
             action={
               capabilities?.schedule
-                ? { href: "/partners/book", label: "Schedule a job" }
+                ? { href: "/partners/book", label: "Request service" }
                 : undefined
             }
             icon={<CircleDollarSign className="h-6 w-6" aria-hidden="true" />}

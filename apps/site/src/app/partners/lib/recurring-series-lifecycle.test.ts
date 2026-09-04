@@ -31,7 +31,7 @@ void test("recurring lifecycle controls state their bounded consequences accessi
   assert.match(component, /aria-describedby=\{helpId\}/u);
   assert.match(
     component,
-    /Existing\s+jobs and review drafts remain unchanged/u,
+    /Existing\s+jobs and review requests remain unchanged/u,
   );
   assert.match(
     component,

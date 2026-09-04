@@ -316,6 +316,18 @@ Site UI:
 - Protected: overview, scheduling, jobs, locations, photos/proof, approvals,
   billing/documents, reports, settings/team/security, and help
 
+Partners use email/password and revocable account-scoped server sessions. The
+Team and Partner runtimes have no MFA requirement, prompt, enrollment/recovery
+flow, step-up gate, or MFA endpoint. The expand-only pre-deploy phase leaves
+historical MFA schema and method/recovery/enrollment/flag records in place and
+ignored so old and new instances can coexist during the rolling deployment.
+Normal runtime security may consume stale pre-session tokens and revoke retired
+session types. Once password-only activation is live or creates a user/session,
+the former mandatory-MFA application is not a valid rollback target. Recovery
+uses feature flags, maintenance/read-only containment, and a forward fix. Bulk
+cleanup is deferred to a separately rehearsed contract migration after the
+runtime removal is deployed and verified.
+
 Canonical partner API:
 
 - `StonegateOS/apps/api/app/api/portal/v2`
@@ -330,7 +342,8 @@ own a second lifecycle: it is an immutable selected-account/target binding and
 read projection, while historical `legacy_snapshot` rows remain visibly
 non-actionable. Staff create these bindings from the account context in
 `/team/partners`; Partners review and respond from Billing & documents using
-account/scope-safe opaque IDs, strong revisions, idempotency, and recent MFA.
+account/scope-safe opaque IDs, the current eligible session, exact capabilities,
+strong revisions, and idempotency.
 
 Legacy `/api/portal/*` adapters are compatibility readers/writers only while
 migration evidence is collected; they may not derive authority from CRM

@@ -40,10 +40,6 @@ import {
   type PersonalSessionInventory,
 } from "./settings-sessions";
 import {
-  parseTeamMfaSecurityStatus,
-  type TeamMfaSecurityStatus,
-} from "./team-mfa-security";
-import {
   parseInboxNewLeadFeed,
   type InboxNewLeadFeed,
 } from "./inbox-new-leads";
@@ -579,8 +575,6 @@ export default async function TeamPage({
 
   let personalSessions: PersonalSessionInventory | null = null;
   let personalSessionsError: string | null = null;
-  let mfaSecurity: TeamMfaSecurityStatus | null = null;
-  let mfaSecurityError: string | null = null;
   if (tab === "settings") {
     if (!hasPermission("sessions.manage_self")) {
       personalSessionsError =
@@ -607,25 +601,6 @@ export default async function TeamPage({
         personalSessionsError =
           "Session inventory is temporarily unavailable. No sessions were changed.";
       }
-    }
-    try {
-      const response = await callAdminApiAs(principal, "/api/admin/team/mfa", {
-        timeoutMs: 8_000,
-      });
-      if (!response.ok) {
-        mfaSecurityError = `Multi-factor security is unavailable (HTTP ${response.status}).`;
-      } else {
-        mfaSecurity = parseTeamMfaSecurityStatus(
-          await response.json().catch(() => null),
-        );
-        if (!mfaSecurity) {
-          mfaSecurityError =
-            "Multi-factor security returned an invalid response. No settings were changed.";
-        }
-      }
-    } catch {
-      mfaSecurityError =
-        "Multi-factor security is temporarily unavailable. No settings were changed.";
     }
   }
 
@@ -781,8 +756,6 @@ export default async function TeamPage({
       calendarBadge,
       personalSessions,
       personalSessionsError,
-      mfaSecurity,
-      mfaSecurityError,
     },
   };
 

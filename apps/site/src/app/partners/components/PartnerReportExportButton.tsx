@@ -50,11 +50,14 @@ export function PartnerReportExportButton() {
         className={partnerSecondaryButtonClass}
       >
         {busy ? (
-          <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          <LoaderCircle
+            className="h-4 w-4 animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
         ) : (
           <Download className="h-4 w-4" aria-hidden="true" />
         )}
-        {busy ? "Preparing export…" : "Export CSV"}
+        {busy ? "Preparing CSV…" : "Download CSV"}
       </button>
       {message ? (
         <p className="max-w-64 text-xs leading-5 text-amber-800" role="status">

@@ -54,8 +54,6 @@ export type PartnerAccessReviewSnapshot = {
   identityStatus: string | null;
   identityOrgContactId: string | null;
   passwordSet: boolean;
-  mfaRequired: boolean | null;
-  mfaEnrolled: boolean;
   membershipId: string | null;
   membershipCount: number;
   membershipStatus: string | null;
@@ -107,8 +105,6 @@ export async function findPartnerAccessReviewSnapshot(
       identityStatus: string | null;
       identityOrgContactId: string | null;
       passwordSet: boolean;
-      mfaRequired: boolean | null;
-      mfaEnrolled: boolean;
       membershipId: string | null;
       membershipCount: number | string;
       membershipStatus: string | null;
@@ -170,8 +166,6 @@ export async function findPartnerAccessReviewSnapshot(
       partner_user.org_contact_id AS "identityOrgContactId",
       partner_user.password_hash IS NOT NULL
         AND partner_user.password_set_at IS NOT NULL AS "passwordSet",
-      partner_user.mfa_required AS "mfaRequired",
-      partner_user.mfa_enrolled_at IS NOT NULL AS "mfaEnrolled",
       membership.id AS "membershipId",
       (
         SELECT count(*)
@@ -289,27 +283,6 @@ export async function findPartnerAccessReviewSnapshot(
   };
 }
 
-export async function markAuditOwnerSessionMfaVerifiedForPartnerReview(): Promise<void> {
-  const updated = await sqlClient()<Array<{ id: string }>>`
-    UPDATE team_sessions AS session
-    SET assurance_level = 'aal2',
-        mfa_verified_at = statement_timestamp(),
-        last_seen_at = statement_timestamp()
-    FROM team_members AS member
-    WHERE member.id = session.team_member_id
-      AND lower(member.email) = 'audit-owner@mystos.test'
-      AND member.active = true
-      AND session.auth_method = 'team_session'
-      AND session.expires_at > statement_timestamp()
-    RETURNING session.id
-  `;
-  if (updated.length !== 1) {
-    throw new Error(
-      `Expected one active Audit Owner session for partner review, found ${updated.length}.`,
-    );
-  }
-}
-
 export async function resetPartnerAccessReviewRateLimits(): Promise<void> {
   await sqlClient()`
     DELETE FROM team_auth_rate_limits
@@ -319,8 +292,6 @@ export async function resetPartnerAccessReviewRateLimits(): Promise<void> {
       "partner_access_application",
       "partner_application_mutation",
       "partner_activation",
-      "partner_mfa_enrollment",
-      "partner_mfa_verification",
     ]}::text[])
   `;
 }
@@ -400,13 +371,6 @@ export async function cleanupPartnerAccessReviewFixture(
         WHERE partner_user_id = ANY(${partnerUserIds}::uuid[])
       `;
       await tx`
-        UPDATE partner_mfa_methods
-        SET enabled = false,
-            disabled_at = coalesce(disabled_at, statement_timestamp()),
-            updated_at = statement_timestamp()
-        WHERE partner_user_id = ANY(${partnerUserIds}::uuid[])
-      `;
-      await tx`
         UPDATE partner_users
         SET active = false,
             email = 'archived+' || id::text || '@mystos.test',
@@ -418,7 +382,6 @@ export async function cleanupPartnerAccessReviewFixture(
             name = 'Archived E2E portal applicant',
             password_hash = NULL,
             password_set_at = NULL,
-            mfa_enrolled_at = NULL,
             security_version = security_version + 1,
             updated_at = statement_timestamp()
         WHERE id = ANY(${partnerUserIds}::uuid[])

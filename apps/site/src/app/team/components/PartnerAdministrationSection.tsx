@@ -21,7 +21,6 @@ import {
   partnerJobChangeRequestDecisionAction,
   partnerLocationAddressReviewDecisionAction,
   partnerIdentityDisableAction,
-  partnerMfaResetAction,
   partnerQuarantineResolveAction,
   partnerSecuritySessionRevokeAction,
 } from "../actions/partner-administration";
@@ -106,8 +105,6 @@ type PartnerIdentitySecurityImpact = {
     active: boolean;
     status: string;
     passwordSet: boolean;
-    mfaRequired: boolean;
-    mfaEnrolledAt: string | null;
     securityVersion: number;
     version: string;
   };
@@ -126,11 +123,7 @@ type PartnerIdentitySecurityImpact = {
   membershipSnapshot: string;
   allMembershipsEnumerated: boolean;
   activeSessionCount: number;
-  enabledMfaMethodCount: number;
-  unusedRecoveryCodeCount: number;
   canDisable: boolean;
-  canResetMfa: boolean;
-  mfaRecoveryPending: boolean;
 };
 
 type PartnerApprovalRuleAdminPayload = {
@@ -739,14 +732,6 @@ function rowPresentation(
         ),
         details: [
           {
-            label: "MFA",
-            value: item["mfaEnrolledAt"]
-              ? "Enrolled"
-              : item["mfaRequired"] === true
-                ? "Required, not enrolled"
-                : "Not required",
-          },
-          {
             label: "Password",
             value: item["passwordSetAt"]
               ? "Password set"
@@ -875,8 +860,8 @@ function rowPresentation(
             value: display(item["deviceName"], "Unnamed device"),
           },
           {
-            label: "Assurance",
-            value: `${statusLabel(display(item["authMethod"], "unknown"))} · ${display(item["assuranceLevel"], "aal1").toUpperCase()}`,
+            label: "Sign-in type",
+            value: statusLabel(display(item["authMethod"], "unknown")),
           },
           {
             label: "Company access",
@@ -1367,7 +1352,6 @@ function parsePartnerIdentitySecurityImpact(
     !isExactInstant(version) ||
     typeof identity["active"] !== "boolean" ||
     typeof identity["passwordSet"] !== "boolean" ||
-    typeof identity["mfaRequired"] !== "boolean" ||
     !isSafeWholeNumber(identity["securityVersion"])
   ) {
     return null;
@@ -1423,16 +1407,8 @@ function parsePartnerIdentitySecurityImpact(
     (impact["allMembershipsEnumerated"] === true &&
       membershipCount !== memberships.length) ||
     !isSafeWholeNumber(impact["activeSessionCount"]) ||
-    !isSafeWholeNumber(impact["enabledMfaMethodCount"]) ||
-    !isSafeWholeNumber(impact["unusedRecoveryCodeCount"]) ||
-    typeof impact["canDisable"] !== "boolean" ||
-    typeof impact["canResetMfa"] !== "boolean" ||
-    typeof impact["mfaRecoveryPending"] !== "boolean"
+    typeof impact["canDisable"] !== "boolean"
   ) {
-    return null;
-  }
-  const mfaEnrolledAt = identity["mfaEnrolledAt"];
-  if (mfaEnrolledAt !== null && !isExactInstant(clean(mfaEnrolledAt))) {
     return null;
   }
   return {
@@ -1443,9 +1419,6 @@ function parsePartnerIdentitySecurityImpact(
       active: identity["active"],
       status,
       passwordSet: identity["passwordSet"],
-      mfaRequired: identity["mfaRequired"],
-      mfaEnrolledAt:
-        mfaEnrolledAt === null ? null : clean(identity["mfaEnrolledAt"]),
       securityVersion: identity["securityVersion"],
       version,
     },
@@ -1454,11 +1427,7 @@ function parsePartnerIdentitySecurityImpact(
     membershipSnapshot,
     allMembershipsEnumerated: impact["allMembershipsEnumerated"],
     activeSessionCount: impact["activeSessionCount"],
-    enabledMfaMethodCount: impact["enabledMfaMethodCount"],
-    unusedRecoveryCodeCount: impact["unusedRecoveryCodeCount"],
     canDisable: impact["canDisable"],
-    canResetMfa: impact["canResetMfa"],
-    mfaRecoveryPending: impact["mfaRecoveryPending"],
   };
 }
 
@@ -1573,10 +1542,6 @@ export async function PartnerAdministrationSection({
   const canDisablePartnerIdentities = hasTeamPermission(
     principal,
     "partners.identities.disable",
-  );
-  const canResetPartnerMfa = hasTeamPermission(
-    principal,
-    "partners.security.mfa.reset",
   );
   const canReleaseQuarantine = hasTeamPermission(
     principal,
@@ -1922,7 +1887,6 @@ export async function PartnerAdministrationSection({
             <PartnerIdentitySecurityOwnerPanel
               impact={securityImpact}
               canDisable={canDisablePartnerIdentities}
-              canResetMfa={canResetPartnerMfa}
             />
           ) : null}
         </div>
@@ -2038,7 +2002,6 @@ export async function PartnerAdministrationSection({
               display(item["identityStatus"], "") === "active" &&
               item["identityActive"] === true &&
               Boolean(item["passwordSetAt"]) &&
-              Boolean(item["mfaEnrolledAt"]) &&
               display(item["migrationReviewStatus"], "not_required") !==
                 "pending" &&
               display(item["migrationReviewStatus"], "not_required") !==
@@ -2931,8 +2894,8 @@ export async function PartnerAdministrationSection({
                         </div>
                       ) : (
                         <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
-                          Commercial Manager or Team Owner permission and recent
-                          MFA are required to classify this request.
+                          Commercial Manager or Team Owner permission is
+                          required to classify this request.
                         </p>
                       )
                     ) : (
@@ -3041,8 +3004,8 @@ export async function PartnerAdministrationSection({
                         </div>
                       ) : (
                         <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
-                          Recent-MFA Staff decision permission is required to
-                          resolve this request.
+                          Staff decision permission is required to resolve this
+                          request.
                         </p>
                       )
                     ) : (
@@ -3268,8 +3231,8 @@ export async function PartnerAdministrationSection({
                         </div>
                       ) : (
                         <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
-                          Recent-MFA Staff decision permission is required to
-                          resolve this request.
+                          Staff decision permission is required to resolve this
+                          request.
                         </p>
                       )
                     ) : (
@@ -3383,7 +3346,7 @@ export async function PartnerAdministrationSection({
                         margins, or commissions. Approval rules use a separate
                         account-scoped, audited writer.
                         {canManageCommercial
-                          ? " Commercial management authority may create, revise, activate, or deactivate approval rules after recent MFA."
+                          ? " Commercial management authority may create, revise, activate, or deactivate approval rules."
                           : ""}
                       </p>
                       <Link
@@ -3769,9 +3732,8 @@ export async function PartnerAdministrationSection({
                     <p className="mt-2 text-xs leading-5 text-rose-950">
                       Team Owner only. This control appears only when the
                       company has no active Administrator and this member is
-                      active, reviewed, password-enabled, and MFA-enrolled. It
-                      promotes the member account-wide and revokes all of their
-                      sessions.
+                      active, reviewed, and password-enabled. It promotes the
+                      member account-wide and revokes all of their sessions.
                     </p>
                     <form
                       action={partnerAdministratorRecoveryAction}
@@ -3910,15 +3872,12 @@ export async function PartnerAdministrationSection({
 function PartnerIdentitySecurityOwnerPanel({
   impact,
   canDisable,
-  canResetMfa,
 }: {
   impact: PartnerIdentitySecurityImpact;
   canDisable: boolean;
-  canResetMfa: boolean;
 }): React.ReactElement {
   const identity = impact.identity;
   const disableConfirmation = `DISABLE ${identity.email}`;
-  const mfaConfirmation = `RESET ${identity.email} MFA`;
   const membershipCountLabel = impact.allMembershipsEnumerated
     ? String(impact.membershipCount)
     : `${impact.membershipCount}+`;
@@ -3957,7 +3916,7 @@ function PartnerIdentitySecurityOwnerPanel({
         Use a membership suspension when only one company should lose access.
       </p>
 
-      <dl className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <dl className="mt-4 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-rose-200 bg-white/80 p-3">
           <dt className="text-xs font-semibold uppercase tracking-wide text-rose-700">
             Affected memberships
@@ -3972,22 +3931,6 @@ function PartnerIdentitySecurityOwnerPanel({
           </dt>
           <dd className="mt-1 text-lg font-semibold text-rose-950">
             {impact.activeSessionCount}
-          </dd>
-        </div>
-        <div className="rounded-xl border border-rose-200 bg-white/80 p-3">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-rose-700">
-            MFA methods
-          </dt>
-          <dd className="mt-1 text-lg font-semibold text-rose-950">
-            {impact.enabledMfaMethodCount}
-          </dd>
-        </div>
-        <div className="rounded-xl border border-rose-200 bg-white/80 p-3">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-rose-700">
-            Recovery codes
-          </dt>
-          <dd className="mt-1 text-lg font-semibold text-rose-950">
-            {impact.unusedRecoveryCodeCount}
           </dd>
         </div>
       </dl>
@@ -4037,7 +3980,7 @@ function PartnerIdentitySecurityOwnerPanel({
         )}
       </div>
 
-      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+      <div className="mt-5">
         <details className="rounded-xl border-2 border-rose-300 bg-white p-4">
           <summary className="flex min-h-[44px] cursor-pointer items-center text-sm font-bold text-rose-950">
             Disable identity across every company
@@ -4098,76 +4041,6 @@ function PartnerIdentitySecurityOwnerPanel({
                 : identity.status === "disabled"
                   ? "This identity is already globally disabled."
                   : "The complete membership impact could not be established, so disable is blocked."}
-            </p>
-          )}
-        </details>
-
-        <details className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
-          <summary className="flex min-h-[44px] cursor-pointer items-center text-sm font-bold text-amber-950">
-            Reset partner MFA and require re-enrollment
-          </summary>
-          <p className="mt-2 text-sm leading-6 text-amber-950">
-            This revokes all sessions, authenticators, recovery codes, and
-            pending credentials. It does not activate or suspend any company
-            membership. The person must verify their existing password and
-            enroll a new authenticator through the one-use activation link.
-          </p>
-          {impact.mfaRecoveryPending ? (
-            <p className="mt-2 rounded-lg border border-amber-300 bg-white/70 p-3 text-xs font-semibold text-amber-950">
-              Re-enrollment is already pending. Repeating this action revokes
-              the earlier link and queues a newly security-version-bound link.
-            </p>
-          ) : null}
-          {canResetMfa && impact.canResetMfa ? (
-            <form action={partnerMfaResetAction} className="mt-3 space-y-3">
-              <input type="hidden" name="partnerUserId" value={identity.id} />
-              <input
-                type="hidden"
-                name="expectedVersion"
-                value={identity.version}
-              />
-              <input
-                type="hidden"
-                name="membershipSnapshot"
-                value={impact.membershipSnapshot}
-              />
-              <input
-                type="hidden"
-                name="idempotencyKey"
-                value={`partner-mfa-reset:${identity.id}:${randomUUID()}`}
-              />
-              <label className="block text-xs font-semibold text-amber-950">
-                Security and recovery reason
-                <textarea
-                  className={`${TEAM_INPUT_COMPACT} mt-1 min-h-24 resize-y`}
-                  name="reason"
-                  minLength={20}
-                  maxLength={1000}
-                  required
-                />
-              </label>
-              <label className="block text-xs font-semibold text-amber-950">
-                Type {mfaConfirmation}
-                <input
-                  className={`${TEAM_INPUT_COMPACT} mt-1`}
-                  name="confirmation"
-                  autoComplete="off"
-                  spellCheck={false}
-                  required
-                />
-              </label>
-              <SubmitButton
-                className={teamButtonClass("danger", "sm")}
-                pendingLabel="Revoking MFA and sessions…"
-              >
-                Reset MFA and queue recovery
-              </SubmitButton>
-            </form>
-          ) : (
-            <p className="mt-3 text-sm text-amber-950">
-              Safe reset is unavailable. The identity must be active, have an
-              existing password and MFA posture, and retain at least one active
-              portal-enabled membership for purpose-bound recovery.
             </p>
           )}
         </details>

@@ -97,37 +97,37 @@ const PRESENTATIONS = {
     key: "contractor",
     label: "Contractor",
     taskLabels: {
-      schedule: "Schedule site service",
-      jobs: "Review jobsite work",
-      locations: "Manage worksites",
-      proof: "Review jobsite proof",
-      repeat_work: "Repeat jobsite work",
+      schedule: "Request jobsite service",
+      jobs: "Jobsite jobs",
+      locations: "Saved worksites",
+      proof: "Jobsite proof",
+      repeat_work: "Reuse jobsite details",
     },
     overview: {
-      eyebrow: "Contractor operations",
+      eyebrow: "Quick service for contractors",
       description:
-        "Coordinate jobsite service, crew access, material details, and closeout proof without losing the field context.",
-      nextActionHeading: "Keep the next jobsite moving",
+        "Request jobsite service with saved site details, then follow updates and closeout proof without repeating the field context.",
+      nextActionHeading: "Get the next site handled",
       nextActionLead:
-        "Start with the site and scope, then give the field team the details needed for a clean handoff.",
+        "Reuse the worksite, add only what changed, and send one complete request.",
       nextActions: [
         {
           id: "locations",
-          label: "Prepare a worksite",
+          label: "Save a worksite once",
           description:
             "Save parking, loading, superintendent, and access details for reuse.",
           href: "/partners/properties",
         },
         {
           id: "schedule",
-          label: "Schedule site service",
+          label: "Request jobsite service",
           description:
-            "Describe the material, equipment needs, hazards, and deadline before choosing a window.",
+            "Use the saved site, add the current scope and photos, and choose a window.",
           href: "/partners/book",
         },
         {
           id: "proof",
-          label: "Review jobsite proof",
+          label: "Get closeout proof",
           description:
             "Keep before, after, issue, and completion evidence with the job.",
           href: "/partners/photos",
@@ -147,9 +147,9 @@ const PRESENTATIONS = {
       ],
     },
     booking: {
-      scopeHeading: "Plan the field scope",
+      scopeHeading: "Tell us what this job needs",
       scopeLead:
-        "Give the crew enough jobsite context to plan labor, equipment, access, and the service window.",
+        "Start with the saved worksite, then add only the material, access, and timing that are different.",
       descriptionLabel: "What work should be completed?",
       descriptionPlaceholder:
         "Describe materials, work areas, approximate volume, heavy items, demolition status, site readiness, deadlines, and anything the crew should plan for.",
@@ -159,9 +159,9 @@ const PRESENTATIONS = {
         "Loading, parking, elevator, or equipment constraints",
         "Hazards, heavy items, restricted material, and deadlines",
       ],
-      proofHeading: "Suggested contractor proof",
+      proofHeading: "Choose the proof you need",
       proofLead:
-        "Apply a starting point only if it fits this job. Every proof field remains editable before submission.",
+        "Use a preset to save time, then adjust it for this job if needed.",
       proofPresets: [
         {
           id: "contractor_handoff",
@@ -205,37 +205,37 @@ const PRESENTATIONS = {
     key: "real_estate_agent",
     label: "Real-estate professional",
     taskLabels: {
-      schedule: "Schedule property service",
-      jobs: "Review property work",
-      locations: "Manage properties",
-      proof: "Review property proof",
-      repeat_work: "Repeat property work",
+      schedule: "Request property service",
+      jobs: "Property jobs",
+      locations: "Saved properties",
+      proof: "Property proof",
+      repeat_work: "Reuse property details",
     },
     overview: {
-      eyebrow: "Real-estate operations",
+      eyebrow: "Quick service for real-estate teams",
       description:
-        "Coordinate listing, closing, and turnover service with property access, deadlines, and client-ready proof in one record.",
-      nextActionHeading: "Prepare the next property milestone",
+        "Request listing, closing, or turnover service quickly with saved property details and client-ready proof in one place.",
+      nextActionHeading: "Get the property ready",
       nextActionLead:
-        "Start with the property and deadline, then capture the access and proof details needed for a smooth handoff.",
+        "Choose a saved property, add the deadline and what changed, then send the request.",
       nextActions: [
         {
           id: "locations",
-          label: "Add a property",
+          label: "Save a property once",
           description:
             "Save the property, listing reference, access method, and on-site contact.",
           href: "/partners/properties",
         },
         {
           id: "schedule",
-          label: "Schedule property service",
+          label: "Request property service",
           description:
-            "Tie the scope to a listing, closing, inspection, or turnover deadline.",
+            "Add the current scope and tie it to the listing, closing, or turnover date.",
           href: "/partners/book",
         },
         {
           id: "proof",
-          label: "Share listing-ready proof",
+          label: "Get client-ready proof",
           description:
             "Review completion photos before updating a seller, buyer, or client.",
           href: "/partners/photos",
@@ -255,9 +255,9 @@ const PRESENTATIONS = {
       ],
     },
     booking: {
-      scopeHeading: "Prepare the property scope",
+      scopeHeading: "Tell us what the property needs",
       scopeLead:
-        "Connect the work to the property milestone so Stonegate can plan access, timing, and a clear client handoff.",
+        "Start with the saved property, then add the deadline, access changes, and work needed now.",
       descriptionLabel: "What should be ready at the property?",
       descriptionPlaceholder:
         "Describe rooms or exterior areas, items to remove, occupied status, listing or closing deadline, client expectations, and anything that must remain.",
@@ -267,9 +267,9 @@ const PRESENTATIONS = {
         "Occupied status, lockbox or key process, and access hours",
         "Agent, seller, buyer, tenant, or estate contact for the visit",
       ],
-      proofHeading: "Suggested property proof",
+      proofHeading: "Choose the proof you need",
       proofLead:
-        "Choose a starting point only when it matches the client handoff. You can change every proof field.",
+        "Use a preset for a faster client handoff, then adjust it if needed.",
       proofPresets: [
         {
           id: "listing_ready",
@@ -313,39 +313,39 @@ const PRESENTATIONS = {
     key: "property_manager",
     label: "Property manager",
     taskLabels: {
-      schedule: "Schedule property work",
-      jobs: "Review active turns",
-      locations: "Manage the portfolio",
-      proof: "Review turnover proof",
-      repeat_work: "Repeat portfolio work",
+      schedule: "Request property service",
+      jobs: "Property jobs",
+      locations: "Saved properties",
+      proof: "Turnover proof",
+      repeat_work: "Reuse property details",
     },
     overview: {
-      eyebrow: "Property operations",
+      eyebrow: "Quick service for property teams",
       description:
-        "Coordinate unit turns, common-area work, site contacts, recurring service, and proof across a managed portfolio.",
-      nextActionHeading: "Keep the portfolio service-ready",
+        "Request unit-turn or common-area service with saved property details, then follow every job and proof record in one place.",
+      nextActionHeading: "Keep properties moving",
       nextActionLead:
-        "Start with reusable property details, then standardize turnover scope and evidence across locations.",
+        "Reuse property and access details, add the unit or area, and send the request.",
       nextActions: [
         {
           id: "locations",
-          label: "Organize the portfolio",
+          label: "Save property details",
           description:
             "Save property, unit, office, parking, elevator, and access details.",
           href: "/partners/properties",
         },
         {
           id: "schedule",
-          label: "Schedule property work",
+          label: "Request property service",
           description:
-            "Capture the unit or area, turnover deadline, contact, and required proof.",
+            "Choose the property, add the unit or area, and select a service window.",
           href: "/partners/book",
         },
         {
           id: "jobs",
-          label: "Review active turns",
+          label: "See active jobs",
           description:
-            "Track requests, approvals, schedule changes, messages, and completion status.",
+            "See status, approvals, schedule changes, messages, and completion proof.",
           href: "/partners/bookings",
         },
       ],
@@ -363,9 +363,9 @@ const PRESENTATIONS = {
       ],
     },
     booking: {
-      scopeHeading: "Define the property task",
+      scopeHeading: "Tell us what this property needs",
       scopeLead:
-        "Name the unit or common area, turnover milestone, access path, and documentation needed for the property record.",
+        "Start with saved property details, then add the unit, deadline, and work needed now.",
       descriptionLabel: "What does this property need?",
       descriptionPlaceholder:
         "Describe the unit or common area, move-out condition, items or material, turnover deadline, tenant status, and make-ready dependencies.",
@@ -375,9 +375,9 @@ const PRESENTATIONS = {
         "Tenant status, key process, office contact, and access hours",
         "Parking, elevator, loading, and documentation requirements",
       ],
-      proofHeading: "Suggested turnover proof",
+      proofHeading: "Choose the turnover proof",
       proofLead:
-        "Apply a portfolio starting point only when it fits this property. The job-level requirements remain editable.",
+        "Use a preset to save time, then adjust it for this property if needed.",
       proofPresets: [
         {
           id: "unit_turnover",
@@ -421,39 +421,39 @@ const PRESENTATIONS = {
     key: "commercial_client",
     label: "Commercial client",
     taskLabels: {
-      schedule: "Schedule facility service",
-      jobs: "Track commercial work",
-      locations: "Manage facilities",
-      proof: "Review closeout proof",
-      repeat_work: "Repeat commercial work",
+      schedule: "Request facility service",
+      jobs: "Facility jobs",
+      locations: "Saved facilities",
+      proof: "Closeout proof",
+      repeat_work: "Reuse facility details",
     },
     overview: {
-      eyebrow: "Commercial operations",
+      eyebrow: "Quick service for commercial teams",
       description:
-        "Coordinate facility service, operational constraints, commercial references, approvals, proof, and repeat work in one workspace.",
-      nextActionHeading: "Prepare the next facility request",
+        "Request facility service with saved site and billing details, then follow approvals, updates, and closeout records in one place.",
+      nextActionHeading: "Get the next facility job started",
       nextActionLead:
-        "Start with the operating site and commercial references, then capture safety, access, and closeout needs.",
+        "Reuse the facility details and add only the scope, references, and safety needs for this job.",
       nextActions: [
         {
           id: "locations",
-          label: "Prepare a facility",
+          label: "Save a facility once",
           description:
             "Save dock, access, business-hour, safety, and site-contact details.",
           href: "/partners/properties",
         },
         {
           id: "schedule",
-          label: "Schedule facility service",
+          label: "Request facility service",
           description:
-            "Capture scope, resource needs, PO or cost center, and service constraints.",
+            "Use the saved site, add scope and references, and choose a service window.",
           href: "/partners/book",
         },
         {
           id: "jobs",
-          label: "Track commercial work",
+          label: "See facility jobs",
           description:
-            "Review approvals, active service, change requests, proof, and records.",
+            "See approvals, status, change requests, proof, and records.",
           href: "/partners/bookings",
         },
       ],
@@ -471,9 +471,9 @@ const PRESENTATIONS = {
       ],
     },
     booking: {
-      scopeHeading: "Define the facility scope",
+      scopeHeading: "Tell us what the facility needs",
       scopeLead:
-        "Capture the operational and commercial context Stonegate needs to plan resources and route approvals safely.",
+        "Start with the saved facility, then add the work, references, and operating details that are different.",
       descriptionLabel: "What should be completed at the facility?",
       descriptionPlaceholder:
         "Describe materials, quantity or volume, work areas, business-hour constraints, resource needs, safety requirements, project milestone, and deadline.",
@@ -483,9 +483,9 @@ const PRESENTATIONS = {
         "Dock, loading, security, escort, and operating-hour constraints",
         "PO, cost center, approver, safety rules, and closeout standard",
       ],
-      proofHeading: "Suggested commercial proof",
+      proofHeading: "Choose the closeout proof",
       proofLead:
-        "Apply a closeout starting point only when it matches the work order. Every requirement remains editable.",
+        "Use a preset to save time, then adjust it to match this work order.",
       proofPresets: [
         {
           id: "facility_closeout",
@@ -529,39 +529,39 @@ const PRESENTATIONS = {
     key: "fallback",
     label: "Partner",
     taskLabels: {
-      schedule: "Schedule a job",
-      jobs: "Review jobs",
-      locations: "Manage locations",
+      schedule: "Request service",
+      jobs: "Jobs",
+      locations: "Saved locations",
       proof: "Photos & proof",
-      repeat_work: "Repeat service work",
+      repeat_work: "Reuse service details",
     },
     overview: {
-      eyebrow: "Partner services",
+      eyebrow: "Quick and easy partner service",
       description:
-        "Coordinate locations, service requests, access details, job updates, and completion proof in one account workspace.",
-      nextActionHeading: "Prepare the next service request",
+        "Request service with saved locations and details, then follow job updates and completion proof in one place.",
+      nextActionHeading: "Get service started",
       nextActionLead:
-        "Start with a reusable location, then capture the work, access, contact, and documentation needed for a clear handoff.",
+        "Choose a saved location, add what is different, and send one complete request.",
       nextActions: [
         {
           id: "locations",
-          label: "Prepare a location",
+          label: "Save a location once",
           description:
             "Save site contacts, access, parking, loading, and service details.",
           href: "/partners/properties",
         },
         {
           id: "schedule",
-          label: "Schedule a job",
+          label: "Request service",
           description:
-            "Describe the scope, add photos, and choose an available or preferred window.",
+            "Add the current details and photos, then choose an available or preferred window.",
           href: "/partners/book",
         },
         {
           id: "jobs",
-          label: "Review jobs",
+          label: "See your jobs",
           description:
-            "Track status, messages, changes, proof, and account records.",
+            "See status, the next step, messages, changes, proof, and records.",
           href: "/partners/bookings",
         },
       ],
@@ -579,9 +579,9 @@ const PRESENTATIONS = {
       ],
     },
     booking: {
-      scopeHeading: "Describe the service scope",
+      scopeHeading: "Tell us what you need",
       scopeLead:
-        "Give Stonegate enough location, work, access, and timing context to plan the right service safely.",
+        "Start with the saved location, then add the work, access, and timing details that are different.",
       descriptionLabel: "What needs to be done?",
       descriptionPlaceholder:
         "Describe the items, material, rooms or work area, access, heavy pieces, deadlines, and anything else the crew should plan for.",
@@ -591,9 +591,9 @@ const PRESENTATIONS = {
         "Parking, loading, elevator, or equipment constraints",
         "Hazards, special handling, deadlines, and required proof",
       ],
-      proofHeading: "Suggested service proof",
+      proofHeading: "Choose the proof you need",
       proofLead:
-        "Apply a starting point only if it fits this job. Every proof field remains editable.",
+        "Use a preset to save time, then adjust it for this job if needed.",
       proofPresets: [
         {
           id: "standard_handoff",

@@ -71,9 +71,7 @@ describe("Partner billing-dispute lifecycle", () => {
     expect(migration).toContain(
       '"request_snapshot" @> \'{"version": 1}\'::jsonb',
     );
-    expect(migration).toContain(
-      '"request_snapshot" ? \'replayReceipt\'',
-    );
+    expect(migration).toContain("\"request_snapshot\" ? 'replayReceipt'");
     expect(migration).toContain('"monetaryMutationPerformed": false');
     expect(migration).toContain('"providerActionPerformed": false');
     expect(migration).toContain(
@@ -100,12 +98,13 @@ describe("Partner billing-dispute lifecycle", () => {
     expect(migration).toContain("OLD.\"state\" <> 'pending'");
   });
 
-  it("requires invoice access, recent partner MFA, origin, CAS, and idempotency", () => {
+  it("requires invoice access, origin, CAS, and idempotency", () => {
     const route = source(
       "app/api/portal/v2/invoices/[invoiceId]/dispute-requests/route.ts",
     );
     const service = source("src/lib/partner-billing-dispute-requests.ts");
-    expect(route).toContain("requireRecentPartnerMfaCapability");
+    expect(route).toContain("requirePartnerCapability");
+    expect(route).not.toContain("requireRecentPartnerMfaCapability");
     expect(route).toContain('"invoices.disputes.request"');
     expect(route).toContain("isAllowedPartnerPortalMutationOrigin");
     expect(route).toContain("readPortalV2IdempotencyKey");
@@ -162,9 +161,9 @@ describe("Partner billing-dispute lifecycle", () => {
         "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       ),
     ).toBe("invalid");
-    expect(parsePartnerBillingDisputeHistoryCursor(`${cursor}=`, invoiceId)).toBe(
-      "invalid",
-    );
+    expect(
+      parsePartnerBillingDisputeHistoryCursor(`${cursor}=`, invoiceId),
+    ).toBe("invalid");
   });
 
   it("stores and reuses the immutable create response on idempotent replay", () => {
@@ -199,7 +198,7 @@ describe("Partner billing-dispute lifecycle", () => {
     }
   });
 
-  it("makes Staff decisions classification-only, recent-MFA, CAS, and audited", () => {
+  it("makes Staff decisions classification-only, recently authenticated, CAS, and audited", () => {
     const route = source(
       "app/api/admin/partner-management/v1/billing-disputes/[requestId]/decision/route.ts",
     );

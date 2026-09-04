@@ -4,7 +4,7 @@ import { PartnerEmailChangeConfirmation } from "@/app/partners/components/Partne
 import { PARTNER_EMAIL_CHANGE_TOKEN_COOKIE } from "@/lib/partner-application-session";
 
 export const metadata: Metadata = {
-  title: "Confirm partner sign-in email",
+  title: "Confirm your partner sign-in email",
   robots: { index: false, follow: false, nocache: true },
   referrer: "no-referrer",
 };

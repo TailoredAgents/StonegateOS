@@ -741,9 +741,9 @@ export async function getCanonicalPartnerQuote(input: {
         allowedActions.includes("accept") || allowedActions.includes("decline"),
       notice:
         changeOrder[0]?.state === "offered"
-          ? "This proposal is the exact change order for your job. Accepting finalizes its stated price and approved public details; the current schedule, service, and proof requirements stay in effect until Stonegate confirms any operational change separately."
+          ? "This proposal is the change order for your job. Accepting confirms its price and listed details. The current schedule, service, and proof requirements stay in place until Stonegate confirms any related change separately."
           : changeOrder[0]?.state === "accepted"
-            ? "This accepted proposal is the job’s final change-order price evidence. Any requested schedule, service, or proof changes still require separate Stonegate confirmation."
+            ? "This accepted proposal is the final price record for the change order. Any requested schedule, service, or proof changes still need separate Stonegate confirmation."
             : !row.targetLocationActive
               ? "This quote remains available as financial evidence, but its location is archived and new responses are disabled."
               : exactIssued && !proposal[0]
@@ -1259,7 +1259,7 @@ export async function decideCanonicalPartnerQuote(input: {
         actorLabel: input.principal.email,
         actorRole: input.principal.roleKey,
         sessionId: input.principal.session.id,
-        authMethod: "mfa_step_up",
+        authMethod: "partner_session",
         correlationId: input.correlationId,
         requiredPermissions: ["quotes.respond"],
         outcome: "succeeded",

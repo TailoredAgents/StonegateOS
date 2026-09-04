@@ -39,6 +39,13 @@ export async function POST(request: NextRequest): Promise<Response> {
         correlationId,
       );
     }
+    if (authentication.session.authMethod === "magic_link") {
+      return createPartnerPortalV2ErrorResponse(
+        "forbidden",
+        403,
+        correlationId,
+      );
+    }
 
     let rawPayload: unknown;
     try {

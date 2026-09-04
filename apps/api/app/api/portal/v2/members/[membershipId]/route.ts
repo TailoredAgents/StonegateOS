@@ -3,7 +3,7 @@ import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
-import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
+import { requirePartnerCapability } from "@/lib/partner-account-authorization";
 import { arePartnerPortalV2WritesEnabled } from "@/lib/partner-portal-feature-flags";
 import { runPortalV2IdempotentMutation } from "@/lib/partner-portal-v2-idempotency";
 import {
@@ -37,7 +37,7 @@ export async function PATCH(
 ): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
   try {
-    const authorization = await requireRecentPartnerMfaCapability(
+    const authorization = await requirePartnerCapability(
       request,
       "account.members.manage",
     );

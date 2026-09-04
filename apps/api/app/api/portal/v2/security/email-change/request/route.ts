@@ -136,7 +136,6 @@ export async function POST(request: NextRequest): Promise<Response> {
             accountId: principal.accountId!,
             membershipId: principal.membershipId!,
             sessionId: principal.session.id,
-            mfaRequired: principal.security.mfaRequired,
             correlationId,
           },
           newEmail: parsed.data.newEmail,
@@ -183,33 +182,18 @@ export async function POST(request: NextRequest): Promise<Response> {
             },
           };
         }
-        if (
-          result.kind === "recent_mfa_required" ||
-          result.kind === "recent_authentication_required"
-        ) {
+        if (result.kind === "recent_authentication_required") {
           return {
             status: 403,
             body: {
               ok: false,
-              error: "mfa_step_up_required",
-              message:
-                result.kind === "recent_mfa_required"
-                  ? "Verify this session with two-step verification before changing your email."
-                  : "Sign in again before changing your email.",
+              error: "recent_authentication_required",
+              message: "Sign in again before changing your email.",
               alternatives: [
                 {
-                  action:
-                    result.kind === "recent_mfa_required"
-                      ? "verify_mfa"
-                      : "reauthenticate",
-                  label:
-                    result.kind === "recent_mfa_required"
-                      ? "Verify this session"
-                      : "Sign in again",
-                  href:
-                    result.kind === "recent_mfa_required"
-                      ? "/partners/settings#two-step-verification"
-                      : "/partners/login?returnTo=%2Fpartners%2Fsettings",
+                  action: "reauthenticate",
+                  label: "Sign in again",
+                  href: "/partners/login?returnTo=%2Fpartners%2Fsettings",
                 },
               ],
             },

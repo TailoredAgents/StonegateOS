@@ -66,12 +66,7 @@ async function settleClaimFailure(
 ): Promise<void> {
   if (!claim) return;
   try {
-    await settleTeamMutationIdempotencyFailure(
-      getDb(),
-      mutation,
-      claim,
-      error,
-    );
+    await settleTeamMutationIdempotencyFailure(getDb(), mutation, claim, error);
   } catch (settlementError) {
     console.error("[partner-management] account_mutation_settlement_failed", {
       correlationId: mutation.correlationId,
@@ -279,7 +274,7 @@ export async function handlePartnerAdministratorRecoveryMutation(input: {
       {
         correlationId: input.mutation.correlationId,
         fieldErrors: {
-          membershipId: "Choose an active, reviewed, MFA-enrolled member.",
+          membershipId: "Choose an active, reviewed member with a password.",
           reason: "Explain the recovery in at least 20 characters.",
           confirmation: "Enter RECOVER PARTNER ADMINISTRATOR exactly.",
         },

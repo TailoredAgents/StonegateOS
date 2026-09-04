@@ -8,9 +8,9 @@ function source(relativePath: string): string {
 
 void test("job detail keeps the promised window authoritative over published ETA", () => {
   const page = source("../(portal)/bookings/[jobId]/page.tsx");
-  assert.match(page, /Operational arrival estimate/u);
+  assert.match(page, /Latest arrival estimate/u);
   assert.match(page, /promised two-hour arrival window remains authoritative/u);
-  assert.match(page, /No operational estimate published/u);
+  assert.match(page, /No narrower estimate available/u);
   assert.match(page, /Stonegate service crew/u);
   assert.match(page, /Individual names and live location are not shared/u);
   assert.doesNotMatch(
@@ -41,6 +41,6 @@ void test("issue reporting is accessible, bounded, and uses the shared thread", 
   assert.match(messages, /kind: "issue"/u);
   assert.match(messages, /issueCategory: operation\.category/u);
   assert.match(messages, /issuePriority: operation\.priority/u);
-  assert.match(messages, /joins this job’s shared Stonegate thread/u);
+  assert.match(messages, /report stays with this job for follow-up/u);
   assert.match(messages, /aria-live="assertive"/u);
 });

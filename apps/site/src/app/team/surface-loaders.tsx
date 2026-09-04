@@ -1,6 +1,5 @@
 import type { ReactElement } from "react";
 import type { PersonalSessionInventory } from "./settings-sessions";
-import type { TeamMfaSecurityStatus } from "./team-mfa-security";
 import type { TeamSurfaceId } from "./surface-registry";
 
 export type TeamSurfaceLoaderContext = {
@@ -185,8 +184,6 @@ export type TeamSurfaceLoaderContext = {
     } | null;
     personalSessions: PersonalSessionInventory | null;
     personalSessionsError: string | null;
-    mfaSecurity: TeamMfaSecurityStatus | null;
-    mfaSecurityError: string | null;
   };
 };
 

@@ -493,9 +493,9 @@ export async function resolvePartnerJobChangeOrderFromQuoteResponse(
   const accepted = outcome === "accepted";
   const detail = accepted
     ? effects.length > 0
-      ? "The change-order price and approved public details are final. Stonegate will confirm the requested operational changes separately; the current schedule, service, and proof requirements remain in effect until then."
-      : "The change-order price and approved public details are now final."
-    : "The change order was declined. The current job price and details remain unchanged.";
+      ? "The change-order price and approved details are final. Stonegate will confirm the requested timing, service, or proof changes separately; the current schedule, service, and proof requirements stay in effect until then."
+      : "The change-order price and approved details are final."
+    : "The change order was declined. The current job price and details stay unchanged.";
   const [event] = await tx
     .insert(partnerJobEvents)
     .values({
@@ -629,7 +629,7 @@ export async function supersedeOfferedPartnerJobChangeOrderForCancellation(
     partnerBookingId: input.partnerBookingId,
     eventKey: "job.change_order_superseded",
     title: "Change order closed",
-    body: "The job was canceled, so its unaccepted change order was closed.",
+    body: "The service was canceled, so its unaccepted change order was closed.",
     actionPath: `/partners/bookings/${input.partnerBookingId}`,
     createdAt: input.now,
   });

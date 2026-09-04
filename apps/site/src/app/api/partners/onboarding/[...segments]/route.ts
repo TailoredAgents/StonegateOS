@@ -5,7 +5,6 @@ import {
   callPartnerPublicApi,
 } from "@/app/partners/lib/api";
 import {
-  PARTNER_ACTIVATION_MFA_TRANSACTION_COOKIE,
   PARTNER_ACTIVATION_TOKEN_COOKIE,
   PARTNER_APPLICATION_SESSION_COOKIE,
   PARTNER_EMAIL_CHANGE_TOKEN_COOKIE,
@@ -20,8 +19,6 @@ const PUBLIC_ENDPOINTS = new Set([
   "email-challenges/consume",
   "activation/inspect",
   "activation/complete",
-  "activation/mfa/enrollment",
-  "activation/mfa/confirm",
   "password-recovery/request",
   "password-recovery/complete",
   "email-change/confirm",
@@ -42,8 +39,6 @@ const ALLOWED_METHODS: Record<string, readonly string[]> = {
   "application/withdraw": ["POST"],
   "activation/inspect": ["POST"],
   "activation/complete": ["POST"],
-  "activation/mfa/enrollment": ["POST"],
-  "activation/mfa/confirm": ["POST"],
   "activation/resend": ["POST"],
   "password-recovery/request": ["POST"],
   "password-recovery/complete": ["POST"],
@@ -109,18 +104,6 @@ function deletePurposeTokenCookie(response: NextResponse, name: string): void {
     value: "",
     httpOnly: true,
     secure: process.env["NODE_ENV"] === "production",
-    sameSite: "lax",
-    path: "/",
-    expires: new Date(0),
-  });
-}
-
-function deleteActivationMfaCookie(response: NextResponse): void {
-  response.cookies.set({
-    name: PARTNER_ACTIVATION_MFA_TRANSACTION_COOKIE,
-    value: "",
-    httpOnly: true,
-    secure: true,
     sameSite: "lax",
     path: "/",
     expires: new Date(0),
@@ -230,27 +213,6 @@ async function proxy(
   if (forwardedIp) headers.set("X-Forwarded-For", forwardedIp.slice(0, 128));
   const userAgent = request.headers.get("user-agent")?.trim();
   if (userAgent) headers.set("User-Agent", userAgent.slice(0, 512));
-  if (endpoint.startsWith("activation/mfa/")) {
-    const transactionToken =
-      request.cookies
-        .get(PARTNER_ACTIVATION_MFA_TRANSACTION_COOKIE)
-        ?.value?.trim() ?? "";
-    if (!/^[A-Za-z0-9_-]{43}$/u.test(transactionToken)) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "unauthorized",
-          message: "The security setup session has expired.",
-        },
-        {
-          status: 401,
-          headers: { "Cache-Control": "private, no-store" },
-        },
-      );
-    }
-    headers.set("Authorization", `Bearer ${transactionToken}`);
-  }
-
   const caller = APPLICANT_ENDPOINTS.has(endpoint)
     ? callPartnerApplicantApi
     : PUBLIC_ENDPOINTS.has(endpoint)
@@ -304,51 +266,6 @@ async function proxy(
     } catch {
       payload = null;
     }
-    const transactionToken =
-      typeof payload?.["transactionToken"] === "string"
-        ? payload["transactionToken"].trim()
-        : "";
-    const transactionExpiry = validExpiry(payload?.["expiresAt"]);
-    const needsMfaSetup =
-      payload?.["status"] === "mfa_setup_required" &&
-      payload?.["authority"] === "pre_authentication_only";
-    if (needsMfaSetup) {
-      if (
-        !/^[A-Za-z0-9_-]{43}$/u.test(transactionToken) ||
-        !transactionExpiry ||
-        transactionExpiry.getTime() - Date.now() > 10 * 60 * 1_000
-      ) {
-        return NextResponse.json(
-          {
-            ok: false,
-            error: "invalid_response",
-            message:
-              "Activation did not return a valid security setup session.",
-          },
-          { status: 502, headers: responseHeaders },
-        );
-      }
-      const response = NextResponse.json(
-        {
-          ...payload,
-          transactionToken: undefined,
-          redirectTo: "/partners/activate/mfa",
-        },
-        { status: upstream.status, headers: responseHeaders },
-      );
-      response.cookies.set({
-        name: PARTNER_ACTIVATION_MFA_TRANSACTION_COOKIE,
-        value: transactionToken,
-        httpOnly: true,
-        secure: true,
-        sameSite: "lax",
-        path: "/",
-        expires: transactionExpiry,
-      });
-      deleteApplicationCookie(response);
-      deletePurposeTokenCookie(response, PARTNER_ACTIVATION_TOKEN_COOKIE);
-      return response;
-    }
     const sessionToken =
       typeof payload?.["sessionToken"] === "string"
         ? payload["sessionToken"].trim()
@@ -364,16 +281,10 @@ async function proxy(
         { status: 502, headers: responseHeaders },
       );
     }
-    const securitySetupOnly =
-      payload?.["nextAction"] === "mfa_enrollment_required" ||
-      payload?.["authority"] === "security_setup_only" ||
-      payload?.["mfaRequired"] === true;
     const safePayload = {
       ...payload,
       sessionToken: undefined,
-      redirectTo: securitySetupOnly
-        ? "/partners/settings#two-step-verification"
-        : "/partners/overview",
+      redirectTo: "/partners/overview",
     };
     const response = NextResponse.json(safePayload, {
       status: upstream.status,
@@ -390,52 +301,6 @@ async function proxy(
     });
     deleteApplicationCookie(response);
     deletePurposeTokenCookie(response, PARTNER_ACTIVATION_TOKEN_COOKIE);
-    return response;
-  }
-
-  if (endpoint === "activation/mfa/confirm" && upstream.ok) {
-    let payload: Record<string, unknown> | null = null;
-    try {
-      payload = JSON.parse(new TextDecoder().decode(bytes)) as Record<
-        string,
-        unknown
-      >;
-    } catch {
-      payload = null;
-    }
-    const sessionToken =
-      typeof payload?.["sessionToken"] === "string"
-        ? payload["sessionToken"].trim()
-        : "";
-    const expiresAt = validExpiry(payload?.["expiresAt"]);
-    if (!/^[A-Za-z0-9_-]{43}$/u.test(sessionToken) || !expiresAt) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "invalid_response",
-          message: "Security setup completed without a valid portal session.",
-        },
-        { status: 502, headers: responseHeaders },
-      );
-    }
-    const response = NextResponse.json(
-      {
-        ...payload,
-        sessionToken: undefined,
-        redirectTo: "/partners/overview",
-      },
-      { status: upstream.status, headers: responseHeaders },
-    );
-    response.cookies.set({
-      name: PARTNER_SESSION_COOKIE,
-      value: sessionToken,
-      httpOnly: true,
-      secure: process.env["NODE_ENV"] === "production",
-      sameSite: "lax",
-      path: "/",
-      expires: expiresAt,
-    });
-    deleteActivationMfaCookie(response);
     return response;
   }
 
@@ -469,12 +334,6 @@ async function proxy(
     (upstream.status === 401 || upstream.status === 410)
   ) {
     deletePurposeTokenCookie(response, PARTNER_ACTIVATION_TOKEN_COOKIE);
-  }
-  if (
-    endpoint.startsWith("activation/mfa/") &&
-    (upstream.status === 401 || upstream.status === 410)
-  ) {
-    deleteActivationMfaCookie(response);
   }
   return response;
 }

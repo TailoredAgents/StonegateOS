@@ -61,11 +61,11 @@ function copyFor(input: {
   const greeting = input.name ? `Hi ${input.name},` : "Hello,";
   if (input.purpose === "email_verification") {
     return {
-      subject: "Verify your email for Stonegate Partner access",
+      subject: "Continue your Stonegate partner access request",
       body: [
         greeting,
         "",
-        "Verify this email before completing your Stonegate Partner Portal application:",
+        "Verify your email to continue your Stonegate partner access request:",
         input.deliveryUrl,
         "",
         `This one-time link expires at ${input.expiresAt.toISOString()}.`,
@@ -75,11 +75,11 @@ function copyFor(input: {
   }
   if (input.purpose === "account_activation") {
     return {
-      subject: "Activate your Stonegate Partner Portal account",
+      subject: "Finish setting up your Stonegate Partner Portal",
       body: [
         greeting,
         "",
-        `Stonegate granted your access${input.accountName ? ` to ${input.accountName}` : ""}. Set or confirm your password and complete the required security setup:`,
+        `Your partner access${input.accountName ? ` to ${input.accountName}` : ""} is approved. Set or confirm your password and complete the required security step:`,
         input.deliveryUrl,
         "",
         `This one-time link expires at ${input.expiresAt.toISOString()}.`,
@@ -89,11 +89,11 @@ function copyFor(input: {
   }
   if (input.purpose === "email_change") {
     return {
-      subject: "Confirm your new Stonegate Partner Portal email",
+      subject: "Confirm your new Partner Portal sign-in email",
       body: [
         greeting,
         "",
-        "Confirm this address as the new sign-in email for your Stonegate Partner Portal identity:",
+        "Confirm this address as the new email you will use to sign in:",
         input.deliveryUrl,
         "",
         `This one-time link expires at ${input.expiresAt.toISOString()}.`,
@@ -102,11 +102,11 @@ function copyFor(input: {
     };
   }
   return {
-    subject: "Reset your Stonegate Partner Portal password",
+    subject: "Reset your Partner Portal password",
     body: [
       greeting,
       "",
-      "Use this one-time link to reset your Stonegate Partner Portal password:",
+      "Use this one-time link to reset your Partner Portal password:",
       input.deliveryUrl,
       "",
       `This link expires at ${input.expiresAt.toISOString()}.`,

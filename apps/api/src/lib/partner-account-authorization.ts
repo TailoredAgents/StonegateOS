@@ -81,6 +81,10 @@ export const PARTNER_INTRINSIC_CAPABILITIES = [
   "portal.session.switch_account",
 ] as const satisfies readonly PartnerCapability[];
 
+const ROUTINE_MAGIC_LINK_CAPABILITIES = [
+  "portal.session.read",
+] as const satisfies readonly PartnerCapability[];
+
 export const PARTNER_LAUNCH_ROLE_KEYS = [
   "administrator",
   "operations",
@@ -166,28 +170,6 @@ export const PARTNER_SYSTEM_ROLE_TEMPLATES = {
 
 const CAPABILITY_SET = new Set<string>(PARTNER_CAPABILITY_CATALOG);
 const INTRINSIC_SET = new Set<string>(PARTNER_INTRINSIC_CAPABILITIES);
-const MFA_REQUIRED_ROLE_KEYS = new Set(["administrator", "billing_approver"]);
-const MFA_REQUIRED_CAPABILITIES = new Set<PartnerCapability>([
-  "account.members.manage",
-  "account.security.manage",
-  "approvals.decide",
-  "quotes.respond",
-  "commercial.edit",
-  "invoices.disputes.request",
-  "payments.initiate",
-]);
-
-export function partnerAccessRequiresMfa(input: {
-  roleKey: string;
-  capabilities: readonly PartnerCapability[];
-}): boolean {
-  return (
-    MFA_REQUIRED_ROLE_KEYS.has(input.roleKey) ||
-    input.capabilities.some((capability) =>
-      MFA_REQUIRED_CAPABILITIES.has(capability),
-    )
-  );
-}
 
 function capabilityPatternMatches(pattern: string, required: string): boolean {
   if (pattern === "*") return true;
@@ -277,23 +259,11 @@ export type PartnerPrincipal = {
   accessSource: "membership";
   session: {
     id: string;
-    authMethod:
-      | "legacy"
-      | "magic_link"
-      | "password"
-      | "passkey"
-      | "mfa_step_up";
-    assuranceLevel: "aal1" | "aal2";
-    mfaVerifiedAt: Date | null;
+    authMethod: "legacy" | "magic_link" | "password" | "passkey";
     deviceName: string | null;
     createdAt: Date;
     lastSeenAt: Date;
     expiresAt: Date;
-  };
-  security: {
-    mfaRequired: boolean;
-    mfaEnrolled: boolean;
-    mfaSatisfied: boolean;
   };
   availableAccounts: PartnerAccountAccess[];
 };
@@ -536,6 +506,13 @@ export async function resolvePartnerPrincipal(
 ): Promise<PartnerPrincipalResult> {
   const authentication = await requirePartnerSession(request);
   if (!authentication.ok) return authentication;
+  if (
+    authentication.session.authMethod === "magic_link" &&
+    request.method !== "GET" &&
+    request.method !== "HEAD"
+  ) {
+    return { ok: false, status: 403, error: "forbidden" };
+  }
 
   const availableAccounts = await loadActiveMembershipAccesses(
     authentication.partnerUser.id,
@@ -547,15 +524,17 @@ export async function resolvePartnerPrincipal(
   });
   if (!selection.ok) return selection;
   const selected = selection.access;
+  const isRoutineMagicLink = authentication.session.authMethod === "magic_link";
+  const effectiveCapabilities = isRoutineMagicLink
+    ? [...ROUTINE_MAGIC_LINK_CAPABILITIES]
+    : selected.capabilities;
+  const effectiveAvailableAccounts = isRoutineMagicLink
+    ? availableAccounts.map((access) => ({
+        ...access,
+        capabilities: [...ROUTINE_MAGIC_LINK_CAPABILITIES],
+      }))
+    : availableAccounts;
 
-  const mfaRequired =
-    authentication.partnerUser.mfaRequired ||
-    partnerAccessRequiresMfa({
-      roleKey: selected.roleKey,
-      capabilities: selected.capabilities,
-    });
-  const mfaSatisfied =
-    !mfaRequired || authentication.session.assuranceLevel === "aal2";
   return {
     ok: true,
     principal: {
@@ -573,24 +552,17 @@ export async function resolvePartnerPrincipal(
       accessScope: selected.accessScope,
       preferences: selected.preferences,
       legacyOrgContactId: selected.legacyOrgContactId,
-      capabilities: selected.capabilities,
+      capabilities: effectiveCapabilities,
       accessSource: selected.source,
       session: {
         id: authentication.session.id,
         authMethod: authentication.session.authMethod,
-        assuranceLevel: authentication.session.assuranceLevel,
-        mfaVerifiedAt: authentication.session.mfaVerifiedAt,
         deviceName: authentication.session.deviceName,
         createdAt: authentication.session.createdAt,
         lastSeenAt: authentication.session.lastSeenAt,
         expiresAt: authentication.session.expiresAt,
       },
-      security: {
-        mfaRequired,
-        mfaEnrolled: Boolean(authentication.partnerUser.mfaEnrolledAt),
-        mfaSatisfied,
-      },
-      availableAccounts,
+      availableAccounts: effectiveAvailableAccounts,
     },
   };
 }
@@ -610,25 +582,6 @@ export async function requirePartnerCapability(
   if (!result.ok) return result;
   if (!hasPartnerCapability(result.principal, capability)) {
     return { ok: false, status: 403, error: "forbidden" };
-  }
-  if (
-    !INTRINSIC_SET.has(capability) &&
-    result.principal.security.mfaRequired &&
-    !result.principal.security.mfaSatisfied
-  ) {
-    return { ok: false, status: 403, error: "mfa_step_up_required" };
-  }
-  return result;
-}
-
-export async function requirePartnerAssurance(
-  request: NextRequest,
-  assuranceLevel: "aal1" | "aal2",
-): Promise<PartnerPrincipalResult> {
-  const result = await resolvePartnerPrincipal(request);
-  if (!result.ok || assuranceLevel === "aal1") return result;
-  if (result.principal.session.assuranceLevel !== "aal2") {
-    return { ok: false, status: 403, error: "mfa_step_up_required" };
   }
   return result;
 }

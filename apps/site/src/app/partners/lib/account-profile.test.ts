@@ -32,7 +32,7 @@ void test("profile mutations are revision-safe and retain unsaved-change guards"
   );
   assert.match(component, /window\.addEventListener\("beforeunload", warn\)/u);
   assert.match(component, /result\?\.response\.status === 412/u);
-  assert.match(component, /result\?\.error\.error === "mfa_step_up_required"/u);
+  assert.doesNotMatch(component, /mfa_step_up_required|mfa\/step-up/iu);
   assert.match(component, /organizationFormKey\(profile\)/u);
   assert.match(component, /billingFormKey\(profile\)/u);
   assert.doesNotMatch(

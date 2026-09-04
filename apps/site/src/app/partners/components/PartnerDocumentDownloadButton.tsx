@@ -37,11 +37,14 @@ export function PartnerDocumentDownloadButton({
       setError(
         [404, 409, 501, 503].includes(result?.response.status ?? 503)
           ? "Secure downloads are not available yet."
-          : result?.error.message ?? "This document could not be downloaded.",
+          : (result?.error.message ?? "This document could not be downloaded."),
       );
       return;
     }
-    const url = result.data.download?.url ?? result.data.downloadIntent?.url ?? result.data.url;
+    const url =
+      result.data.download?.url ??
+      result.data.downloadIntent?.url ??
+      result.data.url;
     if (!url) {
       setError("The document service did not return a download link.");
       return;
@@ -72,14 +75,20 @@ export function PartnerDocumentDownloadButton({
         className={cn(partnerSecondaryButtonClass, className)}
       >
         {busy ? (
-          <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          <LoaderCircle
+            className="h-4 w-4 animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
         ) : (
           <Download className="h-4 w-4" aria-hidden="true" />
         )}
-        {busy ? "Preparing…" : label}
+        {busy ? "Preparing download…" : label}
       </button>
       {error ? (
-        <span className="max-w-56 text-xs leading-5 text-amber-800" role="status">
+        <span
+          className="max-w-56 text-xs leading-5 text-amber-800"
+          role="status"
+        >
           {error}
         </span>
       ) : null}

@@ -218,7 +218,8 @@ describe("staff access-application persistence and route contract", () => {
       "isNull(partnerRoleTemplates.partnerAccountId)",
     );
     expect(itemRoute).toContain('roleKey: "admin"');
-    expect(itemRoute).toContain("mfaRequired: true");
+    expect(itemRoute).not.toContain("mfaRequired");
+    expect(itemRoute).not.toContain("mfaEnrolledAt");
     expect(itemRoute).toContain('status: "portal_partner"');
     expect(itemRoute).toContain("commercialConfigurationChanged: false");
     expect(itemRoute).toContain("instantConfirmationGrantedDirectly: false");

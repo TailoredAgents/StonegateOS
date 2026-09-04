@@ -273,7 +273,7 @@ export function PartnerJobMessages({
       setPendingSend(null);
       setSendConfirmation(
         operation.kind === "issue"
-          ? "Issue reported to Stonegate and added to this job thread."
+          ? "Issue reported to Stonegate and saved with this job."
           : "Message sent to Stonegate.",
       );
     },
@@ -340,7 +340,7 @@ export function PartnerJobMessages({
                 id="job-messages-heading"
                 className="text-lg font-semibold text-slate-950"
               >
-                Job messages
+                Keep this job moving
               </h2>
               {typeof initialUnreadCount === "number" &&
               initialUnreadCount > 0 ? (
@@ -353,7 +353,7 @@ export function PartnerJobMessages({
               ) : null}
             </div>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Keep job-specific updates with the Stonegate service team.
+              Send updates or questions directly to the Stonegate service team.
             </p>
           </div>
         </div>
@@ -418,7 +418,7 @@ export function PartnerJobMessages({
                 aria-hidden="true"
               />
               <p className="mt-3 font-semibold text-slate-900">
-                No messages yet
+                No updates yet
               </p>
               <p className="mt-1 max-w-sm text-sm leading-6 text-slate-600">
                 {canSend
@@ -632,7 +632,7 @@ export function PartnerJobMessages({
                 <div className="text-xs leading-5 text-slate-600">
                   <p id="partner-job-issue-help">
                     Do not include passwords, payment card details, or access
-                    codes. Your report joins this job’s shared Stonegate thread.
+                    codes. Your report stays with this job for follow-up.
                   </p>
                   <p
                     id="partner-job-issue-count"
@@ -700,7 +700,8 @@ export function PartnerJobMessages({
         </>
       ) : (
         <p className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
-          Your portal role can view this conversation but cannot send messages.
+          You can read this conversation, but your account access does not allow
+          sending messages.
         </p>
       )}
     </section>

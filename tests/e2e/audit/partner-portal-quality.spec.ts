@@ -44,7 +44,7 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
 }
 
 test(
-  "Partner Portal landing prioritizes sign-in and presents an accessible product record",
+  "Partner Portal landing prioritizes sign-in and presents an accessible fast-service path",
   {
     tag: "@partner-landing-public",
   },
@@ -52,9 +52,7 @@ test(
     const navigationResponse = await page.goto("/partners");
     expect(navigationResponse?.status()).toBe(200);
     const serverHtml = await navigationResponse?.text();
-    expect(serverHtml).toContain(
-      "Schedule, track, and document every Stonegate job.",
-    );
+    expect(serverHtml).toContain("Quick and easy service for our partners.");
     expect(serverHtml).toContain('rel="canonical"');
     expect(serverHtml).toContain('property="og:image"');
 
@@ -89,7 +87,7 @@ test(
 
     await expect(
       page.getByRole("heading", {
-        name: "Schedule, track, and document every Stonegate job.",
+        name: "Quick and easy service for our partners.",
         level: 1,
       }),
     ).toBeVisible();
@@ -200,7 +198,7 @@ test(
       expect(response?.status()).toBe(200);
       await expect(
         page.getByRole("heading", {
-          name: "Schedule, track, and document every Stonegate job.",
+          name: "Quick and easy service for our partners.",
           level: 1,
         }),
       ).toBeVisible();
@@ -224,7 +222,7 @@ test(
     await page.goto("/partners");
     await expect(
       page.getByRole("heading", {
-        name: "Schedule, track, and document every Stonegate job.",
+        name: "Quick and easy service for our partners.",
         level: 1,
       }),
     ).toBeVisible();
@@ -466,11 +464,11 @@ test("Partner Portal authenticated shell, overview, and scheduler are responsive
     );
     await expect(
       page.getByRole("heading", {
-        name: "Schedule facility service",
+        name: "Request facility service",
         level: 1,
       }),
     ).toBeVisible();
-    await expect(page.getByText("All changes saved")).toBeVisible();
+    await expect(page.getByText("Saved", { exact: true })).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await expectTeamStateToPassAutomatedWcag({
       page,
@@ -483,7 +481,7 @@ test("Partner Portal authenticated shell, overview, and scheduler are responsive
       const scopeText = `Remove staged furniture and boxed material. Quality ${fixture.marker}`;
       await page.getByRole("button", { name: "Continue" }).click();
       await expect(
-        page.getByRole("heading", { name: "Service & scope" }),
+        page.getByRole("heading", { name: "Add service details" }),
       ).toBeVisible();
       await page
         .getByRole("textbox", { name: BOOKING_SCOPE_LABEL })
@@ -491,14 +489,14 @@ test("Partner Portal authenticated shell, overview, and scheduler are responsive
       await page.getByRole("button", { name: "Continue" }).click();
 
       await expect(
-        page.getByRole("heading", { name: "Contact & access" }),
+        page.getByRole("heading", { name: "Confirm contact & access" }),
       ).toBeVisible();
       await page.getByLabel("On-site contact name").fill("Quality Site Lead");
       await page.getByLabel("Mobile phone").fill(fixture.partnerPhoneE164);
       await page.getByRole("button", { name: "Continue" }).click();
 
       await expect(
-        page.getByRole("heading", { name: "Photos & proof" }),
+        page.getByRole("heading", { name: "Add photos & proof" }),
       ).toBeVisible();
       await page.getByRole("button", { name: "Continue" }).click();
 
@@ -512,7 +510,7 @@ test("Partner Portal authenticated shell, overview, and scheduler are responsive
       await page.getByRole("button", { name: "Continue" }).click();
 
       await expect(
-        page.getByRole("heading", { name: "Review & send" }),
+        page.getByRole("heading", { name: "Check & send" }),
       ).toBeVisible();
       await page.getByRole("button", { name: "Send service request" }).click();
       await expect(page).toHaveURL(

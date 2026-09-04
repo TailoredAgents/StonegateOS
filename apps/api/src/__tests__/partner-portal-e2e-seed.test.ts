@@ -47,7 +47,7 @@ describe("Partner Portal deterministic E2E seed manifest", () => {
     );
   });
 
-  it("contains approved, limited, suspended, MFA-required, and multi-account actors", () => {
+  it("contains approved, limited, suspended, and multi-account actors without MFA flags", () => {
     expect(PARTNER_PORTAL_E2E_MEMBER_MATRIX).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -56,20 +56,21 @@ describe("Partner Portal deterministic E2E seed manifest", () => {
           status: "active",
         }),
         expect.objectContaining({ key: "suspended", status: "suspended" }),
-        expect.objectContaining({ key: "admin", mfaRequired: true }),
-        expect.objectContaining({ key: "approver", mfaRequired: true }),
-        expect.objectContaining({ key: "billing", mfaRequired: true }),
+        expect.objectContaining({ key: "admin", status: "active" }),
+        expect.objectContaining({ key: "approver", status: "active" }),
+        expect.objectContaining({ key: "billing", status: "active" }),
       ]),
     );
+    expect(
+      PARTNER_PORTAL_E2E_MEMBER_MATRIX.every(
+        (member) => !("mfaRequired" in member),
+      ),
+    ).toBe(true);
     const implementation = source("scripts/seed-partner-portal-e2e.ts");
     expect(implementation).toContain("membershipIds.admin_secondary");
-    expect(implementation).toContain(
-      'assuranceLevel: member.mfaRequired ? "aal2" : "aal1"',
-    );
-    expect(implementation).toContain("partnerMfaMethods");
-    expect(implementation).toContain(
-      "`e2e-credential:${runId}:${memberKey}:${userIds[memberKey]}`",
-    );
+    expect(implementation).toContain('authMethod: "password"');
+    expect(implementation).toContain('assuranceLevel: "aal1"');
+    expect(implementation).not.toContain("partnerMfaMethods");
   });
 
   it("covers every public job state plus representative billing states", () => {
@@ -154,7 +155,6 @@ describe("Partner Portal E2E seed safety and cleanup", () => {
   it("archives and disables portal identities without hard-deleting retained records", () => {
     expect(cleanup).toContain("partnerUsersDeactivated");
     expect(cleanup).toContain("partnerMembershipsSuspended");
-    expect(cleanup).toContain("partnerMfaMethodsDisabled");
     expect(cleanup).toContain("partnerApplicationsWithdrawn");
     expect(cleanup).toContain("partnerSessionsRevoked");
     expect(cleanup).toContain("archived-e2e-session:");

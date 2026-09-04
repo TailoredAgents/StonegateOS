@@ -4,7 +4,7 @@ import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
-import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
+import { requirePartnerCapability } from "@/lib/partner-account-authorization";
 import {
   arePartnerPortalEmbeddedAchPaymentsEnabled,
   arePartnerPortalEmbeddedPaymentsEnabled,
@@ -48,7 +48,7 @@ export async function POST(
   ) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
-  const authorization = await requireRecentPartnerMfaCapability(
+  const authorization = await requirePartnerCapability(
     request,
     "payments.initiate",
   );

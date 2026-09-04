@@ -12,8 +12,6 @@ type TeamSessionApiResponse = {
   ok?: boolean;
   sessionId?: unknown;
   authMethod?: unknown;
-  assuranceLevel?: unknown;
-  mfaVerifiedAt?: unknown;
   teamMember?: {
     id?: unknown;
     name?: unknown;
@@ -23,6 +21,22 @@ type TeamSessionApiResponse = {
     permissions?: unknown;
   };
 };
+
+export type TeamSessionVerificationResult =
+  | { kind: "valid"; principal: TeamRequestPrincipal }
+  | { kind: "invalid" }
+  | {
+      kind: "unavailable";
+      reason:
+        | "timeout"
+        | "network_error"
+        | "rate_limited"
+        | "upstream_error"
+        | "malformed_response";
+      retryAfter: string | null;
+    };
+
+export const TEAM_SESSION_VERIFICATION_TIMEOUT_MS = 2_000;
 
 export type TeamRequestPrincipal = TeamPrincipal & {
   sessionToken: string;
@@ -67,7 +81,7 @@ function parseVerifiedPrincipal(
   sessionToken: string,
   payload: TeamSessionApiResponse | null,
 ): TeamRequestPrincipal | null {
-  if (!payload?.ok || !payload.teamMember) return null;
+  if (payload?.ok !== true || !payload.teamMember) return null;
 
   const sessionId =
     typeof payload.sessionId === "string" ? payload.sessionId.trim() : "";
@@ -86,13 +100,6 @@ function parseVerifiedPrincipal(
       ? payload.teamMember.name.trim()
       : "";
   if (!sessionId || !authMethod || !memberId || !name) return null;
-  const assuranceLevel = payload.assuranceLevel === "aal2" ? "aal2" : "aal1";
-  const mfaVerifiedAt =
-    typeof payload.mfaVerifiedAt === "string" &&
-    Number.isFinite(Date.parse(payload.mfaVerifiedAt))
-      ? payload.mfaVerifiedAt
-      : null;
-
   const roleSlug =
     typeof payload.teamMember.roleSlug === "string" &&
     payload.teamMember.roleSlug.trim()
@@ -112,44 +119,111 @@ function parseVerifiedPrincipal(
     email,
     roleSlug,
     authMethod,
-    assuranceLevel,
-    mfaVerifiedAt,
     passwordSet: payload.teamMember.passwordSet === true,
     permissions: normalizePermissions(payload.teamMember.permissions),
   };
 }
 
+function normalizeRetryAfter(value: string | null): string | null {
+  const normalized = value?.trim() ?? "";
+  if (!/^\d{1,5}$/u.test(normalized)) return null;
+  const seconds = Number(normalized);
+  return Number.isSafeInteger(seconds) && seconds >= 0 && seconds <= 86_400
+    ? String(seconds)
+    : null;
+}
+
+export async function verifyTeamSessionTokenResult(
+  sessionToken: string,
+  options: {
+    fetcher?: typeof fetch;
+    timeoutMs?: number;
+    apiBaseUrl?: string;
+  } = {},
+): Promise<TeamSessionVerificationResult> {
+  const token = sessionToken.trim();
+  if (!token) return { kind: "invalid" };
+
+  const fetcher = options.fetcher ?? fetch;
+  const timeoutMs = options.timeoutMs ?? TEAM_SESSION_VERIFICATION_TIMEOUT_MS;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const apiBaseUrl = (options.apiBaseUrl ?? resolveApiBase()).replace(
+      /\/$/u,
+      "",
+    );
+    const response = await fetcher(`${apiBaseUrl}/api/public/team/session`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "manual",
+      signal: controller.signal,
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      return { kind: "invalid" };
+    }
+    if (!response.ok) {
+      return {
+        kind: "unavailable",
+        reason: response.status === 429 ? "rate_limited" : "upstream_error",
+        retryAfter:
+          response.status === 429
+            ? normalizeRetryAfter(response.headers.get("retry-after"))
+            : null,
+      };
+    }
+
+    const payload = (await response
+      .json()
+      .catch(() => null)) as TeamSessionApiResponse | null;
+    const principal = parseVerifiedPrincipal(token, payload);
+    return principal
+      ? { kind: "valid", principal }
+      : {
+          kind: "unavailable",
+          reason: "malformed_response",
+          retryAfter: null,
+        };
+  } catch {
+    return {
+      kind: "unavailable",
+      reason: timedOut ? "timeout" : "network_error",
+      retryAfter: null,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+const cachedTeamSessionVerification = cache(
+  async (sessionToken: string): Promise<TeamSessionVerificationResult> =>
+    verifyTeamSessionTokenResult(sessionToken),
+);
+
+/** Compatibility helper for read-only callers that accept a nullable result. */
 export const verifyTeamSessionToken = cache(
   async (sessionToken: string): Promise<TeamRequestPrincipal | null> => {
-    const token = sessionToken.trim();
-    if (!token) return null;
-
-    try {
-      const response = await fetch(
-        `${resolveApiBase()}/api/public/team/session`,
-        {
-          method: "GET",
-          headers: { Authorization: `Bearer ${token}` },
-          cache: "no-store",
-        },
-      );
-      if (!response.ok) return null;
-
-      const payload = (await response
-        .json()
-        .catch(() => null)) as TeamSessionApiResponse | null;
-      return parseVerifiedPrincipal(token, payload);
-    } catch {
-      return null;
-    }
+    const verification = await cachedTeamSessionVerification(sessionToken);
+    return verification.kind === "valid" ? verification.principal : null;
   },
 );
 
 export async function resolveTeamPrincipalFromRequest(
   request: NextRequest,
-): Promise<TeamRequestPrincipal | null> {
+): Promise<TeamSessionVerificationResult> {
   const token = request.cookies.get(TEAM_SESSION_COOKIE)?.value ?? "";
-  return verifyTeamSessionToken(token);
+  return cachedTeamSessionVerification(token);
 }
 
 export async function resolveTeamPrincipalFromCookies(): Promise<TeamRequestPrincipal | null> {
@@ -159,6 +233,20 @@ export async function resolveTeamPrincipalFromCookies(): Promise<TeamRequestPrin
     return await verifyTeamSessionToken(token);
   } catch {
     return null;
+  }
+}
+
+export async function resolveTeamPrincipalResultFromCookies(): Promise<TeamSessionVerificationResult> {
+  try {
+    const cookieStore = await cookies();
+    const token = cookieStore.get(TEAM_SESSION_COOKIE)?.value ?? "";
+    return await cachedTeamSessionVerification(token);
+  } catch {
+    return {
+      kind: "unavailable",
+      reason: "network_error",
+      retryAfter: null,
+    };
   }
 }
 
@@ -172,10 +260,35 @@ export class TeamPrincipalRequiredError extends Error {
   }
 }
 
+export class TeamSessionVerificationUnavailableError extends Error {
+  readonly status = 503;
+  readonly code = "session_verification_unavailable";
+  readonly retryAfter: string | null;
+
+  constructor(
+    result: Extract<TeamSessionVerificationResult, { kind: "unavailable" }>,
+  ) {
+    super(
+      "Your session could not be verified because the service is temporarily unavailable. Keep your work and try again.",
+    );
+    this.name = "TeamSessionVerificationUnavailableError";
+    this.retryAfter = result.retryAfter;
+  }
+}
+
+export function requireVerifiedTeamPrincipal(
+  verification: TeamSessionVerificationResult,
+): TeamRequestPrincipal {
+  if (verification.kind === "valid") return verification.principal;
+  if (verification.kind === "unavailable") {
+    throw new TeamSessionVerificationUnavailableError(verification);
+  }
+  throw new TeamPrincipalRequiredError();
+}
+
 export async function requireCurrentTeamPrincipal(): Promise<TeamRequestPrincipal> {
-  const principal = await resolveTeamPrincipalFromCookies();
-  if (!principal) throw new TeamPrincipalRequiredError();
-  return principal;
+  const verification = await resolveTeamPrincipalResultFromCookies();
+  return requireVerifiedTeamPrincipal(verification);
 }
 
 export function toTeamMemberIdentity(

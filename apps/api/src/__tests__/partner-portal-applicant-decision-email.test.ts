@@ -63,7 +63,7 @@ describe("partner applicant decision email", () => {
     });
 
     expect(copy.subject).toBe(
-      "More information is needed for your Partner Portal application",
+      "More information is needed for your partner access request",
     );
     expect(copy.text).toContain("Hi Ada Lovelace,");
     expect(copy.text).toContain("Example Properties");
@@ -96,10 +96,10 @@ describe("partner applicant decision email", () => {
     });
 
     expect(copy.subject).toBe(
-      "Update on your Stonegate Partner Portal application",
+      "Update on your Stonegate partner access request",
     );
     expect(copy.text).toContain("could not approve");
-    expect(copy.text).toContain("No Partner Portal account");
+    expect(copy.text).toContain("No partner account");
     expect(copy.text).not.toContain("INTERNAL DECLINE REASON");
     expect(copy.text).not.toContain("stonegate.example/partners/application");
   });

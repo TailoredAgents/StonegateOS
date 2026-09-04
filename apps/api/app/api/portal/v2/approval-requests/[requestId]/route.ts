@@ -27,13 +27,6 @@ export async function GET(
     );
   }
   const { principal } = authorization;
-  if (principal.session.assuranceLevel !== "aal2") {
-    return createPartnerPortalV2ErrorResponse(
-      "mfa_step_up_required",
-      403,
-      correlationId,
-    );
-  }
   const { requestId } = await context.params;
   if (
     !principal.accountId ||

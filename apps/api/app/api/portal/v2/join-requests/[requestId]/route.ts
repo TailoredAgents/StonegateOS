@@ -3,7 +3,7 @@ import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
-import { requireRecentPartnerMfaCapability } from "@/lib/partner-recent-mfa";
+import { requirePartnerCapability } from "@/lib/partner-account-authorization";
 import {
   decideAccountJoinRequest,
   hasAccountJoinRequest,
@@ -37,7 +37,7 @@ export async function POST(
 ): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
   try {
-    const authorization = await requireRecentPartnerMfaCapability(
+    const authorization = await requirePartnerCapability(
       request,
       "account.members.manage",
     );

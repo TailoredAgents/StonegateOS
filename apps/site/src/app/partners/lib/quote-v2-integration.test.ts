@@ -31,7 +31,11 @@ void test("Partner quote response is accessible, revision-safe, and explicit", (
   assert.match(decision, /authorityAffirmed: true as const/u);
   assert.match(decision, /consentAffirmed: true as const/u);
   assert.match(decision, /I am authorized to accept this proposal/u);
-  assert.match(decision, /No quote decision was recorded/u);
+  assert.match(decision, /No quote decision was changed/u);
+  assert.doesNotMatch(
+    decision,
+    /MFA|mfa\/step-up|authenticator|recovery code/iu,
+  );
   assert.match(decision, /certificateState === "ready"/u);
   assert.match(decision, /acceptance certificate is still being prepared/u);
   assert.match(decision, /motion-reduce:animate-none/u);

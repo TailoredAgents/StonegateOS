@@ -46,7 +46,7 @@ export function GET() {
                   textTransform: "uppercase",
                 }}
               >
-                Built for partner operations
+                Stonegate Partner Portal
               </div>
               <div
                 style={{
@@ -57,7 +57,7 @@ export function GET() {
                   lineHeight: 1.04,
                 }}
               >
-                Stonegate Partner Portal — Schedule. Coordinate. Document.
+                Quick and easy service for our partners.
               </div>
               <div
                 style={{
@@ -67,8 +67,8 @@ export function GET() {
                   color: "#D3E0E8",
                 }}
               >
-                Schedule pickups, coordinate sites, and keep proof and billing
-                together.
+                Request service, choose an eligible window, and keep every
+                update in one place.
               </div>
             </div>
             <div style={{ fontSize: 20, color: "#D3E0E8" }}>

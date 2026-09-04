@@ -165,8 +165,8 @@ void test("prevents self-approval and duplicate decisions without blocking an ex
 
 void test("gives explicit safe recovery copy for protected approval failures", () => {
   assert.match(
-    approvalDecisionErrorMessage("mfa_step_up_required", 403),
-    /Verify with MFA/u,
+    approvalDecisionErrorMessage("forbidden", 403),
+    /cannot make this decision/u,
   );
   assert.match(
     approvalDecisionErrorMessage("hold_expired", 410),
@@ -202,6 +202,6 @@ void test("approval decision UI sends revision and idempotency guards", () => {
   assert.match(component, /"Idempotency-Key": operationRef\.current\.key/u);
   assert.match(component, /approved_needs_reschedule/u);
   assert.match(component, /You may still approve or decline/u);
-  assert.match(component, /mfa_step_up_required/u);
+  assert.doesNotMatch(component, /mfa_step_up_required|mfa\/step-up/iu);
   assert.match(component, /requestedByCurrentMember/u);
 });

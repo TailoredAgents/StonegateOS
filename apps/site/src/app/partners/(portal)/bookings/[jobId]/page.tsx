@@ -590,6 +590,31 @@ function formatPreferredDate(value: string, timezone: string): string {
   }).format(date);
 }
 
+function jobNextStep(status: string): string {
+  switch (status) {
+    case "requested":
+      return "Stonegate is checking your request. Updates will appear on this page.";
+    case "approval_needed":
+      return "An authorized person on your account needs to review this request.";
+    case "under_review":
+      return "Stonegate is reviewing the details before confirming the work.";
+    case "confirmed":
+      return "Check the arrival window, on-site contact, and access details before service.";
+    case "en_route":
+      return "Keep the on-site contact available while the crew is on the way.";
+    case "in_progress":
+      return "Work is underway. Updates and proof will appear here.";
+    case "completed":
+      return "Review the completed work, proof, and available documents.";
+    case "canceled":
+      return "No further action is required. Use Book again if you need this service later.";
+    case "declined":
+      return "Review the details below or contact Stonegate for another option.";
+    default:
+      return "Review the current job details below.";
+  }
+}
+
 export default async function PartnerJobDetailPage({
   params,
   searchParams,
@@ -676,14 +701,14 @@ export default async function PartnerJobDetailPage({
         ? "Job completed"
         : job.operations.eta.state === "not_applicable"
           ? "Not applicable"
-          : "No operational estimate published";
+          : "No narrower estimate available";
   const operationalEtaDetail =
     job.operations.eta.state === "operational_estimate" &&
     job.operations.eta.publishedAt
-      ? `Published ${formatDateTime(job.operations.eta.publishedAt, timezone)}. This estimate may change; the promised two-hour arrival window remains authoritative.`
+      ? `Updated ${formatDateTime(job.operations.eta.publishedAt, timezone)}. This estimate may change; the promised two-hour arrival window remains authoritative.`
       : job.operations.eta.state === "not_published" &&
           job.schedule.arrivalWindow
-        ? "Use the promised two-hour arrival window until Stonegate publishes a narrower operational estimate."
+        ? "Use the confirmed two-hour arrival window unless Stonegate provides a narrower estimate."
         : null;
   const assignedTeamValue =
     job.operations.assignedTeam.state === "assigned"
@@ -799,8 +824,8 @@ export default async function PartnerJobDetailPage({
       >
         {query.created === "1" ? (
           <PartnerNotice tone="success">
-            Request received. Current confirmation:{" "}
-            <strong>{humanize(job.confirmationMode)}</strong>.
+            Request received. Current status:{" "}
+            <strong>{humanize(job.status)}</strong>.
           </PartnerNotice>
         ) : null}
         {job.reviewReasons.length ? (
@@ -809,8 +834,8 @@ export default async function PartnerJobDetailPage({
             className={query.created === "1" ? "mt-3" : undefined}
           >
             {job.confirmationMode === "approval" && job.schedule.arrivalWindow
-              ? "Account approval is required. The requested window is held only temporarily and is not confirmed; if the approval hold expires, a scheduler must choose a new available window."
-              : `Stonegate review is needed before every detail is final. Your ${job.schedule.arrivalWindow ? "preferred arrival window" : "preferred dates"} and current status remain visible here; no time is reserved until Stonegate confirms it.`}
+              ? "Account approval is needed. The requested window is temporary and is not confirmed; if it expires, a scheduler will need to choose another available window."
+              : `Stonegate needs to review this request before every detail is final. Your ${job.schedule.arrivalWindow ? "preferred arrival window" : "preferred dates"} stays visible here, but no time is reserved until it is confirmed.`}
           </PartnerNotice>
         ) : null}
         {job.changeOrder?.state === "offered" ? (
@@ -833,8 +858,8 @@ export default async function PartnerJobDetailPage({
         ) : job.changeOrder?.state === "accepted" &&
           job.changeOrder.operationalEffectsPending.length > 0 ? (
           <PartnerNotice tone="warning" className="mt-3">
-            The change-order price is final. Stonegate still needs to execute
-            these operational updates:{" "}
+            The change-order price is final. Stonegate still needs to complete
+            these job updates:{" "}
             {job.changeOrder.operationalEffectsPending.map(humanize).join(", ")}
             . Until confirmed, the schedule, service, and proof requirements
             shown on this job remain in effect.
@@ -842,11 +867,15 @@ export default async function PartnerJobDetailPage({
         ) : null}
       </PartnerPageHeader>
 
+      <PartnerNotice tone={job.status === "completed" ? "success" : "info"}>
+        <strong>Next:</strong> {jobNextStep(job.status)}
+      </PartnerNotice>
+
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
         <div className="space-y-5">
           <PartnerPanel>
             <h2 className="text-lg font-semibold text-slate-950">
-              Request details
+              Service details
             </h2>
             <dl className="mt-4 grid gap-4 sm:grid-cols-2">
               <DetailItem
@@ -874,7 +903,7 @@ export default async function PartnerJobDetailPage({
               />
               <DetailItem
                 icon={Clock3}
-                label="Operational arrival estimate"
+                label="Latest arrival estimate"
                 value={operationalEtaValue}
                 detail={operationalEtaDetail}
               />
@@ -1015,7 +1044,7 @@ export default async function PartnerJobDetailPage({
               <div className="mt-4">
                 <PartnerEmptyState
                   title="Timeline is being prepared"
-                  description="The current job status is shown above. New milestones will appear here as work progresses."
+                  description="The current status and next step are shown above. New milestones will appear here as work progresses."
                 />
               </div>
             )}
@@ -1094,8 +1123,10 @@ export default async function PartnerJobDetailPage({
                 Delivery status for you
               </h3>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                This account-member view shows recorded scheduling notification
-                attempts without exposing destinations or provider details.
+                See recorded schedule-notification attempts.{" "}
+                {
+                  "This keeps the record useful without exposing destinations or provider details."
+                }
               </p>
               {job.notificationDeliveryHistory.length ? (
                 <ul className="mt-3 space-y-2">
@@ -1142,7 +1173,8 @@ export default async function PartnerJobDetailPage({
                   Photos &amp; proof
                 </h2>
                 <p className="mt-0.5 text-sm text-slate-600">
-                  Job-linked evidence currently visible to your account.
+                  Before, after, issue, and completion photos kept with this
+                  job.
                 </p>
               </div>
             </div>
@@ -1192,8 +1224,8 @@ export default async function PartnerJobDetailPage({
               Job actions
             </h2>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Actions and unavailable reasons reflect the current job, schedule,
-              account policy, pending reviews, and your role.
+              Available actions are shown first. If something is unavailable,
+              you can open the explanation below.
             </p>
             <div className="mt-4">
               <PartnerJobActions
@@ -1358,8 +1390,8 @@ export default async function PartnerJobDetailPage({
               </h2>
             </div>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Stonegate support can see this job ID and help with access,
-              timing, documentation, or billing.
+              Contact Stonegate about access, timing, proof, documents, or
+              billing for this job.
             </p>
             <Link
               href="/partners/help"

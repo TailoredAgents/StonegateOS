@@ -72,9 +72,9 @@ export default async function PartnerPhotosPage({
     return unavailable ? (
       <div className="space-y-5 sm:space-y-6">
         <PartnerPageHeader
-          eyebrow="Service documentation"
+          eyebrow="Job photos in one place"
           title="Photos & proof"
-          description="Upload private job photos, review before-and-after evidence, and manage completion packages."
+          description="Add job photos, see what proof is still needed, and keep the finished record easy to find."
           breadcrumbs={[
             { label: "Overview", href: "/partners/overview" },
             { label: "Photos & proof", href: "/partners/photos" },
@@ -82,9 +82,9 @@ export default async function PartnerPhotosPage({
         />
         <PartnerPanel>
           <PartnerEmptyState
-            title="The account proof workspace is not available yet"
-            description="No photos were uploaded or shared. Contact Stonegate if you need documentation for a job."
-            action={{ href: "/partners/help", label: "Request documentation" }}
+            title="Photo and proof tools are not available right now"
+            description="No photos were uploaded or shared. Contact Stonegate and include the job you need documentation for."
+            action={{ href: "/partners/help", label: "Ask for job documents" }}
             icon={<Camera className="h-6 w-6" aria-hidden="true" />}
           />
         </PartnerPanel>
@@ -143,9 +143,9 @@ export default async function PartnerPhotosPage({
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
-        eyebrow="Service documentation"
+        eyebrow="Job photos in one place"
         title="Photos & proof"
-        description="Upload private job photos, review evidence requirements, and create formal completion records and expiring share links."
+        description="Add job photos, see what proof is still needed, and download or share the finished record from one place."
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Photos & proof", href: "/partners/photos" },
@@ -164,16 +164,18 @@ export default async function PartnerPhotosPage({
       {!selectedJob ? (
         <PartnerPanel>
           <PartnerEmptyState
-            title="No jobs available for proof"
-            description="Schedule a job first. Its photo requirements and gallery will appear here."
-            action={{ href: "/partners/book", label: "Schedule a job" }}
+            title="Request service to start a photo record"
+            description="Once a job is scheduled, its proof requirements and private gallery will appear here automatically."
+            action={{ href: "/partners/book", label: "Request service" }}
             icon={<Camera className="h-6 w-6" aria-hidden="true" />}
           />
         </PartnerPanel>
       ) : (
         <div className="grid gap-5 xl:grid-cols-[18rem_minmax(0,1fr)]">
           <PartnerPanel className="h-fit xl:sticky xl:top-24">
-            <h2 className="font-semibold text-slate-950">Choose a job</h2>
+            <h2 className="font-semibold text-slate-950">
+              Choose a job to view
+            </h2>
             <nav
               aria-label="Jobs with proof"
               className="mt-3 max-h-[60vh] space-y-2 overflow-y-auto pr-1"
@@ -244,8 +246,8 @@ export default async function PartnerPhotosPage({
               />
             ) : proofUnavailable ? (
               <PartnerEmptyState
-                title="Proof service is not available for this job"
-                description="No upload or share action was attempted. Existing job records are unchanged."
+                title="Photo and proof tools are unavailable for this job"
+                description="No upload or share action was attempted, and the job record is unchanged. Open the job for its current details or contact Stonegate for help."
                 action={{
                   href: `/partners/bookings/${selectedJob.id}`,
                   label: "Open job details",
