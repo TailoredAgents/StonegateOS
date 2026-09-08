@@ -63,6 +63,78 @@ describe("expense overview repository boundaries", () => {
 });
 
 describe("expense overview repository mapping", () => {
+  it("keeps legacy service-work revenue and labor aligned while rejecting rogue quote rows", () => {
+    const mapped = mapExpenseOverviewRows({
+      weekStart: WEEK_START,
+      asOf: "2026-08-24",
+      rows: baseRows({
+        jobs: [
+          {
+            id: "legacy-estimate-job",
+            status: "completed",
+            appointmentType: "estimate",
+            completedAt: new Date("2026-08-20T16:00:00.000Z"),
+            finalTotalCents: 42_500,
+          },
+          {
+            id: "quote-only",
+            status: "completed",
+            appointmentType: "in_person_quote",
+            completedAt: new Date("2026-08-20T17:00:00.000Z"),
+            finalTotalCents: 500_000,
+          },
+          {
+            id: "legacy-quote-only",
+            status: "completed",
+            appointmentType: "in_person_estimate",
+            completedAt: new Date("2026-08-20T18:00:00.000Z"),
+            finalTotalCents: 600_000,
+          },
+        ],
+        commissions: [
+          {
+            appointmentId: "legacy-estimate-job",
+            completedAt: new Date("2026-08-20T16:00:00.000Z"),
+            role: "crew",
+            amountCents: 8_500,
+          },
+          {
+            appointmentId: "legacy-estimate-job",
+            completedAt: new Date("2026-08-20T16:00:00.000Z"),
+            role: "marketing",
+            amountCents: 7_225,
+          },
+          {
+            appointmentId: "quote-only",
+            completedAt: new Date("2026-08-20T17:00:00.000Z"),
+            role: "crew",
+            amountCents: 100_000,
+          },
+          {
+            appointmentId: "legacy-quote-only",
+            completedAt: new Date("2026-08-20T18:00:00.000Z"),
+            role: "marketing",
+            amountCents: 100_000,
+          },
+        ],
+      }),
+    });
+
+    const overview = buildExpenseOverview(mapped);
+
+    expect(overview.revenueCents).toBe(42_500);
+    expect(overview.labor).toEqual({
+      state: "estimated",
+      amountCents: 15_725,
+      subrows: {
+        crewCents: 8_500,
+        salesCents: 0,
+        managementCents: 7_225,
+        otherPayrollAdjustmentsCents: 0,
+      },
+    });
+  });
+
   it("maps ledger, allocations, commissions, payout snapshots, ads, and verification state", () => {
     const rows = baseRows({
       jobs: [

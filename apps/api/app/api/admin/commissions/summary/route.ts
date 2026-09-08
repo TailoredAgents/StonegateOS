@@ -2,7 +2,9 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { appointmentCommissions, appointments, getDb } from "@/db";
+import { serviceWorkAppointmentTypePredicate } from "@/lib/appointment-kind";
 import { requirePermission } from "@/lib/permissions";
+import { calculatePayoutPeriodPayrollAdjustmentTotalCents } from "@/lib/payout-run-report";
 import {
   getOrCreateCommissionSettings,
   resolveCurrentPayoutPeriod,
@@ -57,6 +59,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       .where(
         and(
           eq(appointments.status, "completed"),
+          serviceWorkAppointmentTypePredicate(appointments.type),
           gte(appointments.completedAt, period.periodStart),
           lt(appointments.completedAt, period.periodEnd),
         ),
@@ -75,6 +78,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         .where(
           and(
             eq(appointments.status, "completed"),
+            serviceWorkAppointmentTypePredicate(appointments.type),
             gte(appointments.completedAt, period.periodStart),
             lt(appointments.completedAt, period.periodEnd),
           ),
@@ -86,14 +90,17 @@ export async function GET(request: NextRequest): Promise<Response> {
       cardTipsCents = 0;
     }
 
+    const payrollAdjustmentsCents =
+      await calculatePayoutPeriodPayrollAdjustmentTotalCents(db, period);
+
     const totals = { sales: 0, marketing: 0, crew: 0, adjustments: 0 };
     for (const row of rows) {
       const cents = Number(row.totalCents ?? 0);
       if (row.role === "sales") totals.sales += cents;
       else if (row.role === "marketing") totals.marketing += cents;
       else if (row.role === "crew") totals.crew += cents;
-      else if (row.role === "adjustments") totals.adjustments += cents;
     }
+    totals.adjustments = payrollAdjustmentsCents;
 
     return NextResponse.json({
       ok: true,

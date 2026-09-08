@@ -7,6 +7,7 @@ import {
   appointmentBookingDetailsSchema,
   validateQuotedTotalForBookingDetails,
 } from "@/lib/appointment-booking-details";
+import { isQuoteOnlyAppointmentType } from "@/lib/appointment-kind";
 import {
   BoundedJsonRequestError,
   readBoundedJsonRequest,
@@ -141,11 +142,6 @@ async function storeTerminalFailure(
   });
   await completeTeamMutationIdempotency(tx, mutation, claim, result, status);
   return { result, status };
-}
-
-function isQuoteOnlyAppointmentType(value: string | null): boolean {
-  const type = (value ?? "").trim().toLowerCase();
-  return type === "in_person_quote" || type === "in_person_estimate";
 }
 
 function sameJson(left: unknown, right: unknown): boolean {

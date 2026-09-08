@@ -348,6 +348,75 @@ describe("expense overview calculations", () => {
     });
   });
 
+  it("reconciles legacy estimate service work with payout commissions", () => {
+    const result = buildExpenseOverview(
+      baseInput({
+        jobs: [
+          {
+            id: "legacy-estimate-job",
+            status: "completed",
+            appointmentType: "estimate",
+            completedAt: "2026-08-20T16:00:00.000Z",
+            finalTotalCents: 42_500,
+          },
+          {
+            id: "quote-only",
+            status: "completed",
+            appointmentType: "in_person_quote",
+            completedAt: "2026-08-20T17:00:00.000Z",
+            finalTotalCents: 500_000,
+          },
+          {
+            id: "legacy-quote-only",
+            status: "completed",
+            appointmentType: " IN_PERSON_ESTIMATE ",
+            completedAt: "2026-08-20T18:00:00.000Z",
+            finalTotalCents: 600_000,
+          },
+        ],
+        commissions: [
+          {
+            appointmentId: "legacy-estimate-job",
+            completedAt: "2026-08-20T16:00:00.000Z",
+            group: "crew",
+            amountCents: 8_500,
+          },
+          {
+            appointmentId: "legacy-estimate-job",
+            completedAt: "2026-08-20T16:00:00.000Z",
+            group: "management",
+            amountCents: 7_225,
+          },
+          {
+            appointmentId: "quote-only",
+            completedAt: "2026-08-20T17:00:00.000Z",
+            group: "crew",
+            amountCents: 100_000,
+          },
+          {
+            appointmentId: "legacy-quote-only",
+            completedAt: "2026-08-20T18:00:00.000Z",
+            group: "management",
+            amountCents: 100_000,
+          },
+        ],
+      }),
+    );
+
+    expect(result.revenueCents).toBe(42_500);
+    expect(result.labor).toEqual({
+      state: "estimated",
+      amountCents: 15_725,
+      subrows: {
+        crewCents: 8_500,
+        salesCents: 0,
+        managementCents: 7_225,
+        otherPayrollAdjustmentsCents: 0,
+      },
+    });
+    expect(result.missingCommissionDataCount).toBe(0);
+  });
+
   it("uses finalized payout data as Actual and excludes payout expenses", () => {
     const result = buildExpenseOverview(
       baseInput({

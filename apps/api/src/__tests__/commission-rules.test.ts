@@ -4,10 +4,54 @@ import {
   isDemoBookingDetails,
   isDemoCommissionJob,
   isDemoServicesRequested,
+  resolveAppointmentCommissionBaseCents,
 } from "@/lib/commissions";
 import { resolveLockedCrewPayout } from "@/lib/locked-crew-payout";
 
 describe("commission rules", () => {
+  it("generates commissions only for completed service work", () => {
+    for (const type of ["job", "estimate", "recurring_service"]) {
+      expect(
+        resolveAppointmentCommissionBaseCents({
+          type,
+          status: "completed",
+          finalTotalCents: 42_500,
+        }),
+      ).toBe(42_500);
+    }
+
+    for (const type of [
+      "in_person_quote",
+      " IN_PERSON_ESTIMATE ",
+      "",
+      "   ",
+      null,
+    ]) {
+      expect(
+        resolveAppointmentCommissionBaseCents({
+          type,
+          status: "completed",
+          finalTotalCents: 42_500,
+        }),
+      ).toBeNull();
+    }
+
+    expect(
+      resolveAppointmentCommissionBaseCents({
+        type: "estimate",
+        status: "confirmed",
+        finalTotalCents: 42_500,
+      }),
+    ).toBeNull();
+    expect(
+      resolveAppointmentCommissionBaseCents({
+        type: "estimate",
+        status: "completed",
+        finalTotalCents: null,
+      }),
+    ).toBeNull();
+  });
+
   it("treats booked demo services as demo crew jobs", () => {
     expect(isDemoServicesRequested(["junk_removal", "demo-hauloff"])).toBe(
       true,

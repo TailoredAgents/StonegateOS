@@ -1,9 +1,18 @@
 import { expect, test } from "../test";
+import { exerciseLiveExpenseOverview } from "../support/expense-live-overview";
 
 test.describe("Mobile Spend V2", () => {
   test.use({
     storageState: "tests/e2e/storage/mobile-owner.json",
     serviceWorkers: "block",
+  });
+
+  test("refreshes completed-job totals live and recovers safely from stale connections", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(!isMobile, "This workflow is covered by the mobile projects.");
+    await exerciseLiveExpenseOverview(page);
   });
 
   test("coalesces receipt sync triggers into one upload", async ({
@@ -866,7 +875,20 @@ test.describe("Mobile Spend V2", () => {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          week: { startDate: "2026-08-24", endDate: "2026-08-30" },
+          ok: true,
+          week: {
+            startDate: new URL(route.request().url()).searchParams.get(
+              "weekStart",
+            ),
+            endDate: new Date(
+              Date.parse(
+                `${new URL(route.request().url()).searchParams.get("weekStart")}T12:00:00Z`,
+              ) +
+                6 * 86_400_000,
+            )
+              .toISOString()
+              .slice(0, 10),
+          },
           revenueCents: 80_000,
           ordinaryExpensesCents: 50_000,
           laborCents: 30_000,

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { buildGoogleCalendarEventId } from "@/lib/calendar";
 
-const workspaceRoot = resolve(__dirname, "../../../..");
+const workspaceRoot = resolve(process.cwd(), "../..");
 const read = (path: string): string =>
   readFileSync(resolve(workspaceRoot, path), "utf8");
 

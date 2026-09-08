@@ -4789,13 +4789,13 @@ export default async function MobileHomePage({
                   <div>
                     <h2 className="text-base font-semibold">Payout Runs</h2>
                     <p className="mt-1 text-sm text-slate-300">
-                      Current payout due{" "}
+                      Current payroll{" "}
                       {ownerSummary.currentPayout
                         ? formatUsdCents(
                             ownerSummary.currentPayout.totalsCents.total,
                           )
                         : "$0"}{" "}
-                      before card tips.
+                      before card tips and reimbursements.
                     </p>
                   </div>
                   <MobilePayoutCreateButton
@@ -4834,6 +4834,17 @@ export default async function MobileHomePage({
                         )}
                       </p>
                     </div>
+                    {ownerSummary.currentPayout.totalsCents.adjustments !==
+                    0 ? (
+                      <div className="rounded-md border border-white/10 bg-slate-900 p-3">
+                        <p className="text-slate-500">Other payroll</p>
+                        <p className="mt-1 font-semibold text-slate-100">
+                          {formatUsdCents(
+                            ownerSummary.currentPayout.totalsCents.adjustments,
+                          )}
+                        </p>
+                      </div>
+                    ) : null}
                     <div className="rounded-md border border-white/10 bg-slate-900 p-3">
                       <p className="text-slate-500">Card tips</p>
                       <p className="mt-1 font-semibold text-slate-100">

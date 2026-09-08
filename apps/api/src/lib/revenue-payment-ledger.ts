@@ -1,3 +1,4 @@
+import { isServiceWorkAppointmentType } from "@/lib/appointment-kind";
 import { allocateRefund } from "@/lib/payment-summary";
 
 export type RevenuePaymentRow = {
@@ -69,11 +70,7 @@ function isBalanceEligible(appointment: RevenueAppointmentRow): boolean {
     return false;
   }
 
-  const appointmentType = appointment.appointmentType.trim().toLowerCase();
-  return (
-    appointmentType !== "in_person_quote" &&
-    appointmentType !== "in_person_estimate"
-  );
+  return isServiceWorkAppointmentType(appointment.appointmentType);
 }
 
 export function buildPaymentLedgerReportingSummary(input: {

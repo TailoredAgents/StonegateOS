@@ -32,6 +32,10 @@ import {
   getExpenseMutationAttempt,
 } from "./lib/expense-mutation-idempotency";
 import {
+  ExpenseOverviewRefreshError,
+  startExpenseOverviewUpdates,
+} from "./lib/expense-overview-updates";
+import {
   addDateKeyDays,
   centsToMoneyInput,
   easternDateKey,
@@ -3295,6 +3299,10 @@ function OverviewView({
   const [error, setError] = React.useState<string | null>(null);
   const [managingFixedCosts, setManagingFixedCosts] = React.useState(false);
   const [fixedCostRefresh, setFixedCostRefresh] = React.useState(0);
+  const [online, setOnline] = React.useState(true);
+  const [lastUpdated, setLastUpdated] = React.useState<Date | null>(null);
+  const [accessDenied, setAccessDenied] = React.useState(false);
+  const refreshOverviewRef = React.useRef<(() => void) | null>(null);
   const manageFixedCostsButtonRef = React.useRef<HTMLButtonElement>(null);
   const restoreManageFixedCostsFocusRef = React.useRef(false);
   React.useEffect(() => {
@@ -3306,39 +3314,75 @@ function OverviewView({
     return () => window.cancelAnimationFrame(frame);
   }, [managingFixedCosts]);
   React.useEffect(() => {
-    let active = true;
-    setLoading(true);
-    setError(null);
-    void fetch(
-      `/api/mobile/expenses/overview?weekStart=${encodeURIComponent(weekStart)}`,
-      { cache: "no-store" },
-    )
-      .then(async (response) => ({
-        response,
-        payload: await jsonPayload(response),
-      }))
-      .then(({ response, payload }) => {
-        if (!active) return;
-        if (!response.ok)
-          throw new Error(
+    if (managingFixedCosts) return;
+    const updates = startExpenseOverviewUpdates({
+      load: async (signal) => {
+        const response = await fetch(
+          `/api/mobile/expenses/overview?weekStart=${encodeURIComponent(weekStart)}`,
+          { cache: "no-store", credentials: "include", signal },
+        );
+        const payload = await jsonPayload(response);
+        if (!response.ok) {
+          const retryAfter = response.headers.get("retry-after") ?? "";
+          const retryAfterMs = /^\d+$/u.test(retryAfter)
+            ? Number(retryAfter) * 1000
+            : Math.max(0, Date.parse(retryAfter) - Date.now()) || 0;
+          throw new ExpenseOverviewRefreshError(
             expenseErrorMessage(payload, "The weekly overview is unavailable."),
+            response.status,
+            retryAfterMs,
           );
-        setOverview(expenseOverviewWithDumpDefaults(payload ?? {}));
-      })
-      .catch(
-        (reason: unknown) =>
-          active &&
+        }
+        if (
+          !payload ||
+          payload["ok"] !== true ||
+          objectValue(payload["week"])?.["startDate"] !== weekStart
+        ) {
+          throw new Error(
+            "The latest weekly totals could not be verified. Retrying automatically.",
+          );
+        }
+        return expenseOverviewWithDumpDefaults(payload);
+      },
+      onValue: (value) => {
+        setOverview(value);
+        setLastUpdated(new Date());
+        setError(null);
+        setAccessDenied(false);
+      },
+      onError: (reason) => {
+        if (
+          reason instanceof ExpenseOverviewRefreshError &&
+          (reason.status === 401 || reason.status === 403)
+        ) {
+          setOverview(null);
+          setLastUpdated(null);
+          setAccessDenied(true);
           setError(
-            reason instanceof Error
-              ? reason.message
-              : "The weekly overview is unavailable.",
-          ),
-      )
-      .finally(() => active && setLoading(false));
+            reason.status === 401
+              ? "Your session has expired. Sign in again to see the latest totals."
+              : "You no longer have access to the expense overview. Contact the account owner if you need access.",
+          );
+          return;
+        }
+        setError(
+          reason instanceof Error && reason.name !== "AbortError"
+            ? reason.message
+            : "The latest totals could not be loaded. Retrying automatically.",
+        );
+      },
+      onRefreshing: setLoading,
+      onOnline: (connected) => {
+        setOnline(connected);
+        if (!connected) setLoading(false);
+      },
+    });
+    refreshOverviewRef.current = updates.refresh;
     return () => {
-      active = false;
+      updates.stop();
+      refreshOverviewRef.current = null;
     };
-  }, [fixedCostRefresh, weekStart]);
+  }, [fixedCostRefresh, managingFixedCosts, weekStart]);
 
   const firstMissingDate = overview?.missingAdEntries[0]?.businessDate ?? null;
   const headlineCards = overview
@@ -3437,6 +3481,39 @@ function OverviewView({
             {overview.week.startDate} through {overview.week.endDate}
           </p>
         ) : null}
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/10 pt-3">
+          <div className="text-xs leading-5 text-slate-400">
+            <p>
+              {!online
+                ? "Offline — updates paused"
+                : accessDenied
+                  ? "Access required — updates stopped"
+                  : error
+                    ? "Totals may be out of date"
+                    : "Automatically checks for updates every 10 seconds"}
+            </p>
+            {lastUpdated ? (
+              <p>
+                Last updated{" "}
+                <time dateTime={lastUpdated.toISOString()}>
+                  {lastUpdated.toLocaleTimeString("en-US", {
+                    hour: "numeric",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}
+                </time>
+              </p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            disabled={loading || !online || accessDenied}
+            onClick={() => refreshOverviewRef.current?.()}
+            className={`${secondaryButton} shrink-0`}
+          >
+            {loading ? "Updating…" : "Refresh"}
+          </button>
+        </div>
       </div>
       <div
         role="status"
@@ -3444,7 +3521,7 @@ function OverviewView({
         aria-atomic="true"
         className="sr-only"
       >
-        {loading ? "Loading weekly overview" : ""}
+        {loading && !overview ? "Loading weekly overview" : ""}
       </div>
       {canManageFixedCosts ? (
         <div className={`${cardClass} flex items-center gap-3`}>
@@ -3621,6 +3698,9 @@ function OverviewView({
                   </span>
                 </div>
               </div>
+              <p className="text-xs leading-5 text-slate-400">
+                Reimbursements stay in Payout Runs and are not counted as labor.
+              </p>
               <div className="flex justify-between border-t border-white/10 pt-3">
                 <span>Advertising</span>
                 <strong>
@@ -5680,6 +5760,7 @@ export function MobileSpendV2({
         )
       ) : view === "overview" && overviewEnabled ? (
         <OverviewView
+          key={`${employee.id}:${weekStart}`}
           weekStart={weekStart}
           onWeekStart={setWeekStart}
           onMissingAd={openMissingAd}

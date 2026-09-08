@@ -28,6 +28,7 @@ import {
   quotes,
 } from "@/db";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
+import { serviceWorkAppointmentTypePredicate } from "@/lib/appointment-kind";
 import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
 import {
   getBookingRulesPolicy,
@@ -984,7 +985,7 @@ export async function bookAcceptedQuote(input: {
         .where(
           and(
             eq(appointments.leadId, linkedLead.id),
-            eq(appointments.type, "job"),
+            serviceWorkAppointmentTypePredicate(appointments.type),
             ne(appointments.status, "canceled"),
           ),
         )

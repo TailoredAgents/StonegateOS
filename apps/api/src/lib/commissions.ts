@@ -17,6 +17,11 @@ import {
   teamMembers,
 } from "@/db";
 import type { AuditActor } from "@/lib/audit";
+import { readManagementRateVersion } from "@/lib/management-commission-rates";
+import {
+  isServiceWorkAppointmentType,
+  serviceWorkAppointmentTypePredicate,
+} from "@/lib/appointment-kind";
 import {
   attachApprovedReimbursementClaimsToDraftPayout,
   markAttachedReimbursementClaimsPaid,
@@ -389,6 +394,22 @@ export async function getCommissionManagementConfigurationStatus(
   db: Pick<DatabaseClient, "select">,
   managementRateBps: number,
 ): Promise<CommissionManagementConfigurationStatus> {
+  const version = await readManagementRateVersion(db, new Date());
+  if (version) {
+    const recipients = version.recipients
+      .filter((entry) => entry.rateBps > 0)
+      .map((entry) => ({
+        memberId: entry.memberId,
+        splitBps: entry.rateBps,
+        name: entry.name,
+        active: entry.active,
+      }));
+    return {
+      ready: recipients.every((entry) => entry.active),
+      totalSplitBps: version.totalRateBps,
+      recipients,
+    };
+  }
   if (managementRateBps <= 0) {
     return { ready: true, totalSplitBps: 0, recipients: [] };
   }
@@ -659,7 +680,9 @@ export async function getOrCreateCommissionSettings(
       ...existing,
       payoutWeekday: asWeekday(existing.payoutWeekday),
       salesRateBps: DEFAULT_SALES_RATE_BPS,
-      marketingRateBps: DEFAULT_MANAGEMENT_RATE_BPS,
+      marketingRateBps:
+        (await readManagementRateVersion(db, new Date()))?.totalRateBps ??
+        DEFAULT_MANAGEMENT_RATE_BPS,
       crewPoolRateBps: DEFAULT_CREW_POOL_RATE_BPS,
       marketingMemberId: null,
     };
@@ -706,7 +729,9 @@ export async function getOrCreateCommissionSettings(
     ...created,
     payoutWeekday: asWeekday(created.payoutWeekday),
     salesRateBps: DEFAULT_SALES_RATE_BPS,
-    marketingRateBps: DEFAULT_MANAGEMENT_RATE_BPS,
+    marketingRateBps:
+      (await readManagementRateVersion(db, new Date()))?.totalRateBps ??
+      DEFAULT_MANAGEMENT_RATE_BPS,
     crewPoolRateBps: DEFAULT_CREW_POOL_RATE_BPS,
     marketingMemberId: null,
   };
@@ -926,6 +951,18 @@ function computeBpsAmount(baseCents: number, rateBps: number): number {
   return roundCents((baseCents * rateBps) / 10000);
 }
 
+export function resolveAppointmentCommissionBaseCents(input: {
+  type: string | null | undefined;
+  status: string | null | undefined;
+  finalTotalCents: number | null | undefined;
+}): number | null {
+  return input.status === "completed" &&
+    isServiceWorkAppointmentType(input.type) &&
+    typeof input.finalTotalCents === "number"
+    ? input.finalTotalCents
+    : null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -1110,7 +1147,7 @@ async function savePayoutRunReportHtmlSerialized(
   return savePayoutRunReportHtml(tx, payoutRunId);
 }
 
-async function refreshDraftPayoutReports(
+export async function refreshDraftPayoutReports(
   db: DatabaseClient,
   options: { payoutRunIds?: readonly string[] } = {},
 ): Promise<void> {
@@ -1232,16 +1269,22 @@ export async function recalculateAppointmentCommissions(
   try {
     await db.transaction(async (tx) => {
       await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext('commission_settings'), hashtext(${SETTINGS_KEY}))`,
+      );
+      await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext('appointment_commissions'), hashtext(${appointmentId}))`,
       );
 
       let row:
         | {
             id: string;
+            type: string | null;
             status: string | null;
             finalTotalCents: number | null;
             soldByMemberId: string | null;
             marketingMemberId: string | null;
+            completedAt: Date | null;
+            startAt: Date | null;
           }
         | undefined;
 
@@ -1249,10 +1292,13 @@ export async function recalculateAppointmentCommissions(
         const [full] = await tx
           .select({
             id: appointments.id,
+            type: appointments.type,
             status: appointments.status,
             finalTotalCents: appointments.finalTotalCents,
             soldByMemberId: appointments.soldByMemberId,
             marketingMemberId: appointments.marketingMemberId,
+            completedAt: appointments.completedAt,
+            startAt: appointments.startAt,
           })
           .from(appointments)
           .where(eq(appointments.id, appointmentId))
@@ -1267,8 +1313,11 @@ export async function recalculateAppointmentCommissions(
         const [fallback] = await tx
           .select({
             id: appointments.id,
+            type: appointments.type,
             status: appointments.status,
             finalTotalCents: appointments.finalTotalCents,
+            completedAt: appointments.completedAt,
+            startAt: appointments.startAt,
           })
           .from(appointments)
           .where(eq(appointments.id, appointmentId))
@@ -1287,10 +1336,7 @@ export async function recalculateAppointmentCommissions(
         throw new Error("appointment_not_found");
       }
 
-      const baseCents =
-        row.status === "completed" && typeof row.finalTotalCents === "number"
-          ? row.finalTotalCents
-          : null;
+      const baseCents = resolveAppointmentCommissionBaseCents(row);
 
       if (baseCents === null) {
         try {
@@ -1330,14 +1376,27 @@ export async function recalculateAppointmentCommissions(
         });
       }
 
+      const commissionAt = row.completedAt ?? row.startAt;
+      if (!commissionAt)
+        throw new Error("completed_job_commission_date_missing");
+      const managementVersion = await readManagementRateVersion(
+        tx,
+        commissionAt,
+      );
+      const managementRateBps =
+        managementVersion?.totalRateBps ?? DEFAULT_MANAGEMENT_RATE_BPS;
       const managementPoolCents = computeBpsAmount(
         baseCents,
-        settings.marketingRateBps,
+        managementRateBps,
       );
-      const managementSplits = await readCommissionManagementSplits(
-        tx,
-        settings.marketingRateBps,
-      );
+      const managementSplits = managementVersion
+        ? managementVersion.recipients
+            .filter((entry) => entry.rateBps > 0)
+            .map((entry) => ({
+              memberId: entry.memberId,
+              splitBps: entry.rateBps,
+            }))
+        : await readCommissionManagementSplits(tx, managementRateBps);
       const managementTotalSplitBps = managementSplits.reduce(
         (sum, entry) => sum + entry.splitBps,
         0,
@@ -1353,11 +1412,18 @@ export async function recalculateAppointmentCommissions(
           baseCents,
           amountCents: entry.cents,
           meta: {
-            rateBps: settings.marketingRateBps,
-            totalRateBps: settings.marketingRateBps,
+            rateBps: managementRateBps,
+            totalRateBps: managementRateBps,
             splitBps: entry.splitBps,
             totalSplitBps: managementTotalSplitBps,
             poolLabel: "management",
+            ...(managementVersion
+              ? {
+                  rateVersionId: managementVersion.id,
+                  rateEffectiveFrom:
+                    managementVersion.effectiveFrom.toISOString(),
+                }
+              : {}),
           },
         });
       }
@@ -1785,10 +1851,13 @@ export async function lockPayoutRun(
 
   if (!snapshot) throw new Error("payout_run_not_found");
   const result = await db.transaction(async (tx) => {
-    // Match appointment financial mutations: period -> report -> payout row.
+    // Match financial mutations and policy activation: settings -> period -> report -> payout row.
     // Holding the period lock while sources are recalculated prevents an
     // appointment from committing new commission truth after this snapshot is
     // finalized.
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext('commission_settings'), hashtext(${SETTINGS_KEY}))`,
+    );
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext(${payoutPeriodLockKey(snapshot)}))`,
     );
@@ -1874,6 +1943,7 @@ export async function lockPayoutRun(
           gte(appointments.completedAt, run.periodStart),
           lt(appointments.completedAt, run.periodEnd),
           eq(appointments.status, "completed"),
+          serviceWorkAppointmentTypePredicate(appointments.type),
         ),
       )
       .groupBy(appointmentCommissions.memberId, appointmentCommissions.role);

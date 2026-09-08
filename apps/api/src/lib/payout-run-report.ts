@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gte, lt, ne, sql } from "drizzle-orm";
 import type { DatabaseClient } from "@/db";
 import {
   appointmentCommissions,
@@ -10,6 +10,7 @@ import {
   properties,
   teamMembers,
 } from "@/db";
+import { serviceWorkAppointmentTypePredicate } from "@/lib/appointment-kind";
 
 type PayoutRunRecord = {
   id: string;
@@ -314,6 +315,7 @@ export async function calculatePayoutRunLiveTotalCents(
         gte(appointments.completedAt, run.periodStart),
         lt(appointments.completedAt, run.periodEnd),
         eq(appointments.status, "completed"),
+        serviceWorkAppointmentTypePredicate(appointments.type),
       ),
     );
 
@@ -333,6 +335,41 @@ export async function calculatePayoutRunLiveTotalCents(
     0,
   );
   return commissionTotal + adjustmentTotal;
+}
+
+/**
+ * Returns payroll-only adjustments for the canonical payout run that owns a
+ * period. Reimbursements belong in the amount paid out, but they are repayment
+ * of an expense rather than labor and must stay out of payroll/Spend totals.
+ */
+export async function calculatePayoutPeriodPayrollAdjustmentTotalCents(
+  db: Pick<DatabaseClient, "select">,
+  period: {
+    timezone: string;
+    periodStart: Date;
+    periodEnd: Date;
+  },
+): Promise<number> {
+  const [row] = await db
+    .select({
+      totalCents:
+        sql<number>`coalesce(sum(${payoutRunAdjustments.amountCents}), 0)::int`.as(
+          "total_cents",
+        ),
+    })
+    .from(payoutRunAdjustments)
+    .innerJoin(payoutRuns, eq(payoutRunAdjustments.payoutRunId, payoutRuns.id))
+    .where(
+      and(
+        eq(payoutRuns.timezone, period.timezone),
+        eq(payoutRuns.periodStart, period.periodStart),
+        eq(payoutRuns.periodEnd, period.periodEnd),
+        eq(payoutRuns.periodCanonical, true),
+        ne(payoutRunAdjustments.kind, "reimbursement"),
+      ),
+    );
+
+  return Number(row?.totalCents ?? 0);
 }
 
 export function serializePayoutRunVersionForSql(updatedAt: Date): string {
@@ -384,6 +421,7 @@ export async function buildPayoutRunReportData(
           gte(appointments.completedAt, run.periodStart),
           lt(appointments.completedAt, run.periodEnd),
           eq(appointments.status, "completed"),
+          serviceWorkAppointmentTypePredicate(appointments.type),
         ),
       )
       .orderBy(

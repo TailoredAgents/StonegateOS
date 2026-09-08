@@ -12,6 +12,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { appointmentHolds, appointments, contacts } from "@/db";
+import { isQuoteOnlyAppointmentType } from "@/lib/appointment-kind";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
 
 const EASTERN_TIME_ZONE = "America/New_York";
@@ -215,10 +216,9 @@ function appointmentTitle(input: {
   const contactName = [input.firstName, input.lastName]
     .filter((part): part is string => Boolean(part?.trim()))
     .join(" ");
-  const kind =
-    input.type?.trim().toLowerCase() === "in_person_quote"
-      ? "in-person quote"
-      : "job";
+  const kind = isQuoteOnlyAppointmentType(input.type)
+    ? "in-person quote"
+    : "job";
   return contactName ? `${contactName} - ${kind}` : `CRM ${kind}`;
 }
 

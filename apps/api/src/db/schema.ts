@@ -6715,11 +6715,65 @@ export const commissionManagementSplits = pgTable(
 );
 
 /**
- * Optional crew allocation overrides. Each enabled rule is an exact set of
- * members whose split weights are normalized inside the configured crew pool.
- * Appointments retain the resolved weights, so later configuration changes do
- * not rewrite completed work or a locked payout run.
+ * Append-only management policies. Each version is a complete set of direct
+ * recipient rates, selected by job completion time rather than recalculation time.
  */
+export const commissionManagementRateVersions = pgTable(
+  "commission_management_rate_versions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    settingsKey: text("settings_key")
+      .notNull()
+      .references(() => commissionSettings.key, { onDelete: "restrict" }),
+    effectiveFrom: timestamp("effective_from", {
+      withTimezone: true,
+    }).notNull(),
+    totalRateBps: integer("total_rate_bps").notNull(),
+    reason: text("reason").notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    effectiveUnique: uniqueIndex(
+      "commission_management_rate_versions_effective_unique",
+    ).on(table.settingsKey, table.effectiveFrom),
+    rateCheck: check(
+      "commission_management_rate_versions_rate_check",
+      sql`${table.totalRateBps} BETWEEN 0 AND 10000`,
+    ),
+  }),
+);
+
+export const commissionManagementRateRecipients = pgTable(
+  "commission_management_rate_recipients",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    versionId: uuid("version_id")
+      .notNull()
+      .references(() => commissionManagementRateVersions.id, {
+        onDelete: "restrict",
+      }),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    rateBps: integer("rate_bps").notNull(),
+  },
+  (table) => ({
+    memberUnique: uniqueIndex(
+      "commission_management_rate_recipients_member_unique",
+    ).on(table.versionId, table.memberId),
+    rateCheck: check(
+      "commission_management_rate_recipients_rate_check",
+      sql`${table.rateBps} BETWEEN 0 AND 10000`,
+    ),
+  }),
+);
+
+/** Optional exact-team crew split overrides; independent from management rates. */
 export const commissionCrewSplitRules = pgTable(
   "commission_crew_split_rules",
   {

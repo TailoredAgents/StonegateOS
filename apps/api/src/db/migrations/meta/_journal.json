@@ -1121,6 +1121,13 @@
       "when": 1794873600000,
       "tag": "0162_partner_billing_dispute_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 160,
+      "version": "7",
+      "when": 1794960000000,
+      "tag": "0163_effective_management_commission_rates",
+      "breakpoints": true
     }
   ]
 }

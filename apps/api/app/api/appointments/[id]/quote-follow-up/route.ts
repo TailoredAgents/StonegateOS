@@ -5,6 +5,7 @@ import { and, eq, ilike, inArray, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import { appointments, contacts, crmTasks, getDb, outboxEvents } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { isQuoteOnlyAppointmentType as isQuoteOnlyType } from "@/lib/appointment-kind";
 import { requirePermission } from "@/lib/permissions";
 import { getBusinessHoursPolicy } from "@/lib/policy";
 import {
@@ -28,13 +29,6 @@ function parseDueAt(value: string, timezone: string): Date | null {
     : DateTime.fromISO(trimmed, { zone: timezone });
   if (!dt.isValid) return null;
   return dt.toUTC().toJSDate();
-}
-
-function isQuoteOnlyType(value: string | null | undefined): boolean {
-  const normalized = (value ?? "").trim().toLowerCase();
-  return (
-    normalized === "in_person_quote" || normalized === "in_person_estimate"
-  );
 }
 
 export async function POST(

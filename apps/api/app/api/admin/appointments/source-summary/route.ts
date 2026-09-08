@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, desc, eq, gte, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import {
   appointments,
   contacts,
@@ -10,6 +10,10 @@ import {
   properties,
 } from "@/db";
 import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
+import {
+  QUOTE_ONLY_APPOINTMENT_TYPES,
+  serviceWorkAppointmentTypePredicate,
+} from "@/lib/appointment-kind";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 
@@ -220,7 +224,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       and(
         gte(appointments.createdAt, since),
         inArray(appointments.status, ["confirmed", "completed"]),
-        ne(appointments.type, "in_person_quote"),
+        serviceWorkAppointmentTypePredicate(appointments.type),
       ),
     )
     .orderBy(desc(appointments.createdAt))
@@ -306,7 +310,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     since: since.toISOString(),
     through: now.toISOString(),
     countedStatuses: ["confirmed", "completed"],
-    excludedAppointmentTypes: ["in_person_quote"],
+    excludedAppointmentTypes: [...QUOTE_ONLY_APPOINTMENT_TYPES],
     totalBookedJobs: rows.length,
     sources: totals,
     facebook: buckets.get("facebook"),

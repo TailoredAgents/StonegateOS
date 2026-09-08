@@ -1,4 +1,5 @@
 import { DateTime } from "luxon";
+import { isServiceWorkAppointmentType } from "@/lib/appointment-kind";
 
 export const EXPENSE_OVERVIEW_TIME_ZONE = "America/New_York" as const;
 export const EXPENSE_OVERVIEW_LABOR_CATEGORY_ID = "labor" as const;
@@ -609,7 +610,7 @@ function calculateLabor(
       .filter((job) => {
         if (
           job.status !== "completed" ||
-          job.appointmentType !== "job" ||
+          !isServiceWorkAppointmentType(job.appointmentType) ||
           job.completedAt === null
         ) {
           return false;
@@ -674,7 +675,7 @@ function calculateLabor(
   for (const job of input.jobs) {
     if (
       job.status !== "completed" ||
-      job.appointmentType !== "job" ||
+      !isServiceWorkAppointmentType(job.appointmentType) ||
       job.completedAt === null ||
       job.commissionDataExpected === false
     ) {
@@ -868,7 +869,7 @@ function calculatePeriod(
   for (const job of input.jobs) {
     if (
       job.status !== "completed" ||
-      job.appointmentType !== "job" ||
+      !isServiceWorkAppointmentType(job.appointmentType) ||
       job.completedAt === null
     ) {
       continue;

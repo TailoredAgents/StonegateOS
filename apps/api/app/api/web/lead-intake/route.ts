@@ -535,7 +535,8 @@ export async function POST(request: NextRequest) {
             contactId: contact.id,
             propertyId: property.id,
             leadId: lead.id,
-            type: "estimate",
+            // This appointment is a quote visit, not completed service work.
+            type: "in_person_quote",
             startAt: timing.startAt ?? null,
             durationMinutes: timing.durationMinutes,
             status: "requested",

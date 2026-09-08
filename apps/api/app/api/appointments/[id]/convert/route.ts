@@ -22,6 +22,7 @@ import {
   parseAppointmentBookingDetails,
   validateQuotedTotalForBookingDetails,
 } from "@/lib/appointment-booking-details";
+import { isQuoteOnlyAppointmentType as isConvertibleQuoteType } from "@/lib/appointment-kind";
 import {
   AppointmentMediaError,
   assertAppointmentStatusTransitionAllowed,
@@ -136,13 +137,6 @@ function parseLocalOrIsoDateTime(value: string, timezone: string): Date | null {
     ? DateTime.fromISO(trimmed, { setZone: true })
     : DateTime.fromISO(trimmed, { zone: timezone });
   return dateTime.isValid ? dateTime.toUTC().toJSDate() : null;
-}
-
-function isConvertibleQuoteType(value: string | null | undefined): boolean {
-  const normalized = (value ?? "").trim().toLowerCase();
-  return (
-    normalized === "in_person_quote" || normalized === "in_person_estimate"
-  );
 }
 
 function requireAppointmentVersion(value: string | null): string {

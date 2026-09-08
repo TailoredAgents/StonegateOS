@@ -7,6 +7,7 @@ import {
   paymentRefunds,
   payments,
 } from "@/db";
+import { isQuoteOnlyAppointmentType } from "@/lib/appointment-kind";
 import {
   buildAppointmentPaymentSummary,
   type AppointmentPaymentSummary,
@@ -37,12 +38,10 @@ export function canCollectAppointmentPayment(
   appointmentType?: string | null,
 ): boolean {
   const normalizedStatus = appointmentStatus?.trim().toLowerCase() ?? "";
-  const normalizedType = appointmentType?.trim().toLowerCase() ?? "";
   return (
     normalizedStatus !== "canceled" &&
     normalizedStatus !== "no_show" &&
-    normalizedType !== "in_person_quote" &&
-    normalizedType !== "in_person_estimate"
+    !isQuoteOnlyAppointmentType(appointmentType)
   );
 }
 

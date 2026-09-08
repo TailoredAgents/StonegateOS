@@ -690,6 +690,9 @@ export async function POST(request: NextRequest) {
           .set({
             contactId: contact.id,
             propertyId,
+            // This flow books priced service work. Keep the appointment
+            // classification canonical even when updating a legacy draft.
+            type: "job",
             startAt,
             durationMinutes,
             travelBufferMinutes,
@@ -711,7 +714,7 @@ export async function POST(request: NextRequest) {
             contactId: contact.id,
             propertyId,
             leadId: leadId ?? null,
-            type: "estimate",
+            type: "job",
             startAt,
             durationMinutes,
             status: appointmentStatus,

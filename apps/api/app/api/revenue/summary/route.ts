@@ -11,6 +11,7 @@ import {
   properties,
 } from "@/db";
 import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
+import { serviceWorkAppointmentTypePredicate } from "@/lib/appointment-kind";
 import { requirePermission } from "@/lib/permissions";
 import { buildPaymentLedgerReportingSummary } from "@/lib/revenue-payment-ledger";
 import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
@@ -59,6 +60,7 @@ async function computeWindow(
     .where(
       and(
         eq(appointments.status, "completed"),
+        serviceWorkAppointmentTypePredicate(appointments.type),
         isNotNull(appointments.startAt),
         isNotNull(appointments.finalTotalCents),
         gte(appointments.startAt, start),
@@ -91,6 +93,7 @@ async function computeAllTimeWindow(
     .where(
       and(
         eq(appointments.status, "completed"),
+        serviceWorkAppointmentTypePredicate(appointments.type),
         isNotNull(appointments.finalTotalCents),
       ),
     );
@@ -111,7 +114,12 @@ async function computePaymentLedgerSummary(db: ReturnType<typeof getDb>) {
         finalTotalCents: appointments.finalTotalCents,
       })
       .from(appointments)
-      .where(isNotNull(appointments.finalTotalCents)),
+      .where(
+        and(
+          isNotNull(appointments.finalTotalCents),
+          serviceWorkAppointmentTypePredicate(appointments.type),
+        ),
+      ),
     db
       .select({
         id: payments.id,
@@ -169,6 +177,7 @@ async function computeWeekToDateJobs(
     .where(
       and(
         eq(appointments.status, "completed"),
+        serviceWorkAppointmentTypePredicate(appointments.type),
         isNotNull(appointments.startAt),
         isNotNull(appointments.finalTotalCents),
         gte(appointments.startAt, start),

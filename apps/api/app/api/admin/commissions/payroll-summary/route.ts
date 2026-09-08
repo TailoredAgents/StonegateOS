@@ -16,6 +16,7 @@ import {
   recalculateCurrentPayoutPeriodAppointments,
   resolveCurrentPayoutPeriod,
 } from "@/lib/commissions";
+import { serviceWorkAppointmentTypePredicate } from "@/lib/appointment-kind";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 
@@ -147,6 +148,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     .where(
       and(
         inArray(payoutRuns.status, ["locked", "paid"]),
+        eq(payoutRuns.timezone, settings.timezone),
+        eq(payoutRuns.periodCanonical, true),
         gte(payoutRuns.scheduledPayoutAt, yearStart.toJSDate()),
         lt(payoutRuns.scheduledPayoutAt, yearEnd.toJSDate()),
       ),
@@ -239,6 +242,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     .where(
       and(
         eq(appointments.status, "completed"),
+        serviceWorkAppointmentTypePredicate(appointments.type),
         gte(appointments.completedAt, currentPeriod.periodStart),
         lt(appointments.completedAt, currentPeriod.periodEnd),
       ),
@@ -258,8 +262,10 @@ export async function GET(request: NextRequest): Promise<Response> {
     .from(payoutRuns)
     .where(
       and(
+        eq(payoutRuns.timezone, currentPeriod.timezone),
         eq(payoutRuns.periodStart, currentPeriod.periodStart),
         eq(payoutRuns.periodEnd, currentPeriod.periodEnd),
+        eq(payoutRuns.periodCanonical, true),
       ),
     )
     .limit(1);

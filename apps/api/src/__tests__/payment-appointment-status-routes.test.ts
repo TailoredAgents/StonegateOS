@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { canCollectAppointmentPayment } from "@/lib/payment-ledger";
 
-const workspaceRoot = resolve(__dirname, "../../../..");
+const workspaceRoot = resolve(process.cwd(), "../..");
 const squareRoute = readFileSync(
   resolve(
     workspaceRoot,

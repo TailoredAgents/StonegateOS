@@ -22,6 +22,7 @@ import {
   type ExpenseOverviewInput,
   type ExpenseOverviewLaborGroup,
 } from "@/lib/expense-overview";
+import { serviceWorkAppointmentTypePredicate } from "@/lib/appointment-kind";
 
 type ExpenseLifecycleStatus = "draft" | "posted" | "voided" | "corrected";
 type ExpenseReviewStatus = "draft" | "pending" | "approved" | "rejected";
@@ -510,7 +511,7 @@ export async function loadExpenseOverviewInput(
       .where(
         and(
           eq(appointments.status, "completed"),
-          eq(appointments.type, "job"),
+          serviceWorkAppointmentTypePredicate(appointments.type),
           gte(appointments.completedAt, window.priorStartAt),
           lt(appointments.completedAt, window.currentEndAtExclusive),
         ),
@@ -599,7 +600,7 @@ export async function loadExpenseOverviewInput(
       .where(
         and(
           eq(appointments.status, "completed"),
-          eq(appointments.type, "job"),
+          serviceWorkAppointmentTypePredicate(appointments.type),
           gte(appointments.completedAt, window.priorStartAt),
           lt(appointments.completedAt, window.currentEndAtExclusive),
         ),

@@ -1,7 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
 import { commissionSettings, getDb } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
@@ -125,21 +124,9 @@ export async function PUT(request: NextRequest): Promise<Response> {
       },
     });
 
-  const [saved] = await db
-    .select({
-      key: commissionSettings.key,
-      timezone: commissionSettings.timezone,
-      payoutWeekday: commissionSettings.payoutWeekday,
-      payoutHour: commissionSettings.payoutHour,
-      payoutMinute: commissionSettings.payoutMinute,
-      salesRateBps: commissionSettings.salesRateBps,
-      marketingRateBps: commissionSettings.marketingRateBps,
-      crewPoolRateBps: commissionSettings.crewPoolRateBps,
-      marketingMemberId: commissionSettings.marketingMemberId,
-    })
-    .from(commissionSettings)
-    .where(eq(commissionSettings.key, "default"))
-    .limit(1);
+  // The stored 17% baseline remains historical. Active dated policies must be
+  // reflected in responses, even when an owner changes only the payout schedule.
+  const effectiveSettings = await getOrCreateCommissionSettings(db);
 
   await recalculateCurrentPayoutPeriodAppointments(db);
 
@@ -148,8 +135,8 @@ export async function PUT(request: NextRequest): Promise<Response> {
     action: "commission.settings.updated",
     entityType: "commission_settings",
     entityId: "default",
-    meta: settings,
+    meta: effectiveSettings,
   });
 
-  return NextResponse.json({ ok: true, settings: saved ?? settings });
+  return NextResponse.json({ ok: true, settings: effectiveSettings });
 }

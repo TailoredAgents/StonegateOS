@@ -15,7 +15,7 @@ import {
   type TeamMutationContext,
 } from "@/lib/team-mutation";
 
-const workspaceRoot = resolve(__dirname, "../../../..");
+const workspaceRoot = resolve(process.cwd(), "../..");
 const commissionSource = readFileSync(
   resolve(workspaceRoot, "apps/api/src/lib/commissions.ts"),
   "utf8",
