@@ -1674,7 +1674,7 @@ function MobileWeekAgenda({
                                         defaultValue={formatTimeInputValue(
                                           event.start,
                                         )}
-                                        step={900}
+                                        step={60}
                                         required
                                         className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
                                       />
