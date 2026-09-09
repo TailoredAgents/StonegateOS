@@ -4,7 +4,7 @@ import type {
   TeamPermission,
 } from "@myst-os/sdk";
 import type { NextRequest } from "next/server";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { z } from "zod";
 import {
@@ -13,13 +13,18 @@ import {
   getDb,
   leads,
   outboxEvents,
+  partnerBookings,
   teamMembers,
 } from "@/db";
 import {
   AppointmentMediaError,
   assertAppointmentStatusTransitionAllowed,
 } from "@/lib/appointment-media";
-import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
+import {
+  acquireScheduleConflictLock,
+  inspectScheduleConflicts,
+} from "@/lib/appointment-schedule-conflicts";
+import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import {
   parseAppointmentBookingDetails,
   validateQuotedTotalForBookingDetails,
@@ -63,6 +68,7 @@ import {
   teamMutationSuccessResult,
 } from "@/lib/team-mutation";
 import { getTeamOperationKillSwitchForRisk } from "@/lib/team-operation-kill-switch";
+import { queuePartnerAppointmentStatusEffects } from "@/lib/partner-job-lifecycle";
 
 const STATUS_REQUEST_MAXIMUM_BYTES = 32_768;
 const MAXIMUM_CENTS = 2_147_483_647;
@@ -638,8 +644,7 @@ export async function POST(
     const hasFinancialChanges = includesFinancialChanges(parsed.data);
     const hasCompletionTimeOverride = parsed.data.completedAt !== undefined;
     const hasFinalTotalCorrection = isFinalTotalCorrectionIntent(parsed.data);
-    const requiresProofOverride =
-      parsed.data.proofOverrideReason !== undefined;
+    const requiresProofOverride = parsed.data.proofOverrideReason !== undefined;
     const requiresPaymentManagement =
       hasCompletionTimeOverride || hasFinalTotalCorrection;
     const sendsCustomerMessage =
@@ -814,6 +819,10 @@ export async function POST(
           cardTipCents: appointments.cardTipCents,
           status: appointments.status,
           completedAt: appointments.completedAt,
+          startAt: appointments.startAt,
+          durationMinutes: appointments.durationMinutes,
+          travelBufferMinutes: appointments.travelBufferMinutes,
+          partnerNeedsScheduling: sql<boolean>`exists (select 1 from ${partnerBookings} where ${partnerBookings.appointmentId} = ${appointments.id} and ${partnerBookings.publicStatus} in ('under_review', 'approval_needed', 'canceled', 'declined', 'completed'))`,
           marketingMemberId: appointments.marketingMemberId,
           updatedAt: appointments.updatedAt,
         })
@@ -1237,6 +1246,47 @@ export async function POST(
       const leavingCompleted =
         existing.status === "completed" && status !== "completed";
       const statusChanged = existing.status !== status;
+      const returnsToOccupiedSchedule =
+        ["canceled", "completed", "no_show"].includes(existing.status) &&
+        !["canceled", "completed", "no_show"].includes(status);
+      if (
+        statusChanged &&
+        existing.partnerNeedsScheduling &&
+        (status === "confirmed" || returnsToOccupiedSchedule)
+      ) {
+        return storeTerminalFailure(
+          tx,
+          mutation,
+          claimed.claim,
+          statusFailure(
+            "conflict",
+            "partner_scheduling_required",
+            "Use the partner service-review scheduling action to confirm requested work. Closed partner jobs need a new request; changing status alone cannot reserve a service window.",
+          ),
+          409,
+        );
+      }
+      if (returnsToOccupiedSchedule && existing.startAt) {
+        const capacityDecision = await inspectScheduleConflicts(tx, {
+          startAt: existing.startAt,
+          durationMinutes: existing.durationMinutes,
+          travelBufferMinutes: existing.travelBufferMinutes,
+          capacity: getAppointmentCapacity(),
+          excludeAppointmentId: existing.id,
+        });
+        if (capacityDecision.conflict)
+          return storeTerminalFailure(
+            tx,
+            mutation,
+            claimed.claim,
+            statusFailure(
+              "conflict",
+              "schedule_conflict",
+              "This appointment cannot be reopened at its old time because current staffing, holds, or calendar blocks no longer leave enough capacity. Reschedule it first.",
+            ),
+            409,
+          );
+      }
       const becameFinalTotalKnown =
         status === "completed" &&
         finalTotalCentsToSet !== undefined &&
@@ -1531,6 +1581,13 @@ export async function POST(
           messageAuthorization,
           correlationId: mutation.correlationId,
         },
+      });
+      await queuePartnerAppointmentStatusEffects(tx, {
+        appointmentId: updated.id,
+        status,
+        previousStatus: existing.status,
+        version: updated.updatedAt.toISOString(),
+        actorTeamMemberId: mutation.actor.id,
       });
       if (calendarSync === "requested") {
         await tx.insert(outboxEvents).values({

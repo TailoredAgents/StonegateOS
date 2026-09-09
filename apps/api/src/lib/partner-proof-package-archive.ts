@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { open } from "node:fs/promises";
 
 export type PartnerProofArchiveEntry = Readonly<{
   path: string;
@@ -29,9 +30,7 @@ function dosTimestamp(at: Date): { date: number; time: number } {
   const year = Math.min(Math.max(at.getUTCFullYear(), 1980), 2107);
   return {
     date:
-      ((year - 1980) << 9) |
-      ((at.getUTCMonth() + 1) << 5) |
-      at.getUTCDate(),
+      ((year - 1980) << 9) | ((at.getUTCMonth() + 1) << 5) | at.getUTCDate(),
     time:
       (at.getUTCHours() << 11) |
       (at.getUTCMinutes() << 5) |
@@ -68,15 +67,32 @@ export function createPartnerProofArchive(
   if (entries.length === 0 || entries.length > 0xffff) {
     throw new TypeError("The proof archive entry count is invalid.");
   }
-  const timestamp = dosTimestamp(generatedAt);
-  const seen = new Set<string>();
-  const localParts: Buffer[] = [];
-  const centralParts: Buffer[] = [];
-  let offset = 0;
+  const archive = new ProofArchiveWriter(generatedAt);
+  return Buffer.concat([
+    ...entries.flatMap((entry) => archive.append(entry)),
+    ...archive.finish(),
+  ]);
+}
 
-  for (const entry of entries) {
+class ProofArchiveWriter {
+  private readonly timestamp;
+  private readonly seen = new Set<string>();
+  private readonly centralParts: Buffer[] = [];
+  private offset = 0;
+
+  constructor(generatedAt: Date) {
+    if (!Number.isFinite(generatedAt.getTime()))
+      throw new TypeError("Invalid archive date.");
+    this.timestamp = dosTimestamp(generatedAt);
+  }
+
+  append(entry: PartnerProofArchiveEntry): Buffer[] {
+    const { timestamp, seen, centralParts, offset } = this;
     const path = checkedArchivePath(entry.path);
-    if (seen.has(path)) throw new TypeError("The proof archive path is duplicated.");
+    if (seen.has(path))
+      throw new TypeError("The proof archive path is duplicated.");
+    if (seen.size >= 0xffff)
+      throw new TypeError("The proof archive has too many entries.");
     seen.add(path);
     if (entry.body.byteLength > 0xffffffff) {
       throw new TypeError("The proof archive entry is too large.");
@@ -95,7 +111,6 @@ export function createPartnerProofArchive(
     local.writeUInt32LE(entry.body.byteLength, 22);
     local.writeUInt16LE(name.byteLength, 26);
     local.writeUInt16LE(0, 28);
-    localParts.push(local, name, entry.body);
 
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
@@ -116,20 +131,53 @@ export function createPartnerProofArchive(
     central.writeUInt32LE(0, 38);
     central.writeUInt32LE(offset, 42);
     centralParts.push(central, name);
-    offset += local.byteLength + name.byteLength + entry.body.byteLength;
+    this.offset += local.byteLength + name.byteLength + entry.body.byteLength;
+    if (this.offset > 0xffffffff)
+      throw new TypeError("The proof archive is too large.");
+    return [local, name, entry.body];
   }
 
-  const centralDirectory = Buffer.concat(centralParts);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(0, 4);
-  end.writeUInt16LE(0, 6);
-  end.writeUInt16LE(entries.length, 8);
-  end.writeUInt16LE(entries.length, 10);
-  end.writeUInt32LE(centralDirectory.byteLength, 12);
-  end.writeUInt32LE(offset, 16);
-  end.writeUInt16LE(0, 20);
-  return Buffer.concat([...localParts, centralDirectory, end]);
+  finish(): Buffer[] {
+    const { centralParts, offset, seen } = this;
+    if (!seen.size) throw new TypeError("The proof archive is empty.");
+    const centralDirectory = Buffer.concat(centralParts);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(0, 4);
+    end.writeUInt16LE(0, 6);
+    end.writeUInt16LE(seen.size, 8);
+    end.writeUInt16LE(seen.size, 10);
+    end.writeUInt32LE(centralDirectory.byteLength, 12);
+    end.writeUInt32LE(offset, 16);
+    end.writeUInt16LE(0, 20);
+    return [centralDirectory, end];
+  }
+}
+
+/** Originals are consumed one at a time; only ZIP directory metadata is retained. */
+export async function writePartnerProofArchive(
+  entries: AsyncIterable<PartnerProofArchiveEntry>,
+  generatedAt: Date,
+  destination: string,
+): Promise<{ byteSize: number; sha256: string }> {
+  const file = await open(destination, "wx", 0o600);
+  const archive = new ProofArchiveWriter(generatedAt);
+  const digest = createHash("sha256");
+  let byteSize = 0;
+  const write = async (parts: readonly Buffer[]) => {
+    for (const part of parts) {
+      await file.writeFile(part);
+      byteSize += part.byteLength;
+      digest.update(part);
+    }
+  };
+  try {
+    for await (const entry of entries) await write(archive.append(entry));
+    await write(archive.finish());
+    return { byteSize, sha256: digest.digest("hex") };
+  } finally {
+    await file.close();
+  }
 }
 
 export function sha256PartnerProofBytes(body: Buffer): string {

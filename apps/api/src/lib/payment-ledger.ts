@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import type { DatabaseClient } from "@/db";
 import {
   appointments,
@@ -6,6 +6,8 @@ import {
   paymentAttempts,
   paymentRefunds,
   payments,
+  partnerBookings,
+  partnerInvoices,
 } from "@/db";
 import { isQuoteOnlyAppointmentType } from "@/lib/appointment-kind";
 import {
@@ -382,6 +384,11 @@ export async function getAppointmentPaymentSummary(
     });
   }
 
+  const credits = await getPartnerInvoiceCreditsByAppointment(db, [appointmentId]);
+  if (jobTotalCents !== null && jobTotalCents !== undefined) {
+    jobTotalCents = Math.max(0, jobTotalCents - (credits.get(appointmentId) ?? 0));
+  }
+
   const [rows, attempts] = await Promise.all([
     listAppointmentPaymentRows(db, appointmentId, {
       schemaAvailable: true,
@@ -426,6 +433,23 @@ export async function getAppointmentPaymentSummary(
   });
 }
 
+/** Credits change collectable receivables, never the job price used for crew commissions. */
+async function getPartnerInvoiceCreditsByAppointment(db: PaymentDatabase, appointmentIds: string[]): Promise<Map<string, number>> {
+  if (appointmentIds.length === 0) return new Map();
+  const rows = await db.select({ appointmentId: partnerBookings.appointmentId,
+    // A replacement issued invoice supersedes voided obligations, not their
+    // immutable documents. Do not subtract the old void credit a second time.
+    creditedCents: sql<number>`case when bool_or(${partnerInvoices.status} <> 'void')
+      then coalesce(sum(${partnerInvoices.creditedCents}) filter (where ${partnerInvoices.status} <> 'void'), 0)
+      else coalesce((array_agg(${partnerInvoices.creditedCents} order by ${partnerInvoices.issuedAt} desc, ${partnerInvoices.id} desc))[1], 0) end::int` })
+    .from(partnerInvoices).innerJoin(partnerBookings, and(
+      eq(partnerBookings.id, partnerInvoices.partnerBookingId),
+      eq(partnerBookings.partnerAccountId, partnerInvoices.partnerAccountId),
+    )).where(and(inArray(partnerBookings.appointmentId, appointmentIds), isNotNull(partnerInvoices.issuedAt)))
+    .groupBy(partnerBookings.appointmentId);
+  return new Map(rows.map((row) => [row.appointmentId, row.creditedCents]));
+}
+
 export async function getAppointmentPaymentSummaryMap(
   appointmentIds: string[],
   jobTotalByAppointmentId?: ReadonlyMap<string, number | null>,
@@ -452,6 +476,9 @@ export async function getAppointmentPaymentSummaryMap(
       appointmentRows.map((row) => [row.id, row.finalTotalCents]),
     );
   }
+  const credits = await getPartnerInvoiceCreditsByAppointment(getDb(), uniqueIds);
+  totals = new Map([...totals].map(([id, total]) => [id,
+    total === null ? null : Math.max(0, total - (credits.get(id) ?? 0))]));
   const [rows, attempts] = await Promise.all([
     listPaymentRowsForAppointments(uniqueIds),
     listSquareAttemptsForAppointments(uniqueIds),

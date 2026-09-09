@@ -27,6 +27,8 @@ import {
 import { teamSurfaceHref } from "../surface-registry";
 import { quoteWorkspaceHref } from "../quotes-workspace";
 import { PartnersSection } from "./PartnersSection";
+import { PartnerRelationshipSetup } from "./PartnerRelationshipSetup";
+import { PartnerRelationshipInvitationActions } from "./PartnerRelationshipInvitationActions";
 import {
   PartnerDomainCreatePanel,
   PartnerDomainMutationControls,
@@ -40,6 +42,9 @@ import {
   type PartnerApprovalRuleAdminOptions,
 } from "./PartnerApprovalRuleManager";
 import { PartnerPortalOperationsPanel } from "./PartnerPortalOperationsPanel";
+import { PartnerRescheduleReviews } from "./PartnerRescheduleReviews";
+import { PartnerServiceReviews } from "./PartnerServiceReviews";
+import { PartnerBillingAdministration } from "./PartnerBillingAdministration";
 import { PartnerServiceAgreementManager } from "./PartnerServiceAgreementManager";
 import {
   TEAM_CARD_PADDED,
@@ -845,7 +850,7 @@ function rowPresentation(
           },
           {
             label: "Payment review",
-            value: `${display(item["hostedPaymentGapCount"], "0")} hosted-link gaps · ${display(item["pendingPaymentAllocationCount"], "0")} pending allocations`,
+            value: `${display(item["hostedPaymentGapCount"], "0")} legacy hosted collections to reconcile · ${display(item["pendingPaymentAllocationCount"], "0")} pending allocations`,
           },
         ],
       };
@@ -1617,6 +1622,8 @@ export async function PartnerAdministrationSection({
           principal={principal}
           rangeDays={rangeDays}
         />
+        {hasTeamPermission(principal, "appointments.read") && hasTeamPermission(principal, "partners.accounts.read") ? <PartnerServiceReviews canSchedule={hasTeamPermission(principal, "appointments.update")} /> : null}
+        {hasTeamPermission(principal, "appointments.read") && hasTeamPermission(principal, "partners.accounts.read") ? <PartnerRescheduleReviews canDecide={hasTeamPermission(principal, "appointments.update")} /> : null}
       </section>
     );
   }
@@ -1777,6 +1784,16 @@ export async function PartnerAdministrationSection({
   return (
     <section className="space-y-6">
       <AdministrationHeader activeView={view} availableViews={availableViews} />
+      {hasTeamPermission(principal, "policy.read") ? <Link href="/team/partners/scheduling" className="inline-flex min-h-11 items-center text-sm font-semibold text-primary-900 underline">Manage scheduling crews, trucks & equipment</Link> : null}
+
+      {view === "accounts" ? (
+        <PartnerRelationshipSetup
+          canCreate={canManageAccounts && hasTeamPermission(principal, "partners.invitations.send")}
+          canInvite={hasTeamPermission(principal, "partners.invitations.send")}
+          canConfigure={canManageAccounts}
+          canConfigureBilling={canManageCommercial}
+        />
+      ) : null}
 
       <div className={TEAM_CARD_PADDED}>
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -1908,6 +1925,7 @@ export async function PartnerAdministrationSection({
             accountName={selectedCommercialAccountName}
             canManage={canManageCommercial}
           />
+          <PartnerBillingAdministration principal={principal} accountId={selectedCommercialAccountId} accountName={selectedCommercialAccountName} canManage={canManageCommercial} />
           {canCreateQuotes ? (
             <PartnerQuoteContextPanel
               context={quoteStaffContext}
@@ -2041,6 +2059,15 @@ export async function PartnerAdministrationSection({
                     ))}
                   </dl>
                 </div>
+                {view === "invitations" && typeof item["etag"] === "string" && Array.isArray(item["allowedActions"]) ? (
+                  <PartnerRelationshipInvitationActions
+                    key={display(item["id"]) + ":" + item["etag"]}
+                    accountId={display(item["partnerAccountId"], "")}
+                    invitationId={display(item["id"], "")}
+                    etag={item["etag"]}
+                    actions={item["allowedActions"].filter((action): action is "resend" | "revoke" => action === "resend" ? hasTeamPermission(principal, "partners.invitations.send") : action === "revoke" && hasTeamPermission(principal, "partners.invitations.revoke"))}
+                  />
+                ) : null}
                 {view === "accounts" && canManageAccounts ? (
                   <div className="mt-4 space-y-3">
                     <details className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-4">
@@ -3034,6 +3061,13 @@ export async function PartnerAdministrationSection({
                         be routed to a change order and leaves the job
                         unchanged.
                       </p>
+                      <p className="mt-2 text-xs leading-5 text-[color:var(--team-text-muted)]">
+                        If work is already completed, billed, or paid, keep the
+                        original bill, payment, and payout unchanged. Additional
+                        work needs a separate linked service request. The
+                        partner can open the original job and choose Request
+                        additional service; do not replace its original price.
+                      </p>
                     </div>
 
                     <div className="grid gap-4 lg:grid-cols-2">
@@ -3293,8 +3327,7 @@ export async function PartnerAdministrationSection({
                         </ul>
                       ) : (
                         <p className="mt-2 text-sm text-emerald-800">
-                          No pricing or hosted-invoice gap is detected in the
-                          currently modeled account records.
+                          No record-level pricing or legacy collection issue is detected. Verify payment-provider readiness separately before enabling online payments.
                         </p>
                       )}
                     </div>
@@ -3844,11 +3877,8 @@ export async function PartnerAdministrationSection({
       ) : null}
       {view === "commercial" ? (
         <aside className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">
-          Commercial readiness is account-scoped. Approval rules now have a
-          versioned, audited Staff writer; captured requests never change when a
-          rule is revised. Pricing and invoice records remain read-only here,
-          while billing-policy setup and provider payment configuration still
-          need separate canonical writers.
+          Choose a company to manage its service agreement, approval rules, and
+          billing. Issuing an invoice does not change the job’s price or commissions.
         </aside>
       ) : null}
       {view === "security" ? (

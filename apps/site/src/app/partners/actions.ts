@@ -92,7 +92,13 @@ export async function partnerPasswordLoginAction(formData: FormData) {
       headers: await partnerAuthForwardHeaders(),
       body: JSON.stringify({ email, password, rememberMe }),
     },
-  );
+  ).catch(() => null);
+
+  if (!res) {
+    const query = new URLSearchParams({ error: "temporarily_unavailable" });
+    if (returnTo !== "/partners/overview") query.set("returnTo", returnTo);
+    redirect(`/partners/login?${query.toString()}`);
+  }
 
   if (!res.ok) {
     const msg = await readErrorMessage(res, "login_failed");

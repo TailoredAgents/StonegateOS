@@ -52,17 +52,14 @@ describe("Partner persona presentation boundary", () => {
   it("requires existing capability filtering and explicit user action at every wired surface", () => {
     const overview = siteSource("(portal)/overview/page.tsx");
     const booking = siteSource("components/PartnerBookingWizard.tsx");
-    const onboarding = siteSource("components/PartnerApplicationWorkspace.tsx");
     const checklist = siteSource("components/PartnerOnboardingChecklist.tsx");
     const repeatWork = siteSource("components/PartnerRepeatWorkManager.tsx");
 
-    expect(overview).toContain("visiblePersonaTaskIds");
-    expect(overview).toContain("capabilities?.schedule");
+    expect(overview).not.toContain("PartnerOnboardingChecklist");
+    expect(overview).not.toContain("PartnerPersonaGuide");
+    expect(overview).toContain("context.capabilities.schedule");
     expect(booking).toContain("onClick={() => applyProofPreset(preset)}");
     expect(booking).toContain("Nothing is applied until you choose a preset");
-    expect(onboarding).toContain(
-      "Suggestions do not select requested features",
-    );
     expect(checklist).toContain("presentation.onboarding.checklistLead");
     expect(repeatWork).toContain(
       "These ideas do not create a template or select a service",

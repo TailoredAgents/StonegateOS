@@ -7,6 +7,7 @@ import {
   partnerPurposeTokenPolicy,
 } from "@/app/partners/lib/public-route-policy";
 import { resolvePartnerApiUrl } from "@/app/partners/lib/api-origin";
+import { resolvePublicOrigin } from "@/app/partners/lib/origin";
 import { ADMIN_SESSION_COOKIE, adminSessionMatches } from "@/lib/admin-session";
 import { PARTNER_APPLICATION_SESSION_COOKIE } from "@/lib/partner-application-session";
 import {
@@ -51,12 +52,17 @@ function parseCookie(value: string | undefined): UtmCookie {
 
 function applySensitivePartnerHeaders(response: NextResponse): NextResponse {
   response.headers.set("Cache-Control", "private, no-store, max-age=0");
-  response.headers.set("Referrer-Policy", "no-referrer");
+  // Tokenless form pages must retain a same-origin Origin header on native
+  // POSTs. `no-referrer` makes browsers send Origin:null, which both breaks
+  // Next Server Actions and correctly fails our CSRF checks. No referrer is
+  // sent to another origin under this policy.
+  response.headers.set("Referrer-Policy", "same-origin");
   return response;
 }
 
 function applyPartnerUnavailableHeaders(response: NextResponse): NextResponse {
   applySensitivePartnerHeaders(response);
+  response.headers.set("Referrer-Policy", "no-referrer");
   response.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   return response;
 }
@@ -175,7 +181,7 @@ async function partnerLandingResponse(
 
   if (destination) {
     const response = NextResponse.redirect(
-      new URL(destination, request.url),
+      new URL(destination, resolvePublicOrigin(request)),
       307,
     );
     if (portalState === "unauthenticated" && rawSessionToken) {
@@ -204,6 +210,14 @@ async function partnerLandingResponse(
     return applySensitivePartnerHeaders(response);
   }
 
+  if (applicationSessionPresent) {
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.delete(PARTNER_INTERNAL_DEGRADED_HEADER);
+    return applySensitivePartnerHeaders(
+      NextResponse.next({ request: { headers: requestHeaders } }),
+    );
+  }
+
   // A truly anonymous request passes through untouched so Next can serve the
   // statically generated, indexable landing response from its public cache.
   if (request.headers.has(PARTNER_INTERNAL_DEGRADED_HEADER)) {
@@ -220,7 +234,10 @@ export async function middleware(request: NextRequest) {
   if (pathname.startsWith("/partners")) {
     if (pathname === PARTNER_UNAVAILABLE_PATH) {
       return applyPartnerUnavailableHeaders(
-        NextResponse.redirect(new URL(PARTNER_LANDING_PATH, request.url), 307),
+        NextResponse.redirect(
+          new URL(PARTNER_LANDING_PATH, resolvePublicOrigin(request)),
+          307,
+        ),
       );
     }
 
@@ -230,7 +247,10 @@ export async function middleware(request: NextRequest) {
       : "";
 
     if (tokenPolicy && request.nextUrl.searchParams.has("token")) {
-      const destination = request.nextUrl.clone();
+      const destination = new URL(
+        request.nextUrl.pathname + request.nextUrl.search,
+        resolvePublicOrigin(request),
+      );
       destination.searchParams.delete("token");
       const response = NextResponse.redirect(destination, 303);
 
@@ -248,7 +268,11 @@ export async function middleware(request: NextRequest) {
         response.cookies.delete(tokenPolicy.cookieName);
       }
 
-      return applySensitivePartnerHeaders(response);
+      applySensitivePartnerHeaders(response);
+      // This response still has a credential in its incoming URL. The next
+      // tokenless form page sets its own same-origin policy.
+      response.headers.set("Referrer-Policy", "no-referrer");
+      return response;
     }
 
     const landingResponse = await partnerLandingResponse(request);

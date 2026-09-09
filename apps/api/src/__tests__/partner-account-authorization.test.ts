@@ -147,6 +147,35 @@ describe("partner account capability authorization", () => {
         selectedMembershipId: activeAccess.membershipId,
       }),
     ).toEqual({ ok: true, access: activeAccess });
+    expect(
+      selectPartnerAccountAccess({
+        activeAccesses: [activeAccess],
+        selectedAccountId: null,
+        selectedMembershipId: null,
+      }),
+    ).toEqual({ ok: true, access: activeAccess });
+    for (const selection of [
+      {
+        selectedAccountId: "55555555-5555-4555-8555-555555555555",
+        selectedMembershipId: "66666666-6666-4666-8666-666666666666",
+      },
+      {
+        selectedAccountId: activeAccess.accountId,
+        selectedMembershipId: "66666666-6666-4666-8666-666666666666",
+      },
+      { selectedAccountId: activeAccess.accountId, selectedMembershipId: null },
+      {
+        selectedAccountId: null,
+        selectedMembershipId: activeAccess.membershipId,
+      },
+    ]) {
+      expect(
+        selectPartnerAccountAccess({
+          activeAccesses: [activeAccess],
+          ...selection,
+        }),
+      ).toEqual({ ok: false, status: 403, error: "account_access_required" });
+    }
   });
 
   it("excludes disabled accounts before they can become V2 authority", () => {

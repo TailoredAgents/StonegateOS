@@ -275,8 +275,11 @@ export async function loadPartnerCommercial<T>(
   endpoint: string,
   resource: string,
   validate: (value: unknown) => value is T,
+  filters?: URLSearchParams,
 ): Promise<PartnerCommercialState<T>> {
-  const response = await callPartnerApi(`/api/portal/v2/${endpoint}?limit=100`, {
+  const query = new URLSearchParams(filters);
+  query.set("limit", "100");
+  const response = await callPartnerApi(`/api/portal/v2/${endpoint}?${query}`, {
     timeoutMs: 20_000,
   }).catch(() => null);
   if (!response) return { status: "unavailable" };

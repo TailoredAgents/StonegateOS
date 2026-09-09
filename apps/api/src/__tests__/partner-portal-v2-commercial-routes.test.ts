@@ -12,11 +12,21 @@ describe("partner portal V2 commercial route guards", () => {
     ["invoices", "invoices.read"],
     ["statements", "invoices.read"],
     ["documents", "documents.financial.read"],
-    ["reports", "reports.financial.read"],
   ])("binds %s reads to their account capability", (resource, capability) => {
     const route = source(`app/api/portal/v2/${resource}/route.ts`);
     expect(route).toContain(`capability: "${capability}"`);
     expect(route).toContain("handlePartnerCommercialList");
+  });
+
+  it("separates optional operational and financial report authority and exports one snapshot", () => {
+    const route = source("app/api/portal/v2/reports/route.ts");
+    expect(route).toContain('"reports.financial.read"');
+    expect(route).toContain('"reports.operational.read"');
+    expect(route).toContain('"reports.financial.export"');
+    expect(route).toContain('"reports.operational.export"');
+    expect(route).toContain('isPartnerToolEnabled(principal.accountId, "reports")');
+    expect(route).toContain("readPartnerServiceReport");
+    expect(route).toContain("renderPartnerServiceReportPdf");
   });
 
   it("uses canonical Quote V2 authority while preserving legacy snapshots as non-actionable", () => {
@@ -151,7 +161,29 @@ describe("partner portal V2 commercial route guards", () => {
     );
     expect(service).not.toContain("storageBucket: document.storageBucket");
     expect(route).not.toContain('principal.accessLevel !== "account"');
-    expect(service).toContain("createPartnerJobAccessCondition");
+    const normalizedService = service.replace(/\s+/gu, " ");
+    expect(normalizedService).toContain(
+      "eq(partnerDocuments.partnerBookingId, partnerBookings.id), eq(partnerDocuments.partnerAccountId, partnerBookings.partnerAccountId)",
+    );
+    expect(normalizedService).toContain(
+      "eq(partnerDocuments.id, input.documentId), eq(partnerDocuments.partnerAccountId, input.accountId)",
+    );
+    expect(normalizedService).toContain(
+      "isNotNull(partnerDocuments.partnerBookingId), createPartnerFinancialDocumentAccessCondition({ accountId: input.accountId, accessLevel: input.accessLevel, accessScope: input.accessScope, })",
+    );
+    expect(service).toContain('return { ok: false, error: "not_found", status: 404 }');
+    expect(service.indexOf('return { ok: false, error: "not_found", status: 404 }'))
+      .toBeLessThan(service.indexOf("await createMediaReadUrl("));
+    const authorization = source("src/lib/partner-portal-v2-commercial.ts");
+    expect(authorization).toContain(
+      "return or(createPartnerJobAccessCondition(access), costCenterGrant)",
+    );
+    expect(authorization).toContain(
+      "scoped_invoice.partner_account_id = ${access.accountId}",
+    );
+    expect(authorization).toContain(
+      "scoped_invoice.partner_booking_id = ${partnerDocuments.partnerBookingId}",
+    );
   });
 
   it("filters scoped commercial reads before pagination and fails closed for account statements", () => {

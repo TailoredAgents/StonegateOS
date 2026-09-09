@@ -7,6 +7,7 @@ import {
   type PartnerPrincipal,
 } from "@/lib/partner-account-authorization";
 import { arePartnerPortalV2ReadsEnabled } from "@/lib/partner-portal-feature-flags";
+import { isPartnerToolEnabled } from "@/lib/partner-account-workflows";
 import type { PartnerCommercialListResult } from "@/lib/partner-portal-v2-commercial";
 import {
   createPartnerPortalV2DescriptorResponse,
@@ -30,6 +31,7 @@ export async function handlePartnerCommercialList(input: {
   capability: PartnerCapability;
   loader: CommercialLoader;
   csvFilename: string;
+  optionalTool?: "reports";
 }): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(input.request.headers);
   const authorization = await requirePartnerCapability(
@@ -68,6 +70,9 @@ export async function handlePartnerCommercialList(input: {
   }
 
   try {
+    if (input.optionalTool && !(await isPartnerToolEnabled(principal.accountId, input.optionalTool))) {
+      return createPartnerPortalV2ErrorResponse("feature_not_enabled", 404, correlationId);
+    }
     const result = await input.loader({
       accountId: principal.accountId,
       params: input.request.nextUrl.searchParams,

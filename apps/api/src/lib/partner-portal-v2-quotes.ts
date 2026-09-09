@@ -44,6 +44,7 @@ import {
 import { normalizePartnerJobAccessScope } from "@/lib/partner-portal-v2-resource-authorization";
 import type { PortalV2StoredResult } from "@/lib/partner-portal-v2-idempotency";
 import { TeamMutationFailure } from "@/lib/team-mutation";
+import { PartnerChangeOrderFinancialReviewRequired } from "@/lib/partner-change-order-price";
 
 const QUOTE_STATUSES = new Set([
   "draft",
@@ -1308,6 +1309,9 @@ export async function decideCanonicalPartnerQuote(input: {
     });
     return result;
   } catch (error) {
+    if (error instanceof PartnerChangeOrderFinancialReviewRequired) {
+      return failure(409, "financial_review_required");
+    }
     if (error instanceof TeamMutationFailure) {
       return failure(error.status, "change_order_conflict");
     }

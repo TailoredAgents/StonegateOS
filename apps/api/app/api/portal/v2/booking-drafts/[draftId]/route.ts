@@ -1,22 +1,74 @@
 import type { NextRequest } from "next/server";
 import { readBoundedJsonRequest } from "@/lib/bounded-json-request";
 import { requirePartnerCapability } from "@/lib/partner-account-authorization";
-import { readPortalV2CorrelationId } from "@/lib/portal-v2-contract";
+import { isAllowedPartnerPortalMutationOrigin } from "@/lib/partner-portal-v2-security";
+import {
+  createPortalV2IdempotencyErrorResponse,
+  readPortalV2CorrelationId,
+  readPortalV2IdempotencyKey,
+} from "@/lib/portal-v2-contract";
 import {
   getPartnerBookingDraft,
+  abandonPartnerBookingDraft,
   parsePartnerDraftMutation,
   requirePartnerSchedulingActor,
   requirePortalUuid,
   updatePartnerBookingDraft,
+  PartnerPortalSchedulingError,
 } from "@/lib/partner-portal-v2-scheduling";
 import {
   portalAuthorizationFailureResponse,
+  portalContractFailureResponse,
   portalSchedulingExceptionResponse,
   portalSchedulingSuccessResponse,
   requestIfMatch,
 } from "@/lib/partner-portal-v2-scheduling/route-utils";
 
 type RouteContext = { params: Promise<{ draftId: string }> };
+
+export async function DELETE(
+  request: NextRequest,
+  context: RouteContext,
+): Promise<Response> {
+  const correlationId = readPortalV2CorrelationId(request.headers);
+  try {
+    if (!isAllowedPartnerPortalMutationOrigin(request))
+      throw new PartnerPortalSchedulingError(
+        "forbidden",
+        "The request origin could not be verified.",
+        { status: 403 },
+      );
+    const authorization = await requirePartnerCapability(
+      request,
+      "bookings.update",
+    );
+    if (!authorization.ok)
+      return portalAuthorizationFailureResponse(authorization, correlationId);
+    const actor = requirePartnerSchedulingActor(
+      authorization.principal,
+      "write",
+    );
+    const idempotency = readPortalV2IdempotencyKey(request.headers);
+    if (!idempotency.ok)
+      return portalContractFailureResponse(
+        createPortalV2IdempotencyErrorResponse(idempotency, correlationId),
+      );
+    if (!idempotency.keyHash) throw new Error("required_idempotency_missing");
+    const result = await abandonPartnerBookingDraft({
+      actor,
+      draftId: requirePortalUuid((await context.params).draftId, "draftId"),
+      ifMatch: requestIfMatch(request),
+      idempotencyKeyHash: idempotency.keyHash,
+      correlationId,
+    });
+    return portalSchedulingSuccessResponse(
+      { ok: true, ...result },
+      correlationId,
+    );
+  } catch (error) {
+    return portalSchedulingExceptionResponse(error, correlationId);
+  }
+}
 
 async function authorize(
   request: NextRequest,

@@ -11,6 +11,7 @@ import {
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
 import { requirePartnerCapability } from "@/lib/partner-account-authorization";
+import { isPartnerToolEnabled, normalizePartnerAccountWorkflow } from "@/lib/partner-account-workflows";
 import { arePartnerPortalV2WritesEnabled } from "@/lib/partner-portal-feature-flags";
 import {
   auditPartnerLocationPortfolio,
@@ -176,6 +177,9 @@ export async function POST(
   const commitRequestHash = portalV2RequestHash(parsed.data);
 
   try {
+    if (!(await isPartnerToolEnabled(principal.accountId!, "portfolio"))) {
+      return createPartnerPortalV2ErrorResponse("not_found", 404, correlationId);
+    }
     const db = getDb();
     const result = await db.transaction(async (tx) => {
       const account = await lockPartnerLocationDirectory(
@@ -201,6 +205,7 @@ export async function POST(
           ? { kind: "replay" as const, operation, account }
           : { kind: "conflict" as const };
       }
+      if (!normalizePartnerAccountWorkflow(account.workflowConfig).tools.portfolio) return { kind: "not_found" as const };
       const precondition = evaluatePortalV2RevisionPrecondition({
         ifMatch: request.headers.get("if-match"),
         currentRevision: `partner-location-directory:${principal.accountId}:${account.version}`,

@@ -150,8 +150,10 @@ describe("staff partner management route contract", () => {
     expect(commercial).toContain("partnerPaymentAllocations.partnerAccountId");
     expect(commercial).toContain('billingConfigurationState: "not_modeled"');
     expect(commercial).toContain("providerWriteAvailable: false");
-    expect(commercial).not.toContain("providerInvoiceId");
-    expect(commercial).not.toContain("providerOrderId");
+    // Provider IDs may be used in a server-side predicate to identify unsafe
+    // legacy collections, but must never become serialized response fields.
+    expect(commercial).not.toMatch(/providerInvoiceId\s*:/u);
+    expect(commercial).not.toMatch(/providerOrderId\s*:/u);
     expect(commercial).not.toContain("hostedPaymentUrl:");
     expect(commercial).not.toContain("margin");
     expect(commercial).not.toContain("commission");

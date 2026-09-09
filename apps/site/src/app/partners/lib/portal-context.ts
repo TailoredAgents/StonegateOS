@@ -21,6 +21,9 @@ export type PartnerPortalPermissions = {
   cancelJobs: boolean;
   manageLocations: boolean;
   exportOperationalReports: boolean;
+  readOperationalReports?: boolean;
+  readFinancialReports?: boolean;
+  exportFinancialReports?: boolean;
   uploadMedia: boolean;
   shareProof: boolean;
   readMessages: boolean;
@@ -50,6 +53,7 @@ export type PartnerPortalContext = {
   };
   capabilities: PartnerCapabilities;
   permissions: PartnerPortalPermissions;
+  tools?: Record<string, boolean>;
 };
 
 export type PartnerPortalContextResult =
@@ -59,6 +63,7 @@ export type PartnerPortalContextResult =
 
 type V2MePayload = {
   ok: true;
+  tools: Record<string, boolean>;
   partnerUser: {
     id: string;
     email: string;
@@ -218,6 +223,11 @@ function parseV2MePayload(value: unknown): V2MePayload | null {
 
   return {
     ok: true,
+    tools: (() => {
+      const workflow = (value)["workflow"];
+      const configured = workflow && typeof workflow === "object" && !Array.isArray(workflow) ? (workflow as Record<string, unknown>)["tools"] : null;
+      return Object.fromEntries(["templates", "recurring", "bulk", "reports", "portfolio", "approvals"].map((key) => [key, Boolean(configured && typeof configured === "object" && (configured as Record<string, unknown>)[key] === true)]));
+    })(),
     partnerUser: {
       id: partnerUserId,
       email,
@@ -253,13 +263,8 @@ function navigationCapabilities(
     approvals: hasAny("approvals.read", "approvals.decide"),
     locations: hasAny("properties.read", "properties.manage"),
     proof: hasAny("media.read", "proof.read", "proof.request"),
-    billing: hasAny("rates.read", "invoices.read", "documents.financial.read"),
-    reports: hasAny(
-      "reports.operational.read",
-      "reports.operational.export",
-      "reports.financial.read",
-      "reports.financial.export",
-    ),
+    billing: hasAny("invoices.read", "documents.financial.read"),
+    reports: hasAny("reports.financial.read", "reports.operational.read"),
     help: true,
     settings: hasAny("portal.session.read", "account.read"),
   };
@@ -277,6 +282,9 @@ function actionPermissions(
     cancelJobs: capabilities.has("bookings.cancel"),
     manageLocations: capabilities.has("properties.manage"),
     exportOperationalReports: capabilities.has("reports.operational.export"),
+    readOperationalReports: capabilities.has("reports.operational.read"),
+    readFinancialReports: capabilities.has("reports.financial.read"),
+    exportFinancialReports: capabilities.has("reports.financial.export"),
     uploadMedia: capabilities.has("media.upload"),
     shareProof: capabilities.has("proof.request"),
     readMessages: capabilities.has("messages.read"),
@@ -331,6 +339,7 @@ export async function resolvePartnerPortalContext(
     },
     capabilities: navigationCapabilities(rawCapabilities),
     permissions: actionPermissions(rawCapabilities),
+    tools: payload.tools,
   };
 }
 

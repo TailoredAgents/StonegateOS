@@ -200,6 +200,8 @@ export function PartnerLocationManager({
   const [directoryEtag, setDirectoryEtag] =
     React.useState(initialDirectoryEtag);
   const [search, setSearch] = React.useState("");
+  const [searching, setSearching] = React.useState(false);
+  const searchGeneration = React.useRef(0);
   const [showArchived, setShowArchived] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -214,6 +216,52 @@ export function PartnerLocationManager({
   } | null>(null);
   const [pendingAddressSuggestion, setPendingAddressSuggestion] =
     React.useState<PendingAddressSuggestion | null>(null);
+
+  React.useEffect(() => {
+    const generation = ++searchGeneration.current;
+    const controller = new AbortController();
+    setSearching(true);
+    const timer = window.setTimeout(() => {
+      void partnerPortalFetch<{
+        ok: true;
+        locations: PartnerLocation[];
+        directory: { etag: string };
+        page: { nextCursor: string | null };
+      }>(
+        `locations?active=${showArchived ? "all" : "true"}&limit=100&search=${encodeURIComponent(search.trim())}`,
+        { signal: controller.signal },
+      )
+        .then((result) => {
+          if (
+            controller.signal.aborted ||
+            generation !== searchGeneration.current
+          )
+            return;
+          if (!result.ok) {
+            setMessage({ tone: "error", text: result.error.message });
+            setNextCursor(null);
+            return;
+          }
+          setLocations(result.data.locations);
+          setNextCursor(result.data.page.nextCursor);
+          setDirectoryEtag(result.data.directory.etag);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted)
+            setMessage({
+              tone: "error",
+              text: "Locations could not be searched. Please try again.",
+            });
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setSearching(false);
+        });
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [search, showArchived]);
 
   const visible = locations
     .filter((location) => {
@@ -676,7 +724,8 @@ export function PartnerLocationManager({
   };
 
   const loadMore = async (): Promise<void> => {
-    if (!nextCursor) return;
+    if (!nextCursor || searching) return;
+    const generation = searchGeneration.current;
     setBusyId("load-more");
     const result = await partnerPortalFetch<{
       ok: true;
@@ -684,9 +733,10 @@ export function PartnerLocationManager({
       directory: { etag: string };
       page: { nextCursor: string | null };
     }>(
-      `locations?active=all&limit=100&cursor=${encodeURIComponent(nextCursor)}`,
+      `locations?active=${showArchived ? "all" : "true"}&limit=100&search=${encodeURIComponent(search.trim())}&cursor=${encodeURIComponent(nextCursor)}`,
     ).catch(() => null);
     setBusyId(null);
+    if (generation !== searchGeneration.current) return;
     if (!result?.ok) {
       setMessage({
         tone: "error",

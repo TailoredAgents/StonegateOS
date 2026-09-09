@@ -8,7 +8,6 @@ import {
   ArrowLeft,
   ArrowRight,
   CalendarClock,
-  Camera,
   Check,
   CheckCircle2,
   CircleAlert,
@@ -19,10 +18,10 @@ import {
   ShieldCheck,
   Sparkles,
   Truck,
-  UserRound,
   X,
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
+import { usePartnerUnsavedChanges } from "../lib/use-partner-unsaved-changes";
 import {
   createPortalOperationKey,
   partnerPortalFetch,
@@ -59,15 +58,16 @@ import {
   partnerSecondaryButtonClass,
 } from "./PartnerPortalUi";
 import { PartnerDraftPhotoUpload } from "./PartnerDraftPhotoUpload";
+import { PartnerSavedRequests } from "./PartnerSavedRequests";
 import { PartnerInlineLocationForm } from "./PartnerInlineLocationForm";
+import {
+  sortBookingLocations,
+  toBookingLocation,
+  type BookingLocation,
+} from "../lib/booking-location";
+import type { PartnerLocation } from "../lib/portal-v2";
 
-export type BookingWizardLocation = {
-  id: string;
-  name: string;
-  address: string;
-  serviceAreaStatus?: string;
-  timezone?: string;
-};
+export type BookingWizardLocation = BookingLocation;
 
 export type BookingWizardService = {
   key: string;
@@ -176,13 +176,11 @@ type WizardForm = {
 };
 
 const STEPS = [
-  { label: "Choose location", shortLabel: "Location", icon: MapPin },
-  { label: "Add service details", shortLabel: "Details", icon: Truck },
-  { label: "Confirm contact & access", shortLabel: "Access", icon: UserRound },
-  { label: "Add photos & proof", shortLabel: "Photos", icon: Camera },
+  { label: "Where?", shortLabel: "Where", icon: MapPin },
+  { label: "What do you need?", shortLabel: "Details", icon: Truck },
   {
-    label: "Choose an arrival window",
-    shortLabel: "Window",
+    label: "When?",
+    shortLabel: "When",
     icon: CalendarClock,
   },
   { label: "Check & send", shortLabel: "Check", icon: ShieldCheck },
@@ -316,10 +314,16 @@ function formFromDraft(
     alternateContactPhone: recordString(alternateContact, "phone"),
     alternateContactEmail: recordString(alternateContact, "email"),
     crewInstructions: draft.crewInstructions ?? "",
-    accessDetails: draft.accessDetails ?? "",
-    contactName: recordString(draft.onSiteContact, "name"),
-    contactPhone: recordString(draft.onSiteContact, "phone"),
-    contactEmail: recordString(draft.onSiteContact, "email"),
+    accessDetails: draft.accessDetails ?? defaults.accessDetails ?? "",
+    contactName: draft.onSiteContact
+      ? recordString(draft.onSiteContact, "name")
+      : (defaults.contactName ?? ""),
+    contactPhone: draft.onSiteContact
+      ? recordString(draft.onSiteContact, "phone")
+      : (defaults.contactPhone ?? ""),
+    contactEmail: draft.onSiteContact
+      ? recordString(draft.onSiteContact, "email")
+      : (defaults.contactEmail ?? ""),
     proofBefore:
       typeof draft.proofRequirements["before"] === "number"
         ? draft.proofRequirements["before"] > 0
@@ -328,7 +332,7 @@ function formFromDraft(
       typeof draft.proofRequirements["before"] === "number" &&
       Number.isSafeInteger(draft.proofRequirements["before"]) &&
       draft.proofRequirements["before"] >= 0 &&
-      draft.proofRequirements["before"] <= 40
+      draft.proofRequirements["before"] <= 20
         ? Math.max(1, draft.proofRequirements["before"])
         : (defaults.proofBeforeCount ?? 1),
     proofAfter:
@@ -339,7 +343,7 @@ function formFromDraft(
       typeof draft.proofRequirements["after"] === "number" &&
       Number.isSafeInteger(draft.proofRequirements["after"]) &&
       draft.proofRequirements["after"] >= 0 &&
-      draft.proofRequirements["after"] <= 40
+      draft.proofRequirements["after"] <= 20
         ? Math.max(1, draft.proofRequirements["after"])
         : (defaults.proofAfterCount ?? 1),
     proofPackage: draft.proofRequirements["package"] === true,
@@ -541,9 +545,9 @@ function fieldStep(field: string): number {
     field.includes("Contact") ||
     field.includes("access")
   )
-    return 2;
-  if (field.startsWith("proof")) return 3;
-  if (field.startsWith("preferred")) return 4;
+    return 1;
+  if (field.startsWith("proof")) return 1;
+  if (field.startsWith("preferred")) return 2;
   return 1;
 }
 
@@ -594,7 +598,7 @@ function localErrorsForStep(
       errors["billingContact"] = "Enter a valid billing contact email.";
     }
   }
-  if (step === 2) {
+  if (step === 1) {
     if (!form.contactName.trim())
       errors["onSiteContact"] = "Add the on-site contact’s name.";
     if (!form.contactPhone.trim() && !form.contactEmail.trim()) {
@@ -605,7 +609,19 @@ function localErrorsForStep(
   return errors;
 }
 
-export function PartnerBookingWizard({
+export function PartnerBookingWizard(
+  props: React.ComponentProps<typeof PartnerBookingWizardSession>,
+) {
+  // Resource changes must reset every state/ref, including upload and hold state.
+  return (
+    <PartnerBookingWizardSession
+      key={props.initialDraft?.id ?? "new"}
+      {...props}
+    />
+  );
+}
+
+function PartnerBookingWizardSession({
   locations,
   services,
   initialDraft = null,
@@ -618,6 +634,8 @@ export function PartnerBookingWizard({
   persona,
   supportPhoneE164,
   supportPhoneDisplay,
+  requesterContact,
+  canDiscardDrafts = false,
 }: {
   locations: BookingWizardLocation[];
   services: BookingWizardService[];
@@ -631,12 +649,24 @@ export function PartnerBookingWizard({
   persona: string | null;
   supportPhoneE164: string;
   supportPhoneDisplay: string;
+  requesterContact?: { name: string; phone: string; email: string };
+  canDiscardDrafts?: boolean;
 }) {
   const router = useRouter();
   const personaPresentation = getPartnerPersonaPresentation(persona);
+  const initialLocation = locations.find(
+    (item) => item.id === (initialDraft?.locationId || defaultLocationId),
+  );
+  const initialContact = initialLocation?.contact?.name
+    ? initialLocation.contact
+    : requesterContact;
   const [form, setForm] = React.useState<WizardForm>(() =>
     formFromDraft(initialDraft, {
       locationId: defaultLocationId,
+      contactName: initialContact?.name ?? "",
+      contactPhone: initialContact?.phone ?? "",
+      contactEmail: initialContact?.email ?? "",
+      accessDetails: initialLocation?.accessDetails ?? "",
       preferredTimezone:
         locations.find(
           (location) =>
@@ -675,15 +705,30 @@ export function PartnerBookingWizard({
   const [hold, setHold] = React.useState<PartnerHold | null>(null);
   const [holdSeconds, setHoldSeconds] = React.useState(0);
   const [submitting, setSubmitting] = React.useState(false);
+  const [submissionUncertain, setSubmissionUncertain] = React.useState(false);
+  const submissionAttemptRef = React.useRef<{
+    draftId: string;
+    etag: string;
+    holdId: string | null;
+  } | null>(null);
   const [advancing, setAdvancing] = React.useState(false);
   const [draftPhotoCount, setDraftPhotoCount] = React.useState(0);
   const [showPersonaSuggestions, setShowPersonaSuggestions] =
-    React.useState(true);
+    React.useState(false);
   const [personaFeedback, setPersonaFeedback] = React.useState<string | null>(
     null,
   );
   const [availableLocations, setAvailableLocations] =
     React.useState<BookingWizardLocation[]>(locations);
+  const [locationSearch, setLocationSearch] = React.useState("");
+  const [locationSearching, setLocationSearching] = React.useState(false);
+  const [locationSearchError, setLocationSearchError] = React.useState<
+    string | null
+  >(null);
+  const [locationSearchResults, setLocationSearchResults] = React.useState<
+    BookingWizardLocation[] | null
+  >(null);
+  const [selectedDate, setSelectedDate] = React.useState("");
   const draftRef = React.useRef<PartnerDraft | null>(initialDraft);
   const holdRef = React.useRef<PartnerHold | null>(null);
   const submittedRef = React.useRef(false);
@@ -699,11 +744,79 @@ export function PartnerBookingWizard({
   const saveQueueRef = React.useRef<Promise<unknown>>(Promise.resolve());
   const autosaveTimeoutRef = React.useRef<number | null>(null);
   const initialFormRef = React.useRef(form);
+  const latestFormRef = React.useRef(form);
+  latestFormRef.current = form;
+  const createDraftOperationRef = React.useRef(
+    createPortalOperationKey("booking-draft"),
+  );
+  const progressLoadedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (progressLoadedRef.current || !initialDraft?.id) return;
+    progressLoadedRef.current = true;
+    try {
+      const saved = Number(
+        sessionStorage.getItem(`partner-request-step:${initialDraft.id}`),
+      );
+      // Time choices are always rechecked, never restored as an unverified promise.
+      if (Number.isInteger(saved) && saved > 0) {
+        setStep(1);
+        setFurthestStep(1);
+      }
+    } catch {
+      /* Storage can be unavailable in private browsing. */
+    }
+  }, [initialDraft?.id]);
+  React.useEffect(() => {
+    if (!draft?.id) return;
+    try {
+      sessionStorage.setItem(`partner-request-step:${draft.id}`, String(step));
+    } catch {
+      /* Saving the server draft does not depend on browser storage. */
+    }
+  }, [draft?.id, step]);
 
   React.useEffect(() => {
-    setShowPersonaSuggestions(true);
+    setShowPersonaSuggestions(false);
     setPersonaFeedback(null);
   }, [personaPresentation.key]);
+
+  React.useEffect(() => {
+    if (!locationSearch.trim()) {
+      setLocationSearchResults(null);
+      setLocationSearchError(null);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setLocationSearching(true);
+      setLocationSearchError(null);
+      void partnerPortalFetch<{ ok: true; locations: PartnerLocation[] }>(
+        `locations?active=true&limit=100&search=${encodeURIComponent(locationSearch.trim())}`,
+        { signal: controller.signal },
+      )
+        .then((result) => {
+          if (controller.signal.aborted) return;
+          if (!result.ok) {
+            setLocationSearchError(result.error.message);
+            return;
+          }
+          const found = result.data.locations.map(toBookingLocation);
+          setLocationSearchResults(sortBookingLocations(found));
+          setAvailableLocations((current) => [
+            ...new Map(
+              [...current, ...found].map((item) => [item.id, item]),
+            ).values(),
+          ]);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setLocationSearching(false);
+        });
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [locationSearch]);
 
   React.useEffect(() => {
     if (abandonmentTimerRef.current !== null) {
@@ -756,7 +869,7 @@ export function PartnerBookingWizard({
       }>("booking-drafts", {
         method: "POST",
         headers: {
-          "Idempotency-Key": createPortalOperationKey("booking-draft"),
+          "Idempotency-Key": createDraftOperationRef.current,
         },
         body: JSON.stringify(draftMutation(initialFormRef.current)),
       }).catch(() => null);
@@ -792,6 +905,7 @@ export function PartnerBookingWizard({
           draft: PartnerDraft;
         }>(`booking-drafts/${current.id}`, {
           method: "PATCH",
+          keepalive: true,
           headers: { "If-Match": current.etag },
           body: JSON.stringify(draftMutation(snapshot)),
         }).catch(() => null);
@@ -837,15 +951,31 @@ export function PartnerBookingWizard({
 
   const hasUnsavedChanges = saveStatus !== "saved" && !submittedRef.current;
 
+  usePartnerUnsavedChanges(hasUnsavedChanges);
+  const unsavedRef = React.useRef(hasUnsavedChanges);
+  unsavedRef.current = hasUnsavedChanges;
   React.useEffect(() => {
-    if (!hasUnsavedChanges) return;
-    const protectUnsavedChanges = (event: BeforeUnloadEvent): void => {
-      event.preventDefault();
+    // History navigation cannot reliably be canceled. Flush into this draft's
+    // serialized save queue instead; no sensitive scope is stored in the browser.
+    const flushOnLeave = () => {
+      if (
+        !draftRef.current ||
+        !unsavedRef.current ||
+        submittedRef.current ||
+        submissionAttemptRef.current
+      )
+        return;
+      cancelPendingAutosave();
+      void persist(latestFormRef.current);
     };
-    window.addEventListener("beforeunload", protectUnsavedChanges);
-    return () =>
-      window.removeEventListener("beforeunload", protectUnsavedChanges);
-  }, [hasUnsavedChanges]);
+    window.addEventListener("popstate", flushOnLeave);
+    window.addEventListener("pagehide", flushOnLeave);
+    return () => {
+      window.removeEventListener("popstate", flushOnLeave);
+      window.removeEventListener("pagehide", flushOnLeave);
+      flushOnLeave();
+    };
+  }, [cancelPendingAutosave, persist]);
 
   const flushPersist = React.useCallback(
     async (snapshot: WizardForm): Promise<boolean> => {
@@ -872,12 +1002,12 @@ export function PartnerBookingWizard({
         Math.ceil((new Date(hold.expiresAt).getTime() - Date.now()) / 1000),
       );
       setHoldSeconds(seconds);
-      if (seconds === 0) {
+      if (seconds === 0 && !submissionAttemptRef.current) {
         setHold(null);
         setMessage(
           "That arrival-window hold expired. Your job details are saved; choose another window.",
         );
-        setStep(4);
+        setStep(2);
       }
     };
     update();
@@ -906,7 +1036,7 @@ export function PartnerBookingWizard({
     holdRef.current = null;
     setHold(null);
     setAvailability(null);
-    setFurthestStep((current) => Math.min(current, 4));
+    setFurthestStep((current) => Math.min(current, 2));
     void fetch(
       `/api/partners/portal/booking-drafts/${encodeURIComponent(currentDraft.id)}/hold?holdId=${encodeURIComponent(currentHold.id)}`,
       { method: "DELETE" },
@@ -964,6 +1094,24 @@ export function PartnerBookingWizard({
       ...current,
       locationId,
       preferredTimezone: timezone,
+      contactName:
+        availableLocations.find((item) => item.id === locationId)?.contact
+          ?.name ||
+        requesterContact?.name ||
+        "",
+      contactPhone:
+        availableLocations.find((item) => item.id === locationId)?.contact
+          ?.phone ||
+        requesterContact?.phone ||
+        "",
+      contactEmail:
+        availableLocations.find((item) => item.id === locationId)?.contact
+          ?.email ||
+        requesterContact?.email ||
+        "",
+      accessDetails:
+        availableLocations.find((item) => item.id === locationId)
+          ?.accessDetails ?? "",
     }));
     setFieldErrors((current) => {
       const next = { ...current };
@@ -1042,7 +1190,7 @@ export function PartnerBookingWizard({
       stage: "availability_requested",
       persona,
       surface: "booking",
-      step: 4,
+      step: 3,
     });
     const saved = await flushPersist(form);
     const savedDraft = draftRef.current;
@@ -1108,7 +1256,7 @@ export function PartnerBookingWizard({
         stage: "availability_degraded",
         persona,
         surface: "booking",
-        step: 4,
+        step: 3,
       });
       setAvailability(null);
       setMessage(
@@ -1127,7 +1275,7 @@ export function PartnerBookingWizard({
           : "availability_slot_full",
       persona,
       surface: "booking",
-      step: 4,
+      step: 3,
     });
     setCurrentDraft(result.data.availability.draft);
     setAvailability(result.data.availability);
@@ -1158,7 +1306,7 @@ export function PartnerBookingWizard({
         focusErrorSummary(localErrors);
         return;
       }
-      if (step === 4 && !hold) {
+      if (step === 2 && !hold) {
         const preferredDates = [
           form.preferredDateOne,
           form.preferredDateTwo,
@@ -1185,7 +1333,7 @@ export function PartnerBookingWizard({
           return;
         }
       }
-      if (step === 3) {
+      if (step === 1) {
         const loaded = await loadAvailability();
         if (!loaded) return;
       } else if (!(await persist(form))) {
@@ -1205,6 +1353,12 @@ export function PartnerBookingWizard({
   };
 
   const editReviewStep = (target: number): void => {
+    if (submissionUncertain) {
+      setMessage(
+        "Retry sending to check whether this request was received before editing it. The same request will not create a duplicate job.",
+      );
+      return;
+    }
     setStep(target);
     window.requestAnimationFrame(() =>
       document.getElementById("partner-book-step-heading")?.focus(),
@@ -1246,7 +1400,7 @@ export function PartnerBookingWizard({
           stage: "slot_contention",
           persona,
           surface: "booking",
-          step: 5,
+          step: 3,
         });
         void loadAvailability();
       }
@@ -1258,26 +1412,40 @@ export function PartnerBookingWizard({
   const submitBooking = async (): Promise<void> => {
     const current = draftRef.current;
     const preferredReviewReady = Boolean(form.preferredDateOne);
-    if (!current || (!hold && !preferredReviewReady)) return;
+    if (
+      !current ||
+      (!submissionAttemptRef.current && !hold && !preferredReviewReady)
+    )
+      return;
     setSubmitting(true);
     setMessage(null);
-    const saved = await flushPersist(form);
-    const savedDraft = draftRef.current;
-    if (!saved || !savedDraft) {
-      setSubmitting(false);
-      return;
+    if (!submissionAttemptRef.current) {
+      const saved = await flushPersist(form);
+      const savedDraft = draftRef.current;
+      if (!saved || !savedDraft) {
+        setSubmitting(false);
+        return;
+      }
+      submissionAttemptRef.current = {
+        draftId: savedDraft.id,
+        etag: savedDraft.etag,
+        holdId: hold?.id ?? null,
+      };
     }
+    const attempt = submissionAttemptRef.current;
     const result = await partnerPortalFetch<{
       ok: true;
       booking: { id: string; publicStatus: string; confirmationMode: string };
-    }>(`booking-drafts/${current.id}/submit`, {
+    }>(`booking-drafts/${attempt.draftId}/submit`, {
       method: "POST",
       headers: {
-        "If-Match": savedDraft.etag,
+        "If-Match": attempt.etag,
         "Idempotency-Key": submitOperationKeyRef.current,
       },
       body: JSON.stringify(
-        hold ? { holdId: hold.id } : { submissionMode: "review" },
+        attempt.holdId
+          ? { holdId: attempt.holdId }
+          : { submissionMode: "review" },
       ),
     }).catch(() => null);
     if (!result?.ok) {
@@ -1285,17 +1453,22 @@ export function PartnerBookingWizard({
         stage: "booking_failed",
         persona,
         surface: "booking",
-        step: 6,
+        step: 4,
       });
       setSubmitting(false);
+      const uncertain = !result || result.response.status >= 500;
+      setSubmissionUncertain(uncertain);
+      if (!uncertain) submissionAttemptRef.current = null;
       setMessage(
-        result?.error.message ??
-          "The job was not submitted. Your request is still saved.",
+        uncertain
+          ? "We could not verify whether your request was received. Retry sending to check safely; this will not create a duplicate job."
+          : (result?.error.message ??
+              "The job was not submitted. Your request is still saved."),
       );
       if (result?.response.status === 409) {
         if (hold) {
           setHold(null);
-          setStep(4);
+          setStep(2);
           void loadAvailability();
         }
       }
@@ -1306,7 +1479,7 @@ export function PartnerBookingWizard({
       stage: "booking_submitted",
       persona,
       surface: "booking",
-      step: 6,
+      step: 4,
     });
     trackPartnerFunnelEvent({
       stage:
@@ -1316,7 +1489,7 @@ export function PartnerBookingWizard({
           : "booking_review_requested",
       persona,
       surface: "booking",
-      step: 6,
+      step: 4,
     });
     router.push(
       `/partners/bookings/${encodeURIComponent(result.data.booking.id)}?created=1` as Route,
@@ -1354,6 +1527,9 @@ export function PartnerBookingWizard({
     location?.timezone ??
     form.preferredTimezone ??
     "America/New_York";
+  const visibleDate = windowsByDate.some(([date]) => date === selectedDate)
+    ? selectedDate
+    : (windowsByDate[0]?.[0] ?? "");
   const manualReviewMode =
     !hold && !availabilityLoading && windowsByDate.length === 0;
   const preferredDates = [
@@ -1375,10 +1551,16 @@ export function PartnerBookingWizard({
       className="space-y-5"
       data-partner-unsaved={hasUnsavedChanges ? "true" : undefined}
     >
+      {step === 0 ? (
+        <PartnerSavedRequests
+          currentDraftId={draft?.id}
+          canDiscard={canDiscardDrafts}
+        />
+      ) : null}
       <PartnerPanel className="overflow-hidden p-0 sm:p-0">
         <div className="border-b border-slate-200 bg-slate-50 px-4 py-4 sm:px-6">
           <ol
-            className="grid grid-cols-3 gap-2 sm:grid-cols-6"
+            className="grid grid-cols-4 gap-2"
             aria-label="Service request progress"
           >
             {STEPS.map((item, index) => {
@@ -1536,8 +1718,41 @@ export function PartnerBookingWizard({
                   Choose a saved location to reuse its details, or add a new
                   one. You can confirm access information in a later step.
                 </p>
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  {availableLocations.map((item, index) => {
+                <label
+                  className="mt-4 block text-sm font-semibold text-slate-700"
+                  htmlFor="partner-location-chooser-search"
+                >
+                  Find a saved location
+                  <input
+                    id="partner-location-chooser-search"
+                    type="search"
+                    value={locationSearch}
+                    maxLength={100}
+                    onChange={(event) => setLocationSearch(event.target.value)}
+                    className={partnerFieldClass}
+                    placeholder="Name, address, or property reference"
+                  />
+                </label>
+                {locationSearching ? (
+                  <p role="status" className="mt-2 text-sm text-slate-600">
+                    Searching your locations…
+                  </p>
+                ) : null}
+                {locationSearchError ? (
+                  <PartnerNotice tone="error">
+                    {locationSearchError}
+                  </PartnerNotice>
+                ) : null}
+                {locationSearchResults?.length === 0 ? (
+                  <p role="status" className="mt-3 text-sm">
+                    No saved locations match. Try a different name or address.
+                  </p>
+                ) : null}
+                <div className="mt-4 grid max-h-96 gap-3 overflow-y-auto p-1 md:grid-cols-2">
+                  {(
+                    locationSearchResults ??
+                    sortBookingLocations(availableLocations)
+                  ).map((item, index) => {
                     const selected = item.id === form.locationId;
                     return (
                       <label
@@ -1709,10 +1924,13 @@ export function PartnerBookingWizard({
                   ) : null}
                 </label>
                 {service?.agreement ? (
-                  <section
+                  <details
                     className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
                     aria-labelledby="partner-book-agreement-heading"
                   >
+                    <summary className="min-h-11 cursor-pointer font-semibold text-slate-800">
+                      Your service and pricing details
+                    </summary>
                     <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">
                       Current account agreement
                     </p>
@@ -1769,7 +1987,7 @@ export function PartnerBookingWizard({
                       If this does not match your signed agreement, continue
                       only as a review request and contact Stonegate from Help.
                     </p>
-                  </section>
+                  </details>
                 ) : null}
                 {service?.baseOptions?.length ? (
                   <label className="block" htmlFor="partner-book-base-option">
@@ -1812,110 +2030,121 @@ export function PartnerBookingWizard({
                   </label>
                 ) : null}
                 {service?.addOns?.length ? (
-                  <fieldset
-                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
-                    aria-describedby={
-                      fieldErrors["selectedAddOns"]
-                        ? "partner-book-add-ons-error"
-                        : "partner-book-add-ons-help"
-                    }
+                  <details
+                    className="rounded-xl border border-slate-200 p-3"
+                    open={Boolean(fieldErrors["selectedAddOns"])}
                   >
-                    <legend className="px-1 text-sm font-semibold text-slate-800">
+                    <summary className="min-h-11 cursor-pointer font-semibold text-slate-800">
                       Optional add-ons
-                    </legend>
-                    <p
-                      id="partner-book-add-ons-help"
-                      className="mt-1 text-sm leading-6 text-slate-600"
+                      {Object.keys(form.addOnQuantities).length
+                        ? ` · ${Object.keys(form.addOnQuantities).length} selected`
+                        : ""}
+                    </summary>
+                    <fieldset
+                      className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                      aria-describedby={
+                        fieldErrors["selectedAddOns"]
+                          ? "partner-book-add-ons-error"
+                          : "partner-book-add-ons-help"
+                      }
                     >
-                      Select the exact quantity needed. Your contracted unit
-                      price is shown when your role can view account rates.
-                    </p>
-                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                      {service.addOns.map((addOn) => {
-                        const quantity = form.addOnQuantities[addOn.key];
-                        const selected = quantity !== undefined;
-                        return (
-                          <div
-                            key={addOn.key}
-                            className={cn(
-                              "rounded-xl border bg-white p-4",
-                              selected
-                                ? "border-primary-500 ring-1 ring-primary-200"
-                                : "border-slate-200",
-                            )}
-                          >
-                            <label className="flex min-h-11 cursor-pointer items-start gap-3">
-                              <input
-                                type="checkbox"
-                                checked={selected}
-                                onChange={(event) =>
-                                  updateAddOn(
-                                    addOn,
-                                    event.target.checked,
-                                    addOn.minimumQuantity,
-                                  )
-                                }
-                                className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                              />
-                              <span className="min-w-0 flex-1">
-                                <span className="block font-semibold text-slate-950">
-                                  {addOn.label}
-                                </span>
-                                {addOn.detail ? (
-                                  <span className="mt-1 block text-sm leading-5 text-slate-600">
-                                    {addOn.detail}
-                                  </span>
-                                ) : null}
-                                <span className="mt-1 block text-xs font-semibold text-slate-700">
-                                  {addOn.unitPrice
-                                    ? `${formatMoney(addOn.unitPrice)} per ${addOn.unitLabel}`
-                                    : "Price confirmed during review"}
-                                  {addOn.requiresReview
-                                    ? " · Staff review required"
-                                    : ""}
-                                </span>
-                              </span>
-                            </label>
-                            {selected ? (
-                              <label
-                                className="mt-3 block"
-                                htmlFor={`partner-book-add-on-${addOn.key}`}
-                              >
-                                <span className="text-xs font-semibold text-slate-700">
-                                  Quantity ({addOn.unitLabel})
-                                </span>
+                      <legend className="px-1 text-sm font-semibold text-slate-800">
+                        Optional add-ons
+                      </legend>
+                      <p
+                        id="partner-book-add-ons-help"
+                        className="mt-1 text-sm leading-6 text-slate-600"
+                      >
+                        Select the exact quantity needed. Your contracted unit
+                        price is shown when your role can view account rates.
+                      </p>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                        {service.addOns.map((addOn) => {
+                          const quantity = form.addOnQuantities[addOn.key];
+                          const selected = quantity !== undefined;
+                          return (
+                            <div
+                              key={addOn.key}
+                              className={cn(
+                                "rounded-xl border bg-white p-4",
+                                selected
+                                  ? "border-primary-500 ring-1 ring-primary-200"
+                                  : "border-slate-200",
+                              )}
+                            >
+                              <label className="flex min-h-11 cursor-pointer items-start gap-3">
                                 <input
-                                  id={`partner-book-add-on-${addOn.key}`}
-                                  type="number"
-                                  min={addOn.minimumQuantity}
-                                  max={addOn.maximumQuantity}
-                                  step="1"
-                                  inputMode="numeric"
-                                  value={quantity}
+                                  type="checkbox"
+                                  checked={selected}
                                   onChange={(event) =>
                                     updateAddOn(
                                       addOn,
-                                      true,
-                                      Number(event.target.value),
+                                      event.target.checked,
+                                      addOn.minimumQuantity,
                                     )
                                   }
-                                  className={cn(partnerFieldClass, "mt-1")}
+                                  className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
                                 />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block font-semibold text-slate-950">
+                                    {addOn.label}
+                                  </span>
+                                  {addOn.detail ? (
+                                    <span className="mt-1 block text-sm leading-5 text-slate-600">
+                                      {addOn.detail}
+                                    </span>
+                                  ) : null}
+                                  <span className="mt-1 block text-xs font-semibold text-slate-700">
+                                    {addOn.unitPrice
+                                      ? `${formatMoney(addOn.unitPrice)} per ${addOn.unitLabel}`
+                                      : "Price confirmed during review"}
+                                    {addOn.requiresReview
+                                      ? " · Staff review required"
+                                      : ""}
+                                  </span>
+                                </span>
                               </label>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {fieldErrors["selectedAddOns"] ? (
-                      <p
-                        id="partner-book-add-ons-error"
-                        className="mt-3 text-sm font-medium text-rose-700"
-                      >
-                        {fieldErrors["selectedAddOns"]}
-                      </p>
-                    ) : null}
-                  </fieldset>
+                              {selected ? (
+                                <label
+                                  className="mt-3 block"
+                                  htmlFor={`partner-book-add-on-${addOn.key}`}
+                                >
+                                  <span className="text-xs font-semibold text-slate-700">
+                                    Quantity ({addOn.unitLabel})
+                                  </span>
+                                  <input
+                                    id={`partner-book-add-on-${addOn.key}`}
+                                    type="number"
+                                    min={addOn.minimumQuantity}
+                                    max={addOn.maximumQuantity}
+                                    step="1"
+                                    inputMode="numeric"
+                                    value={quantity}
+                                    onChange={(event) =>
+                                      updateAddOn(
+                                        addOn,
+                                        true,
+                                        Number(event.target.value),
+                                      )
+                                    }
+                                    className={cn(partnerFieldClass, "mt-1")}
+                                  />
+                                </label>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {fieldErrors["selectedAddOns"] ? (
+                        <p
+                          id="partner-book-add-ons-error"
+                          className="mt-3 text-sm font-medium text-rose-700"
+                        >
+                          {fieldErrors["selectedAddOns"]}
+                        </p>
+                      ) : null}
+                    </fieldset>
+                  </details>
                 ) : null}
                 <label className="block" htmlFor="partner-book-description">
                   <span className="text-sm font-semibold text-slate-700">
@@ -1957,568 +2186,627 @@ export function PartnerBookingWizard({
                     </span>
                   ) : null}
                 </label>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label htmlFor="partner-book-item-count">
-                    <span className="text-sm font-semibold text-slate-700">
-                      Approximate item count{" "}
-                      <span className="font-normal text-slate-500">
-                        (optional)
-                      </span>
-                    </span>
-                    <input
-                      id="partner-book-item-count"
-                      type="number"
-                      min="0"
-                      inputMode="numeric"
-                      value={form.itemCount}
-                      onChange={(event) =>
-                        update("itemCount", event.target.value)
-                      }
-                      className={partnerFieldClass}
-                    />
-                  </label>
-                  <label htmlFor="partner-book-volume">
-                    <span className="text-sm font-semibold text-slate-700">
-                      Estimated cubic yards{" "}
-                      <span className="font-normal text-slate-500">
-                        (optional)
-                      </span>
-                    </span>
-                    <input
-                      id="partner-book-volume"
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      inputMode="decimal"
-                      value={form.volume}
-                      onChange={(event) => update("volume", event.target.value)}
-                      className={partnerFieldClass}
-                    />
-                  </label>
-                </div>
-                <fieldset className="rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
-                  <legend className="px-1 text-sm font-semibold text-slate-900">
-                    Scope that needs Stonegate review
-                  </legend>
-                  <p className="mt-1 text-sm leading-6 text-slate-700">
-                    Check anything that may need special planning. This does not
-                    reject the request—it sends the saved scope to Stonegate for
-                    confirmation before a time is promised.
-                  </p>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white p-3">
-                      <input
-                        type="checkbox"
-                        checked={form.restrictedItems}
-                        onChange={(event) =>
-                          update("restrictedItems", event.target.checked)
-                        }
-                        className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                      />
-                      <span>
-                        <span className="block text-sm font-semibold text-slate-950">
-                          Potentially restricted or special-handling material
+                <details
+                  className="rounded-xl border border-slate-200 p-4"
+                  open={Object.keys(fieldErrors).some((key) =>
+                    key.startsWith("scope"),
+                  )}
+                >
+                  <summary className="min-h-11 cursor-pointer font-semibold text-slate-800">
+                    Special handling, heavy items, timing, or extra stops
+                  </summary>
+                  <div className="mt-4 space-y-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <label htmlFor="partner-book-item-count">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Approximate item count{" "}
+                          <span className="font-normal text-slate-500">
+                            (optional)
+                          </span>
                         </span>
-                        <span className="mt-1 block text-xs leading-5 text-slate-600">
-                          Examples include chemicals, paint, fuel, batteries,
-                          pressurized containers, or unknown material.
+                        <input
+                          id="partner-book-item-count"
+                          type="number"
+                          min="0"
+                          inputMode="numeric"
+                          value={form.itemCount}
+                          onChange={(event) =>
+                            update("itemCount", event.target.value)
+                          }
+                          className={partnerFieldClass}
+                        />
+                      </label>
+                      <label htmlFor="partner-book-volume">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Estimated cubic yards{" "}
+                          <span className="font-normal text-slate-500">
+                            (optional)
+                          </span>
                         </span>
-                      </span>
-                    </label>
-                    <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white p-3">
-                      <input
-                        type="checkbox"
-                        checked={form.nonStandard}
-                        onChange={(event) =>
-                          update("nonStandard", event.target.checked)
-                        }
-                        className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                      />
-                      <span>
-                        <span className="block text-sm font-semibold text-slate-950">
-                          Oversized, unusually heavy, or non-standard work
-                        </span>
-                        <span className="mt-1 block text-xs leading-5 text-slate-600">
-                          Select this when access, equipment, lifting,
-                          demolition, or scope is outside a typical pickup.
-                        </span>
-                      </span>
-                    </label>
-                  </div>
-                  <div className="mt-5 grid gap-5 lg:grid-cols-2">
-                    <fieldset>
-                      <legend className="text-sm font-semibold text-slate-900">
-                        Material disclosures
+                        <input
+                          id="partner-book-volume"
+                          type="number"
+                          min="0"
+                          step="0.5"
+                          inputMode="decimal"
+                          value={form.volume}
+                          onChange={(event) =>
+                            update("volume", event.target.value)
+                          }
+                          className={partnerFieldClass}
+                        />
+                      </label>
+                    </div>
+                    <fieldset className="rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
+                      <legend className="px-1 text-sm font-semibold text-slate-900">
+                        Scope that needs Stonegate review
                       </legend>
-                      <p className="mt-1 text-xs leading-5 text-slate-600">
-                        Select every category that may be present. Unknown
-                        material should be disclosed rather than guessed.
+                      <p className="mt-1 text-sm leading-6 text-slate-700">
+                        Check anything that may need special planning. This does
+                        not reject the request—it sends the saved scope to
+                        Stonegate for confirmation before a time is promised.
                       </p>
-                      <div className="mt-2 grid gap-2">
-                        {PARTNER_HAZARD_OPTIONS.map((option) => (
-                          <label
-                            key={option.key}
-                            className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-amber-200 bg-white px-3 py-2"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={form.hazardCategories.includes(
-                                option.key,
-                              )}
-                              onChange={(event) =>
-                                update(
-                                  "hazardCategories",
-                                  event.target.checked
-                                    ? [...form.hazardCategories, option.key]
-                                    : form.hazardCategories.filter(
-                                        (key) => key !== option.key,
-                                      ),
-                                )
-                              }
-                              className="h-5 w-5 rounded border-slate-300 text-primary-700"
-                            />
-                            <span className="text-sm text-slate-800">
-                              {option.label}
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                        <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white p-3">
+                          <input
+                            type="checkbox"
+                            checked={form.restrictedItems}
+                            onChange={(event) =>
+                              update("restrictedItems", event.target.checked)
+                            }
+                            className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
+                          />
+                          <span>
+                            <span className="block text-sm font-semibold text-slate-950">
+                              Potentially restricted or special-handling
+                              material
                             </span>
-                          </label>
-                        ))}
-                      </div>
-                    </fieldset>
-                    <fieldset>
-                      <legend className="text-sm font-semibold text-slate-900">
-                        Access or equipment needs
-                      </legend>
-                      <p className="mt-1 text-xs leading-5 text-slate-600">
-                        This helps Stonegate assign the correct crew, vehicle,
-                        and equipment before confirming the request.
-                      </p>
-                      <div className="mt-2 grid gap-2">
-                        {PARTNER_EQUIPMENT_OPTIONS.map((option) => (
-                          <label
-                            key={option.key}
-                            className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-amber-200 bg-white px-3 py-2"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={form.equipmentNeeds.includes(option.key)}
-                              onChange={(event) =>
-                                update(
-                                  "equipmentNeeds",
-                                  event.target.checked
-                                    ? [...form.equipmentNeeds, option.key]
-                                    : form.equipmentNeeds.filter(
-                                        (key) => key !== option.key,
-                                      ),
-                                )
-                              }
-                              className="h-5 w-5 rounded border-slate-300 text-primary-700"
-                            />
-                            <span className="text-sm text-slate-800">
-                              {option.label}
+                            <span className="mt-1 block text-xs leading-5 text-slate-600">
+                              Examples include chemicals, paint, fuel,
+                              batteries, pressurized containers, or unknown
+                              material.
                             </span>
-                          </label>
-                        ))}
+                          </span>
+                        </label>
+                        <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white p-3">
+                          <input
+                            type="checkbox"
+                            checked={form.nonStandard}
+                            onChange={(event) =>
+                              update("nonStandard", event.target.checked)
+                            }
+                            className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
+                          />
+                          <span>
+                            <span className="block text-sm font-semibold text-slate-950">
+                              Oversized, unusually heavy, or non-standard work
+                            </span>
+                            <span className="mt-1 block text-xs leading-5 text-slate-600">
+                              Select this when access, equipment, lifting,
+                              demolition, or scope is outside a typical pickup.
+                            </span>
+                          </span>
+                        </label>
                       </div>
+                      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+                        <fieldset>
+                          <legend className="text-sm font-semibold text-slate-900">
+                            Material disclosures
+                          </legend>
+                          <p className="mt-1 text-xs leading-5 text-slate-600">
+                            Select every category that may be present. Unknown
+                            material should be disclosed rather than guessed.
+                          </p>
+                          <div className="mt-2 grid gap-2">
+                            {PARTNER_HAZARD_OPTIONS.map((option) => (
+                              <label
+                                key={option.key}
+                                className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-amber-200 bg-white px-3 py-2"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={form.hazardCategories.includes(
+                                    option.key,
+                                  )}
+                                  onChange={(event) =>
+                                    update(
+                                      "hazardCategories",
+                                      event.target.checked
+                                        ? [...form.hazardCategories, option.key]
+                                        : form.hazardCategories.filter(
+                                            (key) => key !== option.key,
+                                          ),
+                                    )
+                                  }
+                                  className="h-5 w-5 rounded border-slate-300 text-primary-700"
+                                />
+                                <span className="text-sm text-slate-800">
+                                  {option.label}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        </fieldset>
+                        <fieldset>
+                          <legend className="text-sm font-semibold text-slate-900">
+                            Access or equipment needs
+                          </legend>
+                          <p className="mt-1 text-xs leading-5 text-slate-600">
+                            This helps Stonegate assign the correct crew,
+                            vehicle, and equipment before confirming the
+                            request.
+                          </p>
+                          <div className="mt-2 grid gap-2">
+                            {PARTNER_EQUIPMENT_OPTIONS.map((option) => (
+                              <label
+                                key={option.key}
+                                className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-amber-200 bg-white px-3 py-2"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={form.equipmentNeeds.includes(
+                                    option.key,
+                                  )}
+                                  onChange={(event) =>
+                                    update(
+                                      "equipmentNeeds",
+                                      event.target.checked
+                                        ? [...form.equipmentNeeds, option.key]
+                                        : form.equipmentNeeds.filter(
+                                            (key) => key !== option.key,
+                                          ),
+                                    )
+                                  }
+                                  className="h-5 w-5 rounded border-slate-300 text-primary-700"
+                                />
+                                <span className="text-sm text-slate-800">
+                                  {option.label}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        </fieldset>
+                      </div>
+                      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                        <label htmlFor="partner-book-required-date">
+                          <span className="text-sm font-semibold text-slate-800">
+                            Must be completed by date{" "}
+                            <span className="font-normal text-slate-600">
+                              (optional)
+                            </span>
+                          </span>
+                          <input
+                            id="partner-book-required-date"
+                            type="date"
+                            value={form.requiredCompletionDate}
+                            onChange={(event) =>
+                              update(
+                                "requiredCompletionDate",
+                                event.target.value,
+                              )
+                            }
+                            className={partnerFieldClass}
+                          />
+                        </label>
+                        <label htmlFor="partner-book-required-time">
+                          <span className="text-sm font-semibold text-slate-800">
+                            Required completion time{" "}
+                            <span className="font-normal text-slate-600">
+                              (optional)
+                            </span>
+                          </span>
+                          <input
+                            id="partner-book-required-time"
+                            type="time"
+                            value={form.requiredCompletionTime}
+                            onChange={(event) =>
+                              update(
+                                "requiredCompletionTime",
+                                event.target.value,
+                              )
+                            }
+                            disabled={!form.requiredCompletionDate}
+                            className={partnerFieldClass}
+                          />
+                        </label>
+                      </div>
+                      <label className="mt-4 flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white p-3">
+                        <input
+                          type="checkbox"
+                          checked={form.multiStop}
+                          onChange={(event) =>
+                            update("multiStop", event.target.checked)
+                          }
+                          className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
+                        />
+                        <span>
+                          <span className="block text-sm font-semibold text-slate-950">
+                            This request has more than one pickup or service
+                            stop
+                          </span>
+                          <span className="mt-1 block text-xs leading-5 text-slate-600">
+                            Multi-stop work is reviewed before a time is
+                            promised.
+                          </span>
+                        </span>
+                      </label>
+                      {form.multiStop ? (
+                        <label
+                          className="mt-3 block"
+                          htmlFor="partner-book-multi-stop-details"
+                        >
+                          <span className="text-sm font-semibold text-slate-800">
+                            Stops and sequence
+                          </span>
+                          <textarea
+                            id="partner-book-multi-stop-details"
+                            value={form.multiStopDetails}
+                            onChange={(event) =>
+                              update("multiStopDetails", event.target.value)
+                            }
+                            rows={3}
+                            maxLength={1_000}
+                            className={partnerFieldClass}
+                            placeholder="List each stop, address or site name, and the required order."
+                          />
+                        </label>
+                      ) : null}
                     </fieldset>
                   </div>
-                  <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                    <label htmlFor="partner-book-required-date">
-                      <span className="text-sm font-semibold text-slate-800">
-                        Must be completed by date{" "}
-                        <span className="font-normal text-slate-600">
+                </details>
+                <details
+                  className="rounded-xl border border-slate-200 p-4"
+                  open={Boolean(
+                    fieldErrors["billingContact"] || fieldErrors["commercial"],
+                  )}
+                >
+                  <summary className="min-h-11 cursor-pointer font-semibold text-slate-800">
+                    Work order, project, and billing details (optional)
+                  </summary>
+                  <div className="mt-4 space-y-4">
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <label htmlFor="partner-book-po">
+                        <span className="text-sm font-semibold text-slate-700">
+                          PO / work order{" "}
+                          <span className="font-normal text-slate-500">
+                            (optional)
+                          </span>
+                        </span>
+                        <input
+                          id="partner-book-po"
+                          value={form.poNumber}
+                          onChange={(event) =>
+                            update("poNumber", event.target.value)
+                          }
+                          maxLength={500}
+                          className={partnerFieldClass}
+                        />
+                      </label>
+                      <label htmlFor="partner-book-cost-center">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Cost center{" "}
+                          <span className="font-normal text-slate-500">
+                            (optional)
+                          </span>
+                        </span>
+                        <input
+                          id="partner-book-cost-center"
+                          value={form.costCenter}
+                          onChange={(event) =>
+                            update("costCenter", event.target.value)
+                          }
+                          maxLength={500}
+                          className={partnerFieldClass}
+                        />
+                      </label>
+                      <label htmlFor="partner-book-project">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Project / listing{" "}
+                          <span className="font-normal text-slate-500">
+                            (optional)
+                          </span>
+                        </span>
+                        <input
+                          id="partner-book-project"
+                          value={form.projectReference}
+                          onChange={(event) =>
+                            update("projectReference", event.target.value)
+                          }
+                          maxLength={500}
+                          className={partnerFieldClass}
+                        />
+                      </label>
+                    </div>
+                    <fieldset className="rounded-2xl border border-slate-200 p-4">
+                      <legend className="px-1 text-sm font-semibold text-slate-900">
+                        Billing contact{" "}
+                        <span className="font-normal text-slate-500">
                           (optional)
                         </span>
-                      </span>
-                      <input
-                        id="partner-book-required-date"
-                        type="date"
-                        value={form.requiredCompletionDate}
-                        onChange={(event) =>
-                          update("requiredCompletionDate", event.target.value)
-                        }
-                        className={partnerFieldClass}
-                      />
-                    </label>
-                    <label htmlFor="partner-book-required-time">
-                      <span className="text-sm font-semibold text-slate-800">
-                        Required completion time{" "}
-                        <span className="font-normal text-slate-600">
-                          (optional)
-                        </span>
-                      </span>
-                      <input
-                        id="partner-book-required-time"
-                        type="time"
-                        value={form.requiredCompletionTime}
-                        onChange={(event) =>
-                          update("requiredCompletionTime", event.target.value)
-                        }
-                        disabled={!form.requiredCompletionDate}
-                        className={partnerFieldClass}
-                      />
-                    </label>
+                      </legend>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        Add both fields when invoices or receipts for this job
+                        should go to a specific person.
+                      </p>
+                      <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                        <label htmlFor="partner-book-billing-name">
+                          <span className="text-sm font-semibold text-slate-700">
+                            Name
+                          </span>
+                          <input
+                            id="partner-book-billing-name"
+                            value={form.billingContactName}
+                            onChange={(event) =>
+                              update("billingContactName", event.target.value)
+                            }
+                            maxLength={200}
+                            autoComplete="name"
+                            className={partnerFieldClass}
+                            aria-invalid={Boolean(
+                              fieldErrors["billingContact"],
+                            )}
+                            aria-describedby={
+                              fieldErrors["billingContact"]
+                                ? "partner-book-billing-error"
+                                : undefined
+                            }
+                          />
+                        </label>
+                        <label htmlFor="partner-book-billing-email">
+                          <span className="text-sm font-semibold text-slate-700">
+                            Email
+                          </span>
+                          <input
+                            id="partner-book-billing-email"
+                            type="email"
+                            inputMode="email"
+                            autoComplete="email"
+                            value={form.billingContactEmail}
+                            onChange={(event) =>
+                              update("billingContactEmail", event.target.value)
+                            }
+                            maxLength={320}
+                            className={partnerFieldClass}
+                            aria-invalid={Boolean(
+                              fieldErrors["billingContact"],
+                            )}
+                            aria-describedby={
+                              fieldErrors["billingContact"]
+                                ? "partner-book-billing-error"
+                                : undefined
+                            }
+                          />
+                        </label>
+                      </div>
+                      {fieldErrors["billingContact"] ? (
+                        <p
+                          id="partner-book-billing-error"
+                          className="mt-3 text-sm font-medium text-rose-700"
+                        >
+                          {fieldErrors["billingContact"]}
+                        </p>
+                      ) : null}
+                    </fieldset>
                   </div>
-                  <label className="mt-4 flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white p-3">
-                    <input
-                      type="checkbox"
-                      checked={form.multiStop}
-                      onChange={(event) =>
-                        update("multiStop", event.target.checked)
-                      }
-                      className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                    />
-                    <span>
-                      <span className="block text-sm font-semibold text-slate-950">
-                        This request has more than one pickup or service stop
-                      </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-600">
-                        Multi-stop work is reviewed before a time is promised.
-                      </span>
-                    </span>
-                  </label>
-                  {form.multiStop ? (
-                    <label
-                      className="mt-3 block"
-                      htmlFor="partner-book-multi-stop-details"
-                    >
-                      <span className="text-sm font-semibold text-slate-800">
-                        Stops and sequence
-                      </span>
-                      <textarea
-                        id="partner-book-multi-stop-details"
-                        value={form.multiStopDetails}
-                        onChange={(event) =>
-                          update("multiStopDetails", event.target.value)
-                        }
-                        rows={3}
-                        maxLength={1_000}
-                        className={partnerFieldClass}
-                        placeholder="List each stop, address or site name, and the required order."
-                      />
-                    </label>
-                  ) : null}
-                </fieldset>
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <label htmlFor="partner-book-po">
-                    <span className="text-sm font-semibold text-slate-700">
-                      PO / work order{" "}
-                      <span className="font-normal text-slate-500">
-                        (optional)
-                      </span>
-                    </span>
-                    <input
-                      id="partner-book-po"
-                      value={form.poNumber}
-                      onChange={(event) =>
-                        update("poNumber", event.target.value)
-                      }
-                      maxLength={500}
-                      className={partnerFieldClass}
-                    />
-                  </label>
-                  <label htmlFor="partner-book-cost-center">
-                    <span className="text-sm font-semibold text-slate-700">
-                      Cost center{" "}
-                      <span className="font-normal text-slate-500">
-                        (optional)
-                      </span>
-                    </span>
-                    <input
-                      id="partner-book-cost-center"
-                      value={form.costCenter}
-                      onChange={(event) =>
-                        update("costCenter", event.target.value)
-                      }
-                      maxLength={500}
-                      className={partnerFieldClass}
-                    />
-                  </label>
-                  <label htmlFor="partner-book-project">
-                    <span className="text-sm font-semibold text-slate-700">
-                      Project / listing{" "}
-                      <span className="font-normal text-slate-500">
-                        (optional)
-                      </span>
-                    </span>
-                    <input
-                      id="partner-book-project"
-                      value={form.projectReference}
-                      onChange={(event) =>
-                        update("projectReference", event.target.value)
-                      }
-                      maxLength={500}
-                      className={partnerFieldClass}
-                    />
-                  </label>
-                </div>
-                <fieldset className="rounded-2xl border border-slate-200 p-4">
-                  <legend className="px-1 text-sm font-semibold text-slate-900">
-                    Billing contact{" "}
-                    <span className="font-normal text-slate-500">
-                      (optional)
-                    </span>
-                  </legend>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                    Add both fields when invoices or receipts for this job
-                    should go to a specific person.
-                  </p>
-                  <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                    <label htmlFor="partner-book-billing-name">
-                      <span className="text-sm font-semibold text-slate-700">
-                        Name
-                      </span>
-                      <input
-                        id="partner-book-billing-name"
-                        value={form.billingContactName}
-                        onChange={(event) =>
-                          update("billingContactName", event.target.value)
-                        }
-                        maxLength={200}
-                        autoComplete="name"
-                        className={partnerFieldClass}
-                        aria-invalid={Boolean(fieldErrors["billingContact"])}
-                        aria-describedby={
-                          fieldErrors["billingContact"]
-                            ? "partner-book-billing-error"
-                            : undefined
-                        }
-                      />
-                    </label>
-                    <label htmlFor="partner-book-billing-email">
-                      <span className="text-sm font-semibold text-slate-700">
-                        Email
-                      </span>
-                      <input
-                        id="partner-book-billing-email"
-                        type="email"
-                        inputMode="email"
-                        autoComplete="email"
-                        value={form.billingContactEmail}
-                        onChange={(event) =>
-                          update("billingContactEmail", event.target.value)
-                        }
-                        maxLength={320}
-                        className={partnerFieldClass}
-                        aria-invalid={Boolean(fieldErrors["billingContact"])}
-                        aria-describedby={
-                          fieldErrors["billingContact"]
-                            ? "partner-book-billing-error"
-                            : undefined
-                        }
-                      />
-                    </label>
-                  </div>
-                  {fieldErrors["billingContact"] ? (
-                    <p
-                      id="partner-book-billing-error"
-                      className="mt-3 text-sm font-medium text-rose-700"
-                    >
-                      {fieldErrors["billingContact"]}
-                    </p>
-                  ) : null}
-                </fieldset>
+                </details>
               </div>
             ) : null}
 
-            {step === 2 ? (
-              <div className="space-y-5">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label
-                    className="sm:col-span-2"
-                    htmlFor="partner-book-contact-name"
-                  >
-                    <span className="text-sm font-semibold text-slate-700">
-                      On-site contact name
-                    </span>
-                    <input
-                      id="partner-book-contact-name"
-                      autoComplete="name"
-                      value={form.contactName}
-                      onChange={(event) =>
-                        update("contactName", event.target.value)
-                      }
-                      className={partnerFieldClass}
-                      required
-                      aria-invalid={Boolean(fieldErrors["onSiteContact"])}
-                      aria-describedby={
-                        fieldErrors["onSiteContact"]
-                          ? "partner-book-contact-name-error"
-                          : undefined
-                      }
-                    />
-                  </label>
-                  <label htmlFor="partner-book-contact-phone">
-                    <span className="text-sm font-semibold text-slate-700">
-                      Mobile phone
-                    </span>
-                    <input
-                      id="partner-book-contact-phone"
-                      type="tel"
-                      autoComplete="tel"
-                      inputMode="tel"
-                      value={form.contactPhone}
-                      onChange={(event) =>
-                        update("contactPhone", event.target.value)
-                      }
-                      className={partnerFieldClass}
-                      aria-invalid={Boolean(fieldErrors["contactMethod"])}
-                      aria-describedby={
-                        fieldErrors["contactMethod"]
-                          ? "partner-book-contact-method-error"
-                          : undefined
-                      }
-                    />
-                  </label>
-                  <label htmlFor="partner-book-contact-email">
-                    <span className="text-sm font-semibold text-slate-700">
-                      Email
-                    </span>
-                    <input
-                      id="partner-book-contact-email"
-                      type="email"
-                      autoComplete="email"
-                      inputMode="email"
-                      value={form.contactEmail}
-                      onChange={(event) =>
-                        update("contactEmail", event.target.value)
-                      }
-                      className={partnerFieldClass}
-                      aria-invalid={Boolean(fieldErrors["contactMethod"])}
-                      aria-describedby={
-                        fieldErrors["contactMethod"]
-                          ? "partner-book-contact-method-error"
-                          : undefined
-                      }
-                    />
-                  </label>
-                </div>
-                {fieldErrors["onSiteContact"] ? (
-                  <p
-                    id="partner-book-contact-name-error"
-                    className="text-sm font-medium text-rose-700"
-                  >
-                    {fieldErrors["onSiteContact"]}
-                  </p>
-                ) : null}
-                {fieldErrors["contactMethod"] ? (
-                  <p
-                    id="partner-book-contact-method-error"
-                    className="text-sm font-medium text-rose-700"
-                  >
-                    {fieldErrors["contactMethod"]}
-                  </p>
-                ) : null}
-                <fieldset className="rounded-2xl border border-slate-200 p-4">
-                  <legend className="px-1 text-sm font-semibold text-slate-900">
-                    Alternate on-site contact{" "}
-                    <span className="font-normal text-slate-500">
-                      (optional)
-                    </span>
-                  </legend>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                    Add a backup person when the primary contact may not be
-                    available at arrival.
-                  </p>
-                  <div className="mt-3 grid gap-4 sm:grid-cols-3">
-                    <label htmlFor="partner-book-alternate-name">
+            {step === 1 ? (
+              <details
+                open={
+                  !form.contactName ||
+                  (!form.contactPhone && !form.contactEmail) ||
+                  Boolean(
+                    fieldErrors["onSiteContact"] ||
+                      fieldErrors["contactMethod"],
+                  )
+                }
+                className="mt-5 rounded-xl border border-slate-200 p-4"
+              >
+                <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-slate-900">
+                  Contact and access details
+                  {form.contactName ? ` · ${form.contactName}` : ""}
+                </summary>
+                <div className="mt-4 space-y-5">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label
+                      className="sm:col-span-2"
+                      htmlFor="partner-book-contact-name"
+                    >
                       <span className="text-sm font-semibold text-slate-700">
-                        Name
+                        On-site contact name
                       </span>
                       <input
-                        id="partner-book-alternate-name"
+                        id="partner-book-contact-name"
                         autoComplete="name"
-                        value={form.alternateContactName}
+                        value={form.contactName}
                         onChange={(event) =>
-                          update("alternateContactName", event.target.value)
+                          update("contactName", event.target.value)
                         }
-                        maxLength={200}
                         className={partnerFieldClass}
+                        required
+                        aria-invalid={Boolean(fieldErrors["onSiteContact"])}
+                        aria-describedby={
+                          fieldErrors["onSiteContact"]
+                            ? "partner-book-contact-name-error"
+                            : undefined
+                        }
                       />
                     </label>
-                    <label htmlFor="partner-book-alternate-phone">
+                    <label htmlFor="partner-book-contact-phone">
                       <span className="text-sm font-semibold text-slate-700">
-                        Phone
+                        Mobile phone
                       </span>
                       <input
-                        id="partner-book-alternate-phone"
+                        id="partner-book-contact-phone"
                         type="tel"
                         autoComplete="tel"
                         inputMode="tel"
-                        value={form.alternateContactPhone}
+                        value={form.contactPhone}
                         onChange={(event) =>
-                          update("alternateContactPhone", event.target.value)
+                          update("contactPhone", event.target.value)
                         }
-                        maxLength={50}
                         className={partnerFieldClass}
+                        aria-invalid={Boolean(fieldErrors["contactMethod"])}
+                        aria-describedby={
+                          fieldErrors["contactMethod"]
+                            ? "partner-book-contact-method-error"
+                            : undefined
+                        }
                       />
                     </label>
-                    <label htmlFor="partner-book-alternate-email">
+                    <label htmlFor="partner-book-contact-email">
                       <span className="text-sm font-semibold text-slate-700">
                         Email
                       </span>
                       <input
-                        id="partner-book-alternate-email"
+                        id="partner-book-contact-email"
                         type="email"
                         autoComplete="email"
                         inputMode="email"
-                        value={form.alternateContactEmail}
+                        value={form.contactEmail}
                         onChange={(event) =>
-                          update("alternateContactEmail", event.target.value)
+                          update("contactEmail", event.target.value)
                         }
-                        maxLength={320}
                         className={partnerFieldClass}
+                        aria-invalid={Boolean(fieldErrors["contactMethod"])}
+                        aria-describedby={
+                          fieldErrors["contactMethod"]
+                            ? "partner-book-contact-method-error"
+                            : undefined
+                        }
                       />
                     </label>
                   </div>
-                </fieldset>
-                <label className="block" htmlFor="partner-book-access">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Access, parking, gate, or loading details{" "}
-                    <span className="font-normal text-slate-500">
-                      (optional)
+                  {fieldErrors["onSiteContact"] ? (
+                    <p
+                      id="partner-book-contact-name-error"
+                      className="text-sm font-medium text-rose-700"
+                    >
+                      {fieldErrors["onSiteContact"]}
+                    </p>
+                  ) : null}
+                  {fieldErrors["contactMethod"] ? (
+                    <p
+                      id="partner-book-contact-method-error"
+                      className="text-sm font-medium text-rose-700"
+                    >
+                      {fieldErrors["contactMethod"]}
+                    </p>
+                  ) : null}
+                  <fieldset className="rounded-2xl border border-slate-200 p-4">
+                    <legend className="px-1 text-sm font-semibold text-slate-900">
+                      Alternate on-site contact{" "}
+                      <span className="font-normal text-slate-500">
+                        (optional)
+                      </span>
+                    </legend>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      Add a backup person when the primary contact may not be
+                      available at arrival.
+                    </p>
+                    <div className="mt-3 grid gap-4 sm:grid-cols-3">
+                      <label htmlFor="partner-book-alternate-name">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Name
+                        </span>
+                        <input
+                          id="partner-book-alternate-name"
+                          autoComplete="name"
+                          value={form.alternateContactName}
+                          onChange={(event) =>
+                            update("alternateContactName", event.target.value)
+                          }
+                          maxLength={200}
+                          className={partnerFieldClass}
+                        />
+                      </label>
+                      <label htmlFor="partner-book-alternate-phone">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Phone
+                        </span>
+                        <input
+                          id="partner-book-alternate-phone"
+                          type="tel"
+                          autoComplete="tel"
+                          inputMode="tel"
+                          value={form.alternateContactPhone}
+                          onChange={(event) =>
+                            update("alternateContactPhone", event.target.value)
+                          }
+                          maxLength={50}
+                          className={partnerFieldClass}
+                        />
+                      </label>
+                      <label htmlFor="partner-book-alternate-email">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Email
+                        </span>
+                        <input
+                          id="partner-book-alternate-email"
+                          type="email"
+                          autoComplete="email"
+                          inputMode="email"
+                          value={form.alternateContactEmail}
+                          onChange={(event) =>
+                            update("alternateContactEmail", event.target.value)
+                          }
+                          maxLength={320}
+                          className={partnerFieldClass}
+                        />
+                      </label>
+                    </div>
+                  </fieldset>
+                  <label className="block" htmlFor="partner-book-access">
+                    <span className="text-sm font-semibold text-slate-700">
+                      Access, parking, gate, or loading details{" "}
+                      <span className="font-normal text-slate-500">
+                        (optional)
+                      </span>
                     </span>
-                  </span>
-                  <textarea
-                    id="partner-book-access"
-                    value={form.accessDetails}
-                    onChange={(event) =>
-                      update("accessDetails", event.target.value)
-                    }
-                    rows={4}
-                    maxLength={4_000}
-                    className={partnerFieldClass}
-                    placeholder="Gate code handoff, lockbox process, loading dock, elevator, parking, tenant notice, pets, or access hours."
-                  />
-                </label>
-                <label
-                  className="block"
-                  htmlFor="partner-book-crew-instructions"
-                >
-                  <span className="text-sm font-semibold text-slate-700">
-                    Crew instructions{" "}
-                    <span className="font-normal text-slate-500">
-                      (optional)
+                    <textarea
+                      id="partner-book-access"
+                      value={form.accessDetails}
+                      onChange={(event) =>
+                        update("accessDetails", event.target.value)
+                      }
+                      rows={4}
+                      maxLength={4_000}
+                      className={partnerFieldClass}
+                      placeholder="Gate code handoff, lockbox process, loading dock, elevator, parking, tenant notice, pets, or access hours."
+                    />
+                  </label>
+                  <label
+                    className="block"
+                    htmlFor="partner-book-crew-instructions"
+                  >
+                    <span className="text-sm font-semibold text-slate-700">
+                      Crew instructions{" "}
+                      <span className="font-normal text-slate-500">
+                        (optional)
+                      </span>
                     </span>
-                  </span>
-                  <textarea
-                    id="partner-book-crew-instructions"
-                    value={form.crewInstructions}
-                    onChange={(event) =>
-                      update("crewInstructions", event.target.value)
-                    }
-                    rows={3}
-                    maxLength={4_000}
-                    className={partnerFieldClass}
-                    placeholder="Anything the crew should do, avoid, verify, or document on site."
-                  />
-                </label>
-              </div>
+                    <textarea
+                      id="partner-book-crew-instructions"
+                      value={form.crewInstructions}
+                      onChange={(event) =>
+                        update("crewInstructions", event.target.value)
+                      }
+                      rows={3}
+                      maxLength={4_000}
+                      className={partnerFieldClass}
+                      placeholder="Anything the crew should do, avoid, verify, or document on site."
+                    />
+                  </label>
+                </div>
+              </details>
             ) : null}
 
-            {step === 3 ? (
-              <fieldset>
+            {step === 1 ? (
+              <fieldset className="mt-5">
                 <legend className="text-base font-semibold text-slate-950">
-                  What photos or proof do you need?
+                  Photos and completion record
                 </legend>
                 <p className="mt-1 text-sm leading-6 text-slate-600">
                   Choose the completion record once and it stays with the job.
@@ -2589,80 +2877,88 @@ export function PartnerBookingWizard({
                     ) : null}
                   </aside>
                 ) : null}
-                <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                  {[
-                    {
-                      key: "proofBefore" as const,
-                      countKey: "proofBeforeCount" as const,
-                      title: "Before photos",
-                      detail: "Document the starting condition.",
-                    },
-                    {
-                      key: "proofAfter" as const,
-                      countKey: "proofAfterCount" as const,
-                      title: "After photos",
-                      detail: "Document the completed work.",
-                    },
-                    {
-                      key: "proofPackage" as const,
-                      countKey: null,
-                      title: "Formal proof package",
-                      detail: "Request a shareable completion record.",
-                    },
-                  ].map((item) => (
-                    <div
-                      key={item.key}
-                      className={cn(
-                        "min-h-32 rounded-2xl border p-4",
-                        form[item.key]
-                          ? "border-primary-500 bg-primary-50"
-                          : "border-slate-200",
-                      )}
-                    >
-                      <label className="flex cursor-pointer items-start gap-3">
-                        <input
-                          type="checkbox"
-                          checked={form[item.key]}
-                          onChange={(event) =>
-                            update(item.key, event.target.checked)
-                          }
-                          className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                        />
-                        <span>
-                          <span className="block font-semibold text-slate-950">
-                            {item.title}
-                          </span>
-                          <span className="mt-1 block text-sm leading-5 text-slate-600">
-                            {item.detail}
-                          </span>
-                        </span>
-                      </label>
-                      {item.countKey && form[item.key] ? (
-                        <label className="mt-3 block text-xs font-semibold text-slate-700">
-                          Minimum images
+                <details className="mt-4 rounded-xl border border-slate-200 p-4">
+                  <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-slate-800">
+                    Before/after photo preferences
+                  </summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    {[
+                      {
+                        key: "proofBefore" as const,
+                        countKey: "proofBeforeCount" as const,
+                        title: "Before photos",
+                        detail: "Document the starting condition.",
+                      },
+                      {
+                        key: "proofAfter" as const,
+                        countKey: "proofAfterCount" as const,
+                        title: "After photos",
+                        detail: "Document the completed work.",
+                      },
+                      {
+                        key: "proofPackage" as const,
+                        countKey: null,
+                        title: "Formal proof package",
+                        detail: "Request a shareable completion record.",
+                      },
+                    ].map((item) => (
+                      <div
+                        key={item.key}
+                        className={cn(
+                          "min-h-32 rounded-2xl border p-4",
+                          form[item.key]
+                            ? "border-primary-500 bg-primary-50"
+                            : "border-slate-200",
+                        )}
+                      >
+                        <label className="flex cursor-pointer items-start gap-3">
                           <input
-                            type="number"
-                            min={1}
-                            max={40}
-                            step={1}
-                            inputMode="numeric"
-                            value={form[item.countKey]}
+                            type="checkbox"
+                            checked={form[item.key]}
                             onChange={(event) =>
-                              update(
-                                item.countKey,
-                                Math.min(
-                                  40,
-                                  Math.max(1, Number(event.target.value) || 1),
-                                ),
-                              )
+                              update(item.key, event.target.checked)
                             }
-                            className={cn(partnerFieldClass, "mt-1")}
+                            className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
                           />
+                          <span>
+                            <span className="block font-semibold text-slate-950">
+                              {item.title}
+                            </span>
+                            <span className="mt-1 block text-sm leading-5 text-slate-600">
+                              {item.detail}
+                            </span>
+                          </span>
                         </label>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
+                        {item.countKey && form[item.key] ? (
+                          <label className="mt-3 block text-xs font-semibold text-slate-700">
+                            Minimum images
+                            <input
+                              type="number"
+                              min={1}
+                              max={20}
+                              step={1}
+                              inputMode="numeric"
+                              value={form[item.countKey]}
+                              onChange={(event) =>
+                                update(
+                                  item.countKey,
+                                  Math.min(
+                                    20,
+                                    Math.max(
+                                      1,
+                                      Number(event.target.value) || 1,
+                                    ),
+                                  ),
+                                )
+                              }
+                              className={cn(partnerFieldClass, "mt-1")}
+                            />
+                          </label>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </details>
                 {draft ? (
                   <div className="mt-5">
                     <PartnerDraftPhotoUpload
@@ -2681,7 +2977,7 @@ export function PartnerBookingWizard({
               </fieldset>
             ) : null}
 
-            {step === 4 ? (
+            {step === 2 ? (
               <div>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -2966,42 +3262,64 @@ export function PartnerBookingWizard({
                         </div>
                       </section>
                     ) : null}
-                    {windowsByDate.map(([date, windows]) => (
-                      <fieldset
-                        key={date}
-                        className="rounded-2xl border border-slate-200 p-4"
+                    <label
+                      className="block text-sm font-semibold text-slate-700"
+                      htmlFor="partner-book-available-date"
+                    >
+                      Service date
+                      <select
+                        id="partner-book-available-date"
+                        className={partnerFieldClass}
+                        value={visibleDate}
+                        onChange={(event) =>
+                          setSelectedDate(event.target.value)
+                        }
                       >
-                        <legend className="px-1 text-sm font-semibold text-slate-950">
-                          {formatDate(date, selectedTimezone)}
-                        </legend>
-                        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                          {windows.map((window) => {
-                            const selected =
-                              hold?.arrivalWindowStartAt === window.startAt &&
-                              hold.arrivalWindowEndAt === window.endAt;
-                            return (
-                              <button
-                                key={window.id}
-                                type="button"
-                                onClick={() => void chooseWindow(window.id)}
-                                disabled={availabilityLoading}
-                                aria-pressed={selected}
-                                aria-label={`${formatTime(window.startAt, selectedTimezone)} to ${formatTime(window.endAt, selectedTimezone)} arrival window`}
-                                className={cn(
-                                  "min-h-12 rounded-xl border px-3 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
-                                  selected
-                                    ? "border-primary-700 bg-primary-700 text-white"
-                                    : "border-slate-300 bg-white text-slate-700 hover:border-primary-400 hover:bg-primary-50",
-                                )}
-                              >
-                                {formatTime(window.startAt, selectedTimezone)}–
-                                {formatTime(window.endAt, selectedTimezone)}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </fieldset>
-                    ))}
+                        {windowsByDate.map(([date]) => (
+                          <option key={date} value={date}>
+                            {formatDate(date, selectedTimezone)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {windowsByDate
+                      .filter(([date]) => date === visibleDate)
+                      .map(([date, windows]) => (
+                        <fieldset
+                          key={date}
+                          className="rounded-2xl border border-slate-200 p-4"
+                        >
+                          <legend className="px-1 text-sm font-semibold text-slate-950">
+                            {formatDate(date, selectedTimezone)}
+                          </legend>
+                          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                            {windows.map((window) => {
+                              const selected =
+                                hold?.arrivalWindowStartAt === window.startAt &&
+                                hold.arrivalWindowEndAt === window.endAt;
+                              return (
+                                <button
+                                  key={window.id}
+                                  type="button"
+                                  onClick={() => void chooseWindow(window.id)}
+                                  disabled={availabilityLoading}
+                                  aria-pressed={selected}
+                                  aria-label={`${formatTime(window.startAt, selectedTimezone)} to ${formatTime(window.endAt, selectedTimezone)} arrival window`}
+                                  className={cn(
+                                    "min-h-12 rounded-xl border px-3 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
+                                    selected
+                                      ? "border-primary-700 bg-primary-700 text-white"
+                                      : "border-slate-300 bg-white text-slate-700 hover:border-primary-400 hover:bg-primary-50",
+                                  )}
+                                >
+                                  {formatTime(window.startAt, selectedTimezone)}
+                                  –{formatTime(window.endAt, selectedTimezone)}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </fieldset>
+                      ))}
                   </div>
                 ) : null}
                 {hold ? (
@@ -3037,7 +3355,7 @@ export function PartnerBookingWizard({
               </div>
             ) : null}
 
-            {step === 5 ? (
+            {step === 3 ? (
               <div className="space-y-5">
                 <PartnerNotice tone="info">
                   {hold
@@ -3052,9 +3370,8 @@ export function PartnerBookingWizard({
                     {[
                       [0, "Location"],
                       [1, "Service & scope"],
-                      [2, "Contact & access"],
-                      [3, "Photos & proof"],
-                      [4, "Schedule"],
+                      [1, "Contact & photos"],
+                      [2, "Schedule"],
                     ].map(([target, label]) => (
                       <button
                         key={label}
@@ -3391,7 +3708,7 @@ export function PartnerBookingWizard({
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
               Back
             </button>
-            {step < 5 ? (
+            {step < 3 ? (
               <button
                 type="button"
                 onClick={() => void goNext()}
@@ -3401,7 +3718,7 @@ export function PartnerBookingWizard({
                   saveStatus === "creating" ||
                   advancing ||
                   availabilityLoading ||
-                  (step === 4 && !hold && !preferredReviewReady)
+                  (step === 2 && !hold && !preferredReviewReady)
                 }
                 className={cn(partnerPrimaryButtonClass, "w-full sm:w-auto")}
               >
@@ -3416,7 +3733,8 @@ export function PartnerBookingWizard({
                 aria-describedby="partner-book-cancellation-terms"
                 disabled={
                   submitting ||
-                  (hold ? holdSeconds <= 0 : !preferredReviewReady)
+                  (!submissionUncertain &&
+                    (hold ? holdSeconds <= 0 : !preferredReviewReady))
                 }
                 className={cn(partnerPrimaryButtonClass, "w-full sm:w-auto")}
               >

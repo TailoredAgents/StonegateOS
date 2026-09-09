@@ -10,11 +10,8 @@ import {
 import {
   PartnerInvitationManager,
   type PartnerInvitation,
+  type PartnerInvitationScopeOptions,
 } from "@/app/partners/components/PartnerInvitationManager";
-import {
-  PartnerJoinRequestManager,
-  type PartnerAdminJoinRequest,
-} from "@/app/partners/components/PartnerJoinRequestManager";
 import {
   PartnerErrorState,
   PartnerPageHeader,
@@ -33,12 +30,11 @@ type TeamPayload = {
 };
 
 export default async function PartnerTeamSettingsPage() {
-  const [response, invitationResponse, joinResponse] = await Promise.all([
+  const [response, invitationResponse] = await Promise.all([
     callPartnerApi("/api/portal/v2/members?status=all&limit=100").catch(
       () => null,
     ),
     callPartnerApi("/api/portal/v2/invitations?limit=100").catch(() => null),
-    callPartnerApi("/api/portal/v2/join-requests?limit=100").catch(() => null),
   ]);
   const payload = response?.ok
     ? ((await response.json().catch(() => null)) as TeamPayload | null)
@@ -47,16 +43,16 @@ export default async function PartnerTeamSettingsPage() {
     ? ((await invitationResponse.json().catch(() => null)) as {
         ok: true;
         invitations: PartnerInvitation[];
+        scopeOptions: PartnerInvitationScopeOptions;
+        page?: { nextCursor: string | null };
       } | null)
     : null;
-  const joinPayload = joinResponse?.ok
-    ? ((await joinResponse.json().catch(() => null)) as {
-        ok: true;
-        joinRequests: PartnerAdminJoinRequest[];
-      } | null)
-    : null;
-
-  if (!payload?.ok) {
+  if (
+    !payload?.ok ||
+    !Array.isArray(payload.members) ||
+    !Array.isArray(payload.roles) ||
+    !payload.invitation
+  ) {
     const forbidden = response?.status === 403;
     return (
       <PartnerErrorState
@@ -137,17 +133,22 @@ export default async function PartnerTeamSettingsPage() {
       )}
 
       {canManage && payload.invitation.available ? (
-        <PartnerInvitationManager
-          initialInvitations={invitationPayload?.invitations ?? []}
-          roles={payload.roles}
-        />
-      ) : null}
-
-      {canManage ? (
-        <PartnerJoinRequestManager
-          initialRequests={joinPayload?.joinRequests ?? []}
-          roles={payload.roles}
-        />
+        invitationPayload?.ok &&
+        Array.isArray(invitationPayload.invitations) &&
+        invitationPayload.scopeOptions ? (
+          <PartnerInvitationManager
+            initialInvitations={invitationPayload.invitations}
+            roles={payload.roles}
+            initialScopeOptions={invitationPayload.scopeOptions}
+            initialNextCursor={invitationPayload.page?.nextCursor ?? null}
+          />
+        ) : (
+          <PartnerErrorState
+            title="We couldn’t load invitations"
+            description="Your current invitations were not changed. Refresh to see their status or contact Sales for help."
+            retryHref="/partners/settings/team"
+          />
+        )
       ) : null}
 
       <PartnerTeamManager initial={payload} />

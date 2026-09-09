@@ -1,7 +1,8 @@
 export type PartnerInvitationActivationQueued = {
   ok: true;
   activationRequired: true;
-  deliveryStatus: "queued";
+  deliveryStatus: "ready";
+  activationExpiresAt: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -16,13 +17,17 @@ export function parsePartnerInvitationActivationQueued(
     "activationRequired",
     "deliveryStatus",
     "correlationId",
+    "activationExpiresAt",
   ]);
   if (
     !isRecord(value) ||
     !Object.keys(value).every((key) => allowedKeys.has(key)) ||
     value["ok"] !== true ||
     value["activationRequired"] !== true ||
-    value["deliveryStatus"] !== "queued" ||
+    value["deliveryStatus"] !== "ready" ||
+    typeof value["activationExpiresAt"] !== "string" ||
+    !Number.isFinite(Date.parse(value["activationExpiresAt"])) ||
+    Date.parse(value["activationExpiresAt"]) <= Date.now() ||
     !(
       value["correlationId"] === undefined ||
       (typeof value["correlationId"] === "string" &&
@@ -35,6 +40,7 @@ export function parsePartnerInvitationActivationQueued(
   return {
     ok: true,
     activationRequired: true,
-    deliveryStatus: "queued",
+    deliveryStatus: "ready",
+    activationExpiresAt: value["activationExpiresAt"],
   };
 }

@@ -21,6 +21,7 @@ import {
   partnerMembershipLocationScopes,
   partnerRoleTemplates,
   partnerSessions,
+  type DatabaseClient,
 } from "@/db";
 import type {
   PartnerMembershipAccessLevel,
@@ -286,6 +287,13 @@ export function selectPartnerAccountAccess(input: {
   );
   if (selected) return { ok: true, access: selected };
 
+  // A removed/suspended explicit selection must not silently change the
+  // tenant beneath an already-open page (especially a pending mutation).
+  // The raw-authenticated account-switch endpoint remains available so the
+  // person can explicitly select another eligible company.
+  if (input.selectedAccountId !== null || input.selectedMembershipId !== null)
+    return { ok: false, status: 403, error: "account_access_required" };
+
   const fallback =
     input.activeAccesses.find((access) => access.isDefault) ??
     input.activeAccesses[0];
@@ -362,10 +370,10 @@ function membershipAccess(
 
 async function loadRelationalMembershipScopes(
   membershipIds: readonly string[],
+  db: PartnerAccessExecutor = getDb(),
 ): Promise<Map<string, PartnerMembershipAccessScope>> {
   const result = new Map<string, PartnerMembershipAccessScope>();
   if (membershipIds.length === 0) return result;
-  const db = getDb();
   const [locations, costCenters] = await Promise.all([
     db
       .select({
@@ -420,10 +428,15 @@ async function loadRelationalMembershipScopes(
   return result;
 }
 
-async function loadActiveMembershipAccesses(
+type PartnerAccessExecutor =
+  | DatabaseClient
+  | Parameters<Parameters<DatabaseClient["transaction"]>[0]>[0];
+
+/** Also used when revalidating delayed deliveries: never infer authority from CRM contacts. */
+export async function loadActiveMembershipAccesses(
   partnerUserId: string,
+  db: PartnerAccessExecutor = getDb(),
 ): Promise<PartnerAccountAccess[]> {
-  const db = getDb();
   const rows = await db
     .select({
       accountId: partnerAccounts.id,
@@ -478,6 +491,7 @@ async function loadActiveMembershipAccesses(
 
   const scopes = await loadRelationalMembershipScopes(
     rows.map((row) => row.membershipId),
+    db,
   );
 
   return rows.flatMap((row) => {

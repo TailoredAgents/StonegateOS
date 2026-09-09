@@ -26,6 +26,8 @@ import {
   getAppointmentPaymentSummary,
 } from "@/lib/payment-ledger";
 import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
+import { reconcilePartnerAppointmentInvoices } from "@/lib/partner-invoice-ledger";
+import { hasUnretiredPartnerHostedInvoice } from "@/lib/partner-hosted-retirement";
 import {
   claimTeamMutationIdempotency,
   completeTeamMutationIdempotency,
@@ -218,6 +220,7 @@ export async function POST(
       const [appointment] = await tx
         .select({
           id: appointments.id,
+          partnerAccountId: appointments.partnerAccountId,
           finalTotalCents: appointments.finalTotalCents,
           status: appointments.status,
           type: appointments.type,
@@ -244,6 +247,11 @@ export async function POST(
         );
       }
       const currentVersion = appointment.updatedAt.toISOString();
+      if (appointment.partnerAccountId && await hasUnretiredPartnerHostedInvoice(tx, appointmentId)) {
+        return completeAppointmentPaymentFailure(tx, mutation, claimed.claim, appointmentId, {
+          ok: false, code: "conflict", message: "This partner invoice has an older online collection channel. Verify its retirement and reconcile any payments before recording another payment.", retryable: false,
+        }, 409, { reason: "partner_hosted_collection_unretired" });
+      }
       if (currentVersion !== expectedVersion) {
         return completeAppointmentPaymentFailure(
           tx,
@@ -575,6 +583,8 @@ export async function POST(
           { retryable: true },
         );
       }
+
+      await reconcilePartnerAppointmentInvoices(tx, appointmentId);
 
       const retryableAttempt = attemptSafety.retryableAttemptId
         ? attemptRows.find(

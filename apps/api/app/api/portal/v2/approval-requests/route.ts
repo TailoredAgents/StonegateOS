@@ -34,7 +34,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       correlationId,
     );
   }
-  if (principal.accessLevel !== "account") {
+  if (!["account", "scoped"].includes(principal.accessLevel)) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
   if (!arePartnerPortalV2ReadsEnabled(principal.accountId)) {
@@ -46,6 +46,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
   try {
     const result = await listPartnerApprovalRequests({
+      access: principal,
       accountId: principal.accountId,
       membershipId: principal.membershipId,
       params: request.nextUrl.searchParams,

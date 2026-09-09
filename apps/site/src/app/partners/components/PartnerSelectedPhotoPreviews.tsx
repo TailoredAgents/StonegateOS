@@ -49,7 +49,7 @@ export function PartnerSelectedPhotoPreviews({
             className="overflow-hidden rounded-xl border border-slate-200 bg-white"
           >
             <div className="flex aspect-[4/3] items-center justify-center bg-slate-100">
-              {previewUrl && !previewFailed ? (
+              {previewUrl && !previewFailed && file.type !== "application/pdf" && !/\.pdf$/iu.test(file.name) ? (
                 // Local object URLs intentionally bypass image optimization.
                 // eslint-disable-next-line @next/next/no-img-element
                 <img

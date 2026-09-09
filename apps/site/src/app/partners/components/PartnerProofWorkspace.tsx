@@ -37,6 +37,8 @@ import {
 import { PartnerDocumentDownloadButton } from "./PartnerDocumentDownloadButton";
 import { PartnerBeforeAfterCompare } from "./PartnerBeforeAfterCompare";
 import { PartnerSelectedPhotoPreviews } from "./PartnerSelectedPhotoPreviews";
+import { usePartnerLiveRefresh } from "../lib/use-partner-live-refresh";
+import { usePartnerUnsavedChanges } from "../lib/use-partner-unsaved-changes";
 
 const ACCEPTED_TYPES = new Set([
   "image/jpeg",
@@ -74,6 +76,11 @@ function formatBytes(value: number | null): string {
 }
 
 function declaredContentType(file: File): string {
+  if (
+    /\.pdf$/iu.test(file.name) &&
+    (!file.type || file.type === "application/pdf")
+  )
+    return "application/pdf";
   if (file.type) return file.type;
   const filename = file.name.toLowerCase();
   if (/\.jpe?g$/u.test(filename)) return "image/jpeg";
@@ -82,19 +89,31 @@ function declaredContentType(file: File): string {
   return filename.endsWith(".heic") ? "image/heic" : "image/heif";
 }
 
-export function PartnerProofWorkspace({
-  jobId,
-  initialProof,
-  canUpload,
-  canShare,
-  persona,
-}: {
+type PartnerProofWorkspaceProps = {
+  accountId?: string;
   jobId: string;
   initialProof: PartnerProof;
   canUpload: boolean;
   canShare: boolean;
   persona?: string | null;
-}) {
+};
+
+export function PartnerProofWorkspace(props: PartnerProofWorkspaceProps) {
+  return (
+    <PartnerProofWorkspaceSession
+      key={`${props.accountId ?? "current"}:${props.jobId}`}
+      {...props}
+    />
+  );
+}
+
+function PartnerProofWorkspaceSession({
+  jobId,
+  initialProof,
+  canUpload,
+  canShare,
+  persona,
+}: PartnerProofWorkspaceProps) {
   const [proof, setProof] = React.useState(initialProof);
   const [category, setCategory] = React.useState("intake");
   const [caption, setCaption] = React.useState("");
@@ -102,6 +121,10 @@ export function PartnerProofWorkspace({
   const [uploadProgress, setUploadProgress] = React.useState<number[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
+  const [lastDeleted, setLastDeleted] = React.useState<{
+    id: string;
+    deletedAt: string;
+  } | null>(null);
   const [packageBusy, setPackageBusy] = React.useState(false);
   const [shareBusy, setShareBusy] = React.useState(false);
   const [revokingId, setRevokingId] = React.useState<string | null>(null);
@@ -119,6 +142,7 @@ export function PartnerProofWorkspace({
   const uploadOperationKeyRef = React.useRef<string | null>(null);
   const finalizeOperationKeysRef = React.useRef(new Map<string, string>());
   const [uploadAttemptStarted, setUploadAttemptStarted] = React.useState(false);
+  usePartnerUnsavedChanges(files.length > 0 || busy);
 
   const resetUploadAttempt = React.useCallback(() => {
     uploadOperationKeyRef.current = null;
@@ -132,20 +156,25 @@ export function PartnerProofWorkspace({
     (media) => media.category === "after" && media.downloadIntent,
   );
 
-  const refresh = React.useCallback(async (): Promise<boolean> => {
-    const result = await partnerPortalFetch<{ ok: true; proof: PartnerProof }>(
-      `jobs/${jobId}/proof`,
-    ).catch(() => null);
-    if (!result?.ok) {
-      setMessage({
-        tone: "error",
-        text: result?.error.message ?? "Proof could not be refreshed.",
-      });
-      return false;
-    }
-    setProof(result.data.proof);
-    return true;
-  }, [jobId]);
+  const refresh = React.useCallback(
+    async (signal?: AbortSignal): Promise<boolean> => {
+      const result = await partnerPortalFetch<{
+        ok: true;
+        proof: PartnerProof;
+      }>(`jobs/${jobId}/proof`, { signal }).catch(() => null);
+      if (!result?.ok) {
+        setMessage({
+          tone: "error",
+          text: result?.error.message ?? "Proof could not be refreshed.",
+        });
+        return false;
+      }
+      setProof(result.data.proof);
+      return true;
+    },
+    [jobId],
+  );
+  usePartnerLiveRefresh(jobId, (signal) => refresh(signal), !busy);
 
   const chooseFiles = (list: FileList | null): void => {
     const selected = Array.from(list ?? []);
@@ -165,8 +194,10 @@ export function PartnerProofWorkspace({
       (file) =>
         file.size <= 0 ||
         file.size > MAX_FILE_BYTES ||
-        (!ACCEPTED_TYPES.has(file.type) &&
-          !(!file.type && ACCEPTED_EXTENSIONS.test(file.name))),
+        (category === "document"
+          ? declaredContentType(file) !== "application/pdf"
+          : !ACCEPTED_TYPES.has(file.type) &&
+            !(!file.type && ACCEPTED_EXTENSIONS.test(file.name))),
     );
     if (invalid) {
       setFiles([]);
@@ -175,7 +206,7 @@ export function PartnerProofWorkspace({
       resetUploadAttempt();
       setMessage({
         tone: "error",
-        text: `${invalid.name} is not a supported image under 10 MB.`,
+        text: `${invalid.name} is not a supported ${category === "document" ? "PDF document" : "image"} under 10 MB.`,
       });
       if (inputRef.current) inputRef.current.value = "";
       return;
@@ -343,19 +374,20 @@ export function PartnerProofWorkspace({
   };
 
   const remove = async (media: PartnerProofMedia): Promise<void> => {
+    if (!canUpload || deletingId) return;
     setDeletingId(media.id);
     setMessage(null);
-    const result = await partnerPortalFetch<{ ok: true }>(
-      `jobs/${jobId}/proof/${media.id}`,
-      {
-        method: "DELETE",
-      },
-    ).catch(() => null);
+    const result = await partnerPortalFetch<{
+      ok: true;
+      deleted: { id: string; deletedAt: string };
+    }>(`jobs/${jobId}/proof/${media.id}`, {
+      method: "DELETE",
+    }).catch(() => null);
     setDeletingId(null);
     if (!result?.ok) {
       setMessage({
         tone: "error",
-        text: result?.error.message ?? "The photo was not removed.",
+        text: result?.error.message ?? "The file was not removed.",
       });
       return;
     }
@@ -363,10 +395,40 @@ export function PartnerProofWorkspace({
       ...current,
       media: current.media.filter((item) => item.id !== media.id),
     }));
+    setLastDeleted(result.data.deleted);
+    await refresh();
     setMessage({
       tone: "success",
-      text: "Photo removed. It remains recoverable under the account retention policy for 30 days.",
+      text: "File removed. You can restore it for 30 days.",
     });
+  };
+
+  const undoRemove = async (target = lastDeleted) => {
+    if (!canUpload || !target || deletingId) return;
+    setDeletingId(target.id);
+    const result = await partnerPortalFetch(
+      `jobs/${jobId}/proof/${target.id}/restore`,
+      {
+        method: "POST",
+        headers: {
+          "If-Match": `"${target.deletedAt}"`,
+          "Idempotency-Key": `restore:${target.id}:${Date.parse(target.deletedAt)}`,
+        },
+      },
+    ).catch(() => null);
+    setDeletingId(null);
+    if (!result?.ok) {
+      setMessage({
+        tone: "error",
+        text:
+          result?.error.message ??
+          "The file could not be restored. Contact Stonegate for help.",
+      });
+      return;
+    }
+    setLastDeleted(null);
+    await refresh();
+    setMessage({ tone: "success", text: "File restored." });
   };
 
   const createPackage = async (): Promise<void> => {
@@ -374,7 +436,7 @@ export function PartnerProofWorkspace({
     setMessage(null);
     const result = await partnerPortalFetch<{
       ok: true;
-      package: PartnerProof["packages"][number];
+      status: "preparing";
     }>(`jobs/${jobId}/proof/packages`, {
       method: "POST",
       headers: { "Idempotency-Key": createPortalOperationKey("proof-package") },
@@ -386,9 +448,9 @@ export function PartnerProofWorkspace({
         tone: result?.response.status === 409 ? "warning" : "error",
         text: withPortalSupportReference(
           result?.response.status === 409
-            ? "A formal package can be generated after the job is complete and every required photo is ready."
+            ? "The completion record is available after service is complete and the required photos are ready."
             : (result?.error.message ??
-                "The proof package could not be generated."),
+                "The completion record could not be prepared."),
           result?.error.correlationId,
         ),
       });
@@ -397,7 +459,7 @@ export function PartnerProofWorkspace({
     await refresh();
     setMessage({
       tone: "success",
-      text: `Proof package v${result.data.package.version} generated.`,
+      text: "Your completion record is being prepared. Download links will appear here when it is ready.",
     });
   };
 
@@ -542,46 +604,61 @@ export function PartnerProofWorkspace({
                 id={`proof-upload-${jobId}`}
                 className="font-semibold text-slate-950"
               >
-                Add photos to this job
+                Add photos or documents
               </h3>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                Choose a category once for this batch. You can add up to 10
-                JPEG, PNG, WebP, HEIC, or HEIF photos at a time, up to 10 MB
-                each.
+                Add up to 10 files at a time, 10 MB each. Photos can be JPEG,
+                PNG, WebP, HEIC, or HEIF. Each job supports 40 photos and 10 PDF
+                documents. PDFs stay private while they are checked for safety.
               </p>
             </div>
           </div>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <label htmlFor={`proof-category-${jobId}`}>
               <span className="text-sm font-semibold text-slate-700">
-                Photo category
+                File category
               </span>
               <select
                 id={`proof-category-${jobId}`}
                 value={category}
-                onChange={(event) => setCategory(event.target.value)}
+                onChange={(event) => {
+                  setCategory(event.target.value);
+                  setFiles([]);
+                  setUploadProgress([]);
+                  resetUploadAttempt();
+                  if (inputRef.current) inputRef.current.value = "";
+                }}
                 disabled={busy || uploadAttemptStarted}
                 className={partnerFieldClass}
               >
-                {["intake", "before", "after", "completion", "issue"].map(
-                  (value) => (
-                    <option key={value} value={value}>
-                      {humanize(value)}
-                    </option>
-                  ),
-                )}
+                {[
+                  "intake",
+                  "before",
+                  "after",
+                  "completion",
+                  "issue",
+                  ...(proof.documentUploadsAvailable ? ["document"] : []),
+                ].map((value) => (
+                  <option key={value} value={value}>
+                    {humanize(value)}
+                  </option>
+                ))}
               </select>
             </label>
             <label htmlFor={`proof-files-${jobId}`}>
               <span className="text-sm font-semibold text-slate-700">
-                Photos
+                {category === "document" ? "PDF documents" : "Photos"}
               </span>
               <input
                 ref={inputRef}
                 id={`proof-files-${jobId}`}
                 type="file"
                 multiple
-                accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
+                accept={
+                  category === "document"
+                    ? "application/pdf,.pdf"
+                    : "image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
+                }
                 onChange={(event) => chooseFiles(event.target.files)}
                 disabled={busy}
                 className={`${partnerFieldClass} file:mr-3 file:rounded-lg file:border-0 file:bg-primary-50 file:px-3 file:py-2 file:font-semibold file:text-primary-800`}
@@ -606,7 +683,7 @@ export function PartnerProofWorkspace({
           {files.length ? (
             <div className="mt-3">
               <p className="text-sm text-slate-600">
-                {files.length} photo{files.length === 1 ? "" : "s"} selected ·{" "}
+                {files.length} file{files.length === 1 ? "" : "s"} selected ·{" "}
                 {formatBytes(
                   files.reduce((total, file) => total + file.size, 0),
                 )}
@@ -645,7 +722,9 @@ export function PartnerProofWorkspace({
               ? "Uploading and processing…"
               : uploadAttemptStarted
                 ? "Retry photos"
-                : "Upload photos"}
+                : category === "document"
+                  ? "Upload documents"
+                  : "Upload photos"}
           </button>
         </section>
       ) : (
@@ -662,10 +741,10 @@ export function PartnerProofWorkspace({
               id={`proof-gallery-${jobId}`}
               className="text-lg font-semibold text-slate-950"
             >
-              Photo gallery
+              Photos and documents
             </h3>
             <p className="mt-1 text-sm text-slate-600">
-              Every image here stays linked to this job and visible only to
+              Every file here stays linked to this job and visible only to
               authorized account members.
             </p>
           </div>
@@ -678,6 +757,56 @@ export function PartnerProofWorkspace({
             Refresh
           </button>
         </div>
+        {canUpload && lastDeleted ? (
+          <div
+            className="mt-3 flex flex-wrap items-center gap-3 text-sm"
+            role="status"
+          >
+            <span>File removed. Recovery is available for 30 days.</span>
+            <button
+              type="button"
+              onClick={() => void undoRemove()}
+              disabled={Boolean(deletingId)}
+              className={partnerSecondaryButtonClass}
+            >
+              Undo removal
+            </button>
+          </div>
+        ) : null}
+        {canUpload && proof.deletedMedia?.length ? (
+          <details className="mt-3 rounded-lg border border-slate-200 p-3">
+            <summary className="min-h-11 cursor-pointer py-2 text-sm font-semibold">
+              Recently removed files
+            </summary>
+            <ul className="divide-y divide-slate-100">
+              {proof.deletedMedia.map((file) => (
+                <li
+                  key={file.id}
+                  className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+                >
+                  <span>
+                    {file.filename || `${humanize(file.category)} file`}
+                    <span className="block text-xs text-slate-600">
+                      Recoverable until{" "}
+                      {new Intl.DateTimeFormat("en-US", {
+                        timeZone: "America/New_York",
+                        dateStyle: "medium",
+                      }).format(new Date(file.recoverableUntil))}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={Boolean(deletingId)}
+                    onClick={() => void undoRemove(file)}
+                    className={partnerSecondaryButtonClass}
+                  >
+                    Restore file
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
         {proof.media.length ? (
           <ul className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {proof.media.map((media) => {
@@ -702,6 +831,13 @@ export function PartnerProofWorkspace({
                         }
                         className="h-full w-full object-cover"
                         loading="lazy"
+                        onError={(event) => {
+                          // Retry a failed signed intent once; periodic refresh renews future intents.
+                          if (event.currentTarget.dataset["retried"] === "true")
+                            return;
+                          event.currentTarget.dataset["retried"] = "true";
+                          void refresh();
+                        }}
                       />
                     ) : (
                       <ImageIcon
@@ -717,6 +853,13 @@ export function PartnerProofWorkspace({
                       </span>
                       <PartnerStatusBadge status={media.status} />
                     </div>
+                    {media.category === "document" &&
+                    media.status === "processing" ? (
+                      <p className="mt-2 text-sm text-slate-600" role="status">
+                        Safety check in progress. This document is not available
+                        yet.
+                      </p>
+                    ) : null}
                     {media.caption ? (
                       <p className="mt-2 text-sm leading-6 text-slate-600">
                         {media.caption}
@@ -729,7 +872,7 @@ export function PartnerProofWorkspace({
                     <div className="mt-3 flex flex-wrap gap-2">
                       {original ? (
                         <a
-                          href={original}
+                          href={`/partners/media/${encodeURIComponent(jobId)}/${encodeURIComponent(media.id)}`}
                           target="_blank"
                           rel="noreferrer"
                           className={partnerSecondaryButtonClass}
@@ -798,15 +941,15 @@ export function PartnerProofWorkspace({
                 id={`proof-packages-${jobId}`}
                 className="font-semibold text-slate-950"
               >
-                Download or share proof
+                Completion record
               </h3>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                Create one fixed completion record, then download it or send an
-                expiring link without sharing portal access.
+                Your completion record is prepared after the work and required
+                photos are complete. Download it or share an expiring link.
               </p>
             </div>
           </div>
-          {canShare ? (
+          {canShare && proof.packages.length === 0 ? (
             <button
               type="button"
               onClick={() => void createPackage()}
@@ -821,7 +964,7 @@ export function PartnerProofWorkspace({
               ) : (
                 <FileArchive className="h-4 w-4" aria-hidden="true" />
               )}
-              {packageBusy ? "Creating…" : "Create proof package"}
+              {packageBusy ? "Checking…" : "Check for completion record"}
             </button>
           ) : null}
         </div>
@@ -836,7 +979,7 @@ export function PartnerProofWorkspace({
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p className="font-semibold text-slate-950">
-                        Proof package v{item.version}
+                        Completion record · version {item.version}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
                         Generated{" "}
@@ -925,7 +1068,7 @@ export function PartnerProofWorkspace({
           </ul>
         ) : (
           <p className="mt-4 text-sm leading-6 text-slate-600">
-            No proof package is ready yet. Create one when the job’s required
+            Your completion record will appear here when the work and required
             photos are complete.
           </p>
         )}

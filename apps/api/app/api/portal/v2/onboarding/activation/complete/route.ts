@@ -117,12 +117,14 @@ export async function POST(request: NextRequest): Promise<Response> {
       return createPartnerPortalV2ErrorResponse(
         result.kind === "invalid"
           ? "unauthorized"
-          : result.kind === "password_policy"
+          : result.kind === "password_policy" ||
+              result.kind === "password_incorrect"
             ? "invalid_fields"
             : "service_unavailable",
         result.kind === "invalid"
           ? 401
-          : result.kind === "password_policy"
+          : result.kind === "password_policy" ||
+              result.kind === "password_incorrect"
             ? 422
             : 503,
         correlationId,

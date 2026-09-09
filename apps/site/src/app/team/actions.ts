@@ -6813,7 +6813,11 @@ export async function sendThreadMessageAction(formData: FormData) {
     body: trimmedBody,
     direction: "outbound",
     ...(resolvedChannel ? { channel: resolvedChannel } : {}),
+    ...(typeof formData.get("audience") === "string" ? { audience: formData.get("audience") } : {}),
   };
+  const requestedOperationKey = formData.get("idempotencyKey");
+  const operationKey = typeof requestedOperationKey === "string" && /^[A-Za-z0-9:_-]{16,160}$/u.test(requestedOperationKey)
+    ? requestedOperationKey : `staff-message:${crypto.randomUUID()}`;
   if (typeof subject === "string" && subject.trim().length > 0) {
     payload["subject"] = subject.trim();
   }
@@ -6882,6 +6886,7 @@ export async function sendThreadMessageAction(formData: FormData) {
     `/api/admin/inbox/threads/${resolvedThreadId}/messages`,
     {
       method: "POST",
+      headers: { "Idempotency-Key": operationKey },
       body: JSON.stringify(payload),
     },
   );

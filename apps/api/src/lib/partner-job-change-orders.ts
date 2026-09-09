@@ -15,6 +15,8 @@ import {
   type PartnerJobChangeOrderOfferSnapshot,
 } from "@/db";
 import { loadPartnerAccountServiceAgreement } from "@/lib/partner-account-service-agreement-service";
+import { applyPartnerChangeOrderPrice } from "@/lib/partner-change-order-price";
+import { lockAppointmentInvoiceCollection } from "@/lib/partner-invoice-ledger";
 import {
   PartnerJobChangeRequestBodySchema,
   type PartnerJobChangeRequestBody,
@@ -327,6 +329,24 @@ export async function resolvePartnerJobChangeOrderFromQuoteResponse(
     .for("update")
     .limit(1);
   if (!order) return null;
+  // Payment completion locks collection before booking rows. Preserve that
+  // ordering here so accepting a quote cannot race or deadlock collection.
+  const [binding] = await tx
+    .select({ appointmentId: partnerBookings.appointmentId })
+    .from(partnerBookings)
+    .where(
+      and(
+        eq(partnerBookings.id, order.partnerBookingId),
+        eq(partnerBookings.partnerAccountId, input.partnerAccountId),
+      ),
+    )
+    .limit(1);
+  if (!binding)
+    throw new TeamMutationFailure(
+      "conflict",
+      "This job is no longer available.",
+    );
+  await lockAppointmentInvoiceCollection(tx, binding.appointmentId);
   const snapshot = OfferSnapshotSchema.safeParse(order.offerSnapshot);
   if (
     !snapshot.success ||
@@ -408,6 +428,19 @@ export async function resolvePartnerJobChangeOrderFromQuoteResponse(
     proposed,
   });
   const effects = pendingOperationalEffects(proposed.materiality);
+  if (input.decision === "accepted") {
+    await applyPartnerChangeOrderPrice(tx, {
+      accountId: input.partnerAccountId,
+      jobId: order.partnerBookingId,
+      appointmentId: binding.appointmentId,
+      amountCents: snapshot.data.amountMinor,
+      actorMembershipId: input.actorMembershipId,
+      changeOrderId: order.id,
+      quoteVersionId: input.quoteVersionId,
+      correlationId: input.correlationId,
+      now: input.now,
+    });
+  }
   const bookingRevision = job.version + 1;
   const nextRateSnapshot =
     input.decision === "accepted"

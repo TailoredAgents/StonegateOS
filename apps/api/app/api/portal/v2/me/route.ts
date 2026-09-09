@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { resolvePartnerPrincipal } from "@/lib/partner-account-authorization";
+import { getPartnerAccountWorkflow, normalizePartnerAccountWorkflow } from "@/lib/partner-account-workflows";
 import { readPortalV2CorrelationId } from "@/lib/portal-v2-contract";
 import {
   createPartnerPortalV2ErrorResponse,
@@ -20,6 +21,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
 
     const { principal } = result;
+    const workflow = principal.accountId ? await getPartnerAccountWorkflow(principal.accountId) : normalizePartnerAccountWorkflow(null);
     const currentAccess = principal.availableAccounts.find(
       (access) =>
         access.accountId === principal.accountId &&
@@ -28,6 +30,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     return createPartnerPortalV2SuccessResponse(
       {
         ok: true,
+        workflow,
         partnerUser: {
           id: principal.partnerUserId,
           email: principal.email,

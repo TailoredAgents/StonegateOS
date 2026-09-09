@@ -8,6 +8,7 @@ export const PARTNER_JOB_ACTION_KEYS = [
   "upload_media",
   "create_proof_share",
   "duplicate",
+  "request_additional_service",
 ] as const;
 
 export type PartnerJobActionKey = (typeof PARTNER_JOB_ACTION_KEYS)[number];

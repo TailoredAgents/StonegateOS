@@ -243,7 +243,7 @@ export function PartnerProofDefaultsManager({
                     id={countId}
                     type="number"
                     min={1}
-                    max={40}
+                    max={category.key === "before" || category.key === "after" ? 20 : 40}
                     step={1}
                     inputMode="numeric"
                     disabled={!canEdit || saving}
@@ -251,7 +251,7 @@ export function PartnerProofDefaultsManager({
                     onChange={(event) =>
                       update(category.key, {
                         minimumCount: Math.min(
-                          40,
+                          category.key === "before" || category.key === "after" ? 20 : 40,
                           Math.max(1, Number(event.target.value) || 1),
                         ),
                       })

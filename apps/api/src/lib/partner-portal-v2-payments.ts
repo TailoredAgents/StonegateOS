@@ -5,6 +5,7 @@ import {
   appointments,
   auditLogs,
   getDb,
+  partnerAccounts,
   partnerBookings,
   partnerInvoices,
   partnerPaymentAllocations,
@@ -33,6 +34,50 @@ import { resolvePublicSiteBaseUrl } from "@/lib/partner-portal-auth";
 import type { PortalV2StoredResult } from "@/lib/partner-portal-v2-idempotency";
 import type { SquareAttemptReconciliationResult } from "@/lib/square-payments";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
+import { lockAppointmentInvoiceCollection } from "@/lib/partner-invoice-ledger";
+import { normalizePartnerAccountWorkflow } from "@/lib/partner-account-workflows";
+import { queuePartnerPaymentLifecycle } from "@/lib/partner-payment-lifecycle";
+import { hasMatchingPartnerAllocationEvidence } from "@/lib/partner-allocation-evidence";
+import { hasPartnerInvoiceAccess } from "@/lib/partner-invoice-access";
+import type { PartnerCommercialAccess } from "@/lib/partner-portal-v2-commercial";
+
+async function partialPaymentsEnabled(
+  db: Pick<TeamMutationTransaction, "select">,
+  accountId: string,
+): Promise<boolean> {
+  const [account] = await db
+    .select({ config: partnerAccounts.portalWorkflowConfig })
+    .from(partnerAccounts)
+    .where(eq(partnerAccounts.id, accountId))
+    .limit(1);
+  return normalizePartnerAccountWorkflow(account?.config).partialPayments;
+}
+
+async function lockInvoicePaymentCollection(
+  tx: TeamMutationTransaction,
+  accountId: string,
+  invoiceId: string,
+): Promise<void> {
+  const [binding] = await tx
+    .select({ appointmentId: partnerBookings.appointmentId })
+    .from(partnerInvoices)
+    .innerJoin(
+      partnerBookings,
+      and(
+        eq(partnerBookings.id, partnerInvoices.partnerBookingId),
+        eq(partnerBookings.partnerAccountId, partnerInvoices.partnerAccountId),
+      ),
+    )
+    .where(
+      and(
+        eq(partnerInvoices.id, invoiceId),
+        eq(partnerInvoices.partnerAccountId, accountId),
+      ),
+    )
+    .limit(1);
+  if (binding)
+    await lockAppointmentInvoiceCollection(tx, binding.appointmentId);
+}
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -50,7 +95,7 @@ const MoneySchema = z
 export const PartnerPaymentIntentRequestSchema = z
   .object({
     invoiceId: z.string().uuid(),
-    purpose: z.enum(["deposit", "one_off"]),
+    purpose: z.enum(["deposit", "one_off", "invoice_balance"]),
     paymentMethod: z.enum(["card", "ach"]),
     amount: MoneySchema,
   })
@@ -83,7 +128,7 @@ export const PartnerEmbeddedPaymentCompletionSchema = z
   })
   .strict();
 
-export type PartnerPaymentPurpose = "deposit" | "one_off";
+export type PartnerPaymentPurpose = "deposit" | "one_off" | "invoice_balance";
 export type PartnerPaymentIntentStatus =
   | "provisioning"
   | "ready"
@@ -134,6 +179,7 @@ type CreatePartnerPaymentInput = Readonly<{
 }>;
 
 type CreatePartnerEmbeddedPaymentInput = Readonly<{
+  access?: PartnerCommercialAccess;
   accountId: string;
   membershipId: string;
   partnerUserId: string;
@@ -151,6 +197,7 @@ type CreatePartnerEmbeddedPaymentInput = Readonly<{
 }>;
 
 type CompletePartnerEmbeddedPaymentInput = Readonly<{
+  access?: PartnerCommercialAccess;
   accountId: string;
   membershipId: string;
   partnerUserId: string;
@@ -211,7 +258,8 @@ export function parsePartnerPaymentAttemptMetadata(
     typeof candidate["partnerUserId"] !== "string" ||
     !UUID_PATTERN.test(candidate["partnerUserId"]) ||
     (candidate["purpose"] !== "deposit" &&
-      candidate["purpose"] !== "one_off") ||
+      candidate["purpose"] !== "one_off" &&
+      candidate["purpose"] !== "invoice_balance") ||
     (candidate["paymentMethod"] !== "card" &&
       candidate["paymentMethod"] !== "ach") ||
     (candidate["checkoutMode"] !== "hosted_redirect" &&
@@ -333,14 +381,15 @@ export function resolvePartnerInvoicePaymentAmount(input: {
 }
 
 /**
- * Embedded checkout is intentionally narrower than hosted invoice payment.
- * A deposit must match the configured outstanding deposit exactly. A one-off
- * must represent a configured 100% prepayment obligation and the full current
- * balance; ordinary issued invoice balances remain on Square-hosted pages.
+ * Stonegate owns the invoice; Square only processes this payment obligation.
+ * Deposits match the outstanding deposit, and invoice-balance checkout must
+ * match the full current balance. Arbitrary partial collections are not enabled.
+ * Legacy one-off prepayments retain their original eligibility rules.
  */
 export function resolvePartnerEmbeddedPaymentAmount(input: {
   purpose: PartnerPaymentPurpose;
   requestedAmountMinor: number;
+  allowPartialPayment?: boolean;
   invoice: {
     depositCents: number;
     totalCents: number;
@@ -354,16 +403,22 @@ export function resolvePartnerEmbeddedPaymentAmount(input: {
       reason:
         | "invalid_amount"
         | "deposit_unavailable"
-        | "hosted_invoice_required";
+        | "prepayment_unavailable";
     } {
   if (input.purpose === "deposit") {
     return resolvePartnerInvoicePaymentAmount(input);
+  }
+  if (input.purpose === "invoice_balance") {
+    return input.allowPartialPayment === true ||
+      input.requestedAmountMinor === input.invoice.balanceCents
+      ? resolvePartnerInvoicePaymentAmount(input)
+      : { ok: false, reason: "invalid_amount" };
   }
   if (
     input.invoice.depositCents !== input.invoice.totalCents ||
     input.requestedAmountMinor !== input.invoice.balanceCents
   ) {
-    return { ok: false, reason: "hosted_invoice_required" };
+    return { ok: false, reason: "prepayment_unavailable" };
   }
   return resolvePartnerInvoicePaymentAmount(input);
 }
@@ -534,6 +589,7 @@ export async function createPartnerHostedPaymentIntent(
   const expiresAt = new Date(now.getTime() + HOSTED_LINK_LIFETIME_MS);
   const db = getDb();
   const prepared = await db.transaction(async (tx) => {
+    await lockInvoicePaymentCollection(tx, input.accountId, input.invoiceId);
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext('partner_invoice_payment'), hashtext(${input.invoiceId}))`,
     );
@@ -547,9 +603,13 @@ export async function createPartnerHostedPaymentIntent(
         currency: partnerInvoices.currency,
         depositCents: partnerInvoices.depositCents,
         totalCents: partnerInvoices.totalCents,
+        creditedCents: partnerInvoices.creditedCents,
         paidCents: partnerInvoices.paidCents,
         balanceCents: partnerInvoices.balanceCents,
         provider: partnerInvoices.provider,
+        providerInvoiceId: partnerInvoices.providerInvoiceId,
+        legacyHostedUrl: partnerInvoices.hostedPaymentUrl,
+        legacyProviderOrderId: partnerInvoices.providerOrderId,
         version: partnerInvoices.version,
         updatedAt: partnerInvoices.updatedAt,
       })
@@ -597,7 +657,8 @@ export async function createPartnerHostedPaymentIntent(
     if (
       !["issued", "partially_paid", "overdue"].includes(invoice.status) ||
       invoice.balanceCents <= 0 ||
-      invoice.totalCents !== invoice.paidCents + invoice.balanceCents ||
+      invoice.totalCents !==
+        invoice.paidCents + invoice.balanceCents + invoice.creditedCents ||
       !canCollectAppointmentPayment(job.status, job.type)
     ) {
       return { kind: "failure" as const, result: failure(409, "conflict") };
@@ -605,7 +666,8 @@ export async function createPartnerHostedPaymentIntent(
     if (
       invoice.currency !== "USD" ||
       input.currency !== invoice.currency ||
-      (invoice.provider !== null && invoice.provider !== "square")
+      (invoice.provider !== null && invoice.provider !== "square") ||
+      (invoice.providerInvoiceId !== null || invoice.legacyHostedUrl !== null || invoice.legacyProviderOrderId !== null)
     ) {
       return {
         kind: "failure" as const,
@@ -817,6 +879,7 @@ export async function createPartnerHostedPaymentIntent(
   let committed = false;
   try {
     committed = await db.transaction(async (tx) => {
+      await lockInvoicePaymentCollection(tx, input.accountId, input.invoiceId);
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext('partner_invoice_payment'), hashtext(${input.invoiceId}))`,
       );
@@ -1040,6 +1103,18 @@ export async function createPartnerEmbeddedPaymentIntent(
   const expiresAt = new Date(now.getTime() + EMBEDDED_INTENT_LIFETIME_MS);
   const db = getDb();
   const prepared = await db.transaction(async (tx) => {
+    await lockInvoicePaymentCollection(tx, input.accountId, input.invoiceId);
+    if (
+      input.access &&
+      !(await hasPartnerInvoiceAccess(
+        tx,
+        input.accountId,
+        input.invoiceId,
+        input.access,
+      ))
+    ) {
+      return { kind: "failure" as const, result: failure(404, "not_found") };
+    }
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext('partner_invoice_payment'), hashtext(${input.invoiceId}))`,
     );
@@ -1052,9 +1127,13 @@ export async function createPartnerEmbeddedPaymentIntent(
         currency: partnerInvoices.currency,
         depositCents: partnerInvoices.depositCents,
         totalCents: partnerInvoices.totalCents,
+        creditedCents: partnerInvoices.creditedCents,
         paidCents: partnerInvoices.paidCents,
         balanceCents: partnerInvoices.balanceCents,
         provider: partnerInvoices.provider,
+        providerInvoiceId: partnerInvoices.providerInvoiceId,
+        legacyHostedUrl: partnerInvoices.hostedPaymentUrl,
+        legacyProviderOrderId: partnerInvoices.providerOrderId,
         version: partnerInvoices.version,
         updatedAt: partnerInvoices.updatedAt,
       })
@@ -1098,7 +1177,8 @@ export async function createPartnerEmbeddedPaymentIntent(
       !job ||
       !["issued", "partially_paid", "overdue"].includes(invoice.status) ||
       invoice.balanceCents <= 0 ||
-      invoice.totalCents !== invoice.paidCents + invoice.balanceCents ||
+      invoice.totalCents !==
+        invoice.paidCents + invoice.balanceCents + invoice.creditedCents ||
       !canCollectAppointmentPayment(job.status, job.type)
     ) {
       return { kind: "failure" as const, result: failure(409, "conflict") };
@@ -1106,7 +1186,8 @@ export async function createPartnerEmbeddedPaymentIntent(
     if (
       invoice.currency !== "USD" ||
       input.currency !== invoice.currency ||
-      (invoice.provider !== null && invoice.provider !== "square")
+      (invoice.provider !== null && invoice.provider !== "square") ||
+      (invoice.providerInvoiceId !== null || invoice.legacyHostedUrl !== null || invoice.legacyProviderOrderId !== null)
     ) {
       return {
         kind: "failure" as const,
@@ -1116,13 +1197,14 @@ export async function createPartnerEmbeddedPaymentIntent(
     const amount = resolvePartnerEmbeddedPaymentAmount({
       purpose: input.purpose,
       requestedAmountMinor: input.amountMinor,
+      allowPartialPayment: await partialPaymentsEnabled(tx, input.accountId),
       invoice,
     });
     if (!amount.ok) {
       return {
         kind: "failure" as const,
         result:
-          amount.reason === "hosted_invoice_required"
+          amount.reason === "prepayment_unavailable"
             ? failure(422, "review_required")
             : failure(422, "invalid_fields"),
       };
@@ -1173,6 +1255,7 @@ export async function createPartnerEmbeddedPaymentIntent(
       if (
         attempt.status === "launched" &&
         metadata?.checkoutMode === checkoutMode &&
+        metadata.partnerMembershipId === input.membershipId &&
         metadata.paymentMethod === input.paymentMethod &&
         metadata.partnerAccountId === input.accountId &&
         metadata.partnerInvoiceId === input.invoiceId &&
@@ -1434,6 +1517,20 @@ export async function completePartnerEmbeddedPaymentIntent(
   const db = getDb();
   const now = new Date();
   const prepared = await db.transaction(async (tx) => {
+    const [binding] = await tx
+      .select({ appointmentId: paymentAttempts.appointmentId })
+      .from(paymentAttempts)
+      .innerJoin(
+        partnerBookings,
+        and(
+          eq(partnerBookings.appointmentId, paymentAttempts.appointmentId),
+          eq(partnerBookings.partnerAccountId, input.accountId),
+        ),
+      )
+      .where(eq(paymentAttempts.id, input.paymentIntentId))
+      .limit(1);
+    if (binding?.appointmentId)
+      await lockAppointmentInvoiceCollection(tx, binding.appointmentId);
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext('partner_payment_intent'), hashtext(${input.paymentIntentId}))`,
     );
@@ -1480,6 +1577,17 @@ export async function completePartnerEmbeddedPaymentIntent(
       metadata.currency !== attempt.currency ||
       attempt.locationId !== provider.locationId ||
       !safeProviderIdentifier(attempt.providerOrderId)
+    ) {
+      return { kind: "failure" as const, result: failure(404, "not_found") };
+    }
+    if (
+      input.access &&
+      !(await hasPartnerInvoiceAccess(
+        tx,
+        input.accountId,
+        metadata.partnerInvoiceId,
+        input.access,
+      ))
     ) {
       return { kind: "failure" as const, result: failure(404, "not_found") };
     }
@@ -1540,10 +1648,14 @@ export async function completePartnerEmbeddedPaymentIntent(
         currency: partnerInvoices.currency,
         depositCents: partnerInvoices.depositCents,
         totalCents: partnerInvoices.totalCents,
+        creditedCents: partnerInvoices.creditedCents,
         paidCents: partnerInvoices.paidCents,
         balanceCents: partnerInvoices.balanceCents,
         appointmentStatus: appointments.status,
         appointmentType: appointments.type,
+        providerInvoiceId: partnerInvoices.providerInvoiceId,
+        legacyHostedUrl: partnerInvoices.hostedPaymentUrl,
+        legacyProviderOrderId: partnerInvoices.providerOrderId,
       })
       .from(partnerInvoices)
       .innerJoin(
@@ -1567,6 +1679,10 @@ export async function completePartnerEmbeddedPaymentIntent(
       ? resolvePartnerEmbeddedPaymentAmount({
           purpose: metadata.purpose,
           requestedAmountMinor: metadata.amountMinor,
+          allowPartialPayment: await partialPaymentsEnabled(
+            tx,
+            input.accountId,
+          ),
           invoice,
         })
       : null;
@@ -1574,7 +1690,9 @@ export async function completePartnerEmbeddedPaymentIntent(
       !invoice ||
       !["issued", "partially_paid", "overdue"].includes(invoice.status) ||
       invoice.currency !== metadata.currency ||
-      invoice.totalCents !== invoice.paidCents + invoice.balanceCents ||
+      invoice.providerInvoiceId !== null || invoice.legacyHostedUrl !== null || invoice.legacyProviderOrderId !== null ||
+      invoice.totalCents !==
+        invoice.paidCents + invoice.balanceCents + invoice.creditedCents ||
       !canCollectAppointmentPayment(
         invoice.appointmentStatus,
         invoice.appointmentType,
@@ -1666,6 +1784,12 @@ export async function completePartnerEmbeddedPaymentIntent(
           .update(paymentAttempts)
           .set(failureBinding)
           .where(eq(paymentAttempts.id, prepared.attemptId));
+        await queuePartnerPaymentLifecycle(tx, {
+          accountId: input.accountId,
+          invoiceId: prepared.invoiceId,
+          intentId: prepared.attemptId,
+          state: indeterminate ? "processing" : "failed",
+        });
         await insertPartnerPaymentAudit({
           tx,
           actorType: "human",
@@ -1690,10 +1814,18 @@ export async function completePartnerEmbeddedPaymentIntent(
         });
       });
     } catch {
-      await db
-        .update(paymentAttempts)
-        .set(failureBinding)
-        .where(eq(paymentAttempts.id, prepared.attemptId));
+      await db.transaction(async (tx) => {
+        await tx
+          .update(paymentAttempts)
+          .set(failureBinding)
+          .where(eq(paymentAttempts.id, prepared.attemptId));
+        await queuePartnerPaymentLifecycle(tx, {
+          accountId: input.accountId,
+          invoiceId: prepared.invoiceId,
+          intentId: prepared.attemptId,
+          state: indeterminate ? "processing" : "failed",
+        });
+      });
     }
     if (!indeterminate) return failure(422, "invalid_fields");
     const pending = await getPartnerPaymentIntent({
@@ -1725,6 +1857,12 @@ export async function completePartnerEmbeddedPaymentIntent(
         .update(paymentAttempts)
         .set(providerBinding)
         .where(eq(paymentAttempts.id, prepared.attemptId));
+      await queuePartnerPaymentLifecycle(tx, {
+        accountId: input.accountId,
+        invoiceId: prepared.invoiceId,
+        intentId: prepared.attemptId,
+        state: "processing",
+      });
       await insertPartnerPaymentAudit({
         tx,
         actorType: "human",
@@ -1754,10 +1892,18 @@ export async function completePartnerEmbeddedPaymentIntent(
     // The provider response is financially authoritative. Preserve its exact
     // identifiers even when the best-effort audit write is temporarily down;
     // webhook/order-note reconciliation can then finish safely.
-    await db
-      .update(paymentAttempts)
-      .set(providerBinding)
-      .where(eq(paymentAttempts.id, prepared.attemptId));
+    await db.transaction(async (tx) => {
+      await tx
+        .update(paymentAttempts)
+        .set(providerBinding)
+        .where(eq(paymentAttempts.id, prepared.attemptId));
+      await queuePartnerPaymentLifecycle(tx, {
+        accountId: input.accountId,
+        invoiceId: prepared.invoiceId,
+        intentId: prepared.attemptId,
+        state: "processing",
+      });
+    });
   }
 
   if (prepared.paymentMethod === "card") {
@@ -1790,6 +1936,7 @@ export async function completePartnerEmbeddedPaymentIntent(
 
 export async function getPartnerPaymentIntent(input: {
   accountId: string;
+  access?: PartnerCommercialAccess;
   paymentIntentId: string;
   provider?: PartnerEmbeddedPaymentProvider;
 }): Promise<
@@ -1847,6 +1994,7 @@ export async function getPartnerPaymentIntent(input: {
       currency: partnerInvoices.currency,
       depositCents: partnerInvoices.depositCents,
       totalCents: partnerInvoices.totalCents,
+      creditedCents: partnerInvoices.creditedCents,
       paidCents: partnerInvoices.paidCents,
       balanceCents: partnerInvoices.balanceCents,
       appointmentStatus: appointments.status,
@@ -1868,7 +2016,18 @@ export async function getPartnerPaymentIntent(input: {
       ),
     )
     .limit(1);
-  if (!invoice) return { ok: false, status: 404, error: "not_found" };
+  if (
+    !invoice ||
+    (input.access &&
+      !(await hasPartnerInvoiceAccess(
+        db,
+        input.accountId,
+        invoice.id,
+        input.access,
+      )))
+  ) {
+    return { ok: false, status: 404, error: "not_found" };
+  }
   const [payment] = await db
     .select({
       id: payments.id,
@@ -1912,6 +2071,7 @@ export async function getPartnerPaymentIntent(input: {
     ? resolvePartnerEmbeddedPaymentAmount({
         purpose: metadata.purpose,
         requestedAmountMinor: metadata.amountMinor,
+        allowPartialPayment: await partialPaymentsEnabled(db, input.accountId),
         invoice,
       })
     : null;
@@ -2086,6 +2246,21 @@ async function markPartnerAllocationReview(input: {
   });
 }
 
+export function isPartnerInvoiceCollectibleForAllocation(
+  invoice: {
+    status: string;
+    balanceCents: number;
+  },
+  amountMinor: number,
+): boolean {
+  return (
+    ["issued", "partially_paid", "overdue"].includes(invoice.status) &&
+    Number.isSafeInteger(amountMinor) &&
+    amountMinor > 0 &&
+    invoice.balanceCents >= amountMinor
+  );
+}
+
 export async function finalizePartnerPortalPaymentReconciliation(
   tx: TeamMutationTransaction,
   result: SquareAttemptReconciliationResult,
@@ -2111,6 +2286,7 @@ export async function finalizePartnerPortalPaymentReconciliation(
       partnerBookingId: partnerInvoices.partnerBookingId,
       currency: partnerInvoices.currency,
       totalCents: partnerInvoices.totalCents,
+      creditedCents: partnerInvoices.creditedCents,
       paidCents: partnerInvoices.paidCents,
       balanceCents: partnerInvoices.balanceCents,
       status: partnerInvoices.status,
@@ -2167,9 +2343,8 @@ export async function finalizePartnerPortalPaymentReconciliation(
     (payment.canonicalStatus !== "completed" &&
       payment.providerStatus?.toLowerCase() !== "completed") ||
     invoice.currency !== metadata.currency ||
-    !["issued", "partially_paid", "overdue"].includes(invoice.status) ||
-    invoice.totalCents !== invoice.paidCents + invoice.balanceCents ||
-    invoice.balanceCents < metadata.amountMinor
+    invoice.totalCents !==
+      invoice.paidCents + invoice.balanceCents + invoice.creditedCents
   ) {
     await markPartnerAllocationReview({
       tx,
@@ -2190,6 +2365,20 @@ export async function finalizePartnerPortalPaymentReconciliation(
     .from(partnerPaymentAllocations)
     .where(eq(partnerPaymentAllocations.paymentId, payment.id))
     .for("update");
+  if (allocations.length && invoice.partnerBookingId && await hasMatchingPartnerAllocationEvidence(tx, {
+    accountId: metadata.partnerAccountId,
+    jobId: invoice.partnerBookingId,
+    paymentId: payment.id,
+    principalCents: payment.jobAmountCents,
+    allocations,
+  })) {
+    // Preserve the immutable correction instead of recreating the original
+    // checkout allocation when Square redelivers an older settlement event.
+    await tx.update(paymentAttempts).set({ metadata: { partnerPortalPayment: {
+      ...metadata, allocationState: "settled", allocationError: undefined,
+    } }, updatedAt: new Date() }).where(eq(paymentAttempts.id, attempt.id));
+    return;
+  }
   const existing = allocations.find(
     (allocation) =>
       allocation.accountId === metadata.partnerAccountId &&
@@ -2197,6 +2386,7 @@ export async function finalizePartnerPortalPaymentReconciliation(
   );
   if (existing) {
     if (
+      allocations.length === 1 &&
       existing.amountCents === metadata.amountMinor &&
       existing.state === "settled"
     ) {
@@ -2219,6 +2409,19 @@ export async function finalizePartnerPortalPaymentReconciliation(
     });
     return;
   }
+  // A replay of a settled allocation is successful even after the invoice is
+  // fully paid. Only a NEW allocation requires a currently payable balance.
+  if (
+    !isPartnerInvoiceCollectibleForAllocation(invoice, metadata.amountMinor)
+  ) {
+    await markPartnerAllocationReview({
+      tx,
+      metadata,
+      attemptId: attempt.id,
+      reason: "invoice_payment_binding_mismatch",
+    });
+    return;
+  }
   const now = new Date();
   await tx.insert(partnerPaymentAllocations).values({
     partnerAccountId: metadata.partnerAccountId,
@@ -2230,7 +2433,7 @@ export async function finalizePartnerPortalPaymentReconciliation(
     createdAt: now,
   });
   const paidCents = invoice.paidCents + metadata.amountMinor;
-  const balanceCents = invoice.totalCents - paidCents;
+  const balanceCents = invoice.totalCents - paidCents - invoice.creditedCents;
   const [updated] = await tx
     .update(partnerInvoices)
     .set({

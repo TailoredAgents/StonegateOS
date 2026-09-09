@@ -24,7 +24,7 @@ export type PartnerEmbeddedOrderRequest = Readonly<{
   intentId: string;
   appointmentId: string;
   invoiceNumber: string;
-  purpose: "deposit" | "one_off";
+  purpose: "deposit" | "one_off" | "invoice_balance";
   amountMinor: number;
   currency: "USD";
 }>;
@@ -355,6 +355,9 @@ export function createSquarePartnerEmbeddedPaymentProvider(
       });
       const label = safeInvoiceLabel(input.invoiceNumber);
       const requestBody = {
+        // One fresh order for this exact obligation, never the full job again.
+        // ACH pays this order in full once; deposits and later balances must
+        // not share a partially paid Square order.
         idempotency_key: `${input.intentId}-order`,
         order: {
           location_id: locationId,
@@ -364,6 +367,8 @@ export function createSquarePartnerEmbeddedPaymentProvider(
               name:
                 input.purpose === "deposit"
                   ? `Stonegate invoice ${label} deposit`
+                  : input.purpose === "invoice_balance"
+                    ? `Stonegate invoice ${label} remaining balance`
                   : `Stonegate invoice ${label} immediate payment`,
               note,
               quantity: "1",

@@ -136,7 +136,13 @@ describe("partner portal V2 hosted payment contracts", () => {
         requestedAmountMinor: 15_000,
         invoice: ordinary,
       }),
-    ).toEqual({ ok: false, reason: "hosted_invoice_required" });
+    ).toEqual({ ok: false, reason: "prepayment_unavailable" });
+    expect(resolvePartnerEmbeddedPaymentAmount({
+      purpose: "invoice_balance", requestedAmountMinor: 15_000, invoice: ordinary,
+    })).toEqual({ ok: true, amountMinor: 15_000 });
+    expect(resolvePartnerEmbeddedPaymentAmount({
+      purpose: "invoice_balance", requestedAmountMinor: 5_000, invoice: ordinary,
+    })).toEqual({ ok: false, reason: "invalid_amount" });
     expect(
       resolvePartnerEmbeddedPaymentAmount({
         purpose: "one_off",

@@ -1,5 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, or } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  lt,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import {
   appointmentHolds,
   appointments,
@@ -8,18 +20,19 @@ import {
   outboxEvents,
   partnerAccountLocations,
   partnerAccountMemberships,
+  partnerBookingDrafts,
+  partnerAccountCostCenters,
   partnerApprovalDecisions,
   partnerApprovalRequests,
   partnerApprovalRules,
   partnerBookings,
   partnerJobEvents,
-  partnerRoleTemplates,
   partnerUsers,
   type DatabaseClient,
 } from "@/db";
 import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
 import {
-  computePartnerCapabilities,
+  loadActiveMembershipAccesses,
   type PartnerPrincipal,
 } from "@/lib/partner-account-authorization";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
@@ -32,6 +45,55 @@ import {
   parsePortalV2Rfc3339,
 } from "@/lib/portal-v2-contract";
 import { isPortalV2Uuid } from "@/lib/partner-portal-v2-security";
+import {
+  createPartnerJobAccessCondition,
+  createPartnerJobLocationJoinCondition,
+  normalizePartnerJobAccessScope,
+  partnerJobAccessScopeKey,
+} from "@/lib/partner-portal-v2-resource-authorization";
+
+type ApprovalAccess = Pick<
+  PartnerPrincipal,
+  "accountId" | "accessLevel" | "accessScope"
+>;
+export function createPartnerApprovalAccessCondition(
+  access: ApprovalAccess | undefined,
+): SQL | undefined {
+  if (!access || access.accessLevel === "account") return undefined;
+  if (access.accessLevel !== "scoped" || !access.accountId) return sql`false`;
+  const scope = normalizePartnerJobAccessScope(access);
+  const locationGrants: SQL[] = [];
+  if (scope.locationIds.length)
+    locationGrants.push(
+      inArray(partnerAccountLocations.id, [...scope.locationIds]),
+    );
+  if (scope.propertyIds.length)
+    locationGrants.push(
+      inArray(partnerAccountLocations.propertyId, [...scope.propertyIds]),
+    );
+  const draftCostGrant = scope.costCenterIds.length
+    ? sql`exists (select 1 from ${partnerAccountCostCenters}
+    where ${partnerAccountCostCenters.partnerAccountId} = ${access.accountId}
+    and ${partnerAccountCostCenters.code} = ${partnerBookingDrafts.commercial}->>'costCenter'
+    and ${inArray(partnerAccountCostCenters.id, [...scope.costCenterIds])})`
+    : sql`false`;
+  const jobCostGrant = scope.costCenterIds.length
+    ? sql`exists (select 1 from ${partnerAccountCostCenters}
+    where ${partnerAccountCostCenters.partnerAccountId} = ${access.accountId}
+    and ${partnerAccountCostCenters.code} = ${partnerBookings.costCenter}
+    and ${inArray(partnerAccountCostCenters.id, [...scope.costCenterIds])})`
+    : sql`false`;
+  return or(
+    sql`exists (select 1 from ${partnerBookings} left join ${partnerAccountLocations} on ${createPartnerJobLocationJoinCondition()}
+      where ${partnerBookings.id} = ${partnerApprovalRequests.partnerBookingId}
+      and ${partnerBookings.partnerAccountId} = ${access.accountId} and ${or(createPartnerJobAccessCondition(access), jobCostGrant)})`,
+    sql`exists (select 1 from ${partnerBookingDrafts} left join ${partnerAccountLocations}
+      on ${partnerAccountLocations.id} = ${partnerBookingDrafts.locationId} and ${partnerAccountLocations.partnerAccountId} = ${partnerBookingDrafts.partnerAccountId}
+      where ${partnerBookingDrafts.id} = ${partnerApprovalRequests.bookingDraftId}
+      and ${partnerBookingDrafts.partnerAccountId} = ${access.accountId}
+      and ${or(...locationGrants, draftCostGrant) ?? sql`false`})`,
+  );
+}
 
 const ROLE_KEY_PATTERN = /^[a-z][a-z0-9_]{1,63}$/u;
 const SERVICE_KEY_PATTERN = /^[a-z][a-z0-9_-]{1,79}$/u;
@@ -1089,6 +1151,7 @@ export function buildPartnerApprovalRequestInsert(input: {
 
 type ApprovalCursor = {
   accountId: string;
+  accessKey: string;
   state: string | null;
   asOf: string;
   lastAt: string;
@@ -1099,6 +1162,7 @@ function isApprovalCursor(
   value: unknown,
   accountId: string,
   state: string | null,
+  accessKey: string,
 ): value is ApprovalCursor {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -1112,8 +1176,9 @@ function isApprovalCursor(
       : null;
   return (
     Object.keys(record).sort().join(",") ===
-      "accountId,asOf,lastAt,lastId,state" &&
+      "accessKey,accountId,asOf,lastAt,lastId,state" &&
     record["accountId"] === accountId &&
+    record["accessKey"] === accessKey &&
     record["state"] === state &&
     parsedAsOf !== null &&
     parsedAsOf.toISOString() === record["asOf"] &&
@@ -1378,6 +1443,7 @@ export type PartnerApprovalReadResult =
     };
 
 export async function listPartnerApprovalRequests(input: {
+  access?: ApprovalAccess;
   accountId: string;
   membershipId: string;
   params: URLSearchParams;
@@ -1396,7 +1462,12 @@ export async function listPartnerApprovalRequests(input: {
   const pagination = parsePortalV2Pagination(input.params, {
     cursorKind: "commercial.approvals",
     validateCursorPayload: (value): value is ApprovalCursor =>
-      isApprovalCursor(value, input.accountId, state),
+      isApprovalCursor(
+        value,
+        input.accountId,
+        state,
+        input.access ? partnerJobAccessScopeKey(input.access) : "account",
+      ),
     allowedQueryKeys: new Set(["state"]),
   });
   if (!pagination.ok) {
@@ -1421,6 +1492,7 @@ export async function listPartnerApprovalRequests(input: {
     .where(
       and(
         eq(partnerApprovalRequests.partnerAccountId, input.accountId),
+        createPartnerApprovalAccessCondition(input.access),
         stateCondition,
         cursor && cursorAt
           ? or(
@@ -1476,6 +1548,9 @@ export async function listPartnerApprovalRequests(input: {
             limit: pagination.limit,
             payload: {
               accountId: input.accountId,
+              accessKey: input.access
+                ? partnerJobAccessScopeKey(input.access)
+                : "account",
               state,
               asOf: now.toISOString(),
               lastAt: last.createdAt.toISOString(),
@@ -1487,6 +1562,7 @@ export async function listPartnerApprovalRequests(input: {
 }
 
 export async function getPartnerApprovalRequest(input: {
+  access?: ApprovalAccess;
   accountId: string;
   membershipId: string;
   requestId: string;
@@ -1502,6 +1578,7 @@ export async function getPartnerApprovalRequest(input: {
       and(
         eq(partnerApprovalRequests.partnerAccountId, input.accountId),
         eq(partnerApprovalRequests.id, input.requestId),
+        createPartnerApprovalAccessCondition(input.access),
       ),
     )
     .limit(1);
@@ -2101,6 +2178,37 @@ export async function decidePartnerApprovalRequest(
   const db = getDb();
   return db.transaction(async (tx) => {
     await acquireScheduleConflictLock(tx);
+    const [activeIdentity] = await tx
+      .select({ id: partnerAccountMemberships.id })
+      .from(partnerAccountMemberships)
+      .innerJoin(
+        partnerUsers,
+        eq(partnerUsers.id, partnerAccountMemberships.partnerUserId),
+      )
+      .where(
+        and(
+          eq(partnerAccountMemberships.id, input.membershipId),
+          eq(partnerAccountMemberships.partnerAccountId, input.accountId),
+          eq(partnerAccountMemberships.partnerUserId, input.partnerUserId),
+          eq(partnerAccountMemberships.status, "active"),
+          eq(partnerUsers.active, true),
+          eq(partnerUsers.identityStatus, "active"),
+        ),
+      )
+      .for("share")
+      .limit(1);
+    if (!activeIdentity)
+      return { status: 403, body: { ok: false, error: "forbidden" } };
+    const membership = (
+      await loadActiveMembershipAccesses(input.partnerUserId, tx)
+    ).find(
+      (access) =>
+        access.accountId === input.accountId &&
+        access.membershipId === input.membershipId,
+    );
+    if (!membership || !membership.capabilities.includes("approvals.decide"))
+      return { status: 403, body: { ok: false, error: "forbidden" } };
+    const capabilities = membership.capabilities;
     const [requestRow] = await tx
       .select()
       .from(partnerApprovalRequests)
@@ -2108,6 +2216,7 @@ export async function decidePartnerApprovalRequest(
         and(
           eq(partnerApprovalRequests.id, input.requestId),
           eq(partnerApprovalRequests.partnerAccountId, input.accountId),
+          createPartnerApprovalAccessCondition(membership),
         ),
       )
       .for("update")
@@ -2131,53 +2240,6 @@ export async function decidePartnerApprovalRequest(
       };
     }
     if (requestRow.requestedByMembershipId === input.membershipId) {
-      return { status: 403, body: { ok: false, error: "forbidden" } };
-    }
-
-    const [membership] = await tx
-      .select({
-        id: partnerAccountMemberships.id,
-        roleKey: partnerAccountMemberships.roleKey,
-        accessLevel: partnerAccountMemberships.accessLevel,
-        status: partnerAccountMemberships.status,
-        roleTemplateId: partnerAccountMemberships.roleTemplateId,
-        capabilityGrants: partnerAccountMemberships.capabilityGrants,
-        capabilityDenies: partnerAccountMemberships.capabilityDenies,
-        roleCapabilities: partnerRoleTemplates.capabilities,
-        roleActive: partnerRoleTemplates.active,
-      })
-      .from(partnerAccountMemberships)
-      .leftJoin(
-        partnerRoleTemplates,
-        and(
-          eq(partnerAccountMemberships.roleTemplateId, partnerRoleTemplates.id),
-          or(
-            isNull(partnerRoleTemplates.partnerAccountId),
-            eq(partnerRoleTemplates.partnerAccountId, input.accountId),
-          ),
-        ),
-      )
-      .where(
-        and(
-          eq(partnerAccountMemberships.id, input.membershipId),
-          eq(partnerAccountMemberships.partnerAccountId, input.accountId),
-          eq(partnerAccountMemberships.partnerUserId, input.partnerUserId),
-          eq(partnerAccountMemberships.status, "active"),
-        ),
-      )
-      .limit(1);
-    if (!membership || membership.accessLevel !== "account") {
-      return { status: 403, body: { ok: false, error: "forbidden" } };
-    }
-    const capabilities = computePartnerCapabilities({
-      roleCapabilities:
-        membership.roleTemplateId && membership.roleActive
-          ? (membership.roleCapabilities ?? [])
-          : [],
-      grants: membership.capabilityGrants,
-      denies: membership.capabilityDenies,
-    });
-    if (!capabilities.includes("approvals.decide")) {
       return { status: 403, body: { ok: false, error: "forbidden" } };
     }
 
@@ -2263,7 +2325,7 @@ export async function decidePartnerApprovalRequest(
         {
           membershipId: input.membershipId,
           roleKey: membership.roleKey,
-          capabilities: ["approvals.decide"],
+          capabilities,
           decision: input.decision,
         },
       ],
@@ -2295,7 +2357,7 @@ export async function decidePartnerApprovalRequest(
         reason: input.reason,
         decisionSnapshot: {
           roleKey: membership.roleKey,
-          capabilities: ["approvals.decide"],
+          capabilities,
           eligibleRuleIds: eligibility.eligibleRuleIds,
           requestRevision: requestRow.revision,
           assuranceLevel: "aal1",
@@ -2338,6 +2400,16 @@ export async function decidePartnerApprovalRequest(
         updatedAt: partnerApprovalRequests.updatedAt,
       });
     if (!updated) throw new Error("approval_request_revision_race");
+    if (requestRow.partnerBookingId)
+      await tx.insert(outboxEvents).values({
+        type: "partner.approval.decided",
+        payload: {
+          partnerAccountId: input.accountId,
+          partnerBookingId: requestRow.partnerBookingId,
+          approvalRequestId: requestRow.id,
+          revision: updated.revision,
+        },
+      });
 
     const auditId = randomUUID();
     await tx.insert(auditLogs).values({

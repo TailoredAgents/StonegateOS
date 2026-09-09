@@ -170,6 +170,7 @@ async function createFixture(
       status: "active_partner",
       segment: "commercial_client",
       portalAccessEnabled: true,
+      portalWorkflowConfig: { tools: { recurring: true, templates: true } },
       createdAt: NOW,
       updatedAt: NOW,
     });
@@ -435,11 +436,8 @@ describeWithDatabase(
         evaluateDuePartnerRecurringOccurrences({ limit: 10, now: NOW }),
       ]);
 
-      if (lifecycle.status === "rejected") {
-        const error = lifecycleError(lifecycle.reason);
-        expect(error.code).toBe("conflict");
-        expect(error.retryable).toBe(true);
-      } else {
+      expect(lifecycle.status).toBe("fulfilled");
+      if (lifecycle.status === "fulfilled") {
         // The horizon worker can finish its claimed occurrence before the
         // lifecycle transaction reaches the series. In that valid serialized
         // order the subsequent pause succeeds; it is not a concurrency leak.
@@ -450,8 +448,15 @@ describeWithDatabase(
       }
       expect(horizon.status).toBe("fulfilled");
       if (horizon.status === "fulfilled") {
-        expect(horizon.value.claimed).toBe(1);
-        expect(horizon.value.recoveredStale).toBe(1);
+        // Claim-first may recover/evaluate once; pause-first leaves nothing
+        // claimable. Both outcomes must leave no lease or accepted capacity.
+        expect([
+          [0, 0],
+          [1, 1],
+        ]).toContainEqual([
+          horizon.value.claimed,
+          horizon.value.recoveredStale,
+        ]);
       }
 
       const occurrences = await getDb()
@@ -467,10 +472,10 @@ describeWithDatabase(
         (occurrence) => occurrence.localDate === OUTSIDE_HORIZON_DATE,
       );
       expect(outside).toMatchObject({
-        state: "tentative",
+        state: "skipped",
         bookingDraftId: null,
         partnerBookingId: null,
-        failureCode: null,
+        failureCode: "series_paused",
       });
       expect(outside?.evaluation["reservationCreated"]).toBe(false);
       const [holdCount, appointmentCount] = await Promise.all([

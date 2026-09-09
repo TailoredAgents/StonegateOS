@@ -215,7 +215,6 @@ describe("partner portal onboarding completion contracts", () => {
     const root = join(process.cwd(), "app/api/portal/v2");
     const routes = [
       "access-applications/[applicationId]/withdraw/route.ts",
-      "company-join-requests/route.ts",
       "company-join-requests/[requestId]/withdraw/route.ts",
       "sessions/[sessionHandle]/revoke/route.ts",
       "notification-preferences/route.ts",
@@ -226,5 +225,15 @@ describe("partner portal onboarding completion contracts", () => {
       expect(source).toContain("isAllowedPartnerPortalMutationOrigin");
       expect(source).toContain("readPortalV2IdempotencyKey");
     }
+  });
+
+  it("retires new company joins without reintroducing a public authority-granting write", () => {
+    const source = readFileSync(
+      join(process.cwd(), "app/api/portal/v2/company-join-requests/route.ts"),
+      "utf8",
+    );
+    expect(source).toContain("partnerAccessWorkflowRetired");
+    expect(source).not.toContain("createPartnerJoinRequest(");
+    expect(source).toContain("requirePartnerCapability");
   });
 });

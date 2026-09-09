@@ -43,7 +43,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   urls.push({ url: absoluteUrl("/estimate"), lastModified: now });
   urls.push({ url: absoluteUrl("/contractors"), lastModified: now });
-  urls.push({ url: absoluteUrl("/partners"), lastModified: now });
   urls.push({ url: absoluteUrl("/service-agreement"), lastModified: now });
 
   urls.push({ url: absoluteUrl("/blog"), lastModified: now });

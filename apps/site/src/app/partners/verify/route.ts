@@ -32,7 +32,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!upstream?.ok) {
     return failureRedirect(
       origin,
-      upstream && upstream.status >= 500
+      !upstream || upstream.status === 429 || upstream.status >= 500
         ? "temporarily_unavailable"
         : "invalid_or_expired",
     );

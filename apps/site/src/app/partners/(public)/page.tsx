@@ -4,9 +4,9 @@ import { getPublicCompanyProfile } from "@/lib/company";
 import { absoluteUrl } from "@/lib/metadata";
 
 const title = "For Partners";
-const socialTitle = "Stonegate Partner Portal — Quick and Easy Service";
+const socialTitle = "Stonegate Partner Portal";
 const description =
-  "Request Stonegate junk removal with saved locations, simple scheduling, shared photos, job updates, completion proof, and organized billing.";
+  "Sign in to request Stonegate service and check your jobs. Existing partners can contact Stonegate Sales for access or help.";
 const socialImage = absoluteUrl("/partners/social-image");
 
 export const dynamic = "force-static";
@@ -16,7 +16,7 @@ export const metadata: Metadata = {
   title,
   description,
   alternates: { canonical: absoluteUrl("/partners") },
-  robots: { index: true, follow: true },
+  robots: { index: false, follow: false },
   openGraph: {
     title: socialTitle,
     description,

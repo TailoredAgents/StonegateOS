@@ -26,6 +26,7 @@ import {
   PartnerNotice,
   PartnerPanel,
   partnerPrimaryButtonClass,
+  partnerFieldClass,
   partnerSecondaryButtonClass,
 } from "./PartnerPortalUi";
 import type { PartnerCancellationDecision } from "./PartnerJobActions";
@@ -101,6 +102,12 @@ export function PartnerRescheduleFlow({
   const [submitting, setSubmitting] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
   const [outcome, setOutcome] = React.useState<RescheduleOutcome | null>(null);
+  const [preferredDate, setPreferredDate] = React.useState("");
+  const [preferredTime, setPreferredTime] = React.useState("anytime");
+  const submitKeyRef = React.useRef(
+    createPortalOperationKey("job-reschedule-submit"),
+  );
+  const reviewRevisionRef = React.useRef<string | null>(null);
   const draftRef = React.useRef<PartnerDraft | null>(null);
   const holdRef = React.useRef<PartnerHold | null>(null);
   const completedRef = React.useRef(false);
@@ -290,6 +297,7 @@ export function PartnerRescheduleFlow({
       return;
     }
     setSelectedWindowId(window.id);
+    submitKeyRef.current = createPortalOperationKey("job-reschedule-submit");
     setHold(result.data.hold);
   };
 
@@ -308,12 +316,42 @@ export function PartnerRescheduleFlow({
     await loadAvailability(currentDraft);
   };
 
-  const submit = async (): Promise<void> => {
-    const currentDraft = draftRef.current;
+  const submit = async (review = false): Promise<void> => {
+    let currentDraft = draftRef.current;
     const currentHold = holdRef.current;
-    if (!currentDraft || !currentHold || holdSeconds <= 0) return;
+    if (
+      !currentDraft ||
+      (!review && (!currentHold || holdSeconds <= 0)) ||
+      (review && !preferredDate)
+    )
+      return;
     setSubmitting(true);
     setMessage(null);
+    if (review && !reviewRevisionRef.current) {
+      const saved = await partnerPortalFetch<{ ok: true; draft: PartnerDraft }>(
+        `booking-drafts/${currentDraft.id}`,
+        {
+          method: "PATCH",
+          headers: { "If-Match": currentDraft.etag },
+          body: JSON.stringify({
+            preferredWindows: [
+              { localDate: preferredDate, timeOfDay: preferredTime, timezone },
+            ],
+          }),
+        },
+      ).catch(() => null);
+      if (!saved?.ok) {
+        setSubmitting(false);
+        setMessage(
+          saved?.error.message ??
+            "Your preferred date could not be saved. Your current schedule has not changed.",
+        );
+        return;
+      }
+      currentDraft = saved.data.draft;
+      reviewRevisionRef.current = currentDraft.etag;
+      setCurrentDraft(currentDraft);
+    }
     const result = await partnerPortalFetch<{
       ok: true;
       reschedule: PartnerRescheduleResult;
@@ -321,12 +359,14 @@ export function PartnerRescheduleFlow({
       method: "POST",
       headers: {
         "If-Match": jobEtag,
-        "Idempotency-Key": createPortalOperationKey("job-reschedule-submit"),
+        "Idempotency-Key": submitKeyRef.current,
       },
       body: JSON.stringify({
         draftId: currentDraft.id,
-        holdId: currentHold.id,
-        draftEtag: currentDraft.etag,
+        ...(review
+          ? { submissionMode: "review" }
+          : { holdId: currentHold!.id }),
+        draftEtag: review ? reviewRevisionRef.current : currentDraft.etag,
       }),
     }).catch(() => null);
     setSubmitting(false);
@@ -357,17 +397,27 @@ export function PartnerRescheduleFlow({
   };
 
   if (outcome) {
-    const requestedWindow = formatWindow(
-      outcome.arrivalWindowStartAt,
-      outcome.arrivalWindowEndAt,
-      timezone,
-    );
-    const requestedDay = new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone,
-      weekday: "long",
-      month: "long",
-      day: "numeric",
-    }).format(new Date(outcome.arrivalWindowStartAt));
+    const requestedWindow =
+      outcome.arrivalWindowStartAt && outcome.arrivalWindowEndAt
+        ? formatWindow(
+            outcome.arrivalWindowStartAt,
+            outcome.arrivalWindowEndAt,
+            timezone,
+          )
+        : "Preferred dates sent";
+    const requestedDay = outcome.arrivalWindowStartAt
+      ? new Intl.DateTimeFormat("en-US", {
+          timeZone: timezone,
+          weekday: "long",
+          month: "long",
+          day: "numeric",
+        }).format(new Date(outcome.arrivalWindowStartAt))
+      : (outcome.preferredWindows ?? [])
+          .map(
+            (window) =>
+              `${formatDay(window.localDate, window.timezone)} (${window.timeOfDay})`,
+          )
+          .join(", ");
     return (
       <PartnerPanel>
         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
@@ -458,10 +508,9 @@ export function PartnerRescheduleFlow({
 
         {availability?.calendar.state !== "current" ? (
           <PartnerNotice tone="warning" className="mt-4">
-            Calendar availability is{" "}
-            {availability?.calendar.state ?? "being checked"}. You may still
-            choose a window, but your current schedule stays in place while
-            Stonegate reviews the change.
+            Live confirmation is not available right now. Send a preferred date
+            below; your current schedule stays in place while Stonegate reviews
+            the change.
           </PartnerNotice>
         ) : null}
         {message ? (
@@ -494,7 +543,9 @@ export function PartnerRescheduleFlow({
           </div>
         ) : null}
 
-        {!loading && windowsByDate.length ? (
+        {!loading &&
+        availability?.instantConfirmationEligible &&
+        windowsByDate.length ? (
           <div
             className="mt-6 max-h-[36rem] space-y-5 overflow-y-auto pr-1"
             aria-busy={holding}
@@ -541,6 +592,62 @@ export function PartnerRescheduleFlow({
           </div>
         ) : null}
       </PartnerPanel>
+
+      {!loading && draft && !hold ? (
+        <PartnerPanel>
+          <h2 className="text-lg font-semibold text-slate-950">
+            Request a different date
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-slate-600">
+            If a suitable confirmed window is not available, tell us your
+            preference. Your current booking stays scheduled until Stonegate
+            confirms a change.
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <label className="text-sm font-semibold text-slate-700">
+              Preferred date
+              <input
+                type="date"
+                className={partnerFieldClass}
+                value={preferredDate}
+                onChange={(event) => {
+                  setPreferredDate(event.target.value);
+                  reviewRevisionRef.current = null;
+                  submitKeyRef.current = createPortalOperationKey(
+                    "job-reschedule-submit",
+                  );
+                }}
+              />
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              Best time
+              <select
+                className={partnerFieldClass}
+                value={preferredTime}
+                onChange={(event) => {
+                  setPreferredTime(event.target.value);
+                  reviewRevisionRef.current = null;
+                  submitKeyRef.current = createPortalOperationKey(
+                    "job-reschedule-submit",
+                  );
+                }}
+              >
+                <option value="anytime">Any time</option>
+                <option value="morning">Morning</option>
+                <option value="afternoon">Afternoon</option>
+              </select>
+            </label>
+          </div>
+          <button
+            type="button"
+            className={`${partnerPrimaryButtonClass} mt-4`}
+            disabled={submitting || !preferredDate}
+            onClick={() => void submit(true)}
+          >
+            {submitting ? "Sending…" : "Send change request"}
+          </button>
+        </PartnerPanel>
+      ) : null}
 
       {hold ? (
         <PartnerPanel>

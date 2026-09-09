@@ -8,6 +8,7 @@ import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   BarChart3,
+  Bell,
   BriefcaseBusiness,
   Building2,
   CalendarPlus2,
@@ -25,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
+import { confirmPartnerNavigation } from "../lib/use-partner-unsaved-changes";
 import type {
   PartnerPortalAccount,
   PartnerCapabilities,
@@ -53,7 +55,7 @@ type PartnerNavItem = {
 const NAV_ITEMS: PartnerNavItem[] = [
   {
     href: "/partners/overview",
-    label: "Overview",
+    label: "Home",
     capability: "overview",
     icon: Home,
     exact: true,
@@ -67,7 +69,8 @@ const NAV_ITEMS: PartnerNavItem[] = [
   },
   {
     href: "/partners/bookings",
-    label: "Jobs",
+    label: "My jobs",
+    shortLabel: "Jobs",
     capability: "jobs",
     icon: BriefcaseBusiness,
   },
@@ -79,7 +82,7 @@ const NAV_ITEMS: PartnerNavItem[] = [
   },
   {
     href: "/partners/properties",
-    label: "Locations",
+    label: "Saved locations",
     capability: "locations",
     icon: MapPin,
   },
@@ -91,7 +94,7 @@ const NAV_ITEMS: PartnerNavItem[] = [
   },
   {
     href: "/partners/billing",
-    label: "Billing & documents",
+    label: "Billing",
     capability: "billing",
     icon: CircleDollarSign,
   },
@@ -102,6 +105,12 @@ const NAV_ITEMS: PartnerNavItem[] = [
     icon: BarChart3,
   },
   {
+    href: "/partners/updates",
+    label: "Updates",
+    capability: "help",
+    icon: Bell,
+  },
+  {
     href: "/partners/help",
     label: "Help",
     capability: "help",
@@ -110,6 +119,7 @@ const NAV_ITEMS: PartnerNavItem[] = [
 ];
 
 const PAGE_TITLES: Array<{ prefix: string; title: string }> = [
+  { prefix: "/partners/updates", title: "Updates" },
   { prefix: "/partners/approvals", title: "Approvals" },
   { prefix: "/partners/bookings", title: "Jobs" },
   { prefix: "/partners/book", title: "Request service" },
@@ -129,7 +139,7 @@ function isActivePath(pathname: string, item: PartnerNavItem): boolean {
 function getPageTitle(pathname: string): string {
   return (
     PAGE_TITLES.find((entry) => pathname.startsWith(entry.prefix))?.title ??
-    "Overview"
+    "Home"
   );
 }
 
@@ -144,47 +154,26 @@ function focusableElements(container: HTMLElement): HTMLElement[] {
 }
 
 function PortalNavigation({
-  pathname,
-  capabilities,
-  onNavigate,
-}: {
-  pathname: string;
-  capabilities: PartnerCapabilities;
-  onNavigate?: () => void;
-}) {
-  return (
-    <nav aria-label="Partner portal" className="space-y-1">
-      {NAV_ITEMS.filter((item) => capabilities[item.capability]).map((item) => {
-        const active = isActivePath(pathname, item);
-        const Icon = item.icon;
-        return (
-          <Link
-            key={item.href}
-            href={item.href as Route}
-            onClick={onNavigate}
-            aria-current={active ? "page" : undefined}
-            className={cn(
-              "group flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
-              active
-                ? "bg-primary-50 text-primary-900 ring-1 ring-inset ring-primary-100"
-                : "text-slate-600 hover:bg-slate-100 hover:text-slate-950",
-            )}
-          >
-            <Icon
-              className={cn(
-                "h-5 w-5 shrink-0",
-                active
-                  ? "text-primary-700"
-                  : "text-slate-400 group-hover:text-slate-700",
-              )}
-              aria-hidden="true"
-            />
-            <span>{item.label}</span>
-          </Link>
-        );
-      })}
-    </nav>
-  );
+  pathname, capabilities, onNavigate,
+}: { pathname: string; capabilities: PartnerCapabilities; onNavigate?: () => void }) {
+  const visible = NAV_ITEMS.filter((item) => capabilities[item.capability] && item.href !== "/partners/book");
+  const primary = new Set(["/partners/overview", "/partners/bookings", "/partners/properties", "/partners/help"]);
+  const renderItem = (item: PartnerNavItem) => {
+    const active = isActivePath(pathname, item);
+    const Icon = item.icon;
+    return <Link key={item.href} href={item.href as Route} onClick={onNavigate} aria-current={active ? "page" : undefined}
+      className={cn("group flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500", active ? "bg-primary-50 text-primary-900" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950")}>
+      <Icon className="h-5 w-5 shrink-0" aria-hidden="true" /><span>{item.label}</span>
+    </Link>;
+  };
+  const secondary = visible.filter((item) => !primary.has(item.href));
+  return <nav aria-label="Partner portal" className="space-y-1">
+    {visible.filter((item) => primary.has(item.href)).map(renderItem)}
+    {secondary.length ? <details className="pt-2" open={secondary.some((item) => isActivePath(pathname, item)) || undefined}>
+      <summary className="flex min-h-11 cursor-pointer items-center rounded-xl px-3 text-sm font-semibold text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">More tools</summary>
+      <div className="mt-1 border-l border-slate-200 pl-2">{secondary.map(renderItem)}</div>
+    </details> : null}
+  </nav>;
 }
 
 function ShellAccountSwitcher({
@@ -208,7 +197,7 @@ function ShellAccountSwitcher({
   }, [current?.id]);
 
   const switchAccount = async (): Promise<void> => {
-    if (!selected || selected === current?.id || busy) return;
+    if (!selected || selected === current?.id || busy || !confirmPartnerNavigation()) return;
     if (document.querySelector('[data-partner-unsaved="true"]')) {
       setError(
         "Save or discard your unsaved changes before switching accounts.",
@@ -310,6 +299,7 @@ export function PartnerAppShell({
   userName,
   userEmail,
   capabilities,
+  tools,
 }: {
   children: React.ReactNode;
   companyName: string;
@@ -319,6 +309,7 @@ export function PartnerAppShell({
   userName: string;
   userEmail: string;
   capabilities: PartnerCapabilities;
+  tools?: Record<string, boolean>;
 }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = React.useState(false);
@@ -483,7 +474,7 @@ export function PartnerAppShell({
               ) : null}
               <PortalNavigation
                 pathname={pathname}
-                capabilities={capabilities}
+                capabilities={{ ...capabilities, reports: capabilities.reports && tools?.["reports"] === true }}
               />
             </div>
             <div className="border-t border-slate-200 p-4">
@@ -581,7 +572,7 @@ export function PartnerAppShell({
 
         <nav
           aria-label="Quick navigation"
-          className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
+          className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] lg:hidden"
         >
           <div className="grid grid-flow-col auto-cols-fr">
             {NAV_ITEMS.filter((item) =>
@@ -598,7 +589,7 @@ export function PartnerAppShell({
                     aria-current={active ? "page" : undefined}
                     className={cn(
                       "flex min-h-[64px] flex-col items-center justify-center gap-1 px-1 py-2 text-[11px] font-semibold",
-                      active ? "text-primary-800" : "text-slate-500",
+                      active ? "text-primary-800" : "text-slate-600",
                     )}
                   >
                     <Icon className="h-5 w-5" aria-hidden="true" />
@@ -609,7 +600,7 @@ export function PartnerAppShell({
             <button
               type="button"
               onClick={openNavigation}
-              className="flex min-h-[64px] flex-col items-center justify-center gap-1 px-1 py-2 text-[11px] font-semibold text-slate-500"
+              className="flex min-h-[64px] flex-col items-center justify-center gap-1 px-1 py-2 text-[11px] font-semibold text-slate-600"
               aria-label="Open all navigation"
               aria-expanded={mobileOpen}
               aria-controls={DRAWER_ID}
@@ -665,7 +656,7 @@ export function PartnerAppShell({
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
               <PortalNavigation
                 pathname={pathname}
-                capabilities={capabilities}
+                capabilities={{ ...capabilities, reports: capabilities.reports && tools?.["reports"] === true }}
                 onNavigate={navigateFromDrawer}
               />
             </div>

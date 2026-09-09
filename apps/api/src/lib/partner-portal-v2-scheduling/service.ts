@@ -1,5 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
+import { ensurePartnerJobThread } from "@/lib/partner-job-thread";
+import { partnerJobLocationSnapshot } from "@/lib/partner-job-location";
+import { partnerServiceRequestability } from "@/lib/partner-service-requestability";
+import { normalizePartnerAccountWorkflow } from "@/lib/partner-account-workflows";
+import { acquirePartnerRecurringHorizonClaimLock } from "@/lib/partner-recurring-coordination";
 import { DateTime } from "luxon";
+import {
+  loadNamedResourcePlan,
+  namedResourceBlocksForOccupancy,
+  type NamedResourcePlan,
+} from "@/lib/scheduling-resource-store";
 import { isPartnerAddOnTierKey } from "@myst-os/pricing";
 import {
   and,
@@ -41,21 +51,30 @@ import {
   partnerJobEvents,
   partnerRateAddOnItems,
   partnerRescheduleRequests,
+  partnerRecurringSeries,
+  partnerRecurringOccurrences,
   partnerScheduleAssistanceRequests,
-  partnerSchedulingProfileResourceRequirements,
   partnerSchedulingProfiles,
   partnerServiceAddOnOptions,
   partnerServiceAddOns,
   partnerServiceCatalog,
+  partnerUsers,
   scheduleBlocks,
   scheduleDateOverrides,
-  scheduleResources,
   scheduleResourcePools,
   type DatabaseClient,
 } from "@/db";
 import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
 import { getCalendarConfig } from "@/lib/calendar";
-import type { PartnerPrincipal } from "@/lib/partner-account-authorization";
+import {
+  loadActiveMembershipAccesses,
+  type PartnerPrincipal,
+} from "@/lib/partner-account-authorization";
+import { loadPartnerAdditionalServiceSource } from "@/lib/partner-additional-service";
+import {
+  createPartnerAdditionalDraftSourceAccessCondition,
+  partnerJobAccessScopeKey,
+} from "@/lib/partner-portal-v2-resource-authorization";
 import {
   arePartnerPortalV2ReadsEnabled,
   arePartnerPortalV2WritesEnabled,
@@ -63,6 +82,8 @@ import {
 } from "@/lib/partner-portal-feature-flags";
 import {
   createPortalV2StrongEtag,
+  encodePortalV2Cursor,
+  parsePortalV2Pagination,
   evaluatePortalV2RevisionPrecondition,
 } from "@/lib/portal-v2-contract";
 import {
@@ -80,9 +101,7 @@ import {
   createSchedulePolicySnapshotFromLegacy,
   evaluateInstantConfirmEligibility,
   normalizeSchedulingReviewReasons,
-  type NamedScheduleResource,
   type NamedScheduleResourceBlock,
-  type NamedScheduleResourceRequirement,
   type ScheduleCapacityBlock,
   type SchedulePolicySnapshot,
   type SchedulingReviewReasonCode,
@@ -185,11 +204,13 @@ export type PartnerSchedulingActor = Readonly<{
   canReadRates: boolean;
   locationIds: readonly string[];
   propertyIds: readonly string[];
+  costCenterIds?: readonly string[];
 }>;
 
 export type PartnerDraftDto = Readonly<{
   id: string;
   rescheduleFromJobId: string | null;
+  additionalServiceFromJobId: string | null;
   state: string;
   locationId: string | null;
   serviceKey: string | null;
@@ -355,6 +376,7 @@ export function toPartnerDraftDto(row: DraftRow): PartnerDraftDto {
   return Object.freeze({
     id: row.id,
     rescheduleFromJobId: row.rescheduleFromPartnerBookingId,
+    additionalServiceFromJobId: row.additionalServiceFromPartnerBookingId,
     state: row.state,
     locationId: row.locationId,
     serviceKey: row.serviceKey,
@@ -420,6 +442,9 @@ export function requirePartnerSchedulingActor(
       principal.capabilities.includes("rates.read"),
     locationIds: Object.freeze([...(principal.accessScope.locationIds ?? [])]),
     propertyIds: Object.freeze([...(principal.accessScope.propertyIds ?? [])]),
+    costCenterIds: Object.freeze([
+      ...(principal.accessScope.costCenterIds ?? []),
+    ]),
   });
 }
 
@@ -538,7 +563,237 @@ async function loadDraft(
     );
   const location = await loadLocation(tx, actor.accountId, draft.locationId);
   assertDraftAccess(actor, draft, location);
+  if (draft.additionalServiceFromPartnerBookingId) {
+    await requireAdditionalServiceSourceAccess(
+      tx,
+      actor,
+      draft.additionalServiceFromPartnerBookingId,
+    );
+  }
   return { draft, location };
+}
+
+function schedulingJobPrincipal(actor: PartnerSchedulingActor) {
+  return {
+    accountId: actor.accountId,
+    accessLevel: actor.accessLevel,
+    accessScope: {
+      locationIds: [...actor.locationIds],
+      propertyIds: [...actor.propertyIds],
+      costCenterIds: [...(actor.costCenterIds ?? [])],
+    },
+  };
+}
+
+/** A link is provenance, never an extra grant of account or location access. */
+async function requireAdditionalServiceSourceAccess(
+  tx: SchedulingTransaction,
+  actor: PartnerSchedulingActor,
+  jobId: string,
+  creating = false,
+) {
+  // Account configuration/membership writers take the account row first.
+  // Scheduling writers have already taken the global schedule lock; no caller
+  // may take that lock after this one. Wait before reading authority, so a
+  // queued suspension cannot be bypassed by an insert waiting on its FK.
+  await tx
+    .select({ id: partnerAccounts.id })
+    .from(partnerAccounts)
+    .where(eq(partnerAccounts.id, actor.accountId))
+    .for("share")
+    .limit(1);
+  await tx
+    .select({ id: partnerUsers.id })
+    .from(partnerUsers)
+    .where(eq(partnerUsers.id, actor.partnerUserId))
+    .for("share")
+    .limit(1);
+  await tx
+    .select({ id: partnerAccountMemberships.id })
+    .from(partnerAccountMemberships)
+    .where(
+      and(
+        eq(partnerAccountMemberships.id, actor.membershipId),
+        eq(partnerAccountMemberships.partnerAccountId, actor.accountId),
+      ),
+    )
+    .for("share")
+    .limit(1);
+  const access = (
+    await loadActiveMembershipAccesses(actor.partnerUserId, tx)
+  ).find(
+    (entry) =>
+      entry.accountId === actor.accountId &&
+      entry.membershipId === actor.membershipId,
+  );
+  const [identity] = await tx
+    .select({ id: partnerUsers.id })
+    .from(partnerUsers)
+    .innerJoin(partnerAccounts, eq(partnerAccounts.id, actor.accountId))
+    .where(
+      and(
+        eq(partnerUsers.id, actor.partnerUserId),
+        eq(partnerUsers.identityStatus, "active"),
+        eq(partnerUsers.active, true),
+        eq(partnerAccounts.portalLifecycleStatus, "active"),
+      ),
+    )
+    .limit(1);
+  const principal = schedulingJobPrincipal(actor);
+  if (
+    !identity ||
+    !access ||
+    !access.capabilities.includes("jobs.read") ||
+    (creating && !access.capabilities.includes("bookings.create")) ||
+    partnerJobAccessScopeKey(principal) !== partnerJobAccessScopeKey(access)
+  ) {
+    throw new PartnerPortalSchedulingError(
+      "not_found",
+      "The job was not found.",
+      { status: 404 },
+    );
+  }
+  const source = await loadPartnerAdditionalServiceSource(tx, principal, jobId);
+  if (!source)
+    throw new PartnerPortalSchedulingError(
+      "not_found",
+      "The job was not found.",
+      { status: 404 },
+    );
+  return source;
+}
+
+/** Start a new job; deliberately never update or copy the source's financial records. */
+export async function createPartnerAdditionalServiceDraft(input: {
+  actor: PartnerSchedulingActor;
+  jobId: string;
+  idempotencyKeyHash: string;
+  correlationId?: string;
+  now?: Date;
+}): Promise<{ draft: PartnerDraftDto; replayed: boolean }> {
+  const now = input.now ?? new Date();
+  const opHash = operationHash(
+    "additional_service.draft.create",
+    input.actor.accountId,
+    input.idempotencyKeyHash,
+  );
+  const requestHash = sha256(input.jobId, input.actor.membershipId);
+  return getDb().transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`partner_draft_create_v2:${input.actor.accountId}`}))`,
+    );
+    const source = await requireAdditionalServiceSourceAccess(
+      tx,
+      input.actor,
+      input.jobId,
+      true,
+    );
+    const [replay] = await tx
+      .select()
+      .from(partnerBookingDrafts)
+      .where(
+        and(
+          eq(partnerBookingDrafts.partnerAccountId, input.actor.accountId),
+          sql`${partnerBookingDrafts.validation}->>'createOperationKeyHash' = ${opHash}`,
+        ),
+      )
+      .limit(1);
+    if (replay) {
+      if (
+        replay.validation["createRequestHash"] !== requestHash ||
+        replay.additionalServiceFromPartnerBookingId !== input.jobId
+      ) {
+        throw new PartnerPortalSchedulingError(
+          "idempotency_conflict",
+          "That request key was already used for different input.",
+          { status: 409 },
+        );
+      }
+      const { draft } = await loadDraft(tx, input.actor, replay.id);
+      return { draft: toPartnerDraftDto(draft), replayed: true };
+    }
+    if (!source.eligible) {
+      throw new PartnerPortalSchedulingError(
+        "conflict",
+        "Use the current job's change request for unfinished work, or start a separate service request.",
+        { status: 409 },
+      );
+    }
+    const candidate = await loadLocation(
+      tx,
+      input.actor.accountId,
+      source.locationId,
+    );
+    const location = candidate?.active ? candidate : null;
+    if (location) assertLocationAccess(input.actor, location);
+    const [fallback] = await tx
+      .select({
+        key: partnerServiceCatalog.key,
+        workflow: partnerAccounts.portalWorkflowConfig,
+      })
+      .from(partnerServiceCatalog)
+      .innerJoin(partnerAccounts, eq(partnerAccounts.id, input.actor.accountId))
+      .where(
+        and(
+          eq(partnerServiceCatalog.key, "service_request"),
+          eq(partnerServiceCatalog.active, true),
+        ),
+      )
+      .limit(1);
+    const [draft] = await tx
+      .insert(partnerBookingDrafts)
+      .values({
+        partnerAccountId: input.actor.accountId,
+        createdByMembershipId: input.actor.membershipId,
+        additionalServiceFromPartnerBookingId: source.id,
+        locationId: location?.id ?? null,
+        serviceKey:
+          fallback &&
+          !partnerServiceRequestability(fallback.workflow, fallback.key)
+            .disabled
+            ? fallback.key
+            : null,
+        onSiteContact: location?.onSiteContact ?? null,
+        // No original scope, price, quote/opportunity, secrets, media, approvals,
+        // payment, crew assignment, or completion state crosses this boundary.
+        state: "draft",
+        validation: {
+          createOperationKeyHash: opHash,
+          createRequestHash: requestHash,
+          checkedAt: null,
+          fieldErrors: {},
+        },
+        expiresAt: DateTime.fromJSDate(now)
+          .plus({ days: DRAFT_TTL_DAYS })
+          .toJSDate(),
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+    if (!draft)
+      throw new Error("partner_additional_service_draft_create_failed");
+    await tx.insert(auditLogs).values({
+      actorId: input.actor.partnerUserId,
+      actorRole: "partner",
+      actorLabel: input.actor.email,
+      sessionId: input.actor.sessionId,
+      authMethod: "partner_session",
+      correlationId: input.correlationId ?? randomUUID(),
+      requiredPermissions: ["bookings.create", "jobs.read"],
+      outcome: "succeeded",
+      idempotencyKeyHash: opHash,
+      action: "partner.additional_service.draft_created",
+      entityType: "partner_booking_draft",
+      entityId: draft.id,
+      meta: sanitizeAuditMetadata({
+        accountId: input.actor.accountId,
+        membershipId: input.actor.membershipId,
+        sourceJobId: source.id,
+      }),
+      createdAt: now,
+    });
+    return { draft: toPartnerDraftDto(draft), replayed: false };
+  });
 }
 
 function assertRevision(
@@ -687,6 +942,26 @@ async function assertAccountServiceTier(
       },
     );
   }
+  const [requestAccount] = await tx
+    .select({ config: partnerAccounts.portalWorkflowConfig })
+    .from(partnerAccounts)
+    .where(eq(partnerAccounts.id, accountId))
+    .limit(1);
+  const requestability = partnerServiceRequestability(
+    requestAccount?.config,
+    serviceKey,
+  );
+  if (requestability.disabled)
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "This service is not enabled for your account.",
+      {
+        status: 422,
+        fieldErrors: {
+          serviceKey: "Choose another service or contact Stonegate.",
+        },
+      },
+    );
   let agreement: PartnerAccountServiceAgreementRecord;
   let entitlement: PartnerAccountServiceEntitlement;
   try {
@@ -699,6 +974,12 @@ async function assertAccountServiceTier(
     if (!(error instanceof PartnerServiceAgreementConfigurationError)) {
       throw error;
     }
+    if (
+      error.code === "service_not_entitled" &&
+      requestability.reviewAllowed &&
+      !tierKey
+    )
+      return;
     throw new PartnerPortalSchedulingError(
       "invalid_fields",
       "That service is not included in this account’s current agreement.",
@@ -720,6 +1001,13 @@ async function assertAccountServiceTier(
   }
   if (!tierKey) {
     if (!requireComplete) return;
+    const configuredRates = await loadPartnerAgreementRateOptions(tx, {
+      accountId,
+      serviceKey,
+      agreementCurrency: agreement.currency,
+      now,
+    });
+    if (configuredRates.length === 0) return; // Unpriced work can be requested, never confirmed.
     throw new PartnerPortalSchedulingError(
       "invalid_fields",
       "Choose a base service option from this account’s current agreement.",
@@ -764,11 +1052,178 @@ async function assertAccountServiceTier(
   }
 }
 
+export type PartnerRecurringSource = Readonly<{
+  seriesId: string;
+  occurrenceId: string;
+}>;
+
+/** Resolve internal recurrence provenance before locking, then serialize it with
+ * staff containment and lifecycle changes. A generic saved draft cannot bypass
+ * its bound recurrence merely by omitting the internal worker context. */
+async function lockPartnerRecurringSource(
+  tx: SchedulingTransaction,
+  actor: PartnerSchedulingActor,
+  explicit: PartnerRecurringSource | undefined,
+  draftId?: string,
+  allowSubmitted = false,
+) {
+  const [bound] =
+    !explicit && draftId
+      ? await tx
+          .select({
+            seriesId: partnerRecurringOccurrences.recurringSeriesId,
+            occurrenceId: partnerRecurringOccurrences.id,
+          })
+          .from(partnerRecurringOccurrences)
+          .where(
+            and(
+              eq(partnerRecurringOccurrences.partnerAccountId, actor.accountId),
+              eq(partnerRecurringOccurrences.bookingDraftId, draftId),
+            ),
+          )
+          .limit(1)
+      : [];
+  const source = explicit ?? bound;
+  if (!source) return null;
+  await acquirePartnerRecurringHorizonClaimLock(tx);
+  await acquireScheduleConflictLock(tx);
+  const [account] = await tx
+    .select({
+      config: partnerAccounts.portalWorkflowConfig,
+      lifecycle: partnerAccounts.portalLifecycleStatus,
+      accessEnabled: partnerAccounts.portalAccessEnabled,
+    })
+    .from(partnerAccounts)
+    .where(eq(partnerAccounts.id, actor.accountId))
+    .for("update")
+    .limit(1);
+  const [series] = await tx
+    .select()
+    .from(partnerRecurringSeries)
+    .where(
+      and(
+        eq(partnerRecurringSeries.id, source.seriesId),
+        eq(partnerRecurringSeries.partnerAccountId, actor.accountId),
+      ),
+    )
+    .for("update")
+    .limit(1);
+  const [occurrence] = await tx
+    .select()
+    .from(partnerRecurringOccurrences)
+    .where(
+      and(
+        eq(partnerRecurringOccurrences.id, source.occurrenceId),
+        eq(partnerRecurringOccurrences.recurringSeriesId, source.seriesId),
+        eq(partnerRecurringOccurrences.partnerAccountId, actor.accountId),
+      ),
+    )
+    .for("update")
+    .limit(1);
+  if (
+    !account ||
+    !series ||
+    !occurrence ||
+    (draftId &&
+      occurrence.bookingDraftId &&
+      occurrence.bookingDraftId !== draftId)
+  )
+    throw new PartnerPortalSchedulingError(
+      "not_found",
+      "This recurring request is no longer available.",
+      { status: 404 },
+    );
+  if (
+    !(allowSubmitted && occurrence.partnerBookingId) &&
+    (account.lifecycle !== "active" ||
+      !account.accessEnabled ||
+      !normalizePartnerAccountWorkflow(account.config).tools.recurring ||
+      series.state !== "active" ||
+      occurrence.state !== "evaluating" ||
+      occurrence.partnerBookingId)
+  )
+    throw new PartnerPortalSchedulingError(
+      "forbidden",
+      "Recurring service was paused, canceled, or disabled before this request was submitted. No new job was accepted.",
+      { status: 403 },
+    );
+  return source;
+}
+
+async function bindPartnerRecurringDraft(
+  tx: SchedulingTransaction,
+  source: PartnerRecurringSource | null,
+  actor: PartnerSchedulingActor,
+  draftId: string,
+) {
+  if (!source) return;
+  const [bound] = await tx
+    .update(partnerRecurringOccurrences)
+    .set({ bookingDraftId: draftId, updatedAt: new Date() })
+    .where(
+      and(
+        eq(partnerRecurringOccurrences.id, source.occurrenceId),
+        eq(partnerRecurringOccurrences.partnerAccountId, actor.accountId),
+        eq(partnerRecurringOccurrences.state, "evaluating"),
+        or(
+          isNull(partnerRecurringOccurrences.bookingDraftId),
+          eq(partnerRecurringOccurrences.bookingDraftId, draftId),
+        ),
+      ),
+    )
+    .returning({ id: partnerRecurringOccurrences.id });
+  if (!bound)
+    throw new PartnerPortalSchedulingError(
+      "conflict",
+      "The recurring request changed before its draft was saved.",
+      { status: 409 },
+    );
+}
+
+async function finalizePartnerRecurringBooking(
+  tx: SchedulingTransaction,
+  source: PartnerRecurringSource | null,
+  actor: PartnerSchedulingActor,
+  booking: SubmittedPartnerBookingDto,
+  now: Date,
+) {
+  if (!source) return;
+  const [updated] = await tx
+    .update(partnerRecurringOccurrences)
+    .set({
+      partnerBookingId: booking.id,
+      bookingDraftId: booking.draftId,
+      state: booking.publicStatus === "confirmed" ? "confirmed" : "review",
+      failureCode:
+        booking.publicStatus === "confirmed"
+          ? null
+          : "stonegate_review_required",
+      evaluatedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(partnerRecurringOccurrences.id, source.occurrenceId),
+        eq(partnerRecurringOccurrences.partnerAccountId, actor.accountId),
+        eq(partnerRecurringOccurrences.state, "evaluating"),
+        isNull(partnerRecurringOccurrences.partnerBookingId),
+      ),
+    )
+    .returning({ id: partnerRecurringOccurrences.id });
+  if (!updated)
+    throw new PartnerPortalSchedulingError(
+      "conflict",
+      "The recurring request changed before confirmation. No new job was accepted.",
+      { status: 409 },
+    );
+}
+
 export async function createPartnerBookingDraft(input: {
   actor: PartnerSchedulingActor;
   mutation: PartnerDraftMutation;
   idempotencyKeyHash: string;
   now?: Date;
+  recurringSource?: PartnerRecurringSource;
 }): Promise<{ draft: PartnerDraftDto; replayed: boolean }> {
   const db = getDb();
   const now = input.now ?? new Date();
@@ -779,6 +1234,11 @@ export async function createPartnerBookingDraft(input: {
   );
   const requestHash = sha256(stableJson(input.mutation));
   return db.transaction(async (tx) => {
+    const recurringSource = await lockPartnerRecurringSource(
+      tx,
+      input.actor,
+      input.recurringSource,
+    );
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext(${`partner_draft_create_v2:${input.actor.accountId}`}))`,
     );
@@ -806,6 +1266,12 @@ export async function createPartnerBookingDraft(input: {
         replay.locationId,
       );
       assertDraftAccess(input.actor, replay, replayLocation);
+      await bindPartnerRecurringDraft(
+        tx,
+        recurringSource,
+        input.actor,
+        replay.id,
+      );
       return { draft: toPartnerDraftDto(replay), replayed: true };
     }
     await resolveMutationLocation(tx, input.actor, input.mutation.locationId);
@@ -844,6 +1310,12 @@ export async function createPartnerBookingDraft(input: {
       })
       .returning();
     if (!created) throw new Error("partner_draft_create_failed");
+    await bindPartnerRecurringDraft(
+      tx,
+      recurringSource,
+      input.actor,
+      created.id,
+    );
     return { draft: toPartnerDraftDto(created), replayed: false };
   });
 }
@@ -1187,6 +1659,218 @@ export async function getPartnerBookingDraft(input: {
   });
 }
 
+export async function abandonPartnerBookingDraft(input: {
+  actor: PartnerSchedulingActor;
+  draftId: string;
+  ifMatch: string | null;
+  idempotencyKeyHash: string;
+  correlationId: string;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const operation = operationHash(
+    "draft.abandon",
+    input.actor.accountId,
+    input.idempotencyKeyHash,
+  );
+  return getDb().transaction(async (tx) => {
+    await acquireScheduleConflictLock(tx);
+    const { draft } = await loadDraft(tx, input.actor, input.draftId, {
+      lock: true,
+    });
+    if (
+      draft.state === "abandoned" &&
+      draft.validation["abandonOperationKeyHash"] === operation
+    )
+      return { draft: toPartnerDraftDto(draft), replayed: true };
+    assertDraftStateMutable(draft, now);
+    assertRevision(draft, input.ifMatch, input.correlationId);
+    const [reused] = await tx
+      .select({ id: partnerBookingDrafts.id })
+      .from(partnerBookingDrafts)
+      .where(
+        and(
+          eq(partnerBookingDrafts.partnerAccountId, input.actor.accountId),
+          sql`${partnerBookingDrafts.validation}->>'abandonOperationKeyHash' = ${operation}`,
+        ),
+      )
+      .limit(1);
+    if (reused)
+      throw new PartnerPortalSchedulingError(
+        "idempotency_conflict",
+        "That request key was already used for another saved request.",
+        { status: 409 },
+      );
+    await tx
+      .update(appointmentHolds)
+      .set({ status: "released", updatedAt: now })
+      .where(
+        and(
+          eq(appointmentHolds.partnerAccountId, input.actor.accountId),
+          eq(appointmentHolds.partnerBookingDraftId, draft.id),
+          eq(appointmentHolds.status, "active"),
+        ),
+      );
+    const [abandoned] = await tx
+      .update(partnerBookingDrafts)
+      .set({
+        state: "abandoned",
+        revision: draft.revision + 1,
+        updatedAt: now,
+        validation: { ...draft.validation, abandonOperationKeyHash: operation },
+      })
+      .where(
+        and(
+          eq(partnerBookingDrafts.partnerAccountId, input.actor.accountId),
+          eq(partnerBookingDrafts.id, draft.id),
+        ),
+      )
+      .returning();
+    if (!abandoned) throw new Error("partner_draft_abandon_failed");
+    await tx.insert(auditLogs).values({
+      actorType: "human",
+      actorId: input.actor.partnerUserId,
+      actorRole: "partner",
+      actorLabel: input.actor.email,
+      sessionId: input.actor.sessionId,
+      authMethod: "partner_session",
+      correlationId: input.correlationId,
+      requiredPermissions: ["bookings.update"],
+      outcome: "succeeded",
+      idempotencyKeyHash: operation,
+      action: "partner.draft.abandoned",
+      entityType: "partner_booking_draft",
+      entityId: draft.id,
+      meta: sanitizeAuditMetadata({
+        accountId: input.actor.accountId,
+        membershipId: input.actor.membershipId,
+      }),
+      createdAt: now,
+    });
+    return { draft: toPartnerDraftDto(abandoned), replayed: false };
+  });
+}
+
+export async function listPartnerBookingDrafts(input: {
+  actor: PartnerSchedulingActor;
+  params: URLSearchParams;
+  now?: Date;
+}) {
+  type Cursor = {
+    accountId: string;
+    membershipId: string;
+    updatedAt: string;
+    id: string;
+  };
+  const pagination = parsePortalV2Pagination(input.params, {
+    cursorKind: "partner_booking_drafts",
+    allowedQueryKeys: new Set<string>(),
+    validateCursorPayload: (value: unknown): value is Cursor => {
+      if (!value || typeof value !== "object" || Array.isArray(value))
+        return false;
+      const cursor = value as Record<string, unknown>;
+      return (
+        cursor["accountId"] === input.actor.accountId &&
+        cursor["membershipId"] === input.actor.membershipId &&
+        typeof cursor["id"] === "string" &&
+        /^[0-9a-f-]{36}$/iu.test(cursor["id"]) &&
+        typeof cursor["updatedAt"] === "string" &&
+        Number.isFinite(Date.parse(cursor["updatedAt"]))
+      );
+    },
+  });
+  if (!pagination.ok)
+    throw new PartnerPortalSchedulingError(
+      "invalid_cursor",
+      "The saved-request page is invalid. Refresh the list.",
+      { status: 422 },
+    );
+  const cursor = pagination.cursor?.payload;
+  const now = input.now ?? new Date();
+  const rows = await getDb()
+    .select({ draft: partnerBookingDrafts })
+    .from(partnerBookingDrafts)
+    .leftJoin(
+      partnerAccountLocations,
+      and(
+        eq(partnerAccountLocations.id, partnerBookingDrafts.locationId),
+        eq(partnerAccountLocations.partnerAccountId, input.actor.accountId),
+      ),
+    )
+    .where(
+      and(
+        eq(partnerBookingDrafts.partnerAccountId, input.actor.accountId),
+        eq(
+          partnerBookingDrafts.createdByMembershipId,
+          input.actor.membershipId,
+        ),
+        isNull(partnerBookingDrafts.rescheduleFromPartnerBookingId),
+        createPartnerAdditionalDraftSourceAccessCondition(
+          schedulingJobPrincipal(input.actor),
+        ),
+        inArray(partnerBookingDrafts.state, ["draft", "ready"]),
+        or(
+          isNull(partnerBookingDrafts.expiresAt),
+          gt(partnerBookingDrafts.expiresAt, now),
+        ),
+        input.actor.accessLevel === "account"
+          ? undefined
+          : or(
+              isNull(partnerBookingDrafts.locationId),
+              and(
+                eq(partnerAccountLocations.active, true),
+                or(
+                  input.actor.locationIds.length
+                    ? inArray(partnerAccountLocations.id, [
+                        ...input.actor.locationIds,
+                      ])
+                    : sql`false`,
+                  input.actor.propertyIds.length
+                    ? inArray(partnerAccountLocations.propertyId, [
+                        ...input.actor.propertyIds,
+                      ])
+                    : sql`false`,
+                ),
+              ),
+            ),
+        cursor
+          ? or(
+              lt(partnerBookingDrafts.updatedAt, new Date(cursor.updatedAt)),
+              and(
+                eq(partnerBookingDrafts.updatedAt, new Date(cursor.updatedAt)),
+                lt(partnerBookingDrafts.id, cursor.id),
+              ),
+            )
+          : undefined,
+      ),
+    )
+    .orderBy(
+      desc(partnerBookingDrafts.updatedAt),
+      desc(partnerBookingDrafts.id),
+    )
+    .limit(pagination.limit + 1);
+  const visible = rows.slice(0, pagination.limit).map((row) => row.draft);
+  const last = visible.at(-1);
+  return {
+    drafts: visible.map(toPartnerDraftDto),
+    page: {
+      nextCursor:
+        rows.length > pagination.limit && last
+          ? encodePortalV2Cursor({
+              kind: "partner_booking_drafts",
+              limit: pagination.limit,
+              payload: {
+                accountId: input.actor.accountId,
+                membershipId: input.actor.membershipId,
+                updatedAt: last.updatedAt.toISOString(),
+                id: last.id,
+              },
+            })
+          : null,
+    },
+  };
+}
+
 export function partnerDraftMutationInvalidatesHold(input: {
   currentLocationId: string | null;
   currentServiceKey: string | null;
@@ -1325,12 +2009,6 @@ type CalendarHealth = Readonly<{
   externalBusyCoverageSyncedAt: Date | null;
 }>;
 
-type NamedResourcePlan = Readonly<{
-  resources: readonly NamedScheduleResource[];
-  requirements: readonly NamedScheduleResourceRequirement[];
-  revision: string;
-}>;
-
 type SchedulingSetup = Readonly<{
   catalog: CatalogRow;
   profile: ProfileRow;
@@ -1388,6 +2066,7 @@ async function loadAccountCommercialEligibility(input: {
     .select({
       status: partnerAccounts.status,
       portalAccessEnabled: partnerAccounts.portalAccessEnabled,
+      workflow: partnerAccounts.portalWorkflowConfig,
     })
     .from(partnerAccounts)
     .where(eq(partnerAccounts.id, input.accountId))
@@ -1403,6 +2082,21 @@ async function loadAccountCommercialEligibility(input: {
   let agreement: PartnerAccountServiceAgreementRecord | null = null;
   let entitlement: PartnerAccountServiceEntitlement | null = null;
   if (input.serviceKey) {
+    const requestability = partnerServiceRequestability(
+      account.workflow,
+      input.serviceKey,
+    );
+    if (requestability.disabled)
+      throw new PartnerPortalSchedulingError(
+        "invalid_fields",
+        "This service is not enabled for your account.",
+        {
+          status: 422,
+          fieldErrors: {
+            serviceKey: "Choose another service or contact Stonegate.",
+          },
+        },
+      );
     try {
       ({ agreement, entitlement } = await requirePartnerServiceEntitlement(
         input.tx,
@@ -1416,17 +2110,24 @@ async function loadAccountCommercialEligibility(input: {
       if (!(error instanceof PartnerServiceAgreementConfigurationError)) {
         throw error;
       }
-      throw new PartnerPortalSchedulingError(
-        "invalid_fields",
-        "That service is not included in this account’s active agreement.",
-        {
-          status: 422,
-          fieldErrors: {
-            serviceKey:
-              "Choose a service from the current account agreement or contact Stonegate.",
+      if (
+        !(
+          error.code === "service_not_entitled" &&
+          requestability.reviewAllowed &&
+          !input.tierKey
+        )
+      )
+        throw new PartnerPortalSchedulingError(
+          "invalid_fields",
+          "That service is not included in this account’s active agreement.",
+          {
+            status: 422,
+            fieldErrors: {
+              serviceKey:
+                "Choose a service from the current account agreement or contact Stonegate.",
+            },
           },
-        },
-      );
+        );
     }
   }
   let prices: readonly PartnerEffectiveRateOption[] = [];
@@ -1842,131 +2543,6 @@ async function loadCalendarHealth(
   });
 }
 
-const SCHEDULE_RESOURCE_KEY_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/u;
-
-function validScheduleResourceKeys(values: readonly string[]): boolean {
-  return (
-    values.length <= 50 &&
-    values.every(
-      (value) =>
-        SCHEDULE_RESOURCE_KEY_PATTERN.test(value) &&
-        value === value.trim().toLowerCase(),
-    ) &&
-    new Set(values).size === values.length
-  );
-}
-
-async function loadNamedResourcePlan(input: {
-  tx: SchedulingTransaction;
-  profile: ProfileRow;
-}): Promise<{ plan: NamedResourcePlan | null; revision: string }> {
-  const [resourceRows, requirementRows] = await Promise.all([
-    input.tx
-      .select()
-      .from(scheduleResources)
-      .where(
-        eq(scheduleResources.capacityPoolKey, input.profile.capacityPoolKey),
-      )
-      .orderBy(
-        scheduleResources.kind,
-        scheduleResources.label,
-        scheduleResources.id,
-      ),
-    input.tx
-      .select()
-      .from(partnerSchedulingProfileResourceRequirements)
-      .where(
-        eq(
-          partnerSchedulingProfileResourceRequirements.schedulingProfileId,
-          input.profile.id,
-        ),
-      )
-      .orderBy(
-        partnerSchedulingProfileResourceRequirements.resourceKind,
-        partnerSchedulingProfileResourceRequirements.id,
-      ),
-  ]);
-  const staffKinds = new Set(
-    resourceRows
-      .filter((resource) => resource.source === "staff")
-      .map((resource) => resource.kind),
-  );
-  const selectedDefinitions = resourceRows.filter(
-    (resource) => resource.source === "staff" || !staffKinds.has(resource.kind),
-  );
-  const resources = selectedDefinitions
-    .filter((resource) => resource.active)
-    .map((resource) =>
-      Object.freeze({
-        id: resource.id,
-        capacityPoolKey: resource.capacityPoolKey,
-        kind: resource.kind,
-        label: resource.label,
-        capacityUnits: resource.capacityUnits,
-        dailyJobMultiplier:
-          resource.source === "compatibility_pool" ? resource.capacityUnits : 1,
-        skillKeys: Object.freeze([...resource.skillKeys]),
-      }),
-    );
-  const requirements = requirementRows.map((requirement) =>
-    Object.freeze({
-      kind: requirement.resourceKind,
-      quantity: requirement.quantity,
-      capacityUnits: requirement.capacityUnits,
-      requiredSkillKeys: Object.freeze([...requirement.requiredSkillKeys]),
-    }),
-  );
-  const revision = sha256(
-    stableJson({
-      resources: resourceRows.map((resource) => ({
-        id: resource.id,
-        capacityPoolKey: resource.capacityPoolKey,
-        kind: resource.kind,
-        label: resource.label,
-        capacityUnits: resource.capacityUnits,
-        skillKeys: resource.skillKeys,
-        active: resource.active,
-        source: resource.source,
-        updatedAt: resource.updatedAt.toISOString(),
-      })),
-      requirements: requirementRows.map((requirement) => ({
-        id: requirement.id,
-        kind: requirement.resourceKind,
-        quantity: requirement.quantity,
-        capacityUnits: requirement.capacityUnits,
-        requiredSkillKeys: requirement.requiredSkillKeys,
-        source: requirement.source,
-        updatedAt: requirement.updatedAt.toISOString(),
-      })),
-    }),
-  );
-  const structurallyValid =
-    requirements.length > 0 &&
-    requirements.every(
-      (requirement) =>
-        validScheduleResourceKeys(requirement.requiredSkillKeys) &&
-        selectedDefinitions.filter(
-          (resource) =>
-            resource.kind === requirement.kind &&
-            resource.capacityUnits >= requirement.capacityUnits &&
-            validScheduleResourceKeys(resource.skillKeys) &&
-            requirement.requiredSkillKeys.every((skill) =>
-              resource.skillKeys.includes(skill),
-            ),
-        ).length >= requirement.quantity,
-    );
-  return {
-    plan: structurallyValid
-      ? Object.freeze({
-          resources: Object.freeze(resources),
-          requirements: Object.freeze(requirements),
-          revision,
-        })
-      : null,
-    revision,
-  };
-}
-
 async function loadSchedulePolicy(input: {
   tx: SchedulingTransaction;
   accountId: string;
@@ -2362,6 +2938,7 @@ async function loadCapacity(input: {
   draft: DraftRow;
   profile: ProfileRow;
   policy: SchedulePolicySnapshot;
+  resourcePlan: NamedResourcePlan | null;
   rangeStartAt: Date;
   rangeEndAt: Date;
   now: Date;
@@ -2471,15 +3048,18 @@ async function loadCapacity(input: {
       .toISODate();
     if (localDate) {
       jobsByLocalDate[localDate] = (jobsByLocalDate[localDate] ?? 0) + 1;
-      for (const assignment of row.resourceAssignments) {
-        resourceBlocks.push({
-          id,
-          resourceId: assignment.resourceId,
-          capacityUnits: assignment.capacityUnits,
-          occupancy: { startAt: row.startAt, endAt },
-          localDate,
-        });
-      }
+      if (input.resourcePlan)
+        resourceBlocks.push(
+          ...namedResourceBlocksForOccupancy({
+            id,
+            startAt: row.startAt,
+            endAt,
+            timezone: input.policy.timezone,
+            capacityPoolKey: row.capacityPoolKey,
+            assignments: row.resourceAssignments,
+            plan: input.resourcePlan,
+          }),
+        );
     }
   }
   for (const row of holdRows) {
@@ -2499,15 +3079,18 @@ async function loadCapacity(input: {
       .setZone(input.policy.timezone)
       .toISODate();
     if (localDate) {
-      for (const assignment of row.resourceAssignments) {
-        resourceBlocks.push({
-          id,
-          resourceId: assignment.resourceId,
-          capacityUnits: assignment.capacityUnits,
-          occupancy: { startAt: row.startAt, endAt },
-          localDate,
-        });
-      }
+      if (input.resourcePlan)
+        resourceBlocks.push(
+          ...namedResourceBlocksForOccupancy({
+            id,
+            startAt: row.startAt,
+            endAt,
+            timezone: input.policy.timezone,
+            capacityPoolKey: row.capacityPoolKey,
+            assignments: row.resourceAssignments,
+            plan: input.resourcePlan,
+          }),
+        );
     }
     if (row.draftId === input.draft.id) {
       ownHoldBlockIds.push(id);
@@ -2651,6 +3234,7 @@ async function computeAvailabilityInTransaction(input: {
   rangeStartAt: Date;
   rangeEndAt: Date;
   now: Date;
+  selectedResourceIds?: readonly string[];
 }): Promise<{
   dto: AvailabilityDto;
   setup: SchedulingSetup;
@@ -2680,6 +3264,7 @@ async function computeAvailabilityInTransaction(input: {
       draft: input.draft,
       profile: setup.profile,
       policy: setup.policy,
+      resourcePlan: setup.resourcePlan,
       rangeStartAt: input.rangeStartAt,
       rangeEndAt: input.rangeEndAt,
       now: input.now,
@@ -2698,7 +3283,11 @@ async function computeAvailabilityInTransaction(input: {
     ...(setup.resourcePlan
       ? {
           resourcePlan: {
-            resources: setup.resourcePlan.resources,
+            resources: input.selectedResourceIds?.length
+              ? setup.resourcePlan.resources.filter((resource) =>
+                  input.selectedResourceIds!.includes(resource.id),
+                )
+              : setup.resourcePlan.resources,
             requirements: setup.resourcePlan.requirements,
             blocks: capacity.resourceBlocks,
           },
@@ -2755,6 +3344,44 @@ export async function getPartnerDraftAvailability(input: {
   return getDb().transaction(async (tx) => {
     const { draft, location } = await loadDraft(tx, input.actor, input.draftId);
     assertDraftStateMutable(draft, now);
+    const { catalog, profile } = await loadCatalogAndProfile(
+      tx,
+      draft.serviceKey,
+      now,
+    );
+    if (catalog?.active && !profile) {
+      const validation = await validateDraftWithRows({
+        tx,
+        draft,
+        location,
+        now,
+      });
+      const commercial = await loadAccountCommercialEligibility({
+        tx,
+        accountId: input.actor.accountId,
+        serviceKey: draft.serviceKey,
+        tierKey: draft.tierKey,
+        selectedAddOns: draft.selectedAddOns,
+        now,
+      });
+      return Object.freeze({
+        draft: toPartnerDraftDto(draft),
+        timezone: location?.timezone ?? "America/New_York",
+        calendar: { state: "unconfigured" as const },
+        reviewReasons: normalizeSchedulingReviewReasons([
+          ...validation.reviewReasons,
+          "missing_service_profile",
+          "manual_review_required",
+        ]),
+        instantConfirmationEligible: false,
+        windows: [],
+        rankedAlternatives: [],
+        pricing: toPartnerAvailabilityPricingDto(
+          commercial.pricing,
+          input.actor.canReadRates,
+        ),
+      });
+    }
     const availability = await computeAvailabilityInTransaction({
       tx,
       actor: input.actor,
@@ -2794,6 +3421,7 @@ export async function createOrReplacePartnerHold(input: {
   ifMatch: string | null | undefined;
   correlationId: string;
   now?: Date;
+  recurringSource?: PartnerRecurringSource;
 }): Promise<{ hold: PartnerHoldDto; replayed: boolean }> {
   const now = input.now ?? new Date();
   const windowId = requirePartnerArrivalWindowId(input.windowId);
@@ -2808,6 +3436,12 @@ export async function createOrReplacePartnerHold(input: {
     input.idempotencyKeyHash,
   );
   return getDb().transaction(async (tx) => {
+    await lockPartnerRecurringSource(
+      tx,
+      input.actor,
+      input.recurringSource,
+      input.draftId,
+    );
     await acquireScheduleConflictLock(tx);
     const { draft, location } = await loadDraft(
       tx,
@@ -3537,6 +4171,8 @@ async function submitUnscheduledPartnerReviewRequest(input: {
       orgContactId: contactId,
       partnerAccountId: input.actor.accountId,
       bookingDraftId: input.draft.id,
+      additionalServiceFromPartnerBookingId:
+        input.draft.additionalServiceFromPartnerBookingId,
       requestedByMembershipId: input.actor.membershipId,
       partnerUserId: input.actor.partnerUserId,
       propertyId,
@@ -3556,6 +4192,7 @@ async function submitUnscheduledPartnerReviewRequest(input: {
         accessDetails: input.draft.accessDetails,
         onSiteContact: input.draft.onSiteContact,
         locationId: input.location.id,
+        locationSnapshot: partnerJobLocationSnapshot(input.location),
         preferredWindows,
         scheduleAssistancePreference: input.draft.scheduleAssistancePreference,
       },
@@ -3603,6 +4240,7 @@ async function submitUnscheduledPartnerReviewRequest(input: {
     })
     .returning();
   if (!booking) throw new Error("partner_review_booking_create_failed");
+  await ensurePartnerJobThread(input.tx, input.actor.accountId, booking.id);
 
   let scheduleAssistanceRequestId: string | null = null;
   if (input.draft.scheduleAssistancePreference !== "none") {
@@ -3667,6 +4305,14 @@ async function submitUnscheduledPartnerReviewRequest(input: {
       throw new Error("partner_review_approval_request_create_failed");
     }
     approvalRequestId = approvalRequest.id;
+    await input.tx.insert(outboxEvents).values({
+      type: "partner.approval.requested",
+      payload: {
+        partnerAccountId: input.actor.accountId,
+        partnerBookingId: booking.id,
+        version: booking.version,
+      },
+    });
   }
 
   if (draftMedia.length > 0) {
@@ -3819,6 +4465,7 @@ export async function submitPartnerBookingDraft(input: {
   ifMatch: string | null | undefined;
   correlationId: string;
   now?: Date;
+  recurringSource?: PartnerRecurringSource;
 }): Promise<{ booking: SubmittedPartnerBookingDto; replayed: boolean }> {
   const now = input.now ?? new Date();
   const opHash = operationHash(
@@ -3827,6 +4474,13 @@ export async function submitPartnerBookingDraft(input: {
     input.idempotencyKeyHash,
   );
   return getDb().transaction(async (tx) => {
+    const recurringSource = await lockPartnerRecurringSource(
+      tx,
+      input.actor,
+      input.recurringSource,
+      input.draftId,
+      true,
+    );
     // This is intentionally the same lock as all legacy CRM booking writers.
     // It must precede capacity reads; row locks cannot prevent range phantoms.
     await acquireScheduleConflictLock(tx);
@@ -3879,9 +4533,17 @@ export async function submitPartnerBookingDraft(input: {
         },
       );
     }
+    if (draft.additionalServiceFromPartnerBookingId) {
+      await requireAdditionalServiceSourceAccess(
+        tx,
+        input.actor,
+        draft.additionalServiceFromPartnerBookingId,
+        true,
+      );
+    }
     const holdId = input.holdId;
     if (!holdId) {
-      return submitUnscheduledPartnerReviewRequest({
+      const result = await submitUnscheduledPartnerReviewRequest({
         tx,
         actor: input.actor,
         draft,
@@ -3890,6 +4552,14 @@ export async function submitPartnerBookingDraft(input: {
         correlationId: input.correlationId,
         now,
       });
+      await finalizePartnerRecurringBooking(
+        tx,
+        recurringSource,
+        input.actor,
+        result.booking,
+        now,
+      );
+      return result;
     }
     const [hold] = await tx
       .select()
@@ -4120,6 +4790,8 @@ export async function submitPartnerBookingDraft(input: {
         orgContactId: contactId,
         partnerAccountId: input.actor.accountId,
         bookingDraftId: draft.id,
+        additionalServiceFromPartnerBookingId:
+          draft.additionalServiceFromPartnerBookingId,
         requestedByMembershipId: input.actor.membershipId,
         partnerUserId: input.actor.partnerUserId,
         propertyId,
@@ -4139,6 +4811,7 @@ export async function submitPartnerBookingDraft(input: {
           accessDetails: draft.accessDetails,
           onSiteContact: draft.onSiteContact,
           locationId: location.id,
+          locationSnapshot: partnerJobLocationSnapshot(location),
         },
         rateSnapshot: {
           amountMinor,
@@ -4187,6 +4860,7 @@ export async function submitPartnerBookingDraft(input: {
       })
       .returning();
     if (!booking) throw new Error("partner_booking_create_failed");
+    await ensurePartnerJobThread(tx, input.actor.accountId, booking.id);
 
     let approvalRequestId: string | null = null;
     if (approvalResolution?.required) {
@@ -4223,6 +4897,14 @@ export async function submitPartnerBookingDraft(input: {
         throw new Error("partner_approval_request_create_failed");
       }
       approvalRequestId = approvalRequest.id;
+      await tx.insert(outboxEvents).values({
+        type: "partner.approval.requested",
+        payload: {
+          partnerAccountId: input.actor.accountId,
+          partnerBookingId: booking.id,
+          version: booking.version,
+        },
+      });
     }
 
     if (availability.draftMedia.length > 0) {
@@ -4387,6 +5069,13 @@ export async function submitPartnerBookingDraft(input: {
       }),
       createdAt: now,
     });
+    await finalizePartnerRecurringBooking(
+      tx,
+      recurringSource,
+      input.actor,
+      toSubmittedBookingDto(booking),
+      now,
+    );
     return {
       booking: toSubmittedBookingDto(booking),
       replayed: false,
@@ -4399,8 +5088,9 @@ export type PartnerRescheduleResultDto = Readonly<{
   jobId: string;
   requestId: string | null;
   publicStatus: string;
-  arrivalWindowStartAt: string;
-  arrivalWindowEndAt: string;
+  arrivalWindowStartAt: string | null;
+  arrivalWindowEndAt: string | null;
+  preferredWindows: readonly Readonly<Record<string, unknown>>[];
   reviewReasons: readonly SchedulingReviewReasonCode[];
   version: number;
   updatedAt: string;
@@ -4425,16 +5115,23 @@ export function createPartnerRescheduleResultDto(input: {
     arrivalWindowEndAt: Date | null;
   };
   requestedArrivalWindow?: {
-    startAt: Date;
-    endAt: Date;
+    startAt: Date | null;
+    endAt: Date | null;
   };
+  preferredWindows?: readonly Readonly<Record<string, unknown>>[];
   reviewReasons?: readonly SchedulingReviewReasonCode[];
 }): PartnerRescheduleResultDto {
-  const arrivalWindowStartAt =
-    input.requestedArrivalWindow?.startAt ?? input.booking.arrivalWindowStartAt;
-  const arrivalWindowEndAt =
-    input.requestedArrivalWindow?.endAt ?? input.booking.arrivalWindowEndAt;
-  if (!arrivalWindowStartAt || !arrivalWindowEndAt) {
+  const arrivalWindowStartAt = input.preferredWindows?.length
+    ? null
+    : (input.requestedArrivalWindow?.startAt ??
+      input.booking.arrivalWindowStartAt);
+  const arrivalWindowEndAt = input.preferredWindows?.length
+    ? null
+    : (input.requestedArrivalWindow?.endAt ?? input.booking.arrivalWindowEndAt);
+  if (
+    input.mode === "instant" &&
+    (!arrivalWindowStartAt || !arrivalWindowEndAt)
+  ) {
     throw new Error("partner_reschedule_result_incomplete");
   }
   return Object.freeze({
@@ -4442,8 +5139,9 @@ export function createPartnerRescheduleResultDto(input: {
     jobId: input.booking.id,
     requestId: input.requestId ?? null,
     publicStatus: input.booking.publicStatus,
-    arrivalWindowStartAt: arrivalWindowStartAt.toISOString(),
-    arrivalWindowEndAt: arrivalWindowEndAt.toISOString(),
+    arrivalWindowStartAt: arrivalWindowStartAt?.toISOString() ?? null,
+    arrivalWindowEndAt: arrivalWindowEndAt?.toISOString() ?? null,
+    preferredWindows: Object.freeze(input.preferredWindows ?? []),
     reviewReasons: Object.freeze(
       input.reviewReasons ??
         normalizeSchedulingReviewReasons(input.booking.requestedReviewReasons),
@@ -4466,7 +5164,7 @@ export async function reschedulePartnerBooking(input: {
   actor: PartnerSchedulingActor;
   jobId: string;
   draftId: string;
-  holdId: string;
+  holdId: string | null;
   idempotencyKeyHash: string;
   jobIfMatch: string | null | undefined;
   draftIfMatch: string | null | undefined;
@@ -4479,7 +5177,9 @@ export async function reschedulePartnerBooking(input: {
     input.actor.accountId,
     input.idempotencyKeyHash,
   );
-  const requestHash = sha256(input.jobId, input.draftId, input.holdId);
+  const requestHash = input.holdId
+    ? sha256(input.jobId, input.draftId, input.holdId)
+    : sha256(input.jobId, input.draftId, "review", input.draftIfMatch ?? "");
 
   return getDb().transaction(async (tx) => {
     await acquireScheduleConflictLock(tx);
@@ -4569,6 +5269,7 @@ export async function reschedulePartnerBooking(input: {
             startAt: reviewReplay.requestedArrivalStartAt,
             endAt: reviewReplay.requestedArrivalEndAt,
           },
+          preferredWindows: reviewReplay.preferredWindows,
           reviewReasons: normalizeSchedulingReviewReasons(
             reviewReplay.reviewReasons,
           ),
@@ -4657,6 +5358,171 @@ export async function reschedulePartnerBooking(input: {
         "The schedule-change draft was not found.",
         { status: 404 },
       );
+    }
+
+    if (!input.holdId) {
+      const preferredWindows = validatePreferredReviewWindows({
+        windows: draft.preferredWindows,
+        timezone: location.timezone,
+        now,
+      });
+      // Preserve the accepted job scope; this draft may change only scheduling preferences.
+      const [pending] = await tx
+        .select({ id: partnerRescheduleRequests.id })
+        .from(partnerRescheduleRequests)
+        .where(
+          and(
+            eq(
+              partnerRescheduleRequests.partnerAccountId,
+              input.actor.accountId,
+            ),
+            eq(partnerRescheduleRequests.partnerBookingId, source.booking.id),
+            eq(partnerRescheduleRequests.state, "pending"),
+          ),
+        )
+        .limit(1);
+      if (pending)
+        throw new PartnerPortalSchedulingError(
+          "conflict",
+          "A schedule-change request is already awaiting review.",
+          { status: 409 },
+        );
+      const reviewReasons = normalizeSchedulingReviewReasons([
+        "manual_review_required",
+        ...(scheduleChangePolicyRequiresReview
+          ? ["schedule_change_policy_review_required"]
+          : []),
+      ]);
+      await tx
+        .update(appointmentHolds)
+        .set({ status: "released", updatedAt: now })
+        .where(
+          and(
+            eq(appointmentHolds.partnerAccountId, input.actor.accountId),
+            eq(appointmentHolds.partnerBookingDraftId, draft.id),
+            eq(appointmentHolds.status, "active"),
+          ),
+        );
+      const [reviewRequest] = await tx
+        .insert(partnerRescheduleRequests)
+        .values({
+          partnerAccountId: input.actor.accountId,
+          partnerBookingId: source.booking.id,
+          bookingDraftId: draft.id,
+          requestKind: "preferred_dates",
+          preferredWindows: preferredWindows.map((window) => ({ ...window })),
+          state: "pending",
+          proposedStartAt: null,
+          requestedArrivalStartAt: null,
+          requestedArrivalEndAt: null,
+          previousStartAt: source.appointment.startAt,
+          previousArrivalStartAt: source.booking.arrivalWindowStartAt,
+          previousArrivalEndAt: source.booking.arrivalWindowEndAt,
+          reviewReasons: [...reviewReasons],
+          operationKeyHash: opHash,
+          requestHash,
+          createdByMembershipId: input.actor.membershipId,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .returning();
+      if (!reviewRequest) throw new Error("partner_reschedule_request_failed");
+      const [updatedBooking] = await tx
+        .update(partnerBookings)
+        .set({ version: source.booking.version + 1, updatedAt: now })
+        .where(
+          and(
+            eq(partnerBookings.id, source.booking.id),
+            eq(partnerBookings.version, source.booking.version),
+          ),
+        )
+        .returning();
+      if (!updatedBooking) throw new Error("partner_reschedule_revision_race");
+      await tx
+        .update(partnerBookingDrafts)
+        .set({
+          state: "submitted",
+          submittedAt: now,
+          revision: draft.revision + 1,
+          updatedAt: now,
+          validation: {
+            ...draft.validation,
+            rescheduleMode: "review",
+            rescheduleRequestId: reviewRequest.id,
+          },
+        })
+        .where(
+          and(
+            eq(partnerBookingDrafts.partnerAccountId, input.actor.accountId),
+            eq(partnerBookingDrafts.id, draft.id),
+            eq(partnerBookingDrafts.revision, draft.revision),
+          ),
+        );
+      await tx.insert(partnerJobEvents).values({
+        partnerAccountId: input.actor.accountId,
+        partnerBookingId: source.booking.id,
+        eventType: "job.reschedule_review_requested",
+        publicLabel: "Schedule change requested",
+        publicDetail:
+          "Stonegate will review your preferred dates. Your current schedule has not changed.",
+        effectiveAt: now,
+        actorType: "partner",
+        actorMembershipId: input.actor.membershipId,
+        metadata: { requestId: reviewRequest.id },
+        createdAt: now,
+      });
+      await queuePartnerBookingNotification({
+        tx,
+        accountId: input.actor.accountId,
+        membershipId:
+          source.booking.requestedByMembershipId ?? input.actor.membershipId,
+        fallbackMembershipId: input.actor.membershipId,
+        partnerBookingId: source.booking.id,
+        eventType: "booking.reschedule_review_requested",
+        dedupeKey: opHash,
+        correlationId: input.correlationId,
+        occurredAt: now,
+        accountTimezone: location.timezone,
+        serviceAt: source.booking.arrivalWindowStartAt,
+      });
+      await tx.insert(appointmentNotes).values({
+        appointmentId: source.appointment.id,
+        body: `[partner-portal-v2-reschedule-review]\nPreferred dates: ${preferredWindows.map((window) => `${window.localDate} ${window.timeOfDay}`).join(", ")}\nThe existing appointment remains unchanged.`,
+        createdAt: now,
+      });
+      await tx.insert(auditLogs).values({
+        actorType: "human",
+        actorId: input.actor.partnerUserId,
+        actorRole: "partner",
+        actorLabel: input.actor.email,
+        sessionId: input.actor.sessionId,
+        authMethod: "partner_session",
+        correlationId: input.correlationId,
+        requiredPermissions: ["bookings.update"],
+        outcome: "succeeded",
+        surface: `/partners/bookings/${source.booking.id}/reschedule`,
+        idempotencyKeyHash: opHash,
+        action: "partner.portal.v2.reschedule.review_requested",
+        entityType: "partner_reschedule_request",
+        entityId: reviewRequest.id,
+        meta: sanitizeAuditMetadata({
+          accountId: input.actor.accountId,
+          membershipId: input.actor.membershipId,
+          partnerBookingId: source.booking.id,
+          requestKind: "preferred_dates",
+        }),
+        createdAt: now,
+      });
+      return {
+        result: createPartnerRescheduleResultDto({
+          mode: "review",
+          requestId: reviewRequest.id,
+          booking: updatedBooking,
+          preferredWindows,
+          reviewReasons,
+        }),
+        replayed: false,
+      };
     }
 
     const [hold] = await tx
@@ -5147,4 +6013,504 @@ export async function reschedulePartnerBooking(input: {
       replayed: false,
     };
   });
+}
+
+/** Staff approval uses the same lock, policy and weighted occupancy as partner holds. */
+export async function getPartnerRescheduleRequestForStaff(
+  requestId: string,
+  now = new Date(),
+) {
+  return getDb().transaction(async (tx) => {
+    const [request] = await tx
+      .select()
+      .from(partnerRescheduleRequests)
+      .where(eq(partnerRescheduleRequests.id, requestId))
+      .limit(1);
+    if (!request)
+      throw new PartnerPortalSchedulingError(
+        "not_found",
+        "Schedule-change request not found.",
+        { status: 404 },
+      );
+    const actor: PartnerSchedulingActor = {
+      accountId: request.partnerAccountId,
+      membershipId: request.createdByMembershipId,
+      partnerUserId: request.createdByMembershipId,
+      email: "staff-review",
+      sessionId: null,
+      accessLevel: "account",
+      canReadRates: false,
+      locationIds: [],
+      propertyIds: [],
+    };
+    const { draft, location } = await loadDraft(
+      tx,
+      actor,
+      request.bookingDraftId,
+    );
+    const [sourceJob] = await tx
+      .select({ appointmentId: partnerBookings.appointmentId })
+      .from(partnerBookings)
+      .where(
+        and(
+          eq(partnerBookings.id, request.partnerBookingId),
+          eq(partnerBookings.partnerAccountId, request.partnerAccountId),
+        ),
+      )
+      .limit(1);
+    let candidates: Array<{
+      startAt: string;
+      windowStartAt: string;
+      windowEndAt: string;
+    }> = [];
+    let warning: string | null = null;
+    if (request.state === "pending") {
+      try {
+        const availability = await computeAvailabilityInTransaction({
+          tx,
+          actor,
+          draft,
+          location,
+          rangeStartAt: now,
+          rangeEndAt: new Date(now.getTime() + 31 * 86400000),
+          now,
+        });
+        if (
+          availability.setup.calendar.state !== "current" ||
+          availability.setup.configurationReviewReasons.length
+        )
+          warning =
+            "Calendar or schedule configuration must be current before a time can be confirmed.";
+        else
+          candidates = availability.result.windows.flatMap((window) =>
+            window.availableCandidates.map((candidate) => ({
+              startAt: candidate.startAt.toISOString(),
+              windowStartAt: window.startAt.toISOString(),
+              windowEndAt: window.endAt.toISOString(),
+            })),
+          );
+      } catch (error) {
+        if (!(error instanceof PartnerPortalSchedulingError)) throw error;
+        warning = error.message;
+      }
+    }
+    return {
+      request: {
+        id: request.id,
+        accountId: request.partnerAccountId,
+        jobId: request.partnerBookingId,
+        appointmentId: sourceJob?.appointmentId ?? null,
+        state: request.state,
+        requestKind: request.requestKind,
+        preferredWindows: request.preferredWindows,
+        requestedArrivalStartAt:
+          request.requestedArrivalStartAt?.toISOString() ?? null,
+        requestedArrivalEndAt:
+          request.requestedArrivalEndAt?.toISOString() ?? null,
+        previousArrivalStartAt:
+          request.previousArrivalStartAt?.toISOString() ?? null,
+        previousArrivalEndAt:
+          request.previousArrivalEndAt?.toISOString() ?? null,
+        reason: request.resolutionReason,
+        updatedAt: request.updatedAt.toISOString(),
+        createdAt: request.createdAt.toISOString(),
+        timezone: location?.timezone ?? "America/New_York",
+        siteName: location?.siteName ?? null,
+      },
+      candidates,
+      warning,
+    };
+  });
+}
+
+export async function withdrawPartnerRescheduleRequest(input: {
+  actor: PartnerSchedulingActor;
+  jobId: string;
+  requestId: string;
+  ifMatch: string | null;
+  idempotencyKeyHash: string;
+  correlationId: string;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const opHash = operationHash(
+    "reschedule.withdraw",
+    input.actor.accountId,
+    input.idempotencyKeyHash,
+  );
+  const requestHash = sha256(input.jobId, input.requestId);
+  return getDb().transaction(async (tx) => {
+    await acquireScheduleConflictLock(tx);
+    const [request] = await tx
+      .select()
+      .from(partnerRescheduleRequests)
+      .where(
+        and(
+          eq(partnerRescheduleRequests.partnerAccountId, input.actor.accountId),
+          eq(partnerRescheduleRequests.id, input.requestId),
+          eq(partnerRescheduleRequests.partnerBookingId, input.jobId),
+        ),
+      )
+      .for("update")
+      .limit(1);
+    const [booking] = await tx
+      .select()
+      .from(partnerBookings)
+      .where(
+        and(
+          eq(partnerBookings.partnerAccountId, input.actor.accountId),
+          eq(partnerBookings.id, input.jobId),
+        ),
+      )
+      .for("update")
+      .limit(1);
+    if (!request || !booking)
+      throw new PartnerPortalSchedulingError(
+        "not_found",
+        "Schedule-change request not found.",
+        { status: 404 },
+      );
+    await loadRescheduleLocation({
+      tx,
+      actor: input.actor,
+      propertyId: booking.propertyId,
+      scopeSnapshot: booking.scopeSnapshot,
+    });
+    if (
+      request.state === "withdrawn" &&
+      request.withdrawalOperationKeyHash === opHash &&
+      request.withdrawalRequestHash === requestHash
+    )
+      return { requestId: request.id, state: "withdrawn", replayed: true };
+    assertPartnerJobRevision(booking, input.ifMatch, input.correlationId);
+    if (request.state !== "pending")
+      throw new PartnerPortalSchedulingError(
+        "conflict",
+        "This request has already been resolved. Refresh the job.",
+        { status: 409 },
+      );
+    const [reused] = await tx
+      .select({ id: partnerRescheduleRequests.id })
+      .from(partnerRescheduleRequests)
+      .where(eq(partnerRescheduleRequests.withdrawalOperationKeyHash, opHash))
+      .limit(1);
+    if (reused)
+      throw new PartnerPortalSchedulingError(
+        "idempotency_conflict",
+        "That request key was already used for another withdrawal.",
+        { status: 409 },
+      );
+    await tx
+      .update(partnerRescheduleRequests)
+      .set({
+        state: "withdrawn",
+        resolvedAt: now,
+        updatedAt: now,
+        resolutionReason:
+          "Withdrawn by the partner. Existing schedule retained.",
+        withdrawalOperationKeyHash: opHash,
+        withdrawalRequestHash: requestHash,
+      })
+      .where(eq(partnerRescheduleRequests.id, request.id));
+    await tx
+      .update(partnerBookings)
+      .set({ version: booking.version + 1, updatedAt: now })
+      .where(eq(partnerBookings.id, booking.id));
+    await tx.insert(partnerJobEvents).values({
+      partnerAccountId: input.actor.accountId,
+      partnerBookingId: booking.id,
+      eventType: "job.reschedule_withdrawn",
+      publicLabel: "Schedule change withdrawn",
+      publicDetail: "Your current arrival window remains scheduled.",
+      effectiveAt: now,
+      actorType: "partner",
+      actorMembershipId: input.actor.membershipId,
+      createdAt: now,
+    });
+    await tx.insert(auditLogs).values({
+      actorType: "human",
+      actorId: input.actor.partnerUserId,
+      actorRole: "partner",
+      actorLabel: input.actor.email,
+      sessionId: input.actor.sessionId,
+      authMethod: "partner_session",
+      correlationId: input.correlationId,
+      requiredPermissions: ["bookings.update"],
+      outcome: "succeeded",
+      idempotencyKeyHash: opHash,
+      action: "partner.reschedule.withdrawn",
+      entityType: "partner_reschedule_request",
+      entityId: request.id,
+      meta: sanitizeAuditMetadata({
+        accountId: input.actor.accountId,
+        membershipId: input.actor.membershipId,
+        partnerBookingId: booking.id,
+      }),
+      createdAt: now,
+    });
+    return { requestId: request.id, state: "withdrawn", replayed: false };
+  });
+}
+
+export async function decidePartnerRescheduleRequest(
+  tx: SchedulingTransaction,
+  input: {
+    requestId: string;
+    decision: "accepted" | "declined";
+    reason: string;
+    startAt: Date | null;
+    expectedVersion: string;
+    teamMemberId: string;
+    correlationId: string;
+    now?: Date;
+    selectedResourceIds?: readonly string[];
+  },
+) {
+  const now = input.now ?? new Date();
+  await acquireScheduleConflictLock(tx);
+  const [request] = await tx
+    .select()
+    .from(partnerRescheduleRequests)
+    .where(eq(partnerRescheduleRequests.id, input.requestId))
+    .for("update")
+    .limit(1);
+  if (!request)
+    throw new PartnerPortalSchedulingError(
+      "not_found",
+      "Schedule-change request not found.",
+      { status: 404 },
+    );
+  if (request.updatedAt.toISOString() !== input.expectedVersion)
+    throw new PartnerPortalSchedulingError(
+      "revision_mismatch",
+      "This request changed. Refresh before deciding.",
+      { status: 412 },
+    );
+  if (request.state !== "pending")
+    throw new PartnerPortalSchedulingError(
+      "conflict",
+      "This request has already been resolved.",
+      { status: 409 },
+    );
+  const [source] = await tx
+    .select({ booking: partnerBookings, appointment: appointments })
+    .from(partnerBookings)
+    .innerJoin(appointments, eq(appointments.id, partnerBookings.appointmentId))
+    .where(
+      and(
+        eq(partnerBookings.partnerAccountId, request.partnerAccountId),
+        eq(partnerBookings.id, request.partnerBookingId),
+      ),
+    )
+    .for("update")
+    .limit(1);
+  if (
+    !source ||
+    !["requested", "confirmed"].includes(source.appointment.status) ||
+    !source.appointment.startAt ||
+    source.appointment.startAt.getTime() !== request.previousStartAt.getTime()
+  )
+    throw new PartnerPortalSchedulingError(
+      "conflict",
+      "The current job schedule changed. Reconcile this request before continuing.",
+      { status: 409 },
+    );
+  let arrivalStartAt = source.booking.arrivalWindowStartAt;
+  let arrivalEndAt = source.booking.arrivalWindowEndAt;
+  if (input.decision === "accepted") {
+    if (!input.startAt || !Number.isFinite(input.startAt.getTime()))
+      throw new PartnerPortalSchedulingError(
+        "invalid_fields",
+        "Select a real available start before approving the change.",
+        { status: 422 },
+      );
+    const actor: PartnerSchedulingActor = {
+      accountId: request.partnerAccountId,
+      membershipId: request.createdByMembershipId,
+      partnerUserId: input.teamMemberId,
+      email: "staff-review",
+      sessionId: null,
+      accessLevel: "account",
+      canReadRates: false,
+      locationIds: [],
+      propertyIds: [],
+    };
+    const { draft, location } = await loadDraft(
+      tx,
+      actor,
+      request.bookingDraftId,
+    );
+    if (!location)
+      throw new PartnerPortalSchedulingError(
+        "not_found",
+        "The service location is no longer available.",
+        { status: 404 },
+      );
+    const range = localDayRangeAround(input.startAt);
+    const availability = await computeAvailabilityInTransaction({
+      tx,
+      actor,
+      draft,
+      location,
+      rangeStartAt: range.start,
+      rangeEndAt: range.end,
+      now,
+      selectedResourceIds: input.selectedResourceIds,
+    });
+    if (
+      availability.setup.calendar.state !== "current" ||
+      availability.setup.configurationReviewReasons.length > 0
+    )
+      throw new PartnerPortalSchedulingError(
+        "review_required",
+        "Calendar or scheduling configuration must be current before confirming this change.",
+        { status: 422 },
+      );
+    const window = availability.result.windows.find((item) =>
+      item.availableCandidates.some(
+        (candidate) => candidate.startAt.getTime() === input.startAt!.getTime(),
+      ),
+    );
+    const candidate = window?.availableCandidates.find(
+      (item) => item.startAt.getTime() === input.startAt!.getTime(),
+    );
+    if (!window || !candidate)
+      throw new PartnerPortalSchedulingError(
+        "slot_unavailable",
+        "That time is no longer available. Choose another time.",
+        { status: 409 },
+      );
+    if (
+      input.selectedResourceIds?.length &&
+      (new Set(input.selectedResourceIds).size !==
+        input.selectedResourceIds.length ||
+        candidate.resourceAssignments.length !==
+          input.selectedResourceIds.length ||
+        candidate.resourceAssignments.some(
+          (resource) =>
+            !input.selectedResourceIds!.includes(resource.resourceId),
+        ))
+    )
+      throw new PartnerPortalSchedulingError(
+        "invalid_fields",
+        "Select exactly the required current resources, or choose automatic assignment.",
+        { status: 422 },
+      );
+    arrivalStartAt = window.startAt;
+    arrivalEndAt = window.endAt;
+    const profile = availability.setup.profile;
+    const [appointment] = await tx
+      .update(appointments)
+      .set({
+        startAt: candidate.startAt,
+        durationMinutes: profile.durationMinutes,
+        travelBufferMinutes: profile.travelBufferMinutes,
+        capacityPoolKey: profile.capacityPoolKey,
+        capacityUnits: profile.capacityUnits,
+        resourceAssignmentSnapshot: candidate.resourceAssignments.map(
+          (item) => ({ ...item }),
+        ),
+        schedulePolicyRevision: availability.setup.policy.revision,
+        promisedArrivalStartAt: window.startAt,
+        promisedArrivalEndAt: window.endAt,
+        status: "confirmed",
+        rescheduleToken: randomUUID().replace(/-/gu, ""),
+        updatedAt: now,
+      })
+      .where(eq(appointments.id, source.appointment.id))
+      .returning();
+    if (!appointment) throw new Error("partner_reschedule_resolution_failed");
+    await tx.insert(outboxEvents).values({
+      type: "appointment.calendar_sync_requested",
+      payload: {
+        appointmentId: appointment.id,
+        version: appointment.updatedAt.toISOString(),
+        reason: "partner.reschedule.staff_accepted",
+        requestedCalendarEventId: appointment.calendarEventId,
+        correlationId: input.correlationId,
+      },
+      createdAt: now,
+    });
+  }
+  const [booking] = await tx
+    .update(partnerBookings)
+    .set({
+      ...(input.decision === "accepted"
+        ? {
+            arrivalWindowStartAt: arrivalStartAt,
+            arrivalWindowEndAt: arrivalEndAt,
+            publicStatus: "confirmed",
+            confirmationMode: "instant",
+          }
+        : {}),
+      version: source.booking.version + 1,
+      updatedAt: now,
+    })
+    .where(eq(partnerBookings.id, source.booking.id))
+    .returning();
+  if (!booking) throw new Error("partner_reschedule_resolution_failed");
+  const [resolved] = await tx
+    .update(partnerRescheduleRequests)
+    .set({
+      state: input.decision,
+      resolutionReason: input.reason,
+      resolvedByTeamMemberId: input.teamMemberId,
+      resolvedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(partnerRescheduleRequests.id, request.id),
+        eq(partnerRescheduleRequests.state, "pending"),
+      ),
+    )
+    .returning();
+  if (!resolved) throw new Error("partner_reschedule_resolution_race");
+  await tx.insert(partnerJobEvents).values({
+    partnerAccountId: request.partnerAccountId,
+    partnerBookingId: source.booking.id,
+    eventType:
+      input.decision === "accepted"
+        ? "job.rescheduled"
+        : "job.reschedule_declined",
+    publicLabel:
+      input.decision === "accepted"
+        ? "Schedule updated"
+        : "Schedule change declined",
+    publicDetail:
+      input.decision === "accepted"
+        ? "Stonegate confirmed your new arrival window."
+        : "Your original arrival window remains scheduled. Contact Stonegate if you need help.",
+    effectiveAt: now,
+    actorType: "staff",
+    actorTeamMemberId: input.teamMemberId,
+    metadata: { requestId: request.id },
+    createdAt: now,
+  });
+  await queuePartnerBookingNotification({
+    tx,
+    accountId: request.partnerAccountId,
+    membershipId:
+      source.booking.requestedByMembershipId ?? request.createdByMembershipId,
+    fallbackMembershipId: request.createdByMembershipId,
+    partnerBookingId: source.booking.id,
+    eventType:
+      input.decision === "accepted"
+        ? "booking.rescheduled"
+        : "booking.reschedule_declined",
+    dedupeKey: `reschedule-decision:${request.id}:${input.decision}`,
+    correlationId: input.correlationId,
+    occurredAt: now,
+    accountTimezone: "America/New_York",
+    serviceAt: arrivalStartAt,
+  });
+  return {
+    requestId: resolved.id,
+    accountId: request.partnerAccountId,
+    jobId: booking.id,
+    state: resolved.state,
+    updatedAt: now.toISOString(),
+    arrivalWindowStartAt: arrivalStartAt?.toISOString() ?? null,
+    arrivalWindowEndAt: arrivalEndAt?.toISOString() ?? null,
+  };
 }

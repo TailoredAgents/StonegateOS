@@ -1,68 +1,22 @@
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
-import { callPartnerPublicApi } from "../lib/api";
-import { PARTNER_SESSION_COOKIE } from "@/lib/partner-session";
+import { NextResponse, type NextRequest } from "next/server";
 import { resolvePublicOrigin } from "../lib/origin";
 import { normalizePartnerReturnTo } from "../lib/safe-return";
 
-export async function GET(request: NextRequest): Promise<Response> {
-  const origin = resolvePublicOrigin(request);
-  const url = new URL(request.url);
-  const token = url.searchParams.get("token")?.trim() ?? "";
-  const rememberMe = url.searchParams.get("remember") === "1";
-  const returnTo = normalizePartnerReturnTo(url.searchParams.get("returnTo"));
-  if (!token) {
-    return NextResponse.redirect(
-      new URL("/partners/login?error=missing_token", origin),
-    );
-  }
-
-  const res = await callPartnerPublicApi(
-    "/api/portal/v2/auth/magic-link/consume",
-    {
-      method: "POST",
-      headers: { Origin: origin },
-      body: JSON.stringify({ token, rememberMe }),
-    },
+/** Old magic links never create a session or serve as a login fallback. */
+export function GET(request: NextRequest): Response {
+  const destination = new URL("/partners/login", resolvePublicOrigin(request));
+  const returnTo = normalizePartnerReturnTo(
+    request.nextUrl.searchParams.get("returnTo"),
   );
-
-  if (!res.ok) {
-    return NextResponse.redirect(
-      new URL("/partners/login?error=expired_or_invalid", origin),
-    );
-  }
-
-  const payload = (await res.json().catch(() => ({}))) as {
-    sessionToken?: string;
-    expiresAt?: string;
-  };
-  const sessionToken =
-    typeof payload.sessionToken === "string" ? payload.sessionToken : "";
-  if (!sessionToken) {
-    return NextResponse.redirect(
-      new URL("/partners/login?error=auth_failed", origin),
-    );
-  }
-
-  const expiresAt = new Date(payload.expiresAt ?? "");
-  if (
-    !Number.isFinite(expiresAt.getTime()) ||
-    expiresAt.getTime() <= Date.now()
-  ) {
-    return NextResponse.redirect(
-      new URL("/partners/login?error=auth_failed", origin),
-    );
-  }
-
-  const response = NextResponse.redirect(new URL(returnTo, origin));
-  response.cookies.set({
-    name: PARTNER_SESSION_COOKIE,
-    value: sessionToken,
-    httpOnly: true,
-    secure: process.env["NODE_ENV"] === "production",
-    sameSite: "lax",
-    path: "/",
-    expires: expiresAt,
+  if (returnTo !== "/partners/overview")
+    destination.searchParams.set("returnTo", returnTo);
+  destination.searchParams.set("error", "security_setup_updated");
+  return NextResponse.redirect(destination, {
+    status: 303,
+    headers: {
+      "Cache-Control": "private, no-store, max-age=0",
+      "Referrer-Policy": "no-referrer",
+      "X-Robots-Tag": "noindex, nofollow",
+    },
   });
-  return response;
 }

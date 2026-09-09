@@ -3,10 +3,8 @@
 import * as React from "react";
 import Link from "next/link";
 import { CheckCircle2, LoaderCircle, MailCheck } from "lucide-react";
-import {
-  onboardingOperationKey,
-  partnerOnboardingFetch,
-} from "../lib/onboarding";
+import { PartnerAccessHelp } from "./PartnerAccessHelp";
+import { partnerOnboardingFetch } from "../lib/onboarding";
 import {
   PartnerNotice,
   partnerPrimaryButtonClass,
@@ -15,12 +13,20 @@ import {
 
 export function PartnerEmailChangeConfirmation({
   hasToken,
+  operationKey,
+  initialError = null,
 }: {
   hasToken: boolean;
+  operationKey: string;
+  initialError?: string | null;
 }) {
   const [busy, setBusy] = React.useState(false);
   const [complete, setComplete] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(initialError);
+  const messageRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (error || complete) messageRef.current?.focus();
+  }, [error, complete]);
 
   async function confirm() {
     if (!hasToken || busy) return;
@@ -33,17 +39,21 @@ export function PartnerEmailChangeConfirmation({
     }>("email-change/confirm", {
       method: "POST",
       headers: {
-        "Idempotency-Key": onboardingOperationKey("email-change-confirm"),
+        "Idempotency-Key": "partner-email-change:" + operationKey,
       },
       body: JSON.stringify({}),
     }).catch(() => null);
     setBusy(false);
     if (!result?.ok) {
       setError(
-        result?.response.status === 409
-          ? "This email change could not be completed safely. Contact Stonegate support."
-          : (result?.error.message ??
-              "This confirmation link is invalid or expired."),
+        !result || result.response.status >= 500
+          ? "We couldn’t reach the account service. Your link has not been cleared; try again or contact Sales."
+          : result.response.status === 429
+            ? "Too many attempts. Wait a few minutes, then try again."
+            : result.response.status === 409
+              ? "This email change could not be completed safely. Contact Stonegate support."
+              : (result?.error.message ??
+                "This confirmation link is invalid or expired."),
       );
       return;
     }
@@ -52,7 +62,11 @@ export function PartnerEmailChangeConfirmation({
 
   if (complete) {
     return (
-      <div className="mx-auto max-w-xl rounded-3xl border border-emerald-200 bg-white p-6 text-center shadow-xl shadow-slate-200/60 sm:p-10">
+      <div
+        ref={messageRef}
+        tabIndex={-1}
+        className="mx-auto max-w-md text-center"
+      >
         <CheckCircle2
           className="mx-auto h-12 w-12 text-emerald-700"
           aria-hidden="true"
@@ -70,17 +84,15 @@ export function PartnerEmailChangeConfirmation({
         >
           Sign in
         </Link>
+        <PartnerAccessHelp className="mt-5 text-left" />
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-xl rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/60 sm:p-10">
+    <div className="mx-auto max-w-md">
       <MailCheck className="h-12 w-12 text-primary-700" aria-hidden="true" />
-      <p className="mt-5 text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">
-        Keep sign-in simple
-      </p>
-      <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
+      <h1 className="mt-5 text-3xl font-semibold tracking-tight text-slate-950">
         Confirm your new sign-in email
       </h1>
       <p className="mt-3 text-sm leading-6 text-slate-600">
@@ -88,33 +100,46 @@ export function PartnerEmailChangeConfirmation({
         devices for security. Your company information will not change.
       </p>
       {error || !hasToken ? (
-        <PartnerNotice tone="error" className="mt-5">
-          {error ?? "This confirmation link is missing or expired."}
-        </PartnerNotice>
+        <div ref={messageRef} tabIndex={-1}>
+          <PartnerNotice tone="error" className="mt-5">
+            {error ?? "This confirmation link is missing or expired."}
+          </PartnerNotice>
+        </div>
       ) : null}
-      <button
-        type="button"
-        onClick={() => void confirm()}
-        disabled={!hasToken || busy}
-        aria-busy={busy}
-        className={`${partnerPrimaryButtonClass} mt-6 w-full`}
+      <form
+        method="post"
+        action="/partners/form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void confirm();
+        }}
       >
-        {busy ? (
-          <LoaderCircle
-            className="h-4 w-4 animate-spin motion-reduce:animate-none"
-            aria-hidden="true"
-          />
-        ) : (
-          <MailCheck className="h-4 w-4" aria-hidden="true" />
-        )}
-        {busy ? "Confirming…" : "Confirm email change"}
-      </button>
+        <input type="hidden" name="operation" value="email_change" />
+        <input type="hidden" name="operationKey" value={operationKey} />
+        <button
+          type="submit"
+          disabled={!hasToken || busy}
+          aria-busy={busy}
+          className={`${partnerPrimaryButtonClass} mt-6 w-full`}
+        >
+          {busy ? (
+            <LoaderCircle
+              className="h-4 w-4 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+          ) : (
+            <MailCheck className="h-4 w-4" aria-hidden="true" />
+          )}
+          {busy ? "Confirming…" : "Confirm email change"}
+        </button>
+      </form>
       <Link
         href="/partners/login"
         className={`${partnerSecondaryButtonClass} mt-3 w-full`}
       >
         Return to sign in
       </Link>
+      <PartnerAccessHelp className="mt-5" />
     </div>
   );
 }

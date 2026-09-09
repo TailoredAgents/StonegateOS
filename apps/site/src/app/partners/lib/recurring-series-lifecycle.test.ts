@@ -35,8 +35,12 @@ void test("recurring lifecycle controls state their bounded consequences accessi
   );
   assert.match(
     component,
-    /does not reserve capacity outside the 30-day\s+horizon/u,
+    /Dates outside the next 30 days are tentative, not\s+reserved/u,
   );
+  assert.match(component, /Continues until canceled/u);
+  assert.match(component, /name="endsOn"/u);
+  assert.match(component, /View job/u);
+  assert.match(component, /More recurring service/u);
   assert.match(component, /Pause future work/u);
   assert.match(component, /Resume future work/u);
   assert.match(component, /Cancel future work/u);

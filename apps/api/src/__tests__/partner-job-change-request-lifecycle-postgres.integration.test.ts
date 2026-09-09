@@ -14,6 +14,7 @@ import {
   partnerJobChangeRequests,
   partnerJobEvents,
   partnerNotifications,
+  partnerInvoices,
   partnerQuotes,
   partnerUsers,
   properties,
@@ -35,6 +36,7 @@ import {
   updatePartnerJobReferences,
 } from "@/lib/partner-job-change-request-lifecycle";
 import { resolvePartnerJobChangeOrderFromQuoteResponse } from "@/lib/partner-job-change-orders";
+import { runPartnerBillingCommand } from "@/lib/partner-billing-administration";
 
 const jest = import.meta.jest;
 const describeWithDatabase = process.env["DATABASE_URL"]
@@ -891,7 +893,8 @@ describeWithDatabase("Partner job change request PostgreSQL lifecycle", () => {
 
   it("converges concurrent Quote V2 acceptance on one final price while operational changes stay pending", async () => {
     const fixture = await createFixture();
-    fixtures.push(fixture);
+    // This journey issues immutable financial evidence. Retain its isolated
+    // local fixture instead of deleting issued invoices or disabling guards.
     const request = await createMaterialRequest(fixture);
     const quote = await createIssuedJobQuote(fixture);
     const offered = await getDb().transaction((tx) =>
@@ -997,6 +1000,8 @@ describeWithDatabase("Partner job change request PostgreSQL lifecycle", () => {
           .select({
             status: appointments.status,
             startAt: appointments.startAt,
+            quotedTotalCents: appointments.quotedTotalCents,
+            finalTotalCents: appointments.finalTotalCents,
           })
           .from(appointments)
           .where(eq(appointments.id, fixture.appointmentId))
@@ -1032,9 +1037,61 @@ describeWithDatabase("Partner job change request PostgreSQL lifecycle", () => {
           "Use loading dock B and call the site contact on arrival.",
       },
     });
-    expect(storedAppointment).toMatchObject({ status: "confirmed" });
+    expect(storedAppointment).toMatchObject({
+      status: "confirmed",
+      quotedTotalCents: 12_345,
+      finalTotalCents: null,
+    });
     expect(storedAppointment?.startAt).toEqual(appointmentBefore?.startAt);
     expect(storedRequest?.state).toBe("change_order_required");
+    const invoice = await getDb().transaction((tx) =>
+      runPartnerBillingCommand(tx, {
+        accountId: fixture.accountId,
+        actorId: fixture.teamMemberId,
+        expectedVersion: null,
+        command: {
+          action: "create_invoice",
+          jobId: fixture.bookingId,
+          lines: [
+            {
+              description: "Accepted change order",
+              quantity: "1",
+              unitAmountCents: 12_345,
+            },
+          ],
+          taxCents: 0,
+          discountCents: 0,
+          depositCents: 0,
+          poNumber: null,
+          costCenter: null,
+          billingContact: { name: "Local billing contact" },
+          terms: null,
+          dueDate: null,
+          reason: "Reviewed accepted change-order price",
+        },
+      }),
+    );
+    await getDb().transaction((tx) =>
+      runPartnerBillingCommand(tx, {
+        accountId: fixture.accountId,
+        actorId: fixture.teamMemberId,
+        expectedVersion: String(invoice.revision),
+        command: {
+          action: "issue_invoice",
+          invoiceId: invoice.invoiceId!,
+          reason: "Verified accepted canonical price",
+        },
+      }),
+    );
+    const [issued] = await getDb()
+      .select()
+      .from(partnerInvoices)
+      .where(eq(partnerInvoices.id, invoice.invoiceId!));
+    expect(issued).toMatchObject({
+      status: "issued",
+      totalCents: 12_345,
+      balanceCents: 12_345,
+    });
   });
 
   it("replays the actual resolved request and current job revision", async () => {

@@ -80,7 +80,7 @@ describe("partner notification endpoint route security contracts", () => {
     collectionRoute.indexOf("export async function POST"),
   );
 
-  it("keeps endpoint listing intrinsic but protects every mutation with explicit security authority", () => {
+  it("uses active identity access and endpoint ownership for personal SMS preferences", () => {
     expect(collectionRead).toContain("requirePartnerCapability");
     expect(collectionRead).toContain('"portal.session.read"');
     for (const route of [collectionMutation, verifyRoute, revokeRoute]) {
@@ -91,7 +91,8 @@ describe("partner notification endpoint route security contracts", () => {
       expect(route).toContain("accountId");
       expect(route).toContain("membershipId");
     }
-    expect(endpointAuthorization).toContain('"account.security.manage"');
+    expect(endpointAuthorization).toContain('"portal.session.read"');
+    expect(endpointAuthorization).not.toContain('"account.security.manage"');
     expect(endpointAuthorization).not.toMatch(/mfa|aal2/iu);
     expect(collectionRoute).toContain("listPartnerNotificationEndpoints");
     expect(collectionRoute).not.toContain("phoneE164");

@@ -7,6 +7,7 @@ import {
   outboxEvents,
   partnerAccessApplications,
   partnerAccountMemberships,
+  partnerAccountInvitations,
   partnerAccounts,
   partnerApplicantSessions,
   partnerAuthChallenges,
@@ -20,6 +21,7 @@ import {
   getUserAgent,
   normalizeEmail,
   resolvePublicSiteBaseUrl,
+  sha256Base64Url,
 } from "@/lib/partner-portal-auth";
 import {
   hashPartnerPassword,
@@ -31,6 +33,8 @@ import {
   PARTNER_PASSWORD_MIN_LENGTH,
 } from "@/lib/partner-password-management";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
+import { derivePartnerInvitationActivationToken } from "@/lib/partner-invitation-handoff";
+import { validatePartnerInvitationActivationAuthority } from "@/lib/partner-invitation-authority";
 
 const EMAIL_VERIFICATION_TTL_MS = 30 * 60 * 1_000;
 const ACCOUNT_ACTIVATION_TTL_MS = 24 * 60 * 60 * 1_000;
@@ -58,6 +62,8 @@ type ChallengeSubject = {
   partnerAccountId?: string | null;
   partnerMembershipId?: string | null;
   applicationId?: string | null;
+  invitationId?: string | null;
+  invitationGeneration?: number | null;
   securityVersionSnapshot?: number | null;
 };
 
@@ -137,6 +143,7 @@ export async function createPartnerPurposeChallengeInTransaction(
     request?: NextRequest | null;
     subject?: ChallengeSubject;
     now?: Date;
+    invitationToken?: string;
   },
 ): Promise<{
   challengeId: string;
@@ -217,11 +224,23 @@ export async function createPartnerPurposeChallengeInTransaction(
     })
     .where(and(challengeScope, eq(partnerAuthChallenges.status, "pending")));
 
-  const rawToken = randomBytes(32).toString("base64url");
+  const rawToken = input.invitationToken
+    ? derivePartnerInvitationActivationToken(input.invitationToken)
+    : randomBytes(32).toString("base64url");
+  if (
+    input.invitationToken &&
+    (input.purpose !== "account_activation" ||
+      !input.subject?.invitationId ||
+      !input.subject.invitationGeneration)
+  )
+    throw new TypeError("invalid_invitation_handoff");
   const deliveryUrl = purposeUrl(input.purpose, rawToken);
   if (!deliveryUrl) throw new Error("partner_auth_site_url_unavailable");
   const challengeId = randomUUID();
-  const expiresAt = new Date(now.getTime() + purposeTtlMs(input.purpose));
+  const expiresAt = new Date(
+    now.getTime() +
+      (input.invitationToken ? 30 * 60 * 1_000 : purposeTtlMs(input.purpose)),
+  );
   const [challenge] = await tx
     .insert(partnerAuthChallenges)
     .values({
@@ -235,6 +254,8 @@ export async function createPartnerPurposeChallengeInTransaction(
       partnerAccountId: input.subject?.partnerAccountId ?? null,
       partnerMembershipId: input.subject?.partnerMembershipId ?? null,
       applicationId: input.subject?.applicationId ?? null,
+      invitationId: input.subject?.invitationId ?? null,
+      invitationGeneration: input.subject?.invitationGeneration ?? null,
       securityVersionSnapshot: input.subject?.securityVersionSnapshot ?? null,
       requestedIp: input.request ? getClientIp(input.request) : null,
       requestedUserAgent: input.request ? getUserAgent(input.request) : null,
@@ -244,32 +265,34 @@ export async function createPartnerPurposeChallengeInTransaction(
     })
     .returning({ id: partnerAuthChallenges.id });
   if (!challenge) throw new Error("partner_auth_challenge_not_created");
-  const [outbox] = await tx
-    .insert(outboxEvents)
-    .values({
-      type: "partner.auth.email",
-      payload: {
-        challengeId,
-        generation,
-        purpose: input.purpose,
-        deliveryUrl,
-        correlationId: input.correlationId,
-      },
-      createdAt: now,
-    })
-    .returning({ id: outboxEvents.id });
-  if (!outbox) throw new Error("partner_auth_outbox_not_created");
-  const [linked] = await tx
-    .update(partnerAuthChallenges)
-    .set({ deliveryOutboxEventId: outbox.id, updatedAt: now })
-    .where(
-      and(
-        eq(partnerAuthChallenges.id, challengeId),
-        eq(partnerAuthChallenges.status, "pending"),
-      ),
-    )
-    .returning({ id: partnerAuthChallenges.id });
-  if (!linked) throw new Error("partner_auth_outbox_not_linked");
+  if (!input.invitationToken) {
+    const [outbox] = await tx
+      .insert(outboxEvents)
+      .values({
+        type: "partner.auth.email",
+        payload: {
+          challengeId,
+          generation,
+          purpose: input.purpose,
+          deliveryUrl,
+          correlationId: input.correlationId,
+        },
+        createdAt: now,
+      })
+      .returning({ id: outboxEvents.id });
+    if (!outbox) throw new Error("partner_auth_outbox_not_created");
+    const [linked] = await tx
+      .update(partnerAuthChallenges)
+      .set({ deliveryOutboxEventId: outbox.id, updatedAt: now })
+      .where(
+        and(
+          eq(partnerAuthChallenges.id, challengeId),
+          eq(partnerAuthChallenges.status, "pending"),
+        ),
+      )
+      .returning({ id: partnerAuthChallenges.id });
+    if (!linked) throw new Error("partner_auth_outbox_not_linked");
+  }
   await tx.insert(auditLogs).values(
     challengeAuditValues({
       action: `partner.auth.${input.purpose}.requested`,
@@ -355,14 +378,22 @@ export async function consumePartnerEmailVerification(input: {
             challenge.normalizedEmail,
           ),
           eq(partnerAccessApplications.flowVersion, 2),
-          or(
-            eq(partnerAccessApplications.status, "submitted"),
-            eq(partnerAccessApplications.status, "under_review"),
-            eq(partnerAccessApplications.status, "needs_information"),
-          ),
         ),
       )
       .orderBy(desc(partnerAccessApplications.submittedAt))
+      .limit(1);
+    // Old verification links are read-only history access after retirement. Keep
+    // approved/declined outcomes and the last verified draft, not a blank form.
+    const [previousApplicant] = await tx
+      .select({
+        draftPayload: partnerApplicantSessions.draftPayload,
+        draftVersion: partnerApplicantSessions.draftVersion,
+      })
+      .from(partnerApplicantSessions)
+      .where(
+        eq(partnerApplicantSessions.normalizedEmail, challenge.normalizedEmail),
+      )
+      .orderBy(desc(partnerApplicantSessions.updatedAt))
       .limit(1);
     const [consumed] = await tx
       .update(partnerAuthChallenges)
@@ -395,6 +426,8 @@ export async function consumePartnerEmailVerification(input: {
       sessionHash: tokenHash(sessionToken),
       applicationId: activeApplication?.id ?? null,
       ip: getClientIp(input.request),
+      draftPayload: previousApplicant?.draftPayload ?? {},
+      draftVersion: previousApplicant?.draftVersion ?? 1,
       userAgent: getUserAgent(input.request),
       expiresAt,
       createdAt: now,
@@ -496,6 +529,9 @@ export async function createPartnerActivationChallengeInTransaction(
     securityVersion: number;
     correlationId: string;
     now?: Date;
+    invitationToken?: string;
+    invitationId?: string;
+    invitationGeneration?: number;
   },
 ) {
   return createPartnerPurposeChallengeInTransaction(tx, {
@@ -503,11 +539,14 @@ export async function createPartnerActivationChallengeInTransaction(
     normalizedEmail: input.normalizedEmail,
     correlationId: input.correlationId,
     now: input.now,
+    invitationToken: input.invitationToken,
     subject: {
       partnerUserId: input.partnerUserId,
       partnerAccountId: input.partnerAccountId,
       partnerMembershipId: input.partnerMembershipId,
       applicationId: input.applicationId,
+      invitationId: input.invitationId,
+      invitationGeneration: input.invitationGeneration,
       securityVersionSnapshot: input.securityVersion,
     },
   });
@@ -623,7 +662,16 @@ export async function inspectPartnerActivationToken(rawToken: string): Promise<
       row.user.normalizedEmail === row.challenge.normalizedEmail &&
       row.user.securityVersion === row.challenge.securityVersionSnapshot &&
       row.account.portalAccessEnabled;
-    if (!valid) return { kind: "invalid" as const };
+    if (
+      !valid ||
+      !(await validatePartnerInvitationActivationAuthority(tx, {
+        invitationId: row.challenge.invitationId,
+        invitationGeneration: row.challenge.invitationGeneration,
+        accountId: row.account.id,
+        membershipId: row.membership.id,
+      }))
+    )
+      return { kind: "invalid" as const };
     return {
       kind: "success" as const,
       email: row.user.email,
@@ -647,7 +695,13 @@ export async function completePartnerActivation(input: {
       sessionToken: string;
       expiresAt: Date;
     }
-  | { kind: "invalid" | "password_policy" | "unavailable" }
+  | {
+      kind:
+        | "invalid"
+        | "password_policy"
+        | "password_incorrect"
+        | "unavailable";
+    }
 > {
   const digest = tokenHash(input.rawToken);
   const now = new Date();
@@ -680,7 +734,7 @@ export async function completePartnerActivation(input: {
     ? await verifyPartnerPassword(input.password, preview.user.passwordHash)
     : null;
   if (existingPasswordVerification && !existingPasswordVerification.valid) {
-    return { kind: "invalid" as const };
+    return { kind: "password_incorrect" as const };
   }
   const shouldWritePasswordHash =
     !preview.user.passwordHash || existingPasswordVerification?.needsRehash;
@@ -707,7 +761,16 @@ export async function completePartnerActivation(input: {
         row.user.securityVersion === row.challenge.securityVersionSnapshot &&
         row.user.passwordHash === preview.user.passwordHash &&
         row.account.portalAccessEnabled;
-      if (!valid) return { kind: "invalid" as const };
+      if (
+        !valid ||
+        !(await validatePartnerInvitationActivationAuthority(tx, {
+          invitationId: row.challenge.invitationId,
+          invitationGeneration: row.challenge.invitationGeneration,
+          accountId: row.account.id,
+          membershipId: row.membership.id,
+        }))
+      )
+        return { kind: "invalid" as const };
       const settingPassword = isPendingIdentity || !row.user.passwordHash;
       const rehashingPassword =
         Boolean(row.user.passwordHash) &&
@@ -793,6 +856,21 @@ export async function completePartnerActivation(input: {
           "partner_activation_state_changed",
         );
       }
+      if (row.challenge.invitationId) {
+        await tx
+          .update(partnerAccountInvitations)
+          .set({
+            activatedAt: now,
+            updatedAt: now,
+            version: sql`${partnerAccountInvitations.version} + 1`,
+          })
+          .where(
+            and(
+              eq(partnerAccountInvitations.id, row.challenge.invitationId),
+              eq(partnerAccountInvitations.partnerAccountId, row.account.id),
+            ),
+          );
+      }
       if (settingPassword) {
         await tx
           .update(partnerSessions)
@@ -831,7 +909,7 @@ export async function completePartnerActivation(input: {
         partnerUserId: row.user.id,
         activePartnerAccountId: row.account.id,
         activeMembershipId: row.membership.id,
-        sessionHash: tokenHash(sessionToken),
+        sessionHash: sha256Base64Url(sessionToken),
         authMethod: "password",
         assuranceLevel: "aal1",
         securityVersion: nextSecurityVersion,

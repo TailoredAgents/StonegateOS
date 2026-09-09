@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, eq, gt, or } from "drizzle-orm";
+import { and, desc, eq, lt, or } from "drizzle-orm";
 import { z } from "zod";
 import {
   auditLogs,
@@ -42,6 +42,7 @@ import {
   readPartnerJobIssueMetadata,
 } from "@/lib/partner-portal-v2-job-hub";
 import { isAllowedPartnerPortalMutationOrigin } from "@/lib/partner-portal-v2-security";
+import { ensurePartnerJobThread } from "@/lib/partner-job-thread";
 import {
   createPortalV2ErrorResponse,
   encodePortalV2Cursor,
@@ -235,6 +236,8 @@ export async function GET(
       .select({
         id: conversationMessages.id,
         authorType: conversationMessages.authorType,
+        authorName: conversationParticipants.displayName,
+        authorMembershipId: conversationParticipants.partnerMembershipId,
         direction: conversationMessages.direction,
         channel: conversationMessages.channel,
         body: conversationMessages.body,
@@ -245,24 +248,28 @@ export async function GET(
         createdAt: conversationMessages.createdAt,
       })
       .from(conversationMessages)
+      .leftJoin(conversationParticipants, and(
+        eq(conversationParticipants.id, conversationMessages.participantId),
+        eq(conversationParticipants.threadId, thread.id),
+      ))
       .where(
         and(
           eq(conversationMessages.threadId, thread.id),
           eq(conversationMessages.portalVisible, true),
           cursorDate && cursorId
             ? or(
-                gt(conversationMessages.createdAt, cursorDate),
+                lt(conversationMessages.createdAt, cursorDate),
                 and(
                   eq(conversationMessages.createdAt, cursorDate),
-                  gt(conversationMessages.id, cursorId),
+                  lt(conversationMessages.id, cursorId),
                 ),
               )
             : undefined,
         ),
       )
       .orderBy(
-        asc(conversationMessages.createdAt),
-        asc(conversationMessages.id),
+        desc(conversationMessages.createdAt),
+        desc(conversationMessages.id),
       )
       .limit(pagination.limit + 1);
     const hasMore = rows.length > pagination.limit;
@@ -321,6 +328,8 @@ export async function GET(
             kind: issue ? ("issue" as const) : ("message" as const),
             issue,
             authorType: message.authorType,
+            authorName: message.authorName?.trim().slice(0, 160) || (message.authorType === "partner" ? "Your team" : "Stonegate"),
+            isCurrentAuthor: Boolean(principal.membershipId && message.authorMembershipId === principal.membershipId),
             direction: message.direction,
             channel: message.channel,
             body: message.body,
@@ -500,47 +509,7 @@ export async function POST(
         }
       }
 
-      let [thread] = await tx
-        .select({ id: conversationThreads.id })
-        .from(conversationThreads)
-        .where(
-          and(
-            eq(conversationThreads.partnerAccountId, principal.accountId!),
-            eq(conversationThreads.partnerBookingId, job.id),
-            eq(conversationThreads.portalVisible, true),
-          ),
-        )
-        .for("update")
-        .limit(1);
-      if (!thread) {
-        await tx
-          .insert(conversationThreads)
-          .values({
-            contactId: job.orgContactId,
-            propertyId: job.propertyId,
-            partnerAccountId: principal.accountId!,
-            partnerBookingId: job.id,
-            portalVisible: true,
-            status: "open",
-            state: "booked",
-            channel: "web",
-            subject: `${job.serviceKey ?? "Service"} job`,
-          })
-          .onConflictDoNothing();
-        [thread] = await tx
-          .select({ id: conversationThreads.id })
-          .from(conversationThreads)
-          .where(
-            and(
-              eq(conversationThreads.partnerAccountId, principal.accountId!),
-              eq(conversationThreads.partnerBookingId, job.id),
-              eq(conversationThreads.portalVisible, true),
-            ),
-          )
-          .for("update")
-          .limit(1);
-      }
-      if (!thread) throw new Error("partner_job_thread_missing");
+      const thread = await ensurePartnerJobThread(tx, principal.accountId!, job.id);
 
       let [participant] = await tx
         .select({ id: conversationParticipants.id })
@@ -561,7 +530,6 @@ export async function POST(
           .values({
             threadId: thread.id,
             participantType: "contact",
-            contactId: job.orgContactId,
             partnerMembershipId: principal.membershipId,
             externalAddress: principal.email,
             displayName: principal.name,
@@ -747,6 +715,8 @@ export async function POST(
           direction: "inbound",
           channel: "web",
           body: result.message.body,
+          authorName: principal.name,
+          isCurrentAuthor: true,
           deliveryStatus: "delivered",
           attachmentIds: result.attachments.map((attachment) => attachment.id),
           attachments: result.attachments,

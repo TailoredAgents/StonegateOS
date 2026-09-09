@@ -1,38 +1,44 @@
 import type { NextRequest } from "next/server";
 
-function normalizeBaseUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+function configuredOrigin(raw: string | undefined): URL | null {
+  if (!raw) return null;
   try {
-    const url = new URL(withScheme);
-    const lowered = url.hostname.toLowerCase();
-    if (lowered === "localhost" || lowered === "127.0.0.1" || lowered === "0.0.0.0") return null;
-    return url.toString().replace(/\/$/, "");
+    const url = new URL(raw.trim());
+    return (url.protocol === "https:" || url.protocol === "http:") &&
+      !url.username &&
+      !url.password
+      ? url
+      : null;
   } catch {
     return null;
   }
 }
 
-export function resolvePublicOrigin(request: NextRequest): string {
-  const forwardedProto = (request.headers.get("x-forwarded-proto") ?? "")
-    .split(",")[0]
-    ?.trim()
-    ?.toLowerCase();
-  const forwardedHost = (request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "")
-    .split(",")[0]
-    ?.trim();
-
-  if (forwardedHost) {
-    const raw = `${forwardedProto === "http" ? "http" : "https"}://${forwardedHost}`;
-    const normalized = normalizeBaseUrl(raw);
-    if (normalized) return normalized;
+/**
+ * NextURL normalizes loopback IPs to "localhost". Recover the exact browser
+ * origin only from an operator-configured Site URL whose authority matches the
+ * request's HTTP Host. Forwarding headers and a caller's Origin cannot define
+ * a trusted destination. Different ports and schemes are not interchangeable.
+ */
+export function resolvePublicOrigin(
+  request: NextRequest,
+  options: { configuredSiteUrls?: readonly (string | undefined)[] } = {},
+): string {
+  const host = request.headers.get("host")?.trim() ?? "";
+  if (host && !/[/\\@?#,\s]/u.test(host)) {
+    for (const raw of options.configuredSiteUrls ?? [
+      process.env["SITE_URL"],
+      process.env["NEXT_PUBLIC_SITE_URL"],
+    ]) {
+      const site = configuredOrigin(raw);
+      if (!site) continue;
+      try {
+        const authority = new URL(site.protocol + "//" + host);
+        if (authority.origin === site.origin) return site.origin;
+      } catch {
+        /* Malformed Host never expands trust. */
+      }
+    }
   }
-
-  const env = normalizeBaseUrl(process.env["NEXT_PUBLIC_SITE_URL"] ?? "");
-  if (env) return env;
-
-  // Last resort (can be wrong on some hosts, but better than throwing).
   return request.nextUrl.origin;
 }
-

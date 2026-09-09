@@ -130,16 +130,17 @@ void test("persona presentation has no authorization or capability influence", (
   assert.doesNotMatch(moduleSource, /can[A-Z][A-Za-z]+\s*:/u);
 });
 
-void test("wires dismissible and explicit persona suggestions without replacing saved values", () => {
+void test("keeps optional defaults without product tours on the service home", () => {
   const overview = source("../(portal)/overview/page.tsx");
   const overviewGuide = source("../components/PartnerPersonaOverviewGuide.tsx");
   const booking = source("../components/PartnerBookingWizard.tsx");
-  const application = source("../components/PartnerApplicationWorkspace.tsx");
   const checklist = source("../components/PartnerOnboardingChecklist.tsx");
   const repeatWork = source("../components/PartnerRepeatWorkManager.tsx");
 
-  assert.match(overview, /visiblePersonaTaskIds/u);
-  assert.match(overview, /capabilities\?\.schedule/u);
+  assert.doesNotMatch(overview, /PartnerPersonaOverviewGuide|PartnerOnboardingChecklist|PartnerStatCard/u);
+  assert.match(overview, /capabilities\.schedule/u);
+  assert.match(overview, /Your next job/u);
+  assert.match(overview, /Continue your saved request/u);
   assert.match(overviewGuide, /Dismiss persona suggestions/u);
   assert.match(overviewGuide, /Suggestions\s+change presentation only/u);
 
@@ -153,8 +154,6 @@ void test("wires dismissible and explicit persona suggestions without replacing 
   assert.match(booking, /formFromDraft\(initialDraft/u);
   assert.doesNotMatch(booking, /useEffect\([^)]*applyProofPreset/u);
 
-  assert.match(application, /Suggestions do not select requested features/u);
-  assert.match(application, /Dismiss persona onboarding suggestions/u);
   assert.match(checklist, /presentation\.onboarding\.checklistLead/u);
   assert.match(repeatWork, /do not create a template or select a service/u);
   assert.match(repeatWork, /Dismiss starter template suggestions/u);
@@ -163,9 +162,8 @@ void test("wires dismissible and explicit persona suggestions without replacing 
 void test("persona guidance retains accessible names, status, and responsive layouts", () => {
   const overviewGuide = source("../components/PartnerPersonaOverviewGuide.tsx");
   const booking = source("../components/PartnerBookingWizard.tsx");
-  const application = source("../components/PartnerApplicationWorkspace.tsx");
   const repeatWork = source("../components/PartnerRepeatWorkManager.tsx");
-  const combined = [overviewGuide, booking, application, repeatWork].join("\n");
+  const combined = [overviewGuide, booking, repeatWork].join("\n");
 
   for (const id of [
     "partner-persona-next-actions-heading",
@@ -182,5 +180,4 @@ void test("persona guidance retains accessible names, status, and responsive lay
   assert.match(booking, /aria-live="polite"/u);
   assert.match(combined, /min-h-11/u);
   assert.match(combined, /sm:grid-cols-2/u);
-  assert.match(application, /sm:grid-cols-3/u);
 });

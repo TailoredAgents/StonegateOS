@@ -54,6 +54,6 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 }
 
-export async function POST(request: NextRequest): Promise<Response> {
-  return submitVerifiedPartnerApplication(request);
+export function POST(request: NextRequest): Promise<Response> {
+  return Promise.resolve(submitVerifiedPartnerApplication(request));
 }

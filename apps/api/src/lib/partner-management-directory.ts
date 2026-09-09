@@ -14,6 +14,8 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { partnerInvitationDto } from "./partner-account-invitations";
+import { effectivePartnerInvoiceStatusSql } from "@/lib/partner-invoice-status";
 import { alias } from "drizzle-orm/pg-core";
 import {
   getDb,
@@ -843,7 +845,7 @@ async function listCommercialReadiness(query: PartnerManagementListQuery) {
     select count(*)::integer
     from ${partnerInvoices}
     where ${partnerInvoices.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerInvoices.status} = 'overdue'
+      and ${effectivePartnerInvoiceStatusSql()} = 'overdue'
       and ${partnerInvoices.balanceCents} > 0
   )`.mapWith(Number);
   const hostedPaymentGapCount = sql<number>`(
@@ -852,7 +854,7 @@ async function listCommercialReadiness(query: PartnerManagementListQuery) {
     where ${partnerInvoices.partnerAccountId} = ${partnerAccounts.id}
       and ${partnerInvoices.status} in ('issued', 'partially_paid', 'overdue')
       and ${partnerInvoices.balanceCents} > 0
-      and ${partnerInvoices.hostedPaymentUrl} is null
+      and (${partnerInvoices.providerInvoiceId} is not null or ${partnerInvoices.hostedPaymentUrl} is not null)
   )`.mapWith(Number);
   const pendingPaymentAllocationCount = sql<number>`(
     select count(*)::integer
@@ -967,7 +969,9 @@ async function listCommercialReadiness(query: PartnerManagementListQuery) {
         readinessIssues.push("overlapping_versioned_rate_cards");
       }
       if (row.hostedPaymentGapCount > 0) {
-        readinessIssues.push("open_invoice_hosted_payment_gap");
+        readinessIssues.push(
+          "legacy_hosted_collection_requires_retirement_and_reconciliation",
+        );
       }
       if (row.invoiceCurrencyCount > 1) {
         readinessIssues.push("mixed_invoice_currencies");
@@ -1827,6 +1831,7 @@ async function listInvitations(query: PartnerManagementListQuery) {
   const search = query.q ? escapedPartnerManagementSearch(query.q) : null;
   const rows = await getDb()
     .select({
+      privateInvitation: partnerAccountInvitations,
       id: partnerAccountInvitations.id,
       partnerAccountId: partnerAccountInvitations.partnerAccountId,
       accountName: partnerAccounts.name,
@@ -1879,16 +1884,22 @@ async function listInvitations(query: PartnerManagementListQuery) {
     .limit(query.limit + 1);
   const page = buildPartnerManagementPage(rows, query);
   return {
-    items: page.items.map((row) => ({
-      ...row,
-      expiresAt: row.expiresAt.toISOString(),
-      sentAt: iso(row.sentAt),
-      acceptedAt: iso(row.acceptedAt),
-      revokedAt: iso(row.revokedAt),
-      expiredAt: iso(row.expiredAt),
-      createdAt: row.createdAt.toISOString(),
-      updatedAt: row.updatedAt.toISOString(),
-    })),
+    items: page.items.map(({ privateInvitation, ...row }) => {
+      const safeInvitation = partnerInvitationDto(privateInvitation);
+      return {
+        ...row,
+        etag: safeInvitation["etag"],
+        allowedActions: safeInvitation["allowedActions"],
+        activatedAt: privateInvitation.activatedAt?.toISOString() ?? null,
+        expiresAt: row.expiresAt.toISOString(),
+        sentAt: iso(row.sentAt),
+        acceptedAt: iso(row.acceptedAt),
+        revokedAt: iso(row.revokedAt),
+        expiredAt: iso(row.expiredAt),
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      };
+    }),
     page: page.page,
   };
 }

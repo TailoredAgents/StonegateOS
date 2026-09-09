@@ -27,7 +27,8 @@ describe("partner portal V2 payment route guards", () => {
       expect(route).not.toContain('assuranceLevel !== "aal2"');
       expect(route).toContain("arePartnerPortalEmbeddedPaymentsEnabled");
       expect(route).toContain("isSecurePartnerPaymentRequest");
-      expect(route).toContain('accessLevel !== "account"');
+      expect(route).toContain('["account", "scoped"].includes(principal.accessLevel)');
+      expect(route).toContain("access: principal");
     },
   );
 
@@ -40,7 +41,8 @@ describe("partner portal V2 payment route guards", () => {
     expect(route).not.toContain('assuranceLevel !== "aal2"');
     expect(route).toContain("arePartnerPortalEmbeddedPaymentsEnabled");
     expect(route).toContain("isSecurePartnerPaymentRequest");
-    expect(route).toContain('accessLevel !== "account"');
+    expect(route).toContain('["account", "scoped"].includes(principal.accessLevel)');
+    expect(route).toContain("access: principal");
   });
 
   it("uses the independent hosted-payment rollout for invoice links", () => {
@@ -54,7 +56,7 @@ describe("partner portal V2 payment route guards", () => {
     expect(route).toContain("isSecurePartnerPaymentRequest");
   });
 
-  it.each([createIntent, invoiceLink])(
+  it.each([createIntent])(
     "requires origin, idempotency, and rate limiting for mutation %s",
     (relativePath) => {
       const route = source(relativePath);
@@ -79,7 +81,7 @@ describe("partner portal V2 payment route guards", () => {
     expect(route).not.toContain("payload: payload.data");
   });
 
-  it("keeps hosted invoice balances isolated from exact embedded obligations", () => {
+  it("uses embedded invoice obligations and keeps legacy hosted reads only", () => {
     const domain = source("src/lib/partner-portal-v2-payments.ts");
     const hostedProvider = source(
       "src/lib/partner-hosted-checkout-provider.ts",
@@ -92,7 +94,10 @@ describe("partner portal V2 payment route guards", () => {
     expect(domain).toContain('mode: "hosted_redirect" as const');
     expect(domain).toContain("embedded: false");
     expect(domain).toContain('"embedded_card" | "embedded_ach"');
-    expect(domain).toContain("hosted_invoice_required");
+    expect(domain).toContain('"invoice_balance"');
+    expect(domain).not.toContain("hosted_invoice_required");
+    expect(source(invoiceLink)).toContain('"payment_channel_retired", 410');
+    expect(source(invoiceLink)).not.toContain("createPartnerHostedPaymentIntent");
     expect(hostedProvider).not.toContain("source_id");
     expect(embeddedProvider).toContain("source_id: sourceToken");
     expect(embeddedProvider).toContain("autocomplete: true");

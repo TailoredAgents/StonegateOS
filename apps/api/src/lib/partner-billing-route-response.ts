@@ -5,7 +5,9 @@ export const PARTNER_BILLING_NO_STORE_HEADERS = {
 
 /** Applies the financial-route cache policy to delegated boundary responses. */
 export function withPartnerBillingNoStore(response: Response): Response {
-  for (const [name, value] of Object.entries(PARTNER_BILLING_NO_STORE_HEADERS)) {
+  for (const [name, value] of Object.entries(
+    PARTNER_BILLING_NO_STORE_HEADERS,
+  )) {
     response.headers.set(name, value);
   }
   return response;

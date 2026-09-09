@@ -13,7 +13,7 @@ import {
 import { SquareApiError } from "@/lib/square-client";
 import { parsePaymentReconciliationSuccess } from "../../../site/src/app/team/lib/payment-reconciliation-result";
 
-const API_ROOT = resolve(__dirname, "../..");
+const API_ROOT = process.cwd();
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const SECOND_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 

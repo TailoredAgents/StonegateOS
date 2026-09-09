@@ -9,6 +9,7 @@ import {
   MailCheck,
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
+import { PartnerAccessHelp } from "./PartnerAccessHelp";
 import {
   onboardingOperationKey,
   partnerOnboardingFetch,
@@ -20,11 +21,24 @@ import {
   partnerSecondaryButtonClass,
 } from "./PartnerPortalUi";
 
-export function PartnerPasswordRecoveryForm() {
+export function PartnerPasswordRecoveryForm({
+  operationKey,
+  sent = false,
+  initialError = null,
+}: {
+  operationKey: string;
+  sent?: boolean;
+  initialError?: string | null;
+}) {
   const [pending, setPending] = React.useState(false);
-  const [complete, setComplete] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [complete, setComplete] = React.useState(sent);
+  const [error, setError] = React.useState<string | null>(initialError);
   const completeRef = React.useRef<HTMLDivElement>(null);
+  const errorRef = React.useRef<HTMLDivElement>(null);
+  const retry = React.useRef<{ email: string; key: string } | null>(null);
+  React.useEffect(() => {
+    if (error) errorRef.current?.focus();
+  }, [error]);
 
   React.useEffect(() => {
     if (complete) completeRef.current?.focus();
@@ -35,9 +49,15 @@ export function PartnerPasswordRecoveryForm() {
   ): Promise<void> {
     event.preventDefault();
     const form = event.currentTarget;
-    if (!form.reportValidity()) return;
+    if (pending || !form.reportValidity()) return;
     const email = new FormData(form).get("email");
     if (typeof email !== "string") return;
+    const normalizedEmail = email.trim();
+    if (retry.current?.email !== normalizedEmail)
+      retry.current = {
+        email: normalizedEmail,
+        key: onboardingOperationKey("partner-password-recovery"),
+      };
     setPending(true);
     setError(null);
     const result = await partnerOnboardingFetch<{ ok: true }>(
@@ -45,9 +65,7 @@ export function PartnerPasswordRecoveryForm() {
       {
         method: "POST",
         headers: {
-          "Idempotency-Key": onboardingOperationKey(
-            "partner-password-recovery",
-          ),
+          "Idempotency-Key": retry.current.key,
         },
         body: JSON.stringify({ email: email.trim() }),
       },
@@ -69,7 +87,7 @@ export function PartnerPasswordRecoveryForm() {
       <div
         ref={completeRef}
         tabIndex={-1}
-        className="mx-auto max-w-xl rounded-3xl border border-emerald-200 bg-white p-6 text-center shadow-xl shadow-slate-200/60 focus:outline-none sm:p-10"
+        className="mx-auto max-w-md text-center"
       >
         <CheckCircle2
           className="mx-auto h-12 w-12 text-emerald-700"
@@ -79,9 +97,9 @@ export function PartnerPasswordRecoveryForm() {
           Check your email
         </h1>
         <p className="mt-3 text-sm leading-6 text-slate-600">
-          If that address matches an active partner account, we sent a one-use
-          password reset link. Open it to choose a new password and return to
-          your account.
+          If that address matches an active partner account, a reset email has
+          been requested. Check your inbox and spam folder. The one-use link
+          lasts 30 minutes.
         </p>
         <Link
           href="/partners/login"
@@ -89,39 +107,41 @@ export function PartnerPasswordRecoveryForm() {
         >
           Return to sign in
         </Link>
+        <PartnerAccessHelp className="mt-5 text-left" />
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-xl rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/60 sm:p-10">
+    <div className="mx-auto max-w-md">
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary-50 text-primary-700 ring-1 ring-primary-100">
         <MailCheck className="h-6 w-6" aria-hidden="true" />
       </div>
-      <p className="mt-5 text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">
-        Get back to service
-      </p>
-      <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
+      <h1 className="mt-5 text-3xl font-semibold tracking-tight text-slate-950">
         Get back into your account
       </h1>
       <p className="mt-3 text-sm leading-6 text-slate-600">
-        Enter your work email. If it matches an active partner account, we’ll
-        send a secure, one-use reset link.
+        Enter the email you use to sign in. If it matches an active partner
+        account, we’ll send a secure, one-use reset link.
       </p>
       {error ? (
-        <PartnerNotice tone="error" className="mt-5">
-          {error}
-        </PartnerNotice>
+        <div ref={errorRef} tabIndex={-1}>
+          <PartnerNotice tone="error" className="mt-5">
+            {error}
+          </PartnerNotice>
+        </div>
       ) : null}
       <form
+        method="post"
+        action="/partners/form"
         onSubmit={(event) => void submit(event)}
         className="mt-6 space-y-5"
         data-partner-analytics="password_recovery_request"
       >
+        <input type="hidden" name="operation" value="recovery" />
+        <input type="hidden" name="operationKey" value={operationKey} />
         <label className="block" htmlFor="partner-recovery-email">
-          <span className="text-sm font-semibold text-slate-700">
-            Work email
-          </span>
+          <span className="text-sm font-semibold text-slate-700">Email</span>
           <input
             id="partner-recovery-email"
             name="email"
@@ -156,6 +176,7 @@ export function PartnerPasswordRecoveryForm() {
       >
         Return to sign in
       </Link>
+      <PartnerAccessHelp className="mt-5" />
     </div>
   );
 }

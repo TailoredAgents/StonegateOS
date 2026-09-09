@@ -3,7 +3,13 @@ import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { z } from "zod";
 import { and, eq, gt, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
-import { appointmentHolds, appointments, getDb, instantQuotes, leads } from "@/db";
+import {
+  appointmentHolds,
+  appointments,
+  getDb,
+  instantQuotes,
+  leads,
+} from "@/db";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { JUNK_VOLUME_UNIT_PRICE } from "@/lib/junk-volume-pricing";
 import {
@@ -11,29 +17,49 @@ import {
   getBookingRulesPolicy,
   getItemPoliciesPolicy,
   getStandardJobPolicy,
-  normalizePostalCode
+  normalizePostalCode,
 } from "@/lib/policy";
-import { getAutonomousBookingDurationMinutes, validateAutonomousBookingStart } from "@/lib/after-hours-autonomy";
-import { buildStandardJobMessage, evaluateStandardJob } from "@/lib/standard-job";
-import { APPOINTMENT_TIME_ZONE, DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
-import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
+import {
+  getAutonomousBookingDurationMinutes,
+  validateAutonomousBookingStart,
+} from "@/lib/after-hours-autonomy";
+import {
+  buildStandardJobMessage,
+  evaluateStandardJob,
+} from "@/lib/standard-job";
+import {
+  APPOINTMENT_TIME_ZONE,
+  DEFAULT_TRAVEL_BUFFER_MIN,
+} from "../../web/scheduling";
+import {
+  acquireScheduleConflictLock,
+  inspectScheduleConflicts,
+} from "@/lib/appointment-schedule-conflicts";
 
 const RAW_ALLOWED_ORIGINS =
-  process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
+  process.env["CORS_ALLOW_ORIGINS"] ??
+  process.env["NEXT_PUBLIC_SITE_URL"] ??
+  process.env["SITE_URL"] ??
+  "*";
 
 const WINDOW_DAYS = 14;
 const HOLD_WINDOW_MINUTES = 15;
 
 function resolveOrigin(requestOrigin: string | null): string {
   if (RAW_ALLOWED_ORIGINS === "*") return "*";
-  const allowed = RAW_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/+$/u, "")).filter(Boolean);
+  const allowed = RAW_ALLOWED_ORIGINS.split(",")
+    .map((o) => o.trim().replace(/\/+$/u, ""))
+    .filter(Boolean);
   if (!allowed.length) return "*";
   const origin = requestOrigin?.trim().replace(/\/+$/u, "") ?? null;
   if (origin && allowed.includes(origin)) return origin;
   return allowed[0] ?? "*";
 }
 
-function applyCors(response: NextResponse, requestOrigin: string | null): NextResponse {
+function applyCors(
+  response: NextResponse,
+  requestOrigin: string | null,
+): NextResponse {
   const origin = resolveOrigin(requestOrigin);
   response.headers.set("Access-Control-Allow-Origin", origin);
   response.headers.set("Vary", "Origin");
@@ -43,12 +69,19 @@ function applyCors(response: NextResponse, requestOrigin: string | null): NextRe
   return response;
 }
 
-function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseInit): NextResponse {
+function corsJson(
+  body: unknown,
+  requestOrigin: string | null,
+  init?: ResponseInit,
+): NextResponse {
   return applyCors(NextResponse.json(body, init), requestOrigin);
 }
 
 export function OPTIONS(request: NextRequest): NextResponse {
-  return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
+  return applyCors(
+    new NextResponse(null, { status: 204 }),
+    request.headers.get("origin"),
+  );
 }
 
 const HoldSchema = z.object({
@@ -57,7 +90,7 @@ const HoldSchema = z.object({
   addressLine1: z.string().min(5),
   city: z.string().min(2),
   state: z.string().min(2).max(2),
-  postalCode: z.string().min(3)
+  postalCode: z.string().min(3),
 });
 
 class HoldError extends Error {
@@ -75,21 +108,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
-  return aStart < bEnd && bStart < aEnd;
-}
-
-function overlapsCount(blocks: Array<{ start: Date; end: Date }>, start: Date, end: Date): number {
-  let count = 0;
-  for (const block of blocks) {
-    if (overlaps(start, end, block.start, block.end)) count += 1;
-  }
-  return count;
-}
-
-function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string; jobTypes?: unknown }): number {
+function deriveDurationMinutes(quote: {
+  aiResult: unknown;
+  perceivedSize: string;
+  jobTypes?: unknown;
+}): number {
   const jobTypes = Array.isArray(quote.jobTypes) ? quote.jobTypes : [];
-  const isDemoEstimate = jobTypes.some((t) => typeof t === "string" && t.toLowerCase() === "demo-hauloff");
+  const isDemoEstimate = jobTypes.some(
+    (t) => typeof t === "string" && t.toLowerCase() === "demo-hauloff",
+  );
   if (isDemoEstimate) return 45;
 
   const ai = isRecord(quote.aiResult) ? quote.aiResult : null;
@@ -100,8 +127,11 @@ function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string
       ? ai["loadFractionEstimate"]
       : null;
   const maxUnitsFromLoad =
-    typeof loadFractionEstimate === "number" ? Math.max(1, Math.round(loadFractionEstimate * 4)) : null;
-  const priceHigh = typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
+    typeof loadFractionEstimate === "number"
+      ? Math.max(1, Math.round(loadFractionEstimate * 4))
+      : null;
+  const priceHigh =
+    typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
   const maxUnitsFromPrice =
     typeof priceHigh === "number" && Number.isFinite(priceHigh) && priceHigh > 0
       ? Math.round(priceHigh / JUNK_VOLUME_UNIT_PRICE)
@@ -136,9 +166,17 @@ export async function POST(request: NextRequest): Promise<Response> {
   try {
     const parsed = HoldSchema.safeParse(await request.json());
     if (!parsed.success) {
-      return corsJson({ ok: false, error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, {
-        status: 400
-      });
+      return corsJson(
+        {
+          ok: false,
+          error: "invalid_payload",
+          details: parsed.error.flatten(),
+        },
+        requestOrigin,
+        {
+          status: 400,
+        },
+      );
     }
 
     const body = parsed.data;
@@ -148,10 +186,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         {
           ok: false,
           error: "out_of_area",
-          message: "Thanks for reaching out. We currently serve Georgia only."
+          message: "Thanks for reaching out. We currently serve Georgia only.",
         },
         requestOrigin,
-        { status: 400 }
+        { status: 400 },
       );
     }
     const normalizedPostalCode = normalizePostalCode(body.postalCode);
@@ -168,14 +206,16 @@ export async function POST(request: NextRequest): Promise<Response> {
         aiResult: instantQuotes.aiResult,
         perceivedSize: instantQuotes.perceivedSize,
         jobTypes: instantQuotes.jobTypes,
-        notes: instantQuotes.notes
+        notes: instantQuotes.notes,
       })
       .from(instantQuotes)
       .where(eq(instantQuotes.id, body.instantQuoteId))
       .limit(1);
 
     if (!quote) {
-      return corsJson({ ok: false, error: "quote_not_found" }, requestOrigin, { status: 404 });
+      return corsJson({ ok: false, error: "quote_not_found" }, requestOrigin, {
+        status: 404,
+      });
     }
 
     const standardPolicy = await getStandardJobPolicy(db);
@@ -185,10 +225,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         jobTypes: quote.jobTypes ?? [],
         perceivedSize: quote.perceivedSize,
         notes: quote.notes ?? null,
-        aiResult: quote.aiResult
+        aiResult: quote.aiResult,
       },
       standardPolicy,
-      itemPolicy
+      itemPolicy,
     );
 
     const standardJobReview = evaluation.isStandard
@@ -196,34 +236,48 @@ export async function POST(request: NextRequest): Promise<Response> {
       : {
           required: true,
           message: buildStandardJobMessage(evaluation),
-          evaluation
+          evaluation,
         };
 
     const durationMinutes = deriveDurationMinutes(quote);
     const travelBufferMinutes =
-      typeof bookingRules.bufferMinutes === "number" && Number.isFinite(bookingRules.bufferMinutes)
+      typeof bookingRules.bufferMinutes === "number" &&
+      Number.isFinite(bookingRules.bufferMinutes)
         ? bookingRules.bufferMinutes
         : DEFAULT_TRAVEL_BUFFER_MIN;
 
     const startAt = new Date(body.startAt);
     if (Number.isNaN(startAt.getTime())) {
-      return corsJson({ ok: false, error: "invalid_startAt" }, requestOrigin, { status: 400 });
+      return corsJson({ ok: false, error: "invalid_startAt" }, requestOrigin, {
+        status: 400,
+      });
     }
 
     const nowLocal = DateTime.now().setZone(schedulingZone);
-    const startLocal = DateTime.fromJSDate(startAt, { zone: "utc" }).setZone(schedulingZone);
+    const startLocal = DateTime.fromJSDate(startAt, { zone: "utc" }).setZone(
+      schedulingZone,
+    );
     if (!startLocal.isValid) {
-      return corsJson({ ok: false, error: "invalid_startAt" }, requestOrigin, { status: 400 });
+      return corsJson({ ok: false, error: "invalid_startAt" }, requestOrigin, {
+        status: 400,
+      });
     }
     if (startLocal < nowLocal) {
-      return corsJson({ ok: false, error: "start_in_past" }, requestOrigin, { status: 400 });
+      return corsJson({ ok: false, error: "start_in_past" }, requestOrigin, {
+        status: 400,
+      });
     }
     const bookingWindowDays =
-      typeof bookingRules.bookingWindowDays === "number" && bookingRules.bookingWindowDays > 0
+      typeof bookingRules.bookingWindowDays === "number" &&
+      bookingRules.bookingWindowDays > 0
         ? Math.min(Math.floor(bookingRules.bookingWindowDays), 90)
         : WINDOW_DAYS;
     if (startLocal > nowLocal.plus({ days: bookingWindowDays }).endOf("day")) {
-      return corsJson({ ok: false, error: "outside_booking_window" }, requestOrigin, { status: 400 });
+      return corsJson(
+        { ok: false, error: "outside_booking_window" },
+        requestOrigin,
+        { status: 400 },
+      );
     }
     const ruleResult = validateAutonomousBookingStart({
       startAt,
@@ -232,11 +286,19 @@ export async function POST(request: NextRequest): Promise<Response> {
       durationMinutes,
     });
     if (!ruleResult.ok) {
-      return corsJson({ ok: false, error: ruleResult.code, message: ruleResult.message }, requestOrigin, { status: 400 });
+      return corsJson(
+        { ok: false, error: ruleResult.code, message: ruleResult.message },
+        requestOrigin,
+        { status: 400 },
+      );
     }
 
     const [leadRow] = await db
-      .select({ id: leads.id, contactId: leads.contactId, propertyId: leads.propertyId })
+      .select({
+        id: leads.id,
+        contactId: leads.contactId,
+        propertyId: leads.propertyId,
+      })
       .from(leads)
       .where(eq(leads.instantQuoteId, quote.id))
       .limit(1);
@@ -249,7 +311,12 @@ export async function POST(request: NextRequest): Promise<Response> {
       await tx
         .update(appointmentHolds)
         .set({ status: "released", updatedAt: now })
-        .where(and(eq(appointmentHolds.instantQuoteId, quote.id), eq(appointmentHolds.status, "active")));
+        .where(
+          and(
+            eq(appointmentHolds.instantQuoteId, quote.id),
+            eq(appointmentHolds.status, "active"),
+          ),
+        );
 
       if (bookingRules.maxJobsPerDay > 0) {
         const dayStartUtc = startLocal.startOf("day").toUTC().toJSDate();
@@ -263,8 +330,8 @@ export async function POST(request: NextRequest): Promise<Response> {
               isNotNull(appointments.startAt),
               gte(appointments.startAt, dayStartUtc),
               lte(appointments.startAt, dayEndUtc),
-              ne(appointments.status, "canceled")
-            )
+              ne(appointments.status, "canceled"),
+            ),
           );
 
         const [holdCount] = await tx
@@ -275,19 +342,19 @@ export async function POST(request: NextRequest): Promise<Response> {
               gte(appointmentHolds.startAt, dayStartUtc),
               lte(appointmentHolds.startAt, dayEndUtc),
               eq(appointmentHolds.status, "active"),
-              gt(appointmentHolds.expiresAt, now)
-            )
+              gt(appointmentHolds.expiresAt, now),
+            ),
           );
 
-        const totalCount = Number(dayCount?.count ?? 0) + Number(holdCount?.count ?? 0);
+        const totalCount =
+          Number(dayCount?.count ?? 0) + Number(holdCount?.count ?? 0);
         if (totalCount >= bookingRules.maxJobsPerDay) {
           throw new HoldError("day_full", 409);
         }
       }
 
       const slotEnd = new Date(
-        startAt.getTime() +
-          (durationMinutes + travelBufferMinutes) * 60_000,
+        startAt.getTime() + (durationMinutes + travelBufferMinutes) * 60_000,
       );
       const lookbackStart = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
       const lookaheadEnd = new Date(slotEnd.getTime() + 24 * 60 * 60 * 1000);
@@ -298,7 +365,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           startAt: appointments.startAt,
           durationMinutes: appointments.durationMinutes,
           travelBufferMinutes: appointments.travelBufferMinutes,
-          status: appointments.status
+          status: appointments.status,
         })
         .from(appointments)
         .where(
@@ -306,8 +373,8 @@ export async function POST(request: NextRequest): Promise<Response> {
             isNotNull(appointments.startAt),
             gte(appointments.startAt, lookbackStart),
             lte(appointments.startAt, lookaheadEnd),
-            ne(appointments.status, "canceled")
-          )
+            ne(appointments.status, "canceled"),
+          ),
         );
 
       const nearbyHolds = await tx
@@ -315,7 +382,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           id: appointmentHolds.id,
           startAt: appointmentHolds.startAt,
           durationMinutes: appointmentHolds.durationMinutes,
-          travelBufferMinutes: appointmentHolds.travelBufferMinutes
+          travelBufferMinutes: appointmentHolds.travelBufferMinutes,
         })
         .from(appointmentHolds)
         .where(
@@ -323,15 +390,17 @@ export async function POST(request: NextRequest): Promise<Response> {
             gte(appointmentHolds.startAt, lookbackStart),
             lte(appointmentHolds.startAt, lookaheadEnd),
             eq(appointmentHolds.status, "active"),
-            gt(appointmentHolds.expiresAt, now)
-          )
+            gt(appointmentHolds.expiresAt, now),
+          ),
         );
 
       const blocks = nearbyAppts
         .filter((row) => row.startAt)
         .map((row) => {
           const start = row.startAt as Date;
-          const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? travelBufferMinutes);
+          const dur =
+            (row.durationMinutes ?? durationMinutes) +
+            (row.travelBufferMinutes ?? travelBufferMinutes);
           return { start, end: new Date(start.getTime() + dur * 60_000) };
         });
 
@@ -339,14 +408,24 @@ export async function POST(request: NextRequest): Promise<Response> {
         .filter((row) => row.startAt)
         .map((row) => {
           const start = row.startAt;
-          const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? travelBufferMinutes);
+          const dur =
+            (row.durationMinutes ?? durationMinutes) +
+            (row.travelBufferMinutes ?? travelBufferMinutes);
           return { start, end: new Date(start.getTime() + dur * 60_000) };
         });
 
       blocks.push(...holdBlocks);
 
       const capacity = getAppointmentCapacity();
-      if (overlapsCount(blocks, startAt, slotEnd) >= capacity) {
+      const scheduleDecision = await inspectScheduleConflicts(tx, {
+        startAt,
+        durationMinutes,
+        travelBufferMinutes,
+        capacity,
+        excludeHoldInstantQuoteId: quote.id,
+        now,
+      });
+      if (scheduleDecision.conflict) {
         throw new HoldError("slot_full", 409);
       }
 
@@ -363,9 +442,12 @@ export async function POST(request: NextRequest): Promise<Response> {
           durationMinutes,
           travelBufferMinutes,
           status: "active",
-          expiresAt
+          expiresAt,
         })
-        .returning({ id: appointmentHolds.id, expiresAt: appointmentHolds.expiresAt });
+        .returning({
+          id: appointmentHolds.id,
+          expiresAt: appointmentHolds.expiresAt,
+        });
 
       if (!created?.id || !created.expiresAt) {
         throw new Error("hold_create_failed");
@@ -374,12 +456,19 @@ export async function POST(request: NextRequest): Promise<Response> {
       return { holdId: created.id, expiresAt: created.expiresAt.toISOString() };
     });
 
-    return corsJson({ ok: true, ...holdResult, standardJobReview }, requestOrigin);
+    return corsJson(
+      { ok: true, ...holdResult, standardJobReview },
+      requestOrigin,
+    );
   } catch (error) {
     if (error instanceof HoldError) {
-      return corsJson({ ok: false, error: error.code }, requestOrigin, { status: error.status });
+      return corsJson({ ok: false, error: error.code }, requestOrigin, {
+        status: error.status,
+      });
     }
     console.error("[junk-quote-hold] server_error", error);
-    return corsJson({ ok: false, error: "server_error" }, requestOrigin, { status: 500 });
+    return corsJson({ ok: false, error: "server_error" }, requestOrigin, {
+      status: 500,
+    });
   }
 }

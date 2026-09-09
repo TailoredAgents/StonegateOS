@@ -1,211 +1,389 @@
 import type { Metadata } from "next";
-import { BarChart3, CalendarRange, FileSpreadsheet } from "lucide-react";
+import Link from "next/link";
 import { PartnerReportExportButton } from "@/app/partners/components/PartnerReportExportButton";
+import { PartnerCollectionPagination } from "@/app/partners/components/PartnerCollectionPagination";
 import {
-  PartnerEmptyState,
   PartnerNotice,
   PartnerPageHeader,
   PartnerPanel,
-  PartnerStatCard,
+  partnerPrimaryButtonClass,
+  partnerSecondaryButtonClass,
 } from "@/app/partners/components/PartnerPortalUi";
-import {
-  formatPartnerDate,
-  formatPartnerMoney,
-  isPartnerReportSummary,
-  isPartnerStatement,
-  loadPartnerCommercial,
-} from "@/app/partners/lib/portal-commercial";
-
+import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
+import { loadPartnerServiceReport } from "@/app/partners/lib/portal-service-reports";
 export const metadata: Metadata = { title: "Reports" };
-
-export default async function PartnerReportsPage() {
-  const reports = await loadPartnerCommercial(
-    "reports",
-    "reports",
-    isPartnerStatement,
+const inputClass =
+  "min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-700";
+const labels = { operational: "Job report", financial: "Billing report" };
+const money = (minor: number, currency: string) =>
+  new Intl.NumberFormat("en-US", { style: "currency", currency }).format(
+    minor / 100,
   );
-  const readyReports = reports.status === "ready" ? reports : null;
-  const summary = readyReports
-    ? readyReports.summary.filter(isPartnerReportSummary)
-    : [];
-
+const friendly = (value: string | null) => value?.replace(/_/gu, " ") ?? "—";
+const filterKeys = [
+  "kind",
+  "from",
+  "to",
+  "locationId",
+  "service",
+  "status",
+  "requesterId",
+  "po",
+  "costCenter",
+  "proof",
+  "financialStatus",
+  "currency",
+  "cursor",
+];
+export default async function PartnerReportsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const [raw, context] = await Promise.all([
+    searchParams,
+    getPartnerPortalContext(),
+  ]);
+  const params: Record<string, string> = {};
+  for (const key of filterKeys)
+    if (
+      typeof raw?.[key] === "string" &&
+      raw[key].length <= (key === "cursor" ? 8192 : 200) &&
+      raw[key]
+    )
+      params[key] = raw[key];
+  const mayOperational =
+    context.status === "authenticated" &&
+    context.permissions.readOperationalReports === true;
+  const mayFinancial =
+    context.status === "authenticated" &&
+    context.permissions.readFinancialReports === true;
+  params["kind"] ??= mayOperational ? "operational" : "financial";
+  const { report, error } = await loadPartnerServiceReport(
+    new URLSearchParams(params),
+  );
+  const kind =
+    report?.kind ??
+    (params["kind"] === "financial" ? "financial" : "operational");
+  const from = report?.filters.from ?? params["from"] ?? "";
+  const to = report?.filters.to ?? params["to"] ?? "";
+  const exportParams = new URLSearchParams({ ...params, from, to });
+  exportParams.delete("cursor");
+  const select = (
+    name: string,
+    title: string,
+    choices: Array<{ id: string; label: string }>,
+  ) => (
+    <label className="space-y-1 text-sm font-medium" key={name}>
+      {title}
+      <select
+        name={name}
+        defaultValue={params[name] ?? ""}
+        className={inputClass}
+      >
+        <option value="">All</option>
+        {choices.map((choice) => (
+          <option key={choice.id} value={choice.id}>
+            {choice.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
   return (
-    <div className="space-y-5 sm:space-y-6">
+    <div className="space-y-5">
       <PartnerPageHeader
-        eyebrow="Ready-to-use account totals"
         title="Reports"
-        description="Review invoice totals and statement periods, then export the records your team needs. Job estimates stay separate."
-        actions={readyReports ? <PartnerReportExportButton /> : undefined}
+        description="Find the job or billing records you need. Downloads contain one complete snapshot of your selected records."
         breadcrumbs={[
-          { label: "Overview", href: "/partners/overview" },
+          { label: "Home", href: "/partners/overview" },
           { label: "Reports", href: "/partners/reports" },
         ]}
+        actions={
+          report?.permissions.export ? (
+            <PartnerReportExportButton query={exportParams.toString()} />
+          ) : undefined
+        }
       />
-
-      {reports.status === "forbidden" ? (
-        <PartnerPanel>
-          <PartnerEmptyState
-            title="Reports are not included in your role"
-            description="Ask an account administrator for report access, or ask Stonegate for the specific statement you need."
-            action={{ href: "/partners/help", label: "Ask for a statement" }}
-            icon={<BarChart3 className="h-6 w-6" aria-hidden="true" />}
-          />
-        </PartnerPanel>
-      ) : reports.status === "unavailable" ? (
-        <PartnerPanel>
-          <PartnerEmptyState
-            title="Account reports are not available right now"
-            description="No totals were guessed or substituted. You can still find available invoices and statements in Billing & documents."
-            action={{
-              href: "/partners/billing",
-              label: "View billing & documents",
-            }}
-            icon={<FileSpreadsheet className="h-6 w-6" aria-hidden="true" />}
-          />
-        </PartnerPanel>
-      ) : reports.status === "error" ? (
-        <PartnerPanel>
-          <PartnerNotice tone="error">
-            We could not load a complete account report. Refresh this page
-            before relying on any totals.
-          </PartnerNotice>
-        </PartnerPanel>
-      ) : !readyReports ? null : readyReports.items.length === 0 &&
-        summary.length === 0 ? (
-        <PartnerPanel>
-          <PartnerEmptyState
-            title="No report activity yet"
-            description="Account summaries appear after Stonegate generates invoices or statement periods."
-            action={{ href: "/partners/book", label: "Request service" }}
-            icon={<BarChart3 className="h-6 w-6" aria-hidden="true" />}
-          />
-        </PartnerPanel>
-      ) : (
-        <>
-          {summary.length ? (
-            <section aria-labelledby="partner-report-summary-heading">
-              <div className="mb-3 flex items-center gap-2">
-                <BarChart3
-                  className="h-5 w-5 text-primary-700"
-                  aria-hidden="true"
-                />
-                <h2
-                  id="partner-report-summary-heading"
-                  className="text-lg font-semibold text-slate-950"
-                >
-                  Invoice totals by currency
-                </h2>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {summary.flatMap((item) => [
-                  <PartnerStatCard
-                    key={`${item.currency}-count`}
-                    label={`${item.currency} invoices`}
-                    value={item.invoiceCount}
-                  />,
-                  <PartnerStatCard
-                    key={`${item.currency}-total`}
-                    label={`${item.currency} invoiced`}
-                    value={formatPartnerMoney(item.total)}
-                  />,
-                  <PartnerStatCard
-                    key={`${item.currency}-paid`}
-                    label={`${item.currency} paid`}
-                    value={formatPartnerMoney(item.paid)}
-                  />,
-                  <PartnerStatCard
-                    key={`${item.currency}-balance`}
-                    label={`${item.currency} balance`}
-                    value={formatPartnerMoney(item.balance)}
-                    detail="Read-only account balance"
-                  />,
-                ])}
-              </div>
-            </section>
-          ) : (
-            <PartnerNotice tone="warning">
-              Period reports are available, but the account invoice summary was
-              not returned. No total has been inferred.
-            </PartnerNotice>
-          )}
-
-          <PartnerPanel>
-            <div className="flex items-start gap-3">
-              <CalendarRange
-                className="mt-0.5 h-5 w-5 shrink-0 text-primary-700"
-                aria-hidden="true"
-              />
-              <div>
-                <h2 className="font-semibold text-slate-950">
-                  Statement periods
-                </h2>
-                <p className="mt-1 text-sm leading-6 text-slate-600">
-                  A quick view of activity from the latest generated account
-                  statements.
-                </p>
-              </div>
-            </div>
-            {readyReports.items.length ? (
-              <ul className="mt-5 grid gap-3 lg:grid-cols-2">
-                {readyReports.items.map((report) => (
-                  <li
-                    key={report.id}
-                    className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4"
-                  >
-                    <p className="font-semibold text-slate-950">
-                      {formatPartnerDate(report.periodStart)} –{" "}
-                      {formatPartnerDate(report.periodEnd)}
-                    </p>
-                    <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                      <div>
-                        <dt className="text-slate-500">Invoices</dt>
-                        <dd className="mt-1 font-semibold text-slate-950">
-                          {formatPartnerMoney(report.amounts.invoices)}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-slate-500">Payments</dt>
-                        <dd className="mt-1 font-semibold text-slate-950">
-                          {formatPartnerMoney(report.amounts.payments)}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-slate-500">Credits</dt>
-                        <dd className="mt-1 text-slate-800">
-                          {formatPartnerMoney(report.amounts.credits)}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-slate-500">Closing balance</dt>
-                        <dd className="mt-1 text-slate-800">
-                          {formatPartnerMoney(report.amounts.closingBalance)}
-                        </dd>
-                      </div>
-                    </dl>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-5 text-sm leading-6 text-slate-600">
-                No statement periods are ready yet. They will appear here after
-                Stonegate generates them.
-              </p>
-            )}
-            {readyReports.page.hasMore ? (
-              <PartnerNotice tone="info" className="mt-4">
-                This page shows the 100 latest periods. Export the report or
-                contact Stonegate for older history.
-              </PartnerNotice>
+      <PartnerPanel>
+        <form action="/partners/reports" className="space-y-4">
+          <input type="hidden" name="kind" value={kind} />
+          <nav aria-label="Report type" className="flex flex-wrap gap-2">
+            {mayOperational ? (
+              <Link
+                href="/partners/reports?kind=operational"
+                className={
+                  kind === "operational"
+                    ? partnerPrimaryButtonClass
+                    : partnerSecondaryButtonClass
+                }
+                aria-current={kind === "operational" ? "page" : undefined}
+              >
+                Job report
+              </Link>
             ) : null}
-          </PartnerPanel>
-
-          <PartnerNotice tone="info">
-            Report totals come from account invoices and statements. They are
-            not payment receipts, tax advice, or a substitute for the issued
-            document.
-          </PartnerNotice>
-        </>
-      )}
+            {mayFinancial ? (
+              <Link
+                href="/partners/reports?kind=financial"
+                className={
+                  kind === "financial"
+                    ? partnerPrimaryButtonClass
+                    : partnerSecondaryButtonClass
+                }
+                aria-current={kind === "financial" ? "page" : undefined}
+              >
+                Billing report
+              </Link>
+            ) : null}
+          </nav>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1 text-sm font-medium">
+              From
+              <input
+                name="from"
+                type="date"
+                defaultValue={from}
+                className={inputClass}
+                required
+              />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
+              Through
+              <input
+                name="to"
+                type="date"
+                defaultValue={to}
+                className={inputClass}
+                required
+              />
+            </label>
+          </div>
+          <p className="text-sm text-slate-600">
+            {kind === "financial"
+              ? "Billing dates use the invoice issue date."
+              : "Job dates use the arrival date, or the request date when no visit is confirmed."}{" "}
+            Dates are shown in Eastern time.
+          </p>
+          <details className="rounded-lg border border-slate-200 px-3">
+            <summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold">
+              More filters
+            </summary>
+            <div className="grid gap-3 pb-4 sm:grid-cols-2 lg:grid-cols-3">
+              {select(
+                "locationId",
+                "Location",
+                report?.options.locations ?? [],
+              )}
+              {select(
+                "service",
+                "Service",
+                (report?.options.services ?? []).map((s) => ({
+                  ...s,
+                  label: friendly(s.label),
+                })),
+              )}
+              {select(
+                "requesterId",
+                "Requested by",
+                report?.options.requesters ?? [],
+              )}
+              {select(
+                "status",
+                "Job status",
+                [
+                  "requested",
+                  "requested_review",
+                  "approval_needed",
+                  "under_review",
+                  "confirmed",
+                  "en_route",
+                  "in_progress",
+                  "completed",
+                  "canceled",
+                  "declined",
+                  "approved_needs_reschedule",
+                ].map((id) => ({ id, label: friendly(id) })),
+              )}
+              {select("proof", "Proof", [
+                { id: "complete", label: "Complete" },
+                { id: "missing", label: "Still needed" },
+                { id: "not_required", label: "Not required" },
+              ])}
+              <label className="space-y-1 text-sm font-medium">
+                Purchase order
+                <input
+                  name="po"
+                  defaultValue={params["po"]}
+                  maxLength={160}
+                  className={inputClass}
+                />
+              </label>
+              <label className="space-y-1 text-sm font-medium">
+                Cost center
+                <input
+                  name="costCenter"
+                  defaultValue={params["costCenter"]}
+                  maxLength={160}
+                  className={inputClass}
+                />
+              </label>
+              {kind === "financial"
+                ? select(
+                    "financialStatus",
+                    "Invoice status",
+                    ["issued", "partially_paid", "paid", "overdue", "void"].map(
+                      (id) => ({ id, label: friendly(id) }),
+                    ),
+                  )
+                : null}
+              {kind === "financial" ? (
+                <label className="space-y-1 text-sm font-medium">
+                  Currency
+                  <input
+                    name="currency"
+                    defaultValue={params["currency"]}
+                    placeholder="All currencies"
+                    pattern="[A-Z]{3}"
+                    maxLength={3}
+                    className={inputClass}
+                  />
+                </label>
+              ) : null}
+            </div>
+          </details>
+          <div className="flex flex-wrap gap-2">
+            <button className={partnerPrimaryButtonClass} type="submit">
+              Apply filters
+            </button>
+            <Link
+              className={partnerSecondaryButtonClass}
+              href={`/partners/reports?kind=${kind}`}
+            >
+              Clear filters
+            </Link>
+          </div>
+        </form>
+      </PartnerPanel>
+      {error ? (
+        <PartnerNotice tone="warning">
+          {error}{" "}
+          <Link
+            href={`/partners/reports?${exportParams}`}
+            className="underline"
+          >
+            Open the first page
+          </Link>{" "}
+          ·{" "}
+          <Link href="/partners/help" className="underline">
+            Contact Stonegate
+          </Link>
+        </PartnerNotice>
+      ) : null}
+      {report ? (
+        <PartnerPanel>
+          <h2 className="text-lg font-semibold">
+            {labels[report.kind]} · {report.count}{" "}
+            {report.count === 1 ? "record" : "records"}
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Snapshot{" "}
+            {new Intl.DateTimeFormat("en-US", {
+              dateStyle: "medium",
+              timeStyle: "short",
+              timeZone: report.timezone,
+            }).format(new Date(report.asOf))}
+            .{" "}
+            {report.kind === "financial"
+              ? "Net paid includes settled payments less refunds. Credits reduce the amount owed. Voided invoices are excluded from totals."
+              : "This report contains job information only, without billing amounts."}
+          </p>
+          {report.summary.map((s) => (
+            <p
+              className="mt-3 border-y border-slate-200 py-3 text-sm"
+              key={s.currency}
+            >
+              {s.currency} · Invoiced {money(s.totalMinor, s.currency)} · Net
+              paid {money(s.paidMinor, s.currency)} · Credits{" "}
+              {money(s.creditedMinor, s.currency)} · Balance{" "}
+              {money(s.balanceMinor, s.currency)}
+            </p>
+          ))}
+          <ul className="divide-y divide-slate-200">
+            {report.items.map((row) => (
+              <li key={row.id} className="space-y-2 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <h3 className="font-semibold">
+                    {row.jobId ? (
+                      <Link
+                        href={`/partners/bookings/${row.jobId}`}
+                        className="underline decoration-slate-300 underline-offset-4"
+                      >
+                        {row.location}
+                      </Link>
+                    ) : (
+                      row.location
+                    )}{" "}
+                    · {friendly(row.service)}
+                  </h3>
+                  <span className="text-sm text-slate-600">
+                    {new Intl.DateTimeFormat("en-US", {
+                      dateStyle: "medium",
+                      timeZone: report.timezone,
+                    }).format(new Date(row.date))}
+                  </span>
+                </div>
+                <p className="text-sm text-slate-600">
+                  {friendly(row.status)} · Proof:{" "}
+                  {row.proof === "missing"
+                    ? "still needed"
+                    : friendly(row.proof)}
+                  {row.requester ? ` · Requested by ${row.requester}` : ""}
+                </p>
+                {row.po || row.costCenter ? (
+                  <p className="break-words text-sm text-slate-600">
+                    PO: {row.po ?? "—"} · Cost center: {row.costCenter ?? "—"}
+                  </p>
+                ) : null}
+                {row.financial ? (
+                  <div className="text-sm">
+                    <p className="break-words">
+                      {row.financial.number} · {friendly(row.financial.status)}
+                    </p>
+                    <p className="mt-1">
+                      Total{" "}
+                      {money(row.financial.totalMinor, row.financial.currency)}{" "}
+                      · Net paid{" "}
+                      {money(row.financial.paidMinor, row.financial.currency)} ·
+                      Credits{" "}
+                      {money(
+                        row.financial.creditedMinor,
+                        row.financial.currency,
+                      )}{" "}
+                      · Balance{" "}
+                      {money(
+                        row.financial.balanceMinor,
+                        row.financial.currency,
+                      )}
+                    </p>
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          {!report.items.length ? (
+            <p className="py-5 text-slate-600">
+              No records match these filters.
+            </p>
+          ) : null}
+          <PartnerCollectionPagination
+            basePath="/partners/reports"
+            cursorKey="cursor"
+            nextCursor={report.page.nextCursor}
+            params={{ ...params, from, to }}
+            label="records"
+          />
+        </PartnerPanel>
+      ) : null}
     </div>
   );
 }

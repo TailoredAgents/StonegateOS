@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, inArray, isNotNull, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  inArray,
+  isNotNull,
+  notInArray,
+  or,
+  sql,
+  lte,
+} from "drizzle-orm";
 import { DateTime } from "luxon";
 import {
   parseGoogleCalendarEventListResponse,
@@ -7,9 +16,19 @@ import {
   resolveGoogleCalendarApiEndpoint,
   type GoogleCalendarApiEndpoint,
 } from "@myst-os/sdk";
-import { appointments, calendarSyncState, getDb, scheduleBlocks } from "@/db";
+import {
+  appointments,
+  calendarSyncState,
+  getDb,
+  scheduleBlocks,
+  partnerBookings,
+} from "@/db";
 import type { DatabaseClient } from "@/db";
-import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
+import {
+  acquireScheduleConflictLock,
+  inspectScheduleConflicts,
+} from "@/lib/appointment-schedule-conflicts";
+import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import type { CalendarConfig } from "./calendar";
 import {
   getCalendarConfig,
@@ -484,6 +503,44 @@ async function performSync(options: SyncOptions): Promise<CalendarSyncResult> {
         fullSync,
         now: syncStartedAt,
       });
+      if (appointmentChanges.partnerMirrorDrift)
+        throw new Error("calendar_partner_mirror_drift");
+      if (appointmentChanges.scheduleChangedAppointmentIds.length) {
+        const changedAppointments = await tx
+          .select({
+            id: appointments.id,
+            startAt: appointments.startAt,
+            durationMinutes: appointments.durationMinutes,
+            travelBufferMinutes: appointments.travelBufferMinutes,
+          })
+          .from(appointments)
+          .where(
+            and(
+              inArray(
+                appointments.id,
+                appointmentChanges.scheduleChangedAppointmentIds,
+              ),
+              isNotNull(appointments.startAt),
+              notInArray(appointments.status, [
+                "canceled",
+                "completed",
+                "no_show",
+              ]),
+            ),
+          );
+        for (const appointment of changedAppointments) {
+          const decision = await inspectScheduleConflicts(tx, {
+            startAt: appointment.startAt!,
+            durationMinutes: appointment.durationMinutes,
+            travelBufferMinutes: appointment.travelBufferMinutes,
+            capacity: getAppointmentCapacity(),
+            excludeAppointmentId: appointment.id,
+            timezone: config.timeZone,
+            now: syncStartedAt,
+          });
+          if (decision.conflict) throw new Error("calendar_schedule_conflict");
+        }
+      }
       const externalBusyCoverageSyncedAt = syncStartedAt;
       await tx
         .update(calendarSyncState)
@@ -531,13 +588,40 @@ async function performSync(options: SyncOptions): Promise<CalendarSyncResult> {
     console.warn("[calendar-sync] persistence_failed", {
       errorName: errorName(error),
     });
+    // A failed reconciliation must retain the previous durable schedule, but
+    // must not keep advertising that coverage as trustworthy for instant work.
+    // A newer successful sync wins over this older request's invalidation.
+    try {
+      await db.transaction(async (tx) => {
+        await acquireScheduleConflictLock(tx);
+        await tx
+          .update(calendarSyncState)
+          .set({ externalBusyCoverageSyncedAt: null, updatedAt: new Date() })
+          .where(
+            and(
+              eq(calendarSyncState.calendarId, config.calendarId),
+              lte(calendarSyncState.updatedAt, syncStartedAt),
+            ),
+          );
+      });
+    } catch (invalidationError) {
+      console.warn("[calendar-sync] coverage_invalidation_failed", {
+        errorName: errorName(invalidationError),
+      });
+    }
     return {
       ok: false,
       reason:
         error instanceof Error &&
         error.message === "calendar_external_busy_event_invalid"
           ? "invalid_external_busy_event"
-          : "persistence_error",
+          : error instanceof Error &&
+              error.message === "calendar_schedule_conflict"
+            ? "schedule_conflict"
+            : error instanceof Error &&
+                error.message === "calendar_partner_mirror_drift"
+              ? "partner_mirror_drift"
+              : "persistence_error",
       pages,
       resets,
       watchRegistered: watchResult.registered,
@@ -974,6 +1058,8 @@ async function applyEventsToAppointments(
   updated: number;
   cancelled: number;
   mirroredEventIds: ReadonlySet<string>;
+  scheduleChangedAppointmentIds: string[];
+  partnerMirrorDrift: boolean;
 }> {
   const appointmentIds = Array.from(
     new Set(
@@ -986,9 +1072,17 @@ async function applyEventsToAppointments(
     new Set(events.map((event) => event.id.trim()).filter(Boolean)),
   );
   const mirroredEventIds = new Set<string>();
+  const scheduleChangedAppointmentIds = new Set<string>();
+  let partnerMirrorDrift = false;
 
   if (appointmentIds.length === 0 && eventIds.length === 0) {
-    return { updated: 0, cancelled: 0, mirroredEventIds };
+    return {
+      updated: 0,
+      cancelled: 0,
+      mirroredEventIds,
+      scheduleChangedAppointmentIds: [],
+      partnerMirrorDrift,
+    };
   }
 
   const rows = await db
@@ -999,6 +1093,7 @@ async function applyEventsToAppointments(
       travelBufferMinutes: appointments.travelBufferMinutes,
       status: appointments.status,
       calendarEventId: appointments.calendarEventId,
+      partnerLinked: sql<boolean>`${appointments.partnerAccountId} IS NOT NULL OR EXISTS (SELECT 1 FROM ${partnerBookings} WHERE ${partnerBookings.appointmentId} = ${appointments.id})`,
     })
     .from(appointments)
     .where(
@@ -1031,6 +1126,56 @@ async function applyEventsToAppointments(
       continue;
     }
     if (event.id.trim()) mirroredEventIds.add(event.id.trim());
+
+    // Google is a busy-time source and mirror, not an alternate partner job
+    // editor. A remote move/cancellation cannot bypass approval, capacity,
+    // public arrival promises, revisions, or committed partner notifications.
+    if (existing.partnerLinked) {
+      const remoteStart = event.start?.dateTime ?? event.start?.date;
+      const remoteEnd = event.end?.dateTime ?? event.end?.date;
+      const expectedMirrorStart = existing.startAt
+        ? new Date(
+            existing.startAt.getTime() -
+              (existing.travelBufferMinutes ?? 0) * 60_000,
+          ).toISOString()
+        : null;
+      const expectedMirrorEnd = existing.startAt
+        ? new Date(
+            existing.startAt.getTime() + existing.durationMinutes * 60_000,
+          ).toISOString()
+        : null;
+      const differs = (value: string | undefined, expected: string | null) =>
+        value !== undefined &&
+        (!Number.isFinite(Date.parse(value)) ||
+          new Date(value).toISOString() !== expected);
+      if (
+        (event.status === "cancelled" && existing.status !== "canceled") ||
+        (event.status !== "cancelled" &&
+          (differs(remoteStart, expectedMirrorStart) ||
+            differs(remoteEnd, expectedMirrorEnd)))
+      ) {
+        partnerMirrorDrift = true;
+        console.warn(
+          "[calendar-sync] partner_mirror_change_requires_staff_reschedule",
+          {
+            appointmentId: existing.id,
+            canceled: event.status === "cancelled",
+          },
+        );
+      }
+      if (
+        event.status !== "cancelled" &&
+        event.id &&
+        existing.calendarEventId !== event.id
+      ) {
+        await db
+          .update(appointments)
+          .set({ calendarEventId: event.id })
+          .where(eq(appointments.id, existing.id));
+        updated += 1;
+      }
+      continue;
+    }
 
     if (event.status === "cancelled") {
       const updates: Partial<typeof appointments.$inferInsert> = {};
@@ -1122,10 +1267,22 @@ async function applyEventsToAppointments(
         .set(updates)
         .where(eq(appointments.id, existing.id));
       updated += 1;
+      if (
+        updates.startAt !== undefined ||
+        updates.durationMinutes !== undefined ||
+        updates.travelBufferMinutes !== undefined
+      )
+        scheduleChangedAppointmentIds.add(existing.id);
     }
   }
 
-  return { updated, cancelled, mirroredEventIds };
+  return {
+    updated,
+    cancelled,
+    mirroredEventIds,
+    scheduleChangedAppointmentIds: [...scheduleChangedAppointmentIds],
+    partnerMirrorDrift,
+  };
 }
 
 async function calendarFetch(

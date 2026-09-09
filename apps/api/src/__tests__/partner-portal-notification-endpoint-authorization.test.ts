@@ -32,7 +32,7 @@ describe("partner portal notification endpoint mutation authorization", () => {
     jest.resetAllMocks();
   });
 
-  it("accepts an AAL1 partner with explicit endpoint-management authority", async () => {
+  it("allows an active member to manage their own verified notification endpoint", async () => {
     const principal = authorizedPrincipal();
     mockRequirePartnerCapability.mockResolvedValue({ ok: true, principal });
 
@@ -41,7 +41,7 @@ describe("partner portal notification endpoint mutation authorization", () => {
     ).resolves.toEqual({ ok: true, principal });
     expect(mockRequirePartnerCapability).toHaveBeenCalledWith(
       request,
-      "account.security.manage",
+      "portal.session.read",
     );
   });
 
@@ -54,7 +54,7 @@ describe("partner portal notification endpoint mutation authorization", () => {
     ).resolves.toEqual(denied);
     expect(mockRequirePartnerCapability).toHaveBeenCalledWith(
       request,
-      "account.security.manage",
+      "portal.session.read",
     );
   });
 });

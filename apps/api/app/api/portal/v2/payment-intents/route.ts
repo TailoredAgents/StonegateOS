@@ -56,7 +56,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       correlationId,
     );
   }
-  if (principal.accessLevel !== "account") {
+  if (!["account", "scoped"].includes(principal.accessLevel)) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
   if (!arePartnerPortalEmbeddedPaymentsEnabled(principal.accountId)) {
@@ -101,7 +101,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       createPortalV2ErrorResponse("invalid_fields", correlationId, {
         fieldErrors: {
           invoiceId: "Choose an invoice from this account.",
-          purpose: "Choose deposit or one_off.",
+          purpose: "Choose a deposit or invoice balance.",
           paymentMethod: "Choose card or ACH for secure portal checkout.",
           amount: "Provide a positive USD amount in integer minor units.",
         },
@@ -148,6 +148,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           };
         }
         return createPartnerEmbeddedPaymentIntent({
+          access: principal,
           accountId: principal.accountId!,
           membershipId: principal.membershipId!,
           partnerUserId: principal.partnerUserId,

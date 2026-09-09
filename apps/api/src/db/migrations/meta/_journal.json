@@ -1128,6 +1128,42 @@
       "when": 1794960000000,
       "tag": "0163_effective_management_commission_rates",
       "breakpoints": true
+    },
+    {
+      "idx": 161, "version": "7", "when": 1795046400000,
+      "tag": "0164_partner_review_service_requests", "breakpoints": true
+    },
+    {
+      "idx": 162, "version": "7", "when": 1795132800000,
+      "tag": "0165_partner_relationship_workflows", "breakpoints": true
+    },
+    {
+      "idx": 163, "version": "7", "when": 1795219200000,
+      "tag": "0166_partner_relationship_invitations", "breakpoints": true
+    },
+    {
+      "idx": 164, "version": "7", "when": 1795305600000,
+      "tag": "0167_partner_crm_billing", "breakpoints": true
+    },
+    {
+      "idx": 165, "version": "7", "when": 1795392000000,
+      "tag": "0168_partner_service_notifications", "breakpoints": true
+    },
+    {
+      "idx": 166, "version": "7", "when": 1795478400000,
+      "tag": "0169_partner_advanced_service_workflows", "breakpoints": true
+    },
+    {
+      "idx": 167, "version": "7", "when": 1795564800000,
+      "tag": "0170_partner_draft_invoice_line_editing", "breakpoints": true
+    },
+    {
+      "idx": 168, "version": "7", "when": 1795651200000,
+      "tag": "0171_partner_payment_allocation_reconciliation", "breakpoints": true
+    },
+    {
+      "idx": 169, "version": "7", "when": 1795737600000,
+      "tag": "0172_partner_additional_service_jobs", "breakpoints": true
     }
   ]
 }

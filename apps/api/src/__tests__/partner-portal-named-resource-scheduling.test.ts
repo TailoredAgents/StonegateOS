@@ -5,6 +5,7 @@ import {
   type NamedScheduleResourceBlock,
   type NamedScheduleResourceRequirement,
 } from "@/lib/scheduling";
+import { namedResourceBlocksForOccupancy } from "@/lib/scheduling-resource-store";
 
 const occupancy = createScheduleInterval(
   new Date("2026-09-08T13:00:00.000Z"),
@@ -72,6 +73,65 @@ function block(
 }
 
 describe("Partner named resource scheduling", () => {
+  it("keeps old pooled or unassigned work occupied after physical resources are configured", () => {
+    const base = {
+      id: "old-job",
+      startAt: occupancy.startAt,
+      endAt: occupancy.endAt,
+      timezone: "America/New_York",
+      capacityPoolKey: "field_service",
+      plan: { resources, requirements, revision: "current" },
+    };
+    const pooled = namedResourceBlocksForOccupancy({
+      ...base,
+      assignments: [
+        {
+          resourceId: "old-pool-crew",
+          kind: "crew",
+          label: "Legacy crew pool",
+          capacityUnits: 1,
+        },
+        {
+          resourceId: "old-pool-truck",
+          kind: "truck",
+          label: "Legacy truck pool",
+          capacityUnits: 1,
+        },
+      ],
+    });
+    expect(pooled.map((entry) => entry.resourceId)).toEqual([
+      "crew-a",
+      "crew-b",
+      "truck-a",
+    ]);
+    expect(
+      namedResourceBlocksForOccupancy({ ...base, assignments: [] }).map(
+        (entry) => entry.resourceId,
+      ),
+    ).toEqual(["crew-a", "crew-b", "truck-a"]);
+    const assigned = namedResourceBlocksForOccupancy({
+      ...base,
+      assignments: [
+        {
+          resourceId: "crew-a",
+          kind: "crew",
+          label: "Alpha",
+          capacityUnits: 1,
+        },
+        {
+          resourceId: "truck-a",
+          kind: "truck",
+          label: "Truck",
+          capacityUnits: 1,
+        },
+      ],
+    });
+    expect(assigned.map((entry) => entry.resourceId)).toEqual([
+      "crew-a",
+      "truck-a",
+    ]);
+  });
+
   it("assigns a deterministic eligible crew and truck while respecting overlap", () => {
     const result = assignNamedScheduleResources({
       capacityPoolKey: "field_service",

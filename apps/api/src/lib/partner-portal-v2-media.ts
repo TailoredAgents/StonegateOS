@@ -20,6 +20,7 @@ import {
   partnerDraftMedia,
   partnerJobEvidence,
   partnerMediaMutationOperations,
+  outboxEvents,
   type DatabaseClient,
 } from "@/db";
 import {
@@ -29,8 +30,14 @@ import {
 } from "@/lib/appointment-image";
 import type { PartnerPrincipal } from "@/lib/partner-account-authorization";
 import {
+  hasPartnerPdfSignature,
+  isPartnerDocumentScanningConfigured,
+} from "@/lib/partner-document-scan";
+import { partnerMediaCountsAllowed } from "@/lib/partner-media-limits";
+import {
   canAccessPartnerDraftResource,
   canAccessPartnerJobResource,
+  createPartnerAdditionalDraftSourceAccessCondition,
 } from "@/lib/partner-portal-v2-resource-authorization";
 import {
   createMediaReadUrl,
@@ -49,11 +56,11 @@ export const PARTNER_MEDIA_CATEGORIES = [
   "after",
   "completion",
   "issue",
+  "document",
 ] as const;
 export type PartnerMediaCategory = (typeof PARTNER_MEDIA_CATEGORIES)[number];
 export type PartnerMediaParentKind = "draft" | "job";
 
-const MAX_PARTNER_MEDIA_COUNT = 40;
 const MAX_PARTNER_MEDIA_BATCH = 10;
 const STAGING_LIFETIME_MS = 24 * 60 * 60 * 1_000;
 const DOWNLOAD_INTENT_SECONDS = 300;
@@ -119,11 +126,18 @@ export const PartnerMediaUploadIntentSchema = z
       }
       ids.add(file.clientId);
       try {
-        validateDeclaredAppointmentImage({
-          contentType: file.contentType,
-          byteLength: file.byteLength,
-          checksumSha256: file.checksumSha256,
-        });
+        if (file.category === "document") {
+          if (
+            file.contentType.trim().toLowerCase() !== "application/pdf" ||
+            !/\.pdf$/iu.test(file.filename)
+          )
+            throw new Error("invalid_pdf_type");
+        } else
+          validateDeclaredAppointmentImage({
+            contentType: file.contentType,
+            byteLength: file.byteLength,
+            checksumSha256: file.checksumSha256,
+          });
       } catch {
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -207,8 +221,8 @@ export type PartnerJobMessageAttachmentHandle = Readonly<{
   filename: string | null;
   contentType: string;
   byteSize: number;
-  width: number;
-  height: number;
+  width: number | null;
+  height: number | null;
   sha256: string;
   createdAt: string;
   readyAt: string;
@@ -273,10 +287,11 @@ function isUsablePartnerJobMessageAttachment(
       Number.isInteger(row.byteSize) &&
       (row.byteSize ?? 0) > 0 &&
       (row.byteSize ?? 0) <= MAX_APPOINTMENT_IMAGE_BYTES &&
-      Number.isInteger(row.width) &&
-      (row.width ?? 0) > 0 &&
-      Number.isInteger(row.height) &&
-      (row.height ?? 0) > 0 &&
+      ((row.contentType === "application/pdf" && row.category === "document") ||
+        (Number.isInteger(row.width) &&
+          (row.width ?? 0) > 0 &&
+          Number.isInteger(row.height) &&
+          (row.height ?? 0) > 0)) &&
       typeof row.sha256 === "string" &&
       /^[0-9a-f]{64}$/iu.test(row.sha256) &&
       row.createdAt instanceof Date &&
@@ -322,8 +337,8 @@ export function projectPartnerJobMessageAttachmentHandles(input: {
         filename,
         contentType: row.contentType.trim().toLowerCase(),
         byteSize: row.byteSize!,
-        width: row.width!,
-        height: row.height!,
+        width: row.width,
+        height: row.height,
         sha256: row.sha256.toLowerCase(),
         createdAt: row.createdAt.toISOString(),
         readyAt: row.readyAt.toISOString(),
@@ -373,6 +388,7 @@ export async function loadReadyPartnerJobMessageAttachments(input: {
         isNull(partnerJobEvidence.deletedAt),
         isNull(mediaAssets.deletedAt),
         eq(mediaAssets.status, "ready"),
+        sql`(${partnerJobEvidence.category} <> 'document' OR ${mediaAssets.sourceMetadata}->>'scanStatus' = 'clean')`,
         isNotNull(mediaAssets.readyAt),
         sql`char_length(btrim(${mediaAssets.storageBucket})) > 0`,
         sql`char_length(btrim(${mediaAssets.originalObjectKey})) > 0`,
@@ -689,6 +705,7 @@ async function assertParentAvailable(
         and(
           eq(partnerBookingDrafts.id, input.parentId),
           eq(partnerBookingDrafts.partnerAccountId, accountId),
+          createPartnerAdditionalDraftSourceAccessCondition(input.principal),
         ),
       )
       .for("share")
@@ -777,6 +794,7 @@ async function lockParentForMediaMutation(
     parentId: string;
     principal: PartnerPrincipal;
     allowSubmittedDraftFinalize?: boolean;
+    allowHistoricalRestore?: boolean;
   },
 ): Promise<{ state: string }> {
   const accountId = input.principal.accountId;
@@ -795,6 +813,7 @@ async function lockParentForMediaMutation(
         and(
           eq(partnerBookingDrafts.id, input.parentId),
           eq(partnerBookingDrafts.partnerAccountId, accountId),
+          createPartnerAdditionalDraftSourceAccessCondition(input.principal),
         ),
       )
       .for("update")
@@ -874,7 +893,10 @@ async function lockParentForMediaMutation(
   ) {
     throw new PartnerPortalMediaError("not_found", 404);
   }
-  if (["canceled", "declined"].includes(job.status)) {
+  if (
+    !input.allowHistoricalRestore &&
+    ["canceled", "declined"].includes(job.status)
+  ) {
     throw new PartnerPortalMediaError("conflict", 409);
   }
   return { state: job.status };
@@ -951,6 +973,8 @@ async function loadAssociationRows(input: {
     .where(
       and(
         eq(association.partnerAccountId, input.accountId),
+        eq(mediaAssets.partnerAccountId, input.accountId),
+        isNull(mediaAssets.deletedAt),
         eq(parentColumn, input.parentId),
         input.includeDeleted ? undefined : isNull(association.deletedAt),
         input.associationIds?.length
@@ -967,9 +991,16 @@ async function loadAssociationRows(input: {
 }
 
 async function createMediaDto(row: AssociationRow) {
+  if (
+    row.category === "document" &&
+    row.assetStatus === "ready" &&
+    metadataString(row.sourceMetadata, "scanStatus") !== "clean"
+  ) {
+    row = { ...row, assetStatus: "processing" };
+  }
   const expiresAt = new Date(Date.now() + DOWNLOAD_INTENT_SECONDS * 1_000);
   const [thumbnailUrl, displayUrl, originalUrl] =
-    row.assetStatus === "ready"
+    row.assetStatus === "ready" && !row.deletedAt
       ? await Promise.all([
           row.thumbnailObjectKey
             ? createMediaReadUrl(
@@ -998,7 +1029,7 @@ async function createMediaDto(row: AssociationRow) {
     createdAt: row.createdAt.toISOString(),
     readyAt: row.readyAt?.toISOString() ?? null,
     downloadIntent:
-      row.assetStatus === "ready"
+      row.assetStatus === "ready" && !row.deletedAt
         ? {
             thumbnailUrl,
             displayUrl,
@@ -1045,6 +1076,16 @@ export async function createPartnerMediaUploadIntents(input: {
   }
   const accountId = input.principal.accountId;
   const membershipId = input.principal.membershipId;
+  if (
+    input.files.some((file) => file.category === "document") &&
+    !isPartnerDocumentScanningConfigured()
+  ) {
+    throw new PartnerPortalMediaError(
+      "service_unavailable",
+      503,
+      "Document uploads are unavailable. Email sales@stonegatejunkremoval.com or call 404-777-2631 for help.",
+    );
+  }
   const bucket = getMediaStorageBucket();
   const provider = getMediaStorageProvider();
   const db = getDb();
@@ -1061,7 +1102,10 @@ export async function createPartnerMediaUploadIntents(input: {
         ? partnerDraftMedia.bookingDraftId
         : partnerJobEvidence.partnerBookingId;
     const countRows = await tx
-      .select({ count: sql<number>`count(*)::int` })
+      .select({
+        images: sql<number>`count(*) filter (where ${association.category} <> 'document')::int`,
+        documents: sql<number>`count(*) filter (where ${association.category} = 'document')::int`,
+      })
       .from(association)
       .where(
         and(
@@ -1070,7 +1114,7 @@ export async function createPartnerMediaUploadIntents(input: {
           isNull(association.deletedAt),
         ),
       );
-    const count = countRows[0]?.count ?? 0;
+    const count = countRows[0] ?? { images: 0, documents: 0 };
     const sourceKeys = input.files.map(
       (file) =>
         `partner:${accountId}:${input.parentKind}:${input.parentId}:${file.clientId}`,
@@ -1092,9 +1136,23 @@ export async function createPartnerMediaUploadIntents(input: {
         row.sourceKey ? ([[row.sourceKey, row]] as const) : [],
       ),
     );
-    const newCount = sourceKeys.filter((key) => !existingByKey.has(key)).length;
-    if (count + newCount > MAX_PARTNER_MEDIA_COUNT) {
-      throw new PartnerPortalMediaError("conflict", 409);
+    const newFiles = input.files.filter(
+      (_file, index) => !existingByKey.has(sourceKeys[index]!),
+    );
+    const newDocuments = newFiles.filter(
+      (file) => file.category === "document",
+    ).length;
+    if (
+      !partnerMediaCountsAllowed(
+        count.images + newFiles.length - newDocuments,
+        count.documents + newDocuments,
+      )
+    ) {
+      throw new PartnerPortalMediaError(
+        "media_limit_reached",
+        409,
+        "Each job supports up to 40 photos and 10 PDF documents.",
+      );
     }
     const now = new Date();
     const stagingExpiresAt = new Date(now.getTime() + STAGING_LIFETIME_MS);
@@ -1228,7 +1286,7 @@ export async function createPartnerMediaUploadIntents(input: {
                 mediaAssetId: asset.id,
                 category: file.category,
                 caption: file.caption ?? null,
-                sortOrder: count + index,
+                sortOrder: count.images + count.documents + index,
                 uploadedByMembershipId: membershipId,
                 createdAt: now,
               })
@@ -1241,7 +1299,7 @@ export async function createPartnerMediaUploadIntents(input: {
                 mediaAssetId: asset.id,
                 category: file.category,
                 caption: file.caption ?? null,
-                sortOrder: count + index,
+                sortOrder: count.images + count.documents + index,
                 uploadedByMembershipId: membershipId,
                 createdAt: now,
               })
@@ -1397,6 +1455,13 @@ export async function finalizePartnerMedia(input: {
       accountId,
       assetId: association.assetId,
     });
+    if (
+      operation.replayed &&
+      association.category === "document" &&
+      association.sourceMetadata?.["scanStatus"] === "queued"
+    ) {
+      return { row: association, operation, expectedChecksum: null };
+    }
     if (operation.replayed && association.assetStatus !== "ready") {
       throw new PartnerPortalMediaError("media_integrity_conflict", 409);
     }
@@ -1446,6 +1511,11 @@ export async function finalizePartnerMedia(input: {
   if (row.assetStatus === "ready") {
     return createMediaDto(row);
   }
+  if (
+    row.category === "document" &&
+    metadataString(row.sourceMetadata, "scanStatus") === "queued"
+  )
+    return createMediaDto(row);
 
   const stagingKey = row.originalObjectKey;
   const finalPrefix = `partner/${accountId}/${input.parentKind}/${input.parentId}/${row.assetId}`;
@@ -1474,6 +1544,76 @@ export async function finalizePartnerMedia(input: {
       prepared.expectedChecksum !== actualSha256
     ) {
       throw new PartnerPortalMediaError("invalid_fields", 422);
+    }
+    if (row.category === "document") {
+      if (!hasPartnerPdfSignature(bytes))
+        throw new PartnerPortalMediaError(
+          "invalid_fields",
+          422,
+          "Upload a valid PDF document up to 10 MB.",
+        );
+      const quarantineKey = `partner/quarantine/${accountId}/${row.assetId}/${actualSha256}.pdf`;
+      await putImmutableMediaObject({
+        key: quarantineKey,
+        body: bytes,
+        contentType: "application/pdf",
+      });
+      await db.transaction(async (tx) => {
+        await lockParentForMediaMutation(tx, {
+          parentKind: input.parentKind,
+          parentId: input.parentId,
+          principal: input.principal,
+          allowSubmittedDraftFinalize: true,
+        });
+        const [current] = await loadAssociationRows({
+          parentKind: input.parentKind,
+          parentId: input.parentId,
+          accountId,
+          associationIds: [input.associationId],
+          db: tx,
+        });
+        if (!current || current.assetStatus !== "processing")
+          throw new PartnerPortalMediaError("conflict", 409);
+        await tx
+          .update(mediaAssets)
+          .set({
+            originalObjectKey: quarantineKey,
+            contentType: "application/pdf",
+            byteSize: bytes.length,
+            sha256: actualSha256,
+            width: null,
+            height: null,
+            stagingExpiresAt: null,
+            sourceMetadata: {
+              ...row.sourceMetadata,
+              inputSha256: actualSha256,
+              scanStatus: "queued",
+            },
+          })
+          .where(
+            and(
+              eq(mediaAssets.id, row.assetId),
+              eq(mediaAssets.partnerAccountId, accountId),
+            ),
+          );
+        await tx.insert(outboxEvents).values({
+          type: "partner.document.scan",
+          payload: { assetId: row.assetId, accountId },
+        });
+        await completePartnerMediaFinalizeOperation(tx, {
+          id: prepared.operation.id,
+          claimToken: prepared.operation.claimToken,
+          status: "succeeded",
+        });
+      });
+      const [queued] = await loadAssociationRows({
+        parentKind: input.parentKind,
+        parentId: input.parentId,
+        accountId,
+        associationIds: [input.associationId],
+      });
+      if (!queued) throw new PartnerPortalMediaError("not_found", 404);
+      return createMediaDto(queued);
     }
     let normalized;
     try {
@@ -1589,6 +1729,11 @@ export async function finalizePartnerMedia(input: {
           sha256: normalized.sha256,
         },
       });
+      if (input.parentKind === "job")
+        await tx.insert(outboxEvents).values({
+          type: "partner.proof.prepare",
+          payload: { accountId, jobId: input.parentId },
+        });
     });
     if (stagingKey !== originalKey) {
       await deleteMediaObject(stagingKey).catch(() => undefined);
@@ -1677,4 +1822,129 @@ export async function softDeletePartnerMedia(input: {
     deletedAt: now.toISOString(),
     purgeEligibleAt: purgeEligibleAt.toISOString(),
   };
+}
+
+export async function restorePartnerMedia(input: {
+  parentKind: PartnerMediaParentKind;
+  parentId: string;
+  associationId: string;
+  principal: PartnerPrincipal;
+  deletedAt: string;
+  correlationId: string;
+}) {
+  const accountId = input.principal.accountId;
+  if (!accountId) throw new PartnerPortalMediaError("not_found", 404);
+  const association =
+    input.parentKind === "draft" ? partnerDraftMedia : partnerJobEvidence;
+  const parentColumn =
+    input.parentKind === "draft"
+      ? partnerDraftMedia.bookingDraftId
+      : partnerJobEvidence.partnerBookingId;
+  return getDb().transaction(async (tx) => {
+    await lockParentForMediaMutation(tx, {
+      ...input,
+      allowHistoricalRestore: true,
+    });
+    const [row] = await tx
+      .select({
+        id: association.id,
+        category: association.category,
+        deletedAt: association.deletedAt,
+        purgeEligibleAt: association.purgeEligibleAt,
+        assetDeletedAt: mediaAssets.deletedAt,
+      })
+      .from(association)
+      .innerJoin(mediaAssets, eq(mediaAssets.id, association.mediaAssetId))
+      .where(
+        and(
+          eq(association.id, input.associationId),
+          eq(association.partnerAccountId, accountId),
+          eq(parentColumn, input.parentId),
+        ),
+      )
+      .limit(1);
+    if (!row || row.assetDeletedAt)
+      throw new PartnerPortalMediaError("not_found", 404);
+    if (!row.deletedAt) return { id: row.id, restored: true };
+    if (row.deletedAt.toISOString() !== input.deletedAt)
+      throw new PartnerPortalMediaError("revision_mismatch", 412);
+    if (!row.purgeEligibleAt || row.purgeEligibleAt <= new Date())
+      throw new PartnerPortalMediaError("restore_expired", 410);
+    const [count] = await tx
+      .select({
+        images: sql<number>`count(*) filter (where ${association.category} <> 'document')::int`,
+        documents: sql<number>`count(*) filter (where ${association.category} = 'document')::int`,
+      })
+      .from(association)
+      .where(
+        and(
+          eq(association.partnerAccountId, accountId),
+          eq(parentColumn, input.parentId),
+          isNull(association.deletedAt),
+        ),
+      );
+    if (
+      !partnerMediaCountsAllowed(
+        (count?.images ?? 0) + (row.category === "document" ? 0 : 1),
+        (count?.documents ?? 0) + (row.category === "document" ? 1 : 0),
+      )
+    )
+      throw new PartnerPortalMediaError("media_limit_reached", 409);
+    await tx
+      .update(association)
+      .set({ deletedAt: null, purgeEligibleAt: null })
+      .where(eq(association.id, row.id));
+    if (input.parentKind === "job")
+      await tx.insert(outboxEvents).values({
+        type: "partner.proof.prepare",
+        payload: { accountId, jobId: input.parentId },
+      });
+    await tx.insert(auditLogs).values({
+      actorType: "human",
+      actorId: input.principal.partnerUserId,
+      actorRole: input.principal.roleKey,
+      sessionId: input.principal.session.id,
+      authMethod: "partner_session",
+      correlationId: input.correlationId,
+      action: "partner.media.restored",
+      entityType:
+        input.parentKind === "draft"
+          ? "partner_draft_media"
+          : "partner_job_evidence",
+      entityId: row.id,
+      surface: "partner_portal_v2",
+      meta: { partnerAccountId: accountId, parentId: input.parentId },
+    });
+    return { id: row.id, restored: true };
+  });
+}
+
+export async function listRecoverablePartnerMedia(input: {
+  parentKind: PartnerMediaParentKind;
+  parentId: string;
+  principal: PartnerPrincipal;
+}) {
+  const accountId = input.principal.accountId;
+  if (!accountId) throw new PartnerPortalMediaError("not_found", 404);
+  return getDb().transaction(async (tx) => {
+    await assertParentAvailable(tx, input);
+    const rows = await loadAssociationRows({
+      ...input,
+      accountId,
+      includeDeleted: true,
+      db: tx,
+    });
+    const cutoff = Date.now() - 30 * 24 * 60 * 60_000;
+    return rows
+      .filter((row) => row.deletedAt && row.deletedAt.getTime() > cutoff)
+      .map((row) => ({
+        id: row.id,
+        filename: row.originalFilename,
+        category: row.category,
+        deletedAt: row.deletedAt!.toISOString(),
+        recoverableUntil: new Date(
+          row.deletedAt!.getTime() + 30 * 24 * 60 * 60_000,
+        ).toISOString(),
+      }));
+  });
 }

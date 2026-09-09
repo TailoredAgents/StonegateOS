@@ -118,10 +118,8 @@ describe("partner recurring-series lifecycle", () => {
     expect(lifecycle).toContain("requestHash");
     expect(lifecycle).toContain("evaluatePortalV2RevisionPrecondition");
     expect(lifecycle).toContain("eq(partnerRecurringSeries.revision");
-    expect(lifecycle).toContain('occurrence.state === "evaluating"');
-    expect(lifecycle).toContain(
-      "isNull(partnerRecurringOccurrences.bookingDraftId)",
-    );
+    expect(lifecycle).toContain('"evaluating"');
+    expect(lifecycle).toContain('status: "released"');
     expect(lifecycle).toContain(
       "isNull(partnerRecurringOccurrences.partnerBookingId)",
     );

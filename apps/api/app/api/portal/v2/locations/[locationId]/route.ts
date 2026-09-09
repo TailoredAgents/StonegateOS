@@ -18,6 +18,7 @@ import {
   PartnerLocationSecretConfigurationError,
 } from "@/lib/partner-location-secrets";
 import { requirePartnerCapability } from "@/lib/partner-account-authorization";
+import { isPartnerToolEnabled } from "@/lib/partner-account-workflows";
 import {
   arePartnerPortalV2ReadsEnabled,
   arePartnerPortalV2WritesEnabled,
@@ -274,6 +275,11 @@ async function mutateLocation(
   }
 
   try {
+    // Detaching an existing hierarchy remains available for maintenance after
+    // the optional tool is disabled. Creating/reassigning a parent does not.
+    if (updateInput?.parentLocationId && !(await isPartnerToolEnabled(principal.accountId, "portfolio"))) {
+      return createPartnerPortalV2ErrorResponse("not_found", 404, correlationId);
+    }
     const verification = updateInput?.address
       ? await verifyAddress({
           addressLine1: updateInput.address.line1,

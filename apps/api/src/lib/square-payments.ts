@@ -16,6 +16,7 @@ import {
   paymentProviderEvents,
   paymentRefunds,
   payments,
+  partnerBillingRefundRequests,
 } from "@/db";
 import {
   getSquareOrder,
@@ -37,6 +38,11 @@ import {
   syncAppointmentCardTipCents,
 } from "@/lib/payment-ledger";
 import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
+import {
+  lockAppointmentInvoiceCollection,
+  reconcilePartnerAppointmentInvoices,
+} from "@/lib/partner-invoice-ledger";
+import { queuePartnerPaymentLifecycle } from "@/lib/partner-payment-lifecycle";
 import {
   finalizePartnerPortalPaymentReconciliation,
   parsePartnerPaymentAttemptMetadata,
@@ -497,6 +503,7 @@ export async function reconcileSquareAttempt(input: {
     const code = errorCode(error);
     const pending = isRetryableSquareError(error);
     const result = await db.transaction(async (tx) => {
+      await lockAppointmentInvoiceCollection(tx, attempt.appointmentId);
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext('square_payment_attempt'), hashtext(${attempt.id}))`,
       );
@@ -545,6 +552,9 @@ export async function reconcileSquareAttempt(input: {
               errorCode: "square_completed_attempt_binding_mismatch",
             };
         await input.finalize?.(tx, reconciliation);
+        if (reconciliation.status === "verified") {
+          await reconcilePartnerAppointmentInvoices(tx, locked.appointmentId);
+        }
         return reconciliation;
       }
       const reconciliation: SquareAttemptReconciliationResult = {
@@ -576,6 +586,7 @@ export async function reconcileSquareAttempt(input: {
   }
 
   const result = await db.transaction(async (tx) => {
+    await lockAppointmentInvoiceCollection(tx, attempt.appointmentId);
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext('square_payment_attempt'), hashtext(${attempt.id}))`,
     );
@@ -759,6 +770,7 @@ export async function reconcileSquareAttempt(input: {
       providerPaymentId: verified.providerPaymentId,
     };
     await input.finalize?.(tx, reconciliation);
+    await reconcilePartnerAppointmentInvoices(tx, locked.appointmentId);
     return reconciliation;
   });
 
@@ -939,6 +951,93 @@ async function reconcileSquarePayment(payment: SquarePayment): Promise<{
           : "processed",
     };
   }
+  const portalMetadata = parsePartnerPaymentAttemptMetadata(
+    completedAttempt?.metadata,
+  );
+  if (
+    portalMetadata &&
+    ["FAILED", "CANCELED"].includes(payment.status ?? "") &&
+    completedAttempt?.status !== "completed" &&
+    completedAttempt?.providerOrderId === payment.order_id &&
+    (!completedAttempt.providerPaymentId ||
+      completedAttempt.providerPaymentId === providerPaymentId)
+  ) {
+    const terminal = await db.transaction(async (tx) => {
+      const [binding] = await tx
+        .select({ appointmentId: paymentAttempts.appointmentId })
+        .from(paymentAttempts)
+        .where(eq(paymentAttempts.id, attemptId))
+        .limit(1);
+      if (!binding?.appointmentId) return false;
+      await lockAppointmentInvoiceCollection(tx, binding.appointmentId);
+      const [locked] = await tx
+        .select()
+        .from(paymentAttempts)
+        .where(eq(paymentAttempts.id, attemptId))
+        .for("update")
+        .limit(1);
+      if (
+        !locked ||
+        locked.status === "completed" ||
+        locked.providerOrderId !== payment.order_id ||
+        (locked.providerPaymentId &&
+          locked.providerPaymentId !== providerPaymentId) ||
+        parseSquareMoneyAmount(payment.amount_money) !==
+          locked.requestedJobAmountCents ||
+        payment.amount_money?.currency !== "USD" ||
+        (locked.squareLocationId &&
+          locked.squareLocationId !== payment.location_id)
+      )
+        return false;
+      const [existing] = await tx
+        .select({ id: payments.id, status: payments.canonicalStatus })
+        .from(payments)
+        .where(
+          and(
+            eq(payments.provider, "square"),
+            eq(payments.providerPaymentId, providerPaymentId),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (existing?.status === "completed") return false; // Never undo settled money on a late/contradictory event.
+      const now = new Date();
+      if (existing)
+        await tx
+          .update(payments)
+          .set({
+            canonicalStatus: "failed",
+            providerStatus: payment.status,
+            status: "failed",
+            updatedAt: now,
+          })
+          .where(eq(payments.id, existing.id));
+      await tx
+        .update(paymentAttempts)
+        .set({
+          status: "failed",
+          providerPaymentId,
+          errorCode: "provider_payment_failed",
+          errorMessage: null,
+          resolvedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(paymentAttempts.id, attemptId));
+      await queuePartnerPaymentLifecycle(tx, {
+        accountId: portalMetadata.partnerAccountId,
+        invoiceId: portalMetadata.partnerInvoiceId,
+        intentId: attemptId,
+        state: "failed",
+      });
+      return true;
+    });
+    if (terminal)
+      return {
+        paymentId: null,
+        paymentAttemptId: attemptId,
+        status: "processed",
+      };
+  }
   if (completedAttempt?.status === "completed") {
     const [linkedPayment] = await db
       .select({
@@ -1096,6 +1195,9 @@ async function reconcileSquareRefund(refund: SquareRefund): Promise<{
   const now = new Date();
 
   await db.transaction(async (tx) => {
+    if (paymentRow.appointmentId) {
+      await lockAppointmentInvoiceCollection(tx, paymentRow.appointmentId);
+    }
     await tx
       .insert(paymentRefunds)
       .values({
@@ -1207,8 +1309,25 @@ async function reconcileSquareRefund(refund: SquareRefund): Promise<{
         updatedAt: now,
       })
       .where(eq(payments.id, paymentRow.id));
+    await tx
+      .update(partnerBillingRefundRequests)
+      .set({
+        status: isCompleted
+          ? "settled"
+          : ["FAILED", "REJECTED"].includes(refund.status ?? "")
+            ? "failed"
+            : "submitted",
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(partnerBillingRefundRequests.providerRefundId, providerRefundId),
+          eq(partnerBillingRefundRequests.paymentId, paymentRow.id),
+        ),
+      );
     if (paymentRow.appointmentId) {
       await syncAppointmentCardTipCents(tx, paymentRow.appointmentId);
+      await reconcilePartnerAppointmentInvoices(tx, paymentRow.appointmentId);
     }
   });
 

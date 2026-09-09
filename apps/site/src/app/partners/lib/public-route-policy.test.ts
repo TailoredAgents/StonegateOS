@@ -65,7 +65,7 @@ void test("the public landing adapts without treating cookie presence as authent
       applicationSessionPresent: true,
       portalState: "unauthenticated",
     }),
-    "/partners/application",
+    null,
   );
   assert.equal(
     partnerLandingDestination({
@@ -96,7 +96,7 @@ void test("only exact purpose-token routes receive short-lived HttpOnly cookie p
   });
   assert.deepEqual(partnerPurposeTokenPolicy("/partners/invitations/accept"), {
     cookieName: "myst-partner-invitation-token",
-    maximumAgeSeconds: 30 * 60,
+    maximumAgeSeconds: 7 * 24 * 60 * 60,
   });
   assert.equal(partnerPurposeTokenPolicy("/partners/verify"), null);
   assert.equal(partnerPurposeTokenPolicy("/partners/activate/extra"), null);
@@ -298,7 +298,7 @@ void test("activation links move the token into an HttpOnly cookie and sanitize 
   assert.equal(response.headers.get("referrer-policy"), "no-referrer");
 });
 
-void test("sanitized activation responses remain private and non-cacheable", async () => {
+void test("sanitized activation responses remain private and preserve native POST origins", async () => {
   const response = await middleware(
     new NextRequest("https://stonegate.example/partners/activate"),
   );
@@ -307,7 +307,25 @@ void test("sanitized activation responses remain private and non-cacheable", asy
     response.headers.get("cache-control"),
     "private, no-store, max-age=0",
   );
-  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(response.headers.get("referrer-policy"), "same-origin");
+});
+
+void test("cookie-bearing tokenless entrances preserve CSRF-safe native form origins", async () => {
+  for (const cookie of [
+    "myst-partner-application=retired-applicant",
+    "myst-partner-session=malformed",
+  ]) {
+    const response = await middleware(
+      new NextRequest("https://stonegate.example/partners", {
+        headers: { cookie },
+      }),
+    );
+    assert.equal(response.headers.get("referrer-policy"), "same-origin");
+    assert.match(
+      response.headers.get("cache-control") ?? "",
+      /private, no-store/u,
+    );
+  }
 });
 
 void test("anonymous landing traffic passes through without private cache headers or an auth probe", async () => {
@@ -426,11 +444,8 @@ void test("definitively rejected and malformed sessions are cleared without trus
           },
         }),
       );
-      assert.equal(response.status, 307);
-      assert.equal(
-        response.headers.get("location"),
-        "https://stonegate.example/partners/application",
-      );
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("location"), null);
       assert.match(
         response.headers.get("set-cookie") ?? "",
         /myst-partner-session=;/u,
@@ -464,17 +479,14 @@ void test("definitively rejected and malformed sessions are cleared without trus
   assert.equal(fetchCalls, 0);
 });
 
-void test("an applicant-only landing request resumes the application privately", async () => {
+void test("a historical applicant cookie does not trap visitors in the retired application flow", async () => {
   const response = await middleware(
     new NextRequest("https://stonegate.example/partners", {
       headers: { cookie: "myst-partner-application=applicant-session" },
     }),
   );
-  assert.equal(response.status, 307);
-  assert.equal(
-    response.headers.get("location"),
-    "https://stonegate.example/partners/application",
-  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("location"), null);
   assert.equal(
     response.headers.get("cache-control"),
     "private, no-store, max-age=0",

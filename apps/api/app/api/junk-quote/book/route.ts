@@ -45,7 +45,10 @@ import {
   DEFAULT_TRAVEL_BUFFER_MIN,
 } from "../../web/scheduling";
 import { normalizeName, normalizePhone } from "../../web/utils";
-import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
+import {
+  acquireScheduleConflictLock,
+  inspectScheduleConflicts,
+} from "@/lib/appointment-schedule-conflicts";
 
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ??
@@ -107,22 +110,6 @@ class BookingError extends Error {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
-  return aStart < bEnd && bStart < aEnd;
-}
-
-function overlapsCount(
-  blocks: Array<{ start: Date; end: Date }>,
-  start: Date,
-  end: Date,
-): number {
-  let count = 0;
-  for (const block of blocks) {
-    if (overlaps(start, end, block.start, block.end)) count += 1;
-  }
-  return count;
 }
 
 function deriveDurationMinutes(quote: {
@@ -603,8 +590,7 @@ export async function POST(request: NextRequest) {
       );
 
       const slotEnd = new Date(
-        startAt.getTime() +
-          (durationMinutes + travelBufferMinutes) * 60_000,
+        startAt.getTime() + (durationMinutes + travelBufferMinutes) * 60_000,
       );
       const lookbackStart = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
       const lookaheadEnd = new Date(slotEnd.getTime() + 24 * 60 * 60 * 1000);
@@ -669,7 +655,16 @@ export async function POST(request: NextRequest) {
       blocks.push(...holdBlocks);
 
       const capacity = getAppointmentCapacity();
-      if (overlapsCount(blocks, startAt, slotEnd) >= capacity) {
+      const scheduleDecision = await inspectScheduleConflicts(tx, {
+        startAt,
+        durationMinutes,
+        travelBufferMinutes,
+        capacity,
+        excludeAppointmentId: existingAppt?.id,
+        excludeHoldInstantQuoteId: quote.id,
+        now,
+      });
+      if (scheduleDecision.conflict) {
         throw new BookingError("slot_full", 409);
       }
 

@@ -36,6 +36,8 @@ mockModule("@/lib/partner-account-authorization", () => ({
 }));
 
 mockModule("@/lib/partner-portal-v2-scheduling", () => ({
+  listPartnerBookingDrafts: jest.fn(),
+  abandonPartnerBookingDraft: jest.fn(),
   createPartnerBookingDraft: mockCreatePartnerBookingDraft,
   createPartnerRescheduleDraft: mockCreatePartnerRescheduleDraft,
   createOrReplacePartnerHold: mockCreateOrReplacePartnerHold,

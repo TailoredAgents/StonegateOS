@@ -124,9 +124,14 @@ export default async function PartnerPropertiesPage() {
             initialNextCursor={directory.nextCursor}
             initialDirectoryEtag={directory.directoryEtag}
             canManage={canManage}
-            canManagePortfolio={directory.canManagePortfolio}
+            canManagePortfolio={
+              directory.canManagePortfolio &&
+              context.status === "authenticated" &&
+              context.tools?.["portfolio"] === true
+            }
             canExport={
               context.status === "authenticated" &&
+              context.tools?.["portfolio"] === true &&
               context.permissions.exportOperationalReports
             }
           />

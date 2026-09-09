@@ -2,10 +2,8 @@ import { DateTime } from "luxon";
 import { and, asc, eq, inArray, isNull, lt, lte, or } from "drizzle-orm";
 import {
   getDb,
-  partnerAccountMemberships,
   partnerRecurringOccurrences,
   partnerRecurringSeries,
-  partnerUsers,
 } from "@/db";
 import { isOperationalFeatureEnabled } from "@/lib/feature-flags";
 import {
@@ -14,10 +12,13 @@ import {
 } from "@/lib/partner-portal-feature-flags";
 import {
   evaluateClaimedPartnerRecurringOccurrence,
+  extendPartnerRecurringOccurrences,
   recordRecurringOccurrenceMaintenanceFailure,
 } from "@/lib/partner-repeat-work";
 import type { PartnerSchedulingActor } from "@/lib/partner-portal-v2-scheduling";
 import { acquirePartnerRecurringHorizonClaimLock } from "@/lib/partner-recurring-coordination";
+import { isPartnerToolEnabled } from "@/lib/partner-account-workflows";
+import { loadPartnerBackgroundSchedulingActor } from "@/lib/partner-background-scheduling-actor";
 
 const DEFAULT_BATCH_LIMIT = 20;
 const MAX_BATCH_LIMIT = 100;
@@ -144,7 +145,10 @@ async function claimDueOccurrences(input: {
         now: input.now,
       });
       if (position === "outside_horizon") continue;
-      if (!arePartnerPortalV2WritesEnabled(candidate.partnerAccountId)) {
+      if (
+        !arePartnerPortalV2WritesEnabled(candidate.partnerAccountId) ||
+        !(await isPartnerToolEnabled(candidate.partnerAccountId, "recurring"))
+      ) {
         skippedFeatureDisabled += 1;
         continue;
       }
@@ -192,44 +196,10 @@ async function claimDueOccurrences(input: {
 async function loadMaintenanceActor(
   occurrence: ClaimedOccurrence,
 ): Promise<PartnerSchedulingActor | null> {
-  const [row] = await getDb()
-    .select({
-      membershipId: partnerAccountMemberships.id,
-      partnerAccountId: partnerAccountMemberships.partnerAccountId,
-      partnerUserId: partnerAccountMemberships.partnerUserId,
-      accessLevel: partnerAccountMemberships.accessLevel,
-      accessScope: partnerAccountMemberships.accessScope,
-      email: partnerUsers.email,
-    })
-    .from(partnerAccountMemberships)
-    .innerJoin(
-      partnerUsers,
-      eq(partnerAccountMemberships.partnerUserId, partnerUsers.id),
-    )
-    .where(
-      and(
-        eq(partnerAccountMemberships.id, occurrence.createdByMembershipId),
-        eq(
-          partnerAccountMemberships.partnerAccountId,
-          occurrence.partnerAccountId,
-        ),
-        eq(partnerAccountMemberships.status, "active"),
-        eq(partnerUsers.active, true),
-      ),
-    )
-    .limit(1);
-  if (!row) return null;
-  return Object.freeze({
-    accountId: row.partnerAccountId,
-    membershipId: row.membershipId,
-    partnerUserId: row.partnerUserId,
-    email: row.email,
-    sessionId: null,
-    accessLevel: row.accessLevel,
-    canReadRates: true,
-    locationIds: Object.freeze([...(row.accessScope.locationIds ?? [])]),
-    propertyIds: Object.freeze([...(row.accessScope.propertyIds ?? [])]),
-  });
+  return loadPartnerBackgroundSchedulingActor(
+    occurrence.partnerAccountId,
+    occurrence.createdByMembershipId,
+  );
 }
 
 export async function evaluateDuePartnerRecurringOccurrences(
@@ -273,6 +243,7 @@ export async function evaluateDuePartnerRecurringOccurrences(
   }
   const now = input.now ?? new Date();
   const limit = normalizeRecurringHorizonBatchLimit(input.limit);
+  await extendPartnerRecurringOccurrences(now, limit);
   const claim = await claimDueOccurrences({ limit, now });
   const counts = {
     ...empty,

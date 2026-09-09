@@ -1,25 +1,19 @@
 import { createRequire } from "node:module";
 import React from "react";
-import {
-  Document,
-  Font,
-  Image,
-  Page,
-  StyleSheet,
-  Text,
-  View,
-  renderToBuffer,
-} from "@react-pdf/renderer";
+import type * as ReactPDF from "@react-pdf/renderer";
 import sharp from "sharp";
 import {
   createPartnerProofArchive,
   sha256PartnerProofBytes,
+  writePartnerProofArchive,
 } from "@/lib/partner-proof-package-archive";
 
-const moduleRequire = createRequire(import.meta.url);
+const moduleRequire = createRequire(
+  typeof __filename === "string" ? __filename : import.meta.url,
+);
 let fontsRegistered = false;
 
-function registerFonts(): void {
+function registerFonts(Font: typeof ReactPDF.Font): void {
   if (fontsRegistered) return;
   Font.register({
     family: "Noto Sans",
@@ -50,7 +44,7 @@ export type PartnerProofPackageRequirement = Readonly<{
   satisfied: boolean;
 }>;
 
-export type PartnerProofPackageEvidence = Readonly<{
+export type PartnerProofPackageEvidenceMetadata = Readonly<{
   reference: string;
   category: string;
   caption: string | null;
@@ -62,8 +56,9 @@ export type PartnerProofPackageEvidence = Readonly<{
   height: number | null;
   sha256: string;
   capturedAt: string;
-  originalBytes: Buffer;
 }>;
+export type PartnerProofPackageEvidence = PartnerProofPackageEvidenceMetadata &
+  Readonly<{ originalBytes: Buffer }>;
 
 export type PartnerProofPackageRenderInput = Readonly<{
   version: number;
@@ -91,6 +86,12 @@ export type PartnerProofPackageArtifacts = Readonly<{
   zip: Readonly<{ body: Buffer; sha256: string; filename: string }>;
   publicRecord: Record<string, unknown>;
 }>;
+export type PartnerProofPackageMetadataInput = Omit<
+  PartnerProofPackageRenderInput,
+  "evidence"
+> & {
+  evidence: readonly PartnerProofPackageEvidenceMetadata[];
+};
 
 function text(value: string | null | undefined, maximum = 500): string | null {
   const normalized = value
@@ -120,18 +121,24 @@ function safeExtension(contentType: string): string {
   if (contentType === "image/webp") return "webp";
   if (contentType === "image/heic") return "heic";
   if (contentType === "image/heif") return "heif";
+  if (contentType === "application/pdf") return "pdf";
   return "bin";
 }
 
-function archiveFilename(input: PartnerProofPackageEvidence, index: number): string {
-  const category = (text(input.category, 40) ?? "proof")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/^-|-$/gu, "") || "proof";
-  const basename = (text(input.filename, 120) ?? "photo")
-    .replace(/\.[^.]+$/u, "")
-    .replace(/[^a-zA-Z0-9._-]+/gu, "-")
-    .replace(/^-+|-+$/gu, "") || "photo";
+function archiveFilename(
+  input: PartnerProofPackageEvidenceMetadata,
+  index: number,
+): string {
+  const category =
+    (text(input.category, 40) ?? "proof")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gu, "-")
+      .replace(/^-|-$/gu, "") || "proof";
+  const basename =
+    (text(input.filename, 120) ?? "photo")
+      .replace(/\.[^.]+$/u, "")
+      .replace(/[^a-zA-Z0-9._-]+/gu, "-")
+      .replace(/^-+|-+$/gu, "") || "photo";
   return `proof/${String(index + 1).padStart(2, "0")}-${category}-${basename}.${safeExtension(input.contentType)}`;
 }
 
@@ -149,14 +156,17 @@ function canonical(value: unknown): unknown {
     return Object.fromEntries(
       Object.keys(value as Record<string, unknown>)
         .sort()
-        .map((key) => [key, canonical((value as Record<string, unknown>)[key])]),
+        .map((key) => [
+          key,
+          canonical((value as Record<string, unknown>)[key]),
+        ]),
     );
   }
   throw new TypeError("The completion record contains an unsupported value.");
 }
 
 function completionRecord(
-  input: PartnerProofPackageRenderInput,
+  input: PartnerProofPackageMetadataInput,
   paths: readonly string[],
 ): Record<string, unknown> {
   return canonical({
@@ -211,7 +221,7 @@ function completionRecord(
   }) as Record<string, unknown>;
 }
 
-const styles = StyleSheet.create({
+const styles = {
   page: {
     paddingTop: 42,
     paddingBottom: 54,
@@ -227,22 +237,73 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     marginBottom: 20,
   },
-  eyebrow: { fontSize: 8, color: "#59675e", textTransform: "uppercase", letterSpacing: 1 },
+  eyebrow: {
+    fontSize: 8,
+    color: "#59675e",
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
   title: { fontSize: 22, color: "#173f2b", fontWeight: 700, marginTop: 3 },
   subtitle: { fontSize: 10, color: "#59675e", marginTop: 5 },
   summary: { flexDirection: "row", gap: 12, marginBottom: 18 },
-  summaryCard: { flexGrow: 1, flexBasis: 0, backgroundColor: "#f3f7f3", padding: 11, borderRadius: 6 },
-  label: { fontSize: 7, color: "#59675e", textTransform: "uppercase", marginBottom: 3 },
+  summaryCard: {
+    flexGrow: 1,
+    flexBasis: 0,
+    backgroundColor: "#f3f7f3",
+    padding: 11,
+    borderRadius: 6,
+  },
+  label: {
+    fontSize: 7,
+    color: "#59675e",
+    textTransform: "uppercase",
+    marginBottom: 3,
+  },
   value: { fontSize: 10, fontWeight: 700, color: "#173f2b" },
   section: { marginBottom: 18 },
-  sectionTitle: { fontSize: 13, color: "#173f2b", fontWeight: 700, marginBottom: 8 },
-  row: { flexDirection: "row", justifyContent: "space-between", borderBottomWidth: 1, borderBottomColor: "#d9e2da", paddingVertical: 6 },
-  proofCard: { borderWidth: 1, borderColor: "#d9e2da", borderRadius: 6, padding: 10, marginBottom: 12, breakInside: "avoid" },
-  image: { width: "100%", maxHeight: 320, objectFit: "contain", backgroundColor: "#f3f7f3", marginBottom: 8 },
+  sectionTitle: {
+    fontSize: 13,
+    color: "#173f2b",
+    fontWeight: 700,
+    marginBottom: 8,
+  },
+  row: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: "#d9e2da",
+    paddingVertical: 6,
+  },
+  proofCard: {
+    borderWidth: 1,
+    borderColor: "#d9e2da",
+    borderRadius: 6,
+    padding: 10,
+    marginBottom: 12,
+  },
+  image: {
+    width: "100%",
+    height: 320,
+    objectFit: "contain",
+    backgroundColor: "#f3f7f3",
+    marginBottom: 8,
+  },
   caption: { fontSize: 9, marginTop: 3 },
   checksum: { color: "#59675e", fontSize: 7, marginTop: 4 },
-  footer: { position: "absolute", left: 42, right: 42, bottom: 24, borderTopWidth: 1, borderTopColor: "#d9e2da", paddingTop: 7, flexDirection: "row", justifyContent: "space-between", color: "#59675e", fontSize: 7 },
-});
+  footer: {
+    position: "absolute",
+    left: 42,
+    right: 42,
+    bottom: 24,
+    borderTopWidth: 1,
+    borderTopColor: "#d9e2da",
+    paddingTop: 7,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    color: "#59675e",
+    fontSize: 7,
+  },
+} satisfies Parameters<typeof ReactPDF.StyleSheet.create>[0];
 
 function formatInstant(value: string, timezone: string): string {
   const at = new Date(value);
@@ -262,7 +323,12 @@ async function pdfImageData(original: Buffer): Promise<string | null> {
   try {
     const jpeg = await sharp(original, { failOn: "error" })
       .rotate()
-      .resize({ width: 900, height: 650, fit: "inside", withoutEnlargement: true })
+      .resize({
+        width: 900,
+        height: 650,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
       .jpeg({ quality: 76, progressive: false })
       .toBuffer();
     return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
@@ -272,46 +338,139 @@ async function pdfImageData(original: Buffer): Promise<string | null> {
 }
 
 async function renderPdf(
-  input: PartnerProofPackageRenderInput,
+  input: PartnerProofPackageMetadataInput,
   previewImages: readonly (string | null)[],
 ): Promise<Buffer> {
-  registerFonts();
+  // Dynamic ESM loading also works in the tsx background worker's CJS entrypoint.
+  const { Document, Font, Image, Page, Text, View, renderToBuffer } =
+    await import("@react-pdf/renderer");
+  registerFonts(Font);
   const location =
     text(input.job.locationName, 160) ??
-    [text(input.job.city, 100), text(input.job.state, 32)].filter(Boolean).join(", ") ??
+    [text(input.job.city, 100), text(input.job.state, 32)]
+      .filter(Boolean)
+      .join(", ") ??
     "Service location";
   const completedAt = formatInstant(input.job.completedAt, input.job.timezone);
   const pdf = await renderToBuffer(
-    <Document title={`Stonegate completion proof - ${location}`} author="Stonegate">
+    <Document
+      title={`Stonegate completion proof - ${location}`}
+      author="Stonegate"
+    >
       <Page size="LETTER" style={styles.page}>
         <View style={styles.header}>
           <Text style={styles.eyebrow}>Stonegate verified service record</Text>
           <Text style={styles.title}>Completion proof</Text>
-          <Text style={styles.subtitle}>{location} · Package v{input.version}</Text>
+          <Text style={styles.subtitle}>
+            {location} · Package v{input.version}
+          </Text>
         </View>
         <View style={styles.summary}>
-          <View style={styles.summaryCard}><Text style={styles.label}>Service</Text><Text style={styles.value}>{label(input.job.serviceKey)}</Text></View>
-          <View style={styles.summaryCard}><Text style={styles.label}>Completed</Text><Text style={styles.value}>{completedAt}</Text></View>
-          <View style={styles.summaryCard}><Text style={styles.label}>Proof status</Text><Text style={styles.value}>Complete</Text></View>
+          <View style={styles.summaryCard}>
+            <Text style={styles.label}>Service</Text>
+            <Text style={styles.value}>{label(input.job.serviceKey)}</Text>
+          </View>
+          <View style={styles.summaryCard}>
+            <Text style={styles.label}>Completed</Text>
+            <Text style={styles.value}>{completedAt}</Text>
+          </View>
+          <View style={styles.summaryCard}>
+            <Text style={styles.label}>Proof status</Text>
+            <Text style={styles.value}>Complete</Text>
+          </View>
         </View>
-        {input.job.projectReference ? <View style={styles.section}><Text style={styles.sectionTitle}>Project reference</Text><Text>{text(input.job.projectReference, 160)}</Text></View> : null}
+        {input.job.projectReference ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Project reference</Text>
+            <Text>{text(input.job.projectReference, 160)}</Text>
+          </View>
+        ) : null}
+        {input.job.promisedArrivalStartAt && input.job.promisedArrivalEndAt ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Promised arrival window</Text>
+            <Text>
+              {formatInstant(
+                input.job.promisedArrivalStartAt,
+                input.job.timezone,
+              )}{" "}
+              –{" "}
+              {formatInstant(
+                input.job.promisedArrivalEndAt,
+                input.job.timezone,
+              )}
+            </Text>
+            <Text>{input.job.timezone}</Text>
+          </View>
+        ) : null}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Evidence requirements</Text>
-          {input.requirements.map((requirement) => <View key={requirement.category} style={styles.row}><Text>{label(requirement.category)}</Text><Text>{requirement.readyCount} of {requirement.minimumCount} ready · {requirement.satisfied ? "Satisfied" : "Incomplete"}</Text></View>)}
+          {input.requirements.map((requirement) => (
+            <View key={requirement.category} style={styles.row}>
+              <Text>{label(requirement.category)}</Text>
+              <Text>
+                {requirement.readyCount} of {requirement.minimumCount} ready ·{" "}
+                {requirement.satisfied ? "Satisfied" : "Incomplete"}
+              </Text>
+            </View>
+          ))}
         </View>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Before-and-after service proof</Text>
-          {input.evidence.map((item, index) => <View key={item.reference} style={styles.proofCard} wrap={false}>
-            {/* React PDF images are document content; DOM alt attributes do not apply. */}
-            {/* eslint-disable-next-line jsx-a11y/alt-text */}
-            {previewImages[index] ? <Image src={previewImages[index]} style={styles.image} /> : null}
-            <Text style={styles.value}>{label(item.category)} photo</Text>
-            {item.caption ? <Text style={styles.caption}>{text(item.caption, 500)}</Text> : null}
-            <Text style={styles.checksum}>Captured {formatInstant(item.capturedAt, input.job.timezone)} · SHA-256 {item.sha256}</Text>
-          </View>)}
+        {input.evidence.length === 0 ? (
+          <Text>
+            No photos or documents were required for this service record.
+          </Text>
+        ) : null}
+        <View style={styles.footer} fixed>
+          <Text>
+            Immutable completion record · Manifest{" "}
+            {input.manifestChecksumSha256.slice(0, 16)}…
+          </Text>
+          <Text
+            render={({ pageNumber, totalPages }) =>
+              `Page ${pageNumber} of ${totalPages}`
+            }
+          />
         </View>
-        <View style={styles.footer} fixed><Text>Immutable completion record · Manifest {input.manifestChecksumSha256.slice(0, 16)}…</Text><Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} /></View>
       </Page>
+      {input.evidence.map((item, index) => (
+        <Page
+          key={item.reference}
+          size="LETTER"
+          style={styles.page}
+          wrap={false}
+        >
+          <Text style={styles.sectionTitle}>Service proof · {location}</Text>
+          <View key={item.reference} style={styles.proofCard} wrap={false}>
+            {/* React PDF images are document content; DOM alt attributes do not apply. */}
+            {previewImages[index] ? (
+              // React PDF's image is not an HTML image and has no alt prop.
+              // eslint-disable-next-line jsx-a11y/alt-text
+              <Image src={previewImages[index]} style={styles.image} />
+            ) : null}
+            <Text style={styles.value}>
+              {label(item.category)}{" "}
+              {item.contentType === "application/pdf" ? "document" : "photo"}
+            </Text>
+            {item.caption ? (
+              <Text style={styles.caption}>{text(item.caption, 500)}</Text>
+            ) : null}
+            <Text style={styles.checksum}>
+              Captured {formatInstant(item.capturedAt, input.job.timezone)} ·
+              SHA-256 {item.sha256}
+            </Text>
+          </View>
+          <View style={styles.footer} fixed>
+            <Text>
+              Immutable completion record · Manifest{" "}
+              {input.manifestChecksumSha256.slice(0, 16)}…
+            </Text>
+            <Text
+              render={({ pageNumber, totalPages }) =>
+                `Page ${pageNumber} of ${totalPages}`
+              }
+            />
+          </View>
+        </Page>
+      ))}
     </Document>,
   );
   return Buffer.from(pdf);
@@ -320,7 +479,7 @@ async function renderPdf(
 export async function renderPartnerProofPackageArtifacts(
   input: PartnerProofPackageRenderInput,
 ): Promise<PartnerProofPackageArtifacts> {
-  if (!input.evidence.length || input.requirements.some((item) => !item.satisfied)) {
+  if (input.requirements.some((item) => !item.satisfied)) {
     throw new TypeError("A proof package requires complete, ready evidence.");
   }
   for (const item of input.evidence) {
@@ -328,12 +487,17 @@ export async function renderPartnerProofPackageArtifacts(
       item.byteSize !== item.originalBytes.byteLength ||
       sha256PartnerProofBytes(item.originalBytes) !== item.sha256
     ) {
-      throw new TypeError("A proof-package original does not match its immutable evidence record.");
+      throw new TypeError(
+        "A proof-package original does not match its immutable evidence record.",
+      );
     }
   }
   const paths = input.evidence.map(archiveFilename);
   const publicRecord = completionRecord(input, paths);
-  const recordBytes = Buffer.from(`${JSON.stringify(publicRecord, null, 2)}\n`, "utf8");
+  const recordBytes = Buffer.from(
+    `${JSON.stringify(publicRecord, null, 2)}\n`,
+    "utf8",
+  );
   const zip = createPartnerProofArchive(
     [
       { path: "completion-record.json", body: recordBytes },
@@ -344,9 +508,9 @@ export async function renderPartnerProofPackageArtifacts(
     ],
     new Date(input.generatedAt),
   );
-  const previewImages = await Promise.all(
-    input.evidence.map((item) => pdfImageData(item.originalBytes)),
-  );
+  const previewImages = [];
+  for (const item of input.evidence)
+    previewImages.push(await pdfImageData(item.originalBytes));
   const pdf = await renderPdf(input, previewImages);
   return {
     pdf: {
@@ -357,6 +521,63 @@ export async function renderPartnerProofPackageArtifacts(
     zip: {
       body: zip,
       sha256: sha256PartnerProofBytes(zip),
+      filename: `stonegate-original-proof-v${input.version}.zip`,
+    },
+    publicRecord,
+  };
+}
+
+/** Worker path: no original image buffers survive an iteration, and ZIP bytes live on disk. */
+export async function renderPartnerProofPackageToFile(
+  input: PartnerProofPackageMetadataInput,
+  zipPath: string,
+  readOriginal: (
+    item: PartnerProofPackageEvidenceMetadata,
+    index: number,
+  ) => Promise<Buffer>,
+) {
+  if (input.requirements.some((item) => !item.satisfied)) {
+    throw new TypeError("A proof package requires complete, ready evidence.");
+  }
+  const paths = input.evidence.map(archiveFilename);
+  const publicRecord = completionRecord(input, paths);
+  const previewImages: (string | null)[] = [];
+  async function* entries() {
+    yield {
+      path: "completion-record.json",
+      body: Buffer.from(`${JSON.stringify(publicRecord, null, 2)}\n`, "utf8"),
+    };
+    for (const [index, item] of input.evidence.entries()) {
+      const body = await readOriginal(item, index);
+      if (
+        body.byteLength !== item.byteSize ||
+        sha256PartnerProofBytes(body) !== item.sha256
+      ) {
+        throw new TypeError(
+          "A proof-package original does not match its immutable evidence record.",
+        );
+      }
+      previewImages.push(
+        item.contentType.startsWith("image/") ? await pdfImageData(body) : null,
+      );
+      yield { path: paths[index]!, body };
+    }
+  }
+  const zip = await writePartnerProofArchive(
+    entries(),
+    new Date(input.generatedAt),
+    zipPath,
+  );
+  const pdf = await renderPdf(input, previewImages);
+  return {
+    pdf: {
+      body: pdf,
+      sha256: sha256PartnerProofBytes(pdf),
+      filename: `stonegate-completion-proof-v${input.version}.pdf`,
+    },
+    zip: {
+      ...zip,
+      path: zipPath,
       filename: `stonegate-original-proof-v${input.version}.zip`,
     },
     publicRecord,

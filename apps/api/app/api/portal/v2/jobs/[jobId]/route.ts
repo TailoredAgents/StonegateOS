@@ -1,4 +1,8 @@
 import type { NextRequest } from "next/server";
+import { partnerJobContact } from "@/lib/partner-job-contact";
+import { partnerAdditionalServiceEligibilitySql } from "@/lib/partner-additional-service";
+import { effectivePartnerInvoiceStatusSql } from "@/lib/partner-invoice-status";
+import { readPartnerJobLocationSnapshot } from "@/lib/partner-job-location";
 import { NextResponse } from "next/server";
 import { and, asc, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import {
@@ -173,6 +177,7 @@ export async function GET(
         createdAt: partnerBookings.createdAt,
         updatedAt: partnerBookings.updatedAt,
         appointmentStatus: appointments.status,
+        additionalServiceEligible: partnerAdditionalServiceEligibilitySql(),
         appointmentCompletedAt: appointments.completedAt,
         locationId: partnerAccountLocations.id,
         siteName: partnerAccountLocations.siteName,
@@ -327,7 +332,7 @@ export async function GET(
             .select({
               id: partnerInvoices.id,
               number: partnerInvoices.invoiceNumber,
-              status: partnerInvoices.status,
+              status: effectivePartnerInvoiceStatusSql(),
               currency: partnerInvoices.currency,
               totalCents: partnerInvoices.totalCents,
               paidCents: partnerInvoices.paidCents,
@@ -449,7 +454,14 @@ export async function GET(
         .limit(1)
         .then((rows) => rows[0] ?? null),
       db
-        .select({ id: partnerRescheduleRequests.id })
+        .select({
+          id: partnerRescheduleRequests.id,
+          preferredWindows: partnerRescheduleRequests.preferredWindows,
+          requestedArrivalStartAt:
+            partnerRescheduleRequests.requestedArrivalStartAt,
+          requestedArrivalEndAt:
+            partnerRescheduleRequests.requestedArrivalEndAt,
+        })
         .from(partnerRescheduleRequests)
         .where(
           and(
@@ -579,6 +591,7 @@ export async function GET(
         )
         .limit(50),
     ]);
+    const savedLocation = readPartnerJobLocationSnapshot(job.scope);
     const operations = createPartnerJobOperationsSummary({
       jobStatus: job.status,
       assignedMemberCount: assignedTeamCount,
@@ -620,6 +633,7 @@ export async function GET(
       }),
     });
     const actionAvailability = resolvePartnerJobActionAvailability({
+      additionalServiceEligible: job.additionalServiceEligible,
       status: job.status,
       appointmentStatus: job.appointmentStatus,
       hasPromisedWindow: Boolean(job.arrivalStartAt && job.arrivalEndAt),
@@ -637,6 +651,9 @@ export async function GET(
         uploadMedia: hasPartnerCapability(principal, "media.upload"),
         shareProof: canReadProof,
         duplicate: hasPartnerCapability(principal, "bookings.create"),
+        requestAdditionalService:
+          hasPartnerCapability(principal, "bookings.create") &&
+          hasPartnerCapability(principal, "jobs.read"),
       },
       cancellation,
     });
@@ -682,10 +699,11 @@ export async function GET(
           schedule: createPartnerPublicJobScheduleDto({
             arrivalWindowStartAt: job.arrivalStartAt,
             arrivalWindowEndAt: job.arrivalEndAt,
-            timezone: job.timezone,
+            timezone: savedLocation?.timezone ?? job.timezone,
             completedAt: job.appointmentCompletedAt,
           }),
           operations,
+          pendingRescheduleRequest: pendingRescheduleRequest ?? null,
           location: {
             id: job.locationId,
             name: job.siteName,
@@ -704,7 +722,8 @@ export async function GET(
               parking: job.parkingInstructions,
               loading: job.loadingInstructions,
             },
-            onSiteContact: job.onSiteContact,
+            onSiteContact: partnerJobContact(job.scope, job.onSiteContact),
+            ...(savedLocation ?? {}),
           },
           scope: job.scope,
           proofRequirements: job.proofRequirements,

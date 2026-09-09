@@ -1,4 +1,6 @@
 import type { Metadata, Route } from "next";
+import { PartnerPageRefresh } from "../../components/PartnerPageRefresh";
+import { formatPartnerArrivalWindow } from "../../lib/partner-arrival-window";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -66,20 +68,6 @@ function dateOnly(value: string | undefined): string {
     parsed.toISOString().slice(0, 10) === value
     ? value
     : "";
-}
-
-function formatDateTime(
-  value: string | null,
-  timezone = "America/New_York",
-): string {
-  if (!value) return "Scheduling pending";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "Scheduling pending";
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
 }
 
 function humanize(value: string | null | undefined): string {
@@ -171,8 +159,8 @@ export default async function PartnerBookingsPage({
   if (status) query.set("status", status);
   else if (viewStatuses.length > 0) query.set("status", viewStatuses.join(","));
   if (search) query.set("search", search);
-  if (from) query.set("from", `${from}T00:00:00.000Z`);
-  if (to) query.set("to", `${to}T23:59:59.999Z`);
+  if (from) query.set("from", from);
+  if (to) query.set("to", to);
   if (cursor) query.set("cursor", cursor);
 
   const [response, context] = await Promise.all([
@@ -228,6 +216,9 @@ export default async function PartnerBookingsPage({
 
   return (
     <div className="space-y-5 sm:space-y-6">
+      <PartnerPageRefresh
+        resourceKey={`jobs:${context.status === "authenticated" ? context.accountId : "unavailable"}:${query.toString()}`}
+      />
       <PartnerPageHeader
         eyebrow="Your service requests"
         title="Jobs"
@@ -406,10 +397,7 @@ export default async function PartnerBookingsPage({
                             aria-hidden="true"
                           />
                           <time dateTime={window?.startAt}>
-                            {formatDateTime(
-                              window?.startAt ?? null,
-                              window?.timezone,
-                            )}
+                            {formatPartnerArrivalWindow(window)}
                           </time>
                         </span>
                         {job.location.address ? (

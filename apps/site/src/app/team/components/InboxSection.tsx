@@ -55,6 +55,7 @@ import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
 import { ContactMediaAnalysisClient } from "./ContactMediaAnalysisClient";
 import { ContactSalesAgentMemoryClient } from "./ContactSalesAgentMemoryClient";
 import { ContactSalesAgentNextActionClient } from "./ContactSalesAgentNextActionClient";
+import { resolveInboxConversationContext } from "../inbox-conversation-context";
 import { InboxCustomerWorkspaceClient } from "./InboxCustomerWorkspaceClient";
 
 type ThreadSummary = {
@@ -112,6 +113,7 @@ type ThreadSummary = {
 
 type ThreadDetail = {
   id: string;
+  partnerJob?: { accountId: string; jobId: string } | null;
   status: string;
   state?: string | null;
   stateUpdatedAt?: string | null;
@@ -884,15 +886,15 @@ export async function InboxSection({
 
   const activeThread = threadDetail?.thread ?? null;
   const activeThreadMessages = threadDetail?.messages ?? [];
-  const requestedChannel =
-    requestedChannelParam ??
-    (isSupportedChannel(activeThread?.channel) ? activeThread.channel : "sms");
   const requestedContactId =
     typeof contactId === "string" && contactId.trim().length
       ? contactId.trim()
       : null;
-  const activeContactId =
-    requestedContactId ?? activeThread?.contact?.id ?? null;
+  const { isPartnerConversation, requestedChannel, activeContactId } = resolveInboxConversationContext({
+    activeThread,
+    requestedChannel: requestedChannelParam,
+    requestedContactId,
+  });
 
   let timelineError: InboxLoadError | null = null;
   let timeline: TimelineResponse | null = null;
@@ -1421,7 +1423,7 @@ export async function InboxSection({
     activeThread?.property ?? activeThreadSummary?.property ?? null;
   const activePhone = normalizePhoneLink(activeContact?.phone);
   const canCall = Boolean(activeContactId && activePhone && canPlaceCalls);
-  const showConversation = Boolean(activeContactId);
+  const showConversation = Boolean(activeContactId || (isPartnerConversation && selectedThreadId));
   const scrollKey = (() => {
     const lastId = conversationMessages.length
       ? (conversationMessages[conversationMessages.length - 1]?.id ?? "none")
@@ -2412,7 +2414,7 @@ export async function InboxSection({
                   const contactId = thread.contact?.id ?? null;
                   const key = contactId ?? `thread:${thread.id}`;
                   const existing = byKey.get(key);
-                  const threadName = thread.contact?.name ?? "Unknown contact";
+                  const threadName = thread.contact?.name ?? thread.subject ?? (thread.channel === "web" ? "Partner job" : "Unknown contact");
                   const threadActivityAt = getThreadActivityAt(thread);
                   const parsedLast = threadActivityAt
                     ? Date.parse(threadActivityAt)
@@ -2500,9 +2502,9 @@ export async function InboxSection({
                 });
 
                 return groups.map((group) => {
-                  const isActive =
-                    Boolean(group.contactId && activeContactId) &&
-                    group.contactId === activeContactId;
+                  const isActive = group.contactId
+                    ? group.contactId === activeContactId
+                    : group.threads.some((thread) => thread.id === selectedThreadId);
 
                   const sortedThreads = [...group.threads].sort((a, b) => {
                     const aAt = getThreadActivityAt(a);
@@ -2727,7 +2729,7 @@ export async function InboxSection({
                     </a>
                     <h3 className="text-lg font-semibold text-slate-900">
                       <span className="inline-flex flex-wrap items-center gap-2">
-                        <span>{activeContact?.name ?? "Unknown contact"}</span>
+                        <span>{activeContact?.name ?? activeThread?.subject ?? (isPartnerConversation ? "Partner job" : "Unknown contact")}</span>
                         {activeContactId ? (
                           <ContactNameEditorClient
                             contactId={activeContactId}
@@ -2765,7 +2767,7 @@ export async function InboxSection({
                 </div>
               </div>
 
-              {activeContactId ? (
+              {activeContactId && requestedChannel !== "web" ? (
                 <InboxCustomerWorkspaceClient
                   contactId={activeContactId}
                   activeChannel={requestedChannel}
@@ -2963,7 +2965,7 @@ export async function InboxSection({
                     </a>
                   </div>
                 ) : null}
-                {selectedThreadId ? (
+                {selectedThreadId && requestedChannel !== "web" ? (
                   <InboxAutoDraftClient
                     threadId={selectedThreadId}
                     channel={requestedChannel}
@@ -3190,6 +3192,9 @@ export async function InboxSection({
                         >
                           <div className="mb-1 flex items-center justify-between gap-2">
                             <div className="flex flex-wrap items-center gap-2">
+                              {message.direction === "internal" ? (
+                                <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-900">Internal note — Stonegate only</span>
+                              ) : null}
                               {autoReply ? (
                                 <div className="inline-flex items-center gap-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                                   Auto reply
@@ -3204,7 +3209,7 @@ export async function InboxSection({
                                 </div>
                               ) : null}
                               <div className="inline-flex items-center rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                                {message.channel === "dm"
+                                {message.channel === "web" ? "Partner Portal" : message.channel === "dm"
                                   ? "Messenger"
                                   : message.channel.toUpperCase()}
                               </div>
@@ -3507,10 +3512,21 @@ export async function InboxSection({
                   action={sendThreadMessageAction}
                   className="space-y-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-4"
                 >
+                  <input type="hidden" name="idempotencyKey" value={`partner-staff-message:${randomUUID()}`} />
+                  {(selectedThread as ThreadDetail | null)?.partnerJob ? (
+                    <label className="flex flex-col gap-1 text-sm font-semibold">
+                      <span>Who can see this message?</span>
+                      <select name="audience" required defaultValue="" className={TEAM_INPUT_COMPACT}>
+                        <option value="" disabled>Choose reply or note</option>
+                        <option value="partner">Reply to partner</option>
+                        <option value="internal">Internal note — Stonegate only</option>
+                      </select>
+                    </label>
+                  ) : null}
                   <input
                     type="hidden"
                     name="contactId"
-                    value={activeContactId}
+                    value={activeContactId ?? ""}
                   />
                   <input
                     type="hidden"
@@ -3545,6 +3561,8 @@ export async function InboxSection({
                     <textarea
                       id="inbox-thread-body"
                       name="body"
+                      required={isPartnerConversation}
+                      maxLength={isPartnerConversation ? 5000 : undefined}
                       rows={3}
                       className={TEAM_INPUT_COMPACT}
                     />

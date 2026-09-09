@@ -9,6 +9,7 @@ import {
   type PartnerLocation,
 } from "../lib/portal-v2";
 import type { BookingWizardLocation } from "./PartnerBookingWizard";
+import { toBookingLocation } from "../lib/booking-location";
 import {
   PartnerNotice,
   partnerFieldClass,
@@ -35,18 +36,7 @@ const EMPTY_FORM: InlineLocationForm = {
 };
 
 function toWizardLocation(location: PartnerLocation): BookingWizardLocation {
-  return {
-    id: location.id,
-    name: location.siteName?.trim() || location.address.line1,
-    address: [
-      location.address.line1,
-      location.address.line2,
-      `${location.address.city}, ${location.address.state} ${location.address.postalCode}`,
-    ]
-      .filter(Boolean)
-      .join(", "),
-    serviceAreaStatus: location.serviceArea.status,
-  };
+  return toBookingLocation(location);
 }
 
 export function PartnerInlineLocationForm({

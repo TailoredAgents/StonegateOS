@@ -61,7 +61,8 @@ describe("durable partner onboarding checklist", () => {
   });
 
   it("renders accessible durable progress and refreshes after linked setup work", () => {
-    expect(overview).toContain("<PartnerOnboardingChecklist");
+    // The historical checklist remains compatible but no longer obstructs the job home.
+    expect(overview).not.toContain("<PartnerOnboardingChecklist");
     expect(component).toContain('role="progressbar"');
     expect(component).toContain("aria-valuenow={checklist.completedCount}");
     expect(component).toContain('headers: { "If-Match": etag }');

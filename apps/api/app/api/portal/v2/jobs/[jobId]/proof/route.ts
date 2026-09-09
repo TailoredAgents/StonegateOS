@@ -7,15 +7,17 @@ import {
   partnerProofPackages,
   partnerProofShareLinks,
 } from "@/db";
-import { requirePartnerCapability } from "@/lib/partner-account-authorization";
+import { requirePartnerCapability, hasPartnerCapability } from "@/lib/partner-account-authorization";
 import { arePartnerPortalV2ReadsEnabled } from "@/lib/partner-portal-feature-flags";
 import { hasPartnerJobAccess } from "@/lib/partner-portal-v2-resource-authorization";
 import {
   listPartnerMedia,
+  listRecoverablePartnerMedia,
   PartnerPortalMediaError,
 } from "@/lib/partner-portal-v2-media";
 import { isPortalV2Uuid } from "@/lib/partner-portal-v2-security";
 import { readPortalV2CorrelationId } from "@/lib/portal-v2-contract";
+import { isPartnerDocumentScanningConfigured } from "@/lib/partner-document-scan";
 import {
   createPartnerPortalV2ErrorResponse,
   createPartnerPortalV2SuccessResponse,
@@ -61,6 +63,7 @@ export async function GET(
       principal,
     });
     const db = getDb();
+    const deletedMedia = hasPartnerCapability(principal, "media.upload") ? await listRecoverablePartnerMedia({ parentKind: "job", parentId: jobId, principal }) : [];
     const [requirementRows, packageRows, shareRows, documentRows] =
       await Promise.all([
         db
@@ -171,6 +174,7 @@ export async function GET(
           requirements,
           outstanding: outstanding.map((row) => row.category),
           media,
+          deletedMedia,
           packages: packageRows.map((row) => ({
             id: row.id,
             version: row.version,
@@ -197,6 +201,7 @@ export async function GET(
             accessCount: row.accessCount,
             createdAt: row.createdAt.toISOString(),
           })),
+          documentUploadsAvailable: isPartnerDocumentScanningConfigured(),
         },
       },
       correlationId,

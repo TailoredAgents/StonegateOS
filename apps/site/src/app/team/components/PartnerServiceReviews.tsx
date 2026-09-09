@@ -1,0 +1,406 @@
+"use client";
+import { useEffect, useRef, useState } from "react";
+import {
+  loadPartnerServiceReviews,
+  type PartnerServiceReview,
+  type PartnerServiceReviewDetail,
+} from "../actions/partner-service-reviews";
+import { CalendarAppointmentActions } from "./CalendarAppointmentActions";
+import { teamButtonClass } from "./team-ui";
+
+function preferred(windows: PartnerServiceReview["preferredWindows"]) {
+  return (
+    windows
+      .map(
+        (window) =>
+          window.localDate + " " + window.timeOfDay.replaceAll("_", " "),
+      )
+      .join("; ") || "Staff to arrange a date"
+  );
+}
+/** Reads partner requests; the existing CRM scheduling form owns every mutation. */
+export function PartnerServiceReviews({
+  canSchedule,
+}: {
+  canSchedule: boolean;
+}) {
+  const [items, setItems] = useState<PartnerServiceReview[]>([]),
+    [cursor, setCursor] = useState<string | null>(null);
+  const [query, setQuery] = useState(""),
+    [appliedQuery, setAppliedQuery] = useState("");
+  const [detail, setDetail] = useState<PartnerServiceReviewDetail | null>(null),
+    [busy, setBusy] = useState(false),
+    [message, setMessage] = useState("");
+  const [returnDetail, setReturnDetail] =
+    useState<PartnerServiceReviewDetail | null>(null);
+  const generation = useRef(0),
+    detailRef = useRef<HTMLDivElement>(null);
+  async function load(more = false, search = appliedQuery) {
+    const current = ++generation.current;
+    setBusy(true);
+    setMessage("");
+    const result = await loadPartnerServiceReviews({
+      q: search,
+      ...(more && cursor ? { cursor } : {}),
+    }).catch(() => null);
+    if (current !== generation.current) return;
+    setBusy(false);
+    if (!result?.ok) {
+      setMessage(result?.message ?? "Requests could not be loaded.");
+      return;
+    }
+    setItems((previous) =>
+      more
+        ? [
+            ...previous,
+            ...result.items.filter(
+              (item) => !previous.some((entry) => entry.id === item.id),
+            ),
+          ]
+        : result.items,
+    );
+    setCursor(result.nextCursor);
+    setAppliedQuery(search);
+  }
+  useEffect(() => {
+    void load();
+  }, []);
+  useEffect(() => {
+    if (detail) detailRef.current?.focus();
+  }, [detail]);
+  async function open(
+    item: Pick<PartnerServiceReview, "id" | "accountId">,
+    previous: PartnerServiceReviewDetail | null = null,
+  ) {
+    const current = ++generation.current;
+    setBusy(true);
+    setDetail(null);
+    setMessage("");
+    const result = await loadPartnerServiceReviews({
+      id: item.id,
+      accountId: item.accountId,
+    }).catch(() => null);
+    if (current !== generation.current) return;
+    setBusy(false);
+    if (!result?.ok) {
+      setMessage(result?.message ?? "This request could not be loaded.");
+      setDetail(previous);
+      return;
+    }
+    setDetail(result.detail);
+    setReturnDetail(previous);
+  }
+  return (
+    <section
+      className="space-y-4 rounded-xl border border-slate-200 bg-white p-5"
+      aria-labelledby="partner-service-reviews-heading"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2
+          id="partner-service-reviews-heading"
+          className="text-lg font-semibold text-slate-950"
+        >
+          New service requests needing review
+        </h2>
+        <button
+          type="button"
+          disabled={busy}
+          className={teamButtonClass("secondary", "sm")}
+          onClick={() => void load()}
+        >
+          Refresh requests
+        </button>
+      </div>
+      <p className="text-sm leading-6 text-slate-600">
+        These jobs do not have a confirmed arrival window. Review scope, pricing
+        and requirements before using the CRM scheduler below.
+      </p>
+      <form
+        method="post"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!busy) void load(false, query);
+        }}
+        className="flex flex-wrap items-end gap-3"
+      >
+        <label className="min-w-0 flex-1 text-sm font-semibold">
+          Find company
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            type="search"
+            maxLength={100}
+            className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-base"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={busy}
+          className={teamButtonClass("secondary", "sm")}
+        >
+          Search requests
+        </button>
+      </form>
+      {message ? (
+        <p
+          role="alert"
+          className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+        >
+          {message}
+        </p>
+      ) : null}
+      {busy ? (
+        <p role="status" className="text-sm">
+          Loading…
+        </p>
+      ) : null}
+      <ul className="divide-y divide-slate-200">
+        {items.map((item) => (
+          <li key={item.id}>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void open(item)}
+              className="min-h-11 w-full py-3 text-left"
+            >
+              <span className="block font-semibold text-primary-900">
+                {item.accountName} · {item.service}
+              </span>
+              <span className="mt-1 block text-sm text-slate-600">
+                {item.siteName} · {preferred(item.preferredWindows)}
+              </span>
+              <span className="mt-1 block text-xs text-slate-500">
+                {item.status.replaceAll("_", " ")} · received{" "}
+                {new Intl.DateTimeFormat("en-US", {
+                  dateStyle: "medium",
+                  timeZone: "America/New_York",
+                }).format(new Date(item.createdAt))}
+              </span>
+              {item.originalJob ? (
+                <span className="mt-1 block text-sm font-medium text-primary-800">
+                  Additional service · original job{" "}
+                  {item.originalJob.id.slice(0, 8).toUpperCase()}
+                </span>
+              ) : null}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {!busy && !message && !items.length ? (
+        <p className="text-sm text-slate-600">
+          No unscheduled partner requests match this view.
+        </p>
+      ) : null}
+      {cursor ? (
+        <button
+          type="button"
+          disabled={busy}
+          className={teamButtonClass("secondary", "sm")}
+          onClick={() => void load(true)}
+        >
+          Load older requests
+        </button>
+      ) : null}
+      {detail ? (
+        <div
+          key={detail.id}
+          ref={detailRef}
+          tabIndex={-1}
+          className="space-y-4 border-t border-slate-200 pt-5 focus-visible:outline-2 focus-visible:outline-offset-2"
+        >
+          <h3 className="text-lg font-semibold">
+            {detail.accountName} · {detail.service}
+          </h3>
+          {returnDetail ? (
+            <button
+              type="button"
+              className={teamButtonClass("secondary", "sm")}
+              onClick={() => {
+                setDetail(returnDetail);
+                setReturnDetail(null);
+              }}
+            >
+              Return to additional service request
+            </button>
+          ) : null}
+          {detail.originalJob ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6">
+              <p>
+                This is separate additional work. The original job’s bill,
+                payment, and payout stay unchanged. Confirm a separate price and
+                schedule for this request.
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                className={`${teamButtonClass("secondary", "sm")} mt-2`}
+                onClick={() =>
+                  void open(
+                    { id: detail.originalJob!.id, accountId: detail.accountId },
+                    detail,
+                  )
+                }
+              >
+                View original job{" "}
+                {detail.originalJob.id.slice(0, 8).toUpperCase()}
+              </button>
+            </div>
+          ) : null}
+          <p className="text-sm">
+            {detail.location
+              ? [
+                  detail.location.name,
+                  detail.location.address.line1,
+                  detail.location.address.line2,
+                  detail.location.address.city,
+                  detail.location.address.state,
+                  detail.location.address.postalCode,
+                ]
+                  .filter(Boolean)
+                  .join(", ")
+              : "Site details need staff review."}
+          </p>
+          <p className="text-sm">
+            <strong>Preferred dates:</strong>{" "}
+            {preferred(detail.preferredWindows)}. These are requests, not
+            reservations.
+          </p>
+          {detail.reasons.length ? (
+            <p className="text-sm text-amber-900">
+              <strong>Review needed:</strong>{" "}
+              {detail.reasons
+                .map((reason) => reason.replaceAll("_", " "))
+                .join("; ")}
+            </p>
+          ) : null}
+          <div>
+            <h4 className="font-semibold">Requested work</h4>
+            <p className="mt-1 whitespace-pre-wrap text-sm leading-6">
+              {detail.description || "Description was not provided."}
+            </p>
+          </div>
+          {detail.scopeFields.length ? (
+            <dl className="grid gap-3 sm:grid-cols-2">
+              {detail.scopeFields.map((field) => (
+                <div key={field.label}>
+                  <dt className="text-sm font-semibold">{field.label}</dt>
+                  <dd className="whitespace-pre-wrap text-sm">{field.value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+          {detail.crewInstructions ? (
+            <div>
+              <h4 className="font-semibold">Crew instructions</h4>
+              <p className="mt-1 whitespace-pre-wrap text-sm leading-6">
+                {detail.crewInstructions}
+              </p>
+            </div>
+          ) : null}
+          <p className="text-sm">
+            <strong>On-site contact:</strong>{" "}
+            {[
+              detail.onSiteContact.name,
+              detail.onSiteContact.phone,
+              detail.onSiteContact.email,
+            ]
+              .filter(Boolean)
+              .join(" · ") || "Not provided"}
+          </p>
+          <p className="text-sm">
+            <strong>Requested proof:</strong> {detail.proof.before} before
+            photo(s), {detail.proof.after} after photo(s).
+          </p>
+          {canSchedule && detail.canSchedule ? (
+            <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6">
+              Choose the internal planned start in 30-minute steps. The partner
+              receives the corresponding two-hour arrival window. Confirm scope,
+              price and site eligibility first; CRM capacity checks still apply.
+            </p>
+          ) : null}
+          <div>
+            <h4 className="font-semibold">Photos supplied with this job</h4>
+            {detail.photos.length ? (
+              <ul className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {detail.photos.map((photo) => (
+                  <li key={photo.id} className="min-w-0">
+                    {photo.url ? (
+                      <a
+                        href={photo.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block rounded-lg focus-visible:outline-2"
+                      >
+                        <img
+                          src={photo.url}
+                          alt={
+                            photo.caption ||
+                            photo.category + " photo supplied for this request"
+                          }
+                          width={320}
+                          height={240}
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          className="aspect-[4/3] w-full rounded-lg object-cover"
+                        />
+                      </a>
+                    ) : (
+                      <p className="rounded-lg border border-slate-200 p-3 text-sm">
+                        {photo.category} —{" "}
+                        {photo.status === "ready"
+                          ? "Preview unavailable; refresh or check storage."
+                          : photo.status}
+                      </p>
+                    )}
+                    <p className="mt-1 text-xs text-slate-600">
+                      {photo.caption || photo.category}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-sm text-slate-600">
+                No photos were attached.
+              </p>
+            )}
+            <p className="mt-2 text-xs text-slate-500">
+              Photo links last five minutes. Reopen this request to refresh
+              them.
+            </p>
+          </div>
+          {canSchedule && detail.canSchedule ? (
+            <CalendarAppointmentActions
+              appointmentId={detail.appointment.id}
+              appointmentType={detail.appointment.type}
+              start={detail.appointment.startAt ?? ""}
+              version={detail.appointment.version}
+              quotedTotalCents={null}
+              finalTotalCents={null}
+              isQuoteOnly={false}
+              canEditStatus={false}
+              canUpdateAppointments
+              canCollectPayments={false}
+              canSendCustomerMessages={false}
+              canManageAppointmentMedia={false}
+              canOverrideScheduleConflicts={false}
+              teamMembers={[]}
+              scheduleOnly
+              onScheduled={() => {
+                setDetail(null);
+                void load();
+              }}
+            />
+          ) : (
+            <p className="text-sm text-slate-600">
+              {detail.status === "approval_needed"
+                ? "Resolve the required company approval before scheduling."
+                : detail.canSchedule
+                  ? "Your role can read requests but cannot schedule them."
+                  : "This request is no longer awaiting initial scheduling. Refresh to see the current queue."}
+            </p>
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+}

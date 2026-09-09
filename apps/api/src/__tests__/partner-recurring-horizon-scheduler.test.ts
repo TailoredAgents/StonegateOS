@@ -121,9 +121,13 @@ describe("partner recurring horizon scheduler", () => {
       "apps/api/src/lib/partner-recurring-horizon-scheduler.ts",
     );
     const repeatWork = source("apps/api/src/lib/partner-repeat-work.ts");
+    const bookingService = source("apps/api/src/lib/partner-portal-v2-scheduling/service.ts");
+    const coordination = source("apps/api/src/lib/partner-recurring-coordination.ts");
     const worker = source("scripts/outbox-worker.ts");
 
-    expect(scheduler).toContain("partner_recurring_horizon_claim_v1");
+    expect(coordination).toContain("partner_recurring_horizon_claim_v1");
+    expect(coordination).toContain("pg_advisory_xact_lock");
+    expect(scheduler).toContain("acquirePartnerRecurringHorizonClaimLock(tx)");
     expect(scheduler).toContain('state: "evaluating"');
     expect(scheduler).toContain("EVALUATION_LEASE_MINUTES");
     expect(scheduler).toContain("arePartnerPortalV2WritesEnabled");
@@ -139,7 +143,23 @@ describe("partner recurring horizon scheduler", () => {
     expect(repeatWork).toContain("reconciledFromIdempotentSubmission: true");
     expect(repeatWork).toContain("partner_recurring_staff_action");
     expect(repeatWork).toContain("reservationCreated: false");
-    expect(repeatWork).not.toContain("outboxEvents");
+    const occurrenceEvaluation = repeatWork.slice(
+      repeatWork.indexOf("async function evaluateRecurringOccurrence("),
+      repeatWork.indexOf("async function ensureRecurringStaffAction("),
+    );
+    expect(occurrenceEvaluation).toContain("submitPartnerBookingDraft");
+    expect(occurrenceEvaluation).not.toContain("outboxEvents");
+    expect(occurrenceEvaluation).not.toContain(".insert(appointments)");
+    const bookingSubmission = bookingService.slice(
+      bookingService.indexOf("export async function submitPartnerBookingDraft("),
+      bookingService.indexOf("export async function reschedulePartnerBooking("),
+    );
+    expect(bookingSubmission).toContain("getDb().transaction");
+    expect(bookingSubmission).toContain("lockPartnerRecurringSource(");
+    const scheduleLock = bookingSubmission.indexOf("await acquireScheduleConflictLock(tx)");
+    const appointmentWrite = bookingSubmission.indexOf(".insert(appointments)");
+    expect(scheduleLock).toBeGreaterThan(0);
+    expect(appointmentWrite).toBeGreaterThan(scheduleLock);
     expect(worker).toContain("runPartnerRecurringHorizonOnce");
     expect(worker).toContain("PARTNER_RECURRING_HORIZON_BATCH_SIZE");
     expect(worker).toContain("PARTNER_RECURRING_HORIZON_INTERVAL_MS");

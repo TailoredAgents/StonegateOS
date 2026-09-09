@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
-import { createPartnerProofArchive } from "@/lib/partner-proof-package-archive";
-import { renderPartnerProofPackageArtifacts } from "@/lib/partner-proof-package-renderer";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  createPartnerProofArchive,
+  writePartnerProofArchive,
+} from "@/lib/partner-proof-package-archive";
+import {
+  renderPartnerProofPackageArtifacts,
+  renderPartnerProofPackageToFile,
+} from "@/lib/partner-proof-package-renderer";
 
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -10,13 +19,18 @@ const PNG = Buffer.from(
 function zipEntries(zip: Buffer): Map<string, Buffer> {
   const entries = new Map<string, Buffer>();
   let offset = 0;
-  while (offset + 4 <= zip.byteLength && zip.readUInt32LE(offset) === 0x04034b50) {
+  while (
+    offset + 4 <= zip.byteLength &&
+    zip.readUInt32LE(offset) === 0x04034b50
+  ) {
     const compressedSize = zip.readUInt32LE(offset + 18);
     const nameLength = zip.readUInt16LE(offset + 26);
     const extraLength = zip.readUInt16LE(offset + 28);
     const nameStart = offset + 30;
     const bodyStart = nameStart + nameLength + extraLength;
-    const name = zip.subarray(nameStart, nameStart + nameLength).toString("utf8");
+    const name = zip
+      .subarray(nameStart, nameStart + nameLength)
+      .toString("utf8");
     entries.set(name, zip.subarray(bodyStart, bodyStart + compressedSize));
     offset = bodyStart + compressedSize;
   }
@@ -24,6 +38,84 @@ function zipEntries(zip: Buffer): Map<string, Buffer> {
 }
 
 describe("partner proof-package artifacts", () => {
+  it("creates a completion record when the job legitimately requires no media", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "stonegate-empty-proof-test-"),
+    );
+    try {
+      const result = await renderPartnerProofPackageToFile(
+        {
+          version: 1,
+          generatedAt: "2026-09-09T12:00:00Z",
+          manifestChecksumSha256: "a".repeat(64),
+          job: {
+            status: "completed",
+            serviceKey: "service_request",
+            tierKey: null,
+            projectReference: null,
+            locationName: "Local site",
+            city: "Atlanta",
+            state: "GA",
+            timezone: "America/New_York",
+            completedAt: "2026-09-09T12:00:00Z",
+            promisedArrivalStartAt: null,
+            promisedArrivalEndAt: null,
+          },
+          requirements: [
+            {
+              category: "before",
+              required: false,
+              minimumCount: 0,
+              readyCount: 0,
+              satisfied: true,
+            },
+          ],
+          evidence: [],
+        },
+        join(directory, "record.zip"),
+        () => Promise.reject(new Error("There is no original to read.")),
+      );
+      expect(result.pdf.body.subarray(0, 5).toString()).toBe("%PDF-");
+      expect([...zipEntries(await readFile(result.zip.path)).keys()]).toEqual([
+        "completion-record.json",
+      ]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it("streams the same immutable ZIP bytes into a private file without retaining originals", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "stonegate-proof-test-"));
+    const path = join(directory, "proof.zip");
+    const at = new Date("2026-09-09T12:00:00Z");
+    const entries = [
+      { path: "proof/one.png", body: PNG },
+      { path: "proof/two.png", body: PNG },
+    ];
+    let consumed = 0;
+    try {
+      const metadata = await writePartnerProofArchive(
+        (async function* () {
+          for (const entry of entries) {
+            if (consumed) expect((await stat(path)).size).toBeGreaterThan(0);
+            consumed += 1;
+            yield entry;
+          }
+        })(),
+        at,
+        path,
+      );
+      const bytes = await readFile(path);
+      expect(bytes).toEqual(createPartnerProofArchive(entries, at));
+      expect(metadata).toEqual({
+        byteSize: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      });
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+      expect(consumed).toBe(2);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it("creates a standards-shaped UTF-8 ZIP without permitting path traversal", () => {
     const archive = createPartnerProofArchive(
       [{ path: "proof/café.png", body: PNG }],
@@ -91,13 +183,18 @@ describe("partner proof-package artifacts", () => {
     expect(artifacts.pdf.sha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(artifacts.zip.sha256).toMatch(/^[0-9a-f]{64}$/u);
     const entries = zipEntries(artifacts.zip.body);
-    const photoEntry = [...entries.entries()].find(([name]) => name.startsWith("proof/"));
+    const photoEntry = [...entries.entries()].find(([name]) =>
+      name.startsWith("proof/"),
+    );
     expect(photoEntry?.[1]).toEqual(PNG);
-    const completionRecord = entries.get("completion-record.json")?.toString("utf8") ?? "";
+    const completionRecord =
+      entries.get("completion-record.json")?.toString("utf8") ?? "";
     expect(completionRecord).toContain("PO-42 West Wing");
     expect(completionRecord).toContain("manifestChecksumSha256");
     expect(completionRecord).not.toContain(evidenceReference);
-    expect(JSON.stringify(artifacts.publicRecord)).not.toContain(evidenceReference);
+    expect(JSON.stringify(artifacts.publicRecord)).not.toContain(
+      evidenceReference,
+    );
   });
 
   it("refuses to package originals that do not match persisted evidence", async () => {
@@ -119,21 +216,31 @@ describe("partner proof-package artifacts", () => {
           timezone: "America/New_York",
           completedAt: "2026-08-29T16:30:00.000Z",
         },
-        requirements: [{ category: "after", required: true, minimumCount: 1, readyCount: 1, satisfied: true }],
-        evidence: [{
-          reference: "reference",
-          category: "after",
-          caption: null,
-          sortOrder: 0,
-          contentType: "image/png",
-          filename: "after.png",
-          byteSize: PNG.byteLength,
-          width: 1,
-          height: 1,
-          sha256: "0".repeat(64),
-          capturedAt: "2026-08-29T16:20:00.000Z",
-          originalBytes: PNG,
-        }],
+        requirements: [
+          {
+            category: "after",
+            required: true,
+            minimumCount: 1,
+            readyCount: 1,
+            satisfied: true,
+          },
+        ],
+        evidence: [
+          {
+            reference: "reference",
+            category: "after",
+            caption: null,
+            sortOrder: 0,
+            contentType: "image/png",
+            filename: "after.png",
+            byteSize: PNG.byteLength,
+            width: 1,
+            height: 1,
+            sha256: "0".repeat(64),
+            capturedAt: "2026-08-29T16:20:00.000Z",
+            originalBytes: PNG,
+          },
+        ],
       }),
     ).rejects.toThrow("does not match");
   });

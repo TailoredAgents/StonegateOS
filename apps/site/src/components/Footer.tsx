@@ -125,7 +125,7 @@ export function Footer() {
                   href="/partners/request-access"
                   className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
                 >
-                  Request partner access
+                  Partner access & help
                 </Link>
               </li>
               <li>

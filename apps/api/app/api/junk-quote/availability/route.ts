@@ -3,9 +3,16 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { DateTime } from "luxon";
 import { and, eq, gt, gte, lte, ne } from "drizzle-orm";
-import { appointmentHolds, getDb, appointments, instantQuotes, properties } from "@/db";
+import {
+  appointmentHolds,
+  getDb,
+  appointments,
+  instantQuotes,
+  properties,
+} from "@/db";
 import { forwardGeocode } from "@/lib/geocode";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
+import { filterScheduleReadCandidates } from "@/lib/appointment-schedule-conflicts";
 import { JUNK_VOLUME_UNIT_PRICE } from "@/lib/junk-volume-pricing";
 import {
   getBusinessHourWindowsForDate,
@@ -13,24 +20,38 @@ import {
   getBookingRulesPolicy,
   getItemPoliciesPolicy,
   getStandardJobPolicy,
-  normalizePostalCode
+  normalizePostalCode,
 } from "@/lib/policy";
-import { buildStandardJobMessage, evaluateStandardJob } from "@/lib/standard-job";
-import { APPOINTMENT_TIME_ZONE, DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
+import {
+  buildStandardJobMessage,
+  evaluateStandardJob,
+} from "@/lib/standard-job";
+import {
+  APPOINTMENT_TIME_ZONE,
+  DEFAULT_TRAVEL_BUFFER_MIN,
+} from "../../web/scheduling";
 
 const RAW_ALLOWED_ORIGINS =
-  process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
+  process.env["CORS_ALLOW_ORIGINS"] ??
+  process.env["NEXT_PUBLIC_SITE_URL"] ??
+  process.env["SITE_URL"] ??
+  "*";
 
 function resolveOrigin(requestOrigin: string | null): string {
   if (RAW_ALLOWED_ORIGINS === "*") return "*";
-  const allowed = RAW_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/+$/u, "")).filter(Boolean);
+  const allowed = RAW_ALLOWED_ORIGINS.split(",")
+    .map((o) => o.trim().replace(/\/+$/u, ""))
+    .filter(Boolean);
   if (!allowed.length) return "*";
   const origin = requestOrigin?.trim().replace(/\/+$/u, "") ?? null;
   if (origin && allowed.includes(origin)) return origin;
   return allowed[0] ?? "*";
 }
 
-function applyCors(response: NextResponse, requestOrigin: string | null): NextResponse {
+function applyCors(
+  response: NextResponse,
+  requestOrigin: string | null,
+): NextResponse {
   const origin = resolveOrigin(requestOrigin);
   response.headers.set("Access-Control-Allow-Origin", origin);
   response.headers.set("Vary", "Origin");
@@ -40,12 +61,19 @@ function applyCors(response: NextResponse, requestOrigin: string | null): NextRe
   return response;
 }
 
-function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseInit): NextResponse {
+function corsJson(
+  body: unknown,
+  requestOrigin: string | null,
+  init?: ResponseInit,
+): NextResponse {
   return applyCors(NextResponse.json(body, init), requestOrigin);
 }
 
 export function OPTIONS(request: NextRequest): NextResponse {
-  return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
+  return applyCors(
+    new NextResponse(null, { status: 204 }),
+    request.headers.get("origin"),
+  );
 }
 
 const AvailabilitySchema = z.object({
@@ -55,7 +83,7 @@ const AvailabilitySchema = z.object({
   state: z.string().min(2).max(2),
   postalCode: z.string().min(3),
   targetLat: z.number().optional(),
-  targetLng: z.number().optional()
+  targetLng: z.number().optional(),
 });
 
 type Suggestion = {
@@ -79,23 +107,11 @@ function formatDayLocal(date: Date, timezone: string): string {
   );
 }
 
-function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
-  return aStart < bEnd && bStart < aEnd;
-}
-
-function overlapsCount(
-  blocks: Array<{ start: Date; end: Date }>,
-  start: Date,
-  end: Date
+function distanceKm(
+  block: { lat: number | null; lng: number | null },
+  targetLat: number,
+  targetLng: number,
 ): number {
-  let count = 0;
-  for (const block of blocks) {
-    if (overlaps(start, end, block.start, block.end)) count += 1;
-  }
-  return count;
-}
-
-function distanceKm(block: { lat: number | null; lng: number | null }, targetLat: number, targetLng: number): number {
   if (block.lat === null || block.lng === null) return Infinity;
   const R = 6371;
   const dLat = deg2rad(targetLat - block.lat);
@@ -114,7 +130,11 @@ function deg2rad(deg: number): number {
   return deg * (Math.PI / 180);
 }
 
-function nearestDistanceKm(blocks: Array<{ lat: number | null; lng: number | null }>, targetLat: number, targetLng: number): number | null {
+function nearestDistanceKm(
+  blocks: Array<{ lat: number | null; lng: number | null }>,
+  targetLat: number,
+  targetLng: number,
+): number | null {
   let best: number | null = null;
   for (const b of blocks) {
     const d = distanceKm(b, targetLat, targetLng);
@@ -156,13 +176,19 @@ function uniqByStart(list: Suggestion[], limit: number): Suggestion[] {
   return out;
 }
 
-function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string; jobTypes?: unknown }): {
+function deriveDurationMinutes(quote: {
+  aiResult: unknown;
+  perceivedSize: string;
+  jobTypes?: unknown;
+}): {
   durationMinutes: number;
   maxUnits: number | null;
   loads: number;
 } {
   const jobTypes = Array.isArray(quote.jobTypes) ? quote.jobTypes : [];
-  const isDemoEstimate = jobTypes.some((t) => typeof t === "string" && t.toLowerCase() === "demo-hauloff");
+  const isDemoEstimate = jobTypes.some(
+    (t) => typeof t === "string" && t.toLowerCase() === "demo-hauloff",
+  );
   if (isDemoEstimate) {
     return { durationMinutes: 45, maxUnits: null, loads: 1 };
   }
@@ -175,8 +201,11 @@ function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string
       ? ai["loadFractionEstimate"]
       : null;
   const maxUnitsFromLoad =
-    typeof loadFractionEstimate === "number" ? Math.max(1, Math.round(loadFractionEstimate * 4)) : null;
-  const priceHigh = typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
+    typeof loadFractionEstimate === "number"
+      ? Math.max(1, Math.round(loadFractionEstimate * 4))
+      : null;
+  const priceHigh =
+    typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
   const maxUnitsFromPrice =
     typeof priceHigh === "number" && Number.isFinite(priceHigh) && priceHigh > 0
       ? Math.round(priceHigh / JUNK_VOLUME_UNIT_PRICE)
@@ -217,9 +246,17 @@ export async function POST(request: NextRequest): Promise<Response> {
   try {
     const parsed = AvailabilitySchema.safeParse(await request.json());
     if (!parsed.success) {
-      return corsJson({ ok: false, error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, {
-        status: 400
-      });
+      return corsJson(
+        {
+          ok: false,
+          error: "invalid_payload",
+          details: parsed.error.flatten(),
+        },
+        requestOrigin,
+        {
+          status: 400,
+        },
+      );
     }
 
     const body = parsed.data;
@@ -229,10 +266,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         {
           ok: false,
           error: "out_of_area",
-          message: "Thanks for reaching out. We currently serve Georgia only."
+          message: "Thanks for reaching out. We currently serve Georgia only.",
         },
         requestOrigin,
-        { status: 400 }
+        { status: 400 },
       );
     }
     const normalizedPostalCode = normalizePostalCode(body.postalCode);
@@ -243,7 +280,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     const schedulingZone = businessHours.timezone || APPOINTMENT_TIME_ZONE;
     const bookingRules = await getBookingRulesPolicy(db);
     const windowDays =
-      typeof bookingRules.bookingWindowDays === "number" && bookingRules.bookingWindowDays > 0
+      typeof bookingRules.bookingWindowDays === "number" &&
+      bookingRules.bookingWindowDays > 0
         ? Math.min(Math.floor(bookingRules.bookingWindowDays), 90)
         : WINDOW_DAYS;
     const [quote] = await db
@@ -252,14 +290,16 @@ export async function POST(request: NextRequest): Promise<Response> {
         aiResult: instantQuotes.aiResult,
         perceivedSize: instantQuotes.perceivedSize,
         jobTypes: instantQuotes.jobTypes,
-        notes: instantQuotes.notes
+        notes: instantQuotes.notes,
       })
       .from(instantQuotes)
       .where(eq(instantQuotes.id, body.instantQuoteId))
       .limit(1);
 
     if (!quote) {
-      return corsJson({ ok: false, error: "quote_not_found" }, requestOrigin, { status: 404 });
+      return corsJson({ ok: false, error: "quote_not_found" }, requestOrigin, {
+        status: 404,
+      });
     }
 
     const standardPolicy = await getStandardJobPolicy(db);
@@ -269,10 +309,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         jobTypes: quote.jobTypes ?? [],
         perceivedSize: quote.perceivedSize,
         notes: quote.notes ?? null,
-        aiResult: quote.aiResult
+        aiResult: quote.aiResult,
       },
       standardPolicy,
-      itemPolicy
+      itemPolicy,
     );
 
     const standardJobReview = evaluation.isStandard
@@ -280,26 +320,29 @@ export async function POST(request: NextRequest): Promise<Response> {
       : {
           required: true,
           message: buildStandardJobMessage(evaluation),
-          evaluation
+          evaluation,
         };
 
     const durationInfo = deriveDurationMinutes(quote);
     const durationMinutes = durationInfo.durationMinutes;
     const travelBufferMinutes =
-      typeof bookingRules.bufferMinutes === "number" && Number.isFinite(bookingRules.bufferMinutes)
+      typeof bookingRules.bufferMinutes === "number" &&
+      Number.isFinite(bookingRules.bufferMinutes)
         ? bookingRules.bufferMinutes
         : DEFAULT_TRAVEL_BUFFER_MIN;
     const capacity = getAppointmentCapacity();
 
-    let resolvedLat: number | null = typeof body.targetLat === "number" ? body.targetLat : null;
-    let resolvedLng: number | null = typeof body.targetLng === "number" ? body.targetLng : null;
+    let resolvedLat: number | null =
+      typeof body.targetLat === "number" ? body.targetLat : null;
+    let resolvedLng: number | null =
+      typeof body.targetLng === "number" ? body.targetLng : null;
 
     if (resolvedLat === null && resolvedLng === null) {
       const geo = await forwardGeocode({
         addressLine1: body.addressLine1,
         city: body.city,
         state: body.state,
-        postalCode: body.postalCode
+        postalCode: body.postalCode,
       });
       if (geo) {
         resolvedLat = geo.lat;
@@ -309,7 +352,9 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     const nowUtc = new Date();
     const lookbackStart = new Date(nowUtc.getTime() - 24 * 60 * 60 * 1000);
-    const windowEnd = new Date(nowUtc.getTime() + windowDays * 24 * 60 * 60 * 1000);
+    const windowEnd = new Date(
+      nowUtc.getTime() + windowDays * 24 * 60 * 60 * 1000,
+    );
 
     const existing = await db
       .select({
@@ -321,7 +366,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         city: properties.city,
         state: properties.state,
         lat: properties.lat,
-        lng: properties.lng
+        lng: properties.lng,
       })
       .from(appointments)
       .leftJoin(properties, eq(appointments.propertyId, properties.id))
@@ -329,8 +374,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         and(
           gte(appointments.startAt, lookbackStart),
           lte(appointments.startAt, windowEnd),
-          ne(appointments.status, "canceled")
-        )
+          ne(appointments.status, "canceled"),
+        ),
       );
 
     const holds = await db
@@ -343,7 +388,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         city: properties.city,
         state: properties.state,
         lat: properties.lat,
-        lng: properties.lng
+        lng: properties.lng,
       })
       .from(appointmentHolds)
       .leftJoin(properties, eq(appointmentHolds.propertyId, properties.id))
@@ -352,32 +397,54 @@ export async function POST(request: NextRequest): Promise<Response> {
           gte(appointmentHolds.startAt, lookbackStart),
           lte(appointmentHolds.startAt, windowEnd),
           eq(appointmentHolds.status, "active"),
-          gt(appointmentHolds.expiresAt, nowUtc)
-        )
+          gt(appointmentHolds.expiresAt, nowUtc),
+        ),
       );
 
     const blocks = existing
       .filter((row) => row.startAt)
       .map((row) => {
         const start = row.startAt as Date;
-        const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? travelBufferMinutes);
-        const city = typeof row.city === "string" ? row.city.toLowerCase().trim() : null;
-        const state = typeof row.state === "string" ? row.state.toLowerCase().trim() : null;
+        const dur =
+          (row.durationMinutes ?? durationMinutes) +
+          (row.travelBufferMinutes ?? travelBufferMinutes);
+        const city =
+          typeof row.city === "string" ? row.city.toLowerCase().trim() : null;
+        const state =
+          typeof row.state === "string" ? row.state.toLowerCase().trim() : null;
         const lat = row.lat ? Number(row.lat) : null;
         const lng = row.lng ? Number(row.lng) : null;
-        return { start, end: new Date(start.getTime() + dur * 60_000), city, state, lat, lng };
+        return {
+          start,
+          end: new Date(start.getTime() + dur * 60_000),
+          city,
+          state,
+          lat,
+          lng,
+        };
       });
 
     const holdBlocks = holds
       .filter((row) => row.startAt)
       .map((row) => {
         const start = row.startAt;
-        const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? travelBufferMinutes);
-        const city = typeof row.city === "string" ? row.city.toLowerCase().trim() : null;
-        const state = typeof row.state === "string" ? row.state.toLowerCase().trim() : null;
+        const dur =
+          (row.durationMinutes ?? durationMinutes) +
+          (row.travelBufferMinutes ?? travelBufferMinutes);
+        const city =
+          typeof row.city === "string" ? row.city.toLowerCase().trim() : null;
+        const state =
+          typeof row.state === "string" ? row.state.toLowerCase().trim() : null;
         const lat = row.lat ? Number(row.lat) : null;
         const lng = row.lng ? Number(row.lng) : null;
-        return { start, end: new Date(start.getTime() + dur * 60_000), city, state, lat, lng };
+        return {
+          start,
+          end: new Date(start.getTime() + dur * 60_000),
+          city,
+          state,
+          lat,
+          lng,
+        };
       });
 
     blocks.push(...holdBlocks);
@@ -413,15 +480,23 @@ export async function POST(request: NextRequest): Promise<Response> {
         days.push({ date: dayKey, slots: daySlots });
         continue;
       }
-      if (bookingRules.maxJobsPerDay > 0 && (dayTotals.get(dayKey) ?? 0) >= bookingRules.maxJobsPerDay) {
+      if (
+        bookingRules.maxJobsPerDay > 0 &&
+        (dayTotals.get(dayKey) ?? 0) >= bookingRules.maxJobsPerDay
+      ) {
         days.push({ date: dayKey, slots: daySlots });
         continue;
       }
-      const dayBlocks = blocks.filter((b) => formatDayLocal(b.start, schedulingZone) === dayKey);
+      const dayBlocks = blocks.filter(
+        (b) => formatDayLocal(b.start, schedulingZone) === dayKey,
+      );
       const dayCounts = dayCityCounts.get(dayKey);
       const topCount =
         dayCounts && dayCounts.size > 0
-          ? [...dayCounts.values()].reduce((max, val) => (val > max ? val : max), 0)
+          ? [...dayCounts.values()].reduce(
+              (max, val) => (val > max ? val : max),
+              0,
+            )
           : 0;
       const nearest =
         resolvedLat !== null && resolvedLng !== null
@@ -429,7 +504,10 @@ export async function POST(request: NextRequest): Promise<Response> {
           : null;
       const withinRadius =
         resolvedLat !== null && resolvedLng !== null
-          ? dayBlocks.filter((b) => distanceKm(b, resolvedLat, resolvedLng) <= DEFAULT_RADIUS_KM).length
+          ? dayBlocks.filter(
+              (b) =>
+                distanceKm(b, resolvedLat, resolvedLng) <= DEFAULT_RADIUS_KM,
+            ).length
           : null;
 
       for (const window of windows) {
@@ -440,11 +518,11 @@ export async function POST(request: NextRequest): Promise<Response> {
         ) {
           if (slotStartLocal < nowLocal) continue;
 
-          const slotEndLocal = slotStartLocal.plus({ minutes: durationMinutes });
+          const slotEndLocal = slotStartLocal.plus({
+            minutes: durationMinutes,
+          });
           const slotStart = slotStartLocal.toUTC().toJSDate();
           const slotEnd = slotEndLocal.toUTC().toJSDate();
-
-          if (overlapsCount(blocks, slotStart, slotEnd) >= capacity) continue;
 
           const slot: Suggestion = {
             startAt: slotStart.toISOString(),
@@ -454,7 +532,7 @@ export async function POST(request: NextRequest): Promise<Response> {
                 ? `Nearest scheduled job ~${nearest.toFixed(1)} km; ${withinRadius ?? 0} within ${DEFAULT_RADIUS_KM} km`
                 : topCount && topCount > 0
                   ? `Aligned with ${topCount} nearby job(s) on this day`
-                  : `No conflicts; ${durationMinutes} min slot`
+                  : `No conflicts; ${durationMinutes} min slot`,
           };
           suggestions.push(slot);
           daySlots.push(slot);
@@ -465,8 +543,18 @@ export async function POST(request: NextRequest): Promise<Response> {
       days.push({ date: dayKey, slots: daySlots });
     }
 
-    const clusterPicks = sortSuggestions(suggestions).slice(0, 3);
-    const soonestPicks = [...suggestions]
+    const available = await filterScheduleReadCandidates({
+      candidates: suggestions,
+      durationMinutes,
+      travelBufferMinutes,
+      capacity,
+      timezone: schedulingZone,
+    });
+    const availableStarts = new Set(available.map((slot) => slot.startAt));
+    for (const day of days)
+      day.slots = day.slots.filter((slot) => availableStarts.has(slot.startAt));
+    const clusterPicks = sortSuggestions(available).slice(0, 3);
+    const soonestPicks = [...available]
       .sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt))
       .slice(0, 8);
     const merged = uniqByStart([...clusterPicks, ...soonestPicks], 8);
@@ -481,12 +569,14 @@ export async function POST(request: NextRequest): Promise<Response> {
         slotIntervalMinutes: SLOT_INTERVAL_MIN,
         suggestions: merged,
         days,
-        standardJobReview
+        standardJobReview,
       },
-      requestOrigin
+      requestOrigin,
     );
   } catch (error) {
     console.error("[junk-quote-availability] server_error", error);
-    return corsJson({ ok: false, error: "server_error" }, requestOrigin, { status: 500 });
+    return corsJson({ ok: false, error: "server_error" }, requestOrigin, {
+      status: 500,
+    });
   }
 }

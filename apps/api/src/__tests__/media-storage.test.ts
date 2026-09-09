@@ -5,23 +5,29 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+const jest = import.meta.jest;
+const mockModule = jest.unstable_mockModule as unknown as (
+  name: string,
+  factory: () => Record<string, unknown>,
+) => void;
 
 const mockRecordProviderFailure = jest.fn(() => Promise.resolve());
 const mockRecordProviderSuccess = jest.fn(() => Promise.resolve());
 
-jest.mock("@/lib/provider-health", () => ({
+mockModule("@/lib/provider-health", () => ({
   recordProviderFailure: mockRecordProviderFailure,
   recordProviderSuccess: mockRecordProviderSuccess,
 }));
 
-import {
+const {
   createMediaUploadUrl,
   getMediaStorageProvider,
   putImmutableMediaObject,
+  getMediaObject,
   readMediaStorageConfig,
   resetMediaStorageForTests,
   verifyMediaStorageBucketAccess,
-} from "@/lib/media-storage";
+} = await import("@/lib/media-storage");
 
 describe("appointment media object storage", () => {
   const keys = [
@@ -89,6 +95,42 @@ describe("appointment media object storage", () => {
     ).toContain("content-length");
   });
 
+  it("stops reading an oversized stream even when its reported size is missing", async () => {
+    process.env["MEDIA_OBJECT_ENDPOINT"] = "http://localhost:4566";
+    process.env["MEDIA_OBJECT_BUCKET"] = "media-test";
+    process.env["MEDIA_OBJECT_ACCESS_KEY_ID"] = "test";
+    process.env["MEDIA_OBJECT_SECRET_ACCESS_KEY"] = "test";
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"] = "0";
+    let consumed = 0;
+    let closed = false;
+    const send = jest
+      .spyOn(S3Client.prototype, "send")
+      .mockImplementation((() =>
+        Promise.resolve({
+          Body: {
+            [Symbol.asyncIterator]: async function* () {
+              try {
+                for (let i = 0; i < 100; i += 1) {
+                  consumed += 1;
+                  yield await Promise.resolve(Buffer.alloc(1024));
+                }
+              } finally {
+                closed = true;
+              }
+            },
+          },
+        })) as never);
+    try {
+      await expect(getMediaObject("large", 2048)).rejects.toThrow(
+        "media_object_too_large",
+      );
+      expect(consumed).toBe(3);
+      expect(closed).toBe(true);
+    } finally {
+      send.mockRestore();
+    }
+  });
+
   it("signs write-once uploads with a mandatory create-only precondition", async () => {
     process.env["MEDIA_OBJECT_ENDPOINT"] = "http://localhost:4566";
     process.env["MEDIA_OBJECT_REGION"] = "us-east-1";
@@ -138,7 +180,9 @@ describe("appointment media object storage", () => {
         return Promise.resolve({
           ContentLength: body.byteLength,
           Body: {
-            transformToByteArray: () => Promise.resolve(Uint8Array.from(body)),
+            [Symbol.asyncIterator]: async function* () {
+              yield await Promise.resolve(body);
+            },
           },
         } as never);
       }
@@ -197,8 +241,9 @@ describe("appointment media object storage", () => {
         return Promise.resolve({
           ContentLength: stored.byteLength,
           Body: {
-            transformToByteArray: () =>
-              Promise.resolve(Uint8Array.from(stored)),
+            [Symbol.asyncIterator]: async function* () {
+              yield await Promise.resolve(stored);
+            },
           },
         } as never);
       }

@@ -13,6 +13,7 @@ export const PARTNER_JOB_ACTION_KEYS = [
   "upload_media",
   "create_proof_share",
   "duplicate",
+  "request_additional_service",
 ] as const;
 
 export type PartnerJobActionKey = (typeof PARTNER_JOB_ACTION_KEYS)[number];
@@ -50,6 +51,7 @@ export type PartnerJobActionCapabilities = Readonly<{
   uploadMedia: boolean;
   shareProof: boolean;
   duplicate: boolean;
+  requestAdditionalService?: boolean;
 }>;
 
 const TERMINAL_STATUSES = new Set(["completed", "canceled", "declined"]);
@@ -337,6 +339,7 @@ export function resolvePartnerJobActionAvailability(input: {
   cancellationReviewPending: boolean;
   capabilities: PartnerJobActionCapabilities;
   cancellation: PartnerCancellationDecision;
+  additionalServiceEligible?: boolean;
 }): PartnerJobActionAvailability[] {
   const scheduleInput = {
     status: input.status,
@@ -411,6 +414,24 @@ export function resolvePartnerJobActionAvailability(input: {
           "duplicate",
           "Your account role does not allow creating a new job.",
         ),
+    !input.capabilities.requestAdditionalService
+      ? permission(
+          "request_additional_service",
+          "Your account role does not allow creating a service request.",
+        )
+      : !input.additionalServiceEligible
+        ? availability(
+            "request_additional_service",
+            false,
+            "status_unavailable",
+            "Use the current job's change request while it is still being arranged.",
+          )
+        : availability(
+            "request_additional_service",
+            true,
+            "available",
+            "Request separate additional work without changing this job.",
+          ),
   ];
 }
 

@@ -39,78 +39,41 @@ void test("public and authenticated route groups use different shells", () => {
   );
 });
 
-void test("the public landing explains access, security, service review, FAQ, and support", () => {
+void test("the private entrance prioritizes sign-in and direct relationship support", () => {
   const landing = source("../components/PartnerLandingContent.tsx");
-  const preview = source("../components/PartnerPortalPreview.tsx");
-
-  assert.equal(landing.match(/<section(?:\s|>)/gu)?.length, 5);
-  assert.match(landing, /Quick and easy service for our partners\./u);
-  assert.match(landing, /Easy to get started\. Secure for your team\./u);
-  assert.match(landing, /Can I use the portal after verifying my email\?/u);
-  assert.match(
-    landing,
-    /closer review[\s\S]*preferred windows[\s\S]*before promising a time/u,
-  );
-  assert.match(landing, /Common questions/u);
-  assert.match(landing, /company\.phoneE164/u);
-  assert.match(landing, /company\.email/u);
-  assert.match(landing, /company\.hoursSummary/u);
-  assert.match(landing, /landing_call_support/u);
-  assert.match(landing, /landing_email_support/u);
-  assert.match(landing, /<PartnerPortalPreview/u);
-  assert.match(preview, /<figure/u);
-  assert.match(preview, /<figcaption/u);
-  assert.match(preview, /partners-proof-preview-720\.webp/u);
-  assert.match(preview, /width="720"/u);
-  assert.match(preview, /height="405"/u);
-  assert.doesNotMatch(preview, /next\/image|"use client"/u);
+  const help = source("../components/PartnerAccessHelp.tsx");
+  const support = source("./partner-support.ts");
+  const access = source("../(public)/request-access/page.tsx");
+  assert.match(landing, /<PartnerPasswordLoginForm/u);
+  assert.match(landing, /PartnerAccessHelp/u);
   assert.doesNotMatch(
-    `${landing}\n${preview}`,
-    /PartnerPortalUi/u,
-    "the static landing must not pull the interactive portal UI graph into its client manifest",
+    landing,
+    /PartnerPortalPreview|Request access|<details|<figure|licensed|subscription|FAQ/u,
   );
-  assert.doesNotMatch(landing, /(?:primary-950|accent-400)/u);
-  assert.ok(
-    statSync(
-      new URL(
-        "../../../../public/images/partners-proof-preview-720.webp",
-        import.meta.url,
-      ),
-    ).size <= 60_000,
-    "the landing proof preview must stay below 60 KB",
+  assert.match(help, /mailto:/u);
+  assert.match(help, /tel:/u);
+  assert.match(support, /sales@stonegatejunkremoval\.com/u);
+  assert.match(support, /404-777-2631/u);
+  assert.match(access, /PartnerAccessHelp/u);
+  assert.doesNotMatch(
+    access,
+    /PartnerAccessRequestForm|cookies\(|redirect\(|<form/u,
   );
 });
 
-void test("quick and easy service stays the partner platform throughline", () => {
-  const landing = source("../components/PartnerLandingContent.tsx");
+void test("the login offers a short service sign-in instead of a product pitch", () => {
   const login = source("../(public)/login/page.tsx");
-  const shell = source("../components/PartnerAppShell.tsx");
-  const overview = source("../(portal)/overview/page.tsx");
-  const requestPage = source("../(portal)/book/page.tsx");
-  const requestWizard = source("../components/PartnerBookingWizard.tsx");
-  const jobs = source("../(portal)/bookings/page.tsx");
-  const locations = source("../(portal)/properties/page.tsx");
-  const photos = source("../(portal)/photos/page.tsx");
-  const settings = source("../(portal)/settings/page.tsx");
-
-  assert.match(landing, /Quick and easy service for our partners\./u);
-  assert.match(login, /Request service without starting from scratch\./u);
-  assert.match(shell, /label: "Request service"/u);
-  assert.doesNotMatch(shell, /label: "Schedule job"/u);
-  assert.match(overview, /Quick and easy service/u);
-  assert.match(overview, /reuse saved details/u);
-  assert.match(requestPage, /Quick service request/u);
-  assert.match(requestPage, /Choose a saved location/u);
-  assert.match(requestWizard, /Choose location/u);
-  assert.match(requestWizard, /Check & send/u);
-  assert.match(requestWizard, /Send service request/u);
-  assert.match(jobs, /<span className="font-semibold">Next:<\/span>/u);
-  assert.match(
-    locations,
-    /Save each site[^\n]*once so future bookings are faster/u,
+  assert.match(login, /PartnerPasswordLoginForm returnTo=\{returnTo\}/u);
+  const form = source("../components/PartnerPasswordLoginForm.tsx");
+  assert.match(form, /action=\{partnerPasswordLoginAction\}/u);
+  assert.match(form, /autoComplete="username"/u);
+  assert.match(form, /PartnerLoginPasswordInput/u);
+  assert.match(form, /\/partners\/forgot-password/u);
+  assert.match(login, /PartnerAccessHelp/u);
+  assert.doesNotMatch(
+    login,
+    /simple service request in one place|feature card|PartnerPortalPreview/u,
   );
-  assert.match(photos, /keep the finished record easy to find/u);
-  assert.match(settings, /Set your account defaults once/u);
 });
 
 void test("the partner public shell keeps route awareness in one small client action", () => {
@@ -147,12 +110,11 @@ void test("the public shell action follows the current route without distracting
   assert.deepEqual(partnerPublicHeaderAction("/partners/login"), {
     kind: "request_access",
     href: "/partners/request-access",
-    label: "Request access",
+    label: "Access & help",
     analyticsKey: "landing_request_access_header",
   });
 
   for (const path of [
-    "/partners",
     "/partners/request-access",
     "/partners/forgot-password",
   ]) {
@@ -165,6 +127,7 @@ void test("the public shell action follows the current route without distracting
   }
 
   for (const path of [
+    "/partners",
     "/partners/login/mfa",
     "/partners/login/mfa/challenge",
     "/partners/application",
@@ -223,14 +186,8 @@ void test("the marketing navigation has one clear partner entry point", () => {
     );
   }
 
-  assert.match(landing, /aria-label="Partner access options"/u);
-  assert.match(landing, /analyticsKey="landing_sign_in_hero"/u);
-  assert.match(landing, /analyticsKey="landing_request_access_hero"/u);
-  assert.ok(
-    landing.indexOf('label="Sign in"') <
-      landing.indexOf('label="Request access"'),
-    "sign in must remain the primary and first landing action",
-  );
+  assert.match(landing, /PartnerPasswordLoginForm/u);
+  assert.match(landing, /PartnerAccessHelp/u);
 });
 
 void test("marketing actions do not duplicate or cover the navigation", () => {
@@ -270,13 +227,16 @@ void test("public proof shares reject malformed tokens, payloads, and unsafe URL
   assert.doesNotMatch(proofPage, /if \(!token \|\| token\.length > 512\)/u);
 });
 
-void test("only the public landing is indexable within partner account routes", () => {
+void test("the relationship-only portal is excluded from search indexing", () => {
   const landing = source("../(public)/page.tsx");
   const rootLayout = source("../layout.tsx");
   const protectedLayout = source("../(portal)/layout.tsx");
   const socialImage = source("../(public)/social-image/route.tsx");
 
-  assert.match(landing, /robots:\s*\{\s*index:\s*true,\s*follow:\s*true\s*\}/u);
+  assert.match(
+    landing,
+    /robots:\s*\{\s*index:\s*false,\s*follow:\s*false\s*\}/u,
+  );
   assert.match(landing, /alternates:\s*\{\s*canonical:/u);
   assert.match(landing, /absoluteUrl\("\/partners\/social-image"\)/u);
   assert.match(landing, /const title = "For Partners"/u);
@@ -287,7 +247,8 @@ void test("only the public landing is indexable within partner account routes", 
   assert.ok(
     existsSync(new URL("../(public)/social-image/route.tsx", import.meta.url)),
   );
-  assert.doesNotMatch(rootLayout, /robots:/u);
+  assert.match(rootLayout, /robots:/u);
+  assert.doesNotMatch(source("../../sitemap.ts"), /path: "\/partners"/u);
   assert.match(
     protectedLayout,
     /robots:\s*\{\s*index:\s*false,\s*follow:\s*false,\s*nocache:\s*true\s*\}/u,
@@ -357,7 +318,7 @@ void test("raw purpose tokens never enter client props or HTML", () => {
     "partner routes must exit before public-site UTM capture",
   );
 
-  assert.match(activationPage, /hasToken=\{Boolean\(token\)\}/u);
+  assert.match(activationPage, /hasToken=\{Boolean\(token && detail\)\}/u);
   assert.match(resetPage, /hasToken=\{Boolean\(token\)\}/u);
   assert.doesNotMatch(activationPage, /\btoken=\{/u);
   assert.doesNotMatch(activationMfaPage, /\btoken=\{/u);
@@ -386,11 +347,11 @@ void test("raw purpose tokens never enter client props or HTML", () => {
   ]) {
     assert.doesNotMatch(passwordSource, /(?:minLength=\{12\}|Use 12)/u);
   }
+  assert.match(credentialForm, /minLength=\{existingPassword \? 1 : 15\}/u);
   assert.match(
-    credentialForm,
-    /minLength=\{confirmsExistingPassword \? 1 : 15\}/u,
+    source("../components/PartnerLoginPasswordInput.tsx"),
+    /minLength=\{1\}/u,
   );
-  assert.match(loginPage, /minLength=\{1\}/u);
   assert.doesNotMatch(loginPage, /requestPartnerMagicLinkAction/u);
   assert.doesNotMatch(loginPage, /verified mobile phone/u);
   assert.doesNotMatch(loginPage, /magic_link_request/u);

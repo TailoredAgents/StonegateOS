@@ -136,9 +136,46 @@ describe("Calendar half-open schedule intervals", () => {
       conflicts: simultaneous,
     });
   });
+
+  it("shares weighted capacity semantics with partner holds and counts the candidate's units", () => {
+    const existing: ScheduleConflict = {
+      id: "weighted",
+      kind: "appointment",
+      appointmentId: null,
+      title: "Two-unit job",
+      startAt: "2026-07-15T13:00:00Z",
+      endAt: "2026-07-15T14:00:00Z",
+      capacityUnits: 2,
+    };
+    const proposed = buildScheduleInterval(new Date(existing.startAt), 60);
+    expect(selectBlockingScheduleConflicts([existing], proposed, 3, 1)).toEqual(
+      { maximumConcurrent: 2, conflicts: [] },
+    );
+    expect(selectBlockingScheduleConflicts([existing], proposed, 3, 2)).toEqual(
+      { maximumConcurrent: 2, conflicts: [existing] },
+    );
+    expect(
+      selectBlockingScheduleConflicts(
+        [existing],
+        buildScheduleInterval(new Date(existing.endAt), 60),
+        3,
+        2,
+      ),
+    ).toEqual({ maximumConcurrent: 0, conflicts: [] });
+  });
 });
 
 describe("Calendar conflict override contract", () => {
+  it("cannot override a durable blackout or unavailable configured resource pool", () => {
+    const decision = { ...conflictDecision(), overrideAllowed: false };
+    expect(
+      decideScheduleConflictOverride(decision, {
+        reason: "A second staffed crew is confirmed.",
+        acknowledgement: decision.requiredAcknowledgement,
+        fingerprint: decision.fingerprint,
+      }),
+    ).toMatchObject({ ok: false, code: "schedule_conflict" });
+  });
   it("rejects an unacknowledged conflict", () => {
     expect(decideScheduleConflictOverride(conflictDecision(), {})).toEqual(
       expect.objectContaining({ ok: false, code: "schedule_conflict" }),
@@ -275,9 +312,7 @@ describe("Calendar URL filters", () => {
 
 describe("Calendar route enforcement source contracts", () => {
   it("encodes overlap-boundary dates through their timestamp columns", () => {
-    const source = read(
-      "apps/api/src/lib/appointment-schedule-conflicts.ts",
-    );
+    const source = read("apps/api/src/lib/appointment-schedule-conflicts.ts");
 
     expect(source).toContain(
       "sql.param(\n          interval.startAt,\n          appointments.startAt,\n        )",

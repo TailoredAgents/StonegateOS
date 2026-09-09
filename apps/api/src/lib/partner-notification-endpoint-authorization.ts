@@ -9,7 +9,7 @@ export async function requirePartnerNotificationEndpointMutationAccess(
 ): Promise<PartnerPrincipalResult> {
   const authorization = await requirePartnerCapability(
     request,
-    "account.security.manage",
+    "portal.session.read",
   );
   if (!authorization.ok) return authorization;
   return authorization;

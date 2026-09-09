@@ -77,6 +77,7 @@ function jobActionLabel(action: PartnerJobActionKey): string {
     upload_media: "Photo upload",
     create_proof_share: "Proof sharing",
     duplicate: "Book again",
+    request_additional_service: "Additional service",
   };
   return labels[action];
 }
@@ -88,12 +89,14 @@ export function PartnerJobActions({
   actionAvailability,
   cancellation,
   references,
+  templatesEnabled = false,
 }: {
   jobId: string;
   etag: string | null;
   allowedActions: string[];
   actionAvailability: PartnerJobActionAvailability[];
   cancellation: PartnerCancellationDecision;
+  templatesEnabled?: boolean;
   references: {
     poNumber: string | null;
     costCenter: string | null;
@@ -727,7 +730,7 @@ export function PartnerJobActions({
           </ul>
         </details>
       ) : null}
-      {canDuplicate ? (
+      {canDuplicate && templatesEnabled ? (
         <details className="rounded-xl border border-slate-200 bg-slate-50 p-4">
           <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg font-semibold text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 [&::-webkit-details-marker]:hidden">
             <Save className="h-4 w-4" aria-hidden="true" />

@@ -131,6 +131,9 @@ export async function GET(
   const [threadRow] = await db
     .select({
       id: conversationThreads.id,
+      partnerAccountId: conversationThreads.partnerAccountId,
+      partnerBookingId: conversationThreads.partnerBookingId,
+      portalVisible: conversationThreads.portalVisible,
       status: conversationThreads.status,
       state: conversationThreads.state,
       channel: conversationThreads.channel,
@@ -471,6 +474,8 @@ export async function GET(
       ok: true,
       thread: {
         id: threadRow.id,
+        partnerJob: threadRow.portalVisible && threadRow.partnerAccountId && threadRow.partnerBookingId
+          ? { accountId: threadRow.partnerAccountId, jobId: threadRow.partnerBookingId } : null,
         status: threadRow.status,
         state: threadRow.state,
         channel: threadRow.channel,

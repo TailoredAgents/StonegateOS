@@ -128,20 +128,22 @@ describe("Team Partner administration UI mutation contract", () => {
     expect(actions).toContain("No provider call was made.");
   });
 
-  it("renders sanitized commercial readiness without speculative provider controls", () => {
+  it("renders canonical billing controls without provider identifiers or speculative provider mutation fields", () => {
     expect(workspace).toContain("Operational pricing");
     expect(workspace).toContain("Readiness findings");
     expect(workspace).toContain("Configuration evidence");
-    expect(workspace).toContain("hosted-invoice gap");
-    expect(workspace).toContain("provider payment configuration");
+    expect(workspace).toContain("legacy hosted collections to reconcile");
     expect(workspace).toContain("const canManageCommercial");
     expect(workspace).toContain('"partners.commercial.manage"');
     expect(workspace).toContain("PartnerApprovalRuleManager");
     expect(workspace).toContain("Manage approval rules");
     expect(workspace).toContain("includeInactive=true");
-    expect(workspace).toContain(
-      "Pricing and invoice records remain read-only here",
-    );
+    expect(workspace).toContain("PartnerBillingAdministration");
+    expect(workspace).toContain("canManage={canManageCommercial}");
+    const billing = siteSource("components/PartnerBillingAdministrationClient.tsx");
+    expect(billing).toContain("Save draft for review");
+    expect(billing).toContain("REFUND ALREADY GIVEN");
+    expect(billing).not.toContain("providerInvoiceId");
     expect(workspace).not.toContain("providerInvoiceId");
     expect(workspace).not.toContain("providerOrderId");
     expect(workspace).not.toContain("hostedPaymentUrl");

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   closeDbForTests,
   appointments,
@@ -15,6 +15,7 @@ import {
   partnerBookings,
   partnerInvoices,
   partnerNotificationDeliveries,
+  partnerRoleTemplates,
   partnerNotifications,
   partnerUsers,
   properties,
@@ -34,9 +35,13 @@ import { processOutboxBatch } from "@/lib/outbox-processor";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
 
 const jest = import.meta.jest;
-const describeWithDatabase = process.env["DATABASE_URL"]
-  ? describe
-  : describe.skip;
+const describeWithDatabase =
+  process.env["DATABASE_URL"] &&
+  ["127.0.0.1", "localhost"].includes(
+    new URL(process.env["DATABASE_URL"]).hostname,
+  )
+    ? describe
+    : describe.skip;
 
 type Fixture = {
   accountId: string;
@@ -65,15 +70,16 @@ function resultRows(result: unknown): Array<Record<string, unknown>> {
 
 async function expectDatabaseConstraint(
   operation: Promise<unknown>,
-  constraint: string,
+  constraint: string | readonly string[],
 ): Promise<void> {
+  const constraintLabel = typeof constraint === "string" ? constraint : constraint.join(",");
   try {
     await operation;
-    throw new Error(`expected_database_constraint:${constraint}`);
+    throw new Error(`expected_database_constraint:${constraintLabel}`);
   } catch (error) {
     if (
       error instanceof Error &&
-      error.message === `expected_database_constraint:${constraint}`
+      error.message === `expected_database_constraint:${constraintLabel}`
     ) {
       throw error;
     }
@@ -81,11 +87,14 @@ async function expectDatabaseConstraint(
       typeof error === "object" && error !== null && "cause" in error
         ? error.cause
         : null;
-    expect(String(cause)).toContain(constraint);
+    const accepted = typeof constraint === "string" ? [constraint] : constraint;
+    expect(accepted.some((message) => String(cause).includes(message))).toBe(
+      true,
+    );
   }
 }
 
-async function createFixture(label: string): Promise<Fixture> {
+async function createFixture(label: string, draft = false): Promise<Fixture> {
   const now = new Date();
   const accountId = randomUUID();
   const invoiceId = randomUUID();
@@ -96,6 +105,17 @@ async function createFixture(label: string): Promise<Fixture> {
   const accountName = `${label} ${suffix}`;
   const email = `billing-${suffix}@example.test`;
   await getDb().transaction(async (tx) => {
+    const [role] = await tx
+      .select({ id: partnerRoleTemplates.id })
+      .from(partnerRoleTemplates)
+      .where(
+        and(
+          eq(partnerRoleTemplates.key, "billing_approver"),
+          isNull(partnerRoleTemplates.partnerAccountId),
+        ),
+      )
+      .limit(1);
+    if (!role) throw new Error("canonical_billing_role_fixture_missing");
     await tx.insert(teamMembers).values({ id: teamMemberId, name: "Reviewer" });
     await tx.insert(partnerAccounts).values({
       id: accountId,
@@ -122,6 +142,7 @@ async function createFixture(label: string): Promise<Fixture> {
       partnerAccountId: accountId,
       partnerUserId,
       roleKey: "billing_approver",
+      roleTemplateId: role.id,
       status: "active",
       accessLevel: "account",
       acceptedAt: now,
@@ -133,14 +154,14 @@ async function createFixture(label: string): Promise<Fixture> {
       id: invoiceId,
       partnerAccountId: accountId,
       invoiceNumber: `INV-${suffix}`,
-      status: "issued",
+      status: draft ? "draft" : "issued",
       currency: "USD",
       subtotalCents: 25_000,
       totalCents: 25_000,
       paidCents: 5_000,
       balanceCents: 20_000,
       billingContact: { name: "Billing Requester", email },
-      issuedAt: now,
+      issuedAt: draft ? null : now,
       version: 3,
       createdAt: now,
       updatedAt: now,
@@ -449,21 +470,8 @@ async function deleteFixture(fixture: Fixture): Promise<void> {
         .delete(conversationThreads)
         .where(eq(conversationThreads.id, request.threadId));
     }
-    await tx
-      .delete(partnerInvoices)
-      .where(eq(partnerInvoices.partnerAccountId, fixture.accountId));
-    await tx
-      .delete(partnerAccountMemberships)
-      .where(eq(partnerAccountMemberships.id, fixture.membershipId));
-    await tx
-      .delete(partnerUsers)
-      .where(eq(partnerUsers.id, fixture.partnerUserId));
-    await tx
-      .delete(partnerAccounts)
-      .where(eq(partnerAccounts.id, fixture.accountId));
-    await tx
-      .delete(teamMembers)
-      .where(eq(teamMembers.id, fixture.teamMemberId));
+    // Issued invoice evidence and its owners intentionally remain in this
+    // disposable local database. Never disable financial immutability to clean up.
   });
 }
 
@@ -589,6 +597,15 @@ describeWithDatabase("Partner billing-dispute PostgreSQL lifecycle", () => {
     const fixture = await createFixture("Billing notification");
     fixtures.push(fixture);
     const created = await createRequest(fixture, "notification-operation");
+    await getDb()
+      .update(outboxEvents)
+      .set({ createdAt: new Date(0) })
+      .where(
+        and(
+          eq(outboxEvents.type, "partner.billing_dispute.requested"),
+          sql`${outboxEvents.payload}->>'partnerAccountId' = ${fixture.accountId}`,
+        ),
+      );
     const stats = await processOutboxBatch({
       limit: 1,
       eventTypes: ["partner.billing_dispute.requested"],
@@ -656,6 +673,15 @@ describeWithDatabase("Partner billing-dispute PostgreSQL lifecycle", () => {
       }),
     );
 
+    await getDb()
+      .update(outboxEvents)
+      .set({ createdAt: new Date(0) })
+      .where(
+        and(
+          eq(outboxEvents.type, "partner.billing_dispute.requested"),
+          sql`${outboxEvents.payload}->>'partnerAccountId' = ${fixture.accountId}`,
+        ),
+      );
     const stats = await processOutboxBatch({
       limit: 1,
       eventTypes: ["partner.billing_dispute.requested"],
@@ -718,6 +744,21 @@ describeWithDatabase("Partner billing-dispute PostgreSQL lifecycle", () => {
         .update(partnerInvoices)
         .set({ partnerBookingId: bookingId })
         .where(eq(partnerInvoices.id, fixture.invoiceId)),
+      "Issued invoice terms are immutable",
+    );
+    const [originalInvoice] = await getDb()
+      .select()
+      .from(partnerInvoices)
+      .where(eq(partnerInvoices.id, fixture.invoiceId));
+    await expectDatabaseConstraint(
+      getDb()
+        .insert(partnerInvoices)
+        .values({
+          ...originalInvoice!,
+          id: randomUUID(),
+          invoiceNumber: `FOREIGN-${randomUUID()}`,
+          partnerBookingId: bookingId,
+        }),
       "partner_invoices_account_booking_fk",
     );
     await expectDatabaseConstraint(
@@ -823,7 +864,10 @@ describeWithDatabase("Partner billing-dispute PostgreSQL lifecycle", () => {
   });
 
   it("rejects a same-account job thread and a different invoice job at dispute creation", async () => {
-    const jobThreadFixture = await createFixture("Billing job-thread guard");
+    const jobThreadFixture = await createFixture(
+      "Billing job-thread guard",
+      true,
+    );
     const jobMismatchFixture = await createFixture("Billing invoice-job guard");
     fixtures.push(jobThreadFixture, jobMismatchFixture);
 
@@ -832,7 +876,11 @@ describeWithDatabase("Partner billing-dispute PostgreSQL lifecycle", () => {
         const bookingId = await createFixtureBooking(tx, jobThreadFixture);
         await tx
           .update(partnerInvoices)
-          .set({ partnerBookingId: bookingId })
+          .set({
+            partnerBookingId: bookingId,
+            status: "issued",
+            issuedAt: new Date(),
+          })
           .where(eq(partnerInvoices.id, jobThreadFixture.invoiceId));
         const [jobThread] = await tx
           .insert(conversationThreads)
@@ -887,7 +935,10 @@ describeWithDatabase("Partner billing-dispute PostgreSQL lifecycle", () => {
           .set({ partnerBookingId: bookingId })
           .where(eq(partnerInvoices.id, fixture.invoiceId));
       }),
-      "partner_invoice_has_billing_dispute_booking_conflict",
+      [
+        "Issued invoice terms are immutable",
+        "partner_invoice_has_billing_dispute_booking_conflict",
+      ],
     );
     await expectDatabaseConstraint(
       getDb().transaction(async (tx) => {

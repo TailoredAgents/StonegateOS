@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { resolvePublicOrigin } from "@/app/partners/lib/origin";
 import { NextResponse } from "next/server";
 import {
   callPartnerApplicantApi,
@@ -61,7 +62,7 @@ const RESPONSE_HEADERS = [
 function mutationOriginAllowed(request: NextRequest): boolean {
   const origin = request.headers.get("origin");
   const fetchSite = request.headers.get("sec-fetch-site");
-  if (origin) return origin === request.nextUrl.origin;
+  if (origin) return origin === resolvePublicOrigin(request);
   return fetchSite === "same-origin" || fetchSite === "none";
 }
 
@@ -200,7 +201,7 @@ async function proxy(
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
-  if (method !== "GET") headers.set("Origin", request.nextUrl.origin);
+  if (method !== "GET") headers.set("Origin", resolvePublicOrigin(request));
   headers.set(
     "X-Forwarded-Proto",
     request.nextUrl.protocol === "https:" ? "https" : "http",

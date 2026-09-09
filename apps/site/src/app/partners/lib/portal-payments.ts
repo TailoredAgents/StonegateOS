@@ -44,7 +44,7 @@ export type PartnerHostedPaymentIntent = {
 export type PartnerEmbeddedPaymentIntent = {
   id: string;
   invoiceId: string;
-  purpose: "deposit" | "one_off";
+  purpose: "deposit" | "one_off" | "invoice_balance";
   paymentMethod: "card" | "ach";
   status: PartnerPaymentIntentStatus;
   amount: PartnerMoney;
@@ -199,7 +199,8 @@ export function isPartnerEmbeddedPaymentIntent(
   return (
     isPartnerPaymentIntentId(value["id"]) &&
     isPartnerPaymentIntentId(value["invoiceId"]) &&
-    (value["purpose"] === "deposit" || value["purpose"] === "one_off") &&
+    (value["purpose"] === "deposit" || value["purpose"] === "one_off" ||
+      value["purpose"] === "invoice_balance") &&
     (value["paymentMethod"] === "card" || value["paymentMethod"] === "ach") &&
     [
       "provisioning",

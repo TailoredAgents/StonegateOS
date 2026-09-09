@@ -18,6 +18,7 @@ import {
   PartnerLocationSecretConfigurationError,
 } from "@/lib/partner-location-secrets";
 import { requirePartnerCapability } from "@/lib/partner-account-authorization";
+import { isPartnerToolEnabled } from "@/lib/partner-account-workflows";
 import {
   arePartnerPortalV2ReadsEnabled,
   arePartnerPortalV2WritesEnabled,
@@ -204,6 +205,7 @@ export async function GET(request: NextRequest): Promise<Response> {
                   partnerAccountLocations.externalPropertyId,
                   `%${normalizedSearch}%`,
                 ),
+                ilike(partnerAccountLocations.city, `%${normalizedSearch}%`),
               )
             : undefined,
           cursor
@@ -269,7 +271,8 @@ export async function GET(request: NextRequest): Promise<Response> {
           version: portfolio.directoryVersion,
           defaultLocationId: accountWide ? portfolio.defaultLocationId : null,
           canManagePortfolio:
-            accountWide && principal.capabilities.includes("properties.manage"),
+            accountWide && principal.capabilities.includes("properties.manage") &&
+            await isPartnerToolEnabled(principal.accountId, "portfolio"),
           etag: partnerLocationDirectoryEtag({
             accountId: principal.accountId,
             version: portfolio.directoryVersion,
@@ -368,6 +371,9 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   try {
     const input = parsed.data;
+    if (input.parentLocationId && !(await isPartnerToolEnabled(principal.accountId, "portfolio"))) {
+      return createPartnerPortalV2ErrorResponse("not_found", 404, correlationId);
+    }
     const verification = await verifyAddress({
       addressLine1: input.address.line1,
       addressLine2: input.address.line2,

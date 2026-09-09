@@ -8,6 +8,13 @@ const base = require("./jest.config.cjs");
 module.exports = {
   ...base,
   testMatch: [
+    "<rootDir>/src/__tests__/media-storage.test.ts",
+    "<rootDir>/src/__tests__/quote-v2-pdf.test.ts",
+    "<rootDir>/src/__tests__/quote-v2-acceptance-certificate.test.ts",
+    "<rootDir>/src/__tests__/partner-document-scan.test.ts",
+    "<rootDir>/src/__tests__/partner-invoice-ledger.test.ts",
+    "<rootDir>/src/__tests__/partner-billing-administration.test.ts",
+    "<rootDir>/src/__tests__/partner-service-reports.test.ts",
     "<rootDir>/src/__tests__/partner-activation-*.test.ts",
     "<rootDir>/src/__tests__/partner-access-*.test.ts",
     "<rootDir>/src/__tests__/partner-account-*.test.ts",
@@ -29,6 +36,7 @@ module.exports = {
     "<rootDir>/src/__tests__/partner-product-analytics.test.ts",
     "<rootDir>/src/__tests__/partner-public-auth-security.test.ts",
     "<rootDir>/src/__tests__/partner-repeat-*.test.ts",
+    "<rootDir>/src/__tests__/partner-recurring-horizon-scheduler.test.ts",
     "<rootDir>/src/__tests__/partner-staff-*.test.ts",
     "<rootDir>/src/__tests__/partner-verification-first-*.test.ts",
     "<rootDir>/src/__tests__/calendar-external-busy*.test.ts",

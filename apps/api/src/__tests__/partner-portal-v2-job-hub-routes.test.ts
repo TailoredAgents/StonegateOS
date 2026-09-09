@@ -56,12 +56,10 @@ describe("Partner Portal V2 job hub route boundaries", () => {
     expect(messages).toContain("IssueMessageBodySchema");
     expect(messages).toContain("PARTNER_JOB_ISSUE_CATEGORIES");
     expect(messages).toContain("PARTNER_JOB_ISSUE_PRIORITIES");
-    expect(messages).toContain(
-      "eq(conversationThreads.partnerAccountId, principal.accountId!)",
-    );
-    expect(messages).toContain(
-      "eq(conversationThreads.partnerBookingId, job.id)",
-    );
+    expect(messages).toContain("ensurePartnerJobThread(tx, principal.accountId!, job.id)");
+    const sharedThread = source("src/lib/partner-job-thread.ts");
+    expect(sharedThread).toContain("eq(conversationThreads.partnerAccountId, accountId)");
+    expect(sharedThread).toContain("eq(conversationThreads.partnerBookingId, jobId)");
     expect(messages).toContain('eventType: "issue_reported"');
     expect(messages).toContain(
       'action: issue\n          ? "partner.job_issue.reported"',

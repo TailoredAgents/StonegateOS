@@ -190,14 +190,14 @@ describe("partner invitation route and persistence contract", () => {
     expect(itemRoute).toMatch(/"not_found",\s*404/gu);
     expect(acceptRoute).toContain("isAllowedPartnerPortalMutationOrigin");
     expect(acceptRoute).toContain("readPortalV2IdempotencyKey");
-    expect(acceptRoute).toContain("runPortalV2IdempotentMutation");
+    expect(acceptRoute).not.toContain("runPortalV2IdempotentMutation");
+    expect(acceptRoute).toContain("inspectPartnerActivationToken");
+    expect(acceptRoute).toContain("derivePartnerInvitationActivationToken");
     expect(acceptRoute).toContain('action: "partner_invitation_accept"');
     expect(acceptancePage).toContain('method="post"');
     expect(acceptancePage).toContain("/partners/invitations/accept/complete");
     expect(acceptanceCompleteRoute).toContain('request.headers.get("origin")');
-    expect(acceptanceCompleteRoute).toContain(
-      "requestOrigin !== request.nextUrl.origin",
-    );
+    expect(acceptanceCompleteRoute).toContain("requestOrigin !== origin");
   });
 
   it("binds acceptance to account/email/role/scope and queues activation without issuing a session", () => {

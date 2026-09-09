@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { ActionPolicy, MutationResult } from "@myst-os/sdk";
 import type { NextRequest } from "next/server";
+import { hasUnretiredPartnerHostedInvoice } from "@/lib/partner-hosted-retirement";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { appointments, getDb, paymentAttempts, payments } from "@/db";
@@ -265,6 +266,7 @@ export async function POST(
       const [appointment] = await tx
         .select({
           id: appointments.id,
+          partnerAccountId: appointments.partnerAccountId,
           finalTotalCents: appointments.finalTotalCents,
           status: appointments.status,
           type: appointments.type,
@@ -291,6 +293,11 @@ export async function POST(
         );
       }
       const currentVersion = appointment.updatedAt.toISOString();
+      if (appointment.partnerAccountId && await hasUnretiredPartnerHostedInvoice(tx, appointmentId)) {
+        return completeAppointmentPaymentFailure(tx, mutation, claimed.claim, appointmentId, {
+          ok: false, code: "conflict", message: "This partner invoice has an older online collection channel. Verify its retirement and reconcile any payments before collecting another payment.", retryable: false,
+        }, 409, { reason: "partner_hosted_collection_unretired" });
+      }
       if (currentVersion !== expectedVersion) {
         return completeAppointmentPaymentFailure(
           tx,

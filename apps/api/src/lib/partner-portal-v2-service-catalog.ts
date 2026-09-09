@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lte, or } from "drizzle-orm";
 import {
   getDb,
+  partnerAccounts,
   partnerAccountServiceAgreements,
   partnerRateAddOnItems,
   partnerRateCards,
@@ -21,6 +22,8 @@ import {
 } from "@/lib/partner-account-service-agreement-service";
 import { MAX_PARTNER_SERVICE_ADD_ONS } from "@/lib/partner-portal-v2-service-add-ons";
 import { isPartnerAddOnTierKey } from "@myst-os/pricing";
+import { normalizePartnerAccountWorkflow } from "@/lib/partner-account-workflows";
+import { GENERAL_PARTNER_SERVICE_REQUEST } from "@/lib/partner-service-requestability";
 
 type PartnerCatalogMoney = Readonly<{
   amountMinor: number;
@@ -54,7 +57,7 @@ export type PartnerServiceCatalogItemDto = Readonly<{
     currency: string;
     effectiveFrom: string;
     effectiveTo: string | null;
-  }>;
+  }> | null;
   inclusions: readonly string[];
   exclusions: readonly string[];
   quoteRule: string | null;
@@ -122,9 +125,23 @@ export async function listPartnerServiceCatalog(input: {
       ),
     )
     .limit(1);
-  if (!agreementRow) return Object.freeze([]);
-  const agreement = projectPartnerAccountServiceAgreement(agreementRow);
-  const entitlementKeys = agreement.services.map((item) => item.serviceKey);
+  const agreement = agreementRow
+    ? projectPartnerAccountServiceAgreement(agreementRow)
+    : null;
+  const [account] = await db
+    .select({ config: partnerAccounts.portalWorkflowConfig })
+    .from(partnerAccounts)
+    .where(eq(partnerAccounts.id, input.accountId))
+    .limit(1);
+  const workflow = normalizePartnerAccountWorkflow(account?.config);
+  const entitlementKeys = [
+    ...new Set([
+      GENERAL_PARTNER_SERVICE_REQUEST,
+      ...workflow.requestableServiceKeys,
+      ...(agreement?.services.map((item) => item.serviceKey) ?? []),
+    ]),
+  ].filter((key) => !workflow.disabledServiceKeys.includes(key));
+  if (!entitlementKeys.length) return Object.freeze([]);
   const rows = await db
     .select({
       key: partnerServiceCatalog.key,
@@ -135,19 +152,21 @@ export async function listPartnerServiceCatalog(input: {
       profileVersion: partnerSchedulingProfiles.version,
     })
     .from(partnerServiceCatalog)
-    .innerJoin(
+    .leftJoin(
       partnerSchedulingProfiles,
-      eq(partnerSchedulingProfiles.serviceKey, partnerServiceCatalog.key),
-    )
-    .where(
       and(
-        eq(partnerServiceCatalog.active, true),
+        eq(partnerSchedulingProfiles.serviceKey, partnerServiceCatalog.key),
         eq(partnerSchedulingProfiles.active, true),
         lte(partnerSchedulingProfiles.effectiveFrom, now),
         or(
           isNull(partnerSchedulingProfiles.effectiveTo),
           gt(partnerSchedulingProfiles.effectiveTo, now),
         ),
+      ),
+    )
+    .where(
+      and(
+        eq(partnerServiceCatalog.active, true),
         inArray(partnerServiceCatalog.key, entitlementKeys),
       ),
     )
@@ -227,6 +246,7 @@ export async function listPartnerServiceCatalog(input: {
     .limit(1);
   if (
     selectedCard &&
+    agreement &&
     selectedCard.currency.trim().toUpperCase() !== agreement.currency
   ) {
     throw new PartnerServiceAgreementConfigurationError(
@@ -323,12 +343,32 @@ export async function listPartnerServiceCatalog(input: {
 
   return Object.freeze(
     services.map((service) => {
-      const entitlement = findPartnerServiceEntitlement(agreement, service.key);
-      if (!entitlement) {
-        throw new PartnerServiceAgreementConfigurationError(
-          "service_not_entitled",
-        );
-      }
+      const entitlement = agreement
+        ? findPartnerServiceEntitlement(agreement, service.key)
+        : null;
+      if (!entitlement || !agreement)
+        return Object.freeze({
+          key: service.key,
+          label: service.label,
+          description: service.description,
+          requiredScopeFields: Object.freeze([...service.requiredScopeFields]),
+          defaultProofRequirements: Object.freeze({
+            ...service.defaultProofRequirements,
+          }),
+          bookable: true,
+          priceState: "quote_required" as const,
+          agreement: null,
+          inclusions: [],
+          exclusions: [],
+          quoteRule:
+            "Stonegate will review your request and confirm the price and time with you.",
+          pricingStatus: input.revealPrices
+            ? ("review_required" as const)
+            : ("hidden" as const),
+          basePrice: null,
+          baseOptions: [],
+          addOns: [],
+        });
       const base = selectedBase.get(service.key) ?? null;
       const rateCard = selectedRateCard.get(service.key) ?? null;
       const basePrice =
@@ -424,9 +464,7 @@ export async function listPartnerServiceCatalog(input: {
         defaultProofRequirements: Object.freeze({
           ...service.defaultProofRequirements,
         }),
-        bookable:
-          entitlement.pricingState === "quote_required" ||
-          baseOptions.length > 0,
+        bookable: true,
         priceState: entitlement.pricingState,
         agreement: Object.freeze({
           label: agreement.agreementLabel,

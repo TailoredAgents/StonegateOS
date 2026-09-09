@@ -36,8 +36,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       authorization.principal,
       "read",
     );
-    const series = await listPartnerRecurringSeries({ actor });
-    return portalSchedulingSuccessResponse({ ok: true, series }, correlationId);
+    const result = await listPartnerRecurringSeries({ actor, params: request.nextUrl.searchParams });
+    return portalSchedulingSuccessResponse({ ok: true, ...result }, correlationId);
   } catch (error) {
     return portalSchedulingExceptionResponse(error, correlationId);
   }

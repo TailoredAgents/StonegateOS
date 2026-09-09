@@ -13,6 +13,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import {
+  appointmentHolds,
   auditLogs,
   crmTasks,
   getDb,
@@ -23,9 +24,9 @@ import {
   partnerBulkImports,
   partnerRecurringOccurrences,
   partnerRecurringSeries,
-  partnerServiceCatalog,
   partnerServiceTemplates,
   teamMutationIdempotency,
+  outboxEvents,
 } from "@/db";
 import type { PartnerPrincipal } from "@/lib/partner-account-authorization";
 import { recordAuditEvent } from "@/lib/audit";
@@ -42,6 +43,8 @@ import {
 } from "@/lib/partner-portal-v2-scheduling";
 import {
   createPortalV2StrongEtag,
+  encodePortalV2Cursor,
+  parsePortalV2Pagination,
   evaluatePortalV2RevisionPrecondition,
 } from "@/lib/portal-v2-contract";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
@@ -49,8 +52,16 @@ import { projectPartnerAddOnSnapshots } from "@/lib/partner-portal-v2-service-ad
 import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
 import { acquirePartnerRecurringHorizonClaimLock } from "@/lib/partner-recurring-coordination";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
+import {
+  isPartnerToolEnabled,
+  normalizePartnerAccountWorkflow,
+  type PartnerToolKey,
+} from "@/lib/partner-account-workflows";
+import { loadPartnerBackgroundSchedulingActor } from "@/lib/partner-background-scheduling-actor";
+import { listPartnerServiceCatalog } from "@/lib/partner-portal-v2-service-catalog";
+import { arePartnerPortalV2WritesEnabled } from "@/lib/partner-portal-feature-flags";
+import { csvCell } from "@/lib/expense-export";
 
-const MAX_TEMPLATES = 100;
 const MAX_BULK_ROWS = 100;
 const MAX_CSV_BYTES = 256 * 1024;
 const MAX_OCCURRENCES = 24;
@@ -60,6 +71,15 @@ const RECURRING_LIFECYCLE_RECEIPT_ACTION =
 const RECURRING_LIFECYCLE_RECEIPT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+async function requireRepeatWorkTool(accountId: string, tool: PartnerToolKey) {
+  if (!(await isPartnerToolEnabled(accountId, tool)))
+    throw new PartnerPortalSchedulingError(
+      "not_found",
+      "This optional tool is not enabled for your account. Contact Stonegate if you need it.",
+      { status: 404 },
+    );
+}
 
 const UNSAFE_REUSE_KEY =
   /(?:access|gate|lock|secret|password|credential|token|payment|card|bank|price|rate|quote|invoice|approval|hold|authorization)/iu;
@@ -78,6 +98,7 @@ type TemplateData = Readonly<{
 }>;
 
 export type PartnerServiceTemplateDto = Readonly<{
+  active: boolean;
   id: string;
   name: string;
   serviceKey: string;
@@ -94,6 +115,7 @@ export type RecurrenceInput = Readonly<{
   frequency: "weekly" | "biweekly" | "monthly";
   startsOn: string;
   occurrenceCount: number;
+  endsOn?: string | null;
   preferredWindowStart: string | null;
 }>;
 
@@ -116,6 +138,7 @@ export type PartnerRecurringOccurrenceDto = Readonly<{
   state: string;
   draftId: string | null;
   jobId: string | null;
+  currentJobStatus: string | null;
   reason: string | null;
   evaluation: Readonly<Record<string, unknown>>;
   evaluatedAt: string | null;
@@ -159,6 +182,7 @@ export type BulkRowIssue = Readonly<{
 export type NormalizedBulkRow = Readonly<{
   locationId: string;
   serviceKey: string;
+  tierKey: string | null;
   description: string;
   crewInstructions: string | null;
   onSiteContact: Readonly<Record<string, unknown>>;
@@ -354,6 +378,7 @@ function toTemplateDto(
   return Object.freeze({
     id: row.id,
     name: row.name,
+    active: row.active,
     serviceKey: row.serviceKey,
     locationId: row.locationId,
     reusable,
@@ -606,7 +631,64 @@ async function audit(input: {
 
 export async function listPartnerServiceTemplates(input: {
   actor: PartnerSchedulingActor;
-}): Promise<readonly PartnerServiceTemplateDto[]> {
+  params?: URLSearchParams;
+}) {
+  const params = input.params ?? new URLSearchParams();
+  const query = (params.get("q") ?? "").trim();
+  const state = params.get("state") ?? "all";
+  if (query.length > 120 || !["all", "active", "archived"].includes(state))
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Review the template filters.",
+      { status: 422 },
+    );
+  const filterHash = sha256(
+    stableJson({
+      query,
+      state,
+      locations: input.actor.locationIds,
+      properties: input.actor.propertyIds,
+      access: input.actor.accessLevel,
+    }),
+  );
+  type Cursor = {
+    accountId: string;
+    membershipId: string;
+    filterHash: string;
+    name: string;
+    id: string;
+  };
+  const pagination = parsePortalV2Pagination(params, {
+    cursorKind: "partner_service_templates",
+    allowedQueryKeys: new Set(["q", "state"]),
+    validateCursorPayload: (value: unknown): value is Cursor =>
+      isRecord(value) &&
+      value["accountId"] === input.actor.accountId &&
+      value["membershipId"] === input.actor.membershipId &&
+      value["filterHash"] === filterHash &&
+      typeof value["name"] === "string" &&
+      value["name"].length <= 120 &&
+      typeof value["id"] === "string" &&
+      UUID_PATTERN.test(value["id"]),
+  });
+  if (!pagination.ok)
+    throw new PartnerPortalSchedulingError(
+      "invalid_cursor",
+      "Reload saved templates.",
+      { status: 400 },
+    );
+  const after = pagination.cursor?.payload;
+  const filters = and(
+    state === "all"
+      ? undefined
+      : eq(partnerServiceTemplates.active, state === "active"),
+    query
+      ? sql`position(lower(${query}) in lower(${partnerServiceTemplates.name})) > 0`
+      : undefined,
+    after
+      ? sql`(${partnerServiceTemplates.name}, ${partnerServiceTemplates.id}) > (${after.name}, ${after.id}::uuid)`
+      : undefined,
+  );
   const db = getDb();
   const rows =
     input.actor.accessLevel === "account"
@@ -619,14 +701,14 @@ export async function listPartnerServiceTemplates(input: {
                 partnerServiceTemplates.partnerAccountId,
                 input.actor.accountId,
               ),
-              eq(partnerServiceTemplates.active, true),
+              filters,
             ),
           )
           .orderBy(
             asc(partnerServiceTemplates.name),
             asc(partnerServiceTemplates.id),
           )
-          .limit(MAX_TEMPLATES)
+          .limit(pagination.limit + 1)
       : await (async () => {
           const grants: SQL[] = [];
           if (input.actor.locationIds.length > 0) {
@@ -663,7 +745,7 @@ export async function listPartnerServiceTemplates(input: {
                   partnerServiceTemplates.partnerAccountId,
                   input.actor.accountId,
                 ),
-                eq(partnerServiceTemplates.active, true),
+                filters,
                 or(...grants) ?? sql`false`,
               ),
             )
@@ -671,10 +753,28 @@ export async function listPartnerServiceTemplates(input: {
               asc(partnerServiceTemplates.name),
               asc(partnerServiceTemplates.id),
             )
-            .limit(MAX_TEMPLATES);
+            .limit(pagination.limit + 1);
           return scopedRows.map((row) => row.template);
         })();
-  return Object.freeze(rows.map(toTemplateDto));
+  const visible = rows.slice(0, pagination.limit);
+  const last = visible.at(-1);
+  return {
+    templates: Object.freeze(visible.map(toTemplateDto)),
+    nextCursor:
+      rows.length > pagination.limit && last
+        ? encodePortalV2Cursor({
+            kind: "partner_service_templates",
+            limit: pagination.limit,
+            payload: {
+              accountId: input.actor.accountId,
+              membershipId: input.actor.membershipId,
+              filterHash,
+              name: last.name,
+              id: last.id,
+            },
+          })
+        : null,
+  };
 }
 
 export async function createPartnerServiceTemplate(input: {
@@ -686,6 +786,7 @@ export async function createPartnerServiceTemplate(input: {
   idempotencyKeyHash: string;
   correlationId: string;
 }): Promise<{ template: PartnerServiceTemplateDto; replayed: boolean }> {
+  await requireRepeatWorkTool(input.actor.accountId, "templates");
   const name = cleanText(input.name, 120);
   if (!name || name.length < 2) {
     throw new PartnerPortalSchedulingError(
@@ -800,6 +901,12 @@ export async function getPartnerServiceTemplate(input: {
       { status: 404 },
     );
   if (row.locationId) await loadLocationForActor(input.actor, row.locationId);
+  else if (input.actor.accessLevel !== "account")
+    throw new PartnerPortalSchedulingError(
+      "not_found",
+      "The template was not found.",
+      { status: 404 },
+    );
   return toTemplateDto(row);
 }
 
@@ -808,6 +915,7 @@ export async function applyPartnerServiceTemplate(input: {
   templateId: string;
   idempotencyKeyHash: string;
 }): Promise<{ draft: PartnerDraftDto; replayed: boolean }> {
+  await requireRepeatWorkTool(input.actor.accountId, "templates");
   const template = await getPartnerServiceTemplate(input);
   return createPartnerBookingDraft({
     actor: input.actor,
@@ -817,6 +925,172 @@ export async function applyPartnerServiceTemplate(input: {
       input.idempotencyKeyHash,
       template.id,
     ),
+  });
+}
+
+/** Rename, replace from a current draft, or archive a saved shortcut. Recurring series keep their snapshot. */
+export async function updatePartnerServiceTemplate(input: {
+  actor: PartnerSchedulingActor;
+  templateId: string;
+  name?: string;
+  draftId?: string;
+  active?: boolean;
+  ifMatch: string | null;
+  idempotencyKeyHash: string;
+  correlationId: string;
+}) {
+  if (
+    input.active !== false ||
+    input.name !== undefined ||
+    input.draftId !== undefined
+  )
+    await requireRepeatWorkTool(input.actor.accountId, "templates");
+  const source = input.draftId
+    ? await reusableSource({ actor: input.actor, draftId: input.draftId })
+    : null;
+  const name =
+    input.name === undefined ? undefined : cleanText(input.name, 120);
+  if (
+    input.name !== undefined &&
+    (!name || input.name.trim().length > 120 || name.length < 2)
+  )
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Use a template name of 2 to 120 characters.",
+      { status: 422 },
+    );
+  const operationKey = operationHash(
+    "template.update",
+    input.actor.accountId,
+    input.idempotencyKeyHash,
+  );
+  const requestHash = sha256(
+    stableJson({
+      id: input.templateId,
+      name,
+      draftId: input.draftId,
+      active: input.active,
+      ifMatch: input.ifMatch,
+    }),
+  );
+  return getDb().transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${"partner_template_v2:" + input.actor.accountId}))`,
+    );
+    const [row] = await tx
+      .select()
+      .from(partnerServiceTemplates)
+      .where(
+        and(
+          eq(partnerServiceTemplates.id, input.templateId),
+          eq(partnerServiceTemplates.partnerAccountId, input.actor.accountId),
+        ),
+      )
+      .limit(1);
+    if (!row)
+      throw new PartnerPortalSchedulingError(
+        "not_found",
+        "The template was not found.",
+        { status: 404 },
+      );
+    if (row.locationId) await loadLocationForActor(input.actor, row.locationId);
+    else if (input.actor.accessLevel !== "account")
+      throw new PartnerPortalSchedulingError(
+        "not_found",
+        "The template was not found.",
+        { status: 404 },
+      );
+    const [receipt] = await tx
+      .select({ meta: auditLogs.meta })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.action, "partner.portal.v2.service_template.updated"),
+          eq(auditLogs.idempotencyKeyHash, operationKey),
+        ),
+      )
+      .limit(1);
+    if (receipt) {
+      if (receipt.meta?.["requestHash"] !== requestHash)
+        throw new PartnerPortalSchedulingError(
+          "idempotency_conflict",
+          "That request key was already used.",
+          { status: 409 },
+        );
+      return {
+        template: toTemplateDto(row),
+        active: row.active,
+        replayed: true,
+      };
+    }
+    assertTemplateRevision({
+      template: toTemplateDto(row),
+      ifMatch: input.ifMatch,
+      correlationId: input.correlationId,
+    });
+    // Restoring an archived shortcut must validate its existing name too.
+    // Another active template may have claimed that name during archival.
+    const effectiveName = name ?? row.name;
+    if (input.active ?? row.active) {
+      const [duplicate] = await tx
+        .select({ id: partnerServiceTemplates.id })
+        .from(partnerServiceTemplates)
+        .where(
+          and(
+            eq(partnerServiceTemplates.partnerAccountId, input.actor.accountId),
+            eq(partnerServiceTemplates.name, effectiveName),
+            eq(partnerServiceTemplates.active, true),
+            sql`${partnerServiceTemplates.id} <> ${row.id}`,
+          ),
+        )
+        .limit(1);
+      if (duplicate)
+        throw new PartnerPortalSchedulingError(
+          "conflict",
+          "A template with that name already exists.",
+          { status: 409 },
+        );
+    }
+    const [updated] = await tx
+      .update(partnerServiceTemplates)
+      .set({
+        ...(name ? { name } : {}),
+        ...(source
+          ? {
+              serviceKey: source.serviceKey,
+              locationId: source.locationId,
+              templateData: { ...source.data },
+            }
+          : {}),
+        ...(input.active !== undefined ? { active: input.active } : {}),
+        version: row.version + 1,
+      })
+      .where(eq(partnerServiceTemplates.id, row.id))
+      .returning();
+    if (!updated) throw new Error("partner_template_update_failed");
+    await tx.insert(auditLogs).values({
+      actorType: "human",
+      actorId: input.actor.partnerUserId,
+      sessionId: input.actor.sessionId,
+      authMethod: "partner_session",
+      action: "partner.portal.v2.service_template.updated",
+      entityType: "partner_service_template",
+      entityId: row.id,
+      correlationId: input.correlationId,
+      idempotencyKeyHash: operationKey,
+      meta: {
+        accountId: input.actor.accountId,
+        requestHash,
+        version: updated.version,
+        archived: !updated.active,
+        sourceReplaced: Boolean(source),
+      },
+    });
+    return {
+      template: toTemplateDto(updated),
+      active: updated.active,
+      replayed: false,
+    };
   });
 }
 
@@ -834,6 +1108,7 @@ export async function createBookAgainDraft(input: {
     mutation: mutationFromTemplate({
       id: input.jobId,
       name: "Book again",
+      active: true,
       serviceKey: source.serviceKey,
       locationId: source.locationId,
       reusable: source.data,
@@ -862,6 +1137,7 @@ export function parseRecurrenceInput(value: unknown): RecurrenceInput {
     "frequency",
     "startsOn",
     "occurrenceCount",
+    "endsOn",
     "preferredWindowStart",
   ]);
   const unknown = Object.keys(value).find((key) => !allowed.has(key));
@@ -878,12 +1154,19 @@ export function parseRecurrenceInput(value: unknown): RecurrenceInput {
   const name = cleanText(value["name"], 120) ?? "";
   const frequency = value["frequency"];
   const startsOn = cleanText(value["startsOn"], 10) ?? "";
-  const occurrenceCount = value["occurrenceCount"];
+  const occurrenceCount = value["occurrenceCount"] ?? 0;
+  const endsOn = cleanText(value["endsOn"], 10);
   const preferredWindowStart = cleanText(value["preferredWindowStart"], 5);
   const errors: Record<string, string> = {};
-  if (!/^[0-9a-f-]{36}$/iu.test(templateId))
+  if (!UUID_PATTERN.test(templateId))
     errors["templateId"] = "Choose a saved template.";
   if (name.length < 2) errors["name"] = "Use 2 to 120 characters.";
+  if (
+    value["endsOn"] !== undefined &&
+    value["endsOn"] !== null &&
+    (typeof value["endsOn"] !== "string" || value["endsOn"].length !== 10)
+  )
+    errors["endsOn"] = "Use YYYY-MM-DD or leave the end date blank.";
   if (!(["weekly", "biweekly", "monthly"] as unknown[]).includes(frequency))
     errors["frequency"] = "Choose weekly, every two weeks, or monthly.";
   if (
@@ -893,10 +1176,19 @@ export function parseRecurrenceInput(value: unknown): RecurrenceInput {
     errors["startsOn"] = "Choose a valid start date.";
   if (
     !Number.isSafeInteger(occurrenceCount) ||
-    (occurrenceCount as number) < 2 ||
+    ((occurrenceCount as number) !== 0 && (occurrenceCount as number) < 2) ||
     (occurrenceCount as number) > MAX_OCCURRENCES
   )
     errors["occurrenceCount"] = `Choose 2 to ${MAX_OCCURRENCES} occurrences.`;
+  if (
+    endsOn &&
+    (!/^\d{4}-\d{2}-\d{2}$/u.test(endsOn) ||
+      !DateTime.fromISO(endsOn).isValid ||
+      endsOn < startsOn)
+  )
+    errors["endsOn"] = "Choose an end date on or after the first service date.";
+  if (endsOn && occurrenceCount !== 0)
+    errors["endsOn"] = "Choose an end date or an occurrence count, not both.";
   if (
     preferredWindowStart &&
     !/^([01]\d|2[0-3]):(00|30)$/u.test(preferredWindowStart)
@@ -915,6 +1207,7 @@ export function parseRecurrenceInput(value: unknown): RecurrenceInput {
     frequency: frequency as RecurrenceInput["frequency"],
     startsOn,
     occurrenceCount: occurrenceCount as number,
+    endsOn,
     preferredWindowStart,
   });
 }
@@ -976,22 +1269,18 @@ export function recurringOccurrenceLifecycleTransition(input: {
   bookingDraftId: string | null;
   partnerBookingId: string | null;
 }): "tentative" | "skipped" | "canceled" | null {
-  if (
-    input.localDate < input.tomorrow ||
-    input.bookingDraftId ||
-    input.partnerBookingId
-  ) {
+  if (input.localDate < input.tomorrow || input.partnerBookingId) {
     return null;
   }
   if (input.action === "pause") {
-    return input.state === "tentative" ? "skipped" : null;
+    return ["tentative", "evaluating"].includes(input.state) ? "skipped" : null;
   }
   if (input.action === "resume") {
     return input.state === "skipped" && input.failureCode === "series_paused"
       ? "tentative"
       : null;
   }
-  return input.state === "tentative" ||
+  return ["tentative", "evaluating"].includes(input.state) ||
     (input.state === "skipped" && input.failureCode === "series_paused")
     ? "canceled"
     : null;
@@ -1000,6 +1289,8 @@ export function recurringOccurrenceLifecycleTransition(input: {
 export function recurrenceDates(
   input: RecurrenceInput,
   timezone: string,
+  throughDate?: string,
+  fromDate?: string,
 ): readonly string[] {
   const start = DateTime.fromISO(input.startsOn, { zone: timezone }).startOf(
     "day",
@@ -1011,7 +1302,27 @@ export function recurrenceDates(
       { status: 422 },
     );
   const dates: string[] = [];
-  for (let index = 0; index < input.occurrenceCount; index += 1) {
+  const rolling = input.occurrenceCount === 0;
+  const through = throughDate ?? start.plus({ days: 90 }).toISODate();
+  const lower = fromDate
+    ? DateTime.fromISO(fromDate, { zone: timezone })
+    : start;
+  const firstIndex = !rolling
+    ? 0
+    : Math.max(
+        0,
+        Math.floor(
+          lower
+            .diff(start, input.frequency === "monthly" ? "months" : "weeks")
+            .get(input.frequency === "monthly" ? "months" : "weeks") /
+            (input.frequency === "biweekly" ? 2 : 1),
+        ) - 1,
+      );
+  for (
+    let index = firstIndex;
+    index < (rolling ? firstIndex + 100 : input.occurrenceCount);
+    index += 1
+  ) {
     const date =
       input.frequency === "monthly"
         ? start.plus({ months: index })
@@ -1020,6 +1331,9 @@ export function recurrenceDates(
           });
     const iso = date.toISODate();
     if (!iso) throw new Error("partner_recurring_date_failed");
+    if (rolling && (iso > through || (input.endsOn && iso > input.endsOn)))
+      break;
+    if (fromDate && iso < fromDate) continue;
     dates.push(iso);
   }
   return Object.freeze(dates);
@@ -1050,6 +1364,15 @@ async function updateOccurrence(input: {
       and(
         eq(partnerRecurringOccurrences.partnerAccountId, input.actor.accountId),
         eq(partnerRecurringOccurrences.id, input.occurrenceId),
+        input.partnerBookingId
+          ? or(
+              eq(partnerRecurringOccurrences.state, "evaluating"),
+              eq(
+                partnerRecurringOccurrences.partnerBookingId,
+                input.partnerBookingId,
+              ),
+            )
+          : eq(partnerRecurringOccurrences.state, "evaluating"),
       ),
     );
 }
@@ -1063,14 +1386,68 @@ async function evaluateRecurringOccurrence(input: {
   correlationId: string;
   now: Date;
 }): Promise<void> {
+  const recurringSource = {
+    seriesId: input.occurrence.recurringSeriesId,
+    occurrenceId: input.occurrence.id,
+  };
   const day = DateTime.fromISO(input.occurrence.localDate, {
     zone: input.timezone,
   }).startOf("day");
   let bookingDraftId: string | null = null;
+  const submitForReview = async (
+    draft: PartnerDraftDto,
+    reason: string,
+  ): Promise<void> => {
+    const submitted = await submitPartnerBookingDraft({
+      actor: input.actor,
+      recurringSource,
+      draftId: draft.id,
+      holdId: null,
+      ifMatch: draft.etag,
+      idempotencyKeyHash: sha256("recurring-review", input.occurrence.id),
+      correlationId: input.correlationId,
+      now: input.now,
+    });
+    await updateOccurrence({
+      actor: input.actor,
+      occurrenceId: input.occurrence.id,
+      state: "review",
+      bookingDraftId: draft.id,
+      partnerBookingId: submitted.booking.id,
+      failureCode: reason,
+      evaluation: {
+        reservationCreated: false,
+        publicStatus: submitted.booking.publicStatus,
+      },
+      evaluatedAt: input.now,
+    });
+  };
   try {
+    const location = input.template.locationId
+      ? await loadLocationForActor(input.actor, input.template.locationId)
+      : null;
     const created = await createPartnerBookingDraft({
       actor: input.actor,
-      mutation: mutationFromTemplate(input.template),
+      recurringSource,
+      mutation: {
+        ...mutationFromTemplate(input.template),
+        onSiteContact: input.template.reusable.onSiteContact ??
+          location?.onSiteContact ?? {
+            name: "Account contact",
+            email: input.actor.email,
+          },
+        preferredWindows: [
+          {
+            localDate: input.occurrence.localDate,
+            timeOfDay: input.preferredWindowStart
+              ? Number(input.preferredWindowStart.slice(0, 2)) < 12
+                ? "morning"
+                : "afternoon"
+              : "anytime",
+            timezone: input.timezone,
+          },
+        ],
+      },
       idempotencyKeyHash: sha256("recurring-draft", input.occurrence.id),
       now: input.now,
     });
@@ -1125,24 +1502,16 @@ async function evaluateRecurringOccurrence(input: {
       (window) =>
         window.localDate === input.occurrence.localDate && window.available,
     );
-    const publicStarts = availableWindows.map((window) =>
-      DateTime.fromISO(window.startAt)
-        .setZone(input.timezone)
-        .toFormat("HH:mm"),
-    );
-    if (!input.preferredWindowStart) {
-      await updateOccurrence({
-        actor: input.actor,
-        occurrenceId: input.occurrence.id,
-        state: "review",
-        bookingDraftId: created.draft.id,
-        failureCode: "arrival_window_selection_required",
-        evaluation: {
-          availableWindowStarts: publicStarts.slice(0, 12),
-          reservationCreated: false,
-        },
-        evaluatedAt: input.now,
-      });
+    if (
+      !input.preferredWindowStart ||
+      !availability.instantConfirmationEligible
+    ) {
+      await submitForReview(
+        created.draft,
+        !input.preferredWindowStart
+          ? "arrival_window_selection_required"
+          : "stonegate_review_required",
+      );
       return;
     }
     const window = availableWindows.find(
@@ -1152,22 +1521,12 @@ async function evaluateRecurringOccurrence(input: {
           .toFormat("HH:mm") === input.preferredWindowStart,
     );
     if (!window) {
-      await updateOccurrence({
-        actor: input.actor,
-        occurrenceId: input.occurrence.id,
-        state: "review",
-        bookingDraftId: created.draft.id,
-        failureCode: "preferred_window_unavailable",
-        evaluation: {
-          availableWindowStarts: publicStarts.slice(0, 12),
-          reservationCreated: false,
-        },
-        evaluatedAt: input.now,
-      });
+      await submitForReview(created.draft, "preferred_window_unavailable");
       return;
     }
     const hold = await createOrReplacePartnerHold({
       actor: input.actor,
+      recurringSource,
       draftId: created.draft.id,
       windowId: window.id,
       idempotencyKeyHash: sha256("recurring-hold", input.occurrence.id),
@@ -1177,6 +1536,7 @@ async function evaluateRecurringOccurrence(input: {
     });
     const submitted = await submitPartnerBookingDraft({
       actor: input.actor,
+      recurringSource,
       draftId: created.draft.id,
       holdId: hold.hold.id,
       idempotencyKeyHash: sha256("recurring-submit", input.occurrence.id),
@@ -1206,6 +1566,22 @@ async function evaluateRecurringOccurrence(input: {
     });
   } catch (error) {
     const expectedReview = error instanceof PartnerPortalSchedulingError;
+    if (
+      expectedReview &&
+      bookingDraftId &&
+      [409, 410, 422, 503].includes(error.status)
+    ) {
+      try {
+        const draft = await getPartnerBookingDraft({
+          actor: input.actor,
+          draftId: bookingDraftId,
+        });
+        await submitForReview(draft, error.code);
+        return;
+      } catch {
+        /* Invalid scope or revoked access stays in the staff action queue. */
+      }
+    }
     await updateOccurrence({
       actor: input.actor,
       occurrenceId: input.occurrence.id,
@@ -1373,6 +1749,8 @@ export async function recordRecurringOccurrenceMaintenanceFailure(input: {
         eq(partnerRecurringOccurrences.partnerAccountId, input.accountId),
         eq(partnerRecurringOccurrences.recurringSeriesId, input.seriesId),
         eq(partnerRecurringOccurrences.id, input.occurrenceId),
+        eq(partnerRecurringOccurrences.state, "evaluating"),
+        isNull(partnerRecurringOccurrences.partnerBookingId),
       ),
     );
   const occurrence = await loadRecurringOccurrenceActionContext({
@@ -1478,10 +1856,14 @@ export async function evaluateClaimedPartnerRecurringOccurrence(input: {
         { status: 422 },
       );
     }
-    const template = await getPartnerServiceTemplate({
-      actor: input.actor,
-      templateId: series.templateId,
-    });
+    const template =
+      isRecord(series.templateSnapshot) &&
+      isRecord(series.templateSnapshot["reusable"])
+        ? (series.templateSnapshot as unknown as PartnerServiceTemplateDto)
+        : await getPartnerServiceTemplate({
+            actor: input.actor,
+            templateId: series.templateId,
+          });
     await evaluateRecurringOccurrence({
       actor: input.actor,
       template,
@@ -1524,9 +1906,14 @@ export async function evaluateClaimedPartnerRecurringOccurrence(input: {
   };
 }
 
+type RecurringOccurrenceRead =
+  typeof partnerRecurringOccurrences.$inferSelect & {
+    currentJobStatus: string | null;
+  };
+
 function recurringDto(
   series: typeof partnerRecurringSeries.$inferSelect,
-  occurrences: readonly (typeof partnerRecurringOccurrences.$inferSelect)[],
+  occurrences: readonly RecurringOccurrenceRead[],
   lifecycle: PartnerRecurringSeriesLifecycle | null = null,
 ): PartnerRecurringSeriesDto {
   let recurrence: unknown = {};
@@ -1558,6 +1945,7 @@ function recurringDto(
           state: occurrence.state,
           draftId: occurrence.bookingDraftId,
           jobId: occurrence.partnerBookingId,
+          currentJobStatus: occurrence.currentJobStatus,
           reason: occurrence.failureCode,
           evaluation: Object.freeze({ ...occurrence.evaluation }),
           evaluatedAt: occurrence.evaluatedAt?.toISOString() ?? null,
@@ -1590,7 +1978,7 @@ async function loadRecurringSeriesForActor(
   const grants: SQL[] = [];
   if (actor.locationIds.length > 0) {
     grants.push(
-      inArray(partnerServiceTemplates.locationId, [...actor.locationIds]),
+      inArray(partnerRecurringSeries.locationId, [...actor.locationIds]),
     );
   }
   if (actor.propertyIds.length > 0) {
@@ -1615,7 +2003,7 @@ async function loadRecurringSeriesForActor(
     .leftJoin(
       partnerAccountLocations,
       and(
-        eq(partnerAccountLocations.id, partnerServiceTemplates.locationId),
+        eq(partnerAccountLocations.id, partnerRecurringSeries.locationId),
         eq(
           partnerAccountLocations.partnerAccountId,
           partnerRecurringSeries.partnerAccountId,
@@ -1637,18 +2025,38 @@ async function loadRecurringOccurrences(
   db: RepeatWorkDatabase,
   accountId: string,
   seriesId: string,
-): Promise<readonly (typeof partnerRecurringOccurrences.$inferSelect)[]> {
-  return db
-    .select()
+): Promise<readonly RecurringOccurrenceRead[]> {
+  const rows = await db
+    .select({
+      occurrence: partnerRecurringOccurrences,
+      currentJobStatus: partnerBookings.publicStatus,
+    })
     .from(partnerRecurringOccurrences)
+    .leftJoin(
+      partnerBookings,
+      and(
+        eq(partnerBookings.id, partnerRecurringOccurrences.partnerBookingId),
+        eq(
+          partnerBookings.partnerAccountId,
+          partnerRecurringOccurrences.partnerAccountId,
+        ),
+      ),
+    )
     .where(
       and(
         eq(partnerRecurringOccurrences.partnerAccountId, accountId),
         eq(partnerRecurringOccurrences.recurringSeriesId, seriesId),
+        sql`${partnerRecurringOccurrences.localDate} >= (current_date - 30)`,
       ),
     )
     .orderBy(asc(partnerRecurringOccurrences.localDate))
-    .limit(MAX_OCCURRENCES);
+    .limit(100);
+  // Keep the evaluator's immutable submission outcome separate from the linked
+  // job's current public status; staff review/approval can change it later.
+  return rows.map(({ occurrence, currentJobStatus }) => ({
+    ...occurrence,
+    currentJobStatus,
+  }));
 }
 
 function lifecycleFromAuditRow(
@@ -1766,6 +2174,8 @@ export async function mutatePartnerRecurringSeriesLifecycle(input: {
   correlationId: string;
   now?: Date;
 }): Promise<PartnerRecurringSeriesLifecycleResult> {
+  if (input.mutation.action === "resume")
+    await requireRepeatWorkTool(input.actor.accountId, "recurring");
   if (!UUID_PATTERN.test(input.seriesId)) {
     throw new PartnerPortalSchedulingError(
       "not_found",
@@ -1879,13 +2289,6 @@ export async function mutatePartnerRecurringSeriesLifecycle(input: {
       input.actor.accountId,
       series.id,
     );
-    if (occurrences.some((occurrence) => occurrence.state === "evaluating")) {
-      throw new PartnerPortalSchedulingError(
-        "conflict",
-        "An occurrence is being evaluated. Refresh and retry after it finishes.",
-        { status: 409, retryable: true },
-      );
-    }
     const tomorrow = DateTime.fromJSDate(now, { zone: series.timezone })
       .startOf("day")
       .plus({ days: 1 })
@@ -1919,14 +2322,20 @@ export async function mutatePartnerRecurringSeriesLifecycle(input: {
             : "canceled";
       const priorStateCondition =
         input.mutation.action === "pause"
-          ? eq(partnerRecurringOccurrences.state, "tentative")
+          ? inArray(partnerRecurringOccurrences.state, [
+              "tentative",
+              "evaluating",
+            ])
           : input.mutation.action === "resume"
             ? and(
                 eq(partnerRecurringOccurrences.state, "skipped"),
                 eq(partnerRecurringOccurrences.failureCode, "series_paused"),
               )
             : or(
-                eq(partnerRecurringOccurrences.state, "tentative"),
+                inArray(partnerRecurringOccurrences.state, [
+                  "tentative",
+                  "evaluating",
+                ]),
                 and(
                   eq(partnerRecurringOccurrences.state, "skipped"),
                   eq(partnerRecurringOccurrences.failureCode, "series_paused"),
@@ -1969,7 +2378,6 @@ export async function mutatePartnerRecurringSeriesLifecycle(input: {
               planned.map((occurrence) => occurrence.id),
             ),
             gte(partnerRecurringOccurrences.localDate, tomorrow),
-            isNull(partnerRecurringOccurrences.bookingDraftId),
             isNull(partnerRecurringOccurrences.partnerBookingId),
             priorStateCondition,
           ),
@@ -1981,6 +2389,22 @@ export async function mutatePartnerRecurringSeriesLifecycle(input: {
           "An occurrence changed while this request was processed. Refresh and try again.",
           { status: 409, retryable: true },
         );
+      }
+      if (input.mutation.action !== "resume") {
+        const draftIds = planned.flatMap((occurrence) =>
+          occurrence.bookingDraftId ? [occurrence.bookingDraftId] : [],
+        );
+        if (draftIds.length)
+          await tx
+            .update(appointmentHolds)
+            .set({ status: "released", updatedAt: now })
+            .where(
+              and(
+                eq(appointmentHolds.partnerAccountId, input.actor.accountId),
+                inArray(appointmentHolds.partnerBookingDraftId, draftIds),
+                eq(appointmentHolds.status, "active"),
+              ),
+            );
       }
     }
 
@@ -2096,6 +2520,7 @@ export async function createPartnerRecurringSeries(input: {
   correlationId: string;
   now?: Date;
 }) {
+  await requireRepeatWorkTool(input.actor.accountId, "recurring");
   const now = input.now ?? new Date();
   const template = await getPartnerServiceTemplate({
     actor: input.actor,
@@ -2132,6 +2557,29 @@ export async function createPartnerRecurringSeries(input: {
   );
   const requestHash = sha256(stableJson(input.recurrence));
   const created = await getDb().transaction(async (tx) => {
+    await acquirePartnerRecurringHorizonClaimLock(tx);
+    await acquireScheduleConflictLock(tx);
+    const [account] = await tx
+      .select({
+        config: partnerAccounts.portalWorkflowConfig,
+        lifecycle: partnerAccounts.portalLifecycleStatus,
+        accessEnabled: partnerAccounts.portalAccessEnabled,
+      })
+      .from(partnerAccounts)
+      .where(eq(partnerAccounts.id, input.actor.accountId))
+      .for("update")
+      .limit(1);
+    if (
+      !account ||
+      account.lifecycle !== "active" ||
+      !account.accessEnabled ||
+      !normalizePartnerAccountWorkflow(account.config).tools.recurring
+    )
+      throw new PartnerPortalSchedulingError(
+        "forbidden",
+        "Recurring service is not enabled for this company.",
+        { status: 403 },
+      );
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext(${`partner_recurring_v2:${input.actor.accountId}`}))`,
     );
@@ -2155,15 +2603,21 @@ export async function createPartnerRecurringSeries(input: {
         .values({
           partnerAccountId: input.actor.accountId,
           templateId: template.id,
+          locationId: template.locationId,
           name: input.recurrence.name,
           recurrenceRule: stableJson({
             frequency: input.recurrence.frequency,
             occurrenceCount: input.recurrence.occurrenceCount,
+            endsOn: input.recurrence.endsOn ?? null,
           }),
+          templateSnapshot: { ...template },
           timezone,
           preferredWindowStart: input.recurrence.preferredWindowStart,
           startsOn: dates[0]!,
-          endsOn: dates.at(-1)!,
+          endsOn:
+            input.recurrence.occurrenceCount === 0
+              ? (input.recurrence.endsOn ?? null)
+              : dates.at(-1)!,
           state: "active",
           revision: 1,
           createdByMembershipId: input.actor.membershipId,
@@ -2209,6 +2663,51 @@ export async function createPartnerRecurringSeries(input: {
       occurrence.evaluatedAt
     )
       continue;
+    const claimed = await getDb().transaction(async (tx) => {
+      await acquirePartnerRecurringHorizonClaimLock(tx);
+      await acquireScheduleConflictLock(tx);
+      const [account] = await tx
+        .select({ config: partnerAccounts.portalWorkflowConfig })
+        .from(partnerAccounts)
+        .where(eq(partnerAccounts.id, input.actor.accountId))
+        .for("update")
+        .limit(1);
+      if (
+        !account ||
+        !normalizePartnerAccountWorkflow(account.config).tools.recurring
+      )
+        return false;
+      const [activeSeries] = await tx
+        .select({ id: partnerRecurringSeries.id })
+        .from(partnerRecurringSeries)
+        .where(
+          and(
+            eq(partnerRecurringSeries.id, created.series.id),
+            eq(partnerRecurringSeries.partnerAccountId, input.actor.accountId),
+            eq(partnerRecurringSeries.state, "active"),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!activeSeries) return false;
+      const [row] = await tx
+        .update(partnerRecurringOccurrences)
+        .set({ state: "evaluating", evaluatedAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(partnerRecurringOccurrences.id, occurrence.id),
+            eq(
+              partnerRecurringOccurrences.partnerAccountId,
+              input.actor.accountId,
+            ),
+            eq(partnerRecurringOccurrences.state, "tentative"),
+            isNull(partnerRecurringOccurrences.partnerBookingId),
+          ),
+        )
+        .returning({ id: partnerRecurringOccurrences.id });
+      return Boolean(row);
+    });
+    if (!claimed) continue;
     await evaluateClaimedPartnerRecurringOccurrence({
       actor: input.actor,
       seriesId: created.series.id,
@@ -2217,16 +2716,11 @@ export async function createPartnerRecurringSeries(input: {
       now,
     });
   }
-  const refreshed = await getDb()
-    .select()
-    .from(partnerRecurringOccurrences)
-    .where(
-      and(
-        eq(partnerRecurringOccurrences.partnerAccountId, input.actor.accountId),
-        eq(partnerRecurringOccurrences.recurringSeriesId, created.series.id),
-      ),
-    )
-    .orderBy(asc(partnerRecurringOccurrences.localDate));
+  const refreshed = await loadRecurringOccurrences(
+    getDb(),
+    input.actor.accountId,
+    created.series.id,
+  );
   if (!created.replayed)
     await audit({
       principal: input.principal,
@@ -2249,23 +2743,64 @@ export async function createPartnerRecurringSeries(input: {
 
 export async function listPartnerRecurringSeries(input: {
   actor: PartnerSchedulingActor;
+  params?: URLSearchParams;
 }) {
   const db = getDb();
+  type Cursor = {
+    accountId: string;
+    membershipId: string;
+    id: string;
+    createdAt: string;
+  };
+  const pagination = parsePortalV2Pagination(
+    input.params ?? new URLSearchParams(),
+    {
+      cursorKind: "partner_recurring_series",
+      allowedQueryKeys: new Set<string>(),
+      validateCursorPayload: (value: unknown): value is Cursor =>
+        isRecord(value) &&
+        value["accountId"] === input.actor.accountId &&
+        value["membershipId"] === input.actor.membershipId &&
+        typeof value["id"] === "string" &&
+        UUID_PATTERN.test(value["id"]) &&
+        typeof value["createdAt"] === "string" &&
+        Number.isFinite(Date.parse(value["createdAt"])),
+    },
+  );
+  if (!pagination.ok)
+    throw new PartnerPortalSchedulingError(
+      "invalid_cursor",
+      "Reload recurring service.",
+      { status: 400 },
+    );
+  const cursor = pagination.cursor?.payload;
+  const cursorFilter = cursor
+    ? sql`(${partnerRecurringSeries.createdAt}, ${partnerRecurringSeries.id}) < (${sql.param(new Date(cursor.createdAt), partnerRecurringSeries.createdAt)}, ${cursor.id}::uuid)`
+    : undefined;
   const series =
     input.actor.accessLevel === "account"
       ? await db
           .select()
           .from(partnerRecurringSeries)
           .where(
-            eq(partnerRecurringSeries.partnerAccountId, input.actor.accountId),
+            and(
+              eq(
+                partnerRecurringSeries.partnerAccountId,
+                input.actor.accountId,
+              ),
+              cursorFilter,
+            ),
           )
-          .orderBy(desc(partnerRecurringSeries.createdAt))
-          .limit(50)
+          .orderBy(
+            desc(partnerRecurringSeries.createdAt),
+            desc(partnerRecurringSeries.id),
+          )
+          .limit(pagination.limit + 1)
       : await (async () => {
           const grants: SQL[] = [];
           if (input.actor.locationIds.length > 0) {
             grants.push(
-              inArray(partnerServiceTemplates.locationId, [
+              inArray(partnerRecurringSeries.locationId, [
                 ...input.actor.locationIds,
               ]),
             );
@@ -2298,7 +2833,7 @@ export async function listPartnerRecurringSeries(input: {
               and(
                 eq(
                   partnerAccountLocations.id,
-                  partnerServiceTemplates.locationId,
+                  partnerRecurringSeries.locationId,
                 ),
                 eq(
                   partnerAccountLocations.partnerAccountId,
@@ -2313,21 +2848,130 @@ export async function listPartnerRecurringSeries(input: {
                   input.actor.accountId,
                 ),
                 or(...grants) ?? sql`false`,
+                cursorFilter,
               ),
             )
-            .orderBy(desc(partnerRecurringSeries.createdAt))
-            .limit(50);
+            .orderBy(
+              desc(partnerRecurringSeries.createdAt),
+              desc(partnerRecurringSeries.id),
+            )
+            .limit(pagination.limit + 1);
           return rows.map((row) => row.series);
         })();
   const result = [];
-  for (const row of series) {
+  for (const row of series.slice(0, pagination.limit)) {
     const [occurrences, lifecycle] = await Promise.all([
       loadRecurringOccurrences(db, input.actor.accountId, row.id),
       loadRecurringLifecycle(db, row.id),
     ]);
     result.push(recurringDto(row, occurrences, lifecycle));
   }
-  return result;
+  const last = series[Math.min(series.length, pagination.limit) - 1];
+  return {
+    series: result,
+    nextCursor:
+      series.length > pagination.limit && last
+        ? encodePortalV2Cursor({
+            kind: "partner_recurring_series",
+            limit: pagination.limit,
+            payload: {
+              accountId: input.actor.accountId,
+              membershipId: input.actor.membershipId,
+              id: last.id,
+              createdAt: last.createdAt.toISOString(),
+            },
+          })
+        : null,
+  };
+}
+
+/** Materialize a bounded rolling horizon; dates beyond 30 days remain tentative. */
+export async function extendPartnerRecurringOccurrences(
+  now = new Date(),
+  limit = 100,
+): Promise<number> {
+  return getDb().transaction(async (tx) => {
+    await acquirePartnerRecurringHorizonClaimLock(tx);
+    const rows = await tx
+      .select({ series: partnerRecurringSeries })
+      .from(partnerRecurringSeries)
+      .innerJoin(
+        partnerAccounts,
+        eq(partnerAccounts.id, partnerRecurringSeries.partnerAccountId),
+      )
+      .where(
+        and(
+          eq(partnerRecurringSeries.state, "active"),
+          eq(partnerAccounts.portalAccessEnabled, true),
+          sql`${partnerAccounts.portalWorkflowConfig}->'tools'->>'recurring' = 'true'`,
+        ),
+      )
+      .orderBy(
+        sql`${partnerRecurringSeries.occurrencesExpandedAt} asc nulls first`,
+        asc(partnerRecurringSeries.id),
+      )
+      .limit(Math.min(100, Math.max(1, limit)));
+    let added = 0;
+    for (const { series } of rows) {
+      // Rotate every inspected row, including finite or malformed legacy rules,
+      // so one unsupported series cannot starve the rolling-horizon queue.
+      await tx
+        .update(partnerRecurringSeries)
+        .set({ occurrencesExpandedAt: now, updatedAt: series.updatedAt })
+        .where(eq(partnerRecurringSeries.id, series.id));
+      let rule: unknown;
+      try {
+        rule = JSON.parse(series.recurrenceRule);
+      } catch {
+        continue;
+      }
+      if (
+        !isRecord(rule) ||
+        rule["occurrenceCount"] !== 0 ||
+        !["weekly", "biweekly", "monthly"].includes(String(rule["frequency"]))
+      )
+        continue;
+      const today = DateTime.fromJSDate(now, { zone: series.timezone }).startOf(
+        "day",
+      );
+      const dates = recurrenceDates(
+        {
+          templateId: series.templateId ?? "",
+          name: series.name,
+          startsOn: series.startsOn,
+          occurrenceCount: 0,
+          endsOn: series.endsOn,
+          frequency: rule["frequency"] as RecurrenceInput["frequency"],
+          preferredWindowStart: series.preferredWindowStart,
+        },
+        series.timezone,
+        today.plus({ days: 90 }).toISODate()!,
+        today.plus({ days: 1 }).toISODate()!,
+      );
+      if (dates.length) {
+        const inserted = await tx
+          .insert(partnerRecurringOccurrences)
+          .values(
+            dates.map((localDate) => ({
+              partnerAccountId: series.partnerAccountId,
+              recurringSeriesId: series.id,
+              localDate,
+              state: "tentative",
+              evaluation: { reservationCreated: false },
+            })),
+          )
+          .onConflictDoNothing({
+            target: [
+              partnerRecurringOccurrences.recurringSeriesId,
+              partnerRecurringOccurrences.localDate,
+            ],
+          })
+          .returning({ id: partnerRecurringOccurrences.id });
+        added += inserted.length;
+      }
+    }
+    return added;
+  });
 }
 
 export function parseCsv(csv: string): readonly (readonly string[])[] {
@@ -2387,6 +3031,7 @@ export function parseCsv(csv: string): readonly (readonly string[])[] {
 const BULK_HEADERS = [
   "location_id",
   "service_key",
+  "tier_key",
   "description",
   "contact_name",
   "contact_phone",
@@ -2402,7 +3047,7 @@ const BULK_HEADERS = [
 ] as const;
 
 function csvEscape(value: string): string {
-  return /[",\r\n]/u.test(value) ? `"${value.replace(/"/gu, '""')}"` : value;
+  return csvCell(value);
 }
 
 export function correctionCsv(rows: readonly BulkValidationRow[]): string {
@@ -2473,13 +3118,10 @@ export async function validatePartnerBulkCsv(input: {
     ),
   );
   const locationIds = [
-    ...new Set(rawRows.map((row) => row["location_id"] ?? "").filter(Boolean)),
-  ];
-  const serviceKeys = [
     ...new Set(
       rawRows
-        .map((row) => (row["service_key"] ?? "").toLowerCase())
-        .filter(Boolean),
+        .map((row) => row["location_id"] ?? "")
+        .filter((id) => UUID_PATTERN.test(id)),
     ),
   ];
   const [locations, services] = await Promise.all([
@@ -2497,18 +3139,10 @@ export async function validatePartnerBulkCsv(input: {
           ),
         ),
       ),
-    getDb()
-      .select({ key: partnerServiceCatalog.key })
-      .from(partnerServiceCatalog)
-      .where(
-        and(
-          eq(partnerServiceCatalog.active, true),
-          inArray(
-            partnerServiceCatalog.key,
-            serviceKeys.length ? serviceKeys : ["__none__"],
-          ),
-        ),
-      ),
+    listPartnerServiceCatalog({
+      accountId: input.actor.accountId,
+      revealPrices: input.actor.canReadRates,
+    }),
   ]);
   const accessibleLocations = new Map<
     string,
@@ -2530,6 +3164,12 @@ export async function validatePartnerBulkCsv(input: {
       const locationId = raw["location_id"] ?? "";
       const location = accessibleLocations.get(locationId);
       const serviceKey = (raw["service_key"] ?? "").toLowerCase();
+      const service = services.find((item) => item.key === serviceKey);
+      const tierKey =
+        cleanText(raw["tier_key"], 100) ??
+        (service?.baseOptions.length === 1
+          ? service.baseOptions[0]!.tierKey
+          : null);
       const description = cleanText(raw["description"], 4_000) ?? "";
       const contactName = cleanText(raw["contact_name"], 120) ?? "";
       const contactPhone = cleanText(raw["contact_phone"], 40);
@@ -2545,7 +3185,19 @@ export async function validatePartnerBulkCsv(input: {
       if (!supported.has(serviceKey))
         errors.push({
           field: "service_key",
-          message: "Choose an active service key.",
+          message:
+            "Choose a service enabled for your account, or service_request for Stonegate review.",
+        });
+      if (
+        service &&
+        ((tierKey &&
+          !service.baseOptions.some((option) => option.tierKey === tierKey)) ||
+          (!tierKey && service.baseOptions.length > 1))
+      )
+        errors.push({
+          field: "tier_key",
+          message:
+            "Choose a current service option from your account's booking form.",
         });
       if (!description)
         errors.push({ field: "description", message: "Describe the work." });
@@ -2582,11 +3234,12 @@ export async function validatePartnerBulkCsv(input: {
           });
         if (
           preferredDate >
-          DateTime.fromISO(tomorrow).plus({ days: 365 }).toISODate()!
+          DateTime.fromISO(tomorrow).plus({ days: 29 }).toISODate()!
         )
           errors.push({
             field: "preferred_date",
-            message: "Choose a date within one year.",
+            message:
+              "Choose a date within the next 30 days. Use recurring service for ongoing work.",
           });
       }
       if (
@@ -2614,6 +3267,7 @@ export async function validatePartnerBulkCsv(input: {
         : Object.freeze({
             locationId,
             serviceKey,
+            tierKey,
             description,
             crewInstructions: cleanText(raw["crew_instructions"], 4_000),
             onSiteContact: {
@@ -2660,6 +3314,7 @@ export async function createPartnerBulkImport(input: {
   idempotencyKeyHash: string;
   correlationId: string;
 }) {
+  await requireRepeatWorkTool(input.actor.accountId, "bulk");
   const filename =
     cleanText(input.sourceFilename.replace(/^.*[\\/]/u, ""), 120) ??
     "partner-jobs.csv";
@@ -2680,9 +3335,9 @@ export async function createPartnerBulkImport(input: {
     input.idempotencyKeyHash,
   );
   const requestHash = sha256(sourceSha256, String(input.dryRun));
-  const initial = await getDb().transaction(async (tx) => {
+  const result = await getDb().transaction(async (tx) => {
     await tx.execute(
-      sql`select pg_advisory_xact_lock(hashtext(${`partner_bulk_v2:${input.actor.accountId}`}))`,
+      sql`select pg_advisory_xact_lock(hashtext(${"partner_bulk_v2:" + input.actor.accountId}))`,
     );
     const [replay] = await tx
       .select()
@@ -2690,23 +3345,16 @@ export async function createPartnerBulkImport(input: {
       .where(eq(partnerBulkImports.createOperationKeyHash, opHash))
       .limit(1);
     if (replay) {
-      if (replay.createRequestHash !== requestHash)
+      if (
+        replay.createRequestHash !== requestHash ||
+        replay.createdByMembershipId !== input.actor.membershipId
+      )
         throw new PartnerPortalSchedulingError(
           "idempotency_conflict",
           "That request key was already used.",
           { status: 409 },
         );
-      const storedRows = await tx
-        .select()
-        .from(partnerBulkImportRows)
-        .where(
-          and(
-            eq(partnerBulkImportRows.partnerAccountId, input.actor.accountId),
-            eq(partnerBulkImportRows.partnerBulkImportId, replay.id),
-          ),
-        )
-        .orderBy(asc(partnerBulkImportRows.rowNumber));
-      return { batch: replay, storedRows, replayed: true };
+      return { id: replay.id, replayed: true };
     }
     const validCount = rows.filter((row) => row.normalized).length;
     const [batch] = await tx
@@ -2724,131 +3372,31 @@ export async function createPartnerBulkImport(input: {
         createOperationKeyHash: opHash,
         createRequestHash: requestHash,
         completedAt: input.dryRun ? new Date() : null,
-        updatedAt: new Date(),
       })
       .returning();
     if (!batch) throw new Error("partner_bulk_import_create_failed");
-    const storedRows = await tx
-      .insert(partnerBulkImportRows)
-      .values(
-        rows.map((row) => ({
-          partnerAccountId: input.actor.accountId,
-          partnerBulkImportId: batch.id,
-          rowNumber: row.rowNumber,
-          normalizedData: row.normalized as unknown as Record<
-            string,
-            unknown
-          > | null,
-          errors: row.errors.map((issue) => ({ ...issue })),
-          state: row.normalized
-            ? input.dryRun
-              ? "pending"
-              : "review"
-            : "invalid",
-        })),
-      )
-      .returning();
-    return { batch, storedRows, replayed: false };
+    await tx.insert(partnerBulkImportRows).values(
+      rows.map((row) => ({
+        partnerAccountId: input.actor.accountId,
+        partnerBulkImportId: batch.id,
+        rowNumber: row.rowNumber,
+        rawData: { ...row.raw },
+        normalizedData: row.normalized as unknown as Record<
+          string,
+          unknown
+        > | null,
+        errors: row.errors.map((issue) => ({ ...issue })),
+        state: row.normalized ? "pending" : "invalid",
+      })),
+    );
+    if (!input.dryRun)
+      await tx.insert(outboxEvents).values({
+        type: "partner.bulk_import.process",
+        payload: { importId: batch.id, accountId: input.actor.accountId },
+      });
+    return { id: batch.id, replayed: false };
   });
-  if (!input.dryRun && !initial.replayed) {
-    const sourceByRow = new Map(rows.map((row) => [row.rowNumber, row]));
-    for (const stored of initial.storedRows) {
-      const row = sourceByRow.get(stored.rowNumber);
-      if (!row?.normalized) continue;
-      try {
-        const created = await createPartnerBookingDraft({
-          actor: input.actor,
-          mutation: {
-            locationId: row.normalized.locationId,
-            serviceKey: row.normalized.serviceKey,
-            scope: { ...row.normalized.scope },
-            description: row.normalized.description,
-            crewInstructions: row.normalized.crewInstructions,
-            accessDetails: null,
-            onSiteContact: { ...row.normalized.onSiteContact },
-            proofRequirements: { ...row.normalized.proofRequirements },
-            commercial: { ...row.normalized.commercial },
-            preferredWindows: [
-              {
-                localDate: row.normalized.preferredDate,
-                timeOfDay: row.normalized.preferredWindowStart
-                  ? Number(row.normalized.preferredWindowStart.slice(0, 2)) < 12
-                    ? "morning"
-                    : "afternoon"
-                  : "anytime",
-                timezone: row.normalized.timezone,
-              },
-            ],
-          },
-          idempotencyKeyHash: sha256("bulk-draft", stored.id),
-        });
-        await getDb()
-          .update(partnerBulkImportRows)
-          .set({
-            bookingDraftId: created.draft.id,
-            state: "review",
-            errors: [
-              {
-                field: "status",
-                message:
-                  "Draft created. Open it to select a live arrival window and confirm; no capacity is reserved yet.",
-              },
-            ],
-          })
-          .where(
-            and(
-              eq(partnerBulkImportRows.partnerAccountId, input.actor.accountId),
-              eq(partnerBulkImportRows.id, stored.id),
-            ),
-          );
-      } catch (error) {
-        await getDb()
-          .update(partnerBulkImportRows)
-          .set({
-            state: "failed",
-            errors: [
-              {
-                field: "status",
-                message:
-                  error instanceof PartnerPortalSchedulingError
-                    ? error.message
-                    : "Draft creation failed. Try this row again.",
-              },
-            ],
-          })
-          .where(
-            and(
-              eq(partnerBulkImportRows.partnerAccountId, input.actor.accountId),
-              eq(partnerBulkImportRows.id, stored.id),
-            ),
-          );
-      }
-    }
-    await getDb()
-      .update(partnerBulkImports)
-      .set({
-        state: "completed",
-        completedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(partnerBulkImports.partnerAccountId, input.actor.accountId),
-          eq(partnerBulkImports.id, initial.batch.id),
-        ),
-      );
-  }
-  const finalRows = await getDb()
-    .select()
-    .from(partnerBulkImportRows)
-    .where(
-      and(
-        eq(partnerBulkImportRows.partnerAccountId, input.actor.accountId),
-        eq(partnerBulkImportRows.partnerBulkImportId, initial.batch.id),
-      ),
-    )
-    .orderBy(asc(partnerBulkImportRows.rowNumber));
-  if (!initial.replayed)
+  if (!result.replayed)
     await audit({
       principal: input.principal,
       correlationId: input.correlationId,
@@ -2856,34 +3404,626 @@ export async function createPartnerBulkImport(input: {
         ? "partner.portal.v2.bulk_import.validated"
         : "partner.portal.v2.bulk_import.committed",
       entityType: "partner_bulk_import",
-      entityId: initial.batch.id,
+      entityId: result.id,
       permission: "bookings.create",
       idempotencyKeyHash: opHash,
-      meta: {
-        rowCount: rows.length,
-        validCount: rows.filter((row) => row.normalized).length,
-        dryRun: input.dryRun,
-      },
+      meta: { rowCount: rows.length, dryRun: input.dryRun },
     });
   return {
-    import: {
-      id: initial.batch.id,
-      state: input.dryRun ? "validated" : "completed",
-      dryRun: input.dryRun,
-      rowCount: rows.length,
-      validCount: rows.filter((row) => row.normalized).length,
-      errorCount: rows.filter((row) => !row.normalized).length,
-      rows: finalRows.map((row) => ({
-        rowNumber: row.rowNumber,
-        state: row.state,
-        draftId: row.bookingDraftId,
-        errors: row.errors,
-      })),
-      correctionCsv: correctionCsv(rows),
-      capacityReserved: false,
-    },
-    replayed: initial.replayed,
+    import: await getPartnerBulkImport({
+      actor: input.actor,
+      importId: result.id,
+    }),
+    replayed: result.replayed,
   };
+}
+
+async function loadOwnedBulkImport(
+  actor: PartnerSchedulingActor,
+  importId: string,
+) {
+  const [batch] = await getDb()
+    .select()
+    .from(partnerBulkImports)
+    .where(
+      and(
+        eq(partnerBulkImports.id, importId),
+        eq(partnerBulkImports.partnerAccountId, actor.accountId),
+        eq(partnerBulkImports.createdByMembershipId, actor.membershipId),
+      ),
+    )
+    .limit(1);
+  if (!batch)
+    throw new PartnerPortalSchedulingError(
+      "not_found",
+      "The import was not found.",
+      { status: 404 },
+    );
+  return batch;
+}
+
+export async function getPartnerBulkImport(input: {
+  actor: PartnerSchedulingActor;
+  importId: string;
+}) {
+  const batch = await loadOwnedBulkImport(input.actor, input.importId);
+  const rows = await getDb()
+    .select()
+    .from(partnerBulkImportRows)
+    .where(
+      and(
+        eq(partnerBulkImportRows.partnerAccountId, input.actor.accountId),
+        eq(partnerBulkImportRows.partnerBulkImportId, batch.id),
+      ),
+    )
+    .orderBy(asc(partnerBulkImportRows.rowNumber))
+    .limit(MAX_BULK_ROWS);
+  const locationIds = new Set(
+    rows
+      .map((row) => row.normalizedData?.["locationId"])
+      .filter((id): id is string => typeof id === "string"),
+  );
+  for (const id of locationIds) await loadLocationForActor(input.actor, id);
+  const failures = rows.filter(
+    (row) => row.state === "invalid" || row.state === "failed",
+  );
+  return {
+    id: batch.id,
+    filename: batch.sourceFilename,
+    state: batch.state,
+    dryRun: batch.dryRun,
+    createdAt: batch.createdAt.toISOString(),
+    etag: createPortalV2StrongEtag(
+      `partner-bulk-import:${batch.id}:${batch.sourceSha256}`,
+    ),
+    rowCount: batch.rowCount,
+    validCount: batch.validCount,
+    errorCount: failures.length,
+    pendingCount: rows.filter(
+      (row) => row.state === "pending" || row.state === "processing",
+    ).length,
+    confirmedCount: rows.filter((row) => row.state === "created").length,
+    reviewCount: rows.filter((row) => row.state === "review").length,
+    rows: rows.map((row) => ({
+      rowNumber: row.rowNumber,
+      state: row.state,
+      draftId: row.bookingDraftId,
+      jobId: row.partnerBookingId,
+      errors: row.errors,
+    })),
+    correctionCsv: correctionCsv(
+      failures.map((row) => ({
+        rowNumber: row.rowNumber,
+        raw: row.rawData,
+        normalized: null,
+        errors: row.errors as unknown as BulkRowIssue[],
+      })),
+    ),
+    capacityReserved: rows.some((row) => row.state === "created"),
+  };
+}
+
+export async function listPartnerBulkImports(input: {
+  actor: PartnerSchedulingActor;
+  params: URLSearchParams;
+}) {
+  type Cursor = {
+    accountId: string;
+    membershipId: string;
+    id: string;
+    createdAt: string;
+  };
+  const pagination = parsePortalV2Pagination(input.params, {
+    cursorKind: "partner_bulk_imports",
+    allowedQueryKeys: new Set<string>(),
+    validateCursorPayload: (value: unknown): value is Cursor =>
+      isRecord(value) &&
+      value["accountId"] === input.actor.accountId &&
+      value["membershipId"] === input.actor.membershipId &&
+      typeof value["id"] === "string" &&
+      UUID_PATTERN.test(value["id"]) &&
+      typeof value["createdAt"] === "string" &&
+      Number.isFinite(Date.parse(value["createdAt"])),
+  });
+  if (!pagination.ok)
+    throw new PartnerPortalSchedulingError(
+      "invalid_cursor",
+      "Reload the import history.",
+      { status: 400 },
+    );
+  const before = pagination.cursor?.payload;
+  const rows = await getDb()
+    .select({
+      id: partnerBulkImports.id,
+      filename: partnerBulkImports.sourceFilename,
+      state: partnerBulkImports.state,
+      dryRun: partnerBulkImports.dryRun,
+      rowCount: partnerBulkImports.rowCount,
+      createdAt: partnerBulkImports.createdAt,
+    })
+    .from(partnerBulkImports)
+    .where(
+      and(
+        eq(partnerBulkImports.partnerAccountId, input.actor.accountId),
+        eq(partnerBulkImports.createdByMembershipId, input.actor.membershipId),
+        before
+          ? sql`(${partnerBulkImports.createdAt}, ${partnerBulkImports.id}) < (${sql.param(new Date(before.createdAt), partnerBulkImports.createdAt)}, ${before.id}::uuid)`
+          : undefined,
+      ),
+    )
+    .orderBy(desc(partnerBulkImports.createdAt), desc(partnerBulkImports.id))
+    .limit(pagination.limit + 1);
+  const visible = rows.slice(0, pagination.limit);
+  const last = visible.at(-1);
+  return {
+    imports: visible.map((row) => ({
+      ...row,
+      createdAt: row.createdAt.toISOString(),
+    })),
+    nextCursor:
+      rows.length > pagination.limit && last
+        ? encodePortalV2Cursor({
+            kind: "partner_bulk_imports",
+            limit: pagination.limit,
+            payload: {
+              accountId: input.actor.accountId,
+              membershipId: input.actor.membershipId,
+              id: last.id,
+              createdAt: last.createdAt.toISOString(),
+            },
+          })
+        : null,
+  };
+}
+
+/** Retry preserves each row's draft/job idempotency identity; accepted work is never duplicated. */
+export async function commitPartnerBulkImport(input: {
+  actor: PartnerSchedulingActor;
+  importId: string;
+  principal: PartnerPrincipal;
+  correlationId: string;
+  idempotencyKeyHash: string;
+  ifMatch: string | null;
+}) {
+  await requireRepeatWorkTool(input.actor.accountId, "bulk");
+  const previous = await getPartnerBulkImport(input);
+  if (input.ifMatch !== previous.etag)
+    throw new PartnerPortalSchedulingError(
+      "revision_mismatch",
+      "This checked import changed. Reload its saved results.",
+      { status: 412 },
+    );
+  const stored = await getDb()
+    .select()
+    .from(partnerBulkImportRows)
+    .where(
+      and(
+        eq(partnerBulkImportRows.partnerAccountId, input.actor.accountId),
+        eq(partnerBulkImportRows.partnerBulkImportId, input.importId),
+      ),
+    )
+    .orderBy(asc(partnerBulkImportRows.rowNumber))
+    .limit(MAX_BULK_ROWS);
+  const csv = [
+    BULK_HEADERS.join(","),
+    ...stored.map((row) =>
+      BULK_HEADERS.map((field) => {
+        const value = row.rawData[field] ?? "";
+        return /[",\r\n]/u.test(value)
+          ? `"${value.replace(/"/gu, '""')}"`
+          : value;
+      }).join(","),
+    ),
+  ].join("\r\n");
+  const checked = await validatePartnerBulkCsv({ actor: input.actor, csv });
+  await getDb().transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${"partner_bulk_v2:" + input.actor.accountId}))`,
+    );
+    const [batch] = await tx
+      .select()
+      .from(partnerBulkImports)
+      .where(
+        and(
+          eq(partnerBulkImports.id, input.importId),
+          eq(partnerBulkImports.partnerAccountId, input.actor.accountId),
+          eq(
+            partnerBulkImports.createdByMembershipId,
+            input.actor.membershipId,
+          ),
+        ),
+      )
+      .limit(1);
+    if (!batch)
+      throw new PartnerPortalSchedulingError(
+        "not_found",
+        "The import was not found.",
+        { status: 404 },
+      );
+    if (!batch.dryRun) return;
+    for (const row of checked)
+      await tx
+        .update(partnerBulkImportRows)
+        .set({
+          normalizedData: row.normalized as unknown as Record<
+            string,
+            unknown
+          > | null,
+          errors: row.errors.map((issue) => ({ ...issue })),
+          state: row.normalized ? "pending" : "invalid",
+        })
+        .where(
+          and(
+            eq(partnerBulkImportRows.partnerBulkImportId, batch.id),
+            eq(partnerBulkImportRows.rowNumber, row.rowNumber),
+          ),
+        );
+    const validCount = checked.filter((row) => row.normalized).length;
+    await tx
+      .update(partnerBulkImports)
+      .set({
+        dryRun: false,
+        state: "processing",
+        completedAt: null,
+        validCount,
+        errorCount: checked.length - validCount,
+      })
+      .where(eq(partnerBulkImports.id, batch.id));
+    await tx.insert(outboxEvents).values({
+      type: "partner.bulk_import.process",
+      payload: { importId: batch.id, accountId: input.actor.accountId },
+    });
+    await tx.insert(auditLogs).values({
+      actorType: "human",
+      actorId: input.actor.partnerUserId,
+      sessionId: input.actor.sessionId,
+      action: "partner.portal.v2.bulk_import.committed",
+      entityType: "partner_bulk_import",
+      entityId: batch.id,
+      correlationId: input.correlationId,
+      idempotencyKeyHash: operationHash(
+        "bulk.commit",
+        input.actor.accountId,
+        input.idempotencyKeyHash,
+      ),
+      meta: {
+        accountId: input.actor.accountId,
+        validCount,
+        rowCount: checked.length,
+      },
+    });
+  });
+  return getPartnerBulkImport(input);
+}
+
+export async function retryPartnerBulkImport(input: {
+  actor: PartnerSchedulingActor;
+  importId: string;
+  principal: PartnerPrincipal;
+  correlationId: string;
+  idempotencyKeyHash: string;
+}) {
+  await requireRepeatWorkTool(input.actor.accountId, "bulk");
+  await getPartnerBulkImport(input);
+  const batch = await loadOwnedBulkImport(input.actor, input.importId);
+  if (batch.dryRun)
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Submit the checked file before retrying.",
+      { status: 422 },
+    );
+  await getDb().transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${"partner_bulk_v2:" + input.actor.accountId}))`,
+    );
+    await tx
+      .update(partnerBulkImportRows)
+      .set({ state: "pending", processingStartedAt: null })
+      .where(
+        and(
+          eq(partnerBulkImportRows.partnerBulkImportId, batch.id),
+          eq(partnerBulkImportRows.partnerAccountId, input.actor.accountId),
+          eq(partnerBulkImportRows.state, "failed"),
+          isNull(partnerBulkImportRows.partnerBookingId),
+        ),
+      );
+    await tx
+      .update(partnerBulkImports)
+      .set({ state: "processing", completedAt: null })
+      .where(eq(partnerBulkImports.id, batch.id));
+    await tx.insert(outboxEvents).values({
+      type: "partner.bulk_import.process",
+      payload: { importId: batch.id, accountId: input.actor.accountId },
+    });
+  });
+  await audit({
+    principal: input.principal,
+    correlationId: input.correlationId,
+    action: "partner.portal.v2.bulk_import.retried",
+    entityType: "partner_bulk_import",
+    entityId: batch.id,
+    permission: "bookings.create",
+    idempotencyKeyHash: input.idempotencyKeyHash,
+  });
+  return getPartnerBulkImport(input);
+}
+
+async function submitBulkRow(
+  actor: PartnerSchedulingActor,
+  stored: typeof partnerBulkImportRows.$inferSelect,
+) {
+  const row = stored.normalizedData as unknown as NormalizedBulkRow;
+  if (!row)
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Correct this row and upload it again.",
+      { status: 422 },
+    );
+  await loadLocationForActor(actor, row.locationId);
+  if (stored.bookingDraftId) {
+    const [accepted] = await getDb()
+      .select()
+      .from(partnerBookings)
+      .where(
+        and(
+          eq(partnerBookings.partnerAccountId, actor.accountId),
+          eq(partnerBookings.bookingDraftId, stored.bookingDraftId),
+        ),
+      )
+      .limit(1);
+    if (accepted)
+      return {
+        jobId: accepted.id,
+        draftId: stored.bookingDraftId,
+        state: accepted.publicStatus === "confirmed" ? "created" : "review",
+      };
+  }
+  const created = await createPartnerBookingDraft({
+    actor,
+    mutation: {
+      locationId: row.locationId,
+      serviceKey: row.serviceKey,
+      tierKey: row.tierKey ?? null,
+      scope: { ...row.scope },
+      description: row.description,
+      crewInstructions: row.crewInstructions,
+      accessDetails: null,
+      onSiteContact: { ...row.onSiteContact },
+      proofRequirements: { ...row.proofRequirements },
+      commercial: { ...row.commercial },
+      preferredWindows: [
+        {
+          localDate: row.preferredDate,
+          timeOfDay: row.preferredWindowStart
+            ? Number(row.preferredWindowStart.slice(0, 2)) < 12
+              ? "morning"
+              : "afternoon"
+            : "anytime",
+          timezone: row.timezone,
+        },
+      ],
+    },
+    idempotencyKeyHash: sha256("bulk-draft", stored.id),
+  });
+  await getDb()
+    .update(partnerBulkImportRows)
+    .set({ bookingDraftId: created.draft.id })
+    .where(eq(partnerBulkImportRows.id, stored.id));
+  let draft = created.draft;
+  let holdId: string | null = null;
+  const day = DateTime.fromISO(row.preferredDate, {
+    zone: row.timezone,
+  }).startOf("day");
+  try {
+    const availability = await getPartnerDraftAvailability({
+      actor,
+      draftId: draft.id,
+      rangeStartAt: day.toJSDate(),
+      rangeEndAt: day.endOf("day").toJSDate(),
+    });
+    const window = availability.instantConfirmationEligible
+      ? availability.windows.find(
+          (item) =>
+            !row.preferredWindowStart ||
+            DateTime.fromISO(item.startAt, { zone: row.timezone }).toFormat(
+              "HH:mm",
+            ) === row.preferredWindowStart,
+        )
+      : null;
+    if (window) {
+      const held = await createOrReplacePartnerHold({
+        actor,
+        draftId: draft.id,
+        windowId: window.id,
+        ifMatch: draft.etag,
+        idempotencyKeyHash: sha256("bulk-hold", stored.id),
+        correlationId: randomUUID(),
+      });
+      holdId = held.hold.id;
+      draft = await getPartnerBookingDraft({ actor, draftId: draft.id });
+    }
+  } catch (error) {
+    if (
+      !(error instanceof PartnerPortalSchedulingError) ||
+      ![409, 410, 422, 503].includes(error.status)
+    )
+      throw error;
+    draft = await getPartnerBookingDraft({ actor, draftId: draft.id });
+  }
+  try {
+    const submitted = await submitPartnerBookingDraft({
+      actor,
+      draftId: draft.id,
+      holdId,
+      ifMatch: draft.etag,
+      idempotencyKeyHash: sha256("bulk-submit", stored.id),
+      correlationId: randomUUID(),
+    });
+    return {
+      jobId: submitted.booking.id,
+      draftId: draft.id,
+      state:
+        submitted.booking.publicStatus === "confirmed" ? "created" : "review",
+    };
+  } catch (error) {
+    if (
+      !holdId ||
+      !(error instanceof PartnerPortalSchedulingError) ||
+      ![409, 410, 422].includes(error.status)
+    )
+      throw error;
+    draft = await getPartnerBookingDraft({ actor, draftId: draft.id });
+    const submitted = await submitPartnerBookingDraft({
+      actor,
+      draftId: draft.id,
+      holdId: null,
+      ifMatch: draft.etag,
+      idempotencyKeyHash: sha256("bulk-review", stored.id),
+      correlationId: randomUUID(),
+    });
+    return { jobId: submitted.booking.id, draftId: draft.id, state: "review" };
+  }
+}
+
+/** Outbox handler: up to ten rows; continuation and completion are durable. Throw on infrastructure errors for outbox retry. */
+export async function processPartnerBulkImport(payload: {
+  importId: string;
+  accountId: string;
+}): Promise<void> {
+  if (
+    !UUID_PATTERN.test(payload.importId) ||
+    !UUID_PATTERN.test(payload.accountId)
+  )
+    throw new Error("partner_bulk_invalid_payload");
+  if (
+    !arePartnerPortalV2WritesEnabled(payload.accountId) ||
+    !(await isPartnerToolEnabled(payload.accountId, "bulk"))
+  )
+    throw new Error("partner_bulk_processing_disabled");
+  const [batch] = await getDb()
+    .select()
+    .from(partnerBulkImports)
+    .where(
+      and(
+        eq(partnerBulkImports.id, payload.importId),
+        eq(partnerBulkImports.partnerAccountId, payload.accountId),
+      ),
+    )
+    .limit(1);
+  if (!batch || batch.dryRun || batch.state === "completed") return;
+  for (let index = 0; index < 10; index++) {
+    const actor = await loadPartnerBackgroundSchedulingActor(
+      payload.accountId,
+      batch.createdByMembershipId,
+    );
+    const row = await getDb().transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${"partner_bulk_v2:" + payload.accountId}))`,
+      );
+      const [candidate] = await tx
+        .select()
+        .from(partnerBulkImportRows)
+        .where(
+          and(
+            eq(partnerBulkImportRows.partnerBulkImportId, batch.id),
+            eq(partnerBulkImportRows.partnerAccountId, payload.accountId),
+            or(
+              eq(partnerBulkImportRows.state, "pending"),
+              and(
+                eq(partnerBulkImportRows.state, "processing"),
+                sql`${partnerBulkImportRows.processingStartedAt} < now() - interval '15 minutes'`,
+              ),
+            ),
+          ),
+        )
+        .orderBy(asc(partnerBulkImportRows.rowNumber))
+        .limit(1);
+      if (!candidate) return null;
+      await tx
+        .update(partnerBulkImportRows)
+        .set({
+          state: "processing",
+          processingStartedAt: new Date(),
+          processingAttempts: sql`${partnerBulkImportRows.processingAttempts} + 1`,
+        })
+        .where(eq(partnerBulkImportRows.id, candidate.id));
+      return candidate;
+    });
+    if (!row) break;
+    try {
+      if (!actor)
+        throw new PartnerPortalSchedulingError(
+          "forbidden",
+          "Your access changed. Contact Stonegate before retrying these rows.",
+          { status: 403 },
+        );
+      const result = await submitBulkRow(actor, row);
+      await getDb()
+        .update(partnerBulkImportRows)
+        .set({
+          state: result.state,
+          bookingDraftId: result.draftId,
+          partnerBookingId: result.jobId,
+          processingStartedAt: null,
+          errors: [],
+        })
+        .where(eq(partnerBulkImportRows.id, row.id));
+    } catch (error) {
+      const recoverable =
+        !(error instanceof PartnerPortalSchedulingError) ||
+        error.status >= 500 ||
+        error.status === 429;
+      await getDb()
+        .update(partnerBulkImportRows)
+        .set({
+          state: recoverable ? "pending" : "failed",
+          processingStartedAt: null,
+          errors: [
+            {
+              field: "status",
+              message:
+                error instanceof PartnerPortalSchedulingError
+                  ? error.message
+                  : "Processing was interrupted. The saved row will retry safely.",
+            },
+          ],
+        })
+        .where(eq(partnerBulkImportRows.id, row.id));
+      if (recoverable) throw error;
+    }
+  }
+  await getDb().transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${"partner_bulk_v2:" + payload.accountId}))`,
+    );
+    const rows = await tx
+      .select({ state: partnerBulkImportRows.state })
+      .from(partnerBulkImportRows)
+      .where(eq(partnerBulkImportRows.partnerBulkImportId, batch.id));
+    const pending = rows.some(
+      (row) => row.state === "pending" || row.state === "processing",
+    );
+    await tx
+      .update(partnerBulkImports)
+      .set({
+        state: pending
+          ? "processing"
+          : rows.some((row) => row.state === "failed")
+            ? "failed"
+            : "completed",
+        completedAt: pending ? null : new Date(),
+      })
+      .where(eq(partnerBulkImports.id, batch.id));
+    if (pending)
+      await tx.insert(outboxEvents).values({
+        type: "partner.bulk_import.process",
+        payload,
+        nextAttemptAt: new Date(
+          Date.now() +
+            (rows.some((row) => row.state === "processing") ? 60_000 : 1_000),
+        ),
+      });
+  });
 }
 
 export function assertTemplateRevision(input: {

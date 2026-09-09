@@ -27,6 +27,10 @@ import {
   partnerSecondaryButtonClass,
 } from "@/app/partners/components/PartnerPortalUi";
 import { getPublicCompanyProfile } from "@/lib/company";
+import {
+  sortBookingLocations,
+  toBookingLocation,
+} from "../../lib/booking-location";
 
 export const metadata: Metadata = { title: "Request service" };
 
@@ -77,20 +81,7 @@ function parseLocations(payload: unknown): PartnerLocation[] {
 }
 
 function wizardLocation(location: PartnerLocation): BookingWizardLocation {
-  const address = location.address;
-  return {
-    id: location.id,
-    name: location.siteName?.trim() || address.line1,
-    address: [
-      address.line1,
-      address.line2,
-      `${address.city}, ${address.state} ${address.postalCode}`,
-    ]
-      .filter(Boolean)
-      .join(", "),
-    serviceAreaStatus: location.serviceArea?.status,
-    timezone: location.timezone ?? "America/New_York",
-  };
+  return toBookingLocation(location);
 }
 
 function parseMoney(value: unknown): BookingWizardMoney | null {
@@ -443,6 +434,11 @@ export default async function PartnerBookPage({
     .json()
     .catch(() => null)) as unknown;
   const locations = parseLocations(locationPayload).map(wizardLocation);
+  const directory =
+    isRecord(locationPayload) && isRecord(locationPayload["directory"])
+      ? locationPayload["directory"]
+      : null;
+  const canCreateLocation = directory?.["canManagePortfolio"] === true;
   const catalogPayload = catalogResponse?.ok
     ? ((await catalogResponse.json().catch(() => null)) as unknown)
     : null;
@@ -506,6 +502,29 @@ export default async function PartnerBookPage({
       ? params.serviceKey.trim().toLowerCase()
       : "";
 
+  // An explicitly requested site (or an account default) can be outside page one.
+  const requestedLocationId =
+    initialDraft?.locationId ||
+    defaultLocationId ||
+    (typeof directory?.["defaultLocationId"] === "string"
+      ? directory["defaultLocationId"]
+      : "");
+  if (
+    requestedLocationId &&
+    !locations.some((item) => item.id === requestedLocationId)
+  ) {
+    const response = await callPartnerApi(
+      `/api/portal/v2/locations/${encodeURIComponent(requestedLocationId)}`,
+    ).catch(() => null);
+    const payload = response?.ok
+      ? ((await response.json().catch(() => null)) as {
+          location?: PartnerLocation;
+        } | null)
+      : null;
+    if (payload?.location?.active)
+      locations.push(wizardLocation(payload.location));
+  }
+
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
@@ -538,6 +557,20 @@ export default async function PartnerBookPage({
         </div>
       </PartnerPageHeader>
 
+      {initialDraft?.additionalServiceFromJobId ? (
+        <PartnerNotice tone="info">
+          <strong>Request additional service.</strong> This is a separate job
+          with its own price, schedule, and billing. The original bill and
+          payment stay unchanged. Describe only the additional work below.{" "}
+          <Link
+            href={`/partners/bookings/${encodeURIComponent(initialDraft.additionalServiceFromJobId)}`}
+            className="inline-flex min-h-11 items-center font-semibold underline underline-offset-2"
+          >
+            View original job
+          </Link>
+        </PartnerNotice>
+      ) : null}
+
       {draftRecoveryFailed ? (
         <PartnerNotice tone="warning">
           That saved request link is no longer available. A new request will
@@ -545,12 +578,7 @@ export default async function PartnerBookPage({
         </PartnerNotice>
       ) : null}
 
-      <PartnerRepeatWorkManager
-        canManageSeries={context.permissions.updateJobs}
-        persona={context.partnerType}
-      />
-
-      {locations.length === 0 && !context.permissions.manageLocations ? (
+      {locations.length === 0 && !canCreateLocation ? (
         <PartnerPanel>
           <PartnerEmptyState
             title="Choose or add a location first"
@@ -570,12 +598,14 @@ export default async function PartnerBookPage({
         </PartnerPanel>
       ) : (
         <PartnerBookingWizard
-          locations={locations}
+          canDiscardDrafts={context.permissions.updateJobs}
+          key={`${context.accountId}:${initialDraft?.id ?? "new"}`}
+          locations={sortBookingLocations(locations)}
           services={services}
           initialDraft={initialDraft}
           defaultLocationId={
-            locations.some((item) => item.id === defaultLocationId)
-              ? defaultLocationId
+            locations.some((item) => item.id === requestedLocationId)
+              ? requestedLocationId
               : ""
           }
           defaultServiceKey={
@@ -584,7 +614,12 @@ export default async function PartnerBookPage({
               : ""
           }
           canUploadPhotos={context.permissions.uploadMedia}
-          canManageLocations={context.permissions.manageLocations}
+          canManageLocations={canCreateLocation}
+          requesterContact={{
+            name: context.user.name,
+            email: context.user.email,
+            phone: "",
+          }}
           defaultProofRequirements={defaultProofRequirements}
           cancellationPolicy={cancellationPolicy}
           persona={context.partnerType}
@@ -592,6 +627,28 @@ export default async function PartnerBookPage({
           supportPhoneDisplay={company.phoneDisplay}
         />
       )}
+
+      {context.tools?.["templates"] ||
+      context.tools?.["recurring"] ||
+      context.tools?.["bulk"] ? (
+        <details className="rounded-xl border border-slate-200 bg-white p-4">
+          <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-slate-800">
+            Repeat work and other tools
+          </summary>
+          <div className="mt-4">
+            <PartnerRepeatWorkManager
+              key={context.accountId}
+              enabledTools={{
+                templates: context.tools?.["templates"] === true,
+                recurring: context.tools?.["recurring"] === true,
+                bulk: context.tools?.["bulk"] === true,
+              }}
+              canManageSeries={context.permissions.updateJobs}
+              persona={context.partnerType}
+            />
+          </div>
+        </details>
+      ) : null}
 
       <div className="text-center">
         <Link href="/partners/bookings" className={partnerSecondaryButtonClass}>

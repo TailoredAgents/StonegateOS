@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { asc } from "drizzle-orm";
 import { getDb, partnerAccountLocations } from "@/db";
 import { requirePartnerCapability } from "@/lib/partner-account-authorization";
+import { isPartnerToolEnabled } from "@/lib/partner-account-workflows";
 import { arePartnerPortalV2ReadsEnabled } from "@/lib/partner-portal-feature-flags";
 import {
   auditPartnerLocationPortfolio,
@@ -42,6 +43,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   try {
+    if (!(await isPartnerToolEnabled(principal.accountId, "portfolio"))) {
+      return createPartnerPortalV2ErrorResponse("not_found", 404, correlationId);
+    }
     const db = getDb();
     const rows = await db.transaction(async (tx) => {
       const result = await tx

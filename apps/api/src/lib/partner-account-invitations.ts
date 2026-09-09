@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   auditLogs,
@@ -10,6 +10,7 @@ import {
   partnerAccountLocations,
   partnerAccountMemberships,
   partnerAccounts,
+  partnerAuthChallenges,
   partnerInvitationCostCenterScopes,
   partnerInvitationLocationScopes,
   partnerMembershipCostCenterScopes,
@@ -19,6 +20,7 @@ import {
 } from "@/db";
 import {
   computePartnerCapabilities,
+  PARTNER_CAPABILITY_CATALOG,
   isPartnerLaunchRoleKey,
   PARTNER_LAUNCH_ROLE_KEYS,
   type PartnerCapability,
@@ -26,6 +28,10 @@ import {
 } from "@/lib/partner-account-authorization";
 import { resolvePublicSiteBaseUrl } from "@/lib/partner-portal-auth";
 import { createPartnerActivationChallengeInTransaction } from "@/lib/partner-purpose-auth";
+import {
+  loadPartnerInvitationIssuer,
+  loadPartnerStaffInvitationAuthority,
+} from "@/lib/partner-invitation-authority";
 import type { PortalV2StoredResult } from "@/lib/partner-portal-v2-idempotency";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
 import {
@@ -33,7 +39,18 @@ import {
   evaluatePortalV2RevisionPrecondition,
 } from "@/lib/portal-v2-contract";
 
-const INVITATION_TTL_MS = 30 * 60 * 1_000;
+const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+export type PartnerStaffInvitationActor = {
+  staffIssuer: true;
+  accountId: string;
+  teamMemberId: string;
+  membershipId: null;
+  partnerUserId: null;
+  email: string;
+  roleKey: "stonegate";
+  session: { id: string };
+};
+type InvitationActor = PartnerPrincipal | PartnerStaffInvitationActor;
 const PERSONAS = [
   "contractor",
   "real_estate_agent",
@@ -91,7 +108,7 @@ export const PartnerInvitationActionSchema = z
   .strict();
 
 export const PartnerInvitationAcceptanceSchema = z
-  .object({ token: z.string().trim().min(32).max(256) })
+  .object({ token: z.string().trim().length(43) })
   .strict();
 
 type InvitationRow = typeof partnerAccountInvitations.$inferSelect;
@@ -155,6 +172,8 @@ function invitationRevision(row: InvitationRow): string {
     deliveryOutboxEventId: row.deliveryOutboxEventId,
     sentAt: row.sentAt?.toISOString() ?? null,
     acceptedAt: row.acceptedAt?.toISOString() ?? null,
+    activatedAt: row.activatedAt?.toISOString() ?? null,
+    resumeMembershipId: row.resumeMembershipId,
     revokedAt: row.revokedAt?.toISOString() ?? null,
     expiredAt: row.expiredAt?.toISOString() ?? null,
     updatedAt: row.updatedAt.toISOString(),
@@ -183,16 +202,20 @@ export function partnerInvitationDto(
     },
     expiresAt: row.expiresAt.toISOString(),
     acceptedAt: row.acceptedAt?.toISOString() ?? null,
+    activatedAt: row.activatedAt?.toISOString() ?? null,
     revokedAt: row.revokedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     allowedActions:
-      row.status !== "pending"
+      row.activatedAt ||
+      !["pending", "expired", "revoked", "accepted"].includes(row.status)
         ? []
-        : ["dispatching", "reconciliation_required"].includes(
-              row.deliveryStatus,
-            )
-          ? ["revoke"]
-          : ["resend", "revoke"],
+        : row.status === "revoked"
+          ? ["resend"]
+          : ["dispatching", "reconciliation_required"].includes(
+                row.deliveryStatus,
+              )
+            ? ["revoke"]
+            : ["resend", "revoke"],
     etag: createPortalV2StrongEtag(invitationRevision(row)),
   };
 }
@@ -331,8 +354,22 @@ async function insertInvitationScopes(
 
 async function loadActorAuthority(
   tx: TeamMutationTransaction,
-  principal: PartnerPrincipal,
+  principal: InvitationActor,
+  staffPermission = "partners.invitations.send",
 ) {
+  if ("staffIssuer" in principal) {
+    const staff = await loadPartnerStaffInvitationAuthority(
+      tx,
+      principal.teamMemberId,
+      [staffPermission],
+    );
+    return staff
+      ? {
+          actor: { id: null, partnerUserId: null, teamMemberId: staff.id },
+          actorCapabilities: [...PARTNER_CAPABILITY_CATALOG],
+        }
+      : null;
+  }
   const accountId = principal.accountId;
   const membershipId = principal.membershipId;
   if (!accountId || !membershipId) return null;
@@ -346,9 +383,16 @@ async function loadActorAuthority(
       denies: partnerAccountMemberships.capabilityDenies,
       roleCapabilities: partnerRoleTemplates.capabilities,
       roleActive: partnerRoleTemplates.active,
+      roleKey: partnerAccountMemberships.roleKey,
+      identityActive: partnerUsers.active,
+      identityStatus: partnerUsers.identityStatus,
     })
     .from(partnerAccountMemberships)
-    .leftJoin(
+    .innerJoin(
+      partnerUsers,
+      eq(partnerAccountMemberships.partnerUserId, partnerUsers.id),
+    )
+    .innerJoin(
       partnerRoleTemplates,
       and(
         eq(partnerAccountMemberships.roleTemplateId, partnerRoleTemplates.id),
@@ -365,8 +409,16 @@ async function loadActorAuthority(
         eq(partnerAccountMemberships.partnerUserId, principal.partnerUserId),
       ),
     )
+    .for("share")
     .limit(1);
-  if (!actor || actor.status !== "active" || actor.accessLevel !== "account") {
+  if (
+    !actor ||
+    !actor.identityActive ||
+    actor.identityStatus !== "active" ||
+    actor.status !== "active" ||
+    actor.accessLevel !== "account" ||
+    actor.roleKey !== "administrator"
+  ) {
     return null;
   }
   const actorCapabilities = computePartnerCapabilities({
@@ -380,7 +432,7 @@ async function loadActorAuthority(
 
 async function loadActorAndRole(
   tx: TeamMutationTransaction,
-  input: { principal: PartnerPrincipal; roleKey: string },
+  input: { principal: InvitationActor; roleKey: string },
 ) {
   const accountId = input.principal.accountId;
   if (!accountId || !isPartnerLaunchRoleKey(input.roleKey)) return null;
@@ -428,7 +480,7 @@ function invitationUrl(rawToken: string): string | null {
 async function writeInvitationAudit(
   tx: TeamMutationTransaction,
   input: {
-    principal: PartnerPrincipal;
+    principal: InvitationActor;
     invitationId: string | null;
     action: string;
     outcome?: "attempted" | "succeeded" | "denied" | "failed";
@@ -440,13 +492,23 @@ async function writeInvitationAudit(
 ): Promise<void> {
   await tx.insert(auditLogs).values({
     actorType: "human",
-    actorId: input.principal.partnerUserId,
+    actorId:
+      "staffIssuer" in input.principal
+        ? input.principal.teamMemberId
+        : input.principal.partnerUserId,
     actorLabel: input.principal.email,
     actorRole: input.principal.roleKey,
     sessionId: input.principal.session.id,
-    authMethod: "partner_session",
+    authMethod:
+      "staffIssuer" in input.principal ? "team_session" : "partner_session",
     correlationId: input.correlationId,
-    requiredPermissions: ["account.members.manage"],
+    requiredPermissions: [
+      "staffIssuer" in input.principal
+        ? input.action.endsWith(".revoked")
+          ? "partners.invitations.revoke"
+          : "partners.invitations.send"
+        : "account.members.manage",
+    ],
     outcome: input.outcome ?? "succeeded",
     surface: "partner_portal_v2",
     idempotencyKeyHash: input.idempotencyKeyHash ?? null,
@@ -464,6 +526,7 @@ async function writeInvitationAudit(
 export async function listPartnerAccountInvitations(input: {
   principal: PartnerPrincipal;
   limit: number;
+  before?: { id: string; createdAt: string } | null;
 }): Promise<Record<string, unknown>[]> {
   if (!input.principal.accountId) return [];
   const accountId = input.principal.accountId;
@@ -482,13 +545,32 @@ export async function listPartnerAccountInvitations(input: {
         and(
           eq(partnerAccountInvitations.partnerAccountId, accountId),
           eq(partnerAccountInvitations.status, "pending"),
-          sql`${partnerAccountInvitations.expiresAt} <= ${now}`,
+          lte(partnerAccountInvitations.expiresAt, now),
         ),
       );
     const rows = await tx
       .select()
       .from(partnerAccountInvitations)
-      .where(eq(partnerAccountInvitations.partnerAccountId, accountId))
+      .where(
+        and(
+          eq(partnerAccountInvitations.partnerAccountId, accountId),
+          input.before
+            ? or(
+                lt(
+                  partnerAccountInvitations.createdAt,
+                  new Date(input.before.createdAt),
+                ),
+                and(
+                  eq(
+                    partnerAccountInvitations.createdAt,
+                    new Date(input.before.createdAt),
+                  ),
+                  lt(partnerAccountInvitations.id, input.before.id),
+                ),
+              )
+            : undefined,
+        ),
+      )
       .orderBy(
         desc(partnerAccountInvitations.createdAt),
         desc(partnerAccountInvitations.id),
@@ -504,13 +586,17 @@ export async function listPartnerAccountInvitations(input: {
 }
 
 export async function createPartnerAccountInvitation(input: {
-  principal: PartnerPrincipal;
+  principal: InvitationActor;
+  transaction?: TeamMutationTransaction;
   payload: z.infer<typeof PartnerInvitationCreateSchema>;
   correlationId: string;
   idempotencyKeyHash: string;
 }): Promise<PortalV2StoredResult> {
   const accountId = input.principal.accountId;
-  if (!accountId || !input.principal.membershipId) {
+  if (
+    !accountId ||
+    (!input.principal.membershipId && !("staffIssuer" in input.principal))
+  ) {
     return {
       status: 409,
       body: { ok: false, error: "legacy_scope_unavailable" },
@@ -519,7 +605,9 @@ export async function createPartnerAccountInvitation(input: {
   const normalizedEmail = normalizeInvitationEmail(input.payload.email);
   const name = input.payload.name.trim();
   const fingerprint = emailFingerprint(normalizedEmail);
-  return getDb().transaction(async (tx): Promise<PortalV2StoredResult> => {
+  const execute = async (
+    tx: TeamMutationTransaction,
+  ): Promise<PortalV2StoredResult> => {
     const [account] = await tx
       .select({
         id: partnerAccounts.id,
@@ -572,7 +660,7 @@ export async function createPartnerAccountInvitation(input: {
           eq(partnerAccountInvitations.partnerAccountId, accountId),
           eq(partnerAccountInvitations.normalizedEmail, normalizedEmail),
           eq(partnerAccountInvitations.status, "pending"),
-          sql`${partnerAccountInvitations.expiresAt} <= ${expirationNow}`,
+          lte(partnerAccountInvitations.expiresAt, expirationNow),
         ),
       );
 
@@ -619,10 +707,12 @@ export async function createPartnerAccountInvitation(input: {
       identities.length > 1 ||
       existingMembership ||
       (existingIdentity &&
-        (!existingIdentity.active ||
-          !["active", "pending_activation"].includes(
-            existingIdentity.identityStatus,
-          ))) ||
+        !(
+          (existingIdentity.active &&
+            existingIdentity.identityStatus === "active") ||
+          (!existingIdentity.active &&
+            existingIdentity.identityStatus === "pending_activation")
+        )) ||
       pending
     ) {
       await writeInvitationAudit(tx, {
@@ -659,6 +749,10 @@ export async function createPartnerAccountInvitation(input: {
         tokenHash: credential.tokenHash,
         expiresAt,
         invitedByMembershipId: authority.actor.id,
+        invitedByTeamMemberId:
+          "staffIssuer" in input.principal
+            ? input.principal.teamMemberId
+            : null,
         createdAt: now,
         updatedAt: now,
       })
@@ -720,7 +814,10 @@ export async function createPartnerAccountInvitation(input: {
       },
       headers: { ETag: createPortalV2StrongEtag(invitationRevision(stored)) },
     };
-  });
+  };
+  return input.transaction
+    ? execute(input.transaction)
+    : getDb().transaction(execute);
 }
 
 export async function hasPartnerAccountInvitation(
@@ -741,23 +838,33 @@ export async function hasPartnerAccountInvitation(
 }
 
 export async function mutatePartnerAccountInvitation(input: {
-  principal: PartnerPrincipal;
+  principal: InvitationActor;
   invitationId: string;
   action: "resend" | "revoke";
   ifMatch: string | null;
   correlationId: string;
   idempotencyKeyHash: string;
+  transaction?: TeamMutationTransaction;
 }): Promise<PortalV2StoredResult> {
   const accountId = input.principal.accountId;
-  if (!accountId || !input.principal.membershipId) {
+  if (
+    !accountId ||
+    (!input.principal.membershipId && !("staffIssuer" in input.principal))
+  ) {
     return {
       status: 409,
       body: { ok: false, error: "legacy_scope_unavailable" },
     };
   }
-  return getDb().transaction(async (tx): Promise<PortalV2StoredResult> => {
+  const execute = async (
+    tx: TeamMutationTransaction,
+  ): Promise<PortalV2StoredResult> => {
     const [account] = await tx
-      .select({ id: partnerAccounts.id })
+      .select({
+        id: partnerAccounts.id,
+        enabled: partnerAccounts.portalAccessEnabled,
+        lifecycle: partnerAccounts.portalLifecycleStatus,
+      })
       .from(partnerAccounts)
       .where(eq(partnerAccounts.id, accountId))
       .for("update")
@@ -776,7 +883,13 @@ export async function mutatePartnerAccountInvitation(input: {
       .for("update")
       .limit(1);
     if (!row) return { status: 404, body: { ok: false, error: "not_found" } };
-    const authority = await loadActorAuthority(tx, input.principal);
+    const authority = await loadActorAuthority(
+      tx,
+      input.principal,
+      input.action === "revoke"
+        ? "partners.invitations.revoke"
+        : "partners.invitations.send",
+    );
     if (!authority)
       return { status: 403, body: { ok: false, error: "forbidden" } };
     const precondition = evaluatePortalV2RevisionPrecondition({
@@ -791,13 +904,13 @@ export async function mutatePartnerAccountInvitation(input: {
         headers: { ETag: precondition.currentEtag },
       };
     }
-    if (row.status !== "pending") {
+    if (row.activatedAt) {
       return {
         status: 409,
         body: {
           ok: false,
           error: "conflict",
-          reason: "invitation_not_pending",
+          reason: "invitation_already_activated",
         },
       };
     }
@@ -805,11 +918,64 @@ export async function mutatePartnerAccountInvitation(input: {
       await loadInvitationScopes(tx, accountId, [row.id])
     ).get(row.id) ?? { locationIds: [], costCenterIds: [] };
     const now = new Date();
+    const resumeMembershipId =
+      row.acceptedMembershipId ?? row.resumeMembershipId;
+    if (resumeMembershipId) {
+      const [member] = await tx
+        .select({ status: partnerAccountMemberships.status })
+        .from(partnerAccountMemberships)
+        .where(
+          and(
+            eq(partnerAccountMemberships.id, resumeMembershipId),
+            eq(partnerAccountMemberships.partnerAccountId, accountId),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (member?.status !== "invited")
+        return {
+          status: 409,
+          body: {
+            ok: false,
+            error: "conflict",
+            reason: "invitation_already_activated",
+          },
+        };
+    }
+    if (
+      input.action === "resend" &&
+      (!account.enabled || account.lifecycle !== "active")
+    ) {
+      return { status: 409, body: { ok: false, error: "account_unavailable" } };
+    }
+    // An opened invitation is still revocable until password setup commits.
+    const revokeUnfinishedActivation = () =>
+      tx
+        .update(partnerAuthChallenges)
+        .set({
+          status: "revoked",
+          tokenHash: null,
+          revokedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(partnerAuthChallenges.invitationId, row.id),
+            eq(partnerAuthChallenges.partnerAccountId, accountId),
+            eq(partnerAuthChallenges.status, "pending"),
+          ),
+        );
     if (input.action === "revoke") {
+      await revokeUnfinishedActivation();
       const [updated] = await tx
         .update(partnerAccountInvitations)
         .set({
           status: "revoked",
+          resumeMembershipId,
+          acceptedMembershipId: null,
+          acceptedByPartnerUserId: null,
+          acceptedAt: null,
+          expiredAt: null,
           tokenHash: null,
           revokedAt: now,
           revokedByMembershipId: authority.actor.id,
@@ -929,9 +1095,23 @@ export async function mutatePartnerAccountInvitation(input: {
       })
       .returning({ id: outboxEvents.id });
     if (!outbox) throw new Error("invitation_outbox_insert_failed");
+    await revokeUnfinishedActivation();
     const [updated] = await tx
       .update(partnerAccountInvitations)
       .set({
+        status: "pending",
+        resumeMembershipId,
+        acceptedMembershipId: null,
+        acceptedByPartnerUserId: null,
+        acceptedAt: null,
+        revokedAt: null,
+        revokedByMembershipId: null,
+        expiredAt: null,
+        invitedByMembershipId: authority.actor.id,
+        invitedByTeamMemberId:
+          "staffIssuer" in input.principal
+            ? input.principal.teamMemberId
+            : null,
         tokenHash: credential.tokenHash,
         generation,
         version: sql`${partnerAccountInvitations.version} + 1`,
@@ -972,7 +1152,10 @@ export async function mutatePartnerAccountInvitation(input: {
       },
       headers: { ETag: createPortalV2StrongEtag(invitationRevision(updated)) },
     };
-  });
+  };
+  return input.transaction
+    ? execute(input.transaction)
+    : getDb().transaction(execute);
 }
 
 export async function acceptPartnerAccountInvitation(input: {
@@ -982,7 +1165,8 @@ export async function acceptPartnerAccountInvitation(input: {
   accountId: string;
   membershipId: string;
   activationRequired: true;
-  deliveryStatus: "queued";
+  deliveryStatus: "ready";
+  activationExpiresAt: string;
 } | null> {
   const tokenHash = hashPartnerInvitationToken(input.token);
   return getDb().transaction(async (tx) => {
@@ -1005,12 +1189,14 @@ export async function acceptPartnerAccountInvitation(input: {
       .select({
         id: partnerAccounts.id,
         portalAccessEnabled: partnerAccounts.portalAccessEnabled,
+        lifecycle: partnerAccounts.portalLifecycleStatus,
       })
       .from(partnerAccounts)
       .where(eq(partnerAccounts.id, candidate.accountId))
       .for("update")
       .limit(1);
-    if (!account?.portalAccessEnabled) return null;
+    if (!account?.portalAccessEnabled || account.lifecycle !== "active")
+      return null;
     const [invitation] = await tx
       .select()
       .from(partnerAccountInvitations)
@@ -1055,56 +1241,13 @@ export async function acceptPartnerAccountInvitation(input: {
       )
       .limit(1);
     if (!role) return null;
-    const [issuer] = await tx
-      .select({
-        partnerUserId: partnerAccountMemberships.partnerUserId,
-        status: partnerAccountMemberships.status,
-        accessLevel: partnerAccountMemberships.accessLevel,
-        grants: partnerAccountMemberships.capabilityGrants,
-        denies: partnerAccountMemberships.capabilityDenies,
-        roleCapabilities: partnerRoleTemplates.capabilities,
-        roleActive: partnerRoleTemplates.active,
-      })
-      .from(partnerAccountMemberships)
-      .leftJoin(
-        partnerRoleTemplates,
-        and(
-          eq(partnerAccountMemberships.roleTemplateId, partnerRoleTemplates.id),
-          or(
-            isNull(partnerRoleTemplates.partnerAccountId),
-            eq(partnerRoleTemplates.partnerAccountId, account.id),
-          ),
-        ),
-      )
-      .where(
-        and(
-          eq(partnerAccountMemberships.id, invitation.invitedByMembershipId),
-          eq(partnerAccountMemberships.partnerAccountId, account.id),
-        ),
-      )
-      .limit(1);
-    if (
-      !issuer ||
-      issuer.status !== "active" ||
-      issuer.accessLevel !== "account" ||
-      !issuer.roleActive
-    ) {
-      return null;
-    }
-    const issuerCapabilities = computePartnerCapabilities({
-      roleCapabilities: issuer.roleCapabilities ?? [],
-      grants: issuer.grants,
-      denies: issuer.denies,
+    const issuer = await loadPartnerInvitationIssuer(tx, {
+      accountId: account.id,
+      membershipId: invitation.invitedByMembershipId,
+      teamMemberId: invitation.invitedByTeamMemberId,
+      roleCapabilities: role.capabilities,
     });
-    if (
-      !issuerCapabilities.includes("account.members.manage") ||
-      !mayAssignInvitationRole({
-        actorCapabilities: issuerCapabilities,
-        roleCapabilities: role.capabilities,
-      })
-    ) {
-      return null;
-    }
+    if (!issuer) return null;
 
     const scopeSnapshot = (
       await loadInvitationScopes(tx, account.id, [invitation.id])
@@ -1152,9 +1295,16 @@ export async function acceptPartnerAccountInvitation(input: {
     ) {
       return null;
     }
+    let resumedMembershipId: string | null = null;
     if (existingIdentity) {
       const [existingMembership] = await tx
-        .select({ id: partnerAccountMemberships.id })
+        .select({
+          id: partnerAccountMemberships.id,
+          status: partnerAccountMemberships.status,
+          roleId: partnerAccountMemberships.roleTemplateId,
+          roleKey: partnerAccountMemberships.roleKey,
+          accessLevel: partnerAccountMemberships.accessLevel,
+        })
         .from(partnerAccountMemberships)
         .where(
           and(
@@ -1164,7 +1314,60 @@ export async function acceptPartnerAccountInvitation(input: {
         )
         .for("update")
         .limit(1);
-      if (existingMembership) return null;
+      if (existingMembership) {
+        if (
+          existingMembership.id !== invitation.resumeMembershipId ||
+          existingMembership.status !== "invited" ||
+          existingMembership.roleId !== invitation.roleTemplateId ||
+          existingMembership.roleKey !== invitation.roleKey ||
+          existingMembership.accessLevel !== invitation.accessLevel
+        )
+          return null;
+        resumedMembershipId = existingMembership.id;
+        const [locations, costs] = await Promise.all([
+          tx
+            .select({ id: partnerMembershipLocationScopes.locationId })
+            .from(partnerMembershipLocationScopes)
+            .where(
+              and(
+                eq(
+                  partnerMembershipLocationScopes.membershipId,
+                  resumedMembershipId,
+                ),
+                eq(
+                  partnerMembershipLocationScopes.partnerAccountId,
+                  account.id,
+                ),
+              ),
+            ),
+          tx
+            .select({ id: partnerMembershipCostCenterScopes.costCenterId })
+            .from(partnerMembershipCostCenterScopes)
+            .where(
+              and(
+                eq(
+                  partnerMembershipCostCenterScopes.membershipId,
+                  resumedMembershipId,
+                ),
+                eq(
+                  partnerMembershipCostCenterScopes.partnerAccountId,
+                  account.id,
+                ),
+              ),
+            ),
+        ]);
+        if (
+          locations
+            .map((entry) => entry.id)
+            .sort()
+            .join(",") !== scopeSnapshot.locationIds.join(",") ||
+          costs
+            .map((entry) => entry.id)
+            .sort()
+            .join(",") !== scopeSnapshot.costCenterIds.join(",")
+        )
+          return null;
+      } else if (invitation.resumeMembershipId) return null;
     }
     let partnerUserId = existingIdentity?.id ?? null;
     let securityVersion = existingIdentity?.securityVersion ?? 1;
@@ -1219,31 +1422,33 @@ export async function acceptPartnerAccountInvitation(input: {
         ),
       )
       .limit(1);
-    const [membership] = await tx
-      .insert(partnerAccountMemberships)
-      .values({
-        partnerAccountId: account.id,
-        partnerUserId,
-        roleTemplateId: invitation.roleTemplateId,
-        roleKey: invitation.roleKey,
-        status: "invited",
-        persona: invitation.persona,
-        accessLevel: invitation.accessLevel,
-        accessScope: {
-          locationIds: scopeSnapshot.locationIds,
-          costCenterIds: scopeSnapshot.costCenterIds,
-        },
-        isDefault: !anyDefault,
-        invitedByPartnerUserId: issuer.partnerUserId,
-        invitedAt: invitation.createdAt,
-        acceptedAt: null,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .returning({ id: partnerAccountMemberships.id });
+    const [membership] = resumedMembershipId
+      ? [{ id: resumedMembershipId }]
+      : await tx
+          .insert(partnerAccountMemberships)
+          .values({
+            partnerAccountId: account.id,
+            partnerUserId,
+            roleTemplateId: invitation.roleTemplateId,
+            roleKey: invitation.roleKey,
+            status: "invited",
+            persona: invitation.persona,
+            accessLevel: invitation.accessLevel,
+            accessScope: {
+              locationIds: scopeSnapshot.locationIds,
+              costCenterIds: scopeSnapshot.costCenterIds,
+            },
+            isDefault: !anyDefault,
+            invitedByPartnerUserId: issuer.partnerUserId,
+            invitedAt: invitation.createdAt,
+            acceptedAt: null,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .returning({ id: partnerAccountMemberships.id });
     const membershipId = membership?.id;
     if (!membershipId) throw new Error("invitation_membership_insert_failed");
-    if (scopeSnapshot.locationIds.length > 0) {
+    if (!resumedMembershipId && scopeSnapshot.locationIds.length > 0) {
       await tx.insert(partnerMembershipLocationScopes).values(
         scopeSnapshot.locationIds.map((locationId) => ({
           membershipId,
@@ -1253,7 +1458,7 @@ export async function acceptPartnerAccountInvitation(input: {
         })),
       );
     }
-    if (scopeSnapshot.costCenterIds.length > 0) {
+    if (!resumedMembershipId && scopeSnapshot.costCenterIds.length > 0) {
       await tx.insert(partnerMembershipCostCenterScopes).values(
         scopeSnapshot.costCenterIds.map((costCenterId) => ({
           membershipId,
@@ -1285,7 +1490,7 @@ export async function acceptPartnerAccountInvitation(input: {
       )
       .returning({ id: partnerAccountInvitations.id });
     if (!accepted) return null;
-    await createPartnerActivationChallengeInTransaction(tx, {
+    const activation = await createPartnerActivationChallengeInTransaction(tx, {
       partnerUserId,
       partnerAccountId: account.id,
       partnerMembershipId: membershipId,
@@ -1293,6 +1498,9 @@ export async function acceptPartnerAccountInvitation(input: {
       normalizedEmail: invitation.normalizedEmail,
       securityVersion,
       correlationId: input.correlationId,
+      invitationToken: input.token,
+      invitationId: invitation.id,
+      invitationGeneration: invitation.generation,
       now,
     });
     await tx.insert(auditLogs).values({
@@ -1321,7 +1529,8 @@ export async function acceptPartnerAccountInvitation(input: {
       accountId: account.id,
       membershipId,
       activationRequired: true,
-      deliveryStatus: "queued",
+      deliveryStatus: "ready",
+      activationExpiresAt: activation.expiresAt.toISOString(),
     };
   });
 }

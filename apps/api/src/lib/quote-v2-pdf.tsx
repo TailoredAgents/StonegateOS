@@ -1,15 +1,19 @@
 import React from "react";
 import { createRequire } from "node:module";
-import {
-  Document,
-  Font,
-  Image,
-  Page,
-  StyleSheet,
-  Text,
-  View,
-  renderToBuffer,
-} from "@react-pdf/renderer";
+import type * as ReactPDF from "@react-pdf/renderer";
+type PdfRenderer = typeof ReactPDF;
+let Document: PdfRenderer["Document"],
+  Font: PdfRenderer["Font"],
+  Image: PdfRenderer["Image"],
+  Page: PdfRenderer["Page"],
+  Text: PdfRenderer["Text"],
+  View: PdfRenderer["View"],
+  renderToBuffer: PdfRenderer["renderToBuffer"];
+async function loadPdfRenderer(): Promise<void> {
+  ({ Document, Font, Image, Page, Text, View, renderToBuffer } = await import(
+    "@react-pdf/renderer"
+  ));
+}
 import { z } from "zod";
 import {
   formatQuoteTotal,
@@ -18,7 +22,9 @@ import {
 } from "@/lib/quote-v2-render-model";
 
 let fontsRegistered = false;
-const moduleRequire = createRequire(import.meta.url);
+const moduleRequire = createRequire(
+  typeof __filename === "string" ? __filename : import.meta.url,
+);
 
 function registerProposalFonts(): void {
   if (fontsRegistered) return;
@@ -53,7 +59,7 @@ const palette = {
   white: "#ffffff",
 };
 
-const styles = StyleSheet.create({
+const styles = {
   page: {
     paddingTop: 42,
     paddingBottom: 56,
@@ -187,7 +193,7 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   hash: { fontSize: 6.5, color: palette.muted, marginTop: 3 },
-});
+} satisfies Parameters<PdfRenderer["StyleSheet"]["create"]>[0];
 
 function issuerContact(model: QuoteRenderModel): string {
   const issuer = model.document.issuer;
@@ -244,7 +250,7 @@ function ProposalFooter({
   );
 }
 
-export function QuoteProposalDocument({
+function QuoteProposalDocument({
   model,
   logoSource,
 }: {
@@ -472,6 +478,7 @@ export async function renderQuoteProposalPdf(input: {
   model: QuoteRenderModel;
   logoSource?: string | null;
 }): Promise<Buffer> {
+  await loadPdfRenderer();
   return renderToBuffer(
     <QuoteProposalDocument model={input.model} logoSource={input.logoSource} />,
   );
@@ -521,6 +528,7 @@ export async function renderQuoteAcceptanceCertificate(input: {
   issuedContentHash: string;
   evidence: z.input<typeof QuoteAcceptanceCertificateSchema>;
 }): Promise<Buffer> {
+  await loadPdfRenderer();
   registerProposalFonts();
   const evidence = QuoteAcceptanceCertificateSchema.parse(input.evidence);
   if (

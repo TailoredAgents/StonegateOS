@@ -7,9 +7,16 @@ import {
   paymentAttempts,
   paymentProviderEvents,
   paymentRefunds,
+  partnerInvoices,
+  partnerBookings,
   payments,
 } from "@/db";
 import { canDismissSquareAttemptAfterReview } from "@/lib/payment-ledger";
+import { lockAppointmentInvoiceCollection } from "@/lib/partner-invoice-ledger";
+import {
+  requiresHostedCollectionRetirement,
+  isSquareHostedOrderRetired,
+} from "@/lib/partner-hosted-retirement";
 import { resolveLegacyStripePaymentInTransaction } from "@/lib/payment-reconciliation";
 import {
   nextPaymentReconciliationVersion,
@@ -29,7 +36,7 @@ import {
   reconcileSquareRefundEvent,
   SQUARE_PROVIDER_EVENT_LEASE_MS,
 } from "@/lib/square-payments";
-import { SquareApiError } from "@/lib/square-client";
+import { SquareApiError, getSquareOrder } from "@/lib/square-client";
 import {
   claimTeamMutationIdempotency,
   completeTeamMutationIdempotency,
@@ -919,9 +926,57 @@ async function executeOwnerResolution(
   claim: TeamMutationIdempotencyClaim,
   input: OwnerResolutionRequest,
 ) {
+  // A no-charge attestation and a local timeout do not retire a hosted URL.
+  // Read Square outside the transaction; revalidate this exact attempt version
+  // under the collection lock before releasing its reserved balance.
+  let retiredHosted: {
+    attemptId: string;
+    orderId: string;
+    version: string;
+    verifiedAt: string;
+  } | null = null;
+  if (input.operation === "dismiss_square_attempt") {
+    const [attempt] = await db
+      .select({
+        id: paymentAttempts.id,
+        metadata: paymentAttempts.metadata,
+        providerOrderId: paymentAttempts.providerOrderId,
+        updatedAt: paymentAttempts.updatedAt,
+      })
+      .from(paymentAttempts)
+      .where(eq(paymentAttempts.id, input.attemptId))
+      .limit(1);
+    if (attempt && requiresHostedCollectionRetirement(attempt.metadata)) {
+      assertTeamMutationExpectedVersion(mutation, attempt.updatedAt);
+      if (!attempt.providerOrderId)
+        throw new TeamMutationFailure(
+          "conflict",
+          "This hosted collection needs provider reconciliation before its reserved balance can be released.",
+        );
+      const order = await getSquareOrder(attempt.providerOrderId);
+      if (!isSquareHostedOrderRetired(order, attempt.providerOrderId))
+        throw new TeamMutationFailure(
+          "conflict",
+          "This hosted link may still accept payment. Retire the link in Square and reconcile any payments before dismissing it. A local expiry is not provider retirement.",
+        );
+      retiredHosted = {
+        attemptId: attempt.id,
+        orderId: attempt.providerOrderId,
+        version: attempt.updatedAt.toISOString(),
+        verifiedAt: new Date().toISOString(),
+      };
+    }
+  }
   return db.transaction(async (tx) => {
     if (input.operation === "dismiss_square_attempt") {
       await acquireProviderReconciliationLock(tx);
+      const [binding] = await tx
+        .select({ appointmentId: paymentAttempts.appointmentId })
+        .from(paymentAttempts)
+        .where(eq(paymentAttempts.id, input.attemptId))
+        .limit(1);
+      if (binding?.appointmentId)
+        await lockAppointmentInvoiceCollection(tx, binding.appointmentId);
       const [before] = await tx
         .select({
           id: paymentAttempts.id,
@@ -943,6 +998,17 @@ async function executeOwnerResolution(
         );
       }
       assertTeamMutationExpectedVersion(mutation, before.updatedAt);
+      if (
+        requiresHostedCollectionRetirement(before.metadata) &&
+        (!retiredHosted ||
+          retiredHosted.attemptId !== before.id ||
+          retiredHosted.version !== before.updatedAt.toISOString())
+      ) {
+        throw new TeamMutationFailure(
+          "conflict",
+          "The hosted collection changed. Verify its provider retirement again before releasing the balance.",
+        );
+      }
       if (!canDismissSquareAttemptAfterReview(before.status)) {
         throw new TeamMutationFailure(
           "conflict",
@@ -951,6 +1017,25 @@ async function executeOwnerResolution(
       }
 
       const now = nextPaymentReconciliationVersion(before.updatedAt);
+      if (retiredHosted && before.appointmentId) {
+        // Clear only an explicitly bound generic checkout projection. An actual
+        // Square-managed invoice has a separate lifecycle and is never converted here.
+        await tx
+          .update(partnerInvoices)
+          .set({
+            hostedPaymentUrl: null,
+            providerOrderId: null,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(partnerInvoices.providerOrderId, retiredHosted.orderId),
+              isNull(partnerInvoices.providerInvoiceId),
+              sql`exists (select 1 from ${partnerBookings} where ${partnerBookings.id} = ${partnerInvoices.partnerBookingId}
+              and ${partnerBookings.partnerAccountId} = ${partnerInvoices.partnerAccountId} and ${partnerBookings.appointmentId} = ${before.appointmentId})`,
+            ),
+          );
+      }
       const [updated] = await tx
         .update(paymentAttempts)
         .set({
@@ -960,6 +1045,9 @@ async function executeOwnerResolution(
           errorMessage: input.reviewNote,
           metadata: {
             ...(before.metadata ?? {}),
+            ...(retiredHosted
+              ? { hostedCollectionRetirement: retiredHosted }
+              : {}),
             ownerDismissedAt: now.toISOString(),
             ownerDismissedBy:
               mutation.actor.id ?? mutation.actor.label ?? "unknown",
@@ -987,8 +1075,8 @@ async function executeOwnerResolution(
         operation: input.operation,
         outcome: "resolved",
         message:
-          "The attempt was dismissed after the no-charge confirmation. The reason and actor are recorded.",
-        providerEffect: "none",
+          "The attempt was dismissed after the no-charge confirmation. Any hosted collection was verified retired in Square. The reason and actor are recorded.",
+        providerEffect: retiredHosted ? "read_only" : "none",
         targetId: before.id,
         version: now.toISOString(),
         result: {
@@ -1010,9 +1098,10 @@ async function executeOwnerResolution(
           surface: "team.owner.payments",
           operation: input.operation,
           provider: "square",
-          providerEffect: "none",
+          providerEffect: retiredHosted ? "read_only" : "none",
           reviewNoteProvided: true,
           confirmation: "no_square_charge",
+          hostedRetirementVerified: retiredHosted !== null,
         },
         committedAt: now,
       });

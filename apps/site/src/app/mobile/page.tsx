@@ -173,6 +173,7 @@ type MessageDetail = {
 };
 
 type ThreadDetail = {
+  partnerJob?: { accountId: string; jobId: string } | null;
   id: string;
   status: string;
   state?: string;
@@ -2673,6 +2674,8 @@ export default async function MobileHomePage({
                   ) : null}
 
                   <MobileThreadConversation
+                    key={selectedThread.thread.id}
+                    isPartnerJob={Boolean(selectedThread.thread.partnerJob)}
                     threadId={selectedThread.thread.id}
                     channel={selectedThread.thread.channel}
                     initialMessages={selectedThread.messages ?? []}

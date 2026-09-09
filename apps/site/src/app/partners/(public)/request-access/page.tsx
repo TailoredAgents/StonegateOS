@@ -1,37 +1,29 @@
-import type { Metadata, Route } from "next";
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import { PartnerAccessRequestForm } from "@/app/partners/components/PartnerAccessRequestForm";
-import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
-import { PARTNER_APPLICATION_SESSION_COOKIE } from "@/lib/partner-application-session";
-import { PARTNER_SESSION_COOKIE } from "@/lib/partner-session";
+import type { Metadata } from "next";
+import Link from "next/link";
+import { PartnerAccessHelp } from "@/app/partners/components/PartnerAccessHelp";
 
 export const metadata: Metadata = {
-  title: "Request partner access",
-  description:
-    "Request access to quicker, easier Stonegate service for your company.",
+  title: "Partner access and help",
   robots: { index: false, follow: false, nocache: true },
 };
 
-export default async function PartnerRequestAccessPage({
-  searchParams,
-}: {
-  searchParams?: Promise<{ error?: string }>;
-}) {
-  const jar = await cookies();
-  if (jar.get(PARTNER_APPLICATION_SESSION_COOKIE)?.value) {
-    redirect("/partners/application" as Route);
-  }
-  if (jar.get(PARTNER_SESSION_COOKIE)?.value) {
-    const context = await getPartnerPortalContext();
-    if (context.status === "authenticated") {
-      redirect("/partners/overview" as Route);
-    }
-  }
-  const error = (await searchParams)?.error;
-  const initialError =
-    error === "invalid_or_expired" || error === "temporarily_unavailable"
-      ? error
-      : null;
-  return <PartnerAccessRequestForm initialError={initialError} />;
+export default function PartnerRequestAccessPage() {
+  return (
+    <section className="mx-auto max-w-xl">
+      <h1 className="text-3xl font-semibold tracking-tight text-slate-950">
+        Partner access and help
+      </h1>
+      <p className="mt-4 text-base leading-7 text-slate-600">
+        The portal is for people Stonegate already works with. Contact us to get
+        set up, replace an invitation, or get help with your account.
+      </p>
+      <PartnerAccessHelp className="mt-6" />
+      <Link
+        href="/partners/login"
+        className="mt-6 inline-flex min-h-11 items-center font-semibold text-primary-900 underline underline-offset-4"
+      >
+        Already set up? Sign in
+      </Link>
+    </section>
+  );
 }

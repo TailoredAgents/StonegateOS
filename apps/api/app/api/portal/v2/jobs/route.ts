@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { parsePartnerJobDateBoundary } from "@/lib/partner-job-date-filter";
+import { readPartnerJobLocationSnapshot } from "@/lib/partner-job-location";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import {
@@ -218,9 +220,26 @@ export async function GET(request: NextRequest): Promise<Response> {
       correlationId,
     );
   }
-  const fromDate =
-    from && from !== DUPLICATE_QUERY_VALUE ? new Date(from) : null;
-  const toDate = to && to !== DUPLICATE_QUERY_VALUE ? new Date(to) : null;
+  let fromDate: Date | null;
+  let toDate: Date | null;
+  const toIsLocalDay =
+    typeof to === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(to);
+  try {
+    fromDate = parsePartnerJobDateBoundary(
+      typeof from === "string" ? from : null,
+      false,
+    );
+    toDate = parsePartnerJobDateBoundary(
+      typeof to === "string" ? to : null,
+      true,
+    );
+  } catch {
+    return createPartnerPortalV2ErrorResponse(
+      "invalid_fields",
+      422,
+      correlationId,
+    );
+  }
   if (
     (fromDate && !Number.isFinite(fromDate.getTime())) ||
     (toDate && !Number.isFinite(toDate.getTime())) ||
@@ -239,6 +258,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     locationId: locationId === DUPLICATE_QUERY_VALUE ? null : locationId,
     from: fromDate?.toISOString() ?? null,
     to: toDate?.toISOString() ?? null,
+    toExclusive: toIsLocalDay,
     search:
       search === DUPLICATE_QUERY_VALUE ? null : (search?.toLowerCase() ?? null),
     authorizationScope: partnerJobAccessScopeKey(principal),
@@ -272,6 +292,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         status: partnerBookings.publicStatus,
         confirmationMode: partnerBookings.confirmationMode,
         serviceKey: partnerBookings.serviceKey,
+        scopeSnapshot: partnerBookings.scopeSnapshot,
         tierKey: partnerBookings.tierKey,
         addOns: partnerBookings.addOnsSnapshot,
         amountCents: partnerBookings.amountCents,
@@ -398,7 +419,11 @@ export async function GET(request: NextRequest): Promise<Response> {
             ? eq(partnerAccountLocations.id, normalizedFilters.locationId)
             : undefined,
           fromDate ? gte(appointments.startAt, fromDate) : undefined,
-          toDate ? lte(appointments.startAt, toDate) : undefined,
+          toDate
+            ? toIsLocalDay
+              ? lt(appointments.startAt, toDate)
+              : lte(appointments.startAt, toDate)
+            : undefined,
           normalizedFilters.search
             ? or(
                 ilike(
@@ -449,6 +474,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     };
     const evaluatedAt = new Date();
     const jobs = page.map((row) => {
+      const savedLocation = readPartnerJobLocationSnapshot(row.scopeSnapshot);
       const cancellationReviewPending = Boolean(
         row.pendingCancellationRequestId ||
           row.cancellationReconciliationCaseId,
@@ -460,7 +486,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         canCancel,
         reviewPending: cancellationReviewPending,
         policy: resolvePartnerCancellationPolicy({
-          timezone: row.timezone,
+          timezone: savedLocation?.timezone ?? row.timezone,
           accountPolicy: resolvePersistedPartnerAccountCancellationPolicy(
             row.cancellationPolicyRevision !== null &&
               row.cancellationMinimumNoticeMinutes !== null &&
@@ -507,20 +533,22 @@ export async function GET(request: NextRequest): Promise<Response> {
         schedule: createPartnerPublicJobScheduleDto({
           arrivalWindowStartAt: row.arrivalStartAt,
           arrivalWindowEndAt: row.arrivalEndAt,
-          timezone: row.timezone,
+          timezone: savedLocation?.timezone ?? row.timezone,
           completedAt: row.completedAt,
         }),
         location: {
-          id: row.locationId,
-          name: row.siteName,
-          address: row.addressLine1
-            ? {
-                line1: row.addressLine1,
-                city: row.city,
-                state: row.state,
-                postalCode: row.postalCode,
-              }
-            : null,
+          id: savedLocation?.id ?? row.locationId,
+          name: savedLocation?.name ?? row.siteName,
+          address:
+            savedLocation?.address ??
+            (row.addressLine1
+              ? {
+                  line1: row.addressLine1,
+                  city: row.city,
+                  state: row.state,
+                  postalCode: row.postalCode,
+                }
+              : null),
         },
         references: {
           poNumber: row.poNumber,

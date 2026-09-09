@@ -58,13 +58,49 @@ function formatServiceDate(job: PartnerJobSummary): string {
 export default async function PartnerPhotosPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ jobId?: string }>;
+  searchParams?: Promise<{ jobId?: string; search?: string; cursor?: string }>;
 }) {
   const params = (await searchParams) ?? {};
-  const [jobsResponse, portalContext] = await Promise.all([
-    callPartnerApi("/api/portal/v2/jobs?limit=100").catch(() => null),
+  const requestedJobId =
+    typeof params.jobId === "string" ? params.jobId.trim() : "";
+  const search =
+    typeof params.search === "string" ? params.search.trim().slice(0, 100) : "";
+  const cursor =
+    typeof params.cursor === "string"
+      ? params.cursor.trim().slice(0, 2048)
+      : "";
+  const query = new URLSearchParams({ limit: "25" });
+  if (search) query.set("search", search);
+  if (cursor) query.set("cursor", cursor);
+  const photosHref = (values: { jobId?: string; cursor?: string } = {}) =>
+    `/partners/photos?${new URLSearchParams({
+      ...(search ? { search } : {}),
+      ...(values.jobId ? { jobId: values.jobId } : {}),
+      ...(values.cursor ? { cursor: values.cursor } : {}),
+    }).toString()}` as Route;
+  const [jobsResponse, portalContext, requestedResponse] = await Promise.all([
+    callPartnerApi(`/api/portal/v2/jobs?${query}`).catch(() => null),
     getPartnerPortalContext(),
+    requestedJobId
+      ? callPartnerApi(
+          `/api/portal/v2/jobs/${encodeURIComponent(requestedJobId)}`,
+        ).catch(() => null)
+      : Promise.resolve(null),
   ]);
+  const requestedPayload = requestedResponse?.ok
+    ? ((await requestedResponse.json().catch(() => null)) as {
+        job?: PartnerJobSummary;
+      } | null)
+    : null;
+  if (requestedJobId && !isJobSummary(requestedPayload?.job)) {
+    return (
+      <PartnerErrorState
+        title="This job could not be opened"
+        description="No other job has been selected. Open My jobs or contact Stonegate for help."
+        retryHref={`/partners/photos?jobId=${encodeURIComponent(requestedJobId)}`}
+      />
+    );
+  }
   if (!jobsResponse?.ok) {
     const unavailable = [404, 409, 501, 503].includes(
       jobsResponse?.status ?? 503,
@@ -99,12 +135,17 @@ export default async function PartnerPhotosPage({
   }
   const jobsPayload = (await jobsResponse.json().catch(() => null)) as {
     jobs?: unknown[];
+    page?: { hasMore?: boolean; nextCursor?: string | null };
   } | null;
+  const nextCursor = jobsPayload?.page?.hasMore
+    ? jobsPayload.page.nextCursor
+    : null;
   const jobs = (jobsPayload?.jobs ?? []).filter(isJobSummary);
-  const requestedJobId =
-    typeof params.jobId === "string" ? params.jobId.trim() : "";
-  const selectedJob =
-    jobs.find((job) => job.id === requestedJobId) ?? jobs[0] ?? null;
+  const selectedJob = requestedJobId
+    ? requestedPayload!.job!
+    : (jobs[0] ?? null);
+  if (selectedJob && !jobs.some((job) => job.id === selectedJob.id))
+    jobs.unshift(selectedJob);
 
   let proof: PartnerProof | null = null;
   let detailActions: string[] = [];
@@ -161,12 +202,63 @@ export default async function PartnerPhotosPage({
         </div>
       </PartnerPageHeader>
 
+      <PartnerPanel>
+        <form
+          action="/partners/photos"
+          method="get"
+          role="search"
+          className="flex flex-wrap items-end gap-3"
+        >
+          {requestedJobId ? (
+            <input type="hidden" name="jobId" value={requestedJobId} />
+          ) : null}
+          <label
+            htmlFor="partner-proof-search"
+            className="min-w-0 flex-1 text-sm font-medium text-slate-700"
+          >
+            Find a job
+            <input
+              id="partner-proof-search"
+              name="search"
+              type="search"
+              defaultValue={search}
+              maxLength={100}
+              placeholder="Location or job reference"
+              className="mt-1 block min-h-11 w-full rounded-lg border border-slate-300 px-3 text-base focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-700"
+            />
+          </label>
+          <button
+            type="submit"
+            className="min-h-11 rounded-lg bg-primary-900 px-4 text-sm font-semibold text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-700"
+          >
+            Search jobs
+          </button>
+          {search || cursor ? (
+            <Link
+              href="/partners/photos"
+              className="inline-flex min-h-11 items-center px-3 text-sm font-semibold text-primary-700"
+            >
+              Clear search
+            </Link>
+          ) : null}
+        </form>
+      </PartnerPanel>
+
       {!selectedJob ? (
         <PartnerPanel>
           <PartnerEmptyState
-            title="Request service to start a photo record"
-            description="Once a job is scheduled, its proof requirements and private gallery will appear here automatically."
-            action={{ href: "/partners/book", label: "Request service" }}
+            title={search ? "No matching jobs" : "No job photos yet"}
+            description={
+              search
+                ? "Try a different location or reference, or clear the search."
+                : "Your job photos and completion records will appear here once available."
+            }
+            action={
+              portalContext.status === "authenticated" &&
+              portalContext.capabilities.schedule
+                ? { href: "/partners/book", label: "Request service" }
+                : { href: "/partners/bookings", label: "My jobs" }
+            }
             icon={<Camera className="h-6 w-6" aria-hidden="true" />}
           />
         </PartnerPanel>
@@ -185,9 +277,7 @@ export default async function PartnerPhotosPage({
                 return (
                   <Link
                     key={job.id}
-                    href={
-                      `/partners/photos?jobId=${encodeURIComponent(job.id)}` as Route
-                    }
+                    href={photosHref({ jobId: job.id, cursor })}
                     aria-current={active ? "page" : undefined}
                     className={`block rounded-xl border p-3 text-sm transition ${active ? "border-primary-500 bg-primary-50" : "border-slate-200 hover:border-primary-300"}`}
                   >
@@ -197,7 +287,7 @@ export default async function PartnerPhotosPage({
                       </span>
                       <PartnerStatusBadge status={job.status} />
                     </div>
-                    <span className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
+                    <span className="mt-1 flex items-center gap-1.5 text-xs text-slate-600">
                       <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
                       {formatServiceDate(job)}
                     </span>
@@ -205,6 +295,27 @@ export default async function PartnerPhotosPage({
                 );
               })}
             </nav>
+            <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
+              {cursor ? (
+                <Link
+                  href={photosHref({ jobId: requestedJobId })}
+                  className="inline-flex min-h-11 items-center px-2 text-sm font-semibold text-primary-700"
+                >
+                  Newest jobs
+                </Link>
+              ) : null}
+              {nextCursor ? (
+                <Link
+                  href={photosHref({
+                    jobId: selectedJob.id,
+                    cursor: nextCursor,
+                  })}
+                  className="inline-flex min-h-11 items-center px-2 text-sm font-semibold text-primary-700"
+                >
+                  More jobs
+                </Link>
+              ) : null}
+            </div>
           </PartnerPanel>
 
           <PartnerPanel>
@@ -226,6 +337,11 @@ export default async function PartnerPhotosPage({
             </div>
             {proof ? (
               <PartnerProofWorkspace
+                accountId={
+                  portalContext.status === "authenticated"
+                    ? portalContext.accountId
+                    : undefined
+                }
                 jobId={selectedJob.id}
                 initialProof={proof}
                 canUpload={

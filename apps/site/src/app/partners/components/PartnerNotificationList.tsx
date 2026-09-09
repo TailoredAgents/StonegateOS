@@ -14,12 +14,19 @@ export type PartnerDashboardNotification = {
   body: string;
   actionPath: string | null;
   createdAt: string;
+  readAt?: string | null;
 };
 
 export function PartnerNotificationList({
   initialNotifications,
+  initialNextCursor = null,
+  state = "unread",
+  pageLimit = 5,
 }: {
   initialNotifications: PartnerDashboardNotification[];
+  initialNextCursor?: string | null;
+  state?: "all" | "unread";
+  pageLimit?: number;
 }) {
   const router = useRouter();
   const [notifications, setNotifications] =
@@ -27,11 +34,57 @@ export function PartnerNotificationList({
   const [pendingId, setPendingId] = React.useState<string | null>(null);
   const [markingAll, setMarkingAll] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [nextCursor, setNextCursor] = React.useState(initialNextCursor);
+  const [loadingMore, setLoadingMore] = React.useState(false);
+  const loadedOlder = React.useRef(false);
+  React.useEffect(() => {
+    setNotifications((current) =>
+      loadedOlder.current
+        ? [
+            ...new Map(
+              [...current, ...initialNotifications].map((item) => [
+                item.id,
+                item,
+              ]),
+            ).values(),
+          ].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        : initialNotifications,
+    );
+    if (!loadedOlder.current) setNextCursor(initialNextCursor);
+  }, [initialNotifications, initialNextCursor]);
+
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    const result = await partnerPortalFetch<{
+      notifications: PartnerDashboardNotification[];
+      page: { nextCursor: string | null };
+    }>(
+      `notifications?state=${state}&limit=${pageLimit}&cursor=${encodeURIComponent(nextCursor)}`,
+      { signal: AbortSignal.timeout(8_000) },
+    ).catch(() => null);
+    setLoadingMore(false);
+    if (!result?.ok) {
+      setError("Older updates could not be loaded. Try again.");
+      return;
+    }
+    setError((current) => current === "Older updates could not be loaded. Try again." ? null : current);
+    loadedOlder.current = true;
+    setNotifications((current) => [
+      ...new Map(
+        [...current, ...result.data.notifications].map((item) => [
+          item.id,
+          item,
+        ]),
+      ).values(),
+    ]);
+    setNextCursor(result.data.page.nextCursor);
+  };
 
   const markRead = async (
     notification: PartnerDashboardNotification,
   ): Promise<boolean> => {
-    if (pendingId || markingAll) return false;
+    if (pendingId || markingAll || notification.readAt) return false;
     setPendingId(notification.id);
     setError(null);
     const result = await partnerPortalFetch<{
@@ -39,6 +92,7 @@ export function PartnerNotificationList({
       notification: { id: string; readAt: string };
     }>(`notifications/${encodeURIComponent(notification.id)}/read`, {
       method: "POST",
+      signal: AbortSignal.timeout(8_000),
       headers: {
         "Idempotency-Key": createPortalOperationKey("notification-read"),
       },
@@ -53,7 +107,13 @@ export function PartnerNotificationList({
       return false;
     }
     setNotifications((current) =>
-      current.filter((item) => item.id !== notification.id),
+      state === "unread"
+        ? current.filter((item) => item.id !== notification.id)
+        : current.map((item) =>
+            item.id === notification.id
+              ? { ...item, readAt: new Date().toISOString() }
+              : item,
+          ),
     );
     router.refresh();
     return true;
@@ -63,33 +123,58 @@ export function PartnerNotificationList({
     if (pendingId || markingAll) return;
     setMarkingAll(true);
     setError(null);
-    const result = await partnerPortalFetch<{
-      ok: true;
-      markedRead: number;
-      readAt: string;
-    }>("notifications/read-all", {
-      method: "POST",
-      headers: {
-        "Idempotency-Key": createPortalOperationKey("notifications-read-all"),
-      },
-      body: JSON.stringify({}),
-    }).catch(() => null);
-    setMarkingAll(false);
-    if (!result?.ok) {
-      setError(
-        result?.error.message ??
-          "Updates could not be marked as read. Try again shortly.",
+    // Keep a long history from producing hundreds of concurrent mutations.
+    const unread = notifications.filter((item) => !item.readAt);
+    const results: Array<{ id: string; ok: boolean }> = [];
+    for (let index = 0; index < unread.length; index += 5) {
+      const batch = await Promise.all(
+        unread.slice(index, index + 5).map(async (notification) => ({
+          id: notification.id,
+          ok:
+            (
+              await partnerPortalFetch(
+                `notifications/${encodeURIComponent(notification.id)}/read`,
+                {
+                  method: "POST",
+                  signal: AbortSignal.timeout(8_000),
+                  headers: {
+                    "Idempotency-Key":
+                      createPortalOperationKey("notification-read"),
+                  },
+                  body: JSON.stringify({}),
+                },
+              ).catch(() => null)
+            )?.ok === true,
+        })),
       );
+      results.push(...batch);
+    }
+    setMarkingAll(false);
+    const completed = new Set(
+      results.filter((item) => item.ok).map((item) => item.id),
+    );
+    setNotifications((current) =>
+      state === "unread"
+        ? current.filter((item) => !completed.has(item.id))
+        : current.map((item) =>
+            completed.has(item.id)
+              ? { ...item, readAt: new Date().toISOString() }
+              : item,
+          ),
+    );
+    if (completed.size !== results.length) {
+      setError("Some updates could not be marked as read. Try again shortly.");
       return;
     }
-    setNotifications([]);
     router.refresh();
   };
 
-  if (!notifications.length) {
+  if (!notifications.length && !nextCursor) {
     return (
       <div role="status" className="text-sm text-slate-600">
-        All visible updates are marked as read.
+        {state === "all"
+          ? "No updates yet."
+          : "All visible updates are marked as read."}
       </div>
     );
   }
@@ -105,7 +190,11 @@ export function PartnerNotificationList({
         <button
           type="button"
           onClick={() => void markAllRead()}
-          disabled={markingAll || Boolean(pendingId)}
+          disabled={
+            markingAll ||
+            Boolean(pendingId) ||
+            notifications.every((item) => item.readAt)
+          }
           className={partnerSecondaryButtonClass}
         >
           {markingAll ? (
@@ -116,12 +205,13 @@ export function PartnerNotificationList({
           ) : (
             <CheckCheck className="h-4 w-4" aria-hidden="true" />
           )}
-          {markingAll ? "Marking updates…" : "Mark all read"}
+          {markingAll ? "Marking updates…" : "Mark these read"}
         </button>
       </div>
       <ul className="space-y-2">
         {notifications.map((notification) => {
-          const href = (notification.actionPath ?? "/partners/overview") as Route;
+          const href = (notification.actionPath ??
+            "/partners/overview") as Route;
           const pending = pendingId === notification.id;
           return (
             <li
@@ -149,12 +239,9 @@ export function PartnerNotificationList({
                     ) {
                       return;
                     }
-                    event.preventDefault();
-                    void markRead(notification).then((marked) => {
-                      if (marked) router.push(href);
-                    });
+                    // Navigation is independent from best-effort read tracking.
+                    void markRead(notification);
                   }}
-                  aria-disabled={pending}
                   className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-lg px-2 text-sm font-semibold text-primary-800 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
                 >
                   {pending ? (
@@ -171,16 +258,31 @@ export function PartnerNotificationList({
               <button
                 type="button"
                 onClick={() => void markRead(notification)}
-                disabled={pending || markingAll || Boolean(pendingId)}
+                disabled={
+                  Boolean(notification.readAt) ||
+                  pending ||
+                  markingAll ||
+                  Boolean(pendingId)
+                }
                 className="mt-2 inline-flex min-h-11 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 disabled:opacity-60"
               >
                 <CheckCheck className="h-4 w-4" aria-hidden="true" />
-                Mark read
+                {notification.readAt ? "Read" : "Mark read"}
               </button>
             </li>
           );
         })}
       </ul>
+      {nextCursor ? (
+        <button
+          type="button"
+          onClick={() => void loadMore()}
+          disabled={loadingMore}
+          className={`${partnerSecondaryButtonClass} mt-3`}
+        >
+          {loadingMore ? "Loading…" : "Older updates"}
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -31,6 +31,7 @@ type MobileThreadConversationProps = {
   channel: string;
   initialMessages: MessageDetail[];
   doNotContact?: boolean;
+  isPartnerJob?: boolean;
 };
 
 function formatRelativeTime(value: string | null): string {
@@ -56,7 +57,7 @@ function isMediaPlaceholderBody(value: string | null | undefined): boolean {
 function hasServerMatch(optimistic: OptimisticMessage, serverMessages: MessageDetail[]): boolean {
   const optimisticAt = Date.parse(optimistic.createdAt);
   return serverMessages.some((message) => {
-    if (message.direction !== "outbound") return false;
+    if (message.direction !== optimistic.direction) return false;
     if (message.body.trim() !== optimistic.body.trim()) return false;
     const messageAt = Date.parse(message.createdAt);
     if (!Number.isFinite(optimisticAt) || !Number.isFinite(messageAt)) return true;
@@ -76,10 +77,13 @@ export function MobileThreadConversation({
   threadId,
   channel,
   initialMessages,
-  doNotContact = false
+  doNotContact = false,
+  isPartnerJob = false
 }: MobileThreadConversationProps): ReactElement {
   const [messages, setMessages] = useState<ConversationMessage[]>(initialMessages);
   const [body, setBody] = useState("");
+  const [audience, setAudience] = useState<"" | "partner" | "internal">("");
+  const operationRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -149,16 +153,18 @@ export function MobileThreadConversation({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = body.trim();
-    if (!trimmed || isSending) return;
+    if (!trimmed || isSending || (isPartnerJob && !audience)) return;
+    const fingerprint = JSON.stringify({ threadId, body: trimmed, audience });
+    if (operationRef.current?.fingerprint !== fingerprint) operationRef.current = { fingerprint, key: crypto.randomUUID() };
     const allowDncOverride =
-      doNotContact &&
+      !isPartnerJob && doNotContact &&
       window.confirm("This contact is marked Do Not Contact. Send this manual reply anyway?");
-    if (doNotContact && !allowDncOverride) return;
+    if (!isPartnerJob && doNotContact && !allowDncOverride) return;
 
     const optimisticId = `pending-${Date.now()}`;
     const optimisticMessage: OptimisticMessage = {
       id: optimisticId,
-      direction: "outbound",
+      direction: isPartnerJob && audience === "internal" ? "internal" : "outbound",
       channel,
       body: trimmed,
       mediaUrls: [],
@@ -176,14 +182,16 @@ export function MobileThreadConversation({
     try {
       const response = await fetch(`/api/mobile/inbox/threads/${encodeURIComponent(threadId)}/messages`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: trimmed, channel, ...(allowDncOverride ? { allowDncOverride: true } : {}) })
+        headers: { "Content-Type": "application/json", "Idempotency-Key": operationRef.current.key },
+        signal: AbortSignal.timeout(15_000),
+        body: JSON.stringify({ body: trimmed, channel, ...(isPartnerJob ? { audience } : {}), ...(allowDncOverride ? { allowDncOverride: true } : {}) })
       });
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error ?? "send_failed");
       }
+      operationRef.current = null;
 
       setMessages((current) =>
         current.map((message) =>
@@ -246,7 +254,7 @@ export function MobileThreadConversation({
                   {showBody ? <p className="whitespace-pre-wrap break-words">{message.body || "Message received"}</p> : null}
                   {hasMedia ? <MobileInboxMediaGallery messageId={message.id} count={mediaCount} /> : null}
                   <p className={`mt-1 text-[11px] ${outbound ? "text-slate-700" : "text-slate-400"}`}>
-                    {formatRelativeTime(message.createdAt)} • {message.deliveryStatus}
+                    {message.direction === "internal" ? "Internal note · " : ""}{formatRelativeTime(message.createdAt)} • {message.deliveryStatus}
                   </p>
                 </div>
               </div>
@@ -266,12 +274,21 @@ export function MobileThreadConversation({
             {error}
           </div>
         ) : null}
+        {isPartnerJob ? <label className="mb-3 block text-sm font-semibold text-slate-200">
+          Who can see this message?
+          <select required value={audience} disabled={isSending} onChange={(event) => setAudience(event.target.value as typeof audience)} className="mt-1 min-h-11 w-full rounded-md border border-white/20 bg-slate-950 px-3 text-base text-white">
+            <option value="" disabled>Choose reply or note</option>
+            <option value="partner">Reply to partner</option>
+            <option value="internal">Internal note — Stonegate only</option>
+          </select>
+        </label> : null}
         <label className="block">
           <span className="text-xs font-semibold text-slate-300">Reply</span>
           <textarea
             value={body}
             onChange={(event) => setBody(event.target.value)}
             required
+            maxLength={isPartnerJob ? 5000 : undefined}
             rows={3}
             className="mt-1 w-full resize-none rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none transition focus:border-cyan-300"
             placeholder="Type a reply..."
@@ -279,11 +296,11 @@ export function MobileThreadConversation({
         </label>
         <button
           type="submit"
-          disabled={isSending || body.trim().length === 0}
+          disabled={isSending || body.trim().length === 0 || (isPartnerJob && !audience)}
           className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md bg-cyan-300 px-4 py-3 text-sm font-semibold text-slate-950 transition disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          {isSending ? "Sending" : "Send reply"}
+          {isSending ? "Sending" : isPartnerJob && audience === "internal" ? "Save internal note" : "Send reply"}
         </button>
       </form>
     </>

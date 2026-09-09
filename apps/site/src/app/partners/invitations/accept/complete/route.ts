@@ -1,10 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { callPartnerPublicApi } from "@/app/partners/lib/api";
 import { parsePartnerInvitationActivationQueued } from "@/app/partners/lib/invitation-activation";
 import { resolvePublicOrigin } from "@/app/partners/lib/origin";
-import { PARTNER_INVITATION_TOKEN_COOKIE } from "@/lib/partner-application-session";
+import {
+  PARTNER_ACTIVATION_TOKEN_COOKIE,
+  PARTNER_INVITATION_TOKEN_COOKIE,
+} from "@/lib/partner-application-session";
+import { derivePartnerInvitationActivationToken } from "@/app/partners/lib/invitation-handoff";
 
 function clearInvitationToken(response: NextResponse): void {
   response.cookies.set({
@@ -54,9 +58,15 @@ async function readBoundedForm(
   if (!reader) return new URLSearchParams();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let expired = false;
+  const deadline = setTimeout(() => {
+    expired = true;
+    void reader.cancel().catch(() => undefined);
+  }, 10_000);
   try {
     while (true) {
       const { done, value } = await reader.read();
+      if (expired) return null;
       if (done) break;
       if (!value?.byteLength) continue;
       total += value.byteLength;
@@ -67,6 +77,7 @@ async function readBoundedForm(
       chunks.push(value);
     }
   } finally {
+    clearTimeout(deadline);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(total);
@@ -90,7 +101,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const fetchSite = request.headers.get("sec-fetch-site");
   if (
     requestOrigin
-      ? requestOrigin !== request.nextUrl.origin
+      ? requestOrigin !== origin
       : fetchSite !== "same-origin" && fetchSite !== "none"
   ) {
     return NextResponse.json(
@@ -104,7 +115,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     ? (request.cookies.get(PARTNER_INVITATION_TOKEN_COOKIE)?.value?.trim() ??
       "")
     : "";
-  if (!/^[A-Za-z0-9_-]{32,256}$/u.test(token)) {
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(token)) {
     return invalidInvitation(origin);
   }
 
@@ -114,7 +125,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       method: "POST",
       headers: {
         Origin: origin,
-        "Idempotency-Key": `partner-invitation-accept:${randomUUID()}`,
+        "Idempotency-Key": `partner-invitation-accept:${createHash("sha256").update(token, "utf8").digest("hex")}`,
       },
       body: JSON.stringify({ token }),
     },
@@ -139,10 +150,19 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const response = NextResponse.redirect(
-    new URL("/partners/invitations/accept?accepted=1", origin),
+    new URL("/partners/activate", origin),
     303,
   );
   clearInvitationToken(response);
+  response.cookies.set({
+    name: PARTNER_ACTIVATION_TOKEN_COOKIE,
+    value: derivePartnerInvitationActivationToken(token),
+    httpOnly: true,
+    secure: process.env["NODE_ENV"] === "production",
+    sameSite: "lax",
+    path: "/",
+    expires: new Date(payload.activationExpiresAt),
+  });
   response.headers.set("Cache-Control", "private, no-store, max-age=0");
   response.headers.set("Referrer-Policy", "no-referrer");
   return response;

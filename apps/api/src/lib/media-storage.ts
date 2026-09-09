@@ -11,6 +11,8 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { isControlledProviderTestRuntime } from "@myst-os/sdk";
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import {
   recordProviderFailure,
   recordProviderSuccess,
@@ -458,6 +460,8 @@ export async function getMediaObject(
   key: string,
   maxBytes = MAX_BUFFERED_OBJECT_BYTES,
 ): Promise<Buffer> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1)
+    throw new TypeError("Invalid media read limit.");
   await ensureBucket();
   const storage = getStorage();
   const result = await runStorageRequest("get_object", () =>
@@ -469,12 +473,18 @@ export async function getMediaObject(
     typeof result.ContentLength === "number" &&
     result.ContentLength > maxBytes
   ) {
+    if (result.Body && "destroy" in result.Body) result.Body.destroy();
     throw new Error("media_object_too_large");
   }
   if (!result.Body) throw new Error("media_object_empty");
-  const bytes = await result.Body.transformToByteArray();
-  if (bytes.byteLength > maxBytes) throw new Error("media_object_too_large");
-  return Buffer.from(bytes);
+  const chunks: Buffer[] = [];
+  let length = 0;
+  for await (const chunk of result.Body as AsyncIterable<Uint8Array>) {
+    length += chunk.byteLength;
+    if (length > maxBytes) throw new Error("media_object_too_large");
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks, length);
 }
 
 export async function putMediaObject(input: {
@@ -555,12 +565,16 @@ export async function putImmutableMediaObject(input: {
     outcome = "already_exists";
   }
 
-  const [head, storedBytes] = await Promise.all([
-    headMediaObject(input.key),
-    getMediaObject(input.key, input.body.byteLength + 1),
-  ]);
+  const head = await headMediaObject(input.key);
   const expectedType = normalizedStoredContentType(input.contentType);
   const storedType = normalizedStoredContentType(head.contentType);
+  if (
+    head.byteLength !== input.body.byteLength ||
+    storedType !== expectedType
+  ) {
+    throw new Error("media_immutable_object_conflict");
+  }
+  const storedBytes = await getMediaObject(input.key, input.body.byteLength);
   const expectedSha256 = createHash("sha256").update(input.body).digest("hex");
   const storedSha256 = createHash("sha256").update(storedBytes).digest("hex");
   if (
@@ -570,6 +584,96 @@ export async function putImmutableMediaObject(input: {
     storedSha256 !== expectedSha256
   ) {
     throw new Error("media_immutable_object_conflict");
+  }
+  return outcome;
+}
+
+/** Large worker-created archives use known-length streams, never a whole-file Buffer. */
+export async function putImmutableMediaFile(input: {
+  key: string;
+  path: string;
+  byteSize: number;
+  sha256: string;
+  contentType: string;
+}): Promise<"created" | "already_exists"> {
+  if (
+    !Number.isSafeInteger(input.byteSize) ||
+    input.byteSize < 1 ||
+    input.byteSize > 512 * 1024 * 1024 ||
+    !/^[a-f0-9]{64}$/.test(input.sha256)
+  ) {
+    throw new TypeError("Invalid immutable file metadata.");
+  }
+  const source = await stat(input.path);
+  if (!source.isFile() || source.size !== input.byteSize)
+    throw new Error("media_immutable_object_conflict");
+  // Verify the private local file before any external write, then stream it again to upload.
+  const digest = createHash("sha256");
+  for await (const part of createReadStream(input.path)) {
+    if (!Buffer.isBuffer(part)) throw new Error("media_object_invalid_stream");
+    digest.update(part);
+  }
+  if (digest.digest("hex") !== input.sha256)
+    throw new Error("media_immutable_object_conflict");
+  await ensureBucket();
+  const storage = getStorage();
+  let outcome: "created" | "already_exists" = "created";
+  const body = createReadStream(input.path);
+  try {
+    await storage.client.send(
+      new PutObjectCommand({
+        Bucket: storage.config.bucket,
+        Key: input.key,
+        Body: body,
+        ContentLength: input.byteSize,
+        ContentType: input.contentType,
+        CacheControl: "private, max-age=31536000, immutable",
+        IfNoneMatch: "*",
+      }),
+    );
+    await recordStorageSuccess();
+  } catch (error) {
+    if (!isPreconditionFailed(error)) {
+      await recordStorageFailure("put_immutable_file", error);
+      throw error;
+    }
+    outcome = "already_exists";
+  } finally {
+    body.destroy();
+  }
+  const stored = await runStorageRequest("verify_immutable_file", () =>
+    storage.client.send(
+      new GetObjectCommand({
+        Bucket: storage.config.bucket,
+        Key: input.key,
+      }),
+    ),
+  );
+  if (!stored.Body) throw new Error("media_immutable_object_conflict");
+  const storedBody = stored.Body;
+  try {
+    if (
+      stored.ContentLength !== input.byteSize ||
+      normalizedStoredContentType(stored.ContentType ?? null) !==
+        normalizedStoredContentType(input.contentType)
+    ) {
+      throw new Error("media_immutable_object_conflict");
+    }
+    const verification = createHash("sha256");
+    let length = 0;
+    for await (const chunk of storedBody as AsyncIterable<Uint8Array>) {
+      length += chunk.byteLength;
+      if (length > input.byteSize)
+        throw new Error("media_immutable_object_conflict");
+      verification.update(chunk);
+    }
+    if (
+      length !== input.byteSize ||
+      verification.digest("hex") !== input.sha256
+    )
+      throw new Error("media_immutable_object_conflict");
+  } finally {
+    if ("destroy" in storedBody) storedBody.destroy();
   }
   return outcome;
 }

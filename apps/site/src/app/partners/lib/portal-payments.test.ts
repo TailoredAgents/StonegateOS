@@ -207,10 +207,11 @@ void test("payment UI keeps card and ACH creation idempotent and tokens ephemera
     new URL("../components/PartnerInvoicePayment.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(component, /"Idempotency-Key": operationKey\.current/u);
+  assert.match(component, /"Idempotency-Key": prepareKeys\.current\[paymentMethod\]/u);
   assert.match(component, /paymentMethod: "card"/u);
   assert.match(component, /paymentMethod: "ach"/u);
-  assert.match(component, /Square’s secure hosted checkout/u);
+  assert.match(component, /"invoice_balance"/u);
+  assert.doesNotMatch(component, /PartnerHostedInvoicePaymentAction/u);
   assert.match(component, /invoice reconciliation/u);
   assert.match(component, /currentCard\.tokenize/u);
   assert.match(component, /currentAch\.tokenize/u);

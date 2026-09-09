@@ -7,7 +7,10 @@ import {
   readPortalV2CorrelationId,
   readPortalV2IdempotencyKey,
 } from "@/lib/portal-v2-contract";
-import { createPartnerBulkImport } from "@/lib/partner-repeat-work";
+import {
+  createPartnerBulkImport,
+  listPartnerBulkImports,
+} from "@/lib/partner-repeat-work";
 import {
   PartnerPortalSchedulingError,
   requirePartnerSchedulingActor,
@@ -21,6 +24,28 @@ import {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export async function GET(request: NextRequest): Promise<Response> {
+  const correlationId = readPortalV2CorrelationId(request.headers);
+  try {
+    const authorization = await requirePartnerCapability(
+      request,
+      "bookings.create",
+    );
+    if (!authorization.ok)
+      return portalAuthorizationFailureResponse(authorization, correlationId);
+    const result = await listPartnerBulkImports({
+      actor: requirePartnerSchedulingActor(authorization.principal, "read"),
+      params: request.nextUrl.searchParams,
+    });
+    return portalSchedulingSuccessResponse(
+      { ok: true, ...result },
+      correlationId,
+    );
+  } catch (error) {
+    return portalSchedulingExceptionResponse(error, correlationId);
+  }
 }
 
 export async function POST(request: NextRequest): Promise<Response> {

@@ -455,7 +455,10 @@ async function readBoundedSquareBody(response: Response): Promise<unknown> {
 async function squareRequest<T>(
   endpoint: SquareApiEndpoint,
   parse: (value: unknown) => T,
-  options?: SquareRequestOptions & { searchParams?: URLSearchParams },
+  options?: SquareRequestOptions & {
+    searchParams?: URLSearchParams;
+    postBody?: unknown;
+  },
 ): Promise<T> {
   const accessToken =
     options?.accessToken?.trim() ?? process.env["SQUARE_ACCESS_TOKEN"]?.trim();
@@ -470,7 +473,7 @@ async function squareRequest<T>(
   );
   if (options?.searchParams) url.search = options.searchParams.toString();
   const response = await fetchImpl(url, {
-    method: "GET",
+    method: options?.postBody === undefined ? "GET" : "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Square-Version": SQUARE_API_VERSION,
@@ -478,6 +481,9 @@ async function squareRequest<T>(
     },
     signal: AbortSignal.timeout(timeoutMs),
     cache: "no-store",
+    ...(options?.postBody === undefined
+      ? {}
+      : { body: JSON.stringify(options.postBody) }),
   });
   if (!response.ok) {
     await response.body?.cancel();
@@ -487,6 +493,57 @@ async function squareRequest<T>(
     );
   }
   return parse(await readBoundedSquareBody(response));
+}
+
+/** Refund the original settled payment; retries MUST retain the operation key. */
+export async function refundSquarePayment(
+  input: {
+    idempotencyKey: string;
+    paymentId: string;
+    amountCents: number;
+    currency: "USD";
+    reason: string;
+  },
+  options?: SquareRequestOptions,
+): Promise<SquareRefund> {
+  if (
+    !/^[A-Za-z0-9_-]{1,45}$/u.test(input.idempotencyKey) ||
+    !/^[A-Za-z0-9_-]{1,192}$/u.test(input.paymentId) ||
+    !Number.isSafeInteger(input.amountCents) ||
+    input.amountCents <= 0 ||
+    input.currency !== "USD" ||
+    input.reason.trim().length < 3 ||
+    input.reason.length > 192
+  ) {
+    throw new Error("square_refund_request_invalid");
+  }
+  return squareRequest(
+    { kind: "refunds" },
+    (value) => {
+      if (!isRecord(value)) throw new Error("square_refund_invalid_response");
+      const refund = parseSquareRefund(value["refund"]);
+      if (
+        refund.payment_id !== input.paymentId ||
+        parseSquareMoneyAmount(refund.amount_money) !== input.amountCents ||
+        refund.amount_money?.currency !== input.currency ||
+        !["PENDING", "COMPLETED", "FAILED", "REJECTED"].includes(
+          refund.status ?? "",
+        )
+      ) {
+        throw new Error("square_refund_binding_mismatch");
+      }
+      return refund;
+    },
+    {
+      ...options,
+      postBody: {
+        idempotency_key: input.idempotencyKey,
+        payment_id: input.paymentId,
+        amount_money: { amount: input.amountCents, currency: input.currency },
+        reason: input.reason,
+      },
+    },
+  );
 }
 
 export async function getSquareOrder(

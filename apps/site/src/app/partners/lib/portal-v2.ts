@@ -11,6 +11,7 @@ export type PortalV2Error = {
 export type PartnerDraft = {
   id: string;
   rescheduleFromJobId: string | null;
+  additionalServiceFromJobId: string | null;
   state: string;
   locationId: string | null;
   serviceKey: string | null;
@@ -64,8 +65,9 @@ export type PartnerRescheduleResult = {
   jobId: string;
   requestId: string | null;
   publicStatus: string;
-  arrivalWindowStartAt: string;
-  arrivalWindowEndAt: string;
+  arrivalWindowStartAt: string | null;
+  arrivalWindowEndAt: string | null;
+  preferredWindows: Array<{ localDate: string; timeOfDay: string; timezone: string }>;
   reviewReasons: string[];
   version: number;
   updatedAt: string;
@@ -307,6 +309,7 @@ export type PartnerQuoteDetail = PartnerQuote & {
 };
 
 export type PartnerInvoice = {
+  paymentOptions?: { card: boolean; ach: boolean; partialPayments: boolean };
   id: string;
   invoiceNumber: string | null;
   status: string;
@@ -320,6 +323,7 @@ export type PartnerInvoice = {
     deposit: PartnerMoney;
     total: PartnerMoney;
     paid: PartnerMoney;
+    credited?: PartnerMoney;
     balance: PartnerMoney;
   };
   dueDate: string | null;
@@ -333,6 +337,7 @@ export type PartnerInvoice = {
 };
 
 export type PartnerStatement = {
+  revision?: number;
   id: string;
   periodStart: string;
   periodEnd: string;
@@ -462,6 +467,7 @@ export type PartnerProofMedia = {
 };
 
 export type PartnerProof = {
+  documentUploadsAvailable?: boolean;
   status: string;
   requirements: Array<{
     category: string;
@@ -473,6 +479,7 @@ export type PartnerProof = {
   }>;
   outstanding: string[];
   media: PartnerProofMedia[];
+  deletedMedia?: Array<{ id: string; filename: string | null; category: string; deletedAt: string; recoverableUntil: string }>;
   packages: Array<{
     id: string;
     version: number;

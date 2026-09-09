@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { resolvePublicOrigin } from "@/app/partners/lib/origin";
 import { NextResponse } from "next/server";
 import { callPartnerApi, callPartnerPublicApi } from "@/app/partners/lib/api";
 
@@ -19,6 +20,9 @@ const FORWARDED_RESPONSE_HEADERS = [
   "retry-after",
   "x-next-cursor",
   "x-location-directory-etag",
+  "x-report-as-of",
+  "x-report-snapshot-sha256",
+  "x-content-sha256",
   "idempotency-replayed",
 ] as const;
 
@@ -60,7 +64,7 @@ function proxyError(
 function mutationOriginIsAllowed(request: NextRequest): boolean {
   const origin = request.headers.get("origin");
   const fetchSite = request.headers.get("sec-fetch-site");
-  if (origin) return origin === request.nextUrl.origin;
+  if (origin) return origin === resolvePublicOrigin(request);
   return fetchSite === "same-origin" || fetchSite === "none";
 }
 
@@ -177,7 +181,8 @@ async function proxyPartnerPortalRequest(
     "X-Forwarded-Proto",
     request.nextUrl.protocol === "https:" ? "https" : "http",
   );
-  if (method !== "GET") requestHeaders.set("Origin", request.nextUrl.origin);
+  if (method !== "GET")
+    requestHeaders.set("Origin", resolvePublicOrigin(request));
   const query = request.nextUrl.search;
   const joinedPath = segments.join("/");
   const publicAccessRequest =

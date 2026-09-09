@@ -57,6 +57,10 @@ type AppointmentState = {
   completedAt: Date | null;
   marketingMemberId: string | null;
   updatedAt: Date;
+  startAt?: Date;
+  durationMinutes?: number;
+  travelBufferMinutes?: number;
+  partnerNeedsScheduling?: boolean;
 };
 
 let appointment: AppointmentState;
@@ -87,6 +91,7 @@ const mockRecalculateCommissions = jest.fn();
 const mockEvaluatePartnerProofCompletion = jest.fn();
 const mockRecordPartnerProofCompletionOverride = jest.fn();
 const mockAcquireScheduleConflictLock = jest.fn();
+const mockInspectScheduleConflicts = jest.fn();
 
 function selectBuilder() {
   return {
@@ -242,10 +247,15 @@ jest.mock("drizzle-orm", () => ({
   and: jest.fn((...values: unknown[]) => values),
   eq: jest.fn((...values: unknown[]) => values),
   inArray: jest.fn((...values: unknown[]) => values),
+  sql: jest.fn((...values: unknown[]) => values),
 }));
 
 jest.mock("@/db", () => ({
   appointments: mockAppointmentsTable,
+  partnerBookings: {
+    appointmentId: "partner_bookings.appointment_id",
+    publicStatus: "partner_bookings.public_status",
+  },
   appointmentCrewMembers: mockAppointmentCrewMembersTable,
   leads: mockLeadsTable,
   outboxEvents: mockOutboxEventsTable,
@@ -291,6 +301,8 @@ jest.mock("@/lib/appointment-media", () => ({
 jest.mock("@/lib/appointment-schedule-conflicts", () => ({
   acquireScheduleConflictLock: (...args: unknown[]): unknown =>
     mockAcquireScheduleConflictLock(...args) as unknown,
+  inspectScheduleConflicts: (...args: unknown[]): unknown =>
+    mockInspectScheduleConflicts(...args) as unknown,
 }));
 
 jest.mock("@/lib/payment-schema", () => ({
@@ -316,6 +328,13 @@ jest.mock("@/lib/partner-proof-completion", () => ({
     mockEvaluatePartnerProofCompletion(...args) as unknown,
   recordPartnerProofCompletionOverride: (...args: unknown[]): unknown =>
     mockRecordPartnerProofCompletionOverride(...args) as unknown,
+}));
+
+// The lifecycle projection has its own real-PostgreSQL coverage, including
+// ordinary CRM appointments with no partner association. Keep this route's
+// deliberately minimal fake database focused on money/status/idempotency.
+jest.mock("@/lib/partner-job-lifecycle", () => ({
+  queuePartnerAppointmentStatusEffects: jest.fn(() => Promise.resolve()),
 }));
 
 jest.mock("@/lib/team-mutation-idempotency", () => ({
@@ -453,6 +472,7 @@ describe("appointment status mutation integrity", () => {
     });
     mockRecordPartnerProofCompletionOverride.mockResolvedValue(undefined);
     mockAcquireScheduleConflictLock.mockResolvedValue(undefined);
+    mockInspectScheduleConflicts.mockResolvedValue({ conflict: false });
     mockKillSwitch.mockReturnValue(null);
     mockResolveConfiguredCrewPayout.mockImplementation(
       (_database: unknown, memberIds: string[]) =>
@@ -501,6 +521,47 @@ describe("appointment status mutation integrity", () => {
     expect(paramsRead).toBe(false);
     expect(getDbCount).toBe(0);
     expect(mockClaim).not.toHaveBeenCalled();
+  });
+
+  it("requires a real partner scheduling action instead of confirming an unresolved review by status", async () => {
+    appointment.status = "requested";
+    appointment.partnerNeedsScheduling = true;
+    const response = await updateAppointmentStatus(
+      request({
+        status: "confirmed",
+        expectedVersion: currentVersion.toISOString(),
+      }),
+      context(),
+    );
+    expect(response.status).toBe(409);
+    expect(appointmentUpdateCount).toBe(0);
+    expect(mockInspectScheduleConflicts).not.toHaveBeenCalled();
+  });
+
+  it("rechecks current weighted capacity before reopening a canceled appointment at its old time", async () => {
+    appointment.status = "canceled";
+    appointment.startAt = new Date("2026-09-09T14:00:00Z");
+    appointment.durationMinutes = 60;
+    appointment.travelBufferMinutes = 30;
+    mockInspectScheduleConflicts.mockResolvedValue({ conflict: true });
+    const response = await updateAppointmentStatus(
+      request({
+        status: "confirmed",
+        expectedVersion: currentVersion.toISOString(),
+      }),
+      context(),
+    );
+    expect(response.status).toBe(409);
+    expect(mockInspectScheduleConflicts).toHaveBeenCalledWith(
+      mockTransaction,
+      expect.objectContaining({
+        excludeAppointmentId: appointmentId,
+        startAt: appointment.startAt,
+        durationMinutes: 60,
+        travelBufferMinutes: 30,
+      }),
+    );
+    expect(appointmentUpdateCount).toBe(0);
   });
 
   it("rejects unknown fields and oversized bodies before claiming an operation", async () => {

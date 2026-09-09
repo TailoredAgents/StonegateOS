@@ -152,7 +152,7 @@ void test("settings route loads masked endpoints and preferences fail closed", (
   assert.match(page, /\/api\/portal\/v2\/notification-endpoints/u);
   assert.match(page, /parsePartnerSmsEndpoints/u);
   assert.match(page, /smsEndpoints=\{smsEndpoints\}/u);
-  assert.match(page, /"account\.security\.manage"/u);
+  assert.match(page, /"portal\.session\.read"/u);
   assert.match(page, /canManageSmsEndpoints=/u);
   assert.match(security, /PartnerSmsEndpointManager/u);
   assert.match(security, /channel === "smsEnabled" && !smsEndpointVerified/u);

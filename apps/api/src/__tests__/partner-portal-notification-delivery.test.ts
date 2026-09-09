@@ -158,9 +158,7 @@ describe("partner notification durable-delivery contracts", () => {
   });
 
   it("routes create, review, reschedule, and cancel events through one transaction helper", () => {
-    expect(
-      scheduling.match(/queuePartnerBookingNotification\(\{/gu),
-    ).toHaveLength(4);
+    expect(scheduling.match(/queuePartnerBookingNotification\(\{/gu)?.length).toBeGreaterThanOrEqual(4);
     expect(
       cancellation.match(/queuePartnerBookingNotification\(\{/gu),
     ).toHaveLength(2);

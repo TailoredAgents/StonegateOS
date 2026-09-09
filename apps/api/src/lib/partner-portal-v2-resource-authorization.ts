@@ -167,6 +167,7 @@ export function createPartnerDraftAccessCondition(
   }
   const accountConditions: SQL[] = [
     eq(partnerBookingDrafts.partnerAccountId, principal.accountId),
+    createPartnerAdditionalDraftSourceAccessCondition(principal),
   ];
   if (draftId) accountConditions.push(eq(partnerBookingDrafts.id, draftId));
   if (principal.accessLevel === "account") {
@@ -251,6 +252,28 @@ export function createPartnerJobAccessCondition(
   return and(...accountConditions, or(...grants) ?? sql`false`) ?? sql`false`;
 }
 
+/** A linked draft cannot outlive the member's independent access to its original job. */
+export function createPartnerAdditionalDraftSourceAccessCondition(
+  principal: PartnerJobAuthorizationPrincipal,
+): SQL {
+  return (
+    or(
+      isNull(partnerBookingDrafts.additionalServiceFromPartnerBookingId),
+      sql`EXISTS (
+      SELECT 1 FROM ${partnerBookings}
+      LEFT JOIN ${partnerAccountLocations} ON ${createPartnerJobLocationJoinCondition()}
+      WHERE ${and(
+        eq(
+          partnerBookings.id,
+          partnerBookingDrafts.additionalServiceFromPartnerBookingId,
+        ),
+        createPartnerJobAccessCondition(principal),
+      )}
+    )`,
+    ) ?? sql`false`
+  );
+}
+
 /**
  * Notification visibility follows the member's current job scope. Account-only
  * notifications remain visible, while a dangling or newly out-of-scope job
@@ -258,12 +281,19 @@ export function createPartnerJobAccessCondition(
  * partner_account_locations with createPartnerJobLocationJoinCondition().
  */
 export function createPartnerNotificationAccessCondition(
-  principal: PartnerJobAuthorizationPrincipal,
+  principal: PartnerJobAuthorizationPrincipal &
+    Partial<Pick<PartnerPrincipal, "capabilities">>,
 ): SQL {
   if (!principal.accountId) return sql`false`;
   return (
     and(
       eq(partnerNotifications.partnerAccountId, principal.accountId),
+      principal.capabilities?.includes("invoices.read")
+        ? undefined
+        : sql`${partnerNotifications.eventKey} !~ '^(billing|invoice|payment)\\.'`,
+      principal.capabilities?.includes("approvals.decide")
+        ? undefined
+        : sql`${partnerNotifications.eventKey} <> 'approval.requested'`,
       or(
         isNull(partnerNotifications.partnerBookingId),
         createPartnerJobAccessCondition(principal),

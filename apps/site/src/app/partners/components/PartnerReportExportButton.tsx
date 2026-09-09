@@ -3,37 +3,37 @@
 import * as React from "react";
 import { Download, LoaderCircle } from "lucide-react";
 import { partnerSecondaryButtonClass } from "./PartnerPortalUi";
+import { downloadPartnerServiceReport } from "../lib/portal-report-export";
 
-export function PartnerReportExportButton() {
-  const [busy, setBusy] = React.useState(false);
+export function PartnerReportExportButton({ query = "" }: { query?: string }) {
+  const [busy, setBusy] = React.useState<"csv" | "pdf" | null>(null);
+  const busyRef = React.useRef(false);
   const [message, setMessage] = React.useState<string | null>(null);
 
-  const exportReport = async (): Promise<void> => {
-    setBusy(true);
+  const exportReport = async (format: "csv" | "pdf"): Promise<void> => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(format);
     setMessage(null);
-    const response = await fetch("/api/partners/portal/reports?format=csv", {
-      cache: "no-store",
-    }).catch(() => null);
-    setBusy(false);
-    if (!response?.ok) {
+    let artifact: Blob;
+    try {
+      artifact = await downloadPartnerServiceReport({ query, format });
+    } catch (error) {
       setMessage(
-        response?.status === 403
-          ? "Your role does not include report export."
-          : [404, 409, 501, 503].includes(response?.status ?? 503)
-            ? "Report export is not available yet."
-            : "The report could not be exported.",
+        error instanceof Error
+          ? error.message
+          : "The complete report could not be exported.",
       );
+      setBusy(null);
+      busyRef.current = false;
       return;
     }
-    const contentType = response.headers.get("content-type") ?? "";
-    if (!contentType.includes("text/csv")) {
-      setMessage("The report service did not return a CSV file.");
-      return;
-    }
-    const blobUrl = URL.createObjectURL(await response.blob());
+    setBusy(null);
+    busyRef.current = false;
+    const blobUrl = URL.createObjectURL(artifact);
     const link = document.createElement("a");
     link.href = blobUrl;
-    link.download = "partner-reports.csv";
+    link.download = `stonegate-report.${format}`;
     link.hidden = true;
     document.body.append(link);
     link.click();
@@ -43,22 +43,29 @@ export function PartnerReportExportButton() {
 
   return (
     <div className="flex flex-col items-stretch gap-1 sm:items-end">
-      <button
-        type="button"
-        onClick={() => void exportReport()}
-        disabled={busy}
-        className={partnerSecondaryButtonClass}
-      >
-        {busy ? (
-          <LoaderCircle
-            className="h-4 w-4 animate-spin motion-reduce:animate-none"
-            aria-hidden="true"
-          />
-        ) : (
-          <Download className="h-4 w-4" aria-hidden="true" />
-        )}
-        {busy ? "Preparing CSV…" : "Download CSV"}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        {(["csv", "pdf"] as const).map((format) => (
+          <button
+            key={format}
+            type="button"
+            onClick={() => void exportReport(format)}
+            disabled={busy !== null}
+            className={partnerSecondaryButtonClass}
+          >
+            {busy === format ? (
+              <LoaderCircle
+                className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                aria-hidden="true"
+              />
+            ) : (
+              <Download className="h-4 w-4" aria-hidden="true" />
+            )}
+            {busy === format
+              ? `Preparing ${format.toUpperCase()}…`
+              : `Download ${format.toUpperCase()}`}
+          </button>
+        ))}
+      </div>
       {message ? (
         <p className="max-w-64 text-xs leading-5 text-amber-800" role="status">
           {message}

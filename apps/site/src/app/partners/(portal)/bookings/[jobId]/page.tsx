@@ -21,6 +21,7 @@ import {
   PartnerJobActions,
   type PartnerCancellationDecision,
 } from "@/app/partners/components/PartnerJobActions";
+import { PartnerAdditionalService } from "@/app/partners/components/PartnerAdditionalService";
 import {
   PartnerJobMessages,
   type PartnerJobMessage,
@@ -30,6 +31,9 @@ import {
 import { PartnerDocumentDownloadButton } from "@/app/partners/components/PartnerDocumentDownloadButton";
 import { PartnerJobReceiptActions } from "@/app/partners/components/PartnerJobReceiptActions";
 import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
+import { PartnerPageRefresh } from "@/app/partners/components/PartnerPageRefresh";
+import { formatPartnerArrivalWindow } from "@/app/partners/lib/partner-arrival-window";
+import { PartnerRescheduleRequestActions } from "@/app/partners/components/PartnerRescheduleRequestActions";
 import {
   PartnerEmptyState,
   PartnerErrorState,
@@ -42,6 +46,7 @@ import {
 
 type JobDetail = {
   id: string;
+  pendingRescheduleRequest?: { id: string } | null;
   status: string;
   confirmationMode: string;
   service: {
@@ -804,6 +809,9 @@ export default async function PartnerJobDetailPage({
 
   return (
     <div className="space-y-5 sm:space-y-6">
+      <PartnerPageRefresh
+        resourceKey={`job:${portalContext.status === "authenticated" ? portalContext.accountId : "unavailable"}:${job.id}`}
+      />
       <PartnerPageHeader
         eyebrow={`Job ${job.id.slice(0, 8).toUpperCase()}`}
         title={
@@ -811,7 +819,7 @@ export default async function PartnerJobDetailPage({
           address?.line1 ||
           humanize(job.service.key)
         }
-        description={`${humanize(job.service.key)} · ${formatDateTime(job.schedule.arrivalWindow?.startAt ?? null, timezone)}`}
+        description={`${humanize(job.service.key)} · ${formatPartnerArrivalWindow(job.schedule.arrivalWindow)}`}
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Jobs", href: "/partners/bookings" },
@@ -867,9 +875,31 @@ export default async function PartnerJobDetailPage({
         ) : null}
       </PartnerPageHeader>
 
+      {portalContext.status === "authenticated" ? (
+        <PartnerAdditionalService
+          accountId={portalContext.accountId}
+          membershipId={portalContext.membershipId}
+          jobId={job.id}
+          allowedActions={job.allowedActions}
+          actionAvailability={job.actionAvailability}
+        />
+      ) : null}
+
       <PartnerNotice tone={job.status === "completed" ? "success" : "info"}>
         <strong>Next:</strong> {jobNextStep(job.status)}
       </PartnerNotice>
+      {job.pendingRescheduleRequest && etag ? (
+        <PartnerRescheduleRequestActions
+          key={job.pendingRescheduleRequest.id}
+          jobId={job.id}
+          requestId={job.pendingRescheduleRequest.id}
+          etag={etag}
+          canWithdraw={
+            portalContext.status === "authenticated" &&
+            portalContext.permissions.updateJobs
+          }
+        />
+      ) : null}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
         <div className="space-y-5">
@@ -979,6 +1009,11 @@ export default async function PartnerJobDetailPage({
           {canReadMessages ? (
             <PartnerPanel>
               <PartnerJobMessages
+                accountId={
+                  portalContext.status === "authenticated"
+                    ? (portalContext.accountId ?? "")
+                    : ""
+                }
                 jobId={job.id}
                 timezone={timezone}
                 canSend={canSendMessages}
@@ -1230,6 +1265,10 @@ export default async function PartnerJobDetailPage({
             <div className="mt-4">
               <PartnerJobActions
                 jobId={job.id}
+                templatesEnabled={
+                  portalContext.status === "authenticated" &&
+                  portalContext.tools?.["templates"] === true
+                }
                 etag={etag}
                 allowedActions={job.allowedActions}
                 actionAvailability={job.actionAvailability}

@@ -8,6 +8,7 @@ import {
 } from "@/lib/portal-v2-contract";
 import {
   createPartnerBookingDraft,
+  listPartnerBookingDrafts,
   parsePartnerDraftMutation,
   requirePartnerSchedulingActor,
 } from "@/lib/partner-portal-v2-scheduling";
@@ -17,6 +18,32 @@ import {
   portalSchedulingExceptionResponse,
   portalSchedulingSuccessResponse,
 } from "@/lib/partner-portal-v2-scheduling/route-utils";
+
+export async function GET(request: NextRequest): Promise<Response> {
+  const correlationId = readPortalV2CorrelationId(request.headers);
+  try {
+    const authorization = await requirePartnerCapability(
+      request,
+      "bookings.read",
+    );
+    if (!authorization.ok)
+      return portalAuthorizationFailureResponse(authorization, correlationId);
+    const actor = requirePartnerSchedulingActor(
+      authorization.principal,
+      "read",
+    );
+    const result = await listPartnerBookingDrafts({
+      actor,
+      params: request.nextUrl.searchParams,
+    });
+    return portalSchedulingSuccessResponse(
+      { ok: true, ...result },
+      correlationId,
+    );
+  } catch (error) {
+    return portalSchedulingExceptionResponse(error, correlationId);
+  }
+}
 
 export async function POST(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);

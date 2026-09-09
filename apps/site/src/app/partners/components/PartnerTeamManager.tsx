@@ -371,6 +371,10 @@ export function PartnerTeamManager({ initial }: { initial: TeamPayload }) {
   const [status, setStatus] = React.useState("all");
   const [loadingMore, setLoadingMore] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setMembers(initial.members);
+    setNextCursor(initial.page.nextCursor);
+  }, [initial.members, initial.page.nextCursor]);
 
   const filtered = React.useMemo(() => {
     const needle = query.trim().toLowerCase();

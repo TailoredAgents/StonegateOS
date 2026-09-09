@@ -62,11 +62,19 @@ export async function POST(
       maximumBytes: 4 * 1024,
       rejectDuplicateObjectKeys: true,
     });
-    const allowedKeys = new Set(["draftId", "holdId", "draftEtag"]);
+    const allowedKeys = new Set([
+      "draftId",
+      "holdId",
+      "draftEtag",
+      "submissionMode",
+    ]);
     if (
       !isRecord(body) ||
       Object.keys(body).some((key) => !allowedKeys.has(key)) ||
-      typeof body["draftEtag"] !== "string"
+      typeof body["draftEtag"] !== "string" ||
+      (body["submissionMode"] !== undefined &&
+        body["submissionMode"] !== "review") ||
+      (body["submissionMode"] === "review" && body["holdId"] != null)
     ) {
       throw new PartnerPortalSchedulingError(
         "invalid_body",
@@ -77,7 +85,10 @@ export async function POST(
     const { jobId: rawJobId } = await context.params;
     const jobId = requirePortalUuid(rawJobId, "jobId");
     const draftId = requirePortalUuid(body["draftId"], "draftId");
-    const holdId = requirePortalUuid(body["holdId"], "holdId");
+    const holdId =
+      body["submissionMode"] === "review"
+        ? null
+        : requirePortalUuid(body["holdId"], "holdId");
     const result = await reschedulePartnerBooking({
       actor,
       jobId,

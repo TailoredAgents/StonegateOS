@@ -538,6 +538,7 @@ export async function lockPartnerLocationDirectory(
       id: partnerAccounts.id,
       defaultLocationId: partnerAccounts.defaultPartnerLocationId,
       version: partnerAccounts.locationDirectoryVersion,
+      workflowConfig: partnerAccounts.portalWorkflowConfig,
     })
     .from(partnerAccounts)
     .where(eq(partnerAccounts.id, accountId))

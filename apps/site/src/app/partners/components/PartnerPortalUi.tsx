@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
 import { Breadcrumbs, type BreadcrumbItem } from "@/components/Breadcrumbs";
+import { PartnerAccessHelp } from "./PartnerAccessHelp";
 
 export { PartnerStatusBadge } from "./PartnerStatusBadge";
 
@@ -78,7 +79,7 @@ export function PartnerPageHeader({
   children?: ReactNode;
 }) {
   return (
-    <header className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm sm:p-6">
+    <header className="border-b border-slate-200 pb-5">
       {breadcrumbs?.length ? <Breadcrumbs items={breadcrumbs} /> : null}
       <div
         className={cn(
@@ -239,6 +240,7 @@ export function PartnerErrorState({
             Try again
           </Link>
         ) : null}
+        <PartnerAccessHelp className="mt-5" />
       </div>
     </PartnerPanel>
   );

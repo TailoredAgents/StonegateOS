@@ -45,6 +45,9 @@ export async function POST(request: NextRequest): Promise<Response> {
   const conflictOverrideReason = formData.get("conflictOverrideReason");
   const conflictAcknowledgement = formData.get("conflictAcknowledgement");
   const conflictFingerprint = formData.get("conflictFingerprint");
+  const selectedResourceIds = formData.getAll("selectedResourceIds");
+  if (selectedResourceIds.length > 60 || selectedResourceIds.some((value) => typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)) || new Set(selectedResourceIds).size !== selectedResourceIds.length || formData.get("resourceSelectionMode") === "manual" && !selectedResourceIds.length)
+    return respondFailure(returnJson, redirectTo, "Select the required resources, or turn off specific resource selection.");
 
   if (typeof appointmentId !== "string" || !appointmentId.trim()) {
     return respondFailure(returnJson, redirectTo, "Appointment ID missing");
@@ -85,6 +88,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         body: JSON.stringify({
           preferredDate: preferredDate.trim(),
           startTime: startTime.trim(),
+          ...(selectedResourceIds.length ? { selectedResourceIds } : {}),
           ...(version ? { expectedVersion: version } : {}),
           ...(typeof conflictOverrideReason === "string" &&
           conflictOverrideReason.trim()

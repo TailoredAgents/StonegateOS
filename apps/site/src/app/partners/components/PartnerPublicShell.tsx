@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Phone } from "lucide-react";
 import type { PublicCompanyProfile } from "@/lib/company";
 import { PartnerPublicHeaderAction } from "./PartnerPublicHeaderAction";
+import { PARTNER_SUPPORT } from "../lib/partner-support";
 
 export function PartnerPublicShell({
   company,
@@ -58,12 +59,12 @@ export function PartnerPublicShell({
             aria-label="Partner account actions"
           >
             <a
-              href={`tel:${company.phoneE164}`}
+              href={`tel:${PARTNER_SUPPORT.phoneE164}`}
               className="hidden min-h-11 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-primary-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 sm:inline-flex"
               data-partner-analytics="landing_call_support"
             >
               <Phone className="h-4 w-4" aria-hidden="true" />
-              Call {company.phoneDisplay}
+              Call {PARTNER_SUPPORT.phoneDisplay}
             </a>
             <PartnerPublicHeaderAction enabled={showSignIn} />
           </nav>
@@ -82,9 +83,15 @@ export function PartnerPublicShell({
             © {new Date().getFullYear()} {company.name}. Licensed and insured.
           </p>
           <nav aria-label="Legal" className="flex flex-wrap gap-x-4 gap-y-2">
+            <Link
+              href="/partners/request-access"
+              className="inline-flex min-h-11 items-center px-1 font-semibold text-primary-900 underline-offset-4 hover:underline"
+            >
+              Access & help
+            </Link>
             <a
               className="inline-flex min-h-11 min-w-11 items-center justify-center px-1 font-semibold text-primary-900 underline-offset-4 hover:underline sm:hidden"
-              href={`tel:${company.phoneE164}`}
+              href={`tel:${PARTNER_SUPPORT.phoneE164}`}
               data-partner-analytics="landing_call_support"
             >
               Call

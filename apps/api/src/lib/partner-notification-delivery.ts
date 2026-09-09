@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { DateTime } from "luxon";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import {
   auditLogs,
   getDb,
@@ -12,11 +12,16 @@ import {
   partnerNotificationPreferences,
   partnerNotifications,
   partnerUsers,
+  partnerBookings,
+  partnerAccountLocations,
   type DatabaseClient,
   type PartnerNotificationDeliveryEventType,
 } from "@/db";
 import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
 import { arePartnerPortalOutboundNotificationsEnabled } from "@/lib/partner-portal-feature-flags";
+import { loadActiveMembershipAccesses, type PartnerCapability } from "@/lib/partner-account-authorization";
+import { createPartnerJobAccessCondition, createPartnerJobLocationJoinCondition } from "@/lib/partner-portal-v2-resource-authorization";
+import type { PartnerNotificationEventKey } from "@/lib/partner-notification-preferences";
 
 export const PARTNER_NOTIFICATION_DELIVERY_EVENT =
   "partner.notification.dispatch";
@@ -79,7 +84,7 @@ type QueuePartnerNotificationInput = {
 };
 
 type NotificationCopy = {
-  preferenceEventKey: "booking_created" | "booking_changed" | "invoice_issued";
+  preferenceEventKey: PartnerNotificationEventKey;
   inAppEventKey: string;
   title: string;
   body: string;
@@ -103,6 +108,12 @@ const COPY: Record<PartnerNotificationDeliveryEventType, NotificationCopy> = {
     inAppEventKey: "job.rescheduled",
     title: "New service time confirmed",
     body: "Your new two-hour arrival window is confirmed.",
+  },
+  "booking.reschedule_declined": {
+    preferenceEventKey: "booking_changed",
+    inAppEventKey: "job.reschedule_declined",
+    title: "Time-change request declined",
+    body: "Your original arrival window remains scheduled. Contact Stonegate if you need help choosing another time.",
   },
   "booking.reschedule_review_requested": {
     preferenceEventKey: "booking_changed",
@@ -134,6 +145,18 @@ const COPY: Record<PartnerNotificationDeliveryEventType, NotificationCopy> = {
     title: "Billing request updated",
     body: "Stonegate updated your billing request. Review the private billing history for the outcome.",
   },
+  "booking.en_route": { preferenceEventKey: "crew_en_route", inAppEventKey: "job.en_route", title: "Stonegate is on the way", body: "Your crew is on the way. Open the job for the latest service update." },
+  "booking.completed": { preferenceEventKey: "job_completed", inAppEventKey: "job.completed", title: "Service completed", body: "Your Stonegate job is complete. Open the job to see its details and available photos." },
+  "proof.ready": { preferenceEventKey: "proof_ready", inAppEventKey: "proof.ready", title: "Completion record ready", body: "Your job’s completion record and photos are ready to view and download." },
+  "message.received": { preferenceEventKey: "message_received", inAppEventKey: "message.received", title: "New job message", body: "There is a new message in your Stonegate job conversation." },
+  "approval.requested": { preferenceEventKey: "approval_requested", inAppEventKey: "approval.requested", title: "Approval needed", body: "A service request needs your review before it can proceed." },
+  "approval.decided": { preferenceEventKey: "approval_requested", inAppEventKey: "approval.decided", title: "Approval updated", body: "An approval decision was recorded. Open the job for the outcome and scheduling status." },
+  "billing.invoice_issued": { preferenceEventKey: "invoice_issued", inAppEventKey: "invoice.issued", title: "Invoice ready", body: "Your Stonegate invoice is ready. View its details and payment options in Billing." },
+  "billing.invoice_credited": { preferenceEventKey: "invoice_issued", inAppEventKey: "invoice.credited", title: "Invoice credit recorded", body: "Stonegate recorded a credit. View the invoice for the updated balance and credit record." },
+  "billing.payment_processing": { preferenceEventKey: "payment_received", inAppEventKey: "payment.processing", title: "Payment processing", body: "Your payment is processing. It is not yet settled; please do not submit it again." },
+  "billing.payment_settled": { preferenceEventKey: "payment_received", inAppEventKey: "payment.settled", title: "Payment received", body: "Your payment has settled. View the updated balance and available receipt in Billing." },
+  "billing.payment_failed": { preferenceEventKey: "payment_received", inAppEventKey: "payment.failed", title: "Payment needs attention", body: "A payment could not be completed. Open Billing for its current status before trying again." },
+  "billing.payment_refunded": { preferenceEventKey: "payment_received", inAppEventKey: "payment.refunded", title: "Refund recorded", body: "A refund was recorded. Open Billing for its status and updated payment record." },
 };
 
 function validTimezone(value: string | null | undefined): string {
@@ -230,9 +253,7 @@ function dedupeHash(
 function eventMayBypassQuietHours(
   eventType: PartnerNotificationDeliveryEventType,
 ): boolean {
-  return (
-    eventType !== "booking.created" && eventType !== "booking.review_received"
-  );
+  return ["booking.rescheduled", "booking.canceled", "booking.en_route"].includes(eventType);
 }
 
 function exactDate(left: Date | null, right: Date | null): boolean {
@@ -298,6 +319,30 @@ export async function queuePartnerBookingNotification(
   });
 }
 
+/** Fan out only to canonical, currently authorized people; an optional audience narrows job conversations. */
+export async function queuePartnerJobAudienceNotification(input: Omit<QueuePartnerBookingNotificationInput, "membershipId" | "fallbackMembershipId"> & {
+  audienceMembershipIds?: readonly string[];
+  excludeMembershipId?: string;
+}): Promise<void> {
+  if (input.audienceMembershipIds?.length === 0) return;
+  let cursor: string | null = null;
+  for (;;) {
+    const members = await input.tx.select({ id: partnerAccountMemberships.id })
+      .from(partnerAccountMemberships).where(and(
+        eq(partnerAccountMemberships.partnerAccountId, input.accountId),
+        eq(partnerAccountMemberships.status, "active"),
+        cursor ? gt(partnerAccountMemberships.id, cursor) : undefined,
+        input.audienceMembershipIds ? inArray(partnerAccountMemberships.id, [...input.audienceMembershipIds]) : undefined,
+      )).orderBy(asc(partnerAccountMemberships.id)).limit(100);
+    for (const member of members) {
+      if (member.id === input.excludeMembershipId) continue;
+      await queuePartnerBookingNotification({ ...input, membershipId: member.id });
+    }
+    if (members.length < 100) return;
+    cursor = members[members.length - 1]!.id;
+  }
+}
+
 export async function queuePartnerBillingDisputeNotification(
   input: QueuePartnerBillingDisputeNotificationInput,
 ): Promise<void> {
@@ -317,6 +362,24 @@ export async function queuePartnerBillingDisputeNotification(
     occurredAt: input.occurredAt,
     accountTimezone: input.accountTimezone,
   });
+}
+
+/** Recheck role and relational location/cost-center access both at queue time and delivery time. */
+async function recipientHasSubjectAccess(input: {
+  tx: TransactionExecutor; accountId: string; membershipId: string; partnerUserId: string;
+  partnerBookingId: string | null; eventType: PartnerNotificationDeliveryEventType;
+}): Promise<boolean> {
+  const access = (await loadActiveMembershipAccesses(input.partnerUserId, input.tx))
+    .find((row) => row.accountId === input.accountId && row.membershipId === input.membershipId);
+  const required: PartnerCapability = input.eventType.startsWith("billing.") ? "invoices.read"
+    : input.eventType === "approval.requested" ? "approvals.decide"
+    : input.eventType.startsWith("message.") ? "messages.read" : "jobs.read";
+  if (!access || !access.capabilities.includes(required)) return false;
+  if (!input.partnerBookingId) return true;
+  const [job] = await input.tx.select({ id: partnerBookings.id }).from(partnerBookings)
+    .leftJoin(partnerAccountLocations, createPartnerJobLocationJoinCondition())
+    .where(createPartnerJobAccessCondition(access, input.partnerBookingId)).limit(1);
+  return Boolean(job);
 }
 
 async function queuePartnerNotification(
@@ -445,7 +508,10 @@ async function queuePartnerNotification(
     recipient.membershipStatus === "active" &&
     recipient.userActive &&
     recipient.identityStatus === "active" &&
-    recipient.portalAccessEnabled;
+    recipient.portalAccessEnabled && await recipientHasSubjectAccess({
+      tx: input.tx, accountId: input.accountId, membershipId: recipientMembershipId,
+      partnerUserId: recipient.partnerUserId, partnerBookingId: input.partnerBookingId, eventType: input.eventType,
+    });
   const timezone = validTimezone(preference.timezone || input.accountTimezone);
   const urgentSameDay = Boolean(
     eventMayBypassQuietHours(input.eventType) &&
@@ -789,7 +855,11 @@ export async function processPartnerNotificationDelivery(input: {
         recipient.membershipStatus === "active" &&
         recipient.userActive &&
         recipient.identityStatus === "active" &&
-        recipient.portalAccessEnabled,
+        recipient.portalAccessEnabled && await recipientHasSubjectAccess({
+          tx, accountId: delivery.accountId, membershipId: delivery.membershipId,
+          partnerUserId: recipient.partnerUserId, partnerBookingId: delivery.bookingId,
+          eventType: delivery.eventType,
+        }),
     );
     const channelAllowed =
       recipientAvailable &&

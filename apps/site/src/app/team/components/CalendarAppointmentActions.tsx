@@ -9,6 +9,7 @@ import {
 } from "../lib/mutation-feedback";
 import { formatCalendarDayKey, TEAM_TIME_ZONE } from "../lib/calendar-time";
 import { CrewPayoutSelector } from "./CrewPayoutSelector";
+import { StaffScheduleResourcePicker } from "./StaffScheduleResourcePicker";
 import { TEAM_INPUT_COMPACT, teamButtonClass } from "./team-ui";
 
 type Props = {
@@ -26,6 +27,8 @@ type Props = {
   canManageAppointmentMedia: boolean;
   canOverrideScheduleConflicts: boolean;
   teamMembers: Array<{ id: string; name: string }>;
+  scheduleOnly?: boolean;
+  onScheduled?: () => void;
 };
 
 type Feedback = {
@@ -159,6 +162,8 @@ export function CalendarAppointmentActions({
   canManageAppointmentMedia,
   canOverrideScheduleConflicts,
   teamMembers,
+  scheduleOnly = false,
+  onScheduled,
 }: Props): React.ReactElement {
   const router = useRouter();
   const [currentVersion, setCurrentVersion] = React.useState(version);
@@ -342,7 +347,10 @@ export function CalendarAppointmentActions({
             : `${successMessage}${effectCopy}`,
       });
       if (actionName === "note") setNoteDraft("");
-      if (actionName === "reschedule") setScheduleConflict(null);
+      if (actionName === "reschedule") {
+        setScheduleConflict(null);
+        onScheduled?.();
+      }
       router.refresh();
     } catch (error) {
       setFeedback({
@@ -373,265 +381,292 @@ export function CalendarAppointmentActions({
         </div>
       ) : null}
 
-      {canEditStatus ? (
+      {canEditStatus || (scheduleOnly && canUpdateAppointments) ? (
         <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Update appointment
+            {scheduleOnly
+              ? "Schedule service in the CRM"
+              : "Update appointment"}
           </div>
 
-          {isQuoteOnly ? (
-            <form
-              action="/api/team/appointments/status"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submitMutation(
-                  event.currentTarget,
-                  "complete",
-                  "Quote visit marked done.",
-                  "Unable to complete quote visit",
-                );
-              }}
-            >
-              <input type="hidden" name="appointmentId" value={appointmentId} />
-              <input
-                type="hidden"
-                name="appointmentType"
-                value={appointmentType ?? ""}
-              />
-              <input type="hidden" name="status" value="completed" />
-              <div className="flex flex-col gap-3">
-                <p className="text-sm text-slate-600">
-                  Mark this in-person quote visit as done. The customer will not
-                  be notified by this status change.
-                </p>
-                <button
-                  type="submit"
-                  disabled={pendingAction !== null}
-                  className={`${teamButtonClass("primary", "sm")} w-full`}
+          {!scheduleOnly ? (
+            <>
+              {isQuoteOnly ? (
+                <form
+                  action="/api/team/appointments/status"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void submitMutation(
+                      event.currentTarget,
+                      "complete",
+                      "Quote visit marked done.",
+                      "Unable to complete quote visit",
+                    );
+                  }}
                 >
-                  {pendingAction === "complete" ? "Saving…" : "Mark done"}
-                </button>
-              </div>
-            </form>
-          ) : canCollectPayments ? (
-            <form
-              action="/api/team/appointments/status"
-              className="grid min-w-0 grid-cols-1 gap-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submitMutation(
-                  event.currentTarget,
-                  "complete",
-                  "Job completed with the confirmed total and crew.",
-                  "Unable to complete job",
-                );
-              }}
-            >
-              <input type="hidden" name="appointmentId" value={appointmentId} />
-              <input
-                type="hidden"
-                name="appointmentType"
-                value={appointmentType ?? ""}
-              />
-              <input type="hidden" name="status" value="completed" />
-              <input
-                type="hidden"
-                name="expectedFinalTotalCents"
-                value={
-                  finalTotalCents === null ? "null" : String(finalTotalCents)
-                }
-              />
+                  <input
+                    type="hidden"
+                    name="appointmentId"
+                    value={appointmentId}
+                  />
+                  <input
+                    type="hidden"
+                    name="appointmentType"
+                    value={appointmentType ?? ""}
+                  />
+                  <input type="hidden" name="status" value="completed" />
+                  <div className="flex flex-col gap-3">
+                    <p className="text-sm text-slate-600">
+                      Mark this in-person quote visit as done. The customer will
+                      not be notified by this status change.
+                    </p>
+                    <button
+                      type="submit"
+                      disabled={pendingAction !== null}
+                      className={`${teamButtonClass("primary", "sm")} w-full`}
+                    >
+                      {pendingAction === "complete" ? "Saving…" : "Mark done"}
+                    </button>
+                  </div>
+                </form>
+              ) : canCollectPayments ? (
+                <form
+                  action="/api/team/appointments/status"
+                  className="grid min-w-0 grid-cols-1 gap-3"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void submitMutation(
+                      event.currentTarget,
+                      "complete",
+                      "Job completed with the confirmed total and crew.",
+                      "Unable to complete job",
+                    );
+                  }}
+                >
+                  <input
+                    type="hidden"
+                    name="appointmentId"
+                    value={appointmentId}
+                  />
+                  <input
+                    type="hidden"
+                    name="appointmentType"
+                    value={appointmentType ?? ""}
+                  />
+                  <input type="hidden" name="status" value="completed" />
+                  <input
+                    type="hidden"
+                    name="expectedFinalTotalCents"
+                    value={
+                      finalTotalCents === null
+                        ? "null"
+                        : String(finalTotalCents)
+                    }
+                  />
 
-              <label className="flex flex-col gap-1 text-sm text-slate-700">
-                <span>Final job total</span>
-                <input
-                  name="finalTotal"
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  required
-                  defaultValue={completeDefaultValue}
-                  placeholder="e.g. 350.00"
-                  className={TEAM_INPUT_COMPACT}
-                />
-              </label>
-
-              <CrewPayoutSelector
-                teamMembers={teamMembers}
-                showSplitPercentages={false}
-                stacked
-              />
-
-              {canManageAppointmentMedia ? (
-                <details className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
-                  <summary className="min-h-11 cursor-pointer py-2 font-semibold">
-                    Missing-proof exception
-                  </summary>
-                  <label
-                    className="mt-2 block"
-                    htmlFor="calendar-proof-override-reason"
-                  >
-                    <span className="block text-sm leading-6">
-                      Use only when required partner proof cannot be captured.
-                      The reason is recorded in the job history.
-                    </span>
-                    <textarea
-                      id="calendar-proof-override-reason"
-                      name="proofOverrideReason"
-                      minLength={10}
-                      maxLength={500}
-                      rows={3}
-                      className={`${TEAM_INPUT_COMPACT} mt-2 w-full`}
-                      placeholder="Explain why the required proof cannot be provided"
+                  <label className="flex flex-col gap-1 text-sm text-slate-700">
+                    <span>Final job total</span>
+                    <input
+                      name="finalTotal"
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      required
+                      defaultValue={completeDefaultValue}
+                      placeholder="e.g. 350.00"
+                      className={TEAM_INPUT_COMPACT}
                     />
                   </label>
-                </details>
-              ) : null}
 
-              <label
-                htmlFor={crewConfirmationFieldId}
-                className="flex min-h-11 min-w-0 scroll-mt-24 cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-              >
-                <input
-                  id={crewConfirmationFieldId}
-                  type="checkbox"
-                  name="crewConfirmed"
-                  value="yes"
-                  required
-                  className="mt-0.5 h-5 w-5 shrink-0 scroll-mt-24 rounded border-slate-300"
-                />
-                <span className="min-w-0 break-words">
-                  I confirmed the final total and everyone who worked this job.
-                </span>
-              </label>
-
-              {canSendCustomerMessages ? (
-                <label
-                  htmlFor={reviewRequestFieldId}
-                  className="flex min-h-11 min-w-0 scroll-mt-24 cursor-pointer items-start gap-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900"
-                >
-                  <input
-                    id={reviewRequestFieldId}
-                    type="checkbox"
-                    name="sendReviewRequest"
-                    className="mt-0.5 h-5 w-5 shrink-0 scroll-mt-24 rounded border-sky-300"
+                  <CrewPayoutSelector
+                    teamMembers={teamMembers}
+                    showSplitPercentages={false}
+                    stacked
                   />
-                  <span className="min-w-0 break-words">
-                    Request a review message after this completion. Safe default
-                    is off; checking this queues a message but does not confirm
-                    delivery.
-                  </span>
-                </label>
+
+                  {canManageAppointmentMedia ? (
+                    <details className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                      <summary className="min-h-11 cursor-pointer py-2 font-semibold">
+                        Missing-proof exception
+                      </summary>
+                      <label
+                        className="mt-2 block"
+                        htmlFor="calendar-proof-override-reason"
+                      >
+                        <span className="block text-sm leading-6">
+                          Use only when required partner proof cannot be
+                          captured. The reason is recorded in the job history.
+                        </span>
+                        <textarea
+                          id="calendar-proof-override-reason"
+                          name="proofOverrideReason"
+                          minLength={10}
+                          maxLength={500}
+                          rows={3}
+                          className={`${TEAM_INPUT_COMPACT} mt-2 w-full`}
+                          placeholder="Explain why the required proof cannot be provided"
+                        />
+                      </label>
+                    </details>
+                  ) : null}
+
+                  <label
+                    htmlFor={crewConfirmationFieldId}
+                    className="flex min-h-11 min-w-0 scroll-mt-24 cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                  >
+                    <input
+                      id={crewConfirmationFieldId}
+                      type="checkbox"
+                      name="crewConfirmed"
+                      value="yes"
+                      required
+                      className="mt-0.5 h-5 w-5 shrink-0 scroll-mt-24 rounded border-slate-300"
+                    />
+                    <span className="min-w-0 break-words">
+                      I confirmed the final total and everyone who worked this
+                      job.
+                    </span>
+                  </label>
+
+                  {canSendCustomerMessages ? (
+                    <label
+                      htmlFor={reviewRequestFieldId}
+                      className="flex min-h-11 min-w-0 scroll-mt-24 cursor-pointer items-start gap-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900"
+                    >
+                      <input
+                        id={reviewRequestFieldId}
+                        type="checkbox"
+                        name="sendReviewRequest"
+                        className="mt-0.5 h-5 w-5 shrink-0 scroll-mt-24 rounded border-sky-300"
+                      />
+                      <span className="min-w-0 break-words">
+                        Request a review message after this completion. Safe
+                        default is off; checking this queues a message but does
+                        not confirm delivery.
+                      </span>
+                    </label>
+                  ) : (
+                    <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                      The job will be completed without a review message.
+                      Messaging permission is required to request one.
+                    </p>
+                  )}
+
+                  <div>
+                    <button
+                      type="submit"
+                      disabled={pendingAction !== null}
+                      className={`${teamButtonClass("primary", "sm")} w-full`}
+                    >
+                      {pendingAction === "complete"
+                        ? "Saving…"
+                        : "Complete job"}
+                    </button>
+                  </div>
+                </form>
               ) : (
-                <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-                  The job will be completed without a review message. Messaging
-                  permission is required to request one.
+                <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  You can update this appointment, but completing a job total
+                  requires payment access.
                 </p>
               )}
 
-              <div>
-                <button
-                  type="submit"
-                  disabled={pendingAction !== null}
-                  className={`${teamButtonClass("primary", "sm")} w-full`}
+              <div className="grid grid-cols-1 gap-3">
+                <form
+                  action="/api/team/appointments/status"
+                  className="space-y-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void submitMutation(
+                      event.currentTarget,
+                      "no_show",
+                      "Appointment marked no-show.",
+                      "Unable to mark no-show",
+                      "Mark this appointment as a no-show? This changes downstream scheduling and reporting.",
+                    );
+                  }}
                 >
-                  {pendingAction === "complete" ? "Saving…" : "Complete job"}
-                </button>
+                  <input
+                    type="hidden"
+                    name="appointmentId"
+                    value={appointmentId}
+                  />
+                  <input
+                    type="hidden"
+                    name="appointmentType"
+                    value={appointmentType ?? ""}
+                  />
+                  <input type="hidden" name="status" value="no_show" />
+                  <p className="text-xs text-slate-600">
+                    The customer will not be notified by this status change.
+                  </p>
+                  <button
+                    type="submit"
+                    disabled={pendingAction !== null}
+                    className={`${teamButtonClass("secondary", "sm")} w-full`}
+                  >
+                    {pendingAction === "no_show" ? "Saving…" : "Mark no-show"}
+                  </button>
+                </form>
+
+                <form
+                  action="/api/team/appointments/status"
+                  className="space-y-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void submitMutation(
+                      event.currentTarget,
+                      "canceled",
+                      "Appointment canceled.",
+                      "Unable to cancel appointment",
+                      "Cancel this appointment? Linked Google Calendar cleanup will be queued. The customer is notified only when the notice checkbox is selected.",
+                    );
+                  }}
+                >
+                  <input
+                    type="hidden"
+                    name="appointmentId"
+                    value={appointmentId}
+                  />
+                  <input
+                    type="hidden"
+                    name="appointmentType"
+                    value={appointmentType ?? ""}
+                  />
+                  <input type="hidden" name="status" value="canceled" />
+                  {canSendCustomerMessages ? (
+                    <label className="flex min-h-11 items-start gap-3 rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm text-rose-900">
+                      <input
+                        type="checkbox"
+                        name="sendCustomerNotification"
+                        className="mt-0.5 h-5 w-5 rounded border-rose-300"
+                      />
+                      <span>
+                        Send a cancellation notice. Safe default is off;
+                        delivery is tracked separately in Inbox.
+                      </span>
+                    </label>
+                  ) : (
+                    <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                      The customer will not be notified. Messaging permission is
+                      required to send a cancellation notice.
+                    </p>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={pendingAction !== null}
+                    className={`${teamButtonClass("danger", "sm")} w-full`}
+                  >
+                    {pendingAction === "canceled"
+                      ? "Saving…"
+                      : "Cancel appointment"}
+                  </button>
+                </form>
               </div>
-            </form>
-          ) : (
-            <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              You can update this appointment, but completing a job total
-              requires payment access.
-            </p>
-          )}
-
-          <div className="grid grid-cols-1 gap-3">
-            <form
-              action="/api/team/appointments/status"
-              className="space-y-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submitMutation(
-                  event.currentTarget,
-                  "no_show",
-                  "Appointment marked no-show.",
-                  "Unable to mark no-show",
-                  "Mark this appointment as a no-show? This changes downstream scheduling and reporting.",
-                );
-              }}
-            >
-              <input type="hidden" name="appointmentId" value={appointmentId} />
-              <input
-                type="hidden"
-                name="appointmentType"
-                value={appointmentType ?? ""}
-              />
-              <input type="hidden" name="status" value="no_show" />
-              <p className="text-xs text-slate-600">
-                The customer will not be notified by this status change.
-              </p>
-              <button
-                type="submit"
-                disabled={pendingAction !== null}
-                className={`${teamButtonClass("secondary", "sm")} w-full`}
-              >
-                {pendingAction === "no_show" ? "Saving…" : "Mark no-show"}
-              </button>
-            </form>
-
-            <form
-              action="/api/team/appointments/status"
-              className="space-y-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submitMutation(
-                  event.currentTarget,
-                  "canceled",
-                  "Appointment canceled.",
-                  "Unable to cancel appointment",
-                  "Cancel this appointment? Linked Google Calendar cleanup will be queued. The customer is notified only when the notice checkbox is selected.",
-                );
-              }}
-            >
-              <input type="hidden" name="appointmentId" value={appointmentId} />
-              <input
-                type="hidden"
-                name="appointmentType"
-                value={appointmentType ?? ""}
-              />
-              <input type="hidden" name="status" value="canceled" />
-              {canSendCustomerMessages ? (
-                <label className="flex min-h-11 items-start gap-3 rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm text-rose-900">
-                  <input
-                    type="checkbox"
-                    name="sendCustomerNotification"
-                    className="mt-0.5 h-5 w-5 rounded border-rose-300"
-                  />
-                  <span>
-                    Send a cancellation notice. Safe default is off; delivery is
-                    tracked separately in Inbox.
-                  </span>
-                </label>
-              ) : (
-                <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-                  The customer will not be notified. Messaging permission is
-                  required to send a cancellation notice.
-                </p>
-              )}
-              <button
-                type="submit"
-                disabled={pendingAction !== null}
-                className={`${teamButtonClass("danger", "sm")} w-full`}
-              >
-                {pendingAction === "canceled"
-                  ? "Saving…"
-                  : "Cancel appointment"}
-              </button>
-            </form>
-          </div>
-
+            </>
+          ) : null}
           <form
+            method="post"
             action="/api/team/appointments/reschedule"
             className="grid min-w-0 grid-cols-1 gap-3 border-t border-slate-200 pt-3"
             onSubmit={(event) => {
@@ -639,7 +674,9 @@ export function CalendarAppointmentActions({
               void submitMutation(
                 event.currentTarget,
                 "reschedule",
-                "Appointment rescheduled.",
+                scheduleOnly
+                  ? "Service scheduled."
+                  : "Appointment rescheduled.",
                 "Unable to reschedule appointment",
               );
             }}
@@ -667,6 +704,11 @@ export function CalendarAppointmentActions({
                 className={TEAM_INPUT_COMPACT}
               />
             </label>
+            <StaffScheduleResourcePicker
+              key={appointmentId}
+              appointmentId={appointmentId}
+              disabled={pendingAction !== null}
+            />
             {scheduleConflict ? (
               <div
                 role="alert"
@@ -746,14 +788,16 @@ export function CalendarAppointmentActions({
                   ? "Saving…"
                   : scheduleConflict && canOverrideScheduleConflicts
                     ? "Override and reschedule"
-                    : "Reschedule"}
+                    : scheduleOnly
+                      ? "Schedule service"
+                      : "Reschedule"}
               </button>
             </div>
           </form>
         </div>
       ) : null}
 
-      {canUpdateAppointments ? (
+      {canUpdateAppointments && !scheduleOnly ? (
         <form
           action="/api/team/appointments/notes"
           className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3"

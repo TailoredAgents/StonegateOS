@@ -97,7 +97,7 @@ function isAbortReason(reason: unknown): boolean {
 export function InboxLiveUpdatesClient(props: {
   threadId: string | null;
   contactId: string | null;
-  channel: "sms" | "email" | "dm";
+  channel: "sms" | "email" | "dm" | "web";
   initialTimelineSignature: string | null;
   initialThreadsSignature: string | null;
   queue: "needs_reply" | "waiting" | "failed" | "all";

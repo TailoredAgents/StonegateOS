@@ -35,7 +35,7 @@ export async function GET(
   ) {
     return createPartnerPortalV2ErrorResponse("not_found", 404, correlationId);
   }
-  if (principal.accessLevel !== "account") {
+  if (!["account", "scoped"].includes(principal.accessLevel)) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
   if (!arePartnerPortalV2ReadsEnabled(principal.accountId)) {
@@ -47,6 +47,7 @@ export async function GET(
   }
   try {
     const result = await getPartnerApprovalRequest({
+      access: principal,
       accountId: principal.accountId,
       membershipId: principal.membershipId,
       requestId,

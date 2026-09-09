@@ -29,7 +29,11 @@ import {
 } from "@/db";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 import { serviceWorkAppointmentTypePredicate } from "@/lib/appointment-kind";
-import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
+import {
+  acquireScheduleConflictLock,
+  inspectScheduleConflicts,
+  filterScheduleReadCandidates,
+} from "@/lib/appointment-schedule-conflicts";
 import {
   getBookingRulesPolicy,
   getBusinessHourWindowsForDate,
@@ -149,18 +153,6 @@ export async function runBestEffortQuoteHoldCleanup(
       error: error instanceof Error ? error.message : String(error),
     });
   }
-}
-
-function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
-  return aStart < bEnd && bStart < aEnd;
-}
-
-function overlapsCount(blocks: Block[], start: Date, end: Date): number {
-  let count = 0;
-  for (const block of blocks) {
-    if (overlaps(start, end, block.start, block.end)) count += 1;
-  }
-  return count;
 }
 
 function localDayKey(value: Date, timezone: string): string {
@@ -364,11 +356,7 @@ export async function getQuoteAvailability(
       while (cursor.plus({ minutes: context.durationMinutes }) <= window.end) {
         if (cursor > nowLocal.plus({ hours: 2 })) {
           const start = cursor.toUTC().toJSDate();
-          const end = new Date(
-            start.getTime() +
-              (context.durationMinutes + context.travelBufferMinutes) * 60_000,
-          );
-          if (overlapsCount(blocks, start, end) < context.capacity) {
+          {
             const slot = {
               startAt: start.toISOString(),
               endAt: new Date(
@@ -386,9 +374,20 @@ export async function getQuoteAvailability(
     days.push({ date: dayKey, slots: daySlots });
   }
 
+  const available = await filterScheduleReadCandidates({
+    candidates: days.flatMap((day) => day.slots),
+    durationMinutes: context.durationMinutes,
+    travelBufferMinutes: context.travelBufferMinutes,
+    capacity: context.capacity,
+    timezone: context.timezone,
+  });
+  const starts = new Set(available.map((slot) => slot.startAt));
   return {
-    days,
-    suggestions,
+    days: days.map((day) => ({
+      ...day,
+      slots: day.slots.filter((slot) => starts.has(slot.startAt)),
+    })),
+    suggestions: available.slice(0, 6),
     durationMinutes: context.durationMinutes,
     travelBufferMinutes: context.travelBufferMinutes,
     timezone: context.timezone,
@@ -728,10 +727,6 @@ export async function createQuoteAppointmentHold(input: {
       );
     }
 
-    const end = new Date(
-      start.getTime() +
-        (context.durationMinutes + context.travelBufferMinutes) * 60_000,
-    );
     const blocks = await loadScheduleBlocks(
       {
         start: new Date(start.getTime() - 24 * 60 * 60 * 1000),
@@ -745,10 +740,17 @@ export async function createQuoteAppointmentHold(input: {
     const dayTotal = blocks.filter(
       (block) => localDayKey(block.start, context.timezone) === dayKey,
     ).length;
+    const capacityDecision = await inspectScheduleConflicts(tx, {
+      startAt: start,
+      durationMinutes: context.durationMinutes,
+      travelBufferMinutes: context.travelBufferMinutes,
+      capacity: context.capacity,
+      now,
+    });
     if (
       (context.bookingRules.maxJobsPerDay > 0 &&
         dayTotal >= context.bookingRules.maxJobsPerDay) ||
-      overlapsCount(blocks, start, end) >= context.capacity
+      capacityDecision.conflict
     ) {
       throw new PublicQuoteSchedulingError(
         "slot_full",
@@ -965,6 +967,21 @@ export async function bookAcceptedQuote(input: {
         "The booking hold was used by another request. Refresh before retrying.",
       );
     }
+
+    // A hold is not permission to bypass blocks or staffing changes made since
+    // selection. Its consumption and this final check share the global lock.
+    const capacityDecision = await inspectScheduleConflicts(tx, {
+      startAt: start,
+      durationMinutes: context.durationMinutes,
+      travelBufferMinutes: context.travelBufferMinutes,
+      capacity: context.capacity,
+      now,
+    });
+    if (capacityDecision.conflict)
+      throw new PublicQuoteSchedulingError(
+        "slot_full",
+        "That booking time is no longer available. Choose another time.",
+      );
 
     const [linkedLead] = await tx
       .select({ id: leads.id })

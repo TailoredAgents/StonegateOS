@@ -232,6 +232,7 @@ function formatDate(value: string | null): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "Not recorded";
   return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
     dateStyle: "long",
     timeStyle: "short",
   }).format(date);

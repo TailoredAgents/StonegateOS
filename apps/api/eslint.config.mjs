@@ -4,7 +4,7 @@ import typescriptEslint from "@typescript-eslint/eslint-plugin";
 export default [
   ...mystNext,
   {
-    files: ["**/*.{ts,tsx}"],
+    files: ["**/*.{ts,tsx,mts}"],
     languageOptions: {
       parserOptions: {
         project: "./tsconfig.eslint.json",

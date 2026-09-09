@@ -43,9 +43,9 @@ export async function GET(request: NextRequest): Promise<Response> {
       authorization.principal,
       "read",
     );
-    const templates = await listPartnerServiceTemplates({ actor });
+    const result = await listPartnerServiceTemplates({ actor, params: request.nextUrl.searchParams });
     return portalSchedulingSuccessResponse(
-      { ok: true, templates },
+      { ok: true, ...result },
       correlationId,
     );
   } catch (error) {

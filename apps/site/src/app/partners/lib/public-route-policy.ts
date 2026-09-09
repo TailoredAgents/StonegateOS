@@ -16,9 +16,8 @@ export function partnerLandingDestination(input: {
   portalState: PartnerLandingPortalState;
 }): "/partners/application" | "/partners/overview" | null {
   if (input.portalState === "authenticated") return "/partners/overview";
-  if (input.portalState !== "unavailable" && input.applicationSessionPresent) {
-    return "/partners/application";
-  }
+  // Historical applicants can still open their status link directly. Their
+  // cookie must not hijack the relationship entrance or access-help page.
   return null;
 }
 
@@ -51,7 +50,7 @@ export function partnerPurposeTokenPolicy(
   if (pathname === "/partners/invitations/accept") {
     return {
       cookieName: PARTNER_INVITATION_TOKEN_COOKIE,
-      maximumAgeSeconds: 30 * 60,
+      maximumAgeSeconds: 7 * 24 * 60 * 60,
     };
   }
   return null;

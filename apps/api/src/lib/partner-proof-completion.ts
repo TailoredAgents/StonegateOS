@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, or } from "drizzle-orm";
+import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 import {
   mediaAssets,
   partnerBookings,
@@ -148,6 +148,7 @@ export async function evaluatePartnerProofCompletion(
         eq(partnerJobEvidence.partnerBookingId, booking.id),
         isNull(partnerJobEvidence.deletedAt),
         eq(mediaAssets.status, "ready"),
+        sql`(${partnerJobEvidence.category} <> 'document' OR ${mediaAssets.sourceMetadata}->>'scanStatus' = 'clean')`,
         isNull(mediaAssets.deletedAt),
       ),
     );

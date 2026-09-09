@@ -24,6 +24,7 @@ import {
   etaMessageDrafts,
   getDb,
   outboxEvents,
+  partnerBookings,
   properties,
   type DatabaseClient,
 } from "@/db";
@@ -645,6 +646,14 @@ export async function updateCrewEtaStatus(input: {
         ...values,
         dumpStatus: dumpStatus ?? "not_needed",
         createdAt: now,
+      });
+    }
+    // Publish only the explicit operational status, never a location ping or ETA draft.
+    if (status === "heading_there") {
+      const [partnerJob] = await tx.select({ id: partnerBookings.id, accountId: partnerBookings.partnerAccountId })
+        .from(partnerBookings).where(eq(partnerBookings.appointmentId, input.appointmentId)).limit(1);
+      if (partnerJob?.accountId) await tx.insert(outboxEvents).values({
+        type: "partner.job.en_route", payload: { partnerAccountId: partnerJob.accountId, partnerBookingId: partnerJob.id, version: now.toISOString() },
       });
     }
   });

@@ -38,6 +38,47 @@ const fullCapabilities = {
 };
 
 describe("partner job action availability", () => {
+  it.each([
+    {
+      eligible: false,
+      canCreate: true,
+      allowed: false,
+      reason: "status_unavailable",
+    },
+    {
+      eligible: true,
+      canCreate: false,
+      allowed: false,
+      reason: "permission_required",
+    },
+    { eligible: true, canCreate: true, allowed: true, reason: "available" },
+  ])(
+    "additional service needs source eligibility and current create/read permission: %j",
+    ({ eligible, canCreate, allowed, reason }) => {
+      const actions = resolvePartnerJobActionAvailability({
+        status: "completed",
+        appointmentStatus: "completed",
+        hasPromisedWindow: false,
+        proofAvailable: false,
+        revisionAvailable: true,
+        changeRequestPending: false,
+        rescheduleReviewPending: false,
+        cancellationReviewPending: false,
+        additionalServiceEligible: eligible,
+        capabilities: {
+          ...fullCapabilities,
+          requestAdditionalService: canCreate,
+        },
+        cancellation: cancellation(null, "job_terminal"),
+      });
+      expect(
+        actions.find((entry) => entry.action === "request_additional_service"),
+      ).toMatchObject({ allowed, reason: { code: reason } });
+      expect(JSON.stringify(actions)).not.toMatch(
+        /finalTotal|canonicalStatus|paymentId/u,
+      );
+    },
+  );
   it("allows only actions whose role, status, schedule, proof, and cancellation policy permit them", () => {
     const actions = resolvePartnerJobActionAvailability({
       status: "confirmed",

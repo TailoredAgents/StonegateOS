@@ -10,6 +10,8 @@ import {
   partnerStatements,
 } from "@/db";
 import type { PartnerPrincipal } from "@/lib/partner-account-authorization";
+import { getPartnerPaymentReadiness } from "@/lib/partner-payment-readiness";
+import { effectivePartnerInvoiceStatusSql } from "@/lib/partner-invoice-status";
 import {
   createPartnerJobAccessCondition,
   createPartnerJobLocationJoinCondition,
@@ -99,6 +101,27 @@ export function createPartnerInvoiceAccessCondition(
     );
   }
   return or(...grants) ?? sql`false`;
+}
+
+export function createPartnerFinancialDocumentAccessCondition(
+  access: PartnerCommercialAccess | undefined,
+): SQL | undefined {
+  if (access?.accessLevel !== "scoped" || !access.accountId) return undefined;
+  const scope = normalizePartnerJobAccessScope(access);
+  const costCenterGrant = scope.costCenterIds.length
+    ? sql`exists (
+    select 1 from partner_invoices scoped_invoice
+    inner join partner_account_cost_centers scoped_center
+      on scoped_center.partner_account_id = scoped_invoice.partner_account_id and scoped_center.code = scoped_invoice.cost_center
+    where scoped_invoice.partner_account_id = ${access.accountId}
+      and scoped_invoice.partner_booking_id = ${partnerDocuments.partnerBookingId}
+      and scoped_center.id in (${sql.join(
+        scope.costCenterIds.map((id) => sql`${id}::uuid`),
+        sql`, `,
+      )})
+  )`
+    : sql`false`;
+  return or(createPartnerJobAccessCondition(access), costCenterGrant);
 }
 
 function safeText(value: string | null, maximum = 240): string | null {
@@ -434,7 +457,10 @@ export async function listPartnerInvoices(input: {
       id: partnerInvoices.id,
       bookingId: partnerInvoices.partnerBookingId,
       invoiceNumber: partnerInvoices.invoiceNumber,
-      status: partnerInvoices.status,
+      providerInvoiceId: partnerInvoices.providerInvoiceId,
+      legacyHostedUrl: partnerInvoices.hostedPaymentUrl,
+      legacyProviderOrderId: partnerInvoices.providerOrderId,
+      status: effectivePartnerInvoiceStatusSql(),
       currency: partnerInvoices.currency,
       subtotalCents: partnerInvoices.subtotalCents,
       taxCents: partnerInvoices.taxCents,
@@ -442,6 +468,7 @@ export async function listPartnerInvoices(input: {
       depositCents: partnerInvoices.depositCents,
       totalCents: partnerInvoices.totalCents,
       paidCents: partnerInvoices.paidCents,
+      creditedCents: partnerInvoices.creditedCents,
       balanceCents: partnerInvoices.balanceCents,
       poNumber: partnerInvoices.poNumber,
       costCenter: partnerInvoices.costCenter,
@@ -477,7 +504,10 @@ export async function listPartnerInvoices(input: {
       and(
         eq(partnerInvoices.partnerAccountId, input.accountId),
         createPartnerInvoiceAccessCondition(input.access),
-        options.filter ? eq(partnerInvoices.status, options.filter) : undefined,
+        sql`${partnerInvoices.status} <> 'draft'`,
+        options.filter
+          ? eq(effectivePartnerInvoiceStatusSql(), options.filter)
+          : undefined,
         cursorAt && options.cursor
           ? or(
               lt(partnerInvoices.createdAt, cursorAt),
@@ -492,9 +522,14 @@ export async function listPartnerInvoices(input: {
     .orderBy(desc(partnerInvoices.createdAt), desc(partnerInvoices.id))
     .limit(options.limit + 1);
   const page = rows.slice(0, options.limit);
+  const paymentReadiness = await getPartnerPaymentReadiness(input.accountId);
   const items = page.map((row) => ({
     id: row.id,
     invoiceNumber: safeText(row.invoiceNumber, 120),
+    paymentOptions:
+      row.providerInvoiceId || row.legacyHostedUrl || row.legacyProviderOrderId
+        ? { ...paymentReadiness, card: false, ach: false }
+        : paymentReadiness,
     status: row.status,
     bookingId: row.bookingId,
     poNumber: safeText(row.poNumber, 120),
@@ -506,6 +541,7 @@ export async function listPartnerInvoices(input: {
       deposit: money(row.depositCents, row.currency),
       total: money(row.totalCents, row.currency),
       paid: money(row.paidCents, row.currency),
+      credited: money(row.creditedCents, row.currency),
       balance: money(row.balanceCents, row.currency),
     },
     dueDate: row.dueDate,
@@ -546,6 +582,7 @@ export async function listPartnerInvoices(input: {
         "deposit_minor",
         "total_minor",
         "paid_minor",
+        "credited_minor",
         "balance_minor",
         "po_number",
         "cost_center",
@@ -562,6 +599,7 @@ export async function listPartnerInvoices(input: {
         row.depositCents,
         row.totalCents,
         row.paidCents,
+        row.creditedCents,
         row.balanceCents,
         safeText(row.poNumber, 120),
         safeText(row.costCenter, 120),
@@ -627,6 +665,7 @@ export async function listPartnerStatements(input: {
     id: row.id,
     periodStart: row.periodStart,
     periodEnd: row.periodEnd,
+    revision: row.revision,
     amounts: {
       openingBalance: money(row.openingBalanceCents, row.currency),
       invoices: money(row.invoiceCents, row.currency),
@@ -724,7 +763,7 @@ export async function listPartnerDocuments(input: {
     .where(
       and(
         eq(partnerDocuments.partnerAccountId, input.accountId),
-        scopedJobCondition(input.access),
+        createPartnerFinancialDocumentAccessCondition(input.access),
         options.filter
           ? eq(partnerDocuments.documentType, options.filter)
           : undefined,
@@ -832,6 +871,7 @@ export async function listPartnerReports(input: {
       invoiceCount: sql<string>`count(*)::text`,
       totalCents: sql<string>`coalesce(sum(${partnerInvoices.totalCents}), 0)::text`,
       paidCents: sql<string>`coalesce(sum(${partnerInvoices.paidCents}), 0)::text`,
+      creditedCents: sql<string>`coalesce(sum(${partnerInvoices.creditedCents}), 0)::text`,
       balanceCents: sql<string>`coalesce(sum(${partnerInvoices.balanceCents}), 0)::text`,
     })
     .from(partnerInvoices)
@@ -857,6 +897,12 @@ export async function listPartnerReports(input: {
       and(
         eq(partnerInvoices.partnerAccountId, input.accountId),
         createPartnerInvoiceAccessCondition(input.access),
+        inArray(partnerInvoices.status, [
+          "issued",
+          "partially_paid",
+          "paid",
+          "overdue",
+        ]),
         currency ? eq(partnerInvoices.currency, currency) : undefined,
       ),
     )
@@ -867,6 +913,7 @@ export async function listPartnerReports(input: {
     invoiceCount: safeAggregate(row.invoiceCount),
     total: money(safeAggregate(row.totalCents), row.currency),
     paid: money(safeAggregate(row.paidCents), row.currency),
+    credited: money(safeAggregate(row.creditedCents), row.currency),
     balance: money(safeAggregate(row.balanceCents), row.currency),
   }));
   if (scoped && scopedOptions?.ok) {

@@ -12,9 +12,9 @@ import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 import type { PartnerPrincipal } from "@/lib/partner-account-authorization";
 import { createMediaReadUrl, getMediaStorageBucket } from "@/lib/media-storage";
 import {
-  createPartnerJobAccessCondition,
   createPartnerJobLocationJoinCondition,
 } from "@/lib/partner-portal-v2-resource-authorization";
+import { createPartnerFinancialDocumentAccessCondition } from "@/lib/partner-portal-v2-commercial";
 
 function safeText(value: string, maximum: number): string | null {
   const normalized = value.normalize("NFKC").replace(/\s+/gu, " ").trim();
@@ -88,7 +88,7 @@ export async function createPartnerDocumentDownloadIntent(input: {
           ? eq(partnerDocuments.partnerAccountId, input.accountId)
           : and(
               isNotNull(partnerDocuments.partnerBookingId),
-              createPartnerJobAccessCondition({
+              createPartnerFinancialDocumentAccessCondition({
                 accountId: input.accountId,
                 accessLevel: input.accessLevel,
                 accessScope: input.accessScope,

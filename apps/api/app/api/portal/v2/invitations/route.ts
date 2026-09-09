@@ -4,6 +4,7 @@ import {
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
 import { requirePartnerCapability } from "@/lib/partner-account-authorization";
+import { listPartnerInvitationScopeOptions } from "@/lib/partner-invitation-scope-options";
 import {
   createPartnerAccountInvitation,
   listPartnerAccountInvitations,
@@ -28,6 +29,8 @@ import {
   createPortalV2IdempotencyErrorResponse,
   readPortalV2CorrelationId,
   readPortalV2IdempotencyKey,
+  encodePortalV2Cursor,
+  parsePortalV2Pagination,
 } from "@/lib/portal-v2-contract";
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -63,9 +66,12 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
   const keys = [...request.nextUrl.searchParams.keys()];
   const rawLimit = request.nextUrl.searchParams.get("limit") ?? "50";
+  const scopeQuery = request.nextUrl.searchParams.get("scopeQ")?.trim() ?? "";
   if (
-    keys.some((key) => key !== "limit") ||
-    request.nextUrl.searchParams.getAll("limit").length > 1
+    keys.some((key) => key !== "limit" && key !== "scopeQ" && key !== "cursor") ||
+    request.nextUrl.searchParams.getAll("limit").length > 1 ||
+    request.nextUrl.searchParams.getAll("scopeQ").length > 1 ||
+    scopeQuery.length > 160
   ) {
     return createPartnerPortalV2ErrorResponse(
       "invalid_request",
@@ -81,13 +87,33 @@ export async function GET(request: NextRequest): Promise<Response> {
       correlationId,
     );
   }
+  type InvitationCursor = { accountId: string; id: string; createdAt: string };
+  const page = parsePortalV2Pagination(request.nextUrl.searchParams, {
+    cursorKind: "partner_account_invitations", allowedQueryKeys: new Set(["scopeQ"]),
+    validateCursorPayload(value: unknown): value is InvitationCursor {
+      const cursor = value as Partial<InvitationCursor> | null;
+      return Boolean(cursor && cursor.accountId === principal.accountId && typeof cursor.id === "string" && /^[0-9a-f-]{36}$/iu.test(cursor.id) && typeof cursor.createdAt === "string" && Number.isFinite(Date.parse(cursor.createdAt)));
+    },
+  });
+  if (!page.ok) return createPartnerPortalV2ErrorResponse("invalid_cursor", 422, correlationId);
   try {
-    const invitations = await listPartnerAccountInvitations({
+    const rows = await listPartnerAccountInvitations({
       principal,
-      limit,
+      limit: page.limit + 1,
+      before: page.cursor?.payload,
     });
+    const invitations = rows.slice(0, page.limit);
+    const last = invitations.at(-1);
     return createPartnerPortalV2SuccessResponse(
-      { ok: true, invitations },
+      {
+        ok: true,
+        invitations,
+        page: { nextCursor: rows.length > page.limit && last ? encodePortalV2Cursor({ kind: "partner_account_invitations", limit: page.limit, payload: { accountId: principal.accountId, id: last["id"], createdAt: last["createdAt"] } }) : null },
+        scopeOptions: await listPartnerInvitationScopeOptions(
+          principal.accountId,
+          scopeQuery,
+        ),
+      },
       correlationId,
     );
   } catch (error) {

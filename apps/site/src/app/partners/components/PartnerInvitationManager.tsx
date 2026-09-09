@@ -40,13 +40,24 @@ export type PartnerInvitation = {
   };
   expiresAt: string;
   acceptedAt: string | null;
+  activatedAt?: string | null;
   revokedAt: string | null;
   createdAt: string;
   allowedActions: Array<"resend" | "revoke">;
   etag: string;
 };
 
-type InvitationListPayload = { ok: true; invitations: PartnerInvitation[] };
+export type PartnerInvitationScopeOptions = {
+  locations: { id: string; label: string }[];
+  costCenters: { id: string; label: string }[];
+  moreResults: boolean;
+};
+type InvitationListPayload = {
+  ok: true;
+  invitations: PartnerInvitation[];
+  scopeOptions: PartnerInvitationScopeOptions;
+  page?: { nextCursor: string | null };
+};
 
 function dateTime(value: string): string {
   const date = new Date(value);
@@ -54,6 +65,7 @@ function dateTime(value: string): string {
     ? new Intl.DateTimeFormat("en-US", {
         dateStyle: "medium",
         timeStyle: "short",
+        timeZone: "America/New_York",
       }).format(date)
     : "Unavailable";
 }
@@ -67,11 +79,17 @@ function label(value: string): string {
 export function PartnerInvitationManager({
   initialInvitations,
   roles,
+  initialScopeOptions = { locations: [], costCenters: [], moreResults: false },
+  initialNextCursor = null,
 }: {
   initialInvitations: PartnerInvitation[];
   roles: PartnerTeamRole[];
+  initialScopeOptions?: PartnerInvitationScopeOptions;
+  initialNextCursor?: string | null;
 }) {
   const [invitations, setInvitations] = React.useState(initialInvitations);
+  const [nextCursor, setNextCursor] = React.useState(initialNextCursor);
+  React.useEffect(() => setNextCursor(initialNextCursor), [initialNextCursor]);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<{
     tone: "success" | "error" | "warning";
@@ -83,20 +101,105 @@ export function PartnerInvitationManager({
   // from API or array ordering.
   const [roleKey, setRoleKey] = React.useState("");
   const [persona, setPersona] = React.useState("other");
+  const [scopeOptions, setScopeOptions] = React.useState(initialScopeOptions);
+  const [scopeQuery, setScopeQuery] = React.useState("");
+  const [scoped, setScoped] = React.useState(false);
+  const [locationIds, setLocationIds] = React.useState<string[]>([]);
+  const [costCenterIds, setCostCenterIds] = React.useState<string[]>([]);
+  const scopeLabels = React.useRef(
+    new Map(
+      [
+        ...initialScopeOptions.locations,
+        ...initialScopeOptions.costCenters,
+      ].map((choice) => [choice.id, choice.label]),
+    ),
+  );
+  const operation = React.useRef<{ body: string; key: string } | null>(null);
+  const mutationOperation = React.useRef<{ body: string; key: string } | null>(
+    null,
+  );
+  const noticeRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (notice) noticeRef.current?.focus();
+  }, [notice]);
+  React.useEffect(() => {
+    setInvitations(initialInvitations);
+  }, [initialInvitations]);
+
+  async function searchScopes() {
+    if (busy) return;
+    setBusy("scope");
+    const result = await partnerPortalFetch<InvitationListPayload>(
+      "invitations?limit=100&scopeQ=" + encodeURIComponent(scopeQuery),
+    ).catch(() => null);
+    setBusy(null);
+    if (!result?.ok || !result.data.scopeOptions) {
+      setNotice({
+        tone: "error",
+        text: "Locations and cost centers could not be loaded. Your selections were kept.",
+      });
+      return;
+    }
+    for (const choice of [
+      ...result.data.scopeOptions.locations,
+      ...result.data.scopeOptions.costCenters,
+    ])
+      scopeLabels.current.set(choice.id, choice.label);
+    setScopeOptions(result.data.scopeOptions);
+  }
 
   async function refresh(): Promise<void> {
     const result = await partnerPortalFetch<InvitationListPayload>(
       "invitations?limit=100",
     ).catch(() => null);
-    if (result?.ok) setInvitations(result.data.invitations);
+    if (result?.ok && Array.isArray(result.data.invitations)) {
+      setInvitations(result.data.invitations);
+      setNextCursor(result.data.page?.nextCursor ?? null);
+    } else {
+      setNotice({
+        tone: "error",
+        text: "We couldn’t refresh invitation status. The list below may be out of date; nothing was changed.",
+      });
+    }
+  }
+
+  async function loadOlder() {
+    if (busy || !nextCursor) return;
+    setBusy("older");
+    const result = await partnerPortalFetch<InvitationListPayload>("invitations?limit=100&cursor=" + encodeURIComponent(nextCursor)).catch(() => null);
+    setBusy(null);
+    if (!result?.ok || !Array.isArray(result.data.invitations)) { setNotice({ tone: "error", text: "Older invitations could not be loaded. The current list was kept." }); return; }
+    setInvitations((current) => [...current, ...result.data.invitations.filter((row) => !current.some((existing) => existing.id === row.id))]);
+    setNextCursor(result.data.page?.nextCursor ?? null);
   }
 
   async function create(
     event: React.FormEvent<HTMLFormElement>,
   ): Promise<void> {
     event.preventDefault();
+    if (
+      busy ||
+      !event.currentTarget.reportValidity() ||
+      !roleKey ||
+      (scoped && locationIds.length + costCenterIds.length === 0)
+    )
+      return;
     setBusy("create");
     setNotice(null);
+    const body = JSON.stringify({
+      name,
+      email,
+      roleKey,
+      persona,
+      accessLevel: scoped ? "scoped" : "account",
+      locationIds,
+      costCenterIds,
+    });
+    if (operation.current?.body !== body)
+      operation.current = {
+        body,
+        key: createPortalOperationKey("partner-invitation-create"),
+      };
     const result = await partnerPortalFetch<{
       ok: true;
       status: string;
@@ -104,11 +207,9 @@ export function PartnerInvitationManager({
     }>("invitations", {
       method: "POST",
       headers: {
-        "Idempotency-Key": createPortalOperationKey(
-          "partner-invitation-create",
-        ),
+        "Idempotency-Key": operation.current.key,
       },
-      body: JSON.stringify({ name, email, roleKey, persona }),
+      body,
     }).catch(() => null);
     setBusy(null);
     if (!result?.ok) {
@@ -122,9 +223,14 @@ export function PartnerInvitationManager({
     }
     setName("");
     setEmail("");
+    operation.current = null;
+    setRoleKey("");
+    setScoped(false);
+    setLocationIds([]);
+    setCostCenterIds([]);
     setNotice({
       tone: "success",
-      text: "Invitation request accepted. If the address can be invited, the one-time link expires after 30 minutes.",
+      text: "Invitation request accepted. If the address can be invited, one setup email is queued. Its one-use link expires after seven days.",
     });
     await refresh();
   }
@@ -133,8 +239,15 @@ export function PartnerInvitationManager({
     invitation: PartnerInvitation,
     action: "resend" | "revoke",
   ): Promise<void> {
+    if (busy) return;
     setBusy(`${invitation.id}:${action}`);
     setNotice(null);
+    const signature = invitation.id + ":" + invitation.etag + ":" + action;
+    if (mutationOperation.current?.body !== signature)
+      mutationOperation.current = {
+        body: signature,
+        key: createPortalOperationKey("partner-invitation-" + action),
+      };
     const result = await partnerPortalFetch<{
       ok: true;
       invitation: PartnerInvitation;
@@ -142,9 +255,7 @@ export function PartnerInvitationManager({
       method: "POST",
       headers: {
         "If-Match": invitation.etag,
-        "Idempotency-Key": createPortalOperationKey(
-          `partner-invitation-${action}`,
-        ),
+        "Idempotency-Key": mutationOperation.current.key,
       },
       body: JSON.stringify({ action }),
     }).catch(() => null);
@@ -190,16 +301,19 @@ export function PartnerInvitationManager({
           <p className="mt-1 text-sm leading-6 text-slate-600">
             Add the people who help request or manage service. Choose the right
             role carefully; each invitation works only for this company, can be
-            used once, and expires after 30 minutes.
+            used once, and expires after seven days.
           </p>
         </div>
       </div>
       {notice ? (
-        <PartnerNotice tone={notice.tone} className="mt-4">
-          {notice.text}
-        </PartnerNotice>
+        <div ref={noticeRef} tabIndex={-1}>
+          <PartnerNotice tone={notice.tone} className="mt-4">
+            {notice.text}
+          </PartnerNotice>
+        </div>
       ) : null}
       <form
+        method="post"
         onSubmit={(event) => void create(event)}
         className="mt-5 grid gap-4 sm:grid-cols-2"
       >
@@ -236,9 +350,19 @@ export function PartnerInvitationManager({
           <select
             required
             value={roleKey}
-            onChange={(event) => setRoleKey(event.target.value)}
+            onChange={(event) => {
+              setRoleKey(event.target.value);
+              if (event.target.value === "administrator") {
+                setScoped(false);
+                setLocationIds([]);
+                setCostCenterIds([]);
+              }
+            }}
             className={partnerFieldClass}
           >
+            <option value="" disabled>
+              Choose a role
+            </option>
             {roles.map((role) => (
               <option value={role.key} key={role.key}>
                 {role.name}
@@ -262,10 +386,150 @@ export function PartnerInvitationManager({
             <option value="other">Other</option>
           </select>
         </label>
+        {roleKey ? (
+          <p className="text-sm leading-6 text-slate-600 sm:col-span-2">
+            {roles.find((role) => role.key === roleKey)?.description}
+          </p>
+        ) : null}
+        {roleKey && roleKey !== "administrator" ? (
+          <label className="flex min-h-11 items-center gap-3 text-sm sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={scoped}
+              onChange={(event) => {
+                setScoped(event.target.checked);
+                if (!event.target.checked) {
+                  setLocationIds([]);
+                  setCostCenterIds([]);
+                }
+              }}
+              className="h-5 w-5"
+            />
+            Limit this person to selected locations or cost centers
+          </label>
+        ) : null}
+        {scoped ? (
+          <fieldset className="space-y-3 rounded-xl border border-slate-200 p-4 sm:col-span-2">
+            <legend className="px-1 text-sm font-semibold">
+              Permitted locations and cost centers
+            </legend>
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="min-w-0 flex-1 text-sm">
+                Find a location or cost center
+                <input
+                  type="search"
+                  value={scopeQuery}
+                  maxLength={160}
+                  onChange={(event) => setScopeQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void searchScopes();
+                    }
+                  }}
+                  className={partnerFieldClass}
+                />
+              </label>
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => void searchScopes()}
+                className={partnerSecondaryButtonClass}
+              >
+                Search
+              </button>
+            </div>
+            {scopeOptions.moreResults ? (
+              <p className="text-sm text-slate-600">
+                More choices are available. Search by name to narrow the list.
+              </p>
+            ) : null}
+            {!scopeOptions.locations.length &&
+            !scopeOptions.costCenters.length ? (
+              <p className="text-sm text-slate-600">
+                No matching choices. Add a location first or try another search.
+              </p>
+            ) : null}
+            {scopeOptions.locations.map((choice) => (
+              <label
+                key={choice.id}
+                className="flex min-h-11 items-center gap-3 text-sm"
+              >
+                <input
+                  type="checkbox"
+                  checked={locationIds.includes(choice.id)}
+                  disabled={
+                    !locationIds.includes(choice.id) &&
+                    locationIds.length >= 100
+                  }
+                  onChange={() =>
+                    setLocationIds((current) =>
+                      current.includes(choice.id)
+                        ? current.filter((id) => id !== choice.id)
+                        : [...current, choice.id],
+                    )
+                  }
+                  className="h-5 w-5"
+                />
+                Location: {choice.label}
+              </label>
+            ))}
+            {scopeOptions.costCenters.map((choice) => (
+              <label
+                key={choice.id}
+                className="flex min-h-11 items-center gap-3 text-sm"
+              >
+                <input
+                  type="checkbox"
+                  checked={costCenterIds.includes(choice.id)}
+                  disabled={
+                    !costCenterIds.includes(choice.id) &&
+                    costCenterIds.length >= 100
+                  }
+                  onChange={() =>
+                    setCostCenterIds((current) =>
+                      current.includes(choice.id)
+                        ? current.filter((id) => id !== choice.id)
+                        : [...current, choice.id],
+                    )
+                  }
+                  className="h-5 w-5"
+                />
+                Cost center: {choice.label}
+              </label>
+            ))}
+            <p className="text-sm font-semibold">
+              {locationIds.length + costCenterIds.length} selected. Choose at
+              least one.
+            </p>
+            {[...locationIds, ...costCenterIds].map((id) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => {
+                  setLocationIds((current) =>
+                    current.filter((value) => value !== id),
+                  );
+                  setCostCenterIds((current) =>
+                    current.filter((value) => value !== id),
+                  );
+                }}
+                className="mr-2 min-h-11 text-sm text-primary-900 underline"
+              >
+                Remove {scopeLabels.current.get(id) ?? "selection"}
+              </button>
+            ))}
+          </fieldset>
+        ) : null}
         <div className="sm:col-span-2">
           <button
             type="submit"
-            disabled={busy !== null || !roles.length}
+            disabled={
+              busy !== null ||
+              !roles.length ||
+              !roleKey ||
+              (scoped && !locationIds.length && !costCenterIds.length)
+            }
             className={partnerPrimaryButtonClass}
           >
             {busy === "create" ? (
@@ -370,6 +634,7 @@ export function PartnerInvitationManager({
           ) : null}
         </div>
       </div>
+      {nextCursor ? <button type="button" disabled={busy !== null} onClick={() => void loadOlder()} className={cn(partnerSecondaryButtonClass, "mt-4")}>Load older invitations</button> : null}
     </PartnerPanel>
   );
 }

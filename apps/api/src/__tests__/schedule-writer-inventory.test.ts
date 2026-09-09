@@ -40,8 +40,12 @@ const WRITER_INVENTORY = {
   "apps/api/src/lib/outbox-processor.ts": "metadata_only",
   "apps/api/src/lib/partner-cancellation-request-lifecycle.ts":
     "capacity_locked",
+  "apps/api/src/lib/partner-change-order-price.ts": "metadata_only",
   "apps/api/src/lib/partner-portal-v2-approvals.ts": "capacity_locked",
   "apps/api/src/lib/partner-portal-v2-scheduling/service.ts": "capacity_locked",
+  "apps/api/src/lib/partner-staff-schedule.ts": "capacity_locked",
+  "apps/api/src/lib/partner-repeat-work.ts": "capacity_locked",
+  "apps/api/src/lib/partner-relationship-management.ts": "capacity_locked",
   "apps/api/src/lib/payment-ledger.ts": "metadata_only",
   "apps/api/src/lib/quote-scheduling.ts": "capacity_locked",
   "apps/api/src/lib/quote-v2-scheduling-service.ts": "capacity_locked",
@@ -55,6 +59,21 @@ type LockedBoundary = Readonly<{
 }>;
 
 const LOCKED_BOUNDARIES: readonly LockedBoundary[] = [
+  {
+    path: "apps/api/src/lib/partner-repeat-work.ts",
+    anchor: "export async function mutatePartnerRecurringSeriesLifecycle(",
+    protectedOperation: ".update(appointmentHolds)",
+  },
+  {
+    path: "apps/api/src/lib/partner-relationship-management.ts",
+    anchor: "export async function updatePartnerWorkflowAsStaff(",
+    protectedOperation: ".update(appointmentHolds)",
+  },
+  {
+    path: "apps/api/src/lib/partner-staff-schedule.ts",
+    anchor: "export async function synchronizePartnerStaffSchedule(",
+    protectedOperation: "assertPartnerStaffCapacity(tx",
+  },
   {
     path: "apps/api/app/api/admin/booking/book/route.ts",
     anchor: "const result = await db.transaction(async (tx) => {",
@@ -227,6 +246,22 @@ describe("schedule writer inventory", () => {
     );
     expect(source).not.toMatch(
       /\.set\(\{[^}]*status:\s*"(?:canceled|completed|no_show)"/su,
+    );
+  });
+
+  it("keeps the accepted-price bridge out of scheduling and finalized revenue", () => {
+    const source = read("apps/api/src/lib/partner-change-order-price.ts");
+    const mutation = source.match(
+      /\.update\(appointments\)\s*\.set\(\{([^}]+)\}\)/su,
+    )?.[1];
+    expect(mutation).toBeDefined();
+    expect(mutation).toContain("quotedTotalCents: input.amountCents");
+    expect(mutation).toContain("quotedTotalMaxCents: input.amountCents");
+    expect(mutation).not.toMatch(
+      /startAt|status|duration|travelBuffer|capacity|resource|finalTotalCents|completedAt|commission/iu,
+    );
+    expect(source).toContain(
+      "lockAppointmentInvoiceCollection(tx, input.appointmentId)",
     );
   });
 });

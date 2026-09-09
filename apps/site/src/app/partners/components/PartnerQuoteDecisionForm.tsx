@@ -23,6 +23,12 @@ type Message = Readonly<{
 }>;
 
 function quoteDecisionError(code: string, status: number): Message {
+  if (code === "financial_review_required") {
+    return {
+      tone: "warning",
+      text: "Your existing bill and payment stay unchanged. Additional work must be requested as a separate job; this quote cannot replace the original price. Open the original job and choose Request additional service, or email sales@stonegatejunkremoval.com or call 404-777-2631 for help.",
+    };
+  }
   if (code === "approval_required") {
     return {
       tone: "warning",

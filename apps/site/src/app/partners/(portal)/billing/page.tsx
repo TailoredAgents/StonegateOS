@@ -9,6 +9,7 @@ import {
   ScrollText,
 } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
+import { PartnerCollectionPagination } from "@/app/partners/components/PartnerCollectionPagination";
 import { PartnerDocumentDownloadButton } from "@/app/partners/components/PartnerDocumentDownloadButton";
 import {
   PartnerInvoicePaymentAction,
@@ -92,7 +93,7 @@ async function loadPaymentAccess(): Promise<PaymentAccess> {
   const capabilities = payload?.membership?.capabilities;
   const canManagePayments =
     payload?.ok === true &&
-    payload.membership?.accessLevel === "account" &&
+    ["account", "scoped"].includes(String(payload.membership?.accessLevel)) &&
     Array.isArray(capabilities) &&
     capabilities.includes("payments.initiate");
   if (payload?.ok !== true || !Array.isArray(capabilities)) {
@@ -167,23 +168,19 @@ function CollectionFallback({
   );
 }
 
-function MoreRecordsNotice() {
-  return (
-    <PartnerNotice tone="info" className="mt-4">
-      This page shows the 100 newest records. Contact Stonegate if you need
-      older account history.
-    </PartnerNotice>
-  );
-}
-
 export default async function PartnerBillingPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ paymentIntentId?: string | string[] }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const resolvedSearchParams: Promise<{
-    paymentIntentId?: string | string[];
-  }> = searchParams ?? Promise.resolve({});
+  const rawParams: Record<string, string | string[] | undefined> = await (searchParams ?? Promise.resolve({}));
+  const params: Record<string, string> = {};
+  for (const name of ["paymentIntentId", "invoicesCursor", "quotesCursor", "statementsCursor", "documentsCursor"]) {
+    const value = rawParams[name];
+    if (typeof value === "string" && value.length <= 8_192) params[name] = value;
+  }
+  const filters = (resource: string) => new URLSearchParams(params[`${resource}Cursor`]
+    ? { cursor: params[`${resource}Cursor`]! } : {});
   const [
     rates,
     invoices,
@@ -191,18 +188,16 @@ export default async function PartnerBillingPage({
     statements,
     documents,
     paymentAccess,
-    params,
   ] = await Promise.all([
     loadRateCard(),
-    loadPartnerCommercial("invoices", "invoices", isPartnerInvoice),
-    loadPartnerCommercial("quotes", "quotes", isPartnerQuote),
-    loadPartnerCommercial("statements", "statements", isPartnerStatement),
-    loadPartnerCommercial("documents", "documents", isPartnerDocument),
+    loadPartnerCommercial("invoices", "invoices", isPartnerInvoice, filters("invoices")),
+    loadPartnerCommercial("quotes", "quotes", isPartnerQuote, filters("quotes")),
+    loadPartnerCommercial("statements", "statements", isPartnerStatement, filters("statements")),
+    loadPartnerCommercial("documents", "documents", isPartnerDocument, filters("documents")),
     loadPaymentAccess(),
-    resolvedSearchParams,
   ]);
-  const paymentIntentId = isPartnerPaymentIntentId(params.paymentIntentId)
-    ? params.paymentIntentId
+  const paymentIntentId = isPartnerPaymentIntentId(params["paymentIntentId"])
+    ? params["paymentIntentId"]
     : null;
 
   return (
@@ -210,7 +205,7 @@ export default async function PartnerBillingPage({
       <PartnerPageHeader
         eyebrow="Pricing, bills & records"
         title="Billing & documents"
-        description="Find current rates, review quotes, pay eligible invoices, and download account records in one place. Job estimates stay separate."
+        description="Find your invoices, make a payment, and download receipts and job records."
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Billing & documents", href: "/partners/billing" },
@@ -220,12 +215,120 @@ export default async function PartnerBillingPage({
           {!paymentAccess.available
             ? "Protected payment controls are temporarily unavailable. Invoice records remain visible, but no payment has been started or treated as complete."
             : paymentAccess.canManagePayments
-              ? "Pay eligible deposits securely by card or, when enabled, ACH through Square. ACH stays pending until Square confirms settlement. Remaining invoice balances open on Square’s hosted payment page."
+              ? "Pay your deposit or invoice securely here by card or enabled bank transfer. Bank transfers remain pending until settlement."
               : "Billing is read-only for your role. An authorized billing user can pay eligible balances through Square, or you can contact Stonegate for help."}
         </PartnerNotice>
       </PartnerPageHeader>
 
+
       <PartnerPanel>
+        <SectionHeading
+          icon={<ReceiptText className="h-5 w-5" aria-hidden="true" />}
+          eyebrow="Amounts due and paid"
+          title="Invoices"
+        />
+        <div className="mt-5">
+          <PartnerPaymentReturnStatus
+            paymentIntentId={paymentIntentId}
+            accessAvailable={paymentAccess.available}
+            canManagePayments={paymentAccess.canManagePayments}
+          />
+          {invoices.status !== "ready" ? (
+            <CollectionFallback state={invoices} resource="invoices" />
+          ) : invoices.items.length === 0 ? (
+            <PartnerEmptyState
+              title="No invoices available here"
+              description="Invoices will appear here after Stonegate issues them and shares them with your role."
+              icon={<ReceiptText className="h-6 w-6" aria-hidden="true" />}
+            />
+          ) : (
+            <InvoiceList items={invoices.items} paymentAccess={paymentAccess} />
+          )}
+          {invoices.status === "ready" ? (
+            <PartnerCollectionPagination basePath="/partners/billing" cursorKey="invoicesCursor"
+              nextCursor={invoices.page.nextCursor} params={params} label="invoices" />
+          ) : null}
+        </div>
+      </PartnerPanel>
+
+      <PartnerPanel>
+        <SectionHeading
+          icon={<FileClock className="h-5 w-5" aria-hidden="true" />}
+          eyebrow="Proposed scope and pricing"
+          title="Quotes"
+        />
+        <div className="mt-5">
+          {quotes.status !== "ready" ? (
+            <CollectionFallback state={quotes} resource="quotes" />
+          ) : quotes.items.length === 0 ? (
+            <PartnerEmptyState
+              title="No quotes to review"
+              description="New quotes will appear here when Stonegate sends them to this account."
+              icon={<FileClock className="h-6 w-6" aria-hidden="true" />}
+            />
+          ) : (
+            <QuoteList items={quotes.items} />
+          )}
+          {quotes.status === "ready" ? (
+            <PartnerCollectionPagination basePath="/partners/billing" cursorKey="quotesCursor"
+              nextCursor={quotes.page.nextCursor} params={params} label="quotes" />
+          ) : null}
+        </div>
+      </PartnerPanel>
+
+      <PartnerPanel>
+        <SectionHeading
+          icon={<ScrollText className="h-5 w-5" aria-hidden="true" />}
+          eyebrow="Account periods"
+          title="Statements"
+        />
+        <div className="mt-5">
+          {statements.status !== "ready" ? (
+            <CollectionFallback state={statements} resource="statements" />
+          ) : statements.items.length === 0 ? (
+            <PartnerEmptyState
+              title="No statements available here"
+              description="Generated account statements will appear here by billing period."
+              icon={<ScrollText className="h-6 w-6" aria-hidden="true" />}
+            />
+          ) : (
+            <StatementList items={statements.items} />
+          )}
+          {statements.status === "ready" ? (
+            <PartnerCollectionPagination basePath="/partners/billing" cursorKey="statementsCursor"
+              nextCursor={statements.page.nextCursor} params={params} label="statements" />
+          ) : null}
+        </div>
+      </PartnerPanel>
+
+      <PartnerPanel>
+        <SectionHeading
+          icon={<FileText className="h-5 w-5" aria-hidden="true" />}
+          eyebrow="Secure account files"
+          title="Documents"
+        />
+        <div className="mt-5">
+          {documents.status !== "ready" ? (
+            <CollectionFallback state={documents} resource="documents" />
+          ) : documents.items.length === 0 ? (
+            <PartnerEmptyState
+              title="No account documents available here"
+              description="Invoices, statements, proof files, and other shared records will appear here when they are ready."
+              action={{ href: "/partners/help", label: "Ask for a document" }}
+              icon={<FileText className="h-6 w-6" aria-hidden="true" />}
+            />
+          ) : (
+            <DocumentList items={documents.items} />
+          )}
+          {documents.status === "ready" ? (
+            <PartnerCollectionPagination basePath="/partners/billing" cursorKey="documentsCursor"
+              nextCursor={documents.page.nextCursor} params={params} label="documents" />
+          ) : null}
+        </div>
+      </PartnerPanel>
+      <details className="rounded-xl border border-slate-200 bg-white p-5">
+        <summary className="min-h-11 cursor-pointer font-semibold text-slate-900">Service agreement & rates</summary>
+        <div className="mt-4">
         <SectionHeading
           icon={<CircleDollarSign className="h-5 w-5" aria-hidden="true" />}
           eyebrow="Current account"
@@ -267,109 +370,9 @@ export default async function PartnerBillingPage({
             )}
           </div>
         )}
-      </PartnerPanel>
-
-      <PartnerPanel>
-        <SectionHeading
-          icon={<ReceiptText className="h-5 w-5" aria-hidden="true" />}
-          eyebrow="Amounts due and paid"
-          title="Invoices"
-        />
-        <div className="mt-5">
-          <PartnerPaymentReturnStatus
-            paymentIntentId={paymentIntentId}
-            accessAvailable={paymentAccess.available}
-            canManagePayments={paymentAccess.canManagePayments}
-          />
-          {invoices.status !== "ready" ? (
-            <CollectionFallback state={invoices} resource="invoices" />
-          ) : invoices.items.length === 0 ? (
-            <PartnerEmptyState
-              title="No invoices available here"
-              description="Invoices will appear here after Stonegate issues them and shares them with your role."
-              icon={<ReceiptText className="h-6 w-6" aria-hidden="true" />}
-            />
-          ) : (
-            <InvoiceList items={invoices.items} paymentAccess={paymentAccess} />
-          )}
-          {invoices.status === "ready" && invoices.page.hasMore ? (
-            <MoreRecordsNotice />
-          ) : null}
         </div>
-      </PartnerPanel>
+      </details>
 
-      <PartnerPanel>
-        <SectionHeading
-          icon={<FileClock className="h-5 w-5" aria-hidden="true" />}
-          eyebrow="Proposed scope and pricing"
-          title="Quotes"
-        />
-        <div className="mt-5">
-          {quotes.status !== "ready" ? (
-            <CollectionFallback state={quotes} resource="quotes" />
-          ) : quotes.items.length === 0 ? (
-            <PartnerEmptyState
-              title="No quotes to review"
-              description="New quotes will appear here when Stonegate sends them to this account."
-              icon={<FileClock className="h-6 w-6" aria-hidden="true" />}
-            />
-          ) : (
-            <QuoteList items={quotes.items} />
-          )}
-          {quotes.status === "ready" && quotes.page.hasMore ? (
-            <MoreRecordsNotice />
-          ) : null}
-        </div>
-      </PartnerPanel>
-
-      <PartnerPanel>
-        <SectionHeading
-          icon={<ScrollText className="h-5 w-5" aria-hidden="true" />}
-          eyebrow="Account periods"
-          title="Statements"
-        />
-        <div className="mt-5">
-          {statements.status !== "ready" ? (
-            <CollectionFallback state={statements} resource="statements" />
-          ) : statements.items.length === 0 ? (
-            <PartnerEmptyState
-              title="No statements available here"
-              description="Generated account statements will appear here by billing period."
-              icon={<ScrollText className="h-6 w-6" aria-hidden="true" />}
-            />
-          ) : (
-            <StatementList items={statements.items} />
-          )}
-          {statements.status === "ready" && statements.page.hasMore ? (
-            <MoreRecordsNotice />
-          ) : null}
-        </div>
-      </PartnerPanel>
-
-      <PartnerPanel>
-        <SectionHeading
-          icon={<FileText className="h-5 w-5" aria-hidden="true" />}
-          eyebrow="Secure account files"
-          title="Documents"
-        />
-        <div className="mt-5">
-          {documents.status !== "ready" ? (
-            <CollectionFallback state={documents} resource="documents" />
-          ) : documents.items.length === 0 ? (
-            <PartnerEmptyState
-              title="No account documents available here"
-              description="Invoices, statements, proof files, and other shared records will appear here when they are ready."
-              action={{ href: "/partners/help", label: "Ask for a document" }}
-              icon={<FileText className="h-6 w-6" aria-hidden="true" />}
-            />
-          ) : (
-            <DocumentList items={documents.items} />
-          )}
-          {documents.status === "ready" && documents.page.hasMore ? (
-            <MoreRecordsNotice />
-          ) : null}
-        </div>
-      </PartnerPanel>
     </div>
   );
 }
@@ -639,6 +642,10 @@ function InvoiceList({
                 {formatPartnerMoney(invoice.amounts.balance)}
               </dd>
             </div>
+            {invoice.amounts.credited && invoice.amounts.credited.amountMinor > 0 ? <div>
+              <dt className="text-slate-500">Credits applied</dt>
+              <dd className="mt-1 font-semibold text-slate-950">{formatPartnerMoney(invoice.amounts.credited)}</dd>
+            </div> : null}
             <div>
               <dt className="text-slate-500">Due date</dt>
               <dd className="mt-1 text-slate-800">
@@ -662,7 +669,7 @@ function InvoiceList({
               />
             ) : (
               <span className="text-xs leading-5 text-slate-500">
-                Invoice file not generated
+                Invoice PDF is being prepared
               </span>
             )}
             {invoice.bookingId ? (
@@ -779,6 +786,7 @@ function StatementList({ items }: { items: PartnerStatement[] }) {
           <p className="font-semibold text-slate-950">
             {formatPartnerDate(statement.periodStart)} –{" "}
             {formatPartnerDate(statement.periodEnd)}
+            {statement.revision ? ` · Version ${statement.revision}` : ""}
           </p>
           <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
             <div>

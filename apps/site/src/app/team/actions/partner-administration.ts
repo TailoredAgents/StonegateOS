@@ -487,7 +487,6 @@ export async function partnerCancellationRequestDecisionAction(
   const decision = value(formData, "decision");
   const reason = value(formData, "reason");
   const confirmation = value(formData, "confirmation");
-  const partnerQuoteId = value(formData, "partnerQuoteId").toLowerCase();
   const expectedConfirmation =
     decision === "approved"
       ? "APPROVE CANCELLATION"
@@ -500,9 +499,6 @@ export async function partnerCancellationRequestDecisionAction(
     !isPositiveIntegerVersion(expectedVersion) ||
     !isIdempotencyKey(idempotencyKey) ||
     !expectedConfirmation ||
-    (decision === "change_order_required"
-      ? !isUuid(partnerQuoteId)
-      : partnerQuoteId.length > 0) ||
     confirmation !== expectedConfirmation ||
     reason.length < 12 ||
     reason.length > 1_000
@@ -524,13 +520,7 @@ export async function partnerCancellationRequestDecisionAction(
     method: "POST",
     expectedVersion,
     idempotencyKey,
-    body: {
-      decision,
-      reason,
-      confirmation,
-      partnerQuoteId:
-        decision === "change_order_required" ? partnerQuoteId : null,
-    },
+    body: { decision, reason, confirmation },
     failureMessage: "Unable to resolve the cancellation request",
     successMessage:
       decision === "approved"
@@ -630,12 +620,16 @@ export async function partnerJobChangeRequestDecisionAction(
         : decision === "change_order_required"
           ? "REQUIRE CHANGE ORDER"
           : "";
+  const partnerQuoteId = value(formData, "partnerQuoteId").toLowerCase();
   if (
     !hasTeamPermission(principal, "partners.change_requests.decide") ||
     !isUuid(requestId) ||
     !isPositiveIntegerVersion(expectedVersion) ||
     !isIdempotencyKey(idempotencyKey) ||
     !expectedConfirmation ||
+    (decision === "change_order_required"
+      ? !isUuid(partnerQuoteId)
+      : partnerQuoteId !== "") ||
     confirmation !== expectedConfirmation ||
     reason.length < 12 ||
     reason.length > 1_000
@@ -658,7 +652,12 @@ export async function partnerJobChangeRequestDecisionAction(
     method: "POST",
     expectedVersion,
     idempotencyKey,
-    body: { decision, reason, confirmation },
+    body: {
+      decision,
+      reason,
+      confirmation,
+      ...(decision === "change_order_required" ? { partnerQuoteId } : {}),
+    },
     failureMessage: "Unable to resolve the job change request",
     successMessage:
       decision === "approved"

@@ -10,6 +10,8 @@ const mockResolvePartnerPrincipal = jest.fn();
 const mockRequirePartnerCapability = jest.fn();
 const mockSwitchPartnerSessionAccount = jest.fn();
 const mockRequirePartnerSession = jest.fn();
+const mockGetWorkflow = jest.fn();
+mockModule("@/lib/partner-account-workflows", () => ({ getPartnerAccountWorkflow: mockGetWorkflow, normalizePartnerAccountWorkflow: () => ({ tools: {}, requestableServiceKeys: [], disabledServiceKeys: [], partialPayments: false }) }));
 
 mockModule("@/lib/partner-account-authorization", () => ({
   resolvePartnerPrincipal: mockResolvePartnerPrincipal,
@@ -129,6 +131,7 @@ function authenticatedSession() {
 describe("partner portal v2 identity routes", () => {
   beforeEach(() => {
     jest.resetAllMocks();
+    mockGetWorkflow.mockResolvedValue({ tools: { templates: false, recurring: false, bulk: false, reports: false, portfolio: false, approvals: false }, requestableServiceKeys: [], disabledServiceKeys: [], partialPayments: false });
   });
 
   it("returns account-centric identity without session secrets", async () => {

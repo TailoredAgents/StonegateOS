@@ -14,11 +14,15 @@ import { requireActiveContactForDirectOutbound } from "@/lib/contact-outbound-sa
 import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import {
   TeamMutationFailure,
+  beginTeamMutation,
   teamMutationExceptionResponse,
 } from "@/lib/team-mutation";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
+import { readBoundedJsonRequest } from "@/lib/bounded-json-request";
+import { sendStaffPartnerJobMessage } from "@/lib/partner-job-communication";
+import { z } from "zod";
 
 const CHANNELS = ["sms", "email", "dm", "call", "web"] as const;
 const DIRECTIONS = ["inbound", "outbound", "internal"] as const;
@@ -49,11 +53,11 @@ export async function POST(
   if (permissionError) return permissionError;
 
   const { threadId } = await context.params;
-  if (!threadId) {
+  if (!z.string().uuid().safeParse(threadId).success) {
     return NextResponse.json({ error: "thread_id_required" }, { status: 400 });
   }
 
-  const payload = (await request.json().catch(() => null)) as {
+  const payload = (await readBoundedJsonRequest(request, { maximumBytes: 64 * 1024 }).catch(() => null)) as {
     body?: string;
     subject?: string;
     direction?: string;
@@ -62,6 +66,8 @@ export async function POST(
     toAddress?: string;
     fromAddress?: string;
     allowDncOverride?: boolean;
+    audience?: string;
+    attachmentIds?: unknown;
   } | null;
 
   if (!payload || typeof payload !== "object") {
@@ -98,6 +104,19 @@ export async function POST(
 
   const actor = getAuditActorFromRequest(request);
   const db = getDb();
+
+  const [portalThread] = await db.select({ id: conversationThreads.id, jobId: conversationThreads.partnerBookingId })
+    .from(conversationThreads).where(and(eq(conversationThreads.id, threadId), eq(conversationThreads.portalVisible, true), genericInboxThreadScopeCondition())).limit(1);
+  if (portalThread?.jobId) {
+    const parsed = z.object({ audience: z.enum(["partner", "internal"]), body: z.string().trim().min(1).max(5_000), attachmentIds: z.array(z.string().uuid()).max(10).default([]) }).safeParse({ audience: payload.audience, body, attachmentIds: payload.attachmentIds });
+    if (!parsed.success || mediaUrls.length || toAddress || fromAddress) return NextResponse.json({ error: "invalid_fields", message: "Choose Reply to partner or Internal note and use files belonging to this job." }, { status: 422 });
+    const boundary = await beginTeamMutation(request, { principalTypes: ["human"], requiredPermissions: ["messages.send", "partners.accounts.read"], risk: parsed.data.audience === "partner" ? "external" : "normal", requiresIdempotency: true, auditAction: "partner.job_message.staff_created" }, parsed.data.audience === "internal" ? { ignoredPermissionKillSwitches: ["external_sends"] } : {});
+    if (!boundary.ok) return boundary.response;
+    try {
+      const message = await sendStaffPartnerJobMessage({ threadId, ...parsed.data, mutation: boundary.mutation });
+      return NextResponse.json({ message }, { headers: { "Cache-Control": "private, no-store" } });
+    } catch (error) { return teamMutationExceptionResponse(error, boundary.mutation); }
+  }
 
   if (!body && mediaUrls.length === 0) {
     return NextResponse.json({ error: "body_required" }, { status: 400 });

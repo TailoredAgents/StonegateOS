@@ -10,6 +10,7 @@ import {
   outboxEvents,
   contacts,
   properties,
+  partnerBookings,
 } from "@/db";
 import {
   buildRescheduleUrl,
@@ -33,6 +34,8 @@ import { isAdminRequest } from "../../../admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { resolveEasternAppointmentTime } from "@/lib/appointment-time";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
+import { synchronizePartnerStaffSchedule } from "@/lib/partner-staff-schedule";
+import { PartnerPortalSchedulingError } from "@/lib/partner-portal-v2-scheduling/errors";
 import {
   acquireScheduleConflictLock,
   decideScheduleConflictOverride,
@@ -70,6 +73,7 @@ const RescheduleSchema = z
       .optional(),
     rescheduleToken: z.string().min(8).optional(),
     expectedVersion: z.string().datetime().optional(),
+    selectedResourceIds: z.array(z.string().uuid()).max(60).optional(),
     conflictOverrideReason: z.string().trim().max(500).optional(),
     conflictAcknowledgement: z.string().trim().max(4000).optional(),
     conflictFingerprint: z
@@ -119,6 +123,14 @@ export async function POST(
   }
 
   const input = parsed.data;
+  if (input.selectedResourceIds?.length && !isAdmin)
+    return NextResponse.json(
+      {
+        error: "forbidden",
+        message: "Only staff may choose crew or equipment.",
+      },
+      { status: 403 },
+    );
   const conflictOverrideRequested = Boolean(
     input.conflictOverrideReason ||
       input.conflictAcknowledgement ||
@@ -156,6 +168,7 @@ export async function POST(
   const rows = await db
     .select({
       id: appointments.id,
+      partnerAccountId: appointments.partnerAccountId,
       durationMinutes: appointments.durationMinutes,
       travelBufferMinutes: appointments.travelBufferMinutes,
       startAt: appointments.startAt,
@@ -188,6 +201,22 @@ export async function POST(
 
   if (!existing) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+  if (!isAdmin) {
+    const [partnerJob] = await db
+      .select({ id: partnerBookings.id })
+      .from(partnerBookings)
+      .where(eq(partnerBookings.appointmentId, appointmentId))
+      .limit(1);
+    if (existing.partnerAccountId || partnerJob)
+      return NextResponse.json(
+        {
+          error: "forbidden",
+          message:
+            "Manage this service request from your partner account or contact Stonegate.",
+        },
+        { status: 403 },
+      );
   }
 
   const leadFormPayload = existing.leadFormPayload;
@@ -331,6 +360,23 @@ export async function POST(
       const mutationAt = new Date(
         Math.max(Date.now(), locked.updatedAt.getTime() + 1),
       );
+      const partnerSchedule = await synchronizePartnerStaffSchedule(tx, {
+        appointmentId,
+        startAt,
+        durationMinutes: effectiveDurationMinutes,
+        travelBufferMinutes: effectiveTravelBufferMinutes,
+        previousStartAt: locked.startAt,
+        now: mutationAt,
+        actorTeamMemberId: actor.type === "human" ? (actor.id ?? null) : null,
+        correlationId,
+        selectedResourceIds: input.selectedResourceIds,
+      });
+      if (!partnerSchedule && input.selectedResourceIds?.length)
+        throw new PartnerPortalSchedulingError(
+          "review_required",
+          "Named resources require a configured partner service profile.",
+          { status: 422 },
+        );
       const [updated] = await tx
         .update(appointments)
         .set({
@@ -362,17 +408,18 @@ export async function POST(
           updated.id,
           updated.rescheduleToken,
         );
-        await tx.insert(outboxEvents).values({
-          type: "estimate.rescheduled",
-          payload: {
-            appointmentId: updated.id,
-            leadId: existing.leadId,
-            startAt: updated.startAt,
-            durationMinutes: updated.durationMinutes,
-            travelBufferMinutes: updated.travelBufferMinutes,
-            rescheduleUrl,
-          },
-        });
+        if (!partnerSchedule)
+          await tx.insert(outboxEvents).values({
+            type: "estimate.rescheduled",
+            payload: {
+              appointmentId: updated.id,
+              leadId: existing.leadId,
+              startAt: updated.startAt,
+              durationMinutes: updated.durationMinutes,
+              travelBufferMinutes: updated.travelBufferMinutes,
+              rescheduleUrl,
+            },
+          });
         await insertCalendarMutationSuccessAudit(tx, {
           actor,
           action: "appointment.rescheduled",
@@ -411,6 +458,13 @@ export async function POST(
         : { kind: "not_found" as const };
     })
     .catch((error: unknown) => {
+      if (error instanceof PartnerPortalSchedulingError)
+        return {
+          kind: "partner_schedule_rejected" as const,
+          status: error.status,
+          message: error.message,
+          code: error.code,
+        };
       if (
         error instanceof AppointmentMediaError &&
         error.code === "quoted_scope_required"
@@ -420,6 +474,11 @@ export async function POST(
       throw error;
     });
 
+  if (updatedResult.kind === "partner_schedule_rejected")
+    return NextResponse.json(
+      { error: updatedResult.code, message: updatedResult.message },
+      { status: updatedResult.status },
+    );
   if (updatedResult.kind === "quoted_scope_required") {
     return NextResponse.json(
       {

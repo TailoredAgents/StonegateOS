@@ -32,7 +32,11 @@ import {
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { resolveAutomaticAppointmentStatusForMedia } from "@/lib/appointment-media";
-import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
+import {
+  acquireScheduleConflictLock,
+  inspectScheduleConflicts,
+  filterScheduleReadCandidates,
+} from "@/lib/appointment-schedule-conflicts";
 import { getCalendarConfig, isGoogleCalendarEnabled } from "@/lib/calendar";
 import {
   getBookingRulesPolicy,
@@ -554,28 +558,6 @@ function dayOccupancyCount(
   ).length;
 }
 
-function slotHasCapacity(input: {
-  blocks: readonly QuoteV2OccupancyBlock[];
-  startAt: Date;
-  durationMinutes: number;
-  travelBufferMinutes: number;
-  capacity: number;
-}): boolean {
-  const endAt = new Date(
-    input.startAt.getTime() +
-      (input.durationMinutes + input.travelBufferMinutes) * 60_000,
-  );
-  return (
-    quoteV2PeakOccupiedCapacity({
-      blocks: input.blocks,
-      startAt: input.startAt,
-      endAt,
-    }) +
-      1 <=
-    input.capacity
-  );
-}
-
 async function loadAcceptedResponse(
   db: QuoteSchedulingDb,
   input: {
@@ -980,6 +962,7 @@ export async function getQuoteV2Availability(input: {
     startAt: rangeStart,
     endAt: rangeEnd,
     now,
+    excludeQuoteVersionId: row.versionId,
   });
   const days: QuoteV2SchedulingDay[] = [];
   const recommendedSlots: QuoteV2SchedulingSlot[] = [];
@@ -1003,15 +986,7 @@ export async function getQuoteV2Availability(input: {
         ) {
           if (cursor > nowLocal.plus({ minutes: MINIMUM_LEAD_MINUTES })) {
             const startAt = cursor.toUTC().toJSDate();
-            if (
-              slotHasCapacity({
-                blocks,
-                startAt,
-                durationMinutes: context.durationMinutes,
-                travelBufferMinutes: context.travelBufferMinutes,
-                capacity: context.capacity,
-              })
-            ) {
+            {
               const slot = {
                 startAt: startAt.toISOString(),
                 endAt: new Date(
@@ -1029,6 +1004,19 @@ export async function getQuoteV2Availability(input: {
     }
     days.push({ date, slots });
   }
+  const available = await filterScheduleReadCandidates({
+    candidates: days.flatMap((day) => day.slots),
+    durationMinutes: context.durationMinutes,
+    travelBufferMinutes: context.travelBufferMinutes,
+    capacity: context.capacity,
+    timezone: context.timezone,
+    excludeHoldQuoteVersionId: row.versionId,
+    now,
+  });
+  const availableStarts = new Set(available.map((slot) => slot.startAt));
+  for (const day of days)
+    day.slots = day.slots.filter((slot) => availableStarts.has(slot.startAt));
+  recommendedSlots.splice(0, recommendedSlots.length, ...available.slice(0, 3));
   await recordQuoteV2CapabilityUse(db, {
     capabilityId: row.capabilityId,
     at: now,
@@ -1113,20 +1101,8 @@ function validateRequestedSlot(input: {
       "That date no longer has appointment capacity.",
     );
   }
-  if (
-    !slotHasCapacity({
-      blocks: input.blocks,
-      startAt,
-      durationMinutes: input.context.durationMinutes,
-      travelBufferMinutes: input.context.travelBufferMinutes,
-      capacity: input.context.capacity,
-    })
-  ) {
-    throw new QuoteV2PublicStateError(
-      "conflict",
-      "That appointment time is no longer available.",
-    );
-  }
+  // Concurrent capacity is revalidated by the shared inspector immediately
+  // afterward under the schedule lock. Do not double-count unrelated pools.
   return startAt;
 }
 
@@ -1248,6 +1224,19 @@ export async function createQuoteV2AppointmentHold(input: {
       blocks,
       now,
     });
+    const capacityDecision = await inspectScheduleConflicts(tx, {
+      startAt,
+      durationMinutes: context.durationMinutes,
+      travelBufferMinutes: context.travelBufferMinutes,
+      capacity: context.capacity,
+      excludeHoldQuoteVersionId: row.versionId,
+      now,
+    });
+    if (capacityDecision.conflict)
+      throw new QuoteV2PublicStateError(
+        "conflict",
+        "That appointment time is no longer available.",
+      );
     const [existingHold] = await tx
       .select({
         id: appointmentHolds.id,
@@ -1466,29 +1455,19 @@ export async function bookQuoteV2AcceptedResponse(input: {
         "Scheduling policy changed after this hold was created. Choose the time again.",
       );
     }
-    const localStart = DateTime.fromJSDate(hold.startAt, {
-      zone: "utc",
-    }).setZone(context.timezone);
-    const blocks = await loadOccupancy(tx, {
-      startAt: localStart.startOf("day").toUTC().toJSDate(),
-      endAt: localStart.endOf("day").toUTC().toJSDate(),
+    const capacityDecision = await inspectScheduleConflicts(tx, {
+      startAt: hold.startAt,
+      durationMinutes: context.durationMinutes,
+      travelBufferMinutes: context.travelBufferMinutes,
+      capacity: context.capacity,
+      excludeHoldQuoteVersionId: row.versionId,
       now,
-      excludeQuoteVersionId: row.versionId,
     });
-    if (
-      !slotHasCapacity({
-        blocks,
-        startAt: hold.startAt,
-        durationMinutes: context.durationMinutes,
-        travelBufferMinutes: context.travelBufferMinutes,
-        capacity: context.capacity,
-      })
-    ) {
+    if (capacityDecision.conflict)
       throw new QuoteV2PublicStateError(
         "conflict",
         "That appointment time is no longer available.",
       );
-    }
     const deposit = await loadExactCompletedDeposit(tx, { response });
     const document = parseDocument(row);
     const quotedScopeText = document.scope.trim().slice(0, 4_000);

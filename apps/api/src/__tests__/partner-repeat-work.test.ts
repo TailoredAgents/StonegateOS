@@ -84,6 +84,29 @@ describe("partner repeat-work safety", () => {
     ).toThrow("Review the recurring schedule");
   });
 
+  it("rolls ongoing dates across years and respects an optional end date", () => {
+    const ongoing = parseRecurrenceInput({
+      templateId: "11111111-1111-4111-8111-111111111111",
+      name: "Ongoing service",
+      frequency: "monthly",
+      startsOn: "2026-01-31",
+      preferredWindowStart: "10:00",
+    });
+    expect(ongoing.occurrenceCount).toBe(0);
+    expect(
+      recurrenceDates(ongoing, "America/New_York", "2028-04-30", "2028-01-01"),
+    ).toEqual(["2028-01-31", "2028-02-29", "2028-03-31", "2028-04-30"]);
+    expect(
+      recurrenceDates(
+        { ...ongoing, endsOn: "2028-02-29" },
+        "America/New_York",
+        "2028-04-30",
+        "2028-01-01",
+      ),
+    ).toEqual(["2028-01-31", "2028-02-29"]);
+    expect(() => parseRecurrenceInput({ ...ongoing, endsOn: 123 })).toThrow();
+  });
+
   it("parses quoted CSV fields and emits downloadable row corrections", () => {
     expect(
       parseCsv('location_id,description\r\nabc,"Remove desks, chairs"\r\n'),
@@ -138,7 +161,7 @@ describe("partner repeat-work safety", () => {
       service.indexOf("export function parseCsv"),
     );
     expect(recurringList).toContain('input.actor.accessLevel === "account"');
-    expect(recurringList).toContain("partnerServiceTemplates.locationId");
+    expect(recurringList).toContain("partnerRecurringSeries.locationId");
     expect(recurringList).toContain("partnerAccountLocations.propertyId");
     expect(recurringList).toContain("or(...grants) ?? sql`false`");
     const templateList = service.slice(
@@ -160,7 +183,9 @@ describe("partner repeat-work safety", () => {
     );
     expect(ui).toContain("File check complete");
     expect(ui).toContain("Review every row before saving requests");
-    expect(ui).toContain("0</strong> capacity reservations");
+    expect(ui).toContain("No jobs created");
+    expect(ui).toContain("bulkResult.confirmedCount");
+    expect(ui).toContain("bulkResult.reviewCount");
     expect(ui).toContain('aria-live="polite"');
     expect(jobActions).toContain("Book again");
     expect(jobActions).toContain(

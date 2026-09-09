@@ -42,12 +42,6 @@ type Notice = {
   text: string;
 };
 
-type InvoicePaymentLinkPayload = {
-  ok: true;
-  eligible: boolean;
-  paymentIntent: unknown;
-};
-
 type CreatedPaymentIntentPayload = {
   ok: true;
   paymentIntent: unknown;
@@ -237,151 +231,16 @@ function intentNotice(intent: PartnerHostedPaymentIntent): Notice {
   }
 }
 
+// Historical links remain usable only when the read-only status API explicitly
+// returns a ready link. New invoices never create hosted checkout links.
 function navigateToSquareCheckout(intent: PartnerHostedPaymentIntent): boolean {
-  const url = intent.checkout.url;
   if (
     intent.status !== "ready" ||
-    intent.checkout.mode !== "hosted_redirect" ||
-    intent.checkout.embedded !== false ||
-    !isSafeSquareHostedCheckoutUrl(url)
-  ) {
+    !isSafeSquareHostedCheckoutUrl(intent.checkout.url)
+  )
     return false;
-  }
-  window.location.assign(url);
+  window.location.assign(intent.checkout.url);
   return true;
-}
-
-function PartnerHostedInvoicePaymentAction({
-  invoice,
-  canManagePayments,
-}: {
-  invoice: PartnerInvoice;
-  canManagePayments: boolean;
-}) {
-  const router = useRouter();
-  const [busy, setBusy] = React.useState(false);
-  const [notice, setNotice] = React.useState<Notice | null>(null);
-  const operationKey = React.useRef<string | null>(null);
-
-  const eligible = isInvoiceEligibleForHostedCardPayment({
-    status: invoice.status,
-    balance: invoice.amounts.balance,
-  });
-
-  const createCheckout = React.useCallback(async (): Promise<void> => {
-    setBusy(true);
-    setNotice(null);
-    if (!operationKey.current) {
-      operationKey.current = createPortalOperationKey(
-        `invoice-card-${invoice.id}`,
-      );
-    }
-    const result = await partnerPortalFetch<CreatedPaymentIntentPayload>(
-      `invoices/${encodeURIComponent(invoice.id)}/payment-link`,
-      {
-        method: "POST",
-        headers: { "Idempotency-Key": operationKey.current },
-        body: JSON.stringify({
-          purpose: "one_off",
-          paymentMethod: "card",
-          amount: invoice.amounts.balance,
-        }),
-      },
-    ).catch(() => null);
-    setBusy(false);
-    if (!result?.ok) {
-      const code = result?.error.error ?? "service_unavailable";
-      if (
-        ["conflict", "invalid_fields", "review_required", "not_found"].includes(
-          code,
-        )
-      ) {
-        operationKey.current = null;
-      }
-      setNotice(paymentErrorMessage(code, result?.response.status ?? 503));
-      return;
-    }
-    if (!isPartnerHostedPaymentIntent(result.data.paymentIntent)) {
-      operationKey.current = null;
-      setNotice({
-        tone: "error",
-        text: "The payment service returned an invalid checkout response. No navigation occurred; try again later.",
-      });
-      return;
-    }
-    if (!navigateToSquareCheckout(result.data.paymentIntent)) {
-      setNotice(intentNotice(result.data.paymentIntent));
-      if (result.data.paymentIntent.status === "succeeded") router.refresh();
-    }
-  }, [invoice.amounts.balance, invoice.id, router]);
-
-  const beginPayment = React.useCallback(async (): Promise<void> => {
-    setBusy(true);
-    setNotice(null);
-    const existing = await partnerPortalFetch<InvoicePaymentLinkPayload>(
-      `invoices/${encodeURIComponent(invoice.id)}/payment-link`,
-    ).catch(() => null);
-    setBusy(false);
-    if (!existing?.ok) {
-      const code = existing?.error.error ?? "service_unavailable";
-      setNotice(paymentErrorMessage(code, existing?.response.status ?? 503));
-      return;
-    }
-    if (!existing.data.eligible) {
-      setNotice({
-        tone: "warning",
-        text: "This invoice is not eligible for online card payment. Contact Stonegate for billing assistance.",
-      });
-      return;
-    }
-    if (existing.data.paymentIntent !== null) {
-      if (!isPartnerHostedPaymentIntent(existing.data.paymentIntent)) {
-        setNotice({
-          tone: "error",
-          text: "The payment service returned an invalid status. No navigation occurred; try again later.",
-        });
-        return;
-      }
-      if (navigateToSquareCheckout(existing.data.paymentIntent)) return;
-      setNotice(intentNotice(existing.data.paymentIntent));
-      if (existing.data.paymentIntent.status === "succeeded") router.refresh();
-      return;
-    }
-    await createCheckout();
-  }, [createCheckout, invoice.id, router]);
-
-  if (!canManagePayments || !eligible) return null;
-
-  return (
-    <div className="basis-full">
-      <button
-        type="button"
-        onClick={() => void beginPayment()}
-        disabled={busy}
-        className={partnerPrimaryButtonClass}
-      >
-        {busy ? (
-          <LoaderCircle
-            className="h-4 w-4 animate-spin motion-reduce:animate-none"
-            aria-hidden="true"
-          />
-        ) : (
-          <CreditCard className="h-4 w-4" aria-hidden="true" />
-        )}
-        {busy ? "Checking invoice…" : "Pay balance by card"}
-        {!busy ? <ArrowUpRight className="h-4 w-4" aria-hidden="true" /> : null}
-      </button>
-      <p className="mt-2 max-w-md text-xs leading-5 text-slate-600">
-        Opens Square’s secure hosted checkout. Card only; checkout is not
-        embedded in this portal.
-      </p>
-      {notice ? (
-        <PartnerNotice tone={notice.tone} className="mt-3">
-          {notice.text}
-        </PartnerNotice>
-      ) : null}
-    </div>
-  );
 }
 
 function embeddedIntentNotice(intent: PartnerEmbeddedPaymentIntent): Notice {
@@ -427,7 +286,7 @@ function embeddedIntentNotice(intent: PartnerEmbeddedPaymentIntent): Notice {
     case "expired":
       return {
         tone: "warning",
-        text: `This secure ${isAch ? "bank-transfer session" : "card form"} expired. The invoice remains due; start a new deposit payment.`,
+        text: `This secure ${isAch ? "bank-transfer session" : "card form"} expired. Check the current invoice before starting another payment.`,
       };
   }
 }
@@ -439,20 +298,42 @@ function formatUsdMinor(amountMinor: number): string {
   }).format(amountMinor / 100);
 }
 
-function PartnerEmbeddedDepositPaymentAction({
+function PartnerEmbeddedInvoicePaymentAction({
   invoice,
-  depositAmount,
+  paymentAmount: defaultPaymentAmount,
+  purpose,
   canManagePayments,
   payerEmail,
   payerName,
 }: {
   invoice: PartnerInvoice;
-  depositAmount: PartnerInvoice["amounts"]["deposit"];
+  paymentAmount: PartnerInvoice["amounts"]["deposit"];
+  purpose: "deposit" | "invoice_balance";
   canManagePayments: boolean;
   payerEmail: string | null;
   payerName: string | null;
 }) {
   const router = useRouter();
+  const [customAmount, setCustomAmount] = React.useState(
+    (defaultPaymentAmount.amountMinor / 100).toFixed(2),
+  );
+  const mayPayPart =
+    purpose === "invoice_balance" &&
+    invoice.paymentOptions?.partialPayments === true;
+  const paymentAmount = React.useMemo(() => {
+    if (!mayPayPart) return defaultPaymentAmount;
+    const valid = /^[0-9]{1,8}(?:\.[0-9]{1,2})?$/u.test(customAmount);
+    const [whole = "0", fraction = ""] = customAmount.split(".");
+    return {
+      ...defaultPaymentAmount,
+      amountMinor: valid
+        ? Number(whole) * 100 + Number(fraction.padEnd(2, "0"))
+        : 0,
+    };
+  }, [customAmount, defaultPaymentAmount, mayPayPart]);
+  const invalidAmount =
+    paymentAmount.amountMinor <= 0 ||
+    paymentAmount.amountMinor > invoice.amounts.balance.amountMinor;
   const cardContainerId = React.useId().replace(/[^A-Za-z0-9_-]/gu, "");
   const [intent, setIntent] =
     React.useState<PartnerEmbeddedPaymentIntent | null>(null);
@@ -566,7 +447,7 @@ function PartnerEmbeddedDepositPaymentAction({
       setNotice(null);
       if (!prepareKeys.current[paymentMethod]) {
         prepareKeys.current[paymentMethod] = createPortalOperationKey(
-          `invoice-deposit-${paymentMethod}-${invoice.id}`,
+          `invoice-${purpose}-${paymentMethod}-${invoice.id}`,
         );
       }
       const result = await partnerPortalFetch<CreatedPaymentIntentPayload>(
@@ -578,9 +459,9 @@ function PartnerEmbeddedDepositPaymentAction({
           },
           body: JSON.stringify({
             invoiceId: invoice.id,
-            purpose: "deposit",
+            purpose,
             paymentMethod,
-            amount: depositAmount,
+            amount: paymentAmount,
           }),
         },
       ).catch(() => null);
@@ -612,15 +493,15 @@ function PartnerEmbeddedDepositPaymentAction({
         !isPartnerEmbeddedPaymentIntent(nextIntent) ||
         nextIntent.paymentMethod !== paymentMethod ||
         nextIntent.invoiceId !== invoice.id ||
-        nextIntent.purpose !== "deposit" ||
-        nextIntent.amount.amountMinor !== depositAmount.amountMinor ||
-        nextIntent.amount.currency !== depositAmount.currency ||
-        nextIntent.amount.minorUnit !== depositAmount.minorUnit
+        nextIntent.purpose !== purpose ||
+        nextIntent.amount.amountMinor !== paymentAmount.amountMinor ||
+        nextIntent.amount.currency !== paymentAmount.currency ||
+        nextIntent.amount.minorUnit !== paymentAmount.minorUnit
       ) {
         delete prepareKeys.current[paymentMethod];
         setNotice({
           tone: "error",
-          text: "The payment service returned an invalid deposit response. No payment details were submitted.",
+          text: "The payment service returned an invalid payment response. No payment details were submitted.",
         });
         return;
       }
@@ -628,7 +509,7 @@ function PartnerEmbeddedDepositPaymentAction({
       setIntent(nextIntent);
       setNotice(embeddedIntentNotice(nextIntent));
     },
-    [depositAmount, invoice.id],
+    [paymentAmount, invoice.id, purpose],
   );
 
   const beginPayment = React.useCallback(
@@ -645,7 +526,7 @@ function PartnerEmbeddedDepositPaymentAction({
     event.preventDefault();
     const currentIntent = intent;
     const currentCard = card.current;
-    const verificationAmount = squareVerificationAmount(depositAmount);
+    const verificationAmount = squareVerificationAmount(paymentAmount);
     if (
       !currentIntent ||
       currentIntent.status !== "ready" ||
@@ -717,8 +598,8 @@ function PartnerEmbeddedDepositPaymentAction({
     setBusy(false);
     if (!result?.ok) {
       const code = result?.error.error ?? "service_unavailable";
-      completeKey.current = null;
       if (code === "invalid_fields") {
+        completeKey.current = null;
         setIntent(null);
         delete prepareKeys.current.card;
         setCardStatus("idle");
@@ -734,6 +615,9 @@ function PartnerEmbeddedDepositPaymentAction({
         setIntent({ ...currentIntent, status: "requires_review" });
         setNotice(paymentErrorMessage(code, result?.response.status ?? 503));
       } else {
+        // A lost response is not a failed charge. Leave the form closed and
+        // reconcile this intent before offering any new payment attempt.
+        setIntent({ ...currentIntent, status: "pending" });
         setNotice(paymentErrorMessage(code, result?.response.status ?? 503));
       }
       return;
@@ -744,7 +628,7 @@ function PartnerEmbeddedDepositPaymentAction({
       nextIntent.paymentMethod !== "card" ||
       nextIntent.id !== currentIntent.id ||
       nextIntent.invoiceId !== invoice.id ||
-      nextIntent.amount.amountMinor !== depositAmount.amountMinor
+      nextIntent.amount.amountMinor !== paymentAmount.amountMinor
     ) {
       setNotice({
         tone: "warning",
@@ -764,7 +648,7 @@ function PartnerEmbeddedDepositPaymentAction({
     event.preventDefault();
     const currentIntent = intent;
     const currentAch = ach.current;
-    const verificationAmount = squareVerificationAmount(depositAmount);
+    const verificationAmount = squareVerificationAmount(paymentAmount);
     const formData = new FormData(event.currentTarget);
     const rawName = formData.get("accountHolderName");
     const accountHolderName =
@@ -854,8 +738,8 @@ function PartnerEmbeddedDepositPaymentAction({
     setBusy(false);
     if (!result?.ok) {
       const code = result?.error.error ?? "service_unavailable";
-      completeKey.current = null;
       if (code === "invalid_fields") {
+        completeKey.current = null;
         setIntent(null);
         delete prepareKeys.current.ach;
         setAchStatus("idle");
@@ -871,6 +755,7 @@ function PartnerEmbeddedDepositPaymentAction({
         setIntent({ ...currentIntent, status: "requires_review" });
         setNotice(paymentErrorMessage(code, result?.response.status ?? 503));
       } else {
+        setIntent({ ...currentIntent, status: "pending" });
         setNotice(paymentErrorMessage(code, result?.response.status ?? 503));
       }
       return;
@@ -881,7 +766,7 @@ function PartnerEmbeddedDepositPaymentAction({
       nextIntent.paymentMethod !== "ach" ||
       nextIntent.id !== currentIntent.id ||
       nextIntent.invoiceId !== invoice.id ||
-      nextIntent.amount.amountMinor !== depositAmount.amountMinor ||
+      nextIntent.amount.amountMinor !== paymentAmount.amountMinor ||
       nextIntent.status === "succeeded"
     ) {
       setNotice({
@@ -946,12 +831,29 @@ function PartnerEmbeddedDepositPaymentAction({
 
   return (
     <div className="basis-full">
+      {mayPayPart && !intent && (
+        <label className="mb-3 block max-w-xs text-sm font-medium text-slate-700">
+          Payment amount (up to{" "}
+          {formatUsdMinor(invoice.amounts.balance.amountMinor)})
+          <input
+            className={`${partnerFieldClass} mt-1`}
+            inputMode="decimal"
+            value={customAmount}
+            disabled={busy}
+            onChange={(event) => {
+              setCustomAmount(event.target.value);
+              prepareKeys.current = {};
+            }}
+            aria-invalid={invalidAmount}
+          />
+        </label>
+      )}
       {!intent || ["failed", "canceled", "expired"].includes(intent.status) ? (
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => void beginPayment("card")}
-            disabled={busy}
+            disabled={busy || invalidAmount}
             className={partnerPrimaryButtonClass}
           >
             {busy && pendingMethod.current === "card" ? (
@@ -964,32 +866,33 @@ function PartnerEmbeddedDepositPaymentAction({
             )}
             {busy && pendingMethod.current === "card"
               ? "Preparing card form…"
-              : `Pay ${formatUsdMinor(depositAmount.amountMinor)} by card`}
+              : `Pay ${formatUsdMinor(paymentAmount.amountMinor)} by card`}
           </button>
-          <button
-            type="button"
-            onClick={() => void beginPayment("ach")}
-            disabled={busy}
-            className={partnerSecondaryButtonClass}
-          >
-            {busy && pendingMethod.current === "ach" ? (
-              <LoaderCircle
-                className="h-4 w-4 animate-spin motion-reduce:animate-none"
-                aria-hidden="true"
-              />
-            ) : (
-              <Landmark className="h-4 w-4" aria-hidden="true" />
-            )}
-            {busy && pendingMethod.current === "ach"
-              ? "Preparing bank connection…"
-              : "Pay by ACH bank transfer"}
-          </button>
+          {invoice.paymentOptions?.ach === true && (
+            <button
+              type="button"
+              onClick={() => void beginPayment("ach")}
+              disabled={busy || invalidAmount}
+              className={partnerSecondaryButtonClass}
+            >
+              {busy && pendingMethod.current === "ach" ? (
+                <LoaderCircle
+                  className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+              ) : (
+                <Landmark className="h-4 w-4" aria-hidden="true" />
+              )}
+              {busy && pendingMethod.current === "ach"
+                ? "Preparing bank connection…"
+                : "Pay by ACH bank transfer"}
+            </button>
+          )}
         </div>
       ) : null}
       <p className="mt-2 max-w-md text-xs leading-5 text-slate-600">
-        Required deposit only. Square securely tokenizes card or bank details;
-        Stonegate never receives or stores account credentials. ACH starts only
-        when the account and signed-webhook integration are enabled.
+        Pay securely through Square. Stonegate never receives your card or bank
+        credentials. Bank transfers stay pending until settlement.
       </p>
       {notice ? (
         <PartnerNotice tone={notice.tone} className="mt-3">
@@ -1008,7 +911,8 @@ function PartnerEmbeddedDepositPaymentAction({
                 Secure card payment
               </h4>
               <p className="mt-1 text-xs leading-5 text-slate-600">
-                Deposit amount: {formatUsdMinor(depositAmount.amountMinor)}
+                {purpose === "deposit" ? "Deposit" : "Invoice balance"}:{" "}
+                {formatUsdMinor(paymentAmount.amountMinor)}
               </p>
             </div>
             <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">
@@ -1038,7 +942,7 @@ function PartnerEmbeddedDepositPaymentAction({
                 ? "Submitting securely…"
                 : cardStatus === "loading"
                   ? "Loading secure form…"
-                  : `Pay ${formatUsdMinor(depositAmount.amountMinor)}`}
+                  : `Pay ${formatUsdMinor(paymentAmount.amountMinor)}`}
             </button>
           </div>
           <p className="mt-3 text-xs leading-5 text-slate-500">
@@ -1059,7 +963,8 @@ function PartnerEmbeddedDepositPaymentAction({
                 Secure ACH bank transfer
               </h4>
               <p className="mt-1 text-xs leading-5 text-slate-600">
-                Deposit amount: {formatUsdMinor(depositAmount.amountMinor)}
+                {purpose === "deposit" ? "Deposit" : "Invoice balance"}:{" "}
+                {formatUsdMinor(paymentAmount.amountMinor)}
               </p>
             </div>
             <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">
@@ -1099,7 +1004,7 @@ function PartnerEmbeddedDepositPaymentAction({
                 ? "Opening Square securely…"
                 : achStatus === "loading"
                   ? "Loading bank connection…"
-                  : `Authorize ${formatUsdMinor(depositAmount.amountMinor)}`}
+                  : `Authorize ${formatUsdMinor(paymentAmount.amountMinor)}`}
             </button>
           </div>
           <p className="mt-3 text-xs leading-5 text-slate-500">
@@ -1191,18 +1096,39 @@ export function PartnerInvoicePaymentAction({
     paid: invoice.amounts.paid,
     balance: invoice.amounts.balance,
   });
-  return depositAmount ? (
-    <PartnerEmbeddedDepositPaymentAction
+  if (
+    !isInvoiceEligibleForHostedCardPayment({
+      status: invoice.status,
+      balance: invoice.amounts.balance,
+    })
+  )
+    return null;
+  if (!canManagePayments) return null;
+  if (invoice.paymentOptions?.card !== true)
+    return (
+      <p className="text-sm text-slate-600">
+        To arrange payment, email{" "}
+        <a className="underline" href="mailto:sales@stonegatejunkremoval.com">
+          sales@stonegatejunkremoval.com
+        </a>{" "}
+        or call{" "}
+        <a className="underline" href="tel:+14047772631">
+          404-777-2631
+        </a>
+        .
+      </p>
+    );
+  const purpose = depositAmount ? "deposit" : "invoice_balance";
+  const paymentAmount = depositAmount ?? invoice.amounts.balance;
+  return (
+    <PartnerEmbeddedInvoicePaymentAction
+      key={`${invoice.id}:${purpose}:${paymentAmount.amountMinor}`}
       invoice={invoice}
-      depositAmount={depositAmount}
+      paymentAmount={paymentAmount}
+      purpose={purpose}
       canManagePayments={canManagePayments}
       payerEmail={payerEmail}
       payerName={payerName}
-    />
-  ) : (
-    <PartnerHostedInvoicePaymentAction
-      invoice={invoice}
-      canManagePayments={canManagePayments}
     />
   );
 }

@@ -281,6 +281,11 @@ export const partnerAccounts = pgTable(
     portalAccessEnabled: boolean("portal_access_enabled")
       .default(false)
       .notNull(),
+    portalWorkflowConfig: jsonb("portal_workflow_config")
+      .$type<Record<string, unknown>>()
+      .default({})
+      .notNull(),
+    portalWorkflowRevision: integer("portal_workflow_revision").default(1).notNull(),
     portalLifecycleStatus: text("portal_lifecycle_status")
       .$type<"active" | "suspended" | "closed" | "merged">()
       .default("active")
@@ -2898,12 +2903,18 @@ export const partnerAccountInvitations = pgTable(
     generation: integer("generation").default(1).notNull(),
     version: integer("version").default(1).notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    invitedByMembershipId: uuid("invited_by_membership_id").notNull(),
+    invitedByMembershipId: uuid("invited_by_membership_id"),
+    invitedByTeamMemberId: uuid("invited_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
     acceptedByPartnerUserId: uuid("accepted_by_partner_user_id").references(
       () => partnerUsers.id,
       { onDelete: "restrict" },
     ),
     acceptedMembershipId: uuid("accepted_membership_id"),
+    resumeMembershipId: uuid("resume_membership_id"),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
     revokedByMembershipId: uuid("revoked_by_membership_id"),
     deliveryStatus: text("delivery_status")
       .$type<PartnerAccountInvitationDeliveryStatus>()
@@ -2930,6 +2941,10 @@ export const partnerAccountInvitations = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => ({
+    issuerCheck: check(
+      "partner_account_invitations_issuer_check",
+      sql`(${table.invitedByMembershipId} IS NOT NULL) <> (${table.invitedByTeamMemberId} IS NOT NULL)`,
+    ),
     pendingEmailKey: uniqueIndex(
       "partner_account_invitations_pending_email_key",
     )
@@ -3086,6 +3101,9 @@ export const partnerAuthChallenges = pgTable(
     ),
     // Migration 0131 owns this FK because applications are declared below.
     applicationId: uuid("application_id"),
+    // Migration 0166 owns the composite account/invitation foreign key.
+    invitationId: uuid("invitation_id"),
+    invitationGeneration: integer("invitation_generation"),
     securityVersionSnapshot: integer("security_version_snapshot"),
     requestedIp: text("requested_ip"),
     requestedUserAgent: text("requested_user_agent"),
@@ -6272,6 +6290,8 @@ export const partnerBookings = pgTable(
       { onDelete: "restrict" },
     ),
     bookingDraftId: uuid("booking_draft_id"),
+    // Migration 0172 installs an immutable, account-bound source-job link.
+    additionalServiceFromPartnerBookingId: uuid("additional_service_from_partner_booking_id"),
     requestedByMembershipId: uuid("requested_by_membership_id"),
     partnerUserId: uuid("partner_user_id").references(() => partnerUsers.id, {
       onDelete: "set null",
@@ -6371,6 +6391,9 @@ export const partnerBookings = pgTable(
       table.partnerAccountId,
       table.id,
     ),
+    additionalSourceIdx: index("partner_additional_jobs_source_idx")
+      .on(table.partnerAccountId, table.additionalServiceFromPartnerBookingId, table.createdAt, table.id)
+      .where(sql`${table.additionalServiceFromPartnerBookingId} IS NOT NULL`),
     accountLocationIdx: index("partner_bookings_account_location_idx").on(
       table.partnerAccountId,
       table.propertyId,
@@ -10328,6 +10351,7 @@ export const partnerBookingDrafts = pgTable(
     // The migration installs an account-bound composite FK after both account
     // uniqueness keys exist, preventing cross-tenant reschedule references.
     rescheduleFromPartnerBookingId: uuid("reschedule_from_partner_booking_id"),
+    additionalServiceFromPartnerBookingId: uuid("additional_service_from_partner_booking_id"),
     locationId: uuid("location_id").references(
       () => partnerAccountLocations.id,
       { onDelete: "restrict" },
@@ -10545,15 +10569,19 @@ export const partnerRescheduleRequests = pgTable(
     partnerBookingId: uuid("partner_booking_id").notNull(),
     bookingDraftId: uuid("booking_draft_id").notNull(),
     state: text("state").default("pending").notNull(),
+    requestKind: text("request_kind").default("held_window").notNull(),
+    preferredWindows: jsonb("preferred_windows").$type<Record<string, unknown>[]>().default([]).notNull(),
+    withdrawalOperationKeyHash: varchar("withdrawal_operation_key_hash", { length: 64 }),
+    withdrawalRequestHash: varchar("withdrawal_request_hash", { length: 64 }),
     proposedStartAt: timestamp("proposed_start_at", {
       withTimezone: true,
-    }).notNull(),
+    }),
     requestedArrivalStartAt: timestamp("requested_arrival_start_at", {
       withTimezone: true,
-    }).notNull(),
+    }),
     requestedArrivalEndAt: timestamp("requested_arrival_end_at", {
       withTimezone: true,
-    }).notNull(),
+    }),
     previousStartAt: timestamp("previous_start_at", {
       withTimezone: true,
     }).notNull(),
@@ -10589,6 +10617,7 @@ export const partnerRescheduleRequests = pgTable(
     accountRequestKey: uniqueIndex(
       "partner_reschedule_requests_account_request_key",
     ).on(table.partnerAccountId, table.id),
+    withdrawalOperationKey: uniqueIndex("partner_reschedule_requests_withdrawal_operation_key").on(table.withdrawalOperationKeyHash).where(sql`${table.withdrawalOperationKeyHash} IS NOT NULL`),
     operationKey: uniqueIndex(
       "partner_reschedule_requests_operation_key_hash_key",
     ).on(table.operationKeyHash),
@@ -10611,6 +10640,7 @@ export const partnerRescheduleRequests = pgTable(
       "partner_reschedule_requests_window_check",
       sql`${table.requestedArrivalEndAt} > ${table.requestedArrivalStartAt}`,
     ),
+    requestShapeCheck: check("partner_reschedule_requests_shape_check", sql`(${table.requestKind} = 'held_window' AND ${table.proposedStartAt} IS NOT NULL AND ${table.requestedArrivalStartAt} IS NOT NULL AND ${table.requestedArrivalEndAt} IS NOT NULL AND ${table.preferredWindows} = '[]'::jsonb) OR (${table.requestKind} = 'preferred_dates' AND ${table.proposedStartAt} IS NULL AND ${table.requestedArrivalStartAt} IS NULL AND ${table.requestedArrivalEndAt} IS NULL AND jsonb_typeof(${table.preferredWindows}) = 'array' AND jsonb_array_length(${table.preferredWindows}) BETWEEN 1 AND 3)`),
     previousWindowCheck: check(
       "partner_reschedule_requests_previous_window_check",
       sql`(${table.previousArrivalStartAt} IS NULL AND ${table.previousArrivalEndAt} IS NULL) OR (${table.previousArrivalStartAt} IS NOT NULL AND ${table.previousArrivalEndAt} > ${table.previousArrivalStartAt})`,
@@ -11725,10 +11755,23 @@ export type PartnerNotificationDeliveryEventType =
   | "booking.review_received"
   | "booking.rescheduled"
   | "booking.reschedule_review_requested"
+  | "booking.reschedule_declined"
   | "booking.canceled"
   | "booking.cancellation_review_requested"
   | "billing.dispute_requested"
-  | "billing.dispute_resolved";
+  | "billing.dispute_resolved"
+  | "booking.en_route"
+  | "booking.completed"
+  | "proof.ready"
+  | "message.received"
+  | "approval.requested"
+  | "approval.decided"
+  | "billing.invoice_issued"
+  | "billing.invoice_credited"
+  | "billing.payment_processing"
+  | "billing.payment_settled"
+  | "billing.payment_failed"
+  | "billing.payment_refunded";
 export type PartnerNotificationDeliveryChannel = "in_app" | "email" | "sms";
 export type PartnerNotificationDeliveryState =
   | "suppressed"
@@ -11831,11 +11874,11 @@ export const partnerNotificationDeliveries = pgTable(
     ).on(table.partnerAccountId, table.partnerBookingId, table.createdAt),
     eventTypeCheck: check(
       "partner_notification_deliveries_event_type_check",
-      sql`${table.eventType} IN ('booking.created', 'booking.review_received', 'booking.rescheduled', 'booking.reschedule_review_requested', 'booking.canceled', 'booking.cancellation_review_requested', 'billing.dispute_requested', 'billing.dispute_resolved')`,
+      sql`${table.eventType} IN ('booking.created', 'booking.review_received', 'booking.rescheduled', 'booking.reschedule_review_requested', 'booking.reschedule_declined', 'booking.canceled', 'booking.cancellation_review_requested', 'billing.dispute_requested', 'billing.dispute_resolved', 'booking.en_route', 'booking.completed', 'proof.ready', 'message.received', 'approval.requested', 'approval.decided', 'billing.invoice_issued', 'billing.invoice_credited', 'billing.payment_processing', 'billing.payment_settled', 'billing.payment_failed', 'billing.payment_refunded')`,
     ),
     preferenceEventKeyCheck: check(
       "partner_notification_deliveries_preference_event_key_check",
-      sql`${table.preferenceEventKey} IN ('booking_created', 'booking_changed', 'invoice_issued')`,
+      sql`${table.preferenceEventKey} IN ('booking_created', 'booking_changed', 'crew_en_route', 'job_completed', 'invoice_issued', 'payment_received', 'message_received', 'proof_ready', 'approval_requested', 'account_access')`,
     ),
     channelCheck: check(
       "partner_notification_deliveries_channel_check",
@@ -11951,8 +11994,11 @@ export const partnerRecurringSeries = pgTable(
       () => partnerServiceTemplates.id,
       { onDelete: "restrict" },
     ),
+    locationId: uuid("location_id").references(() => partnerAccountLocations.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     recurrenceRule: text("recurrence_rule").notNull(),
+    templateSnapshot: jsonb("template_snapshot").$type<Record<string, unknown> | null>(),
+    occurrencesExpandedAt: timestamp("occurrences_expanded_at", { withTimezone: true }),
     timezone: text("timezone").default("America/New_York").notNull(),
     preferredWindowStart: varchar("preferred_window_start", { length: 5 }),
     startsOn: date("starts_on").notNull(),
@@ -12130,6 +12176,9 @@ export const partnerBulkImportRows = pgTable(
       string,
       unknown
     > | null>(),
+    rawData: jsonb("raw_data").$type<Record<string, string>>().notNull().default({}),
+    processingStartedAt: timestamp("processing_started_at", { withTimezone: true }),
+    processingAttempts: integer("processing_attempts").notNull().default(0),
     errors: jsonb("errors")
       .$type<Array<Record<string, unknown>>>()
       .notNull()
@@ -12163,7 +12212,7 @@ export const partnerBulkImportRows = pgTable(
     ),
     stateCheck: check(
       "partner_bulk_import_rows_state_check",
-      sql`${table.state} IN ('pending', 'invalid', 'review', 'created', 'failed')`,
+      sql`${table.state} IN ('pending', 'processing', 'invalid', 'review', 'created', 'failed')`,
     ),
   }),
 );
@@ -12795,6 +12844,7 @@ export const partnerInvoices = pgTable(
     depositCents: integer("deposit_cents").default(0).notNull(),
     totalCents: integer("total_cents").notNull(),
     paidCents: integer("paid_cents").default(0).notNull(),
+    creditedCents: integer("credited_cents").default(0).notNull(),
     balanceCents: integer("balance_cents").notNull(),
     poNumber: text("po_number"),
     costCenter: text("cost_center"),
@@ -12851,7 +12901,7 @@ export const partnerInvoices = pgTable(
     ),
     totalsCheck: check(
       "partner_invoices_totals_check",
-      sql`${table.subtotalCents} >= 0 AND ${table.taxCents} >= 0 AND ${table.discountCents} >= 0 AND ${table.depositCents} >= 0 AND ${table.totalCents} = ${table.subtotalCents} + ${table.taxCents} - ${table.discountCents} AND ${table.paidCents} >= 0 AND ${table.balanceCents} = ${table.totalCents} - ${table.paidCents} AND ${table.balanceCents} >= 0`,
+      sql`${table.subtotalCents} >= 0 AND ${table.taxCents} >= 0 AND ${table.discountCents} >= 0 AND ${table.depositCents} >= 0 AND ${table.totalCents} = ${table.subtotalCents} + ${table.taxCents} - ${table.discountCents} AND ${table.paidCents} >= 0 AND ${table.creditedCents} >= 0 AND ${table.balanceCents} = ${table.totalCents} - ${table.paidCents} - ${table.creditedCents} AND ${table.balanceCents} >= 0`,
     ),
     currencyCheck: check(
       "partner_invoices_currency_check",
@@ -12863,6 +12913,67 @@ export const partnerInvoices = pgTable(
     ),
   }),
 );
+
+/** Immutable credits reduce an invoice; refunds separately reverse a payment. */
+export const partnerInvoiceCredits = pgTable("partner_invoice_credits", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  partnerAccountId: uuid("partner_account_id").notNull().references(() => partnerAccounts.id, { onDelete: "restrict" }),
+  partnerInvoiceId: uuid("partner_invoice_id").notNull().references(() => partnerInvoices.id, { onDelete: "restrict" }),
+  amountCents: integer("amount_cents").notNull(),
+  reason: text("reason").notNull(),
+  kind: text("kind").default("credit").notNull(),
+  createdBy: uuid("created_by").notNull().references(() => teamMembers.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  accountInvoiceFk: foreignKey({ name: "partner_invoice_credits_account_invoice_fk",
+    columns: [table.partnerAccountId, table.partnerInvoiceId],
+    foreignColumns: [partnerInvoices.partnerAccountId, partnerInvoices.id] }).onDelete("restrict"),
+  amountCheck: check("partner_invoice_credits_amount_check", sql`${table.amountCents} > 0`),
+}));
+
+export const partnerBillingDocumentOperations = pgTable("partner_billing_document_operations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  partnerAccountId: uuid("partner_account_id").notNull().references(() => partnerAccounts.id, { onDelete: "restrict" }),
+  partnerBookingId: uuid("partner_booking_id").references(() => partnerBookings.id, { onDelete: "restrict" }),
+  partnerInvoiceId: uuid("partner_invoice_id").references(() => partnerInvoices.id, { onDelete: "restrict" }),
+  sourceKey: text("source_key").notNull(),
+  documentType: text("document_type").notNull(),
+  version: integer("version").notNull(),
+  snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull(),
+  snapshotHash: varchar("snapshot_hash", { length: 64 }).notNull(),
+  status: text("status").default("pending").notNull(),
+  documentId: uuid("document_id").references(() => partnerDocuments.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (table) => ({
+  sourceSnapshotKey: uniqueIndex("partner_billing_documents_source_snapshot_key")
+    .on(table.partnerAccountId, table.documentType, table.sourceKey, table.snapshotHash),
+  invoiceAccountFk: foreignKey({ name: "partner_billing_documents_invoice_account_fk",
+    columns: [table.partnerAccountId, table.partnerInvoiceId], foreignColumns: [partnerInvoices.partnerAccountId, partnerInvoices.id] }).onDelete("restrict"),
+  jobAccountFk: foreignKey({ name: "partner_billing_documents_job_account_fk",
+    columns: [table.partnerAccountId, table.partnerBookingId], foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id] }).onDelete("restrict"),
+  statusCheck: check("partner_billing_documents_status_check", sql`${table.status} IN ('pending', 'ready')`),
+}));
+
+export const partnerBillingRefundRequests = pgTable("partner_billing_refund_requests", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  partnerAccountId: uuid("partner_account_id").notNull().references(() => partnerAccounts.id, { onDelete: "restrict" }),
+  partnerInvoiceId: uuid("partner_invoice_id").notNull().references(() => partnerInvoices.id, { onDelete: "restrict" }),
+  paymentId: uuid("payment_id").notNull().references(() => payments.id, { onDelete: "restrict" }),
+  amountCents: integer("amount_cents").notNull(),
+  reason: text("reason").notNull(),
+  status: text("status").default("queued").notNull(),
+  providerRefundId: text("provider_refund_id"),
+  requestedBy: uuid("requested_by").notNull().references(() => teamMembers.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  providerRefundKey: uniqueIndex("partner_billing_refunds_provider_key").on(table.providerRefundId),
+  invoiceAccountFk: foreignKey({ name: "partner_billing_refunds_invoice_account_fk",
+    columns: [table.partnerAccountId, table.partnerInvoiceId], foreignColumns: [partnerInvoices.partnerAccountId, partnerInvoices.id] }).onDelete("restrict"),
+  amountCheck: check("partner_billing_refunds_amount_check", sql`${table.amountCents} > 0`),
+  statusCheck: check("partner_billing_refunds_status_check", sql`${table.status} IN ('queued', 'submitted', 'settled', 'failed', 'needs_review')`),
+}));
 
 export type PartnerBillingDisputeCategory =
   | "invoice_amount"
@@ -13144,6 +13255,38 @@ export const partnerPaymentAllocations = pgTable(
   }),
 );
 
+export const partnerAllocationReconciliations = pgTable("partner_allocation_reconciliations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  partnerAccountId: uuid("partner_account_id").notNull().references(() => partnerAccounts.id, { onDelete: "restrict" }),
+  partnerBookingId: uuid("partner_booking_id").notNull().references(() => partnerBookings.id, { onDelete: "restrict" }),
+  paymentId: uuid("payment_id").notNull().references(() => payments.id, { onDelete: "restrict" }),
+  actorId: uuid("actor_id").notNull().references(() => teamMembers.id, { onDelete: "restrict" }),
+  reason: text("reason").notNull(),
+  evidenceReference: text("evidence_reference").notNull(),
+  beforeSnapshot: jsonb("before_snapshot").$type<Record<string, unknown>>().notNull(),
+  afterSnapshot: jsonb("after_snapshot").$type<Record<string, unknown>>().notNull(),
+  correlationId: text("correlation_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  jobIdx: index("partner_allocation_reconciliations_job_idx").on(table.partnerAccountId, table.partnerBookingId, table.createdAt, table.id),
+  reasonCheck: check("partner_allocation_reconciliations_reason_check", sql`length(btrim(${table.reason})) BETWEEN 12 AND 2000`),
+  evidenceCheck: check("partner_allocation_reconciliations_evidence_check", sql`length(btrim(${table.evidenceReference})) BETWEEN 3 AND 500`),
+  beforeCheck: check("partner_allocation_reconciliations_before_check", sql`jsonb_typeof(${table.beforeSnapshot}) = 'object'`),
+  afterCheck: check("partner_allocation_reconciliations_after_check", sql`jsonb_typeof(${table.afterSnapshot}) = 'object'`),
+}));
+
+export const partnerRefundAllocations = pgTable("partner_refund_allocations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  partnerAccountId: uuid("partner_account_id").notNull().references(() => partnerAccounts.id, { onDelete: "restrict" }),
+  partnerInvoiceId: uuid("partner_invoice_id").notNull().references(() => partnerInvoices.id, { onDelete: "restrict" }),
+  refundId: uuid("refund_id").notNull().references(() => paymentRefunds.id, { onDelete: "restrict" }),
+  jobAmountCents: integer("job_amount_cents").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({ invoiceRefundKey: uniqueIndex("partner_refund_allocations_invoice_refund_key").on(table.partnerInvoiceId, table.refundId),
+  amountCheck: check("partner_refund_allocations_amount_check", sql`${table.jobAmountCents} >= 0`),
+  refundIdx: index("partner_refund_allocations_refund_idx").on(table.refundId),
+}));
+
 export const partnerStatements = pgTable(
   "partner_statements",
   {
@@ -13154,6 +13297,7 @@ export const partnerStatements = pgTable(
     periodStart: date("period_start").notNull(),
     periodEnd: date("period_end").notNull(),
     currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+    revision: integer("revision").default(1).notNull(),
     openingBalanceCents: integer("opening_balance_cents").notNull(),
     invoiceCents: integer("invoice_cents").notNull(),
     paymentCents: integer("payment_cents").notNull(),
@@ -13178,6 +13322,7 @@ export const partnerStatements = pgTable(
       table.periodStart,
       table.periodEnd,
       table.currency,
+      table.revision,
     ),
     accountPeriodIdx: index("partner_statements_account_period_idx").on(
       table.partnerAccountId,

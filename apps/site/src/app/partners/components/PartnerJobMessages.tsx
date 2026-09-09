@@ -10,6 +10,8 @@ import {
   Send,
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
+import { usePartnerLiveRefresh } from "../lib/use-partner-live-refresh";
+import { usePartnerUnsavedChanges } from "../lib/use-partner-unsaved-changes";
 import {
   createPortalOperationKey,
   partnerPortalFetch,
@@ -39,11 +41,14 @@ export type PartnerJobMessage = {
     priority: "standard" | "urgent";
   } | null;
   authorType: string;
+  authorName?: string | null;
+  isCurrentAuthor?: boolean;
   direction: string;
   channel: string;
   body: string;
   deliveryStatus: string | null;
   attachmentIds: string[];
+  attachments?: Array<{ id: string; filename?: string | null; downloadIntent?: { originalUrl?: string; displayUrl?: string } | null }>;
   sentAt?: string | null;
   receivedAt?: string | null;
   createdAt: string;
@@ -69,6 +74,7 @@ type PendingSend =
   | {
       kind: "message";
       body: string;
+      attachmentIds: string[];
       idempotencyKey: string;
     }
   | {
@@ -76,6 +82,7 @@ type PendingSend =
       body: string;
       category: PartnerIssueCategory;
       priority: PartnerIssuePriority;
+      attachmentIds: string[];
       idempotencyKey: string;
     };
 
@@ -143,15 +150,8 @@ function failureMessage(error: PortalV2Error | null, fallback: string): string {
   return message || fallback;
 }
 
-export function PartnerJobMessages({
-  jobId,
-  timezone,
-  canSend,
-  initialMessages,
-  initialPage,
-  initialUnreadCount,
-  initialError,
-}: {
+type PartnerJobMessagesProps = {
+  accountId?: string;
   jobId: string;
   timezone: string;
   canSend: boolean;
@@ -159,7 +159,21 @@ export function PartnerJobMessages({
   initialPage: PartnerMessagePage;
   initialUnreadCount?: number;
   initialError?: string | null;
-}) {
+};
+
+export function PartnerJobMessages(props: PartnerJobMessagesProps) {
+  return <PartnerJobMessagesSession key={`${props.accountId ?? "current"}:${props.jobId}`} {...props} />;
+}
+
+function PartnerJobMessagesSession({
+  jobId,
+  timezone,
+  canSend,
+  initialMessages,
+  initialPage,
+  initialUnreadCount,
+  initialError,
+}: PartnerJobMessagesProps) {
   const [messages, setMessages] = React.useState(() =>
     sortMessages(initialMessages),
   );
@@ -167,6 +181,15 @@ export function PartnerJobMessages({
   const [historyError, setHistoryError] = React.useState(initialError ?? null);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
   const [draft, setDraft] = React.useState("");
+  const [attachmentOptions, setAttachmentOptions] = React.useState<Array<{ id: string; filename: string | null; caption: string | null }>>([]);
+  const [attachmentIds, setAttachmentIds] = React.useState<string[]>([]);
+  const [attachmentError, setAttachmentError] = React.useState<string | null>(null);
+  const loadAttachments = async () => {
+    const result = await partnerPortalFetch<{ proof: { media: Array<{ id: string; status: string; filename: string | null; caption: string | null }> } }>(`jobs/${encodeURIComponent(jobId)}/proof`, { signal: AbortSignal.timeout(8_000) }).catch(() => null);
+    if (!result?.ok) { setAttachmentError("Job files could not be loaded. Your message is still saved here."); return; }
+    setAttachmentError(null);
+    setAttachmentOptions(result.data.proof.media.filter((file) => file.status === "ready"));
+  };
   const [issueDraft, setIssueDraft] = React.useState("");
   const [issueCategory, setIssueCategory] =
     React.useState<PartnerIssueCategory>("access");
@@ -182,28 +205,33 @@ export function PartnerJobMessages({
   );
   const messageListRef = React.useRef<HTMLDivElement>(null);
   const previousMessageCountRef = React.useRef(messages.length);
+  const olderHistoryLoaded = React.useRef(false);
   const trimmedDraft = draft.trim();
   const charactersRemaining = MAX_MESSAGE_LENGTH - draft.length;
   const trimmedIssueDraft = issueDraft.trim();
   const issueCharactersRemaining = 2_000 - issueDraft.length;
+  usePartnerUnsavedChanges(Boolean(draft.trim() || issueDraft.trim() || sending));
 
   React.useEffect(() => {
     if (messages.length <= previousMessageCountRef.current) return;
     previousMessageCountRef.current = messages.length;
-    messageListRef.current?.scrollTo({
-      top: messageListRef.current.scrollHeight,
-      behavior: "smooth",
+    const list = messageListRef.current;
+    if (!list || list.scrollHeight - list.scrollTop - list.clientHeight > 240) return;
+    list.scrollTo({
+      top: list.scrollHeight,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
     });
   }, [messages.length]);
 
   const loadMessages = React.useCallback(
-    async (cursor?: string | null): Promise<void> => {
+    async (cursor?: string | null, signal?: AbortSignal): Promise<boolean> => {
       setLoadingHistory(true);
       setHistoryError(null);
       const query = new URLSearchParams({ limit: String(page.limit || 50) });
       if (cursor) query.set("cursor", cursor);
       const result = await partnerPortalFetch<PartnerMessagesPayload>(
         `jobs/${encodeURIComponent(jobId)}/messages?${query.toString()}`,
+        { signal },
       ).catch(() => null);
       setLoadingHistory(false);
       if (!result?.ok) {
@@ -213,17 +241,18 @@ export function PartnerJobMessages({
             "Messages couldn’t be refreshed. No message was changed.",
           ),
         );
-        return;
+        return false;
       }
       setMessages((current) =>
-        cursor
-          ? mergeMessages(current, result.data.messages)
-          : sortMessages(result.data.messages),
+        mergeMessages(current, result.data.messages),
       );
-      setPage(result.data.page);
+      if (cursor) olderHistoryLoaded.current = true;
+      if (cursor || !olderHistoryLoaded.current) setPage(result.data.page);
+      return true;
     },
     [jobId, page.limit],
   );
+  usePartnerLiveRefresh(jobId, (signal) => loadMessages(null, signal), !sending);
 
   const sendMessage = React.useCallback(
     async (operation: PendingSend): Promise<void> => {
@@ -242,14 +271,14 @@ export function PartnerJobMessages({
             ? {
                 kind: "issue",
                 body: operation.body,
-                attachmentIds: [],
+                attachmentIds: operation.attachmentIds,
                 issueCategory: operation.category,
                 issuePriority: operation.priority,
               }
             : {
                 kind: "message",
                 body: operation.body,
-                attachmentIds: [],
+                attachmentIds: operation.attachmentIds,
               },
         ),
       }).catch(() => null);
@@ -271,6 +300,7 @@ export function PartnerJobMessages({
         setDraft("");
       }
       setPendingSend(null);
+      setAttachmentIds([]);
       setSendConfirmation(
         operation.kind === "issue"
           ? "Issue reported to Stonegate and saved with this job."
@@ -286,11 +316,12 @@ export function PartnerJobMessages({
       return;
     }
     const operation: PendingSend =
-      pendingSend?.kind === "message" && pendingSend.body === trimmedDraft
+      pendingSend?.kind === "message" && pendingSend.body === trimmedDraft && JSON.stringify(pendingSend.attachmentIds) === JSON.stringify(attachmentIds)
         ? pendingSend
         : {
             kind: "message",
             body: trimmedDraft,
+            attachmentIds: [...attachmentIds],
             idempotencyKey: createPortalOperationKey("job-message"),
           };
     setPendingSend(operation);
@@ -321,6 +352,7 @@ export function PartnerJobMessages({
             body: trimmedIssueDraft,
             category: issueCategory,
             priority: issuePriority,
+            attachmentIds: [],
             idempotencyKey: createPortalOperationKey("job-issue"),
           };
     setPendingSend(operation);
@@ -391,7 +423,9 @@ export function PartnerJobMessages({
             </div>
           </PartnerNotice>
         </div>
-      ) : (
+      ) : null}
+
+      {messages.length > 0 || !historyError ? (
         <div
           ref={messageListRef}
           className="mt-4 max-h-[32rem] overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-slate-50/70 p-3 sm:p-4"
@@ -407,6 +441,7 @@ export function PartnerJobMessages({
                 <MessageItem
                   key={message.id}
                   message={message}
+                  jobId={jobId}
                   timezone={timezone}
                 />
               ))}
@@ -428,9 +463,9 @@ export function PartnerJobMessages({
             </div>
           )}
         </div>
-      )}
+      ) : null}
 
-      {!historyError && page.hasMore && page.nextCursor ? (
+      {page.hasMore && page.nextCursor ? (
         <button
           type="button"
           onClick={() => void loadMessages(page.nextCursor)}
@@ -443,17 +478,24 @@ export function PartnerJobMessages({
               aria-hidden="true"
             />
           ) : null}
-          {loadingHistory ? "Loading…" : "Load newer messages"}
+          {loadingHistory ? "Loading…" : "Load older messages"}
         </button>
       ) : null}
 
       {canSend ? (
         <>
           <form
+            method="post"
             onSubmit={submitMessage}
             className="mt-5 border-t border-slate-200 pt-5"
             data-partner-analytics="job_message_send"
           >
+            <details className="mb-4 rounded-lg border border-slate-200 p-3" onToggle={(event) => { if (event.currentTarget.open) void loadAttachments(); }}>
+              <summary className="min-h-11 cursor-pointer py-2 text-sm font-semibold">Attach files already on this job</summary>
+              <p className="text-sm text-slate-600">Add new files in Photos on this job, then select up to 10 here.</p>
+              {attachmentError ? <p role="alert" className="mt-2 text-sm text-rose-800">{attachmentError}</p> : null}
+              {attachmentOptions.length ? <fieldset className="mt-2"><legend className="sr-only">Job attachments</legend>{attachmentOptions.map((file) => <label key={file.id} className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={attachmentIds.includes(file.id)} disabled={sending || (!attachmentIds.includes(file.id) && attachmentIds.length >= 10)} onChange={(event) => { setAttachmentIds((ids) => event.target.checked ? [...ids, file.id] : ids.filter((id) => id !== file.id)); setPendingSend(null); }} />{file.caption || file.filename || "Job file"}</label>)}</fieldset> : <p className="mt-2 text-sm text-slate-600">No ready files to attach.</p>}
+            </details>
             <label
               htmlFor="partner-job-message"
               className="text-sm font-semibold text-slate-900"
@@ -710,12 +752,15 @@ export function PartnerJobMessages({
 
 function MessageItem({
   message,
+  jobId,
   timezone,
 }: {
   message: PartnerJobMessage;
+  jobId: string;
   timezone: string;
 }) {
-  const mine = message.authorType.trim().toLowerCase() === "partner";
+  const mine = message.isCurrentAuthor === true;
+  const author = mine ? "You" : message.authorName?.trim() || (message.authorType === "partner" ? "Your team" : "Stonegate");
   const system =
     message.system === true ||
     message.authorType.trim().toLowerCase() === "system";
@@ -742,6 +787,7 @@ function MessageItem({
         <p className="break-words text-xs leading-5 text-slate-500 [overflow-wrap:anywhere]">
           {message.body}
         </p>
+        {message.attachments?.length ? <ul className="mt-2 space-y-1">{message.attachments.map((file) => <li key={file.id}><a href={`/partners/media/${encodeURIComponent(jobId)}/${encodeURIComponent(file.id)}`} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center text-sm underline underline-offset-2 focus-visible:outline focus-visible:outline-2">{file.filename || "Open attached job file"} (opens in a new tab)</a></li>)}</ul> : null}
         <time
           dateTime={message.createdAt}
           className="mt-1 block text-[0.6875rem] text-slate-400"
@@ -772,10 +818,10 @@ function MessageItem({
         )}
         aria-label={
           issueCategory
-            ? `${issuePriority === "urgent" ? "Urgent " : ""}${issueCategory.label} reported ${mine ? "by you" : "by Stonegate"}`
+            ? `${issuePriority === "urgent" ? "Urgent " : ""}${issueCategory.label} reported by ${author}`
             : mine
               ? "Message from you"
-              : "Message from Stonegate"
+              : `Message from ${author}`
         }
       >
         {issueCategory ? (
@@ -794,9 +840,26 @@ function MessageItem({
             {issueCategory.label}
           </p>
         ) : null}
+        <p className="mb-1 text-xs font-semibold">{author}</p>
         <p className="whitespace-pre-wrap break-words text-sm leading-6 [overflow-wrap:anywhere]">
           {message.body}
         </p>
+        {message.attachments?.length ? (
+          <ul className="mt-2 space-y-1" aria-label="Message attachments">
+            {message.attachments.map((file) => (
+              <li key={file.id}>
+                <a
+                  href={`/partners/media/${encodeURIComponent(jobId)}/${encodeURIComponent(file.id)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex min-h-11 items-center text-sm underline underline-offset-2 focus-visible:outline focus-visible:outline-2"
+                >
+                  {file.filename || "Open attached job file"} (opens in a new tab)
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <div
           className={cn(
             "mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.6875rem]",

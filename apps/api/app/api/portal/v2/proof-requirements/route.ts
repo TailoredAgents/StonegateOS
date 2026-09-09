@@ -56,6 +56,9 @@ const UpdateSchema = z
   .superRefine((value, context) => {
     const seen = new Set<string>();
     for (const [index, requirement] of value.requirements.entries()) {
+      if (["before", "after"].includes(requirement.category) && requirement.minimumCount > 20) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["requirements", index, "minimumCount"], message: "Require up to 20 before and 20 after photos." });
+      }
       if (seen.has(requirement.category)) {
         context.addIssue({
           code: z.ZodIssueCode.custom,

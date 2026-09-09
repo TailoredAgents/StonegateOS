@@ -1,7 +1,7 @@
 export type PartnerPublicHeaderAction = {
   kind: "sign_in" | "request_access";
   href: "/partners/login" | "/partners/request-access";
-  label: "Sign in" | "Request access";
+  label: "Sign in" | "Access & help";
   analyticsKey: "landing_sign_in_header" | "landing_request_access_header";
 };
 
@@ -15,7 +15,7 @@ const SIGN_IN_ACTION: PartnerPublicHeaderAction = {
 const REQUEST_ACCESS_ACTION: PartnerPublicHeaderAction = {
   kind: "request_access",
   href: "/partners/request-access",
-  label: "Request access",
+  label: "Access & help",
   analyticsKey: "landing_request_access_header",
 };
 
@@ -39,6 +39,9 @@ export function partnerPublicHeaderAction(
     "/partners/reset-password",
     "/partners/unavailable",
   ];
+  // The entrance already contains the sign-in form. A second Sign in button
+  // would merely send the partner to a duplicate copy of that same form.
+  if (path === "/partners") return null;
   if (
     hiddenActionRoots.some(
       (root) => path === root || path.startsWith(`${root}/`),

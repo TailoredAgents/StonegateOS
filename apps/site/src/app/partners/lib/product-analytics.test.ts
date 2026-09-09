@@ -34,21 +34,26 @@ void test("unknown or attacker-controlled persona input collapses safely", () =>
   );
 });
 
-void test("access requests use stable action and accepted funnel events", () => {
-  const source = fs.readFileSync(
+void test("retired public applications emit no acquisition or verification events", () => {
+  const form = fs.readFileSync(
     path.join(
       process.cwd(),
       "src/app/partners/components/PartnerAccessRequestForm.tsx",
     ),
     "utf8",
   );
-  assert.match(source, /data-partner-analytics="access_email_submit"/u);
-  assert.match(source, /stage: "access_request_started"/u);
-  assert.match(source, /stage: "verification_request_accepted"/u);
-  assert.match(source, /surface: "access"/u);
-  assert.ok(
-    source.indexOf('stage: "verification_request_accepted"') >
-      source.indexOf("if (!result?.ok)"),
+  const page = fs.readFileSync(
+    path.join(
+      process.cwd(),
+      "src/app/partners/(public)/request-access/page.tsx",
+    ),
+    "utf8",
+  );
+  assert.match(form, /PartnerAccessHelp/u);
+  assert.match(page, /PartnerAccessHelp/u);
+  assert.doesNotMatch(
+    form + page,
+    /access_email_submit|verification_request_accepted|access_request_started|partnerOnboardingFetch|<form/u,
   );
 });
 
