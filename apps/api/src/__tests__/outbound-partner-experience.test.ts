@@ -179,7 +179,9 @@ describe("Outbound and Partners experience contract", () => {
     );
     expect(parser).toContain("nothing was imported");
     expect(parser).not.toContain("slice(0, OUTBOUND_IMPORT_MAX_ROWS)");
-    expect(client).toContain("Maximum 2,000 data rows");
+    expect(client).toContain("2,000 contacts");
+    expect(client).toContain("MAX_CSV_BYTES = 2 * 1024 * 1024");
+    expect(client).toContain("byteLength > MAX_CSV_BYTES");
   });
 
   it("distinguishes failed queue, directory, portal-user, and rate loads from emptiness", () => {
@@ -190,10 +192,14 @@ describe("Outbound and Partners experience contract", () => {
       "apps/site/src/app/team/components/PartnersSection.tsx",
     );
 
-    expect(outbound).toContain("Outbound is temporarily unavailable");
-    expect(outbound).toContain(
-      "No queue totals or records are being shown as zero",
+    const queueFailure = outbound.slice(
+      outbound.indexOf("if (!queue)"),
+      outbound.indexOf("const resolvedMemberId"),
     );
+    expect(queueFailure).toContain('role="alert"');
+    expect(queueFailure).toContain("Retry outbound");
+    expect(queueFailure).not.toContain("queue.summary");
+    expect(queueFailure).not.toContain("<OutboundAccountDetail");
     expect(outbound).toContain("directoryUnavailable");
     expect(outbound).toContain('role="alert"');
     expect(partners).toContain(

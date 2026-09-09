@@ -3751,17 +3751,31 @@ export async function openContactThreadAction(formData: FormData) {
     return;
   }
 
-  const ensureRes = await callAdminApiAs(
-    principal,
-    "/api/admin/inbox/threads/ensure",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        contactId: resolvedContactId,
-        channel: resolvedChannel,
-      }),
-    },
-  );
+  let ensureRes: Response;
+  try {
+    ensureRes = await callAdminApiAs(
+      principal,
+      "/api/admin/inbox/threads/ensure",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          contactId: resolvedContactId,
+          channel: resolvedChannel,
+        }),
+      },
+    );
+  } catch (error) {
+    jar.set({
+      name: "myst-flash-error",
+      value: readTeamMutationException(
+        error,
+        "Unable to open this conversation",
+      ),
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
 
   if (!ensureRes.ok) {
     const message = await readErrorMessage(
@@ -3774,13 +3788,14 @@ export async function openContactThreadAction(formData: FormData) {
   }
 
   const ensurePayload = (await ensureRes.json().catch(() => null)) as {
+    ok?: boolean;
     threadId?: string;
   } | null;
   const threadId =
     typeof ensurePayload?.threadId === "string"
       ? ensurePayload.threadId.trim()
       : "";
-  if (!threadId) {
+  if (ensurePayload?.ok !== true || !isUuid(threadId)) {
     jar.set({
       name: "myst-flash-error",
       value: "Unable to open a thread for this contact",
@@ -8338,10 +8353,9 @@ export async function draftOutboundFollowupAction(formData: FormData) {
     return;
   }
 
-  const response = await callAdminApiAs(
-    principal,
-    "/api/admin/outbound/draft",
-    {
+  let response: Response;
+  try {
+    response = await callAdminApiAs(principal, "/api/admin/outbound/draft", {
       method: "POST",
       body: JSON.stringify({
         contactId,
@@ -8351,8 +8365,16 @@ export async function draftOutboundFollowupAction(formData: FormData) {
         ...(disposition ? { disposition } : {}),
         ...(recap ? { recap } : {}),
       }),
-    },
-  );
+    });
+  } catch (error) {
+    jar.set({
+      name: "myst-flash-error",
+      value: `${readTeamMutationException(error, "Unable to confirm the follow-up suggestion")} Check Inbox before creating another suggestion.`,
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
 
   if (!response.ok) {
     const message = await readErrorMessage(
@@ -8365,6 +8387,9 @@ export async function draftOutboundFollowupAction(formData: FormData) {
   }
 
   const payload = (await response.json().catch(() => null)) as {
+    ok?: boolean;
+    contactId?: string;
+    messageId?: string;
     threadId?: string;
     channel?: string;
   } | null;
@@ -8372,14 +8397,19 @@ export async function draftOutboundFollowupAction(formData: FormData) {
   const threadId =
     typeof payload?.threadId === "string" ? payload.threadId.trim() : "";
   const resolvedChannel =
-    typeof payload?.channel === "string"
-      ? payload.channel.trim()
-      : channel || "sms";
+    typeof payload?.channel === "string" ? payload.channel.trim() : "";
 
-  if (!threadId) {
+  if (
+    payload?.ok !== true ||
+    payload.contactId !== contactId ||
+    !isUuid(payload.messageId ?? "") ||
+    !isUuid(threadId) ||
+    (resolvedChannel !== "sms" && resolvedChannel !== "email")
+  ) {
     jar.set({
       name: "myst-flash-error",
-      value: "Suggestion created but thread is missing",
+      value:
+        "The suggestion result could not be confirmed. Check Inbox before creating another suggestion.",
       path: "/",
     });
     revalidatePath("/team");
@@ -8499,18 +8529,25 @@ export async function draftOutboundFirstTouchAction(formData: FormData) {
     return;
   }
 
-  const response = await callAdminApiAs(
-    principal,
-    "/api/admin/outbound/draft",
-    {
+  let response: Response;
+  try {
+    response = await callAdminApiAs(principal, "/api/admin/outbound/draft", {
       method: "POST",
       body: JSON.stringify({
         contactId,
         ...(taskId ? { taskId } : {}),
         ...(channel ? { channel } : {}),
       }),
-    },
-  );
+    });
+  } catch (error) {
+    jar.set({
+      name: "myst-flash-error",
+      value: `${readTeamMutationException(error, "Unable to confirm the outreach suggestion")} Check Inbox before creating another suggestion.`,
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
 
   if (!response.ok) {
     const message = await readErrorMessage(
@@ -8523,6 +8560,9 @@ export async function draftOutboundFirstTouchAction(formData: FormData) {
   }
 
   const payload = (await response.json().catch(() => null)) as {
+    ok?: boolean;
+    contactId?: string;
+    messageId?: string;
     threadId?: string;
     channel?: string;
   } | null;
@@ -8530,14 +8570,19 @@ export async function draftOutboundFirstTouchAction(formData: FormData) {
   const threadId =
     typeof payload?.threadId === "string" ? payload.threadId.trim() : "";
   const resolvedChannel =
-    typeof payload?.channel === "string"
-      ? payload.channel.trim()
-      : channel || "sms";
+    typeof payload?.channel === "string" ? payload.channel.trim() : "";
 
-  if (!threadId) {
+  if (
+    payload?.ok !== true ||
+    payload.contactId !== contactId ||
+    !isUuid(payload.messageId ?? "") ||
+    !isUuid(threadId) ||
+    (resolvedChannel !== "sms" && resolvedChannel !== "email")
+  ) {
     jar.set({
       name: "myst-flash-error",
-      value: "Suggestion created but thread is missing",
+      value:
+        "The suggestion result could not be confirmed. Check Inbox before creating another suggestion.",
       path: "/",
     });
     revalidatePath("/team");

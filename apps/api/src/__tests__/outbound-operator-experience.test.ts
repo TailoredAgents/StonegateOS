@@ -163,7 +163,7 @@ describe("Outbound operator experience", () => {
       view: "queue",
     });
     const partnerUrl = new URL(String(partners), "https://team.invalid");
-    expect(partnerUrl.pathname).toBe("/team/sales/outbound/partners");
+    expect(partnerUrl.pathname).toBe("/team/partners");
     expect(
       parseOutboundReturnHref(partnerUrl.searchParams.get("out_return")),
     ).toEqual({ memberId: MEMBER_ID, view: "queue", filters });
@@ -349,26 +349,42 @@ describe("Outbound operator experience", () => {
       "apps/site/src/app/team/components/OutboundSection.tsx",
     );
     const selection = source(
-      "apps/site/src/app/team/components/OutboundBulkSelectionControls.tsx",
+      "apps/site/src/app/team/components/OutboundBulkActions.tsx",
     );
+    const detail = source(
+      "apps/site/src/app/team/components/OutboundAccountDetail.tsx",
+    );
+    const contactActions = source(
+      "apps/site/src/app/team/components/OutboundContactActions.tsx",
+    );
+    const contactContext = source("apps/site/src/app/team/outbound-detail.ts");
     const partners = source(
       "apps/site/src/app/team/components/PartnersSection.tsx",
     );
     const queue = source("apps/api/app/api/admin/outbound/queue/route.ts");
 
     expect(outbound).toContain("Do Not Contact — outreach blocked");
-    expect(outbound).toContain("selectedOutreachBlocked");
-    expect(outbound).toContain("disabled={hasDnc}");
-    expect(outbound).toContain("Owner:");
-    expect(outbound).toContain("Cadence:");
-    expect(outbound).toContain("Disposition:");
-    expect(outbound).toContain("Callback date and time —");
-    expect(outbound).toContain("DST gaps and repeated");
+    expect(outbound).toContain("<OutboundAccountDetail");
+    expect(detail).toContain("<OutboundContactActions");
+    expect(contactActions).toContain("{outreachBlocked ? (");
+    expect(contactActions).toContain("Do not contact — outreach is blocked");
+    expect(contactContext).toContain(
+      "contact.doNotContact || tasks.some((candidate) => candidate.doNotContact)",
+    );
+    expect(selection).toContain("disabled={item.dncContactCount > 0}");
+    expect(detail).toContain("item.assignedToMemberId");
+    // Outcome context follows the chosen contact/task, not the account's primary task.
+    expect(contactActions).toContain("outboundOutcomeLabel(task.lastDisposition)");
+    expect(contactActions).toContain('type="datetime-local"');
+    expect(contactActions).toContain("America/New_York time");
+    expect(contactActions).toContain("unambiguous time");
     expect(outbound).toContain('action="/team/sales/outbound"');
     expect(outbound).not.toContain('action="/team"');
     expect(partners).toContain('action="/team/sales/outbound/partners"');
     expect(partners).not.toContain('action="/team"');
-    expect(selection).toContain("getEligibleCheckboxes");
+    expect(selection).toContain(
+      "items.filter((item) => item.dncContactCount === 0)",
+    );
     expect(selection).toContain("min-h-11");
     expect(outbound).toContain('role="status"');
     expect(queue).toContain("truncated: false");

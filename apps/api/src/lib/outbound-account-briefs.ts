@@ -146,7 +146,9 @@ function fallbackBrief(input: {
   };
 }
 
-function parseStoredBrief(value: unknown): OutboundAccountBrief | null {
+export function readStoredOutboundAccountBrief(
+  value: unknown,
+): OutboundAccountBrief | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   const summary = cleanText(
@@ -517,7 +519,7 @@ export async function ensureOutboundAccountBrief(input: {
 
   if (!account?.id) return null;
 
-  const storedBrief = parseStoredBrief(account.aiAccountBrief);
+  const storedBrief = readStoredOutboundAccountBrief(account.aiAccountBrief);
   if (isFreshBrief(storedBrief)) return storedBrief;
 
   const contactRows = await db

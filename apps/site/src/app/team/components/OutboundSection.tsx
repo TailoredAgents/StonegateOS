@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { SubmitButton } from "@/components/SubmitButton";
 import {
   hasTeamPermission,
   requireCurrentTeamPrincipal,
@@ -7,129 +6,118 @@ import {
 import { callAdminApiAs } from "../lib/api";
 import {
   buildOutboundHref,
+  buildOutboundFilterHref,
   buildOutboundPartnersHref,
+  buildOutboundPartnerSetupHref,
   type OutboundFilters,
 } from "../outbound-navigation";
 import {
   formatOutboundEasternTime,
-  OUTBOUND_TIME_ZONE,
   parseOutboundQueueResponse,
-  type OutboundHistoryEntry,
   type OutboundQueueItem,
   type OutboundQueueResponse,
   type TeamMember,
 } from "../outbound-queue";
+import { TEAM_SURFACES } from "../surface-registry";
 import {
-  bulkOutboundAction,
-  draftOutboundFirstTouchAction,
-  draftOutboundFollowupAction,
-  openContactThreadAction,
-  setOutboundDispositionAction,
-  startContactCallAction,
-} from "../actions";
-import {
-  TEAM_CARD_PADDED,
-  TEAM_EMPTY_STATE,
+  TEAM_FOCUS_RING,
   TEAM_INPUT_COMPACT,
-  TEAM_SECTION_SUBTITLE,
-  TEAM_SECTION_TITLE,
   teamButtonClass,
+  teamStatePanelClass,
 } from "./team-ui";
-import { OutboundBulkSelectionControls } from "./OutboundBulkSelectionControls";
+import { OutboundAccountDetail } from "./OutboundAccountDetail";
+import { OutboundBulkActions } from "./OutboundBulkActions";
 import { OutboundImportClient } from "./OutboundImportClient";
 
-function normalizeFilterValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
+const PANEL =
+  "min-w-0 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)]";
+const FIELD = `${TEAM_INPUT_COMPACT} !text-base w-full min-w-0`;
+const MUTED = "text-[color:var(--team-text-muted)]";
 
-function formatDue(item: OutboundQueueItem): string {
+function dueLabel(item: OutboundQueueItem) {
   if (!item.dueAt) return "Not started";
-  return formatOutboundEasternTime(item.dueAt) ?? "Not started";
+  if (item.overdue) return "Overdue";
+  if (item.minutesUntilDue !== null && item.minutesUntilDue <= 0)
+    return "Due now";
+  return "Scheduled";
 }
 
-function formatTimestamp(value: string | null | undefined): string | null {
-  return formatOutboundEasternTime(value);
-}
-
-function formatDueBadge(item: OutboundQueueItem): {
-  label: string;
-  tone: string;
-} {
-  if (!item.dueAt)
-    return { label: "Not started", tone: "bg-slate-100 text-slate-600" };
-  if (item.overdue)
-    return { label: "Overdue", tone: "bg-rose-100 text-rose-700" };
-  if (typeof item.minutesUntilDue === "number") {
-    if (item.minutesUntilDue <= 0)
-      return { label: "Due now", tone: "bg-amber-100 text-amber-700" };
-    if (item.minutesUntilDue < 60)
-      return {
-        label: `Due in ${item.minutesUntilDue}m`,
-        tone: "bg-amber-50 text-amber-700",
-      };
-  }
-  return { label: "Scheduled", tone: "bg-slate-100 text-slate-600" };
-}
-
-function formatPartnerFit(value: string | null | undefined): string {
-  const normalized =
-    typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (normalized === "portal_first") return "Portal first";
-  if (normalized === "managed_direct") return "Managed direct";
-  if (normalized === "hybrid") return "Hybrid";
-  if (normalized === "not_a_fit") return "Not a fit";
-  return "Unclassified";
-}
-
-function formatDisposition(value: string | null | undefined): string {
-  const normalized = typeof value === "string" ? value.trim() : "";
-  if (!normalized) return "No disposition yet";
-  return normalized
-    .split("_")
-    .filter(Boolean)
-    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
-    .join(" ");
-}
-
-function assigneeLabel(
-  assignedToMemberId: string,
-  members: readonly TeamMember[],
-): string {
+function OutboundHeader({
+  memberId,
+  filters,
+  view,
+  canImport,
+  canPartners,
+  canCreatePartner,
+}: {
+  memberId?: string;
+  filters: OutboundFilters;
+  view: "queue" | "import";
+  canImport: boolean;
+  canPartners: boolean;
+  canCreatePartner: boolean;
+}) {
   return (
-    members.find((member) => member.id === assignedToMemberId)?.name ??
-    `Unknown member (${assignedToMemberId.slice(0, 8)})`
+    <header className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold tracking-tight">Outbound</h2>
+          <p className={`mt-1 text-sm ${MUTED}`}>
+            Follow up with businesses and look after partner relationships.
+          </p>
+        </div>
+        {canCreatePartner ? (
+          <a
+            href={buildOutboundPartnerSetupHref({ memberId, filters })}
+            className={teamButtonClass("primary")}
+          >
+            Add partner
+          </a>
+        ) : null}
+      </div>
+      <nav
+        aria-label="Outbound views"
+        className="flex flex-wrap gap-1 border-b border-[color:var(--team-border)] pb-2"
+      >
+        {[
+          {
+            label: "Follow-ups",
+            href: buildOutboundHref({ memberId, filters }),
+            active: view === "queue",
+            show: true,
+          },
+          {
+            label: "Import contacts",
+            href: buildOutboundHref({ memberId, filters, view: "import" }),
+            active: view === "import",
+            show: canImport,
+          },
+          {
+            label: "Partners",
+            href: buildOutboundPartnersHref({ memberId, filters, view }),
+            active: false,
+            show: canPartners,
+          },
+        ]
+          .filter((link) => link.show)
+          .map((link) => (
+            <a
+              key={link.label}
+              href={link.href}
+              aria-current={link.active ? "page" : undefined}
+              className={`inline-flex min-h-11 items-center rounded-xl px-4 py-2 text-sm font-semibold ${TEAM_FOCUS_RING} ${link.active ? "bg-[color:var(--team-surface-muted)] text-[color:var(--team-text)]" : `${MUTED} hover:bg-[color:var(--team-surface-muted)]`}`}
+            >
+              {link.label}
+            </a>
+          ))}
+      </nav>
+    </header>
   );
-}
-
-function primaryContact(item: OutboundQueueItem) {
-  return (
-    item.contacts.find((contact) => contact.id === item.primaryContactId) ??
-    item.contacts[0]!
-  );
-}
-
-function formatHistoryKind(value: OutboundHistoryEntry["kind"]): {
-  label: string;
-  tone: string;
-} {
-  if (value === "import")
-    return { label: "Import", tone: "bg-slate-100 text-slate-700" };
-  if (value === "draft")
-    return { label: "Suggestion", tone: "bg-primary-50 text-primary-700" };
-  if (value === "disposition")
-    return { label: "Disposition", tone: "bg-amber-50 text-amber-700" };
-  if (value === "recap")
-    return { label: "Recap", tone: "bg-emerald-50 text-emerald-700" };
-  if (value === "partner")
-    return { label: "Partner", tone: "bg-violet-50 text-violet-700" };
-  if (value === "task")
-    return { label: "Task", tone: "bg-slate-100 text-slate-700" };
-  return { label: "Note", tone: "bg-slate-100 text-slate-700" };
 }
 
 export async function OutboundSection({
   memberId,
-  filters,
+  filters = {},
   view,
 }: {
   memberId?: string;
@@ -137,2186 +125,637 @@ export async function OutboundSection({
   view?: string;
 }): Promise<React.ReactElement> {
   const principal = await requireCurrentTeamPrincipal();
-  const canPlaceCalls = hasTeamPermission(principal, "calls.place");
+  const permissions = {
+    canCall: hasTeamPermission(principal, "calls.place"),
+    canMessage:
+      hasTeamPermission(principal, "messages.write") &&
+      hasTeamPermission(principal, "messages.read"),
+    canDraft:
+      hasTeamPermission(principal, "outbound.write") &&
+      hasTeamPermission(principal, "messages.read"),
+    canManage: hasTeamPermission(principal, "outbound.write"),
+  };
   const canImport = hasTeamPermission(principal, "outbound.import");
-  const resolvedFilters: OutboundFilters = filters ?? {};
+  const partnerSurface = TEAM_SURFACES.find(
+    (surface) => surface.id === "partners",
+  )!;
+  const canPartners = partnerSurface.requiredPermissions.some((permission) =>
+    hasTeamPermission(principal, permission),
+  );
+  const canCreatePartner =
+    hasTeamPermission(principal, "partners.accounts.read") &&
+    hasTeamPermission(principal, "partners.accounts.manage") &&
+    hasTeamPermission(principal, "partners.invitations.send");
   const currentView = view === "import" ? "import" : "queue";
-  const queueHref = buildOutboundHref({
-    memberId,
-    view: "queue",
-    filters: resolvedFilters,
-  });
-  const importHref = buildOutboundHref({
-    memberId,
-    view: "import",
-    filters: resolvedFilters,
-  });
-  const partnersHref = buildOutboundPartnersHref({
-    memberId,
-    view: currentView,
-    filters: resolvedFilters,
-  });
+  const header = (selectedMember = memberId) => (
+    <OutboundHeader
+      memberId={selectedMember}
+      filters={filters}
+      view={currentView}
+      canImport={canImport}
+      canPartners={canPartners}
+      canCreatePartner={canCreatePartner}
+    />
+  );
 
-  if (view === "import" && !canImport) {
+  if (currentView === "import" && !canImport)
     return (
-      <section
-        aria-labelledby="outbound-import-denied-title"
-        className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-950"
-      >
-        <h2 id="outbound-import-denied-title" className="font-semibold">
-          Import access is required
-        </h2>
-        <p className="mt-1">
-          Your current access can view Outbound, but it cannot import contact,
-          pipeline, partner, or task records.
-        </p>
-        <a
-          href={queueHref}
-          className={`${teamButtonClass("secondary")} mt-4 min-h-[44px]`}
-        >
-          Return to Outbound queue
-        </a>
+      <section className="space-y-5">
+        {header()}
+        <div role="status" className={teamStatePanelClass("warning")}>
+          <h3 className="font-semibold">Import access is required</h3>
+          <p className="mt-1">
+            Ask your administrator for import access. You can still use your
+            follow-up list.
+          </p>
+          <a
+            href={buildOutboundHref({ memberId, filters })}
+            className={`${teamButtonClass("secondary")} mt-3`}
+          >
+            Back to follow-ups
+          </a>
+        </div>
       </section>
     );
-  }
 
-  let members: TeamMember[] = [];
-  let directoryUnavailable = false;
-  try {
-    const membersRes = await callAdminApiAs(
-      principal,
-      "/api/admin/team/directory",
-    );
-    if (membersRes.ok) {
-      const payload = (await membersRes.json()) as { members?: TeamMember[] };
-      members = (payload.members ?? []).filter((m) => m.active !== false);
-    } else {
-      directoryUnavailable = true;
+  // Independent reads run together; neither is allowed to manufacture an empty success state.
+  const directoryPromise = (async () => {
+    try {
+      const response = await callAdminApiAs(
+        principal,
+        "/api/admin/team/directory",
+      );
+      if (!response.ok) return null;
+      const data = (await response.json()) as { members?: TeamMember[] };
+      if (!Array.isArray(data.members)) return null;
+      return data.members.filter(
+        (member) =>
+          typeof member.id === "string" &&
+          typeof member.name === "string" &&
+          member.active !== false,
+      );
+    } catch {
+      return null;
     }
-  } catch {
-    members = [];
-    directoryUnavailable = true;
+  })();
+  const apiQuery = new URLSearchParams({ limit: "50" });
+  if (memberId) apiQuery.set("memberId", memberId);
+  for (const key of [
+    "cursor",
+    "direction",
+    "q",
+    "campaign",
+    "attempt",
+    "due",
+    "has",
+    "disposition",
+    "accountId",
+    "taskId",
+  ] as const) {
+    const value = filters[key]?.trim();
+    if (value) apiQuery.set(key, value);
   }
+  const queuePromise =
+    currentView === "queue"
+      ? (async () => {
+          try {
+            const response = await callAdminApiAs(
+              principal,
+              `/api/admin/outbound/queue?${apiQuery}`,
+            );
+            if (!response.ok) return null;
+            return parseOutboundQueueResponse(await response.json());
+          } catch {
+            return null;
+          }
+        })()
+      : Promise.resolve(null);
+  const [directory, queue] = await Promise.all([
+    directoryPromise,
+    queuePromise,
+  ]);
+  const members = directory ?? [];
+  const directoryUnavailable = directory === null;
 
-  if (view === "import") {
+  if (currentView === "import")
     return (
-      <section className="space-y-6">
-        <nav
-          aria-label="Outbound views"
-          className="flex flex-wrap gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-2"
-        >
-          <a
-            href={queueHref}
-            className="inline-flex min-h-[44px] items-center rounded-xl px-4 py-2 text-sm font-semibold text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface-muted)] hover:text-[color:var(--team-text)]"
-          >
-            Queue
-          </a>
-          <a
-            href={importHref}
-            aria-current="page"
-            className="inline-flex min-h-[44px] items-center rounded-xl bg-primary-50 px-4 py-2 text-sm font-semibold text-primary-800"
-          >
-            Import
-          </a>
-          <a
-            href={partnersHref}
-            className="inline-flex min-h-[44px] items-center rounded-xl px-4 py-2 text-sm font-semibold text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface-muted)] hover:text-[color:var(--team-text)]"
-          >
-            Partners
-          </a>
-        </nav>
-        <header className={TEAM_CARD_PADDED}>
-          <h2 className={TEAM_SECTION_TITLE}>Import outbound prospects</h2>
-          <p className={TEAM_SECTION_SUBTITLE}>
-            Preview normalization, duplicates, conflicts, assignment, and every
-            excluded row before one transaction changes CRM data.
-          </p>
-        </header>
-        <div className={TEAM_CARD_PADDED}>
+      <section className="min-w-0 space-y-5 text-[color:var(--team-text)]">
+        {header()}
+        <div className={`${PANEL} p-4 sm:p-6`}>
           <OutboundImportClient
-            members={members.map((member) => ({
-              id: member.id,
-              name: member.name,
-            }))}
+            members={members}
             defaultMemberId={memberId ?? ""}
             directoryUnavailable={directoryUnavailable}
           />
         </div>
       </section>
     );
-  }
 
-  const apiQs = new URLSearchParams({ limit: "50" });
-  if (memberId) apiQs.set("memberId", memberId);
-
-  const apiFilterMap: Array<[string, string, string]> = [
-    ["cursor", "cursor", normalizeFilterValue(resolvedFilters.cursor)],
-    ["direction", "direction", normalizeFilterValue(resolvedFilters.direction)],
-    ["q", "q", normalizeFilterValue(resolvedFilters.q)],
-    ["campaign", "campaign", normalizeFilterValue(resolvedFilters.campaign)],
-    ["attempt", "attempt", normalizeFilterValue(resolvedFilters.attempt)],
-    ["due", "due", normalizeFilterValue(resolvedFilters.due)],
-    ["has", "has", normalizeFilterValue(resolvedFilters.has)],
-    [
-      "disposition",
-      "disposition",
-      normalizeFilterValue(resolvedFilters.disposition),
-    ],
-  ];
-  for (const [, apiKey, value] of apiFilterMap) {
-    if (value) apiQs.set(apiKey, value);
-  }
-  if (resolvedFilters.accountId?.trim())
-    apiQs.set("accountId", resolvedFilters.accountId.trim());
-  if (resolvedFilters.taskId?.trim())
-    apiQs.set("taskId", resolvedFilters.taskId.trim());
-
-  let queuePayload: OutboundQueueResponse | null = null;
-  let queueError = "";
-  try {
-    const queueRes = await callAdminApiAs(
-      principal,
-      `/api/admin/outbound/queue?${apiQs.toString()}`,
-    );
-    if (!queueRes.ok) {
-      queueError = `The outbound queue could not be loaded (HTTP ${queueRes.status}).`;
-    } else {
-      queuePayload = parseOutboundQueueResponse(
-        await queueRes.json().catch(() => null),
-      );
-      if (!queuePayload) {
-        queueError =
-          "The outbound queue returned an incomplete safety response. DNC and assignment state could not be verified.";
-      }
-    }
-  } catch {
-    queueError = "The outbound queue could not be reached.";
-  }
-
-  if (!queuePayload) {
+  if (!queue)
     return (
-      <section className="space-y-6">
-        <nav
-          aria-label="Outbound views"
-          className="flex flex-wrap gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-2"
-        >
-          <a
-            href={queueHref}
-            aria-current="page"
-            className="inline-flex min-h-[44px] items-center rounded-xl bg-primary-50 px-4 py-2 text-sm font-semibold text-primary-800"
-          >
-            Queue
-          </a>
-          {canImport ? (
-            <a
-              href={importHref}
-              className="inline-flex min-h-[44px] items-center rounded-xl px-4 py-2 text-sm font-semibold text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface-muted)] hover:text-[color:var(--team-text)]"
-            >
-              Import
-            </a>
-          ) : null}
-          <a
-            href={partnersHref}
-            className="inline-flex min-h-[44px] items-center rounded-xl px-4 py-2 text-sm font-semibold text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface-muted)] hover:text-[color:var(--team-text)]"
-          >
-            Partners
-          </a>
-        </nav>
-        <div
-          role="alert"
-          className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900"
-        >
-          <h2 className="font-semibold">Outbound is temporarily unavailable</h2>
-          <p className="mt-1">{queueError}</p>
+      <section className="space-y-5">
+        {header()}
+        <div role="alert" className={teamStatePanelClass("danger")}>
+          <h3 className="font-semibold">Follow-ups could not be loaded</h3>
           <p className="mt-1">
-            No queue totals or records are being shown as zero.
+            We couldn’t verify the current accounts and contact restrictions. No
+            outreach controls or misleading zero totals are shown.
           </p>
           <a
-            className={`${teamButtonClass("secondary", "sm")} mt-4`}
-            href={buildOutboundHref({
-              memberId,
-              filters: resolvedFilters,
-            })}
+            href={buildOutboundHref({ memberId, filters })}
+            className={`${teamButtonClass("secondary")} mt-3`}
           >
             Retry outbound
           </a>
         </div>
+        {members.length ? (
+          <form
+            method="get"
+            action="/team/sales/outbound"
+            className={`${PANEL} space-y-3 p-4`}
+          >
+            <label className="grid gap-1 text-sm font-medium">
+              Choose whose follow-ups to open
+              <select
+                name="memberId"
+                defaultValue={memberId ?? ""}
+                required
+                className={FIELD}
+              >
+                <option value="">Choose a teammate</option>
+                {members.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className={`text-sm ${MUTED}`}>
+              If a default teammate hasn’t been configured, choose one here to
+              open their list.
+            </p>
+            <button type="submit" className={teamButtonClass("primary")}>
+              Open follow-ups
+            </button>
+          </form>
+        ) : null}
       </section>
     );
-  }
 
-  const items = queuePayload.items ?? [];
-  const resolvedMemberId =
-    typeof queuePayload.memberId === "string"
-      ? queuePayload.memberId
-      : (memberId ?? "");
-  const memberLabel = resolvedMemberId
-    ? (members.find((m) => m.id === resolvedMemberId)?.name ?? null)
-    : null;
-  const resolvedQueueHref = buildOutboundHref({
+  const resolvedMemberId = queue.memberId;
+  const owner = members.find((member) => member.id === resolvedMemberId)?.name;
+  const selected = filters.accountId
+    ? queue.items.find((item) => item.id === filters.accountId)
+    : filters.taskId
+      ? queue.items.find((item) => item.taskIds.includes(filters.taskId!))
+      : undefined;
+  const selectionRequested = Boolean(filters.accountId || filters.taskId);
+  const clearSelectionHref = buildOutboundHref({
     memberId: resolvedMemberId,
-    view: "queue",
-    filters: resolvedFilters,
+    filters,
+    patch: { accountId: "", taskId: "" },
   });
-  const resolvedImportHref = buildOutboundHref({
+  const resetHref = buildOutboundHref({
     memberId: resolvedMemberId,
-    view: "import",
-    filters: resolvedFilters,
+    filters: {},
   });
-  const resolvedPartnersHref = buildOutboundPartnersHref({
-    memberId: resolvedMemberId,
-    view: "queue",
-    filters: resolvedFilters,
-  });
-
-  const selectedAccountId = normalizeFilterValue(resolvedFilters.accountId);
-  const selectedTaskId = normalizeFilterValue(resolvedFilters.taskId);
-  const selected = selectedAccountId
-    ? (items.find((item) => item.id === selectedAccountId) ?? null)
-    : selectedTaskId
-      ? (items.find(
-          (item) =>
-            item.primaryTaskId === selectedTaskId ||
-            item.taskIds.includes(selectedTaskId),
-        ) ?? null)
-      : null;
-  const selectedPrimary = selected ? primaryContact(selected) : null;
-  const selectedOutreachBlocked = selectedPrimary?.doNotContact === true;
-
-  const pagination = {
-    total: queuePayload.total ?? 0,
-    offset: queuePayload.offset ?? 0,
-    limit: queuePayload.limit ?? 50,
-    nextOffset: queuePayload.nextOffset ?? null,
-    nextCursor: queuePayload.nextCursor,
-    previousCursor: queuePayload.previousCursor,
-  };
-
-  const hasPrev = Boolean(pagination.previousCursor);
-  const hasNext = Boolean(pagination.nextCursor);
+  const hasFilters = [
+    filters.q,
+    filters.campaign,
+    filters.attempt,
+    filters.due,
+    filters.has,
+    filters.disposition,
+  ].some(Boolean);
+  const advancedCount = [
+    filters.campaign,
+    filters.attempt,
+    filters.has,
+    filters.disposition,
+  ].filter(Boolean).length;
+  const quickFilters = [
+    { label: "All follow-ups", due: "", disposition: "" },
+    { label: "Overdue", due: "overdue", disposition: "" },
+    { label: "Due now", due: "due_now", disposition: "" },
+    {
+      label: "Callbacks today",
+      due: "today",
+      disposition: "callback_requested",
+    },
+    { label: "Not started", due: "not_started", disposition: "" },
+  ];
 
   return (
-    <section className="space-y-6">
-      <nav
-        aria-label="Outbound views"
-        className="flex flex-wrap gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-2"
-      >
-        <a
-          href={resolvedQueueHref}
-          aria-current="page"
-          className="inline-flex min-h-[44px] items-center rounded-xl bg-primary-50 px-4 py-2 text-sm font-semibold text-primary-800"
-        >
-          Queue
-        </a>
-        {canImport ? (
-          <a
-            href={resolvedImportHref}
-            className="inline-flex min-h-[44px] items-center rounded-xl px-4 py-2 text-sm font-semibold text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface-muted)] hover:text-[color:var(--team-text)]"
-          >
-            Import
-          </a>
-        ) : null}
-        <a
-          href={resolvedPartnersHref}
-          className="inline-flex min-h-[44px] items-center rounded-xl px-4 py-2 text-sm font-semibold text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface-muted)] hover:text-[color:var(--team-text)]"
-        >
-          Partners
-        </a>
-      </nav>
-      <header className={TEAM_CARD_PADDED}>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h2 className={TEAM_SECTION_TITLE}>Outbound Prospects</h2>
-            <p className={TEAM_SECTION_SUBTITLE}>
-              Cold commercial outreach list. This queue is intentionally
-              separate from inbound leads and Sales HQ.
-            </p>
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-                Outbound / Cold commercial / Property managers
-              </span>
-              {memberLabel ? (
-                <span className="rounded-full bg-primary-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
-                  Assigned to {memberLabel}
-                </span>
-              ) : null}
-            </div>
-          </div>
-          <div className="text-right text-xs text-slate-500">
-            {pagination.total > 0 ? (
-              <span>
-                Showing {Math.min(pagination.offset + 1, pagination.total)}-
-                {Math.min(pagination.offset + items.length, pagination.total)}{" "}
-                of {pagination.total}
-                accounts
-              </span>
-            ) : (
-              <span>No open outbound accounts</span>
-            )}
-            <div className="mt-1">
-              Snapshot {formatOutboundEasternTime(queuePayload.snapshotAt)}
-            </div>
-          </div>
-        </div>
-      </header>
-
+    <section className="min-w-0 space-y-5 text-[color:var(--team-text)]">
+      {header(resolvedMemberId)}
       {directoryUnavailable ? (
-        <div
-          role="status"
-          className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
-        >
-          Team assignments are temporarily unavailable. The queue is still
-          current, but assignment names and assignment controls may be limited.
-        </div>
+        <p role="status" className={teamStatePanelClass("warning")}>
+          Team names couldn’t be loaded. Your current assignment is preserved;
+          reassigning accounts is temporarily unavailable.
+        </p>
       ) : null}
-
-      <div className={TEAM_CARD_PADDED}>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Accounts touched
-            </div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">
-              {queuePayload.summary?.scoreboard?.accountsTouched ?? 0}
-            </div>
-            <div className="mt-1 text-xs text-slate-500">
-              Accounts with at least one logged touch
-            </div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Conversations
-            </div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">
-              {queuePayload.summary?.scoreboard?.conversationsStarted ?? 0}
-            </div>
-            <div className="mt-1 text-xs text-slate-500">
-              Accounts past cold outreach into real dialogue
-            </div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Qualified partners
-            </div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">
-              {queuePayload.summary?.scoreboard?.qualifiedPartners ?? 0}
-            </div>
-            <div className="mt-1 text-xs text-slate-500">
-              Accounts that look strong enough to convert
-            </div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Active partners
-            </div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">
-              {queuePayload.summary?.scoreboard?.activePartners ?? 0}
-            </div>
-            <div className="mt-1 text-xs text-slate-500">
-              Converted accounts now in active partner status
-            </div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Avg fit score
-            </div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">
-              {queuePayload.summary?.scoreboard?.avgFitScore ?? 0}
-            </div>
-            <div className="mt-1 text-xs text-slate-500">
-              Average AI partner-fit score across the owned book
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Partner path mix
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                How the current outbound book is leaning by recommended partner
-                model
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-semibold text-slate-700">
-                Portal first{" "}
-                {queuePayload.summary?.scoreboard?.partnerPathMix.portalFirst ??
-                  0}
-              </span>
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-semibold text-slate-700">
-                Managed direct{" "}
-                {queuePayload.summary?.scoreboard?.partnerPathMix
-                  .managedDirect ?? 0}
-              </span>
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-semibold text-slate-700">
-                Hybrid{" "}
-                {queuePayload.summary?.scoreboard?.partnerPathMix.hybrid ?? 0}
-              </span>
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-semibold text-slate-700">
-                Not a fit{" "}
-                {queuePayload.summary?.scoreboard?.partnerPathMix.notAFit ?? 0}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h3 className="text-base font-semibold text-slate-900">Queue</h3>
-            <p className="mt-1 text-sm text-slate-600">
-              Account-first outreach. Select a row to work one business
-              relationship with linked contacts and tasks.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2 text-xs">
-            <a
-              className="inline-flex min-h-11 items-center rounded-full bg-slate-100 px-3 py-2 font-semibold text-slate-600 hover:bg-slate-200"
-              href={buildOutboundHref({
-                memberId: resolvedMemberId,
-                filters: resolvedFilters,
-                patch: {
-                  due: "",
-                  disposition: "",
-                  cursor: "",
-                  direction: "",
-                },
-              })}
-            >
-              All ({pagination.total})
-            </a>
-            <a
-              className="inline-flex min-h-11 items-center rounded-full bg-slate-50 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-100"
-              href={buildOutboundHref({
-                memberId: resolvedMemberId,
-                filters: resolvedFilters,
-                patch: {
-                  due: "not_started",
-                  cursor: "",
-                  direction: "",
-                },
-              })}
-            >
-              Not started ({queuePayload.summary?.notStarted ?? 0})
-            </a>
-            <a
-              className="inline-flex min-h-11 items-center rounded-full bg-amber-50 px-3 py-2 font-semibold text-amber-700 hover:bg-amber-100"
-              href={buildOutboundHref({
-                memberId: resolvedMemberId,
-                filters: resolvedFilters,
-                patch: {
-                  due: "due_now",
-                  cursor: "",
-                  direction: "",
-                },
-              })}
-            >
-              Due now ({queuePayload.summary?.dueNow ?? 0})
-            </a>
-            <a
-              className="inline-flex min-h-11 items-center rounded-full bg-rose-50 px-3 py-2 font-semibold text-rose-700 hover:bg-rose-100"
-              href={buildOutboundHref({
-                memberId: resolvedMemberId,
-                filters: resolvedFilters,
-                patch: {
-                  due: "overdue",
-                  cursor: "",
-                  direction: "",
-                },
-              })}
-            >
-              Overdue ({queuePayload.summary?.overdue ?? 0})
-            </a>
-            <a
-              className="inline-flex min-h-11 items-center rounded-full bg-primary-50 px-3 py-2 font-semibold text-primary-700 hover:bg-primary-100"
-              href={buildOutboundHref({
-                memberId: resolvedMemberId,
-                filters: resolvedFilters,
-                patch: {
-                  due: "today",
-                  disposition: "callback_requested",
-                  cursor: "",
-                  direction: "",
-                },
-              })}
-            >
-              Callbacks today ({queuePayload.summary?.callbacksToday ?? 0})
-            </a>
-            {canImport ? (
-              <a
-                className="inline-flex min-h-11 items-center rounded-full bg-white px-3 py-2 font-semibold text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
-                href={resolvedImportHref}
-              >
-                Import
-              </a>
-            ) : null}
-          </div>
-        </div>
-
-        <form
-          method="get"
-          action="/team/sales/outbound"
-          className="mt-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4"
-        >
-          <input
-            type="hidden"
-            name="out_account"
-            value={resolvedFilters.accountId ?? ""}
-          />
-          <input
-            type="hidden"
-            name="out_taskId"
-            value={resolvedFilters.taskId ?? ""}
-          />
-
-          <label className="flex w-full flex-col gap-1 text-xs text-slate-600 sm:max-w-xs">
-            <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Assigned to
-            </span>
-            <select
-              name="memberId"
-              defaultValue={resolvedMemberId}
-              className={TEAM_INPUT_COMPACT}
-            >
-              <option value="">Default assignee</option>
-              {members.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-            <label className="flex flex-col gap-1 text-xs text-slate-600 lg:col-span-2">
-              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Search
-              </span>
-              <input
-                name="out_q"
-                defaultValue={resolvedFilters.q ?? ""}
-                className={TEAM_INPUT_COMPACT}
-                placeholder="Company, name, phone, email..."
-              />
-            </label>
-
-            <label className="flex flex-col gap-1 text-xs text-slate-600">
-              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Campaign
-              </span>
-              <select
-                name="out_campaign"
-                defaultValue={resolvedFilters.campaign ?? ""}
-                className={TEAM_INPUT_COMPACT}
-              >
-                <option value="">All</option>
-                {(queuePayload.facets?.campaigns ?? []).map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="flex flex-col gap-1 text-xs text-slate-600">
-              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Attempt
-              </span>
-              <select
-                name="out_attempt"
-                defaultValue={resolvedFilters.attempt ?? ""}
-                className={TEAM_INPUT_COMPACT}
-              >
-                <option value="">All</option>
-                {(queuePayload.facets?.attempts ?? []).map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="flex flex-col gap-1 text-xs text-slate-600">
-              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Due
-              </span>
-              <select
-                name="out_due"
-                defaultValue={resolvedFilters.due ?? ""}
-                className={TEAM_INPUT_COMPACT}
-              >
-                <option value="">All</option>
-                <option value="not_started">Not started</option>
-                <option value="due_now">Due now</option>
-                <option value="overdue">Overdue</option>
-                <option value="today">Today</option>
-              </select>
-            </label>
-
-            <label className="flex flex-col gap-1 text-xs text-slate-600">
-              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Has
-              </span>
-              <select
-                name="out_has"
-                defaultValue={resolvedFilters.has ?? ""}
-                className={TEAM_INPUT_COMPACT}
-              >
-                <option value="">Any</option>
-                <option value="phone">Phone</option>
-                <option value="email">Email</option>
-                <option value="both">Both</option>
-              </select>
-            </label>
-
-            <label className="flex flex-col gap-1 text-xs text-slate-600 lg:col-span-2">
-              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Disposition
-              </span>
-              <select
-                name="out_disposition"
-                defaultValue={resolvedFilters.disposition ?? ""}
-                className={TEAM_INPUT_COMPACT}
-              >
-                <option value="">All</option>
-                {(queuePayload.facets?.dispositions ?? []).map((value) => (
-                  <option key={value} value={value}>
-                    {value.replace(/_/g, " ")}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div className="flex items-end gap-2">
-              <SubmitButton
-                className={`${teamButtonClass("primary", "sm")} w-full sm:w-auto`}
-                pendingLabel="Filtering..."
-              >
-                Filter
-              </SubmitButton>
-              <a
-                className="inline-flex min-h-11 items-center text-xs font-semibold text-slate-500 hover:text-slate-700"
-                href={buildOutboundHref({
-                  memberId: resolvedMemberId,
-                  filters: {},
-                })}
-              >
-                Reset
-              </a>
-            </div>
-          </div>
-        </form>
-
-        {items.length === 0 ? (
-          <div className={`${TEAM_EMPTY_STATE} mt-4`}>
-            No outbound accounts match these filters.
-          </div>
-        ) : (
-          <>
-            <form
-              id="outboundBulkForm"
-              action={bulkOutboundAction}
-              className="mt-4 grid gap-4 rounded-2xl border border-slate-200 bg-white p-4"
-            >
-              <input
-                type="hidden"
-                name="idempotencyKey"
-                value={`outbound-bulk:${randomUUID()}`}
-              />
-              <div className="grid w-full gap-3 sm:grid-cols-3">
-                <label className="flex flex-col gap-1 text-xs text-slate-600">
-                  <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                    Bulk action
-                  </span>
-                  <select
-                    name="action"
-                    defaultValue="assign"
-                    className={TEAM_INPUT_COMPACT}
-                  >
-                    <option value="assign">Assign</option>
-                    <option value="assign_start">Assign + start cadence</option>
-                    <option value="start">Start cadence</option>
-                    <option value="snooze">Snooze</option>
-                  </select>
-                </label>
-                <label className="flex flex-col gap-1 text-xs text-slate-600">
-                  <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                    Assign to
-                  </span>
-                  <select
-                    name="assignedToMemberId"
-                    defaultValue={resolvedMemberId}
-                    className={TEAM_INPUT_COMPACT}
-                  >
-                    <option value="">Default assignee</option>
-                    {members.map((member) => (
-                      <option key={member.id} value={member.id}>
-                        {member.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex flex-col gap-1 text-xs text-slate-600">
-                  <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                    Snooze until
-                  </span>
-                  <select
-                    name="snoozePreset"
-                    defaultValue="tomorrow_9am"
-                    className={TEAM_INPUT_COMPACT}
-                  >
-                    <option value="today_5pm">Later today (5pm ET)</option>
-                    <option value="tomorrow_9am">Tomorrow (9am ET)</option>
-                    <option value="plus_3d_9am">+3 days (9am ET)</option>
-                    <option value="next_monday_9am">
-                      Next Monday (9am ET)
-                    </option>
-                    <option value="plus_7d_9am">+7 days (9am ET)</option>
-                  </select>
-                  <span className="text-[11px] text-slate-500">
-                    Snooze skips rows that are not started yet.
-                  </span>
-                </label>
-              </div>
-              <details className="rounded-xl border border-slate-200 bg-slate-50">
-                <summary className="flex min-h-11 cursor-pointer items-center px-3 py-2 text-sm font-semibold text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500">
-                  Choose accounts for this bulk action
-                </summary>
-                <div className="grid gap-2 border-t border-slate-200 p-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {items.map((item) => {
-                    const hasDnc = item.dncContactCount > 0;
-                    return (
-                      <label
-                        key={item.id}
-                        className={`flex min-h-11 items-start gap-3 rounded-xl border px-3 py-2 text-xs ${
-                          hasDnc
-                            ? "cursor-not-allowed border-rose-200 bg-rose-50 text-rose-900"
-                            : "cursor-pointer border-slate-200 bg-white text-slate-700"
-                        }`}
-                      >
-                        <input
-                          form="outboundBulkForm"
-                          type="checkbox"
-                          name="taskRefs"
-                          value={JSON.stringify(
-                            item.tasks.map((task) => ({
-                              id: task.id,
-                              version: task.version,
-                            })),
-                          )}
-                          disabled={hasDnc}
-                          className="mt-0.5 h-5 w-5 shrink-0"
-                        />
-                        <span>
-                          <span className="block font-semibold text-slate-900">
-                            {item.account.name}
-                          </span>
-                          <span className="mt-0.5 block">
-                            {hasDnc
-                              ? "Not eligible: account contains a DNC contact"
-                              : `${item.openTaskCount} eligible task${item.openTaskCount === 1 ? "" : "s"}`}
-                          </span>
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </details>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <OutboundBulkSelectionControls formId="outboundBulkForm" />
-                <SubmitButton
-                  className={teamButtonClass("primary", "sm")}
-                  pendingLabel="Applying..."
-                >
-                  Apply bulk action
-                </SubmitButton>
-              </div>
-            </form>
-
-            {selected ? (
-              <div className="mt-4 rounded-2xl border border-primary-200 bg-primary-50/60 p-4 lg:hidden">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary-700">
-                      Selected account
-                    </p>
-                    <p className="mt-1 text-base font-semibold text-slate-900">
-                      {selected.account.name}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-600">
-                      {selected.contactCount} contact
-                      {selected.contactCount === 1 ? "" : "s"} /{" "}
-                      {selected.openTaskCount} open task
-                      {selected.openTaskCount === 1 ? "" : "s"}
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold">
-                      <span className="rounded-full border border-primary-200 bg-white px-2.5 py-1 text-slate-800">
-                        Owner:{" "}
-                        {assigneeLabel(selected.assignedToMemberId, members)}
-                      </span>
-                      <span className="rounded-full border border-primary-200 bg-white px-2.5 py-1 text-slate-800">
-                        Cadence: {selected.dueAt ? "Active" : "Not started"}
-                      </span>
-                      <span className="rounded-full border border-primary-200 bg-white px-2.5 py-1 text-slate-800">
-                        Disposition:{" "}
-                        {formatDisposition(selected.lastDisposition)}
-                      </span>
-                      {selectedOutreachBlocked ? (
-                        <span className="rounded-full border border-rose-300 bg-rose-50 px-2.5 py-1 text-rose-950">
-                          Do Not Contact — outreach blocked
-                        </span>
-                      ) : selected.dncContactCount > 0 ? (
-                        <span className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-amber-950">
-                          {selected.dncContactCount} linked DNC contact
-                          {selected.dncContactCount === 1 ? "" : "s"}
-                        </span>
-                      ) : null}
-                    </div>
-                    {selected.account.brief?.summary ? (
-                      <p className="mt-2 text-sm text-slate-600">
-                        {selected.account.brief.summary}
-                      </p>
-                    ) : null}
-                  </div>
-                  <a
-                    href={buildOutboundHref({
-                      memberId: resolvedMemberId,
-                      filters: resolvedFilters,
-                      patch: { accountId: "", taskId: "" },
-                    })}
-                    className="inline-flex min-h-11 min-w-11 items-center justify-center text-xs font-semibold text-primary-700 hover:text-primary-800"
-                  >
-                    Close
-                  </a>
-                </div>
-                <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                  <div className="rounded-xl border border-white/80 bg-white px-3 py-2 text-xs text-slate-600">
-                    <div className="font-semibold text-slate-900">
-                      Last touch
-                    </div>
-                    <div className="mt-1">
-                      {formatTimestamp(selected.account.lastTouchAt) ??
-                        "No touch yet"}
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-white/80 bg-white px-3 py-2 text-xs text-slate-600">
-                    <div className="font-semibold text-slate-900">
-                      Next touch
-                    </div>
-                    <div className="mt-1">
-                      {formatTimestamp(selected.account.nextTouchAt) ??
-                        "Not scheduled"}
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-white/80 bg-white px-3 py-2 text-xs text-slate-600">
-                    <div className="font-semibold text-slate-900">Fit</div>
-                    <div className="mt-1">
-                      {selected.account.fitScore !== null &&
-                      selected.account.fitScore !== undefined
-                        ? `${selected.account.fitScore}/100 · ${formatPartnerFit(selected.account.portalFit)}`
-                        : formatPartnerFit(selected.account.portalFit)}
-                    </div>
-                  </div>
-                </div>
-                {selectedOutreachBlocked && selectedPrimary ? (
-                  <div
-                    role="status"
-                    className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950"
-                  >
-                    <p className="font-semibold">Outreach is blocked</p>
-                    <p className="mt-1">
-                      {selectedPrimary.name} is marked Do Not Contact. Call,
-                      message, suggestion, callback, and cadence controls are
-                      unavailable.
-                    </p>
-                    {selectedPrimary.doNotContactReason ? (
-                      <p className="mt-1 text-xs">
-                        Recorded reason: {selectedPrimary.doNotContactReason}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : selectedPrimary ? (
-                  <div className="mt-3 grid gap-3 rounded-xl border border-primary-200 bg-white p-3">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-600">
-                        Record outcome
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {[
-                          { key: "connected", label: "Connected" },
-                          { key: "no_answer", label: "No answer" },
-                          { key: "left_voicemail", label: "Left voicemail" },
-                          { key: "email_sent", label: "Email sent" },
-                          { key: "not_interested", label: "Not interested" },
-                          { key: "dnc", label: "Mark DNC" },
-                        ].map((outcome) => (
-                          <form
-                            key={outcome.key}
-                            action={setOutboundDispositionAction}
-                          >
-                            <input
-                              type="hidden"
-                              name="taskId"
-                              value={selected.primaryTaskId}
-                            />
-                            <input
-                              type="hidden"
-                              name="disposition"
-                              value={outcome.key}
-                            />
-                            <input
-                              type="hidden"
-                              name="expectedVersion"
-                              value={selected.primaryTaskVersion}
-                            />
-                            <input
-                              type="hidden"
-                              name="idempotencyKey"
-                              value={`outbound-disposition:${randomUUID()}`}
-                            />
-                            <SubmitButton
-                              className={teamButtonClass("secondary", "sm")}
-                              pendingLabel="Saving..."
-                            >
-                              {outcome.label}
-                            </SubmitButton>
-                          </form>
-                        ))}
-                      </div>
-                    </div>
-                    <form
-                      action={setOutboundDispositionAction}
-                      className="grid gap-2"
-                    >
-                      <input
-                        type="hidden"
-                        name="taskId"
-                        value={selected.primaryTaskId}
-                      />
-                      <input
-                        type="hidden"
-                        name="disposition"
-                        value="callback_requested"
-                      />
-                      <input
-                        type="hidden"
-                        name="expectedVersion"
-                        value={selected.primaryTaskVersion}
-                      />
-                      <input
-                        type="hidden"
-                        name="idempotencyKey"
-                        value={`outbound-disposition:${randomUUID()}`}
-                      />
-                      <label className="grid gap-1 text-xs text-slate-700">
-                        <span className="font-semibold">
-                          Callback date and time — {OUTBOUND_TIME_ZONE}
-                        </span>
-                        <span>
-                          Eastern time; DST gaps and repeated times fail closed.
-                        </span>
-                        <input
-                          name="callbackAt"
-                          type="datetime-local"
-                          required
-                          className={TEAM_INPUT_COMPACT}
-                        />
-                      </label>
-                      <SubmitButton
-                        className={teamButtonClass("primary", "sm")}
-                        pendingLabel="Scheduling..."
-                      >
-                        Schedule callback
-                      </SubmitButton>
-                    </form>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            <div className="mt-4 space-y-3 lg:hidden">
-              {items.map((item) => {
-                const dueBadge = formatDueBadge(item);
-                const primary = primaryContact(item);
-                const outreachBlocked = primary.doNotContact;
-                const isSelected = Boolean(selected?.id === item.id);
-                return (
-                  <div
-                    key={item.id}
-                    className={`rounded-2xl border px-4 py-4 shadow-sm ${
-                      isSelected
-                        ? "border-primary-300 bg-primary-50/70"
-                        : "border-slate-200 bg-white"
-                    }`}
-                  >
-                    <a
-                      href={buildOutboundHref({
-                        memberId: resolvedMemberId,
-                        filters: resolvedFilters,
-                        patch: {
-                          accountId: item.id,
-                          taskId: item.primaryTaskId,
-                        },
-                      })}
-                      className="block"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-base font-semibold text-slate-900">
-                            {item.account.name}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            Owner:{" "}
-                            {assigneeLabel(item.assignedToMemberId, members)}
-                          </div>
-                        </div>
-                        <div className="max-w-[12rem] text-right">
-                          <span
-                            className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${dueBadge.tone}`}
-                          >
-                            {dueBadge.label}
-                          </span>
-                          <span className="mt-1 block text-[11px] text-slate-600">
-                            {formatTimestamp(item.dueAt) ??
-                              "Cadence not started"}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold">
-                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">
-                          Cadence: {item.dueAt ? "Active" : "Not started"}
-                        </span>
-                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">
-                          Disposition: {formatDisposition(item.lastDisposition)}
-                        </span>
-                        {outreachBlocked ? (
-                          <span className="rounded-full border border-rose-300 bg-rose-50 px-2.5 py-1 text-rose-900">
-                            Do Not Contact — outreach blocked
-                          </span>
-                        ) : (
-                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-900">
-                            Contactable
-                          </span>
-                        )}
-                        {!outreachBlocked && item.dncContactCount > 0 ? (
-                          <span className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-amber-950">
-                            {item.dncContactCount} other linked DNC contact
-                            {item.dncContactCount === 1 ? "" : "s"}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="mt-3 space-y-1 text-sm text-slate-700">
-                        <div>{primary.name}</div>
-                        <div className="break-words text-xs text-slate-500">
-                          {primary.phone ?? "No phone"} ·{" "}
-                          {primary.email ?? "No email"}
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {item.contactCount} contact
-                          {item.contactCount === 1 ? "" : "s"} /{" "}
-                          {item.openTaskCount} open task
-                          {item.openTaskCount === 1 ? "" : "s"}
-                        </div>
-                      </div>
-                    </a>
-                    {outreachBlocked ? (
-                      <div
-                        role="status"
-                        className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-medium text-rose-950"
-                      >
-                        Call, message, suggestions, callbacks, and cadence
-                        controls are unavailable because {primary.name} is
-                        marked Do Not Contact.
-                      </div>
-                    ) : (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {canPlaceCalls ? (
-                          <form action={startContactCallAction}>
-                            <input
-                              type="hidden"
-                              name="contactId"
-                              value={primary.id}
-                            />
-                            <input
-                              type="hidden"
-                              name="idempotencyKey"
-                              value={`team-call:${randomUUID()}`}
-                            />
-                            <input
-                              type="hidden"
-                              name="explicitNewAttempt"
-                              value="START NEW CALL"
-                            />
-                            <input
-                              type="hidden"
-                              name="taskId"
-                              value={item.primaryTaskId}
-                            />
-                            <SubmitButton
-                              className={teamButtonClass("primary", "sm")}
-                              pendingLabel="Calling..."
-                            >
-                              Call
-                            </SubmitButton>
-                          </form>
-                        ) : null}
-                        <form action={openContactThreadAction}>
-                          <input
-                            type="hidden"
-                            name="contactId"
-                            value={primary.id}
-                          />
-                          <input
-                            type="hidden"
-                            name="channel"
-                            value={primary.email ? "email" : "sms"}
-                          />
-                          <SubmitButton
-                            className={teamButtonClass("secondary", "sm")}
-                            pendingLabel="Opening..."
-                          >
-                            Message
-                          </SubmitButton>
-                        </form>
-                        <form action={draftOutboundFirstTouchAction}>
-                          <input
-                            type="hidden"
-                            name="contactId"
-                            value={primary.id}
-                          />
-                          <input
-                            type="hidden"
-                            name="taskId"
-                            value={item.primaryTaskId}
-                          />
-                          <input
-                            type="hidden"
-                            name="channel"
-                            value={primary.email ? "email" : "sms"}
-                          />
-                          <SubmitButton
-                            className={teamButtonClass("secondary", "sm")}
-                            pendingLabel="Suggesting..."
-                          >
-                            Suggest
-                          </SubmitButton>
-                        </form>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="mt-4 hidden gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px]">
-              <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)]">
-                <table className="w-full table-fixed text-left text-xs">
-                  <thead className="sticky top-0 z-10 bg-[color:var(--team-surface-muted)] text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">
-                    <tr>
-                      <th className="w-[164px] px-4 py-3">Cadence / due</th>
-                      <th className="w-[132px] px-4 py-3">Owner</th>
-                      <th className="w-[76px] px-4 py-3">Attempt</th>
-                      <th className="px-4 py-3">Prospect</th>
-                      <th className="hidden w-[176px] px-4 py-3 text-right md:table-cell">
-                        Actions
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[color:var(--team-border)]">
-                    {items.map((item) => {
-                      const dueBadge = formatDueBadge(item);
-                      const primary = primaryContact(item);
-                      const outreachBlocked = primary.doNotContact;
-                      const isSelected = Boolean(selected?.id === item.id);
-                      return (
-                        <tr
-                          key={item.id}
-                          className={
-                            isSelected
-                              ? "bg-primary-50/40"
-                              : "hover:bg-slate-50"
-                          }
-                        >
-                          <td className="px-4 py-3">
-                            <span
-                              className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${dueBadge.tone}`}
-                            >
-                              {dueBadge.label}
-                            </span>
-                            <span className="mt-1 block text-[11px] text-[color:var(--team-text-soft)]">
-                              {item.dueAt ? "Cadence active" : "Not started"}
-                            </span>
-                            {item.dueAt ? (
-                              <span className="mt-1 block break-words text-[10px] leading-4 text-[color:var(--team-text-soft)]">
-                                {formatTimestamp(item.dueAt)}
-                              </span>
-                            ) : null}
-                          </td>
-                          <td className="px-4 py-3 text-[11px] font-medium text-[color:var(--team-text-muted)]">
-                            {assigneeLabel(item.assignedToMemberId, members)}
-                          </td>
-                          <td className="px-4 py-3 text-[color:var(--team-text-muted)]">
-                            {item.attempt}
-                          </td>
-                          <td className="min-w-0 overflow-hidden px-4 py-3">
-                            <a
-                              href={buildOutboundHref({
-                                memberId: resolvedMemberId,
-                                filters: resolvedFilters,
-                                patch: {
-                                  accountId: item.id,
-                                  taskId: item.primaryTaskId,
-                                },
-                              })}
-                              className="block min-w-0"
-                            >
-                              <div className="truncate text-sm font-semibold text-[color:var(--team-text)]">
-                                {item.account.name}
-                              </div>
-                              <div className="mt-0.5 truncate text-[11px] text-[color:var(--team-text-soft)]">
-                                {primary.name}
-                                {item.account.segment
-                                  ? ` / ${item.account.segment}`
-                                  : item.campaign
-                                    ? ` / ${item.campaign}`
-                                    : ""}
-                              </div>
-                              <div className="mt-1 truncate text-[11px] text-[color:var(--team-text-soft)]">
-                                <span>{primary.phone ?? "No phone"}</span>
-                                <span className="mx-1">{"\u2022"}</span>
-                                <span>{primary.email ?? "No email"}</span>
-                                <span className="mx-1">{"\u2022"}</span>
-                                <span>
-                                  Disposition:{" "}
-                                  {formatDisposition(item.lastDisposition)}
-                                </span>
-                              </div>
-                              <div className="mt-1 flex flex-wrap gap-1 text-[11px] font-semibold">
-                                {outreachBlocked ? (
-                                  <span className="rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-rose-900">
-                                    DNC — outreach blocked
-                                  </span>
-                                ) : (
-                                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-900">
-                                    Contactable
-                                  </span>
-                                )}
-                                {!outreachBlocked &&
-                                item.dncContactCount > 0 ? (
-                                  <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-amber-950">
-                                    {item.dncContactCount} linked DNC
-                                  </span>
-                                ) : null}
-                              </div>
-                              <div className="mt-1 truncate text-[11px] text-[color:var(--team-text-soft)]">
-                                {item.contactCount} contact
-                                {item.contactCount === 1 ? "" : "s"} /{" "}
-                                {item.openTaskCount} open task
-                                {item.openTaskCount === 1 ? "" : "s"} / Account{" "}
-                                {item.account.status?.replace(/_/g, " ") ??
-                                  "linked"}
-                              </div>
-                            </a>
-                          </td>
-                          <td className="relative hidden w-[176px] border-l border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-4 py-3 md:table-cell">
-                            {outreachBlocked ? (
-                              <div className="rounded-xl border border-rose-200 bg-rose-50 p-2 text-right text-[11px] font-semibold text-rose-900">
-                                Do Not Contact
-                                <span className="mt-1 block font-normal">
-                                  Outreach disabled
-                                </span>
-                              </div>
-                            ) : (
-                              <div className="flex flex-col items-end gap-2">
-                                {canPlaceCalls ? (
-                                  <form action={startContactCallAction}>
-                                    <input
-                                      type="hidden"
-                                      name="contactId"
-                                      value={primary.id}
-                                    />
-                                    <input
-                                      type="hidden"
-                                      name="idempotencyKey"
-                                      value={`team-call:${randomUUID()}`}
-                                    />
-                                    <input
-                                      type="hidden"
-                                      name="explicitNewAttempt"
-                                      value="START NEW CALL"
-                                    />
-                                    <input
-                                      type="hidden"
-                                      name="taskId"
-                                      value={item.primaryTaskId}
-                                    />
-                                    <SubmitButton
-                                      className={teamButtonClass(
-                                        "primary",
-                                        "sm",
-                                      )}
-                                      pendingLabel="Calling..."
-                                    >
-                                      Call
-                                    </SubmitButton>
-                                  </form>
-                                ) : null}
-                                <form action={openContactThreadAction}>
-                                  <input
-                                    type="hidden"
-                                    name="contactId"
-                                    value={primary.id}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="channel"
-                                    value={primary.email ? "email" : "sms"}
-                                  />
-                                  <SubmitButton
-                                    className={teamButtonClass(
-                                      "secondary",
-                                      "sm",
-                                    )}
-                                    pendingLabel="Opening..."
-                                  >
-                                    Msg
-                                  </SubmitButton>
-                                </form>
-                                <form action={draftOutboundFirstTouchAction}>
-                                  <input
-                                    type="hidden"
-                                    name="contactId"
-                                    value={primary.id}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="taskId"
-                                    value={item.primaryTaskId}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="channel"
-                                    value={primary.email ? "email" : "sms"}
-                                  />
-                                  <SubmitButton
-                                    className={teamButtonClass(
-                                      "secondary",
-                                      "sm",
-                                    )}
-                                    pendingLabel="Suggesting..."
-                                  >
-                                    Suggest
-                                  </SubmitButton>
-                                </form>
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <aside className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
-                {selected ? (
-                  <div className="space-y-4">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">
-                        Selected account
-                      </p>
-                      <p className="mt-1 text-base font-semibold text-[color:var(--team-text)]">
-                        {selected.account.name}
-                      </p>
-                      <p className="mt-1 text-xs text-[color:var(--team-text-muted)]">
-                        {selected.contactCount} contact
-                        {selected.contactCount === 1 ? "" : "s"} /{" "}
-                        {selected.openTaskCount} open task
-                        {selected.openTaskCount === 1 ? "" : "s"}
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-1 text-[11px] font-semibold">
-                        <span className="rounded-full border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-2 py-1 text-[color:var(--team-text)]">
-                          Owner:{" "}
-                          {assigneeLabel(selected.assignedToMemberId, members)}
-                        </span>
-                        <span className="rounded-full border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-2 py-1 text-[color:var(--team-text)]">
-                          Disposition:{" "}
-                          {formatDisposition(selected.lastDisposition)}
-                        </span>
-                        {selectedOutreachBlocked ? (
-                          <span className="rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-rose-950">
-                            Do Not Contact — outreach blocked
-                          </span>
-                        ) : selected.dncContactCount > 0 ? (
-                          <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-amber-950">
-                            {selected.dncContactCount} linked DNC contact
-                            {selected.dncContactCount === 1 ? "" : "s"}
-                          </span>
-                        ) : null}
-                      </div>
-                      <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
-                        Account{" "}
-                        {selected.account.status?.replace(/_/g, " ") ??
-                          "linked"}
-                        {selected.account.segment
-                          ? ` / ${selected.account.segment}`
-                          : ""}
-                      </p>
-                      <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
-                        Attempt {selected.attempt} /{" "}
-                        {selected.campaign ?? "outbound"} / Due{" "}
-                        {formatDue(selected)}
-                      </p>
-                      <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
-                        {selected.dueAt
-                          ? "Cadence started"
-                          : "Cadence not started"}
-                        {formatTimestamp(selected.startedAt)
-                          ? ` (${formatTimestamp(selected.startedAt)})`
-                          : ""}
-                      </p>
-                      {formatTimestamp(selected.reminderAt) ? (
-                        <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
-                          Reminder scheduled{" "}
-                          {formatTimestamp(selected.reminderAt)}
-                        </p>
-                      ) : null}
-                      {selected.account.lastTouchAt ? (
-                        <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
-                          Account last touch{" "}
-                          {formatTimestamp(selected.account.lastTouchAt)}
-                        </p>
-                      ) : null}
-                      {selected.account.nextTouchAt ? (
-                        <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
-                          Account next touch{" "}
-                          {formatTimestamp(selected.account.nextTouchAt)}
-                        </p>
-                      ) : null}
-                      {selected.noteSnippet ? (
-                        <p className="mt-3 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-3 py-2 text-xs text-[color:var(--team-text-muted)]">
-                          {selected.noteSnippet}
-                        </p>
-                      ) : null}
-                    </div>
-
-                    {selected.account.brief ? (
-                      <div className="rounded-xl border border-primary-200 bg-primary-50/70 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary-700">
-                              AI account brief
-                            </p>
-                            <p className="mt-1 text-xs text-primary-900">
-                              Prep for the next real outreach touch.
-                            </p>
-                          </div>
-                          <div className="text-right text-[11px] text-primary-700">
-                            <div>
-                              {selected.account.brief.provider === "openai"
-                                ? "AI brief"
-                                : "Fallback brief"}
-                            </div>
-                            <div>
-                              {formatTimestamp(
-                                selected.account.brief.updatedAt,
-                              ) ?? selected.account.brief.updatedAt}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="mt-3 space-y-3 text-xs text-slate-700">
-                          <div>
-                            <p className="font-semibold text-slate-900">
-                              Who they are
-                            </p>
-                            <p className="mt-1">
-                              {selected.account.brief.summary}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="font-semibold text-slate-900">
-                              Why they matter
-                            </p>
-                            <p className="mt-1">
-                              {selected.account.brief.whyFit}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="font-semibold text-slate-900">
-                              Service angle
-                            </p>
-                            <p className="mt-1">
-                              {selected.account.brief.serviceAngle}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="font-semibold text-slate-900">
-                              Best opener
-                            </p>
-                            <p className="mt-1 rounded-lg border border-primary-200 bg-white px-3 py-2 text-slate-900">
-                              {selected.account.brief.bestOpener}
-                            </p>
-                          </div>
-                          {selected.account.brief.likelyObjections.length ? (
-                            <div>
-                              <p className="font-semibold text-slate-900">
-                                Likely objections
-                              </p>
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {selected.account.brief.likelyObjections.map(
-                                  (item) => (
-                                    <span
-                                      key={item}
-                                      className="rounded-full border border-primary-200 bg-white px-2.5 py-1 text-[11px] text-slate-700"
-                                    >
-                                      {item}
-                                    </span>
-                                  ),
-                                )}
-                              </div>
-                            </div>
-                          ) : null}
-                          <div>
-                            <p className="font-semibold text-slate-900">
-                              Best next move
-                            </p>
-                            <p className="mt-1">
-                              {selected.account.brief.recommendedNextMove}
-                            </p>
-                          </div>
-                          <div className="rounded-lg border border-primary-200 bg-white px-3 py-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <p className="font-semibold text-slate-900">
-                                  Suggested partner path
-                                </p>
-                                <p className="mt-1 text-slate-700">
-                                  {selected.account.brief.fitReason}
-                                </p>
-                              </div>
-                              <div className="text-right">
-                                <div className="rounded-full border border-primary-200 bg-primary-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
-                                  {formatPartnerFit(
-                                    selected.account.brief.partnerFit,
-                                  )}
-                                </div>
-                                <div className="mt-2 text-[11px] text-slate-500">
-                                  Fit score {selected.account.brief.fitScore}
-                                  /100
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">
-                            Account history
-                          </p>
-                          <p className="mt-1 text-xs text-[color:var(--team-text-muted)]">
-                            Recent import, suggestion, disposition, recap, and
-                            conversion activity for this relationship.
-                          </p>
-                        </div>
-                      </div>
-                      {selected.account.history &&
-                      selected.account.history.length > 0 ? (
-                        <div className="mt-3 space-y-2">
-                          {selected.account.history.map((entry) => {
-                            const kind = formatHistoryKind(entry.kind);
-                            return (
-                              <div
-                                key={entry.id}
-                                className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-3 py-3"
-                              >
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <span
-                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${kind.tone}`}
-                                      >
-                                        {kind.label}
-                                      </span>
-                                      <span className="text-sm font-semibold text-[color:var(--team-text)]">
-                                        {entry.title}
-                                      </span>
-                                    </div>
-                                    <p className="mt-1 text-xs text-[color:var(--team-text-muted)]">
-                                      {entry.summary}
-                                    </p>
-                                    {entry.contactName ? (
-                                      <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
-                                        {entry.contactName}
-                                      </p>
-                                    ) : null}
-                                  </div>
-                                  <div className="shrink-0 text-[11px] text-[color:var(--team-text-soft)]">
-                                    {formatTimestamp(entry.at) ?? entry.at}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="mt-3 rounded-xl border border-dashed border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-3 py-3 text-xs text-[color:var(--team-text-soft)]">
-                          No account activity yet beyond the current queue
-                          state.
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">
-                        Linked contacts
-                      </p>
-                      <div className="mt-2 space-y-3">
-                        {selected.contacts.map((contact) => (
-                          <div
-                            key={contact.id}
-                            className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-3"
-                          >
-                            <div className="text-sm font-semibold text-[color:var(--team-text)]">
-                              {contact.name}
-                            </div>
-                            <div className="mt-1 text-xs text-[color:var(--team-text-muted)]">
-                              {contact.phone ?? "No phone"} /{" "}
-                              {contact.email ?? "No email"}
-                            </div>
-                            {contact.doNotContact ? (
-                              <div
-                                role="status"
-                                className="mt-2 rounded-lg border border-rose-200 bg-rose-50 p-2 text-xs text-rose-950"
-                              >
-                                <span className="font-semibold">
-                                  Do Not Contact — outreach disabled
-                                </span>
-                                {contact.doNotContactReason ? (
-                                  <span className="mt-1 block">
-                                    {contact.doNotContactReason}
-                                  </span>
-                                ) : null}
-                              </div>
-                            ) : (
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {canPlaceCalls ? (
-                                  <form action={startContactCallAction}>
-                                    <input
-                                      type="hidden"
-                                      name="contactId"
-                                      value={contact.id}
-                                    />
-                                    <input
-                                      type="hidden"
-                                      name="idempotencyKey"
-                                      value={`team-call:${randomUUID()}`}
-                                    />
-                                    <input
-                                      type="hidden"
-                                      name="explicitNewAttempt"
-                                      value="START NEW CALL"
-                                    />
-                                    <input
-                                      type="hidden"
-                                      name="taskId"
-                                      value={selected.primaryTaskId}
-                                    />
-                                    <SubmitButton
-                                      className={teamButtonClass(
-                                        "primary",
-                                        "sm",
-                                      )}
-                                      pendingLabel="Calling..."
-                                    >
-                                      Call
-                                    </SubmitButton>
-                                  </form>
-                                ) : null}
-                                <form action={openContactThreadAction}>
-                                  <input
-                                    type="hidden"
-                                    name="contactId"
-                                    value={contact.id}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="channel"
-                                    value={contact.email ? "email" : "sms"}
-                                  />
-                                  <SubmitButton
-                                    className={teamButtonClass(
-                                      "secondary",
-                                      "sm",
-                                    )}
-                                    pendingLabel="Opening..."
-                                  >
-                                    Message
-                                  </SubmitButton>
-                                </form>
-                                <form action={draftOutboundFirstTouchAction}>
-                                  <input
-                                    type="hidden"
-                                    name="contactId"
-                                    value={contact.id}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="taskId"
-                                    value={selected.primaryTaskId}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="channel"
-                                    value={contact.email ? "email" : "sms"}
-                                  />
-                                  <SubmitButton
-                                    className={teamButtonClass(
-                                      "secondary",
-                                      "sm",
-                                    )}
-                                    pendingLabel="Suggesting..."
-                                  >
-                                    Suggest
-                                  </SubmitButton>
-                                </form>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {selectedOutreachBlocked && selectedPrimary ? (
-                      <div
-                        role="status"
-                        className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950"
-                      >
-                        <p className="font-semibold">Outreach is blocked</p>
-                        <p className="mt-1 text-xs">
-                          {selectedPrimary.name} is marked Do Not Contact. Call,
-                          message, disposition, suggestion, callback, and
-                          cadence controls are unavailable.
-                        </p>
-                        {selectedPrimary.doNotContactReason ? (
-                          <p className="mt-1 text-xs">
-                            Recorded reason:{" "}
-                            {selectedPrimary.doNotContactReason}
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <>
-                        {!selected.dueAt ? (
-                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                              Kickoff
-                            </p>
-                            <p className="mt-1 text-xs text-slate-600">
-                              Make your first outreach (call/email), then click
-                              a disposition below (Connected / No answer / Left
-                              VM / Emailed). That first disposition starts the
-                              cadence and schedules the follow-ups.
-                            </p>
-                          </div>
-                        ) : null}
-
-                        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">
-                            Call script
-                          </p>
-                          <p className="mt-1">
-                            Hi, this is Stonegate Junk Removal in Georgia. We
-                            help property managers with unit cleanouts and bulk
-                            pickup. Do you handle any properties that need
-                            haul-off this month?
-                          </p>
-                        </div>
-
-                        <div className="flex flex-wrap gap-2">
-                          {[
-                            { key: "connected", label: "Connected" },
-                            { key: "partner", label: "Partner" },
-                            { key: "no_answer", label: "No answer" },
-                            { key: "left_voicemail", label: "Left VM" },
-                            { key: "email_sent", label: "Emailed" },
-                            { key: "not_interested", label: "Not interested" },
-                            { key: "dnc", label: "DNC" },
-                          ].map((d) => (
-                            <form
-                              key={d.key}
-                              action={setOutboundDispositionAction}
-                            >
-                              <input
-                                type="hidden"
-                                name="taskId"
-                                value={selected.primaryTaskId}
-                              />
-                              <input
-                                type="hidden"
-                                name="disposition"
-                                value={d.key}
-                              />
-                              <input
-                                type="hidden"
-                                name="expectedVersion"
-                                value={selected.primaryTaskVersion}
-                              />
-                              <input
-                                type="hidden"
-                                name="idempotencyKey"
-                                value={`outbound-disposition:${randomUUID()}`}
-                              />
-                              <SubmitButton
-                                className={teamButtonClass("secondary", "sm")}
-                                pendingLabel="Saving..."
-                              >
-                                {d.label}
-                              </SubmitButton>
-                            </form>
-                          ))}
-                        </div>
-
-                        <div className="rounded-xl border border-slate-200 bg-white p-3">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            Detailed update
-                          </p>
-                          <p className="mt-1 text-xs text-slate-600">
-                            Save a quick recap from the call or reply so the
-                            next move is easier to pick up later.
-                          </p>
-                          <form
-                            action={setOutboundDispositionAction}
-                            className="mt-3 flex flex-col gap-2"
-                          >
-                            <input
-                              type="hidden"
-                              name="taskId"
-                              value={selected.primaryTaskId}
-                            />
-                            <input
-                              type="hidden"
-                              name="expectedVersion"
-                              value={selected.primaryTaskVersion}
-                            />
-                            <input
-                              type="hidden"
-                              name="idempotencyKey"
-                              value={`outbound-disposition:${randomUUID()}`}
-                            />
-                            <select
-                              name="disposition"
-                              defaultValue={selected.lastDisposition ?? ""}
-                              className={TEAM_INPUT_COMPACT}
-                            >
-                              <option value="">Choose disposition</option>
-                              <option value="connected">Connected</option>
-                              <option value="partner">Partner</option>
-                              <option value="no_answer">No answer</option>
-                              <option value="left_voicemail">
-                                Left voicemail
-                              </option>
-                              <option value="email_sent">Email sent</option>
-                              <option value="callback_requested">
-                                Callback requested
-                              </option>
-                              <option value="not_interested">
-                                Not interested
-                              </option>
-                              <option value="dnc">DNC</option>
-                            </select>
-                            <textarea
-                              name="recap"
-                              className={`${TEAM_INPUT_COMPACT} min-h-[96px]`}
-                              placeholder="Quick recap: who you spoke with, what they said, what they want next, anything useful for the next touch..."
-                            />
-                            <label className="grid gap-1 text-xs text-slate-600">
-                              <span className="font-semibold">
-                                Callback date and time — {OUTBOUND_TIME_ZONE}
-                              </span>
-                              <span>
-                                Only use this with Callback requested. DST gaps
-                                and repeated Eastern times fail closed.
-                              </span>
-                              <input
-                                name="callbackAt"
-                                type="datetime-local"
-                                className={TEAM_INPUT_COMPACT}
-                              />
-                            </label>
-                            <SubmitButton
-                              className={teamButtonClass("primary", "sm")}
-                              pendingLabel="Saving..."
-                            >
-                              Save detailed update
-                            </SubmitButton>
-                          </form>
-                        </div>
-
-                        <div className="rounded-xl border border-slate-200 bg-white p-3">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            Suggest follow-up
-                          </p>
-                          <p className="mt-1 text-xs text-slate-600">
-                            Use the latest outcome, recap, and contact history
-                            to suggest the next SMS or email for Inbox.
-                          </p>
-                          <form
-                            action={draftOutboundFollowupAction}
-                            className="mt-3 flex flex-col gap-2"
-                          >
-                            <input
-                              type="hidden"
-                              name="taskId"
-                              value={selected.primaryTaskId}
-                            />
-                            <label className="flex flex-col gap-1 text-xs text-slate-600">
-                              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                                Contact
-                              </span>
-                              <select
-                                name="contactId"
-                                defaultValue={selected.primaryContactId}
-                                className={TEAM_INPUT_COMPACT}
-                              >
-                                {selected.contacts.map((contact) => (
-                                  <option
-                                    key={contact.id}
-                                    value={contact.id}
-                                    disabled={contact.doNotContact}
-                                  >
-                                    {contact.name}
-                                    {contact.doNotContact
-                                      ? " — DNC (unavailable)"
-                                      : ""}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <label className="flex flex-col gap-1 text-xs text-slate-600">
-                              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                                Channel
-                              </span>
-                              <select
-                                name="channel"
-                                defaultValue={
-                                  (
-                                    selected.contacts.find(
-                                      (contact) =>
-                                        contact.id ===
-                                        selected.primaryContactId,
-                                    ) ?? selected.contacts[0]
-                                  )?.email
-                                    ? "email"
-                                    : "sms"
-                                }
-                                className={TEAM_INPUT_COMPACT}
-                              >
-                                <option value="sms">SMS</option>
-                                <option value="email">Email</option>
-                              </select>
-                            </label>
-                            <label className="flex flex-col gap-1 text-xs text-slate-600">
-                              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">
-                                Latest outcome
-                              </span>
-                              <select
-                                name="disposition"
-                                defaultValue={selected.lastDisposition ?? ""}
-                                className={TEAM_INPUT_COMPACT}
-                              >
-                                <option value="">Use task context</option>
-                                <option value="connected">Connected</option>
-                                <option value="partner">Partner</option>
-                                <option value="no_answer">No answer</option>
-                                <option value="left_voicemail">
-                                  Left voicemail
-                                </option>
-                                <option value="email_sent">Email sent</option>
-                                <option value="callback_requested">
-                                  Callback requested
-                                </option>
-                                <option value="not_interested">
-                                  Not interested
-                                </option>
-                              </select>
-                            </label>
-                            <textarea
-                              name="recap"
-                              className={`${TEAM_INPUT_COMPACT} min-h-[88px]`}
-                              placeholder="Optional recap to steer the follow-up suggestion..."
-                            />
-                            <SubmitButton
-                              className={teamButtonClass("secondary", "sm")}
-                              pendingLabel="Suggesting..."
-                            >
-                              Suggest
-                            </SubmitButton>
-                          </form>
-                        </div>
-
-                        <div className="rounded-xl border border-slate-200 bg-white p-3">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            Schedule callback — {OUTBOUND_TIME_ZONE}
-                          </p>
-                          <p className="mt-1 text-xs text-slate-600">
-                            Enter Eastern local time. DST gaps and repeated
-                            times fail closed instead of guessing.
-                          </p>
-                          <form
-                            action={setOutboundDispositionAction}
-                            className="mt-2 flex flex-col gap-2"
-                          >
-                            <input
-                              type="hidden"
-                              name="taskId"
-                              value={selected.primaryTaskId}
-                            />
-                            <input
-                              type="hidden"
-                              name="disposition"
-                              value="callback_requested"
-                            />
-                            <input
-                              type="hidden"
-                              name="expectedVersion"
-                              value={selected.primaryTaskVersion}
-                            />
-                            <input
-                              type="hidden"
-                              name="idempotencyKey"
-                              value={`outbound-disposition:${randomUUID()}`}
-                            />
-                            <input
-                              name="callbackAt"
-                              type="datetime-local"
-                              required
-                              className={TEAM_INPUT_COMPACT}
-                            />
-                            <SubmitButton
-                              className={teamButtonClass("primary", "sm")}
-                              pendingLabel="Scheduling..."
-                            >
-                              Set callback
-                            </SubmitButton>
-                          </form>
-                        </div>
-                      </>
-                    )}
-
-                    <div className="rounded-xl border border-slate-200 bg-white p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        Open tasks
-                      </p>
-                      <div className="mt-2 space-y-2">
-                        {selected.tasks.map((task) => (
-                          <div
-                            key={task.id}
-                            className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-700"
-                          >
-                            <div className="font-semibold text-slate-900">
-                              {task.title ?? "Outbound task"} /{" "}
-                              {task.contactName}
-                            </div>
-                            <div className="mt-1 text-[11px] text-slate-500">
-                              Attempt {task.attempt}
-                              {task.lastDisposition
-                                ? ` / ${task.lastDisposition.replace(/_/g, " ")}`
-                                : ""}
-                              {task.dueAt
-                                ? ` / Due ${formatTimestamp(task.dueAt)}`
-                                : " / Not started"}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-sm text-slate-600">
-                    <p className="font-semibold text-slate-900">
-                      Select an account
-                    </p>
-                    <p className="mt-1 text-xs text-slate-600">
-                      Click a row to work one company with linked contacts, open
-                      tasks, and quick outreach actions.
-                    </p>
-                  </div>
-                )}
-              </aside>
-            </div>
-          </>
-        )}
-
-        <div className="mt-4 flex items-center justify-between text-xs text-slate-600">
-          <div className="flex items-center gap-2">
-            {hasPrev ? (
-              <a
-                className={teamButtonClass("secondary", "sm")}
-                href={buildOutboundHref({
-                  memberId: resolvedMemberId,
-                  filters: resolvedFilters,
-                  patch: {
-                    cursor: pagination.previousCursor ?? "",
-                    direction: "previous",
-                  },
-                })}
-              >
-                Prev
-              </a>
-            ) : (
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 font-semibold text-slate-400">
-                Prev
-              </span>
-            )}
-            {hasNext ? (
-              <a
-                className={teamButtonClass("secondary", "sm")}
-                href={buildOutboundHref({
-                  memberId: resolvedMemberId,
-                  filters: resolvedFilters,
-                  patch: {
-                    cursor: pagination.nextCursor ?? "",
-                    direction: "next",
-                  },
-                })}
-              >
-                Next
-              </a>
-            ) : (
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 font-semibold text-slate-400">
-                Next
-              </span>
-            )}
-          </div>
-          <span className="text-[11px] text-slate-500">
-            Tip: outbound dispositions schedule the next touch automatically.
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <p>
+          {owner ? (
+            <>
+              <span className="font-semibold">{owner}’s</span> follow-ups
+            </>
+          ) : (
+            "Assigned follow-ups"
+          )}{" "}
+          <span className={MUTED}>
+            · {queue.total} matching{" "}
+            {queue.total === 1 ? "account" : "accounts"}
           </span>
-        </div>
+        </p>
+        <a
+          href={buildOutboundHref({
+            memberId: resolvedMemberId,
+            filters,
+            patch: { cursor: "", direction: "" },
+          })}
+          className={`inline-flex min-h-11 items-center rounded-lg px-3 font-semibold ${TEAM_FOCUS_RING}`}
+        >
+          Refresh list
+        </a>
+      </div>
+      <div className={`${PANEL} p-4`}>
+        <nav
+          aria-label="Follow-up shortcuts"
+          className="mb-4 flex flex-wrap gap-2"
+        >
+          {quickFilters.map((shortcut) => {
+            const active =
+              (filters.due ?? "") === shortcut.due &&
+              (filters.disposition ?? "") === shortcut.disposition;
+            return (
+              <a
+                key={shortcut.label}
+                aria-current={active ? "page" : undefined}
+                href={buildOutboundFilterHref({
+                  memberId: resolvedMemberId,
+                  filters,
+                  patch: shortcut,
+                })}
+                className={`inline-flex min-h-11 items-center rounded-full border px-3 py-2 text-sm font-medium ${TEAM_FOCUS_RING} ${active ? "border-[color:var(--team-focus-ring)] bg-[color:var(--team-surface-muted)]" : "border-[color:var(--team-border)]"}`}
+              >
+                {shortcut.label}
+              </a>
+            );
+          })}
+        </nav>
+        <form method="get" action="/team/sales/outbound" className="space-y-3">
+          <input type="hidden" name="out_due" value={filters.due ?? ""} />
+          <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(140px,220px)_auto]">
+            <label className="grid min-w-0 gap-1 text-sm font-medium">
+              Find a business or contact
+              <input
+                type="search"
+                name="out_q"
+                defaultValue={filters.q ?? ""}
+                placeholder="Company, name, phone or email"
+                maxLength={200}
+                className={FIELD}
+              />
+            </label>
+            <label className="grid min-w-0 gap-1 text-sm font-medium">
+              Assigned to
+              <select
+                name="memberId"
+                defaultValue={resolvedMemberId}
+                className={FIELD}
+              >
+                {!members.some((member) => member.id === resolvedMemberId) ? (
+                  <option value={resolvedMemberId}>Current teammate</option>
+                ) : null}
+                {members.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="submit" className={teamButtonClass("primary")}>
+              Search
+            </button>
+          </div>
+          <details open={advancedCount > 0 || undefined}>
+            <summary
+              className={`min-h-11 cursor-pointer content-center py-2 text-sm font-medium ${TEAM_FOCUS_RING}`}
+            >
+              More filters{advancedCount ? ` (${advancedCount} active)` : ""}
+            </summary>
+            <div className="grid gap-3 pb-2 sm:grid-cols-2 xl:grid-cols-4">
+              <FilterSelect
+                label="Campaign"
+                name="out_campaign"
+                value={filters.campaign}
+                values={queue.facets.campaigns}
+              />
+              <FilterSelect
+                label="Attempt"
+                name="out_attempt"
+                value={filters.attempt}
+                values={queue.facets.attempts}
+              />
+              <FilterSelect
+                label="Contact details"
+                name="out_has"
+                value={filters.has}
+                values={["phone", "email", "both"]}
+              />
+              <FilterSelect
+                label="Last outcome"
+                name="out_disposition"
+                value={filters.disposition}
+                values={queue.facets.dispositions}
+              />
+            </div>
+            <button
+              type="submit"
+              className={teamButtonClass("secondary", "sm")}
+            >
+              Apply filters
+            </button>
+          </details>
+          {hasFilters ? (
+            <a
+              href={resetHref}
+              className={`inline-flex min-h-11 items-center rounded-lg px-2 text-sm underline ${TEAM_FOCUS_RING}`}
+            >
+              Clear all filters
+            </a>
+          ) : null}
+        </form>
       </div>
 
-      {canImport ? (
-        <div id="outbound-import" className={TEAM_CARD_PADDED}>
-          <h3 className="text-base font-semibold text-slate-900">
-            Import prospects
-          </h3>
-          <p className="mt-2 text-sm text-slate-600">
-            Preview normalization, duplicates, identity conflicts, assignment,
-            and exclusions before changing CRM records.
+      {permissions.canManage && queue.items.length ? (
+        <OutboundBulkActions
+          key={`${queue.snapshotAt}:${queue.items.map((item) => item.primaryTaskVersion).join(":")}`}
+          items={queue.items}
+          members={members}
+          memberId={resolvedMemberId}
+          directoryUnavailable={directoryUnavailable}
+          idempotencyKey={`outbound-bulk:${randomUUID()}`}
+        />
+      ) : null}
+
+      {selectionRequested && !selected ? (
+        <div role="status" className={teamStatePanelClass("warning")}>
+          <p>
+            The selected account is no longer in this list. It may have changed
+            or may be outside these filters. No other account has been opened in
+            its place.
           </p>
           <a
-            href={resolvedImportHref}
-            className={`${teamButtonClass("primary")} mt-4 min-h-[44px]`}
+            className={`${teamButtonClass("secondary", "sm")} mt-2`}
+            href={resetHref}
           >
-            Open CSV import
+            Show all assigned accounts
+          </a>
+          <a
+            className={`${teamButtonClass("secondary", "sm")} ml-2 mt-2`}
+            href={clearSelectionHref}
+          >
+            Clear selection
           </a>
         </div>
       ) : null}
+
+      <div
+        className={`grid min-w-0 items-start gap-5 ${selected ? "xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.9fr)]" : ""}`}
+      >
+        {selected ? (
+          <div className="order-first min-w-0 xl:order-last">
+            <OutboundAccountDetail
+              item={selected}
+              initialTaskId={filters.taskId}
+              members={members}
+              permissions={permissions}
+              closeHref={`${clearSelectionHref}#outbound-list`}
+            />
+          </div>
+        ) : null}
+        <div id="outbound-list" className={`${PANEL} scroll-mt-24`}>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[color:var(--team-border)] px-4 py-3">
+            <h3 className="font-semibold">Your follow-up list</h3>
+            <span className={`text-sm ${MUTED}`}>
+              {queue.items.length
+                ? `${queue.offset + 1}–${Math.min(queue.offset + queue.items.length, queue.total)} of ${queue.total}`
+                : "No matching accounts"}
+            </span>
+          </div>
+          {queue.items.length ? (
+            <ul className="divide-y divide-[color:var(--team-border)]">
+              {queue.items.map((item) => {
+                const contact = item.contacts.find(
+                  (candidate) => candidate.id === item.primaryContactId,
+                )!;
+                const active = selected?.id === item.id;
+                return (
+                  <li key={item.id}>
+                    <a
+                      href={`${buildOutboundHref({ memberId: resolvedMemberId, filters, patch: { accountId: item.id, taskId: item.primaryTaskId } })}#outbound-account`}
+                      aria-current={active ? "true" : undefined}
+                      className={`block min-w-0 p-4 ${TEAM_FOCUS_RING} ${active ? "bg-[color:var(--team-surface-muted)]" : "hover:bg-[color:var(--team-surface-muted)]"}`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <span className="min-w-0 break-words text-base font-semibold">
+                          {item.account.name}
+                        </span>
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-xs font-semibold ${item.overdue ? "bg-rose-100 text-rose-900" : "bg-[color:var(--team-surface-muted)]"}`}
+                        >
+                          {dueLabel(item)}
+                        </span>
+                      </div>
+                      <p className={`mt-1 break-words text-sm ${MUTED}`}>
+                        {contact.name} ·{" "}
+                        {contact.email ?? contact.phone ?? "No contact details"}
+                      </p>
+                      <div
+                        className={`mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs ${MUTED}`}
+                      >
+                        <span>
+                          {item.lastDisposition
+                            ? item.lastDisposition.replace(/_/g, " ")
+                            : "No outcome recorded"}
+                        </span>
+                        {item.dueAt ? (
+                          <span>
+                            Due {formatOutboundEasternTime(item.dueAt)}
+                          </span>
+                        ) : null}
+                        {item.contactCount > 1 ? (
+                          <span>{item.contactCount} contacts</span>
+                        ) : null}
+                      </div>
+                      {contact.doNotContact ? (
+                        <p className="mt-2 text-sm font-semibold text-[color:var(--team-danger-text)]">
+                          Do Not Contact — outreach blocked
+                        </p>
+                      ) : item.dncContactCount > 0 ? (
+                        <p className="mt-2 text-sm text-[color:var(--team-warning-text)]">
+                          {item.dncContactCount} linked contact restricted
+                        </p>
+                      ) : null}
+                      <span className="mt-2 block text-xs font-semibold">
+                        {active ? "Account open" : "Open account →"}
+                      </span>
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <div className="space-y-3 p-6">
+              <h4 className="font-semibold">
+                {hasFilters
+                  ? "Nothing matches these filters"
+                  : "You’re caught up here"}
+              </h4>
+              <p className={`text-sm ${MUTED}`}>
+                {hasFilters
+                  ? "Try a different search or clear the filters."
+                  : "There are no open follow-up accounts assigned to this teammate."}
+              </p>
+              {hasFilters ? (
+                <a href={resetHref} className={teamButtonClass("secondary")}>
+                  Clear filters
+                </a>
+              ) : canImport ? (
+                <a
+                  href={buildOutboundHref({
+                    memberId: resolvedMemberId,
+                    filters,
+                    view: "import",
+                  })}
+                  className={teamButtonClass("secondary")}
+                >
+                  Import contacts
+                </a>
+              ) : null}
+            </div>
+          )}
+          {queue.previousCursor || queue.nextCursor ? (
+            <nav
+              aria-label="Follow-up pages"
+              className="flex justify-between gap-3 border-t border-[color:var(--team-border)] p-3"
+            >
+              {queue.previousCursor ? (
+                <a
+                  className={teamButtonClass("secondary", "sm")}
+                  href={buildOutboundHref({
+                    memberId: resolvedMemberId,
+                    filters,
+                    patch: {
+                      cursor: queue.previousCursor,
+                      direction: "previous",
+                      accountId: "",
+                      taskId: "",
+                    },
+                  })}
+                >
+                  Previous page
+                </a>
+              ) : (
+                <span />
+              )}
+              {queue.nextCursor ? (
+                <a
+                  className={teamButtonClass("secondary", "sm")}
+                  href={buildOutboundHref({
+                    memberId: resolvedMemberId,
+                    filters,
+                    patch: {
+                      cursor: queue.nextCursor,
+                      direction: "next",
+                      accountId: "",
+                      taskId: "",
+                    },
+                  })}
+                >
+                  Next page
+                </a>
+              ) : null}
+            </nav>
+          ) : null}
+        </div>
+      </div>
+      <ActivitySummary queue={queue} />
+      <p className={`text-xs ${MUTED}`}>
+        Updated {formatOutboundEasternTime(queue.snapshotAt)}. Refresh for the
+        latest changes. Dates and callbacks use Eastern time.
+      </p>
     </section>
+  );
+}
+
+function FilterSelect({
+  label,
+  name,
+  value,
+  values,
+}: {
+  label: string;
+  name: string;
+  value?: string;
+  values: string[];
+}) {
+  const options = Array.from(new Set([...(value ? [value] : []), ...values]));
+  return (
+    <label className="grid min-w-0 gap-1 text-sm font-medium">
+      {label}
+      <select name={name} defaultValue={value ?? ""} className={FIELD}>
+        <option value="">All</option>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option.replace(/_/g, " ")}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ActivitySummary({ queue }: { queue: OutboundQueueResponse }) {
+  const stats = queue.summary.scoreboard;
+  if (!stats) return null;
+  return (
+    <details className={`${PANEL} p-4`}>
+      <summary
+        className={`min-h-11 cursor-pointer content-center text-sm font-semibold ${TEAM_FOCUS_RING}`}
+      >
+        Activity summary
+      </summary>
+      <p className={`my-3 text-sm ${MUTED}`}>
+        For this teammate and campaign, including accounts outside the current
+        search and due filters. Partner status here describes the CRM
+        relationship, not portal access.
+      </p>
+      <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        {[
+          ["Accounts contacted", stats.accountsTouched],
+          ["Conversations", stats.conversationsStarted],
+          ["Qualified relationships", stats.qualifiedPartners],
+          ["Active relationships", stats.activePartners],
+        ].map(([label, value]) => (
+          <div key={label}>
+            <dt className={`text-sm ${MUTED}`}>{label}</dt>
+            <dd className="mt-1 text-xl font-semibold">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className={`mt-4 text-sm ${MUTED}`}>
+        Suggested service approach: portal {stats.partnerPathMix.portalFirst},
+        direct contact {stats.partnerPathMix.managedDirect}, either{" "}
+        {stats.partnerPathMix.hybrid}, not a fit {stats.partnerPathMix.notAFit}.
+        Average fit score:{" "}
+        {stats.avgFitScore === null
+          ? "Not assessed"
+          : `${stats.avgFitScore}/100`}
+        .
+      </p>
+    </details>
   );
 }

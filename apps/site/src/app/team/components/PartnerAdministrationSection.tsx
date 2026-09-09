@@ -75,6 +75,7 @@ type AdministrationView =
   | "relationships";
 
 type PartnerAdministrationFilters = {
+  setup?: string;
   adminView?: string;
   adminCursor?: string;
   adminQuery?: string;
@@ -1788,6 +1789,7 @@ export async function PartnerAdministrationSection({
 
       {view === "accounts" ? (
         <PartnerRelationshipSetup
+          openCreate={filters?.setup === "create"}
           canCreate={canManageAccounts && hasTeamPermission(principal, "partners.invitations.send")}
           canInvite={hasTeamPermission(principal, "partners.invitations.send")}
           canConfigure={canManageAccounts}

@@ -4,9 +4,13 @@ import {
   contacts,
   crmTasks,
   outboxEvents,
+  partnerAccounts,
   type DatabaseClient,
 } from "@/db";
-import { ensureOutboundAccountBrief } from "@/lib/outbound-account-briefs";
+import {
+  readStoredOutboundAccountBrief,
+  type OutboundAccountBrief,
+} from "@/lib/outbound-account-briefs";
 import type { OutboundQueueAccount } from "@/lib/outbound-queue-query";
 
 export type OutboundHistoryEntry = {
@@ -27,7 +31,7 @@ export type OutboundHistoryEntry = {
 
 export type OutboundSelectedEnrichment = {
   accountId: string;
-  brief: Awaited<ReturnType<typeof ensureOutboundAccountBrief>>;
+  brief: OutboundAccountBrief | null;
   history: OutboundHistoryEntry[];
 } | null;
 
@@ -250,9 +254,14 @@ export async function loadOutboundSelectedEnrichment(input: {
     null;
   if (!selected?.key.startsWith("account:")) return null;
 
-  const brief = await ensureOutboundAccountBrief({
-    partnerAccountId: selected.id,
-  });
+  // Queue reads must not generate paid AI work or rewrite account fit/status.
+  // A missing stored brief is optional context, never a reason to delay work.
+  const [storedAccount] = await input.db
+    .select({ aiAccountBrief: partnerAccounts.aiAccountBrief })
+    .from(partnerAccounts)
+    .where(eq(partnerAccounts.id, selected.id))
+    .limit(1);
+  const brief = readStoredOutboundAccountBrief(storedAccount?.aiAccountBrief);
   const contactIds = Array.from(
     new Set(selected.contacts.map((item) => item.id)),
   );

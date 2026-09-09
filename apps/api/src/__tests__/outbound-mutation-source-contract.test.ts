@@ -23,6 +23,15 @@ describe("Outbound mutation production contract", () => {
   const actions = siteSource("src/app/team/actions.ts");
   const transport = siteSource("src/app/team/lib/team-mutation-transport.ts");
   const section = siteSource("src/app/team/components/OutboundSection.tsx");
+  const contactActions = siteSource(
+    "src/app/team/components/OutboundContactActions.tsx",
+  );
+  const accountDetail = siteSource(
+    "src/app/team/components/OutboundAccountDetail.tsx",
+  );
+  const bulkActions = siteSource(
+    "src/app/team/components/OutboundBulkActions.tsx",
+  );
   const parser = siteSource("src/app/team/lib/outbound-mutation-result.ts");
 
   it.each([
@@ -158,9 +167,13 @@ describe("Outbound mutation production contract", () => {
     ]) {
       expect(actions).toContain(marker);
     }
-    expect(section).toContain('name="expectedVersion"');
-    expect(section).toContain('name="idempotencyKey"');
-    expect(section).toContain('name="taskRefs"');
+    expect(section).toContain("<OutboundAccountDetail");
+    expect(section).toContain("<OutboundBulkActions");
+    expect(accountDetail).toContain("<OutboundContactActions");
+    expect(contactActions).toContain('name="expectedVersion"');
+    expect(contactActions).toContain('name="idempotencyKey"');
+    expect(bulkActions).toContain('name="idempotencyKey"');
+    expect(bulkActions).toContain('name="taskRefs"');
     expect(parser).toContain("receipt.entityType === expected.entityType");
     expect(parser).toContain("receipt.entityId === expected.entityId");
     expect(parser).toContain("envelope.receipt.actorId === expected.actorId");

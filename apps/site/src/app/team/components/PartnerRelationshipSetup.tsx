@@ -54,11 +54,13 @@ export function PartnerRelationshipSetup({
   canInvite,
   canConfigure,
   canConfigureBilling = false,
+  openCreate = false,
 }: {
   canCreate: boolean;
   canInvite: boolean;
   canConfigure: boolean;
   canConfigureBilling?: boolean;
+  openCreate?: boolean;
 }) {
   const [companies, setCompanies] = React.useState<RelationshipChoice[]>([]);
   const [nextCursor, setNextCursor] = React.useState<string | null>(null);
@@ -230,8 +232,8 @@ export function PartnerRelationshipSetup({
         </div>
       ) : null}
       {canCreate ? (
-        <details className="border-t border-slate-200 pt-3">
-          <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-slate-900">
+        <details open={openCreate || undefined} className="border-t border-slate-200 pt-3">
+          <summary className="min-h-11 cursor-pointer content-center py-2 font-semibold text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">
             Create a company and invite its Administrator
           </summary>
           <form

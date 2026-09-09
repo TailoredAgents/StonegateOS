@@ -19,10 +19,15 @@ import {
   generateOutboundFollowupDraft,
   type OutboundDraftContextMessage,
 } from "@/lib/outbound-drafts";
-import { resolveOrCreatePartnerAccount } from "@/lib/partner-accounts";
+import {
+  GENERIC_INBOX_STAFF_SCOPE,
+  genericInboxThreadScopeCondition,
+} from "@/lib/inbox-staff-scope";
 
 const CHANNELS = ["sms", "email"] as const;
 type Channel = (typeof CHANNELS)[number];
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 function readString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -51,6 +56,7 @@ async function ensureThreadForContact(
       and(
         eq(conversationThreads.contactId, input.contactId),
         eq(conversationThreads.channel, input.channel),
+        genericInboxThreadScopeCondition(),
         or(
           eq(conversationThreads.status, "open"),
           eq(conversationThreads.status, "pending"),
@@ -72,6 +78,7 @@ async function ensureThreadForContact(
     .values({
       contactId: input.contactId,
       channel: input.channel,
+      staffScope: GENERIC_INBOX_STAFF_SCOPE,
       status: "open",
       state: "new",
       assignedTo: input.assignedTo,
@@ -172,6 +179,7 @@ async function loadRecentContactHistory(
     .where(
       and(
         eq(conversationThreads.contactId, contactId),
+        genericInboxThreadScopeCondition(),
         sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`,
       ),
     )
@@ -201,7 +209,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (permissionError) return permissionError;
 
   const payload = (await request.json().catch(() => null)) as unknown;
-  if (!payload || typeof payload !== "object") {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
   const payloadRecord = payload as Record<string, unknown>;
@@ -217,8 +225,25 @@ export async function POST(request: NextRequest): Promise<Response> {
     : null;
   const kind = kindRaw === "follow_up" ? "follow_up" : "first_touch";
 
-  if (!contactId) {
-    return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
+  if (
+    !UUID_PATTERN.test(contactId) ||
+    (payloadRecord["taskId"] !== undefined &&
+      (!taskId || !UUID_PATTERN.test(taskId))) ||
+    (payloadRecord["channel"] !== undefined && !requestedChannel) ||
+    (payloadRecord["kind"] !== undefined &&
+      kindRaw !== "first_touch" &&
+      kindRaw !== "follow_up") ||
+    (recap?.length ?? 0) > 4_000 ||
+    (explicitDisposition?.length ?? 0) > 80
+  ) {
+    return NextResponse.json(
+      {
+        error: "invalid_payload",
+        message:
+          "Check the selected contact, task, and draft details before trying again.",
+      },
+      { status: 400 },
+    );
   }
 
   const db = getDb();
@@ -235,42 +260,68 @@ export async function POST(request: NextRequest): Promise<Response> {
       phoneE164: contacts.phoneE164,
       salespersonMemberId: contacts.salespersonMemberId,
       partnerAccountId: contacts.partnerAccountId,
+      doNotContact: contacts.doNotContact,
+      deletedAt: contacts.deletedAt,
     })
     .from(contacts)
     .where(eq(contacts.id, contactId))
     .limit(1);
 
-  if (!contact?.id) {
+  if (!contact?.id || contact.deletedAt) {
     return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
   }
+  if (contact.doNotContact) {
+    return NextResponse.json(
+      {
+        error: "contact_outreach_blocked",
+        message:
+          "This contact is marked Do Not Contact. No outreach draft was created.",
+      },
+      { status: 409 },
+    );
+  }
 
-  let partnerAccountId = contact.partnerAccountId ?? null;
+  // Validate an explicit task before creating a thread, draft, or other record.
+  // Never infer a task binding from the company name or another contact.
+  let taskNotes = "";
+  let taskAccountId: string | null = null;
+  if (taskId) {
+    const [task] = await db
+      .select({
+        id: crmTasks.id,
+        contactId: crmTasks.contactId,
+        partnerAccountId: crmTasks.partnerAccountId,
+        notes: crmTasks.notes,
+      })
+      .from(crmTasks)
+      .where(and(eq(crmTasks.id, taskId), eq(crmTasks.contactId, contactId)))
+      .limit(1);
+    if (
+      !task ||
+      task.contactId !== contactId ||
+      !/(?:^|\n)kind=outbound(?:\n|$)/iu.test(task.notes ?? "") ||
+      (task.partnerAccountId !== null &&
+        contact.partnerAccountId !== null &&
+        task.partnerAccountId !== contact.partnerAccountId)
+    ) {
+      return NextResponse.json(
+        {
+          error: "outbound_task_not_found",
+          message:
+            "The selected outbound task is no longer available for this contact. Refresh the queue.",
+        },
+        { status: 404 },
+      );
+    }
+    taskNotes = task.notes ?? "";
+    taskAccountId = task.partnerAccountId;
+  }
+
+  const partnerAccountId = contact.partnerAccountId ?? taskAccountId;
   let accountName: string | null = null;
   let accountSegment: string | null = null;
   let accountCity: string | null = null;
   let accountState: string | null = null;
-
-  if (!partnerAccountId) {
-    const account = await resolveOrCreatePartnerAccount(db, {
-      name: contact.company,
-      domain: contact.email ?? null,
-      source: null,
-      ownerMemberId: contact.salespersonMemberId ?? null,
-    });
-    partnerAccountId = account?.id ?? null;
-    if (partnerAccountId) {
-      await db
-        .update(contacts)
-        .set({ partnerAccountId, updatedAt: now })
-        .where(eq(contacts.id, contact.id));
-      if (taskId) {
-        await db
-          .update(crmTasks)
-          .set({ partnerAccountId, updatedAt: now })
-          .where(eq(crmTasks.id, taskId));
-      }
-    }
-  }
 
   if (partnerAccountId) {
     const [account] = await db
@@ -318,12 +369,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   let lastDisposition: string | null = explicitDisposition;
 
   if (taskId) {
-    const [task] = await db
-      .select({ id: crmTasks.id, notes: crmTasks.notes })
-      .from(crmTasks)
-      .where(and(eq(crmTasks.id, taskId), eq(crmTasks.contactId, contactId)))
-      .limit(1);
-    const notes = typeof task?.notes === "string" ? task.notes : "";
+    const notes = taskNotes;
     if (notes.toLowerCase().includes("kind=outbound")) {
       campaign = parseOutboundNoteField(notes, "campaign");
       const attemptRaw = Number(

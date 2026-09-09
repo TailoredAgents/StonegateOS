@@ -137,8 +137,11 @@ describe("Outbound import production contract", () => {
     expect(parser).toContain("formulaNeutralize");
     expect(parser).toContain("truncated: false");
     expect(parser).toContain("for (const row of excluded)");
-    expect(client).toContain("Download all {report.rowCount} excluded rows");
-    expect(client).toContain("is not truncated");
+    expect(client).toContain(
+      "success?.data.exclusionReport ?? preview?.exclusionReport",
+    );
+    expect(client).toContain("onClick={() => downloadReport(report)}");
+    expect(client).toContain("new Blob([report.csv]");
     expect(resultParser).toContain('value["truncated"] !== false');
     expect(resultParser).toContain("physicalLines.length !== expectedRows + 2");
   });
@@ -167,7 +170,9 @@ describe("Outbound import production contract", () => {
 
   it("provides an accessible Preview, Review, Import flow on the canonical view", () => {
     expect(section).toContain('view === "import"');
-    expect(section).toContain("const importHref = buildOutboundHref({");
+    expect(section).toContain(
+      'href: buildOutboundHref({ memberId, filters, view: "import" })',
+    );
     expect(section).toContain('view: "import"');
     expect(section).toContain("<OutboundImportClient");
     expect(section).not.toContain("action={importOutboundProspectsAction}");
@@ -184,6 +189,10 @@ describe("Outbound import production contract", () => {
       'hasTeamPermission(principal, "outbound.import")',
     );
     expect(section).toContain("Import access is required");
+    expect(section).toContain('currentView === "import" && !canImport');
+    expect(client).toContain("inputLocked || inFlightRef.current");
+    expect(client).toContain("resultUncertain || Boolean(success)");
+    expect(client).toContain("setIdempotencyKey(newImportKey())");
   });
 
   it("rejects malformed upstream successes instead of claiming import success", () => {

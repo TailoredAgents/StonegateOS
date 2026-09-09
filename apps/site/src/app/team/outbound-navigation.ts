@@ -89,6 +89,38 @@ export function buildOutboundPartnersHref(args: {
   });
 }
 
+/** A new queue filter must not retain a selection or a cursor from the old result set. */
+export function buildOutboundFilterHref(args: {
+  memberId?: string;
+  filters: OutboundFilters;
+  patch: Partial<OutboundFilters>;
+}): Route {
+  return buildOutboundHref({
+    ...args,
+    patch: {
+      ...args.patch,
+      accountId: "",
+      taskId: "",
+      cursor: "",
+      direction: "",
+    },
+  });
+}
+
+export function buildOutboundPartnerSetupHref(args: {
+  memberId?: string;
+  filters: OutboundFilters;
+}): Route {
+  return teamSurfaceHref("partners", {
+    query: {
+      p_admin: "accounts",
+      p_setup: "create",
+      out_return: String(buildOutboundHref(args)),
+    },
+    hash: "partner-relationship-setup-heading",
+  });
+}
+
 export function parseOutboundReturnHref(
   value: unknown,
 ): OutboundLocation | null {

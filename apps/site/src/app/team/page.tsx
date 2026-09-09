@@ -118,6 +118,7 @@ export default async function TeamPage({
     p_preview?: string;
     p_preview_job?: string;
     p_admin?: string;
+    p_setup?: string;
     p_admin_cursor?: string;
     p_admin_q?: string;
     p_admin_status?: string;
@@ -444,6 +445,7 @@ export default async function TeamPage({
   };
 
   const partnerFilters = {
+    setup: params?.p_setup === "create" ? "create" : undefined,
     adminView: typeof params?.p_admin === "string" ? params.p_admin : undefined,
     adminCursor:
       typeof params?.p_admin_cursor === "string"
