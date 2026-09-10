@@ -185,6 +185,49 @@ describe("partner portal onboarding completion contracts", () => {
     );
   });
 
+  it("accepts the configured Site behind an internal API proxy without trusting forwarded origins", () => {
+    const previousPublicSite = process.env["NEXT_PUBLIC_SITE_URL"];
+    const previousSite = process.env["SITE_URL"];
+    process.env["NEXT_PUBLIC_SITE_URL"] = "https://stonegate.example";
+    delete process.env["SITE_URL"];
+    try {
+      const internalUrl =
+        "http://localhost:10000/api/portal/v2/onboarding/activation/inspect";
+      for (const [origin, allowed] of [
+        ["https://stonegate.example", true],
+        ["https://api.stonegate.example", false],
+        ["https://attacker.example", false],
+      ] as const) {
+        expect(
+          isAllowedPartnerPortalMutationOrigin(
+            new NextRequest(internalUrl, {
+              method: "POST",
+              headers: {
+                origin,
+                "x-forwarded-host": "api.stonegate.example",
+                "x-forwarded-proto": "https",
+              },
+            }),
+          ),
+        ).toBe(allowed);
+      }
+      expect(
+        isAllowedPartnerPortalMutationOrigin(
+          new NextRequest(internalUrl, {
+            method: "POST",
+            headers: { "sec-fetch-site": "cross-site" },
+          }),
+        ),
+      ).toBe(false);
+    } finally {
+      if (previousPublicSite === undefined)
+        delete process.env["NEXT_PUBLIC_SITE_URL"];
+      else process.env["NEXT_PUBLIC_SITE_URL"] = previousPublicSite;
+      if (previousSite === undefined) delete process.env["SITE_URL"];
+      else process.env["SITE_URL"] = previousSite;
+    }
+  });
+
   it("validates notification events, quiet hours, timezone, and SMS intent", () => {
     expect(PARTNER_NOTIFICATION_EVENT_KEYS).toContain("proof_ready");
     expect(

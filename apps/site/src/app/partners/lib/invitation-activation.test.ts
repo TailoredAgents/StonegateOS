@@ -5,7 +5,10 @@ import { NextRequest } from "next/server";
 import { POST } from "../invitations/accept/complete/route";
 import { parsePartnerInvitationActivationQueued } from "./invitation-activation";
 import { derivePartnerInvitationActivationToken } from "./invitation-handoff";
-import { activationInspectionHeaders } from "./activation-inspection";
+import {
+  activationInspectionHeaders,
+  resolveActivationInspectionOrigin,
+} from "./activation-inspection";
 
 const TOKEN = "A".repeat(43);
 const EXPIRY = "2099-01-01T00:00:00.000Z";
@@ -18,23 +21,35 @@ const ready = {
 const source = (path: string) =>
   readFileSync(new URL(path, import.meta.url), "utf8");
 
-void test("activation inspection keeps per-client rate context without forwarding credentials or marketing origin", () => {
+void test("activation inspection uses the configured Site origin, never the API transport or caller headers", () => {
+  const siteOrigin = resolveActivationInspectionOrigin({
+    NODE_ENV: "production",
+    NEXT_PUBLIC_SITE_URL: "https://stonegate.example",
+    API_BASE_URL: "https://api.stonegate.example",
+  });
+  assert.equal(siteOrigin, "https://stonegate.example");
   const headers = activationInspectionHeaders(
     new Headers({
       "x-forwarded-for": "203.0.113.10, 192.0.2.8",
       "user-agent": "a".repeat(600),
       origin: "https://untrusted.example",
+      host: "untrusted.example",
+      "x-forwarded-host": "untrusted.example",
+      "sec-fetch-site": "cross-site",
+      referer: "https://untrusted.example/?token=secret",
       cookie: "credential=secret",
       authorization: "Bearer secret",
     }),
-    "https://api.stonegate.example/api/portal/v2/onboarding/activation/inspect",
+    siteOrigin!,
     { trustedProxyHops: "1" },
   );
-  assert.equal(headers.get("origin"), "https://api.stonegate.example");
+  assert.equal(headers.get("origin"), "https://stonegate.example");
   assert.equal(headers.get("x-forwarded-for"), "192.0.2.8");
   assert.equal(headers.get("user-agent")?.length, 512);
   assert.equal(headers.has("cookie"), false);
   assert.equal(headers.has("authorization"), false);
+  for (const name of ["host", "x-forwarded-host", "sec-fetch-site", "referer"])
+    assert.equal(headers.has(name), false);
   for (const trustedProxyHops of ["", "0", "11", "abc"])
     assert.equal(
       activationInspectionHeaders(
@@ -68,6 +83,62 @@ void test("activation inspection keeps per-client rate context without forwardin
       { trustedProxyHops: "2" },
     ).get("x-forwarded-for"),
     "2001:db8::1",
+  );
+});
+
+void test("activation inspection fails closed on missing or invalid production Site configuration", () => {
+  for (const value of [
+    undefined,
+    "",
+    "bad url",
+    "http://stonegate.example",
+    "https://user:pass@stonegate.example",
+    "https://stonegate.example/path",
+    "https://stonegate.example?token=secret",
+    "https://stonegate.example#fragment",
+    "javascript:alert(1)",
+  ]) {
+    assert.equal(
+      resolveActivationInspectionOrigin({
+        NODE_ENV: "production",
+        NEXT_PUBLIC_SITE_URL: value,
+        API_BASE_URL: "https://api.stonegate.example",
+      }),
+      null,
+    );
+  }
+  assert.equal(
+    resolveActivationInspectionOrigin({
+      NODE_ENV: "production",
+      NEXT_PUBLIC_SITE_URL: "invalid",
+      SITE_URL: "https://stonegate.example/",
+    }),
+    "https://stonegate.example",
+  );
+  assert.equal(
+    resolveActivationInspectionOrigin({
+      NODE_ENV: "production",
+      NEXT_PUBLIC_SITE_URL: "https://canonical.example",
+      SITE_URL: "https://site.example",
+    }),
+    "https://canonical.example",
+  );
+  assert.equal(
+    resolveActivationInspectionOrigin({ NODE_ENV: "development" }),
+    "http://localhost:3000",
+  );
+  assert.equal(
+    resolveActivationInspectionOrigin({
+      NODE_ENV: "test",
+      SITE_URL: "http://127.0.0.1:4200",
+    }),
+    "http://127.0.0.1:4200",
+  );
+  const page = source("../(public)/activate/page.tsx");
+  assert.match(page, /token && inspectionUrl && inspectionOrigin/u);
+  assert.match(
+    page,
+    /activationInspectionHeaders\(\s*await headers\(\),\s*inspectionOrigin,/u,
   );
 });
 function request(origin = "https://stonegate.example", body = "") {
@@ -172,7 +243,10 @@ void test("native invitation POST hands off HttpOnly activation only and retries
 void test("transport/rate errors preserve the invite while rejected credentials are cleared", async () => {
   for (const status of [401, 410, 429, 503]) {
     await withFetch(
-      (() => Promise.resolve(Response.json({ ok: false }, { status }))) as typeof fetch,
+      (() =>
+        Promise.resolve(
+          Response.json({ ok: false }, { status }),
+        )) as typeof fetch,
       async () => {
         const response = await POST(request());
         assert.equal(response.status, 303);

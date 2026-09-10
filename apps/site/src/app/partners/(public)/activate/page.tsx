@@ -4,7 +4,10 @@ import { callPartnerPublicApi } from "@/app/partners/lib/api";
 import { resolvePartnerApiUrl } from "@/app/partners/lib/api-origin";
 import { partnerPublicFormErrorMessage } from "@/app/partners/lib/public-form-policy";
 import { cookies, headers } from "next/headers";
-import { activationInspectionHeaders } from "@/app/partners/lib/activation-inspection";
+import {
+  activationInspectionHeaders,
+  resolveActivationInspectionOrigin,
+} from "@/app/partners/lib/activation-inspection";
 import { PartnerCredentialSetupForm } from "@/app/partners/components/PartnerCredentialSetupForm";
 import { PARTNER_ACTIVATION_TOKEN_COOKIE } from "@/lib/partner-application-session";
 
@@ -24,18 +27,18 @@ export default async function PartnerActivationPage({
   const inspectionUrl = resolvePartnerApiUrl(
     "/api/portal/v2/onboarding/activation/inspect",
   );
+  const inspectionOrigin = resolveActivationInspectionOrigin();
   const response =
-    token && inspectionUrl
+    token && inspectionUrl && inspectionOrigin
       ? await callPartnerPublicApi(
           "/api/portal/v2/onboarding/activation/inspect",
           {
             method: "POST",
-            // This is a server-to-server token inspection, not a browser POST.
-            // Marketing metadata may use a different canonical host; it must
-            // not determine the trusted API request origin.
+            // Assert the operator-configured Site origin, not the API's
+            // external transport origin or caller-controlled browser headers.
             headers: activationInspectionHeaders(
               await headers(),
-              inspectionUrl,
+              inspectionOrigin,
             ),
             body: JSON.stringify({ token }),
             timeoutMs: 10_000,

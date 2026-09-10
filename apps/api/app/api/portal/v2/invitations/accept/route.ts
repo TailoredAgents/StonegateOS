@@ -15,6 +15,7 @@ import {
   createPartnerPortalV2UnexpectedResponse,
 } from "@/lib/partner-portal-v2-response";
 import { derivePartnerInvitationActivationToken } from "@/lib/partner-invitation-handoff";
+import { arePartnerPurposeAuthTokensEnabled } from "@/lib/partner-portal-feature-flags";
 import { inspectPartnerActivationToken } from "@/lib/partner-purpose-auth";
 import { isAllowedPartnerPortalMutationOrigin } from "@/lib/partner-portal-v2-security";
 import { consumeTeamAuthRateLimit } from "@/lib/team-auth-rate-limit";
@@ -26,6 +27,15 @@ import {
 
 export async function POST(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
+  // Preserve the seven-day invitation until the downstream password setup
+  // can run; accepting it starts a much shorter activation handoff.
+  if (!arePartnerPurposeAuthTokensEnabled()) {
+    return createPartnerPortalV2ErrorResponse(
+      "service_unavailable",
+      503,
+      correlationId,
+    );
+  }
   if (!isAllowedPartnerPortalMutationOrigin(request)) {
     return createPartnerPortalV2ErrorResponse("forbidden", 403, correlationId);
   }
