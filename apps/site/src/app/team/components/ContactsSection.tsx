@@ -13,6 +13,7 @@ import {
   badgeClassForPipelineStage,
   labelForPipelineStage,
 } from "./pipeline.stages";
+import { partnerAccessCapabilities } from "../partner-entry-navigation";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { formatStoredContactSource } from "../lib/booking-details";
 import { teamSurfaceHref } from "../surface-registry";
@@ -260,8 +261,7 @@ export async function ContactsSection({
     canReadCalendar: hasTeamPermission(principal, "appointments.read"),
     canReadQuotes: hasTeamPermission(principal, "quotes.read"),
     canWriteQuotes: hasTeamPermission(principal, "quotes.write"),
-    canReadPartners: hasTeamPermission(principal, "partners.read"),
-    canInvitePartners: hasTeamPermission(principal, "partners.invite"),
+    ...partnerAccessCapabilities(principal.permissions),
   };
   let bookingHandoff: InstantQuoteHandoff | null = null;
   let bookingHandoffError: string | null = null;

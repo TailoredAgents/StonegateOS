@@ -55,12 +55,16 @@ export function PartnerRelationshipSetup({
   canConfigure,
   canConfigureBilling = false,
   openCreate = false,
+  initialAccountId,
+  openExisting = false,
 }: {
   canCreate: boolean;
   canInvite: boolean;
   canConfigure: boolean;
   canConfigureBilling?: boolean;
   openCreate?: boolean;
+  initialAccountId?: string;
+  openExisting?: boolean;
 }) {
   const [companies, setCompanies] = React.useState<RelationshipChoice[]>([]);
   const [nextCursor, setNextCursor] = React.useState<string | null>(null);
@@ -114,8 +118,12 @@ export function PartnerRelationshipSetup({
     setNextCursor(result.nextCursor);
   }
   React.useEffect(() => {
-    void findCompanies();
-  }, []);
+    if (initialAccountId) void chooseCompany(initialAccountId);
+    else void findCompanies();
+    return () => {
+      contextGeneration.current += 1;
+    };
+  }, [initialAccountId]);
   async function chooseCompany(id: string) {
     const generation = ++contextGeneration.current;
     setSelectedAccount(id);
@@ -203,7 +211,11 @@ export function PartnerRelationshipSetup({
         id="partner-relationship-setup-heading"
         className="text-xl font-semibold text-slate-900"
       >
-        Set up partner service
+        {initialAccountId
+          ? canConfigure
+            ? "Company settings"
+            : "Invite a coworker"
+          : "Set up partner service"}
       </h2>
       <p className="text-sm leading-6 text-slate-600">
         For companies Stonegate already works with. New companies start simple;
@@ -232,7 +244,10 @@ export function PartnerRelationshipSetup({
         </div>
       ) : null}
       {canCreate ? (
-        <details open={openCreate || undefined} className="border-t border-slate-200 pt-3">
+        <details
+          open={openCreate || undefined}
+          className="border-t border-slate-200 pt-3"
+        >
           <summary className="min-h-11 cursor-pointer content-center py-2 font-semibold text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">
             Create a company and invite its Administrator
           </summary>
@@ -320,424 +335,458 @@ export function PartnerRelationshipSetup({
           </form>
         </details>
       ) : null}
-      <details className="border-t border-slate-200 pt-3">
-        <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-slate-900">
-          Invite coworkers or configure an existing company
-        </summary>
-        <form
-          method="post"
-          className="mt-3 flex flex-wrap items-end gap-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!busy) void findCompanies();
-          }}
+      {!openCreate ? (
+        <details
+          open={Boolean(initialAccountId) || openExisting || undefined}
+          className="border-t border-slate-200 pt-3"
         >
-          <label className="min-w-0 flex-1 text-sm font-semibold">
-            Find company
-            <input
-              type="search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              maxLength={160}
-              className={FIELD}
-            />
-          </label>
-          <button type="submit" disabled={busy !== null} className={BUTTON}>
-            Search
-          </button>
-        </form>
-        <label className="mt-4 block text-sm font-semibold">
-          Company
-          <select
-            value={selectedAccount}
-            disabled={busy !== null}
-            onChange={(event) => void chooseCompany(event.target.value)}
-            className={FIELD}
-          >
-            <option value="">Choose a company</option>
-            {companies.map((company) => (
-              <option key={company.id} value={company.id}>
-                {company.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        {nextCursor ? (
-          <button
-            type="button"
-            disabled={busy !== null}
-            onClick={() => void findCompanies(true)}
-            className="mt-2 min-h-11 text-sm font-semibold text-primary-900 underline"
-          >
-            Load more companies
-          </button>
-        ) : null}
-        {busy === "context" ? (
-          <p role="status" className="mt-4 text-sm text-slate-600">
-            Loading company settings…
-          </p>
-        ) : null}
-        {selectedAccount && !context && busy !== "context" ? (
-          <button
-            type="button"
-            onClick={() => void chooseCompany(selectedAccount)}
-            className="mt-3 min-h-11 text-sm font-semibold text-primary-900 underline"
-          >
-            Retry company settings
-          </button>
-        ) : null}
-        {context &&
-        (!context.account.enabled || context.account.lifecycle !== "active") ? (
-          <p className="mt-4 text-sm leading-6 text-amber-900">
-            This company is not active for the portal. Review its lifecycle
-            before inviting people or changing tools.
-          </p>
-        ) : null}
-        {context &&
-        !context.account.enabled &&
-        context.account.lifecycle === "active" &&
-        canConfigure ? (
-          <form
-            method="post"
-            className="mt-4 space-y-3 rounded-lg border border-slate-200 p-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (busy || !event.currentTarget.reportValidity()) return;
-              const data = new FormData(event.currentTarget);
-              void save("enable", { reason: data.get("reason") });
-            }}
-          >
-            <h3 className="font-semibold">
-              Approve this existing relationship for partner service
-            </h3>
-            <p className="text-sm text-slate-600">
-              This enables the company only. No person receives access until a
-              specific coworker is invited and completes password setup.
-            </p>
-            <label className="block text-sm font-semibold">
-              Relationship confirmation
-              <textarea
-                name="reason"
-                required
-                minLength={10}
-                maxLength={1000}
-                className={FIELD}
-              />
-            </label>
-            <button type="submit" disabled={busy !== null} className={BUTTON}>
-              Approve company access
-            </button>
-          </form>
-        ) : null}
-        {context?.account.enabled &&
-        context.account.lifecycle === "active" &&
-        canInvite ? (
-          <form
-            method="post"
-            className="mt-6 grid gap-4 border-t border-slate-200 pt-5 sm:grid-cols-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const form = event.currentTarget;
-              if (busy || !role || !form.reportValidity()) return;
-              const data = new FormData(form);
-              void save("invite", {
-                accountId: selectedAccount,
-                invitation: {
-                  name: data.get("name"),
-                  email: data.get("email"),
-                  roleKey: role,
-                  persona: "other",
-                  accessLevel: scoped ? "scoped" : "account",
-                  locationIds,
-                  costCenterIds,
-                },
-              });
-            }}
-          >
-            <h3 className="font-semibold sm:col-span-2">
-              Invite a coworker to {context.account.name}
-            </h3>
-            <label className="text-sm font-semibold">
-              Name
-              <input
-                name="name"
-                required
-                minLength={2}
-                maxLength={120}
-                className={FIELD}
-              />
-            </label>
-            <label className="text-sm font-semibold">
-              Email
-              <input
-                name="email"
-                type="email"
-                required
-                maxLength={254}
-                className={FIELD}
-              />
-            </label>
-            <label className="text-sm font-semibold">
-              Role
-              <select
-                required
-                value={role}
-                onChange={(event) => {
-                  setRole(event.target.value);
-                  if (event.target.value === "administrator") {
-                    setScoped(false);
-                    setLocationIds([]);
-                    setCostCenterIds([]);
-                  }
+          <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-slate-900">
+            {initialAccountId
+              ? context?.account.name || "Selected company"
+              : "Invite coworkers or configure an existing company"}
+          </summary>
+          {!initialAccountId ? (
+            <>
+              <form
+                method="post"
+                className="mt-3 flex flex-wrap items-end gap-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!busy) void findCompanies();
                 }}
-                className={FIELD}
               >
-                <option value="" disabled>
-                  Choose a role
-                </option>
-                {ROLES.map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="self-end text-sm leading-6 text-slate-600">
-              {ROLES.find((item) => item.key === role)?.help}
+                <label className="min-w-0 flex-1 text-sm font-semibold">
+                  Find company
+                  <input
+                    type="search"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    maxLength={160}
+                    className={FIELD}
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={busy !== null}
+                  className={BUTTON}
+                >
+                  Search
+                </button>
+              </form>
+              <label className="mt-4 block text-sm font-semibold">
+                Company
+                <select
+                  value={selectedAccount}
+                  disabled={busy !== null}
+                  onChange={(event) => void chooseCompany(event.target.value)}
+                  className={FIELD}
+                >
+                  <option value="">Choose a company</option>
+                  {companies.map((company) => (
+                    <option key={company.id} value={company.id}>
+                      {company.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          ) : null}
+          {nextCursor ? (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => void findCompanies(true)}
+              className="mt-2 min-h-11 text-sm font-semibold text-primary-900 underline"
+            >
+              Load more companies
+            </button>
+          ) : null}
+          {busy === "context" ? (
+            <p role="status" className="mt-4 text-sm text-slate-600">
+              Loading company settings…
             </p>
-            {role && role !== "administrator" ? (
-              <label className="flex min-h-11 items-center gap-3 text-sm sm:col-span-2">
+          ) : null}
+          {selectedAccount && !context && busy !== "context" ? (
+            <button
+              type="button"
+              onClick={() => void chooseCompany(selectedAccount)}
+              className="mt-3 min-h-11 text-sm font-semibold text-primary-900 underline"
+            >
+              Retry company settings
+            </button>
+          ) : null}
+          {context &&
+          (!context.account.enabled ||
+            context.account.lifecycle !== "active") ? (
+            <p className="mt-4 text-sm leading-6 text-amber-900">
+              This company is not active for the portal. Review its lifecycle
+              before inviting people or changing tools.
+            </p>
+          ) : null}
+          {context &&
+          !context.account.enabled &&
+          context.account.lifecycle === "active" &&
+          canConfigure ? (
+            <form
+              method="post"
+              className="mt-4 space-y-3 rounded-lg border border-slate-200 p-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (busy || !event.currentTarget.reportValidity()) return;
+                const data = new FormData(event.currentTarget);
+                void save("enable", { reason: data.get("reason") });
+              }}
+            >
+              <h3 className="font-semibold">
+                Approve this existing relationship for partner service
+              </h3>
+              <p className="text-sm text-slate-600">
+                This enables the company only. No person receives access until a
+                specific coworker is invited and completes password setup.
+              </p>
+              <label className="block text-sm font-semibold">
+                Relationship confirmation
+                <textarea
+                  name="reason"
+                  required
+                  minLength={10}
+                  maxLength={1000}
+                  className={FIELD}
+                />
+              </label>
+              <button type="submit" disabled={busy !== null} className={BUTTON}>
+                Approve company access
+              </button>
+            </form>
+          ) : null}
+          {context?.account.enabled &&
+          context.account.lifecycle === "active" &&
+          canInvite ? (
+            <form
+              method="post"
+              className="mt-6 grid gap-4 border-t border-slate-200 pt-5 sm:grid-cols-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const form = event.currentTarget;
+                if (busy || !role || !form.reportValidity()) return;
+                const data = new FormData(form);
+                void save("invite", {
+                  accountId: selectedAccount,
+                  invitation: {
+                    name: data.get("name"),
+                    email: data.get("email"),
+                    roleKey: role,
+                    persona: "other",
+                    accessLevel: scoped ? "scoped" : "account",
+                    locationIds,
+                    costCenterIds,
+                  },
+                });
+              }}
+            >
+              <h3 className="font-semibold sm:col-span-2">
+                Invite a coworker to {context.account.name}
+              </h3>
+              <label className="text-sm font-semibold">
+                Name
                 <input
-                  type="checkbox"
-                  checked={scoped}
-                  disabled={
-                    !context.locations.length && !context.costCenters.length
-                  }
+                  name="name"
+                  required
+                  minLength={2}
+                  maxLength={120}
+                  className={FIELD}
+                />
+              </label>
+              <label className="text-sm font-semibold">
+                Email
+                <input
+                  name="email"
+                  type="email"
+                  required
+                  maxLength={254}
+                  className={FIELD}
+                />
+              </label>
+              <label className="text-sm font-semibold">
+                Role
+                <select
+                  required
+                  value={role}
                   onChange={(event) => {
-                    setScoped(event.target.checked);
-                    if (!event.target.checked) {
+                    setRole(event.target.value);
+                    if (event.target.value === "administrator") {
+                      setScoped(false);
                       setLocationIds([]);
                       setCostCenterIds([]);
                     }
                   }}
-                  className="h-5 w-5"
-                />
-                Limit access to selected locations or cost centers
+                  className={FIELD}
+                >
+                  <option value="" disabled>
+                    Choose a role
+                  </option>
+                  {ROLES.map((item) => (
+                    <option key={item.key} value={item.key}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
               </label>
-            ) : null}
-            {scoped ? (
-              <fieldset className="space-y-2 sm:col-span-2">
-                <legend className="text-sm font-semibold">
-                  Choose at least one permitted location or cost center
-                </legend>
-                {context.locations.map((item) => (
+              <p className="self-end text-sm leading-6 text-slate-600">
+                {ROLES.find((item) => item.key === role)?.help}
+              </p>
+              {role && role !== "administrator" ? (
+                <label className="flex min-h-11 items-center gap-3 text-sm sm:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={scoped}
+                    disabled={
+                      !context.locations.length && !context.costCenters.length
+                    }
+                    onChange={(event) => {
+                      setScoped(event.target.checked);
+                      if (!event.target.checked) {
+                        setLocationIds([]);
+                        setCostCenterIds([]);
+                      }
+                    }}
+                    className="h-5 w-5"
+                  />
+                  Limit access to selected locations or cost centers
+                </label>
+              ) : null}
+              {scoped ? (
+                <fieldset className="space-y-2 sm:col-span-2">
+                  <legend className="text-sm font-semibold">
+                    Choose at least one permitted location or cost center
+                  </legend>
+                  {context.locations.map((item) => (
+                    <label
+                      key={item.id}
+                      className="flex min-h-11 items-center gap-3 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={locationIds.includes(item.id)}
+                        onChange={() =>
+                          setLocationIds((values) => toggle(values, item.id))
+                        }
+                        className="h-5 w-5"
+                      />
+                      Location: {item.label}
+                    </label>
+                  ))}
+                  {context.costCenters.map((item) => (
+                    <label
+                      key={item.id}
+                      className="flex min-h-11 items-center gap-3 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={costCenterIds.includes(item.id)}
+                        onChange={() =>
+                          setCostCenterIds((values) => toggle(values, item.id))
+                        }
+                        className="h-5 w-5"
+                      />
+                      Cost center: {item.label}
+                    </label>
+                  ))}
+                </fieldset>
+              ) : null}
+              <button
+                type="submit"
+                disabled={
+                  busy !== null ||
+                  !role ||
+                  (scoped && !locationIds.length && !costCenterIds.length)
+                }
+                className={BUTTON}
+              >
+                {busy === "invite" ? "Queuing…" : "Send seven-day invitation"}
+              </button>
+            </form>
+          ) : null}
+          {context?.account.enabled &&
+          context.account.lifecycle === "active" &&
+          canConfigure ? (
+            <form
+              method="post"
+              className="mt-6 space-y-4 border-t border-slate-200 pt-5"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!busy && context)
+                  void save("workflow", {
+                    ...context.config,
+                    confirmPauseRecurring:
+                      new FormData(event.currentTarget).get(
+                        "confirmPauseRecurring",
+                      ) === "on",
+                  });
+              }}
+            >
+              <h3 className="font-semibold">Optional company tools</h3>
+              <p className="text-sm leading-6 text-slate-600">
+                These controls make tools available. They never add role
+                permissions or promise availability.
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {TOOLS.map((tool) => (
                   <label
-                    key={item.id}
+                    key={tool.key}
                     className="flex min-h-11 items-center gap-3 text-sm"
                   >
                     <input
                       type="checkbox"
-                      checked={locationIds.includes(item.id)}
-                      onChange={() =>
-                        setLocationIds((values) => toggle(values, item.id))
+                      checked={context.config.tools[tool.key]}
+                      onChange={(event) =>
+                        setContext((current) =>
+                          current
+                            ? {
+                                ...current,
+                                config: {
+                                  ...current.config,
+                                  tools: {
+                                    ...current.config.tools,
+                                    [tool.key]: event.target.checked,
+                                  },
+                                },
+                              }
+                            : current,
+                        )
                       }
                       className="h-5 w-5"
                     />
-                    Location: {item.label}
+                    {tool.label}
                   </label>
                 ))}
-                {context.costCenters.map((item) => (
+              </div>
+              <fieldset>
+                <legend className="text-sm font-semibold">
+                  Services this company may request without a contracted rate
+                </legend>
+                <p className="mt-1 text-sm leading-6 text-slate-600">
+                  These requests go to review unless all confirmation
+                  requirements are satisfied.
+                </p>
+                {context.services.map((service) => (
                   <label
-                    key={item.id}
+                    key={service.key}
                     className="flex min-h-11 items-center gap-3 text-sm"
                   >
                     <input
                       type="checkbox"
-                      checked={costCenterIds.includes(item.id)}
+                      checked={context.config.requestableServiceKeys.includes(
+                        service.key,
+                      )}
                       onChange={() =>
-                        setCostCenterIds((values) => toggle(values, item.id))
+                        setContext((current) =>
+                          current
+                            ? {
+                                ...current,
+                                config: {
+                                  ...current.config,
+                                  requestableServiceKeys: toggle(
+                                    current.config.requestableServiceKeys,
+                                    service.key,
+                                  ),
+                                  disabledServiceKeys:
+                                    current.config.disabledServiceKeys.filter(
+                                      (entry) => entry !== service.key,
+                                    ),
+                                },
+                              }
+                            : current,
+                        )
                       }
                       className="h-5 w-5"
                     />
-                    Cost center: {item.label}
+                    {service.label}
                   </label>
                 ))}
               </fieldset>
-            ) : null}
-            <button
-              type="submit"
-              disabled={
-                busy !== null ||
-                !role ||
-                (scoped && !locationIds.length && !costCenterIds.length)
-              }
-              className={BUTTON}
-            >
-              {busy === "invite" ? "Queuing…" : "Send seven-day invitation"}
-            </button>
-          </form>
-        ) : null}
-        {context?.account.enabled &&
-        context.account.lifecycle === "active" &&
-        canConfigure ? (
-          <form
-            method="post"
-            className="mt-6 space-y-4 border-t border-slate-200 pt-5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!busy && context) void save("workflow", { ...context.config, confirmPauseRecurring: new FormData(event.currentTarget).get("confirmPauseRecurring") === "on" });
-            }}
-          >
-            <h3 className="font-semibold">Optional company tools</h3>
-            <p className="text-sm leading-6 text-slate-600">
-              These controls make tools available. They never add role
-              permissions or promise availability.
-            </p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {TOOLS.map((tool) => (
-                <label
-                  key={tool.key}
-                  className="flex min-h-11 items-center gap-3 text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    checked={context.config.tools[tool.key]}
-                    onChange={(event) =>
-                      setContext((current) =>
-                        current
-                          ? {
-                              ...current,
-                              config: {
-                                ...current.config,
-                                tools: {
-                                  ...current.config.tools,
-                                  [tool.key]: event.target.checked,
+              <fieldset>
+                <legend className="text-sm font-semibold">
+                  Disable services for this company
+                </legend>
+                {context.services.map((service) => (
+                  <label
+                    key={service.key}
+                    className="flex min-h-11 items-center gap-3 text-sm"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={context.config.disabledServiceKeys.includes(
+                        service.key,
+                      )}
+                      onChange={() =>
+                        setContext((current) =>
+                          current
+                            ? {
+                                ...current,
+                                config: {
+                                  ...current.config,
+                                  disabledServiceKeys: toggle(
+                                    current.config.disabledServiceKeys,
+                                    service.key,
+                                  ),
+                                  requestableServiceKeys:
+                                    current.config.requestableServiceKeys.filter(
+                                      (entry) => entry !== service.key,
+                                    ),
                                 },
-                              },
-                            }
-                          : current,
-                      )
-                    }
-                    className="h-5 w-5"
-                  />
-                  {tool.label}
-                </label>
-              ))}
-            </div>
-            <fieldset>
-              <legend className="text-sm font-semibold">
-                Services this company may request without a contracted rate
-              </legend>
-              <p className="mt-1 text-sm leading-6 text-slate-600">
-                These requests go to review unless all confirmation requirements
-                are satisfied.
-              </p>
-              {context.services.map((service) => (
-                <label
-                  key={service.key}
-                  className="flex min-h-11 items-center gap-3 text-sm"
-                >
+                              }
+                            : current,
+                        )
+                      }
+                      className="h-5 w-5"
+                    />
+                    {service.label}
+                  </label>
+                ))}
+              </fieldset>
+              <label className="flex min-h-11 items-center gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  disabled={!canConfigureBilling}
+                  checked={context.config.partialPayments}
+                  onChange={(event) =>
+                    setContext((current) =>
+                      current
+                        ? {
+                            ...current,
+                            config: {
+                              ...current.config,
+                              partialPayments: event.target.checked,
+                            },
+                          }
+                        : current,
+                    )
+                  }
+                  className="h-5 w-5"
+                />
+                Allow partner-selected partial invoice payments (commercial
+                permission required)
+              </label>
+              {!context.config.tools.recurring ? (
+                <label className="flex min-h-11 items-start gap-3 text-sm leading-6">
                   <input
                     type="checkbox"
-                    checked={context.config.requestableServiceKeys.includes(
-                      service.key,
-                    )}
-                    onChange={() =>
-                      setContext((current) =>
-                        current
-                          ? {
-                              ...current,
-                              config: {
-                                ...current.config,
-                                requestableServiceKeys: toggle(
-                                  current.config.requestableServiceKeys,
-                                  service.key,
-                                ),
-                                disabledServiceKeys:
-                                  current.config.disabledServiceKeys.filter(
-                                    (entry) => entry !== service.key,
-                                  ),
-                              },
-                            }
-                          : current,
-                      )
-                    }
-                    className="h-5 w-5"
+                    name="confirmPauseRecurring"
+                    className="mt-1 h-5 w-5"
                   />
-                  {service.label}
+                  If recurring service was enabled, I confirm that turning it
+                  off pauses future tentative work. Already confirmed jobs
+                  remain unchanged.
                 </label>
-              ))}
-            </fieldset>
-            <fieldset>
-              <legend className="text-sm font-semibold">
-                Disable services for this company
-              </legend>
-              {context.services.map((service) => (
-                <label
-                  key={service.key}
-                  className="flex min-h-11 items-center gap-3 text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    checked={context.config.disabledServiceKeys.includes(
-                      service.key,
-                    )}
-                    onChange={() =>
-                      setContext((current) =>
-                        current
-                          ? {
-                              ...current,
-                              config: {
-                                ...current.config,
-                                disabledServiceKeys: toggle(
-                                  current.config.disabledServiceKeys,
-                                  service.key,
-                                ),
-                                requestableServiceKeys:
-                                  current.config.requestableServiceKeys.filter(
-                                    (entry) => entry !== service.key,
-                                  ),
-                              },
-                            }
-                          : current,
-                      )
-                    }
-                    className="h-5 w-5"
-                  />
-                  {service.label}
-                </label>
-              ))}
-            </fieldset>
-            <label className="flex min-h-11 items-center gap-3 text-sm">
-              <input
-                type="checkbox"
-                disabled={!canConfigureBilling}
-                checked={context.config.partialPayments}
-                onChange={(event) =>
-                  setContext((current) =>
-                    current
-                      ? {
-                          ...current,
-                          config: {
-                            ...current.config,
-                            partialPayments: event.target.checked,
-                          },
-                        }
-                      : current,
-                  )
-                }
-                className="h-5 w-5"
-              />
-              Allow partner-selected partial invoice payments (commercial
-              permission required)
-            </label>
-            {!context.config.tools.recurring ? <label className="flex min-h-11 items-start gap-3 text-sm leading-6"><input type="checkbox" name="confirmPauseRecurring" className="mt-1 h-5 w-5" />If recurring service was enabled, I confirm that turning it off pauses future tentative work. Already confirmed jobs remain unchanged.</label> : null}
-            <button type="submit" disabled={busy !== null} className={BUTTON}>
-              {busy === "workflow" ? "Saving…" : "Save company tools"}
-            </button>
-          </form>
-        ) : null}
-      </details>
+              ) : null}
+              <button type="submit" disabled={busy !== null} className={BUTTON}>
+                {busy === "workflow" ? "Saving…" : "Save company tools"}
+              </button>
+            </form>
+          ) : null}
+        </details>
+      ) : null}
     </section>
   );
 }

@@ -29,6 +29,8 @@ import {
   TEAM_SURFACE_GROUP_ORDER,
   TEAM_SURFACE_BY_ID,
   TEAM_SURFACES,
+  TEAM_NAVIGATION_SURFACES,
+  TEAM_PRIMARY_NAVIGATION_IDS,
 } from "./surface-registry";
 import {
   TeamSurfaceWorkspace,
@@ -119,6 +121,8 @@ export default async function TeamPage({
     p_preview_job?: string;
     p_admin?: string;
     p_setup?: string;
+    p_company?: string;
+    p_company_section?: string;
     p_admin_cursor?: string;
     p_admin_q?: string;
     p_admin_status?: string;
@@ -445,7 +449,16 @@ export default async function TeamPage({
   };
 
   const partnerFilters = {
-    setup: params?.p_setup === "create" ? "create" : undefined,
+    setup:
+      params?.p_setup === "create" || params?.p_setup === "existing"
+        ? params.p_setup
+        : undefined,
+    companyId:
+      typeof params?.p_company === "string" ? params.p_company : undefined,
+    companySection:
+      typeof params?.p_company_section === "string"
+        ? params.p_company_section
+        : undefined,
     adminView: typeof params?.p_admin === "string" ? params.p_admin : undefined,
     adminCursor:
       typeof params?.p_admin_cursor === "string"
@@ -515,7 +528,13 @@ export default async function TeamPage({
   const resolvedTabs: TabNavItem[] = useClassicLayout
     ? tabs.map((item) => ({ ...item, href: withLayout(item.href) }))
     : tabs;
-  const dailyGroups: TabNavGroup[] = TEAM_SURFACES.filter(
+  const navigationIds = new Set<string>(
+    TEAM_NAVIGATION_SURFACES.map((surface) => surface.id),
+  );
+  const navigationTabs = resolvedTabs.filter(
+    (item) => navigationIds.has(item.id) && isAllowed(item.requires),
+  );
+  const dailyGroups: TabNavGroup[] = TEAM_NAVIGATION_SURFACES.filter(
     (surface) => surface.group === "daily",
   ).map((surface) => ({
     id: surface.id,
@@ -527,7 +546,7 @@ export default async function TeamPage({
     (group) => group !== "daily",
   )
     .map((group) => {
-      const itemIds = TEAM_SURFACES.filter(
+      const itemIds = TEAM_NAVIGATION_SURFACES.filter(
         (surface) => surface.group === group,
       ).map((surface) => surface.id);
       return {
@@ -883,7 +902,7 @@ export default async function TeamPage({
             </div>
             <div className="mt-6">
               <TabNav
-                items={resolvedTabs}
+                items={navigationTabs}
                 groups={tabGroups}
                 activeId={tab}
                 hasOwner={hasOwner}
@@ -899,24 +918,18 @@ export default async function TeamPage({
     );
   }
 
-  const allowedTabs = resolvedTabs.filter((item) => isAllowed(item.requires));
+  const allowedTabs = navigationTabs.filter((item) => isAllowed(item.requires));
   const tabMap = new Map(allowedTabs.map((item) => [item.id, item]));
-  const quickIds = ["calendar", "inbox", "contacts", "quotes", "expenses"];
+  const quickIds = TEAM_PRIMARY_NAVIGATION_IDS;
   const utilityIds = ["settings"];
-  const nestedSurfaceIds = new Set(["partners", "sales-log"]);
-  const quickIdSet = new Set(quickIds);
+  const quickIdSet = new Set<string>(quickIds);
   const utilityIdSet = new Set(utilityIds);
   const groups: TeamNavGroup[] = tabGroups
     .map((group) => ({
       id: group.id,
       label: group.label,
       items: group.itemIds
-        .filter(
-          (id) =>
-            !quickIdSet.has(id) &&
-            !utilityIdSet.has(id) &&
-            !nestedSurfaceIds.has(id),
-        )
+        .filter((id) => !quickIdSet.has(id) && !utilityIdSet.has(id))
         .map((id) => tabMap.get(id))
         .filter((item): item is TabNavItem => Boolean(item))
         .map((item) => ({
@@ -956,9 +969,7 @@ export default async function TeamPage({
 
   return (
     <TeamAppShell
-      activeId={
-        tab === "partners" ? "outbound" : tab === "sales-log" ? "sales-hq" : tab
-      }
+      activeId={tab}
       title={activeTab?.label ?? "Team Console"}
       quickItems={quickItems}
       utilityItems={utilityItems}

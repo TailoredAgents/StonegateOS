@@ -21,6 +21,9 @@ export type PartnerServiceReview = {
     serviceKey: string | null;
     createdAt: string;
   } | null;
+  appointmentId?: string | null;
+  arrivalStartAt?: string | null;
+  arrivalEndAt?: string | null;
 };
 export type PartnerServiceReviewDetail = PartnerServiceReview & {
   location: {
@@ -58,7 +61,13 @@ export type PartnerServiceReviewDetail = PartnerServiceReview & {
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 export async function loadPartnerServiceReviews(
-  input: { accountId?: string; id?: string; q?: string; cursor?: string } = {},
+  input: {
+    accountId?: string;
+    id?: string;
+    q?: string;
+    cursor?: string;
+    includeScheduled?: boolean;
+  } = {},
 ): Promise<
   | {
       ok: true;
@@ -77,6 +86,9 @@ export async function loadPartnerServiceReviews(
   if (
     (input.id && (!UUID.test(input.id) || !input.accountId)) ||
     (input.accountId && !UUID.test(input.accountId)) ||
+    (input.includeScheduled !== undefined &&
+      typeof input.includeScheduled !== "boolean") ||
+    (input.includeScheduled && !input.accountId) ||
     (input.q?.length ?? 0) > 100 ||
     (input.cursor?.length ?? 0) > 4000
   )
@@ -92,6 +104,7 @@ export async function loadPartnerServiceReviews(
           ...(input.q ? { q: input.q } : {}),
           ...(input.cursor ? { cursor: input.cursor } : {}),
           ...(input.accountId ? { accountId: input.accountId } : {}),
+          ...(input.includeScheduled ? { includeScheduled: "true" } : {}),
         },
   );
   try {
@@ -120,7 +133,9 @@ export async function loadPartnerServiceReviews(
         ? data.request?.id !== input.id ||
           data.request?.accountId !== input.accountId ||
           !Array.isArray(data.request.photos)
-        : !Array.isArray(data.requests))
+        : !Array.isArray(data.requests) ||
+          (input.accountId &&
+            data.requests.some((item) => item.accountId !== input.accountId)))
     )
       return {
         ok: false,

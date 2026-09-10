@@ -26,6 +26,14 @@ import {
 } from "../actions/partner-administration";
 import { teamSurfaceHref } from "../surface-registry";
 import { quoteWorkspaceHref } from "../quotes-workspace";
+import {
+  normalizePartnerCompanySection,
+  partnerCompanyHref,
+  type PartnerCompanySection,
+} from "../partner-company-navigation";
+import { PartnerCompanyNavigation } from "./PartnerCompanyNavigation";
+import { PartnerAdministrationNavigation } from "./PartnerAdministrationNavigation";
+import { PartnerCompanyContacts } from "./PartnerCompanyContacts";
 import { PartnersSection } from "./PartnersSection";
 import { PartnerRelationshipSetup } from "./PartnerRelationshipSetup";
 import { PartnerRelationshipInvitationActions } from "./PartnerRelationshipInvitationActions";
@@ -75,6 +83,8 @@ type AdministrationView =
   | "relationships";
 
 type PartnerAdministrationFilters = {
+  companyId?: string;
+  companySection?: string;
   setup?: string;
   adminView?: string;
   adminCursor?: string;
@@ -568,6 +578,8 @@ function partnerAdminHref(input: {
   cursor?: string;
   selectedId?: string;
   selectedUserId?: string;
+  companyId?: string;
+  companySection?: PartnerCompanySection;
 }): ReturnType<typeof teamSurfaceHref> {
   const query = new URLSearchParams({ p_admin: input.view });
   if (input.q) query.set("p_admin_q", input.q);
@@ -575,6 +587,9 @@ function partnerAdminHref(input: {
   if (input.cursor) query.set("p_admin_cursor", input.cursor);
   const selectedId = input.selectedId ?? input.selectedUserId;
   if (selectedId) query.set("p_selected", selectedId);
+  if (input.companyId) query.set("p_company", input.companyId);
+  if (input.companySection)
+    query.set("p_company_section", input.companySection);
   return teamSurfaceHref("partners", { query });
 }
 
@@ -1513,7 +1528,34 @@ export async function PartnerAdministrationSection({
   const availableViews = VIEW_CONFIG.filter((candidate) =>
     hasTeamPermission(principal, candidate.permission),
   );
-  const requested = clean(filters?.adminView) as AdministrationView;
+  const companyIdCandidate = clean(filters?.companyId).toLowerCase();
+  const companyId = isUuid(companyIdCandidate) ? companyIdCandidate : "";
+  const companySection = normalizePartnerCompanySection(
+    filters?.companySection,
+  );
+  const canCreatePartner =
+    hasTeamPermission(principal, "partners.accounts.manage") &&
+    hasTeamPermission(principal, "partners.invitations.send") &&
+    hasTeamPermission(principal, "partners.accounts.read");
+  const requestedView = clean(filters?.adminView) as AdministrationView;
+  const requested: AdministrationView = !companyId
+    ? requestedView
+    : companySection === "billing"
+      ? "commercial"
+      : companySection === "people"
+        ? requestedView === "invitations" ||
+          !hasTeamPermission(principal, "partners.memberships.read")
+          ? "invitations"
+          : "memberships"
+        : companySection === "jobs"
+          ? [
+              "cancellation-requests",
+              "change-requests",
+              "location-reviews",
+            ].includes(requestedView)
+            ? requestedView
+            : "operations"
+          : "accounts";
   const view =
     availableViews.find((candidate) => candidate.id === requested)?.id ??
     availableViews[0]?.id ??
@@ -1591,12 +1633,91 @@ export async function PartnerAdministrationSection({
     "partners.change_requests.decide",
   );
 
+  const companySections: PartnerCompanySection[] = ["details"];
+  if (
+    hasTeamPermission(principal, "partners.memberships.read") ||
+    hasTeamPermission(principal, "partners.invitations.read")
+  )
+    companySections.push("people");
+  if (hasTeamPermission(principal, "appointments.read"))
+    companySections.push("jobs");
+  if (hasTeamPermission(principal, "partners.commercial.read"))
+    companySections.push("billing");
+  if (
+    canManageAccounts ||
+    canManageAccountLifecycle ||
+    canClosePartnerAccounts ||
+    canMergePartnerAccounts
+  )
+    companySections.push("settings");
+  let company: Record<string, unknown> | null = null;
+  if (companyIdCandidate) {
+    if (
+      companyId &&
+      hasTeamPermission(principal, "partners.accounts.read") &&
+      companySections.includes(companySection) &&
+      availableViews.some((item) => item.id === requested)
+    ) {
+      try {
+        const response = await callAdminApiAs(
+          principal,
+          `/api/admin/partner-management/v1/accounts?accountId=${companyId}&limit=1`,
+          { timeoutMs: 10_000 },
+        );
+        const result = response.ok
+          ? ((await response.json().catch(() => null)) as unknown)
+          : null;
+        if (
+          isCollectionPayload(result) &&
+          result.items.length === 1 &&
+          result.items[0]?.["id"] === companyId
+        )
+          company = result.items[0];
+      } catch {
+        /* No guessed company or cross-company fallback. */
+      }
+    }
+    if (!company)
+      return (
+        <section className="space-y-5">
+          <AdministrationHeader
+            activeView="accounts"
+            availableViews={availableViews}
+            canCreate={canCreatePartner}
+            canViewResources={hasTeamPermission(principal, "policy.read")}
+          />
+          <div role="alert" className={TEAM_EMPTY_STATE}>
+            This company or section could not be opened. Check your access or
+            try again. No other company has been opened in its place.
+            <div className="mt-3">
+              <Link
+                href="/team/partners"
+                className={teamButtonClass("secondary")}
+              >
+                Back to companies
+              </Link>
+            </div>
+          </div>
+        </section>
+      );
+  }
+  const companyNavigation = company ? (
+    <PartnerCompanyNavigation
+      accountId={companyId}
+      accountName={display(company["name"], "Company")}
+      section={companySection}
+      sections={companySections}
+    />
+  ) : null;
+
   if (view === "relationships") {
     return (
       <section className="space-y-6">
         <AdministrationHeader
           activeView={view}
           availableViews={availableViews}
+          canCreate={canCreatePartner}
+          canViewResources={hasTeamPermission(principal, "policy.read")}
         />
         <PartnersSection filters={filters} />
       </section>
@@ -1618,13 +1739,54 @@ export async function PartnerAdministrationSection({
         <AdministrationHeader
           activeView={view}
           availableViews={availableViews}
+          canCreate={canCreatePartner}
+          canViewResources={hasTeamPermission(principal, "policy.read")}
         />
-        <PartnerPortalOperationsPanel
-          principal={principal}
-          rangeDays={rangeDays}
-        />
-        {hasTeamPermission(principal, "appointments.read") && hasTeamPermission(principal, "partners.accounts.read") ? <PartnerServiceReviews canSchedule={hasTeamPermission(principal, "appointments.update")} /> : null}
-        {hasTeamPermission(principal, "appointments.read") && hasTeamPermission(principal, "partners.accounts.read") ? <PartnerRescheduleReviews canDecide={hasTeamPermission(principal, "appointments.update")} /> : null}
+        {companyNavigation}
+        {!company ? (
+          <PartnerPortalOperationsPanel
+            principal={principal}
+            rangeDays={rangeDays}
+          />
+        ) : null}
+        {company ? (
+          <div className="flex flex-wrap gap-2">
+            {availableViews
+              .filter((item) =>
+                [
+                  "cancellation-requests",
+                  "change-requests",
+                  "location-reviews",
+                ].includes(item.id),
+              )
+              .map((item) => (
+                <a
+                  key={item.id}
+                  href={partnerCompanyHref(companyId, "jobs", item.id)}
+                  className={teamButtonClass("secondary", "sm")}
+                >
+                  {item.label}
+                </a>
+              ))}
+          </div>
+        ) : null}
+        {hasTeamPermission(principal, "appointments.read") &&
+        hasTeamPermission(principal, "partners.accounts.read") ? (
+          <PartnerServiceReviews
+            key={companyId || "all"}
+            accountId={companyId || undefined}
+            includeScheduled={Boolean(company)}
+            canSchedule={hasTeamPermission(principal, "appointments.update")}
+          />
+        ) : null}
+        {hasTeamPermission(principal, "appointments.read") &&
+        hasTeamPermission(principal, "partners.accounts.read") ? (
+          <PartnerRescheduleReviews
+            key={companyId || "all"}
+            accountId={companyId || undefined}
+            canDecide={hasTeamPermission(principal, "appointments.update")}
+          />
+        ) : null}
       </section>
     );
   }
@@ -1640,14 +1802,17 @@ export async function PartnerAdministrationSection({
       ? selectedIdentityIdCandidate
       : "";
   const selectedCommercialAccountId =
-    view === "commercial" && isUuid(selectedIdentityIdCandidate)
-      ? selectedIdentityIdCandidate
-      : "";
+    company && view === "commercial"
+      ? companyId
+      : view === "commercial" && isUuid(selectedIdentityIdCandidate)
+        ? selectedIdentityIdCandidate
+        : "";
   const apiQuery = new URLSearchParams({ limit: "50" });
   if (q) apiQuery.set("q", q);
   if (status) apiQuery.set("status", status);
   if (cursor) apiQuery.set("cursor", cursor);
   if (selectedIdentityId) apiQuery.set("userId", selectedIdentityId);
+  if (companyId) apiQuery.set("accountId", companyId);
 
   let payload: CollectionPayload | null = null;
   let loadError = "";
@@ -1754,7 +1919,10 @@ export async function PartnerAdministrationSection({
   let domainAccountUnavailableReason = "";
   if (
     (view === "domains" && domainPermissions.manage) ||
-    (view === "accounts" && canMergePartnerAccounts)
+    (view === "accounts" &&
+      companySection === "settings" &&
+      Boolean(company) &&
+      canMergePartnerAccounts)
   ) {
     if (!hasTeamPermission(principal, "partners.accounts.read")) {
       domainAccountUnavailableReason =
@@ -1775,88 +1943,177 @@ export async function PartnerAdministrationSection({
   }
   const selectedCommercialAccountName = selectedCommercialAccountId
     ? display(
-        items.find(
-          (item) => display(item["id"], "") === selectedCommercialAccountId,
-        )?.["accountName"],
+        company?.["name"] ??
+          items.find(
+            (item) => display(item["id"], "") === selectedCommercialAccountId,
+          )?.["accountName"],
         selectedCommercialAccountId,
       )
     : "";
 
   return (
     <section className="space-y-6">
-      <AdministrationHeader activeView={view} availableViews={availableViews} />
-      {hasTeamPermission(principal, "policy.read") ? <Link href="/team/partners/scheduling" className="inline-flex min-h-11 items-center text-sm font-semibold text-primary-900 underline">Manage scheduling crews, trucks & equipment</Link> : null}
+      <AdministrationHeader
+        activeView={view}
+        availableViews={availableViews}
+        canCreate={canCreatePartner}
+        canViewResources={hasTeamPermission(principal, "policy.read")}
+      />
+      {companyNavigation}
+      {company && companySection === "people" ? (
+        <nav
+          aria-label="Company people and invitations"
+          className="flex flex-wrap gap-2"
+        >
+          {availableViews
+            .filter(
+              (item) => item.id === "memberships" || item.id === "invitations",
+            )
+            .map((item) => (
+              <a
+                key={item.id}
+                href={partnerCompanyHref(companyId, "people", item.id)}
+                className={teamButtonClass(
+                  item.id === view ? "primary" : "secondary",
+                  "sm",
+                )}
+                aria-current={item.id === view ? "page" : undefined}
+              >
+                {item.id === "memberships" ? "Company people" : "Invitations"}
+              </a>
+            ))}
+        </nav>
+      ) : null}
+      {company && companySection === "jobs" ? (
+        <a
+          href={partnerCompanyHref(companyId, "jobs")}
+          className={teamButtonClass("secondary", "sm")}
+        >
+          Back to company jobs
+        </a>
+      ) : null}
+      {company &&
+      companySection === "settings" &&
+      hasTeamPermission(principal, "policy.read") ? (
+        <Link
+          href="/team/partners/scheduling"
+          className="inline-flex min-h-11 items-center text-sm font-semibold text-primary-900 underline"
+        >
+          Manage scheduling crews, trucks & equipment
+        </Link>
+      ) : null}
 
-      {view === "accounts" ? (
+      {(view === "accounts" &&
+        (filters?.setup === "create" ||
+          filters?.setup === "existing" ||
+          (company && companySection === "settings"))) ||
+      (company &&
+        companySection === "people" &&
+        hasTeamPermission(principal, "partners.invitations.send")) ? (
         <PartnerRelationshipSetup
+          key={`${companyId}:${companySection}:${filters?.setup ?? ""}`}
+          initialAccountId={companyId || undefined}
           openCreate={filters?.setup === "create"}
-          canCreate={canManageAccounts && hasTeamPermission(principal, "partners.invitations.send")}
-          canInvite={hasTeamPermission(principal, "partners.invitations.send")}
-          canConfigure={canManageAccounts}
+          openExisting={filters?.setup === "existing"}
+          canCreate={
+            !company && filters?.setup === "create" && canCreatePartner
+          }
+          canInvite={
+            hasTeamPermission(principal, "partners.invitations.send") &&
+            (!company || companySection === "people")
+          }
+          canConfigure={
+            canManageAccounts && (!company || companySection === "settings")
+          }
           canConfigureBilling={canManageCommercial}
         />
       ) : null}
 
-      <div className={TEAM_CARD_PADDED}>
-        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <h2 className={TEAM_SECTION_TITLE}>{activeConfig.label}</h2>
-            <p className={TEAM_SECTION_SUBTITLE}>{activeConfig.description}</p>
-          </div>
-          <form
-            action="/team/partners"
-            method="get"
-            className="grid w-full max-w-2xl gap-2 sm:grid-cols-[minmax(0,1fr)_12rem_auto]"
-          >
-            <input type="hidden" name="p_admin" value={view} />
-            {selectedIdentityId || selectedCommercialAccountId ? (
-              <input
-                type="hidden"
-                name="p_selected"
-                value={selectedIdentityId || selectedCommercialAccountId}
-              />
-            ) : null}
-            <label className="min-w-0 flex-1">
-              <span className="sr-only">
-                Search {activeConfig.label.toLowerCase()}
-              </span>
-              <input
-                className={TEAM_INPUT_COMPACT}
-                type="search"
-                name="p_admin_q"
-                defaultValue={q}
-                maxLength={160}
-                placeholder={`Search ${activeConfig.label.toLowerCase()}`}
-              />
-            </label>
-            {statusOptions.length > 0 ? (
-              <label>
-                <span className="sr-only">
-                  Filter {activeConfig.label.toLowerCase()} by status
-                </span>
-                <select
-                  className={TEAM_INPUT_COMPACT}
-                  name="p_admin_status"
-                  defaultValue={status}
-                >
-                  <option value="">All statuses</option>
-                  {statusOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {statusLabel(option)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <button
-              className={teamButtonClass("secondary", "sm")}
-              type="submit"
+      {!(company && view === "accounts") &&
+      !(company && view === "commercial") ? (
+        <div className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h2 className={TEAM_SECTION_TITLE}>
+                {view === "accounts"
+                  ? "Partner companies"
+                  : view === "memberships"
+                    ? "Company people"
+                    : view === "commercial"
+                      ? "Billing & service terms"
+                      : activeConfig.label}
+              </h2>
+              {view !== "accounts" && !company ? (
+                <p className={TEAM_SECTION_SUBTITLE}>
+                  {activeConfig.description}
+                </p>
+              ) : null}
+            </div>
+            <form
+              action="/team/partners"
+              method="get"
+              className="grid w-full max-w-2xl gap-2 sm:grid-cols-[minmax(0,1fr)_12rem_auto]"
             >
-              Search
-            </button>
-          </form>
+              <input type="hidden" name="p_admin" value={view} />
+              {companyId ? (
+                <>
+                  <input type="hidden" name="p_company" value={companyId} />
+                  <input
+                    type="hidden"
+                    name="p_company_section"
+                    value={companySection}
+                  />
+                </>
+              ) : null}
+              {selectedIdentityId || selectedCommercialAccountId ? (
+                <input
+                  type="hidden"
+                  name="p_selected"
+                  value={selectedIdentityId || selectedCommercialAccountId}
+                />
+              ) : null}
+              <label className="min-w-0 flex-1">
+                <span className="sr-only">
+                  Search {activeConfig.label.toLowerCase()}
+                </span>
+                <input
+                  className={`${TEAM_INPUT_COMPACT} !text-base w-full min-w-0`}
+                  type="search"
+                  name="p_admin_q"
+                  defaultValue={q}
+                  maxLength={160}
+                  placeholder={`Search ${activeConfig.label.toLowerCase()}`}
+                />
+              </label>
+              {statusOptions.length > 0 && view !== "accounts" ? (
+                <label>
+                  <span className="sr-only">
+                    Filter {activeConfig.label.toLowerCase()} by status
+                  </span>
+                  <select
+                    className={`${TEAM_INPUT_COMPACT} !text-base w-full min-w-0`}
+                    name="p_admin_status"
+                    defaultValue={status}
+                  >
+                    <option value="">All statuses</option>
+                    {statusOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {statusLabel(option)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <button
+                className={teamButtonClass("secondary", "sm")}
+                type="submit"
+              >
+                Search
+              </button>
+            </form>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {view === "domains" && domainPermissions.manage ? (
         <PartnerDomainCreatePanel
@@ -1913,43 +2170,60 @@ export async function PartnerAdministrationSection({
 
       {view === "commercial" && selectedCommercialAccountId ? (
         <div className="space-y-3">
-          <div className="flex justify-end">
-            <Link
-              className={teamButtonClass("secondary", "sm")}
-              href={partnerAdminHref({ view: "commercial", q, status })}
-            >
-              Close approval-rule manager
-            </Link>
-          </div>
-          <PartnerServiceAgreementManager
+          {!company ? (
+            <div className="flex justify-end">
+              <Link
+                className={teamButtonClass("secondary", "sm")}
+                href={partnerAdminHref({ view: "commercial", q, status })}
+              >
+                Back to all company billing
+              </Link>
+            </div>
+          ) : null}
+          <PartnerBillingAdministration
             principal={principal}
             accountId={selectedCommercialAccountId}
             accountName={selectedCommercialAccountName}
             canManage={canManageCommercial}
           />
-          <PartnerBillingAdministration principal={principal} accountId={selectedCommercialAccountId} accountName={selectedCommercialAccountName} canManage={canManageCommercial} />
+          <details className="rounded-xl border border-[color:var(--team-border)] p-4">
+            <summary className="min-h-11 cursor-pointer content-center font-semibold">
+              Service terms & approved services
+            </summary>
+            <PartnerServiceAgreementManager
+              principal={principal}
+              accountId={selectedCommercialAccountId}
+              accountName={selectedCommercialAccountName}
+              canManage={canManageCommercial}
+            />
+          </details>
           {canCreateQuotes ? (
             <PartnerQuoteContextPanel
               context={quoteStaffContext}
               error={quoteStaffContextError}
             />
           ) : null}
-          <PartnerApprovalRuleManager
-            accountId={selectedCommercialAccountId}
-            accountName={selectedCommercialAccountName}
-            rules={approvalRulePayload?.rules ?? []}
-            options={
-              approvalRulePayload?.options ?? {
-                services: [],
-                locations: [],
-                servicesTruncated: false,
-                locationsTruncated: false,
+          <details className="rounded-xl border border-[color:var(--team-border)] p-4">
+            <summary className="min-h-11 cursor-pointer content-center font-semibold">
+              Company approval rules
+            </summary>
+            <PartnerApprovalRuleManager
+              accountId={selectedCommercialAccountId}
+              accountName={selectedCommercialAccountName}
+              rules={approvalRulePayload?.rules ?? []}
+              options={
+                approvalRulePayload?.options ?? {
+                  services: [],
+                  locations: [],
+                  servicesTruncated: false,
+                  locationsTruncated: false,
+                }
               }
-            }
-            canManage={canManageCommercial && Boolean(approvalRulePayload)}
-            hasMore={approvalRulePayload?.hasMore ?? false}
-            loadError={approvalRuleLoadError}
-          />
+              canManage={canManageCommercial && Boolean(approvalRulePayload)}
+              hasMore={approvalRulePayload?.hasMore ?? false}
+              loadError={approvalRuleLoadError}
+            />
+          </details>
         </div>
       ) : null}
 
@@ -1971,6 +2245,8 @@ export async function PartnerAdministrationSection({
               q,
               status,
               selectedUserId: selectedIdentityId,
+              companyId,
+              companySection: companyId ? companySection : undefined,
             })}
           >
             Retry first page
@@ -2031,7 +2307,14 @@ export async function PartnerAdministrationSection({
               display(item["accountPortalLifecycleStatus"], "active") ===
                 "active";
             return (
-              <li key={display(item["id"])} className={TEAM_CARD_PADDED}>
+              <li
+                key={display(item["id"])}
+                className={
+                  view === "accounts"
+                    ? "rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4"
+                    : TEAM_CARD_PADDED
+                }
+              >
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -2048,8 +2331,15 @@ export async function PartnerAdministrationSection({
                       {row.secondary}
                     </p>
                   </div>
-                  <dl className="grid gap-3 text-sm sm:grid-cols-3 lg:min-w-[32rem]">
-                    {row.details.map((detail) => (
+                  <dl className="grid min-w-0 gap-3 text-sm sm:grid-cols-3">
+                    {(view === "accounts" && !company
+                      ? row.details.filter(
+                          (detail) =>
+                            detail.label === "Portal" ||
+                            detail.label === "Location",
+                        )
+                      : row.details
+                    ).map((detail) => (
                       <div key={detail.label}>
                         <dt className="text-xs font-semibold uppercase tracking-wide text-[color:var(--team-text-soft)]">
                           {detail.label}
@@ -2061,16 +2351,65 @@ export async function PartnerAdministrationSection({
                     ))}
                   </dl>
                 </div>
-                {view === "invitations" && typeof item["etag"] === "string" && Array.isArray(item["allowedActions"]) ? (
+                {view === "accounts" && !company ? (
+                  <a
+                    href={partnerCompanyHref(display(item["id"], ""))}
+                    className={`${teamButtonClass("secondary")} mt-4`}
+                  >
+                    Open company
+                  </a>
+                ) : null}
+                {view === "accounts" &&
+                companySection === "details" &&
+                company ? (
+                  <div className="mt-4 space-y-3 text-sm">
+                    <p>
+                      {display(company["website"], "No company website saved")}
+                    </p>
+                    {companySections.includes("people") ? (
+                      <a
+                        href={partnerCompanyHref(companyId, "people")}
+                        className={teamButtonClass("secondary")}
+                      >
+                        View company contacts and invitations
+                      </a>
+                    ) : (
+                      <p>Your role cannot view this company’s people.</p>
+                    )}
+                    <p className="text-[color:var(--team-text-muted)]">
+                      Use this company’s Jobs section for service and Billing
+                      for invoices. Company access does not change the CRM job,
+                      price, or schedule.
+                    </p>
+                  </div>
+                ) : null}
+                {view === "invitations" &&
+                typeof item["etag"] === "string" &&
+                Array.isArray(item["allowedActions"]) ? (
                   <PartnerRelationshipInvitationActions
                     key={display(item["id"]) + ":" + item["etag"]}
                     accountId={display(item["partnerAccountId"], "")}
                     invitationId={display(item["id"], "")}
                     etag={item["etag"]}
-                    actions={item["allowedActions"].filter((action): action is "resend" | "revoke" => action === "resend" ? hasTeamPermission(principal, "partners.invitations.send") : action === "revoke" && hasTeamPermission(principal, "partners.invitations.revoke"))}
+                    actions={item["allowedActions"].filter(
+                      (action): action is "resend" | "revoke" =>
+                        action === "resend"
+                          ? hasTeamPermission(
+                              principal,
+                              "partners.invitations.send",
+                            )
+                          : action === "revoke" &&
+                            hasTeamPermission(
+                              principal,
+                              "partners.invitations.revoke",
+                            ),
+                    )}
                   />
                 ) : null}
-                {view === "accounts" && canManageAccounts ? (
+                {view === "accounts" &&
+                company &&
+                companySection === "settings" &&
+                canManageAccounts ? (
                   <div className="mt-4 space-y-3">
                     <details className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-4">
                       <summary className="flex min-h-[44px] cursor-pointer items-center text-sm font-semibold text-[color:var(--team-text)]">
@@ -2326,6 +2665,8 @@ export async function PartnerAdministrationSection({
                   </div>
                 ) : null}
                 {view === "accounts" &&
+                company &&
+                companySection === "settings" &&
                 accountLifecycleAction &&
                 canManageAccountLifecycle ? (
                   <details className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
@@ -2406,6 +2747,8 @@ export async function PartnerAdministrationSection({
                   </details>
                 ) : null}
                 {view === "accounts" &&
+                company &&
+                companySection === "settings" &&
                 canClosePartnerAccounts &&
                 (accountLifecycleStatus === "active" ||
                   accountLifecycleStatus === "suspended") ? (
@@ -2469,6 +2812,8 @@ export async function PartnerAdministrationSection({
                   </details>
                 ) : null}
                 {view === "accounts" &&
+                company &&
+                companySection === "settings" &&
                 canMergePartnerAccounts &&
                 (accountLifecycleStatus === "active" ||
                   accountLifecycleStatus === "suspended") ? (
@@ -3329,7 +3674,9 @@ export async function PartnerAdministrationSection({
                         </ul>
                       ) : (
                         <p className="mt-2 text-sm text-emerald-800">
-                          No record-level pricing or legacy collection issue is detected. Verify payment-provider readiness separately before enabling online payments.
+                          No record-level pricing or legacy collection issue is
+                          detected. Verify payment-provider readiness separately
+                          before enabling online payments.
                         </p>
                       )}
                     </div>
@@ -3374,24 +3721,26 @@ export async function PartnerAdministrationSection({
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-3 lg:col-span-2">
                       <p className="max-w-3xl text-xs text-[color:var(--team-text-muted)]">
-                        Account billing-policy configuration and provider
-                        payment readiness do not have a canonical writable
-                        account record yet. This inventory never exposes hosted
-                        URLs, provider identifiers, payloads, credentials,
-                        margins, or commissions. Approval rules use a separate
-                        account-scoped, audited writer.
+                        Open the company to manage invoices, service terms, and
+                        approval rules. Online payment availability still
+                        depends on the payment provider being configured and
+                        ready.
                         {canManageCommercial
                           ? " Commercial management authority may create, revise, activate, or deactivate approval rules."
                           : ""}
                       </p>
                       <Link
                         className={teamButtonClass("secondary", "sm")}
-                        href={partnerAdminHref({
-                          view: "commercial",
-                          q,
-                          status,
-                          selectedId: display(item["id"], ""),
-                        })}
+                        href={
+                          companyId
+                            ? partnerCompanyHref(companyId, "billing")
+                            : partnerAdminHref({
+                                view: "commercial",
+                                q,
+                                status,
+                                selectedId: display(item["id"], ""),
+                              })
+                        }
                         aria-current={
                           selectedCommercialAccountId ===
                           display(item["id"], "")
@@ -3399,7 +3748,7 @@ export async function PartnerAdministrationSection({
                             : undefined
                         }
                       >
-                        Manage approval rules
+                        Open billing &amp; service terms
                       </Link>
                     </div>
                   </div>
@@ -3830,7 +4179,13 @@ export async function PartnerAdministrationSection({
         </ol>
       )}
 
-      {payload ? (
+      {company &&
+      companySection === "details" &&
+      hasTeamPermission(principal, "partners.memberships.read") ? (
+        <PartnerCompanyContacts principal={principal} accountId={companyId} />
+      ) : null}
+
+      {payload && !(company && view === "accounts") ? (
         <nav
           aria-label={`${activeConfig.label} pagination`}
           className="flex items-center justify-between gap-3"
@@ -3846,6 +4201,8 @@ export async function PartnerAdministrationSection({
                   view,
                   q,
                   status,
+                  companyId,
+                  companySection: companyId ? companySection : undefined,
                   selectedId: selectedIdentityId || selectedCommercialAccountId,
                 })}
               >
@@ -3859,6 +4216,8 @@ export async function PartnerAdministrationSection({
                   view,
                   q,
                   status,
+                  companyId,
+                  companySection: companyId ? companySection : undefined,
                   cursor: payload.page.nextCursor,
                   selectedId: selectedIdentityId || selectedCommercialAccountId,
                 })}
@@ -3880,7 +4239,8 @@ export async function PartnerAdministrationSection({
       {view === "commercial" ? (
         <aside className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">
           Choose a company to manage its service agreement, approval rules, and
-          billing. Issuing an invoice does not change the job’s price or commissions.
+          billing. Issuing an invoice does not change the job’s price or
+          commissions.
         </aside>
       ) : null}
       {view === "security" ? (
@@ -4084,45 +4444,36 @@ function PartnerIdentitySecurityOwnerPanel({
 function AdministrationHeader({
   activeView,
   availableViews,
+  canCreate = false,
+  canViewResources = false,
 }: {
   activeView: AdministrationView;
   availableViews: typeof VIEW_CONFIG;
+  canCreate?: boolean;
+  canViewResources?: boolean;
 }): React.ReactElement {
   return (
-    <header className="space-y-4">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary-700">
-          Partner Portal
-        </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[color:var(--team-text)]">
-          Partner administration
-        </h1>
-        <p className="mt-1 max-w-3xl text-sm text-[color:var(--team-text-muted)]">
-          Account-centred access operations for every applicant, company,
-          registered person, membership, invitation, join request, and verified
-          company-domain authority, session, quarantine case, or commercial
-          readiness record.
-        </p>
-      </div>
-      <nav
-        aria-label="Partner administration sections"
-        className="flex gap-2 overflow-x-auto rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-2"
-      >
-        {availableViews.map((view) => (
-          <Link
-            key={view.id}
-            href={partnerAdminHref({ view: view.id })}
-            aria-current={activeView === view.id ? "page" : undefined}
-            className={`inline-flex min-h-[44px] shrink-0 items-center rounded-xl px-4 py-2 text-sm font-semibold ${
-              activeView === view.id
-                ? "bg-primary-50 text-primary-800"
-                : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface-muted)] hover:text-[color:var(--team-text)]"
-            }`}
-          >
-            {view.label}
-          </Link>
-        ))}
-      </nav>
-    </header>
+    <PartnerAdministrationNavigation
+      canCreate={canCreate}
+      destinations={[
+        ...availableViews.map((view) => ({
+          id: view.id,
+          label:
+            view.id === "commercial" ? "Billing & service terms" : view.label,
+          href: String(partnerAdminHref({ view: view.id })),
+          active: activeView === view.id,
+        })),
+        ...(canViewResources
+          ? [
+              {
+                id: "scheduling",
+                label: "Scheduling resources",
+                href: "/team/partners/scheduling",
+                active: false,
+              },
+            ]
+          : []),
+      ]}
+    />
   );
 }

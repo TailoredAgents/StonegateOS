@@ -14,6 +14,7 @@ import { teamSurfaceHref } from "../surface-registry";
 import { teamButtonClass } from "./team-ui";
 import { ContactNameEditorClient } from "./ContactNameEditorClient";
 import { ContactPhoneEditorClient } from "./ContactPhoneEditorClient";
+import { PartnerAccessEntry } from "./PartnerAccessEntry";
 import { InboxContactNotesClient } from "./InboxContactNotesClient";
 import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
 import { SubmitButton } from "@/components/SubmitButton";
@@ -22,7 +23,6 @@ import {
   bookAppointmentAction,
   deleteContactAction,
   deletePropertyAction,
-  partnerPortalInviteUserAction,
   startContactCallAction,
   updatePropertyAction,
 } from "../actions";
@@ -112,8 +112,8 @@ const LEGACY_EMBEDDED_CAPABILITIES: ContactWorkspaceCapabilities = {
   canReadCalendar: true,
   canReadQuotes: true,
   canWriteQuotes: true,
-  canReadPartners: true,
-  canInvitePartners: true,
+  canReadPartners: false,
+  canInvitePartners: false,
 };
 
 function formatDateTime(value: string | null): string {
@@ -756,113 +756,11 @@ export function ContactsDetailsPaneClient({
 
       {(!contactWorkspace ||
         (activeSubviewAllowed && subview === "overview")) &&
-      (capabilities.canReadPartners || capabilities.canInvitePartners) ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-900">
-                Partner portal
-              </h3>
-              <p className="mt-1 text-xs text-slate-500">
-                Invite this contact to the Partner Portal. Sending an invite
-                also marks them as a partner.
-              </p>
-            </div>
-            {capabilities.canReadPartners ? (
-              <a
-                className={`${teamButtonClass("secondary", "sm")} min-h-11`}
-                href={teamSurfaceHref("partners", {
-                  query: { p_selected: contact.id },
-                })}
-              >
-                Advanced setup
-              </a>
-            ) : null}
-          </div>
-
-          {capabilities.canInvitePartners ? (
-            <form
-              action={partnerPortalInviteUserAction}
-              className="mt-4 grid gap-3 text-xs text-slate-600 sm:grid-cols-2"
-              onSubmit={(event) => {
-                const label =
-                  contact.email ??
-                  contact.phone ??
-                  contact.name ??
-                  "this contact";
-                if (
-                  !window.confirm(`Send a Partner Portal invite to ${label}?`)
-                ) {
-                  event.preventDefault();
-                }
-              }}
-            >
-              <input type="hidden" name="orgContactId" value={contact.id} />
-              <input type="hidden" name="expectedVersion" value="new" />
-              <input
-                type="hidden"
-                name="idempotencyKey"
-                value={`partner-invite:${contact.id}:${contact.updatedAt}`}
-              />
-
-              <label className="flex flex-col gap-1">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  Name
-                </span>
-                <input
-                  name="name"
-                  defaultValue={contact.name}
-                  required
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                />
-              </label>
-
-              <label className="flex flex-col gap-1">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  Email
-                </span>
-                <input
-                  name="email"
-                  type="email"
-                  defaultValue={contact.email ?? ""}
-                  placeholder="name@company.com"
-                  required
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                />
-              </label>
-
-              <label className="flex flex-col gap-1 sm:col-span-2">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  Phone (optional)
-                </span>
-                <input
-                  name="phone"
-                  type="tel"
-                  defaultValue={contact.phoneE164 ?? contact.phone ?? ""}
-                  placeholder="+1 404-555-1234"
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                />
-              </label>
-
-              <div className="sm:col-span-2 flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[11px] text-slate-500">
-                  Invite includes a login link (expires in ~30 minutes).
-                </span>
-                <SubmitButton
-                  className={teamButtonClass("primary", "sm")}
-                  pendingLabel="Sending..."
-                >
-                  Send portal invite
-                </SubmitButton>
-              </div>
-            </form>
-          ) : (
-            <p className="mt-3 text-xs text-slate-500">
-              You can review the partner workspace, but sending portal invites
-              requires partner invitation access.
-            </p>
-          )}
-        </div>
+      capabilities.canReadPartners ? (
+        <PartnerAccessEntry
+          canReadAccounts={capabilities.canReadPartners}
+          canInvite={capabilities.canInvitePartners}
+        />
       ) : null}
 
       {activeSubviewAllowed && capabilities.canBook && showBookingForm ? (

@@ -7,6 +7,10 @@ import {
   TEAM_SURFACE_BY_ID,
   TEAM_SURFACE_GROUP_LABELS,
   TEAM_SURFACES,
+  TEAM_NAVIGATION_SURFACES,
+  TEAM_PRIMARY_NAVIGATION_IDS,
+  canAccessTeamSurface,
+  getTeamNavigationSurfaces,
 } from "../../../site/src/app/team/surface-registry";
 
 const TEAM_APP = join(process.cwd(), "../site/src/app/team");
@@ -20,7 +24,7 @@ const EXPECTED_SURFACE_MODULES: Readonly<Record<string, string>> = {
   pipeline: "./components/PipelineSection",
   "sales-hq": "./components/SalesScorecardSection",
   outbound: "./components/OutboundSection",
-  partners: "./components/PartnersSection",
+  partners: "./components/PartnerAdministrationSection",
   "sales-log": "./components/SalesActivityLogSection",
   "google-ads": "./components/MarketingSection",
   "web-analytics": "./components/WebAnalyticsSection",
@@ -217,33 +221,80 @@ describe("Site Team surface registry", () => {
     );
   });
 
-  it("nests Sales Activity under Sales HQ and Partners under Outbound", () => {
+  it("keeps legacy Sales URLs without putting a Sales workspace in normal navigation", () => {
     const teamPage = read("page.tsx");
-    const salesHq = read("components/SalesScorecardSection.tsx");
-    const salesActivity = read("components/SalesActivityLogSection.tsx");
-    const outbound = read("components/OutboundSection.tsx");
-    const partners = read("components/PartnersSection.tsx");
+    const ownerNavigation = getTeamNavigationSurfaces(["*"]);
+    for (const id of [
+      "pipeline",
+      "sales-hq",
+      "outbound",
+      "sales-log",
+    ] as const) {
+      expect(TEAM_SURFACE_BY_ID.has(id)).toBe(true);
+      expect(teamSurfaceHref(id)).toMatch(/^\/team\/sales\//u);
+      expect(canAccessTeamSurface(id, ["*"])).toBe(true);
+      expect(ownerNavigation.some((surface) => surface.id === id)).toBe(false);
+    }
+    expect(
+      TEAM_NAVIGATION_SURFACES.some((surface) => surface.group === "sales"),
+    ).toBe(false);
+    expect(teamPage).not.toContain('tab === "partners" ? "outbound"');
+  });
 
-    expect(teamPage).toContain(
-      'const nestedSurfaceIds = new Set(["partners", "sales-log"])',
+  it("places Partners directly in daily work without granting new permissions", () => {
+    expect(TEAM_PRIMARY_NAVIGATION_IDS).toContain("partners");
+    expect(TEAM_SURFACE_BY_ID.get("partners")?.group).toBe("daily");
+    expect(teamSurfaceHref("partners")).toBe("/team/partners");
+    for (const permissions of [
+      ["*"],
+      ["partners.accounts.read"],
+      ["partners.invitations.read"],
+      ["partners.security.read"],
+    ]) {
+      expect(canAccessTeamSurface("partners", permissions)).toBe(true);
+      expect(
+        getTeamNavigationSurfaces(permissions).filter(
+          (surface) => surface.id === "partners",
+        ),
+      ).toHaveLength(1);
+    }
+    for (const permissions of [
+      [],
+      ["sales.read"],
+      ["outbound.read"],
+      ["contacts.read"],
+      ["partners.invitations.send"],
+    ]) {
+      expect(canAccessTeamSurface("partners", permissions)).toBe(false);
+      expect(
+        getTeamNavigationSurfaces(permissions).some(
+          (surface) => surface.id === "partners",
+        ),
+      ).toBe(false);
+    }
+    expect(resolveDefaultTeamSurfaceId(["partners.accounts.read"])).toBe(
+      "partners",
     );
-    expect(teamPage).toContain('tab === "partners"');
-    expect(teamPage).toContain('? "outbound"');
-    expect(teamPage).toContain('tab === "sales-log"');
-    expect(teamPage).toContain('? "sales-hq"');
+    expect(["pipeline", "sales-hq", "outbound", "sales-log"]).not.toContain(
+      resolveDefaultTeamSurfaceId([
+        "sales.read",
+        "outbound.read",
+        "pipeline.read",
+      ]),
+    );
+  });
 
-    for (const source of [salesHq, salesActivity]) {
-      expect(source).toContain('aria-label="Sales HQ views"');
-      expect(source).toContain('teamSurfaceHref("sales-hq")');
-      expect(source).toContain('teamSurfaceHref("sales-log")');
-    }
-    for (const source of [outbound, partners]) {
-      expect(source).toContain('aria-label="Outbound views"');
-    }
-    expect(outbound).toContain("buildOutboundHref");
-    expect(outbound).toContain("buildOutboundPartnersHref");
-    expect(partners).toContain("outboundSubviewHrefFromReturn");
-    expect(partners).toContain('teamSurfaceHref("partners",');
+  it("encodes a direct Add partner link without carrying old Sales selection state", () => {
+    const href = teamSurfaceHref("partners", {
+      query: { p_admin: "accounts", p_setup: "create" },
+      hash: "partner-relationship-setup-heading",
+    });
+    const url = new URL(href, "https://example.test");
+    expect(url.pathname).toBe("/team/partners");
+    expect(url.searchParams.get("p_setup")).toBe("create");
+    expect(url.hash).toBe("#partner-relationship-setup-heading");
+    expect(url.searchParams.has("out_return")).toBe(false);
+    expect(url.searchParams.has("contactId")).toBe(false);
   });
 
   it("keeps Agent and Simulator discoverable together under Advanced tools", () => {

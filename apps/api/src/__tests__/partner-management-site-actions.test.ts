@@ -136,11 +136,14 @@ describe("Team Partner administration UI mutation contract", () => {
     expect(workspace).toContain("const canManageCommercial");
     expect(workspace).toContain('"partners.commercial.manage"');
     expect(workspace).toContain("PartnerApprovalRuleManager");
-    expect(workspace).toContain("Manage approval rules");
+    expect(workspace).toContain("Billing & service terms");
+    expect(workspace).toContain("Company approval rules");
     expect(workspace).toContain("includeInactive=true");
     expect(workspace).toContain("PartnerBillingAdministration");
     expect(workspace).toContain("canManage={canManageCommercial}");
-    const billing = siteSource("components/PartnerBillingAdministrationClient.tsx");
+    const billing = siteSource(
+      "components/PartnerBillingAdministrationClient.tsx",
+    );
     expect(billing).toContain("Save draft for review");
     expect(billing).toContain("REFUND ALREADY GIVEN");
     expect(billing).not.toContain("providerInvoiceId");

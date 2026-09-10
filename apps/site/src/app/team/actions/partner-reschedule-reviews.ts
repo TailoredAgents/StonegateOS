@@ -32,7 +32,7 @@ const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 export async function loadPartnerRescheduleReviews(
-  input: { id?: string; cursor?: string } = {},
+  input: { id?: string; cursor?: string; accountId?: string } = {},
 ): Promise<
   | {
       ok: true;
@@ -48,13 +48,17 @@ export async function loadPartnerRescheduleReviews(
     !hasTeamPermission(principal, "appointments.read")
   )
     return { ok: false, message: "Your role cannot view these requests." };
-  if ((input.id && !UUID.test(input.id)) || (input.cursor?.length ?? 0) > 4000)
+  if (
+    (input.id && !UUID.test(input.id)) ||
+    (input.accountId && !UUID.test(input.accountId)) ||
+    (input.cursor?.length ?? 0) > 4000
+  )
     return { ok: false, message: "Refresh the request list." };
   const path =
     "/api/admin/partner-management/v1/reschedule-requests" +
     (input.id
       ? `/${input.id}`
-      : `?${new URLSearchParams({ limit: "25", ...(input.cursor ? { cursor: input.cursor } : {}) })}`);
+      : `?${new URLSearchParams({ limit: "25", ...(input.cursor ? { cursor: input.cursor } : {}), ...(input.accountId ? { accountId: input.accountId } : {}) })}`);
   try {
     const response = await callAdminApiAs(principal, path, {
       timeoutMs: 10_000,
@@ -74,7 +78,12 @@ export async function loadPartnerRescheduleReviews(
       (input.id &&
         (!data.request ||
           data.request.id !== input.id ||
-          !Array.isArray(data.candidates)))
+          !Array.isArray(data.candidates) ||
+          (input.accountId && data.request.accountId !== input.accountId))) ||
+      (!input.id &&
+        (!Array.isArray(data.requests) ||
+          (input.accountId &&
+            data.requests.some((item) => item.accountId !== input.accountId))))
     )
       return {
         ok: false,
@@ -109,12 +118,14 @@ export async function decidePartnerRescheduleReview(input: {
   startAt?: string;
   selectedResourceIds?: string[];
   key: string;
+  accountId?: string;
 }): Promise<{ ok: boolean; message: string }> {
   const principal = await requireCurrentTeamPrincipal();
   if (
     !hasTeamPermission(principal, "partners.accounts.read") ||
     !hasTeamPermission(principal, "appointments.update") ||
     !UUID.test(input.id) ||
+    (input.accountId && !UUID.test(input.accountId)) ||
     !Number.isFinite(Date.parse(input.version)) ||
     !/^[A-Za-z0-9._:-]{16,200}$/u.test(input.key) ||
     input.reason.trim().length < 12 ||
@@ -125,6 +136,18 @@ export async function decidePartnerRescheduleReview(input: {
       message: "Review your permission and the decision details.",
     };
   try {
+    if (input.accountId) {
+      const current = await loadPartnerRescheduleReviews({
+        id: input.id,
+        accountId: input.accountId,
+      });
+      if (!current.ok || !current.detail)
+        return {
+          ok: false,
+          message:
+            "This request could not be verified for the selected company. No schedule was changed.",
+        };
+    }
     const response = await callAdminApiAs(
       principal,
       `/api/admin/partner-management/v1/reschedule-requests/${input.id}/decision`,

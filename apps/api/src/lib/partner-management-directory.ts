@@ -148,6 +148,7 @@ async function listAccounts(query: PartnerManagementListQuery) {
     )
     .where(
       where([
+        query.accountId ? eq(partnerAccounts.id, query.accountId) : null,
         query.status ? eq(partnerAccounts.status, query.status as never) : null,
         search
           ? or(

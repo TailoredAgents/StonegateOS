@@ -100,12 +100,24 @@ describe("partner management list contract", () => {
         "accounts",
       ),
     ).toThrow("supported accounts status");
-    expect(() =>
+    expect(
       parsePartnerManagementListQuery(
         new URLSearchParams({ accountId: FIRST_ID }),
         "accounts",
+      ).accountId,
+    ).toBe(FIRST_ID);
+    expect(() =>
+      parsePartnerManagementListQuery(
+        new URLSearchParams({ accountId: "not-a-company" }),
+        "accounts",
       ),
-    ).toThrow("not supported by the accounts directory");
+    ).toThrow("Choose a valid accountId");
+    const duplicateAccount = new URLSearchParams();
+    duplicateAccount.append("accountId", FIRST_ID);
+    duplicateAccount.append("accountId", SECOND_ID);
+    expect(() =>
+      parsePartnerManagementListQuery(duplicateAccount, "accounts"),
+    ).toThrow("may only be provided once");
   });
 
   it.each([
@@ -206,9 +218,9 @@ describe("partner management list contract", () => {
     expect(boundedPartnerQuarantineText("  one   two  ", "fallback")).toBe(
       "one two",
     );
-    expect(boundedPartnerQuarantineText("x".repeat(600), "fallback")).toHaveLength(
-      500,
-    );
+    expect(
+      boundedPartnerQuarantineText("x".repeat(600), "fallback"),
+    ).toHaveLength(500);
     expect(
       hasAcceptedPartnerInviteProviderEvidence([{ state: "succeeded" }]),
     ).toBe(true);

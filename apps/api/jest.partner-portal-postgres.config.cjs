@@ -19,6 +19,7 @@ module.exports = {
     "<rootDir>/src/__tests__/partner-billing-history.postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-template-maintenance.postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-service-review-queue.postgres.integration.test.ts",
+    "<rootDir>/src/__tests__/partner-company-directory.postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-completion-record.postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-billing-documents.postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-billing-administration.postgres.integration.test.ts",

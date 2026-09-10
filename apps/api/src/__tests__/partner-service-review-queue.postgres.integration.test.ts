@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import {
   closeDbForTests,
   getDb,
@@ -120,6 +121,109 @@ async function fixture(
 
 suite("initial partner service review queue / real PostgreSQL", () => {
   afterAll(async () => closeDbForTests());
+  it("requires a specific company for history and rejects ambiguous modes", async () => {
+    for (const params of [
+      { includeScheduled: "true" },
+      { includeScheduled: "true", accountId: "not-a-company-id" },
+      { includeScheduled: "yes", accountId: randomUUID() },
+    ]) {
+      expect(
+        await listPartnerServiceReviews(new URLSearchParams(params)),
+      ).toBeNull();
+    }
+  });
+
+  it("lists scheduled and closed company jobs without mixing companies or exposing scope secrets", async () => {
+    const first = await fixture();
+    const company = { id: first.accountId, name: first.accountName };
+    const scheduled = await fixture(
+      "confirmed",
+      new Date("2035-06-04T14:00:00Z"),
+      company,
+    );
+    const completed = await fixture(
+      "completed",
+      new Date("2035-06-03T14:00:00Z"),
+      company,
+    );
+    const canceled = await fixture(
+      "canceled",
+      new Date("2035-06-02T14:00:00Z"),
+      company,
+    );
+    const otherCompany = await fixture("confirmed", new Date());
+    await getDb()
+      .update(partnerBookings)
+      .set({
+        arrivalWindowStartAt: new Date("2035-06-04T14:00:00Z"),
+        arrivalWindowEndAt: new Date("2035-06-04T16:00:00Z"),
+      })
+      .where(eq(partnerBookings.id, scheduled.jobId));
+
+    const history = await listPartnerServiceReviews(
+      new URLSearchParams({
+        accountId: first.accountId,
+        includeScheduled: "true",
+      }),
+    );
+    expect(new Set(history!.requests.map((row) => row.id))).toEqual(
+      new Set([first.jobId, scheduled.jobId, completed.jobId, canceled.jobId]),
+    );
+    expect(
+      history!.requests.every((row) => row.accountId === first.accountId),
+    ).toBe(true);
+    expect(
+      history!.requests.find((row) => row.id === scheduled.jobId),
+    ).toMatchObject({
+      appointmentId: scheduled.appointmentId,
+      arrivalStartAt: "2035-06-04T14:00:00.000Z",
+      arrivalEndAt: "2035-06-04T16:00:00.000Z",
+    });
+    expect(
+      history!.requests.find((row) => row.id === first.jobId),
+    ).toMatchObject({
+      arrivalStartAt: null,
+      arrivalEndAt: null,
+    });
+    expect(JSON.stringify(history)).not.toMatch(
+      /SECRET|cabinet|4045550100|originalObjectKey/u,
+    );
+    expect(JSON.stringify(history)).not.toContain(otherCompany.jobId);
+    const reviews = await listPartnerServiceReviews(
+      new URLSearchParams({ accountId: first.accountId }),
+    );
+    expect(reviews!.requests.map((row) => row.id)).toEqual([first.jobId]);
+    expect(JSON.stringify(reviews)).not.toContain(first.appointmentId);
+  });
+
+  it("paginates more than 100 company jobs and binds cursors to company and history mode", async () => {
+    const first = await fixture("confirmed", new Date());
+    const company = { id: first.accountId, name: first.accountName };
+    for (let index = 0; index < 101; index += 1) {
+      await fixture("completed", new Date(), company);
+    }
+    const params = new URLSearchParams({
+      accountId: first.accountId,
+      includeScheduled: "true",
+      limit: "100",
+    });
+    const pageOne = await listPartnerServiceReviews(params);
+    expect(pageOne!.requests).toHaveLength(100);
+    expect(pageOne!.page.nextCursor).toBeTruthy();
+    params.set("cursor", pageOne!.page.nextCursor!);
+    const pageTwo = await listPartnerServiceReviews(params);
+    expect(pageTwo!.requests).toHaveLength(2);
+    expect(pageTwo!.page.nextCursor).toBeNull();
+    expect(
+      new Set([...pageOne!.requests, ...pageTwo!.requests].map((row) => row.id))
+        .size,
+    ).toBe(102);
+    params.set("includeScheduled", "false");
+    expect(await listPartnerServiceReviews(params)).toBeNull();
+    params.set("includeScheduled", "true");
+    params.set("accountId", randomUUID());
+    expect(await listPartnerServiceReviews(params)).toBeNull();
+  });
   it("shows original-job context on an additional request without contact-based preview links", async () => {
     const original = await fixture("completed", new Date());
     const additional = await fixture(

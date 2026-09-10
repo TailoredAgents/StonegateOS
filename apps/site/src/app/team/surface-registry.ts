@@ -88,7 +88,7 @@ export const TEAM_SURFACES = [
     id: "partners",
     canonicalPath: "/team/partners",
     legacyTabs: ["partners"],
-    group: "sales",
+    group: "daily",
     label: "Partners",
     requiredPermissions: [
       "partners.accounts.read",
@@ -278,6 +278,41 @@ export function isTeamSurfaceId(value: string): value is TeamSurfaceId {
   return TEAM_SURFACE_IDS.has(value as TeamSurfaceId);
 }
 
+// Keep historical Sales routes resolvable without presenting them as daily work.
+// This is navigation policy only: permissions, records and automation are unchanged.
+export const TEAM_NAVIGATION_SURFACES = TEAM_SURFACES.filter(
+  (surface) => surface.group !== "sales",
+);
+
+export const TEAM_PRIMARY_NAVIGATION_IDS: readonly TeamSurfaceId[] = [
+  "calendar",
+  "inbox",
+  "contacts",
+  "partners",
+  "quotes",
+  "expenses",
+];
+
+export function canAccessTeamSurface(
+  surfaceId: TeamSurfaceId,
+  permissions: readonly string[],
+): boolean {
+  const surface = TEAM_SURFACE_BY_ID.get(surfaceId);
+  return Boolean(
+    surface &&
+      (surface.requiredPermissions.length === 0 ||
+        surface.requiredPermissions.some((permission) =>
+          hasTeamPermissionValue(permissions, permission),
+        )),
+  );
+}
+
+export function getTeamNavigationSurfaces(permissions: readonly string[]) {
+  return TEAM_NAVIGATION_SURFACES.filter((surface) =>
+    canAccessTeamSurface(surface.id, permissions),
+  );
+}
+
 export type TeamSurfaceQueryPrimitive = string | number | boolean;
 
 export type TeamSurfaceQueryValue =
@@ -351,7 +386,6 @@ export const TEAM_SURFACE_GROUP_LABELS: Readonly<
 
 export const TEAM_SURFACE_GROUP_ORDER: readonly TeamSurfaceGroup[] = [
   "daily",
-  "sales",
   "marketing",
   "owner",
   "admin",
@@ -386,5 +420,5 @@ export function resolveDefaultTeamSurfaceId(
 
   const inbox = TEAM_SURFACE_BY_ID.get("inbox");
   if (inbox && allowed(inbox)) return "inbox";
-  return TEAM_SURFACES.find(allowed)?.id ?? null;
+  return TEAM_NAVIGATION_SURFACES.find(allowed)?.id ?? null;
 }

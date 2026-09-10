@@ -30,8 +30,10 @@ function windowLabel(
 
 export function PartnerRescheduleReviews({
   canDecide,
+  accountId,
 }: {
   canDecide: boolean;
+  accountId?: string;
 }) {
   const [items, setItems] = useState<RescheduleReview[]>([]),
     [cursor, setCursor] = useState<string | null>(null);
@@ -39,14 +41,22 @@ export function PartnerRescheduleReviews({
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState("");
   const selected = useRef("");
+  const generation = useRef(0);
   const pendingDecision = useRef<{ fingerprint: string; key: string } | null>(
     null,
   );
   async function load(more = false) {
+    const requestGeneration = ++generation.current;
     setBusy(true);
-    const result = await loadPartnerRescheduleReviews(
-      more && cursor ? { cursor } : {},
-    );
+    setMessage("");
+    const result = await loadPartnerRescheduleReviews({
+      accountId,
+      ...(more && cursor ? { cursor } : {}),
+    }).catch(() => ({
+      ok: false as const,
+      message: "The requests could not be loaded. Try again.",
+    }));
+    if (requestGeneration !== generation.current) return;
     setBusy(false);
     if (!result.ok) {
       setMessage(result.message);
@@ -58,16 +68,31 @@ export function PartnerRescheduleReviews({
     setCursor(result.nextCursor);
   }
   useEffect(() => {
+    setItems([]);
+    setCursor(null);
+    setDetail(null);
+    selected.current = "";
+    pendingDecision.current = null;
     void load();
-  }, []);
+    return () => {
+      generation.current += 1;
+    };
+  }, [accountId]);
   async function open(id: string) {
+    const requestGeneration = ++generation.current;
     selected.current = id;
     setDetail(null);
     setBusy(true);
     setMessage("");
     pendingDecision.current = null;
-    const result = await loadPartnerRescheduleReviews({ id });
-    if (selected.current !== id) return;
+    const result = await loadPartnerRescheduleReviews({ id, accountId }).catch(
+      () => ({
+        ok: false as const,
+        message: "This request could not be loaded. Try again.",
+      }),
+    );
+    if (selected.current !== id || requestGeneration !== generation.current)
+      return;
     setBusy(false);
     if (!result.ok) setMessage(result.message);
     else setDetail(result.detail);
@@ -76,7 +101,13 @@ export function PartnerRescheduleReviews({
     form: HTMLFormElement,
     decision: "accepted" | "declined",
   ) {
-    if (!detail || busy || !form.reportValidity()) return;
+    if (
+      !detail ||
+      busy ||
+      !form.reportValidity() ||
+      (accountId && detail.request.accountId !== accountId)
+    )
+      return;
     const data = new FormData(form),
       startAt = formEntryText(data.get("startAt")),
       reason = formEntryText(data.get("reason"));
@@ -84,7 +115,9 @@ export function PartnerRescheduleReviews({
       setMessage("Choose a replacement window before accepting.");
       return;
     }
-    const selectedResourceIds = data.getAll("selectedResourceIds").map(formEntryText);
+    const selectedResourceIds = data
+      .getAll("selectedResourceIds")
+      .map(formEntryText);
     if (
       decision === "accepted" &&
       data.get("resourceSelectionMode") === "manual" &&
@@ -96,6 +129,7 @@ export function PartnerRescheduleReviews({
       return;
     }
     const payload = {
+      ...(accountId ? { accountId } : {}),
       id: detail.request.id,
       version: detail.request.updatedAt,
       decision,
@@ -112,10 +146,15 @@ export function PartnerRescheduleReviews({
         key: `reschedule-review:${crypto.randomUUID()}`,
       };
     setBusy(true);
+    const requestGeneration = ++generation.current;
     const result = await decidePartnerRescheduleReview({
       ...payload,
       key: pendingDecision.current.key,
-    });
+    }).catch(() => ({
+      ok: false,
+      message: "The result could not be confirmed. Retry this same decision.",
+    }));
+    if (requestGeneration !== generation.current) return;
     setBusy(false);
     setMessage(result.message);
     if (result.ok) {

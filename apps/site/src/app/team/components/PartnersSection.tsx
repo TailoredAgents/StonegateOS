@@ -17,6 +17,12 @@ import {
 } from "../partner-page";
 import { teamSurfaceHref } from "../surface-registry";
 import {
+  partnerAccessCapabilities,
+  partnerCompanyAccessHref,
+  partnerRelationshipsHref as buildPartnersHref,
+  type PartnerRelationshipFilters as PartnerFilters,
+} from "../partner-entry-navigation";
+import {
   outboundSubviewHrefFromReturn,
   parseOutboundReturnHref,
 } from "../outbound-navigation";
@@ -24,7 +30,6 @@ import {
   openContactThreadAction,
   partnerLogReferralAction,
   partnerLogTouchAction,
-  partnerPortalInviteUserAction,
   partnerPortalSaveRatesAction,
   partnerPortalSetUserActiveAction,
   partnerScheduleCheckinAction,
@@ -40,20 +45,9 @@ import {
 } from "./team-ui";
 import { PartnerRatesEditor } from "./PartnerRatesEditor";
 import { PartnerPortalReadOnlyPreview } from "./PartnerPortalReadOnlyPreview";
+import { PartnerAccessEntry } from "./PartnerAccessEntry";
 
 type TeamMember = { id: string; name: string; active?: boolean };
-
-type PartnerFilters = {
-  status?: string;
-  ownerId?: string;
-  type?: string;
-  q?: string;
-  cursor?: string;
-  selectedId?: string;
-  preview?: string;
-  previewJobId?: string;
-  outboundReturn?: string;
-};
 
 function normalizeFilter(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -85,43 +79,6 @@ function formatDueBadge(nextTouchAt: string | null): {
   return { label: "Scheduled", tone: "bg-slate-100 text-slate-600" };
 }
 
-function buildPartnersHref(args: {
-  filters: PartnerFilters;
-  patch?: Partial<PartnerFilters>;
-}) {
-  const merged: PartnerFilters = { ...args.filters, ...(args.patch ?? {}) };
-  const qs = new URLSearchParams();
-
-  const setIf = (key: string, value: string | undefined) => {
-    if (!value) return;
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    qs.set(key, trimmed);
-  };
-
-  setIf("p_status", merged.status);
-  setIf("p_owner", merged.ownerId);
-  setIf("p_type", merged.type);
-  setIf("p_q", merged.q);
-  setIf("p_cursor", merged.cursor);
-  setIf("p_selected", merged.selectedId);
-  setIf("p_preview", merged.preview);
-  setIf("p_preview_job", merged.previewJobId);
-  const outboundReturn = parseOutboundReturnHref(merged.outboundReturn);
-  if (outboundReturn) {
-    setIf(
-      "out_return",
-      String(
-        outboundSubviewHrefFromReturn(
-          merged.outboundReturn,
-          outboundReturn.view,
-        ),
-      ),
-    );
-  }
-  return teamSurfaceHref("partners", { query: qs });
-}
-
 export async function PartnersSection({
   filters,
 }: {
@@ -129,9 +86,9 @@ export async function PartnersSection({
 }): Promise<React.ReactElement> {
   const principal = await requireCurrentTeamPrincipal();
   const canPlaceCalls = hasTeamPermission(principal, "calls.place");
-  const canImportOutbound = hasTeamPermission(principal, "outbound.import");
   const canWritePartners = hasTeamPermission(principal, "partners.write");
-  const canInvitePartners = hasTeamPermission(principal, "partners.invite");
+  const { canReadPartners: canReadAccounts, canInvitePartners } =
+    partnerAccessCapabilities(principal.permissions);
   const canDisablePartnerIdentities = hasTeamPermission(
     principal,
     "partners.identities.disable",
@@ -177,14 +134,6 @@ export async function PartnersSection({
   const cursor = normalizeFilter(resolvedFilters.cursor);
   const outboundReturnLocation = parseOutboundReturnHref(
     resolvedFilters.outboundReturn,
-  );
-  const outboundQueueHref = outboundSubviewHrefFromReturn(
-    resolvedFilters.outboundReturn,
-    "queue",
-  );
-  const outboundImportHref = outboundSubviewHrefFromReturn(
-    resolvedFilters.outboundReturn,
-    "import",
   );
 
   const apiQs = new URLSearchParams({ limit: "50", status });
@@ -288,43 +237,12 @@ export async function PartnersSection({
         partnerRatesError || "Partner rates could not be reached.";
     }
   }
-  const portalInviteReady =
-    canInvitePartners &&
-    !portalUsersError &&
-    portalOrganizationStatus === "partner";
-
   return (
     <section className="space-y-6">
-      <nav
-        aria-label="Outbound views"
-        className="flex flex-wrap gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-2"
-      >
-        <Link
-          href={outboundQueueHref}
-          className="inline-flex min-h-[44px] items-center rounded-xl px-4 py-2 text-sm font-semibold text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface-muted)] hover:text-[color:var(--team-text)]"
-        >
-          Queue
-        </Link>
-        {canImportOutbound ? (
-          <Link
-            href={outboundImportHref}
-            className="inline-flex min-h-[44px] items-center rounded-xl px-4 py-2 text-sm font-semibold text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface-muted)] hover:text-[color:var(--team-text)]"
-          >
-            Import
-          </Link>
-        ) : null}
-        <Link
-          href={buildPartnersHref({ filters: resolvedFilters })}
-          aria-current="page"
-          className="inline-flex min-h-[44px] items-center rounded-xl bg-primary-50 px-4 py-2 text-sm font-semibold text-primary-800"
-        >
-          Partners
-        </Link>
-      </nav>
       <header className={TEAM_CARD_PADDED}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className={TEAM_SECTION_TITLE}>Partners</h2>
+            <h2 className={TEAM_SECTION_TITLE}>Relationship history</h2>
             <p className={TEAM_SECTION_SUBTITLE}>
               Manage recurring referral relationships. Partners have a
               lightweight check-in cadence so they don&apos;t get lost in the
@@ -344,20 +262,10 @@ export async function PartnersSection({
         </div>
       </header>
 
-      <aside className={TEAM_CARD_PADDED}>
-        <h3 className={TEAM_SECTION_TITLE}>Partner Portal access</h3>
-        <p className={TEAM_SECTION_SUBTITLE}>
-          Applications, identities, company memberships, invitations, and
-          security are managed from the canonical Partner Administration
-          workspace.
-        </p>
-        <Link
-          className={`${teamButtonClass("secondary", "sm")} mt-4`}
-          href="/team/partners?p_admin=applications"
-        >
-          Open access applications
-        </Link>
-      </aside>
+      <PartnerAccessEntry
+        canReadAccounts={canReadAccounts}
+        canInvite={canInvitePartners}
+      />
 
       {directoryUnavailable ? (
         <div
@@ -398,11 +306,12 @@ export async function PartnersSection({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-semibold text-slate-900">
-                Partner Portal Access
+                Relationship details
               </h3>
               <p className="mt-1 text-xs text-slate-500">
-                Invite portal users and configure negotiated rates for this
-                partner.
+                Review historical portal records and negotiated rates for this
+                relationship. Manage current access from the company in
+                Partners.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -438,11 +347,12 @@ export async function PartnersSection({
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
               <h4 className="text-sm font-semibold text-[color:var(--team-text)]">
-                Invite new user
+                Portal access history
               </h4>
               <p className="mt-1 text-xs text-[color:var(--team-text-soft)]">
-                Requests a magic link by email and optional SMS. Provider
-                acceptance does not guarantee final delivery.
+                Historical contact-linked users are retained below. Use the
+                approved company to invite someone or manage their current
+                access.
               </p>
               {!portalUsersError && portalOrganizationStatus ? (
                 <p className="mt-2 text-xs text-[color:var(--team-text-soft)]">
@@ -453,76 +363,16 @@ export async function PartnersSection({
                   .
                 </p>
               ) : null}
-              {portalInviteReady ? (
-                <form
-                  action={partnerPortalInviteUserAction}
-                  className="mt-3 space-y-3"
+              {canReadAccounts ? (
+                <Link
+                  className={`${teamButtonClass("secondary", "sm")} mt-3 min-h-11`}
+                  href={partnerCompanyAccessHref()}
                 >
-                  <input type="hidden" name="orgContactId" value={selectedId} />
-                  <input type="hidden" name="expectedVersion" value="new" />
-                  <input
-                    type="hidden"
-                    name="idempotencyKey"
-                    value={`partner-invite:${selectedId}:${randomUUID()}`}
-                  />
-                  <label className="block">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--team-text-soft)]">
-                      Name
-                    </div>
-                    <input
-                      name="name"
-                      required
-                      maxLength={200}
-                      autoComplete="name"
-                      className={TEAM_INPUT_COMPACT}
-                      placeholder="Jane Doe"
-                    />
-                  </label>
-                  <label className="block">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--team-text-soft)]">
-                      Email
-                    </div>
-                    <input
-                      name="email"
-                      type="email"
-                      required
-                      maxLength={320}
-                      autoComplete="email"
-                      className={TEAM_INPUT_COMPACT}
-                      placeholder="jane@example.com"
-                    />
-                  </label>
-                  <label className="block">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--team-text-soft)]">
-                      Phone (optional)
-                    </div>
-                    <input
-                      name="phone"
-                      type="tel"
-                      maxLength={64}
-                      autoComplete="tel"
-                      className={TEAM_INPUT_COMPACT}
-                      placeholder="+1 404-555-1234"
-                    />
-                  </label>
-                  <SubmitButton
-                    className={teamButtonClass("primary", "sm")}
-                    pendingLabel="Sending..."
-                  >
-                    Send invite
-                  </SubmitButton>
-                </form>
-              ) : canInvitePartners ? (
-                <p className="mt-3 text-xs text-amber-700" role="status">
-                  Invites are disabled until this organization is active as a
-                  partner and its portal-user state loads successfully.
-                </p>
-              ) : (
-                <p className="mt-3 text-xs text-[color:var(--team-text-soft)]">
-                  You can review portal users, but inviting a user requires the
-                  Partner Invite permission.
-                </p>
-              )}
+                  {canInvitePartners
+                    ? "Set up partner access"
+                    : "Open partner companies"}
+                </Link>
+              ) : null}
 
               <div className="mt-4 border-t border-[color:var(--team-border)] pt-4">
                 <h5 className="text-xs font-semibold text-[color:var(--team-text-muted)]">
@@ -533,8 +383,7 @@ export async function PartnersSection({
                     role="alert"
                     className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900"
                   >
-                    {portalUsersError} Retry this partner workspace before
-                    inviting or reviewing users.
+                    {portalUsersError} Retry to review historical users.
                   </div>
                 ) : portalUsers.length === 0 ? (
                   <div className="mt-2 text-xs text-[color:var(--team-text-soft)]">
@@ -575,51 +424,6 @@ export async function PartnersSection({
                             ? `set (${formatDateTime(user.passwordSetAt)})`
                             : "not set"}
                         </div>
-                        {canInvitePartners &&
-                        portalOrganizationStatus === "partner" &&
-                        user.active ? (
-                          <form
-                            action={partnerPortalInviteUserAction}
-                            className="mt-3"
-                          >
-                            <input
-                              type="hidden"
-                              name="orgContactId"
-                              value={selectedId}
-                            />
-                            <input
-                              type="hidden"
-                              name="name"
-                              value={user.name}
-                            />
-                            <input
-                              type="hidden"
-                              name="email"
-                              value={user.email}
-                            />
-                            <input
-                              type="hidden"
-                              name="phone"
-                              value={user.phoneE164 ?? user.phone ?? ""}
-                            />
-                            <input
-                              type="hidden"
-                              name="expectedVersion"
-                              value={user.updatedAt}
-                            />
-                            <input
-                              type="hidden"
-                              name="idempotencyKey"
-                              value={`partner-invite:${user.id}:${randomUUID()}`}
-                            />
-                            <SubmitButton
-                              className={teamButtonClass("secondary", "sm")}
-                              pendingLabel="Sending..."
-                            >
-                              Send fresh login link
-                            </SubmitButton>
-                          </form>
-                        ) : null}
                         {canDisablePartnerIdentities &&
                         portalOrganizationStatus === "partner" ? (
                           user.active ? (
@@ -815,9 +619,10 @@ export async function PartnersSection({
       <div className={TEAM_CARD_PADDED}>
         <form
           method="get"
-          action="/team/sales/outbound/partners"
+          action="/team/partners"
           className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4"
         >
+          <input type="hidden" name="p_admin" value="relationships" />
           {outboundReturnLocation ? (
             <input
               type="hidden"

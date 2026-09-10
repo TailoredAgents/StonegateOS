@@ -160,7 +160,8 @@ describe("Outbound and Partners experience contract", () => {
     );
     expect(actions).toContain("Invite accepted for delivery by");
     expect(partners).toContain('name="idempotencyKey"');
-    expect(partners).toContain("acceptance does not guarantee final delivery");
+    expect(partners).not.toContain("partnerPortalInviteUserAction");
+    expect(partners).toContain("partnerCompanyAccessHref()");
     expect(manifest).toContain(
       '"app/api/admin/partners/users/route.ts#POST": "external"',
     );

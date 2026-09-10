@@ -61,6 +61,9 @@ export default async function CanonicalTeamWorkspacePage({
     for (const [key, value] of Object.entries(currentSearchParams ?? {})) {
       if (typeof value === "string" && value.length > 0) query.set(key, value);
     }
+    // Old Outbound partner bookmarks refer to the relationship history, not
+    // a similarly named canonical company. Keep explicit newer views intact.
+    if (!query.has("p_admin")) query.set("p_admin", "relationships");
     redirect(
       `${surface.canonicalPath}${query.size ? `?${query.toString()}` : ""}`,
     );

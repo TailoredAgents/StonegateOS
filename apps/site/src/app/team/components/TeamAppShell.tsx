@@ -87,6 +87,21 @@ function IconUsers(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
+function IconCompany(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M5 21V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v17M3 21h18M9 21v-5h6v5M8.5 7h1m5 0h1m-7 4h1m5 0h1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function IconCalendar(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
@@ -490,8 +505,9 @@ function iconForTab(id: string): React.ReactElement {
     case "inbox":
       return <IconInbox className={className} />;
     case "contacts":
-    case "partners":
       return <IconUsers className={className} />;
+    case "partners":
+      return <IconCompany className={className} />;
     case "myday":
       return <IconClipboardCheck className={className} />;
     case "expenses":

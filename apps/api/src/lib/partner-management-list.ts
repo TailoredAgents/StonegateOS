@@ -282,6 +282,7 @@ export function parsePartnerManagementListQuery(
   }
 
   const supportsAccountFilter = new Set<PartnerManagementResource>([
+    "accounts",
     "account-merges",
     "applications",
     "billing-disputes",

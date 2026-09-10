@@ -374,13 +374,16 @@ describe("Outbound operator experience", () => {
     expect(selection).toContain("disabled={item.dncContactCount > 0}");
     expect(detail).toContain("item.assignedToMemberId");
     // Outcome context follows the chosen contact/task, not the account's primary task.
-    expect(contactActions).toContain("outboundOutcomeLabel(task.lastDisposition)");
+    expect(contactActions).toContain(
+      "outboundOutcomeLabel(task.lastDisposition)",
+    );
     expect(contactActions).toContain('type="datetime-local"');
     expect(contactActions).toContain("America/New_York time");
     expect(contactActions).toContain("unambiguous time");
     expect(outbound).toContain('action="/team/sales/outbound"');
     expect(outbound).not.toContain('action="/team"');
-    expect(partners).toContain('action="/team/sales/outbound/partners"');
+    expect(partners).toContain('action="/team/partners"');
+    expect(partners).toContain('name="p_admin" value="relationships"');
     expect(partners).not.toContain('action="/team"');
     expect(selection).toContain(
       "items.filter((item) => item.dncContactCount === 0)",

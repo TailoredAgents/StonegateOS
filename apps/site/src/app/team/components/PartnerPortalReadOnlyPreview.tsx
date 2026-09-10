@@ -24,21 +24,22 @@ import {
   parsePartnerStaffPreviewResponse,
   type PartnerStaffPreviewPayload,
 } from "../partner-preview";
-import { teamSurfaceHref } from "../surface-registry";
+import { partnerRelationshipsHref } from "../partner-entry-navigation";
 import { teamButtonClass } from "./team-ui";
 
 function previewHref(orgContactId: string, jobId?: string | null): Route {
-  const query = new URLSearchParams({
-    p_selected: orgContactId,
-    p_preview: "1",
+  return partnerRelationshipsHref({
+    filters: {
+      selectedId: orgContactId,
+      preview: "1",
+      previewJobId: jobId ?? undefined,
+    },
   });
-  if (jobId) query.set("p_preview_job", jobId);
-  return teamSurfaceHref("partners", { query });
 }
 
 function managementHref(orgContactId: string): Route {
-  return teamSurfaceHref("partners", {
-    query: { p_selected: orgContactId },
+  return partnerRelationshipsHref({
+    filters: { selectedId: orgContactId },
   });
 }
 
@@ -278,8 +279,7 @@ function JobDetail({
     );
   }
 
-  const timezone =
-    job.schedule.arrivalWindow?.timezone ?? "America/New_York";
+  const timezone = job.schedule.arrivalWindow?.timezone ?? "America/New_York";
   const address = job.location.address;
   const description = textAt(job.scope, "description");
   const crewInstructions = textAt(job.scope, "crewInstructions");
@@ -303,10 +303,7 @@ function JobDetail({
             </div>
             <p className="mt-2 text-sm text-slate-600">
               {humanize(job.service.key)} ·{" "}
-              {formatDateTime(
-                job.schedule.arrivalWindow?.startAt,
-                timezone,
-              )}
+              {formatDateTime(job.schedule.arrivalWindow?.startAt, timezone)}
             </p>
           </div>
           <Link
@@ -323,10 +320,7 @@ function JobDetail({
               Arrival window
             </dt>
             <dd className="mt-1 text-sm font-medium text-slate-950">
-              {formatDateTime(
-                job.schedule.arrivalWindow?.startAt,
-                timezone,
-              )}
+              {formatDateTime(job.schedule.arrivalWindow?.startAt, timezone)}
             </dd>
           </div>
           <div>
@@ -460,10 +454,7 @@ function JobDetail({
 
         <PartnerPanel>
           <div className="flex items-center gap-3">
-            <FileText
-              className="h-5 w-5 text-primary-700"
-              aria-hidden="true"
-            />
+            <FileText className="h-5 w-5 text-primary-700" aria-hidden="true" />
             <h2 className="font-semibold text-slate-950">Documents</h2>
           </div>
           {job.documents.length ? (
@@ -665,7 +656,9 @@ export async function PartnerPortalReadOnlyPreview({
         <SummaryCard
           label="Jobs"
           value={preview.summary.totalJobCount}
-          detail={preview.page.hasMore ? "Showing the 100 newest" : "All account jobs"}
+          detail={
+            preview.page.hasMore ? "Showing the 100 newest" : "All account jobs"
+          }
           icon={BriefcaseBusiness}
         />
         <SummaryCard

@@ -1068,12 +1068,6 @@ export async function InstantQuotesSection({
               professional proposal or booking follow-up.
             </p>
           </div>
-          <Link
-            href="/team/sales/hq#instant-quote-learning"
-            className={teamButtonClass("secondary", "sm")}
-          >
-            View learning in Sales HQ
-          </Link>
         </div>
         <div className="grid gap-2">
           {quotes.map((quote) => {
@@ -1103,8 +1097,8 @@ export async function InstantQuotesSection({
                     ) : null}
                   </div>
                   <p className="mt-1 text-xs text-[color:var(--team-text-muted)]">
-                    {quote.zip} · {quote.timeframe} · ${low}–${high} · {quote.photoCount}{" "}
-                    photo{quote.photoCount === 1 ? "" : "s"}
+                    {quote.zip} · {quote.timeframe} · ${low}–${high} ·{" "}
+                    {quote.photoCount} photo{quote.photoCount === 1 ? "" : "s"}
                   </p>
                   <p className="mt-1 line-clamp-2 text-xs text-[color:var(--team-text-soft)]">
                     {quote.aiResult.reasonSummary}

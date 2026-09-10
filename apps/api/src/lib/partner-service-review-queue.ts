@@ -116,12 +116,25 @@ function summary(row: {
 
 export async function listPartnerServiceReviews(params: URLSearchParams) {
   const accountId = params.get("accountId") ?? "",
-    q = (params.get("q") ?? "").trim();
-  if ((accountId && !UUID.test(accountId)) || q.length > 100) return null;
+    q = (params.get("q") ?? "").trim(),
+    historyParam = params.get("includeScheduled"),
+    includeScheduled = historyParam === "true";
+  if (
+    (accountId && !UUID.test(accountId)) ||
+    q.length > 100 ||
+    (historyParam !== null && !["true", "false"].includes(historyParam)) ||
+    (includeScheduled && !accountId)
+  )
+    return null;
+  // History is deliberately company-bound; existing unscoped review reads keep
+  // their original behavior. Different cursor kinds prevent crossing modes.
+  const cursorKind = includeScheduled
+    ? "staff_partner_company_jobs"
+    : "staff_partner_service_reviews";
   type Cursor = { id: string; createdAt: string; accountId: string; q: string };
   const page = parsePortalV2Pagination(params, {
-    cursorKind: "staff_partner_service_reviews",
-    allowedQueryKeys: new Set(["accountId", "q"]),
+    cursorKind,
+    allowedQueryKeys: new Set(["accountId", "q", "includeScheduled"]),
     validateCursorPayload(value: unknown): value is Cursor {
       const cursor = record(value);
       return (
@@ -135,7 +148,12 @@ export async function listPartnerServiceReviews(params: URLSearchParams) {
   if (!page.ok) return null;
   const cursor = page.cursor?.payload;
   const rows = await getDb()
-    .select(fields)
+    .select({
+      ...fields,
+      staffAppointmentId: appointments.id,
+      arrivalStartAt: partnerBookings.arrivalWindowStartAt,
+      arrivalEndAt: partnerBookings.arrivalWindowEndAt,
+    })
     .from(partnerBookings)
     .leftJoin(
       originalJob,
@@ -164,13 +182,17 @@ export async function listPartnerServiceReviews(params: URLSearchParams) {
     )
     .where(
       and(
-        isNull(appointments.startAt),
-        eq(appointments.status, "requested"),
-        inArray(partnerBookings.publicStatus, [
-          "requested",
-          "under_review",
-          "approval_needed",
-        ]),
+        includeScheduled
+          ? undefined
+          : and(
+              isNull(appointments.startAt),
+              eq(appointments.status, "requested"),
+              inArray(partnerBookings.publicStatus, [
+                "requested",
+                "under_review",
+                "approval_needed",
+              ]),
+            ),
         accountId ? eq(partnerBookings.partnerAccountId, accountId) : undefined,
         q
           ? ilike(
@@ -195,12 +217,21 @@ export async function listPartnerServiceReviews(params: URLSearchParams) {
     last = items.at(-1);
   return {
     ok: true,
-    requests: items.map(summary),
+    requests: items.map((row) => ({
+      ...summary(row),
+      ...(includeScheduled
+        ? {
+            appointmentId: row.staffAppointmentId,
+            arrivalStartAt: row.arrivalStartAt?.toISOString() ?? null,
+            arrivalEndAt: row.arrivalEndAt?.toISOString() ?? null,
+          }
+        : {}),
+    })),
     page: {
       nextCursor:
         rows.length > page.limit && last
           ? encodePortalV2Cursor({
-              kind: "staff_partner_service_reviews",
+              kind: cursorKind,
               limit: page.limit,
               payload: {
                 id: last.id,

@@ -13,6 +13,7 @@ import {
   Settings,
   ShieldCheck,
   UserCog,
+  Building2,
 } from "lucide-react";
 import {
   hasMobilePermission,
@@ -64,6 +65,7 @@ import {
 import type { AppointmentBookingDetails } from "../team/lib/booking-details";
 import { isQuoteV2StaffFeatureEnabled } from "../team/lib/quote-v2-staff-feature";
 import { quoteWorkspaceHref } from "../team/quotes-workspace";
+import { teamSurfaceHref } from "../team/surface-registry";
 
 const navItems: Array<{
   id: string;
@@ -73,6 +75,12 @@ const navItems: Array<{
 }> = [
   { id: "inbox", label: "Inbox", href: "/mobile", icon: Inbox },
   { id: "myday", label: "Today", href: "/mobile?screen=myday", icon: Home },
+  {
+    id: "partners",
+    label: "Partners",
+    href: teamSurfaceHref("partners"),
+    icon: Building2,
+  },
   {
     id: "contacts",
     label: "People",
@@ -1947,6 +1955,9 @@ export default async function MobileHomePage({
     : "inbox";
   if (activeScreen === "quotes" && isQuoteV2StaffFeatureEnabled()) {
     redirect(quoteWorkspaceHref("manage"));
+  }
+  if (activeScreen === "partners") {
+    redirect("/team/partners");
   }
   const visibleNav = navItems.filter((item) =>
     session.allowedScreens.includes(item.id),

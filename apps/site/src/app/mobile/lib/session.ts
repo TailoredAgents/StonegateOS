@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { TEAM_SESSION_COOKIE } from "@/lib/team-session";
 import { hasMobilePermission } from "./permission-matching";
+import { canAccessTeamSurface } from "../../team/surface-registry";
 
 export { hasMobilePermission } from "./permission-matching";
 
@@ -73,6 +74,9 @@ export function buildAllowedMobileScreens(member: MobileTeamMember): string[] {
   if (isOwner) {
     screens.add("owner");
     screens.add("access");
+  }
+  if (canAccessTeamSurface("partners", permissions)) {
+    screens.add("partners");
   }
 
   return Array.from(screens);

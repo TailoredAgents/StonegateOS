@@ -7,6 +7,8 @@ import {
 } from "../actions/partner-service-reviews";
 import { CalendarAppointmentActions } from "./CalendarAppointmentActions";
 import { teamButtonClass } from "./team-ui";
+import { formatCalendarDayKey } from "../lib/calendar-time";
+import { teamSurfaceHref } from "../surface-registry";
 
 function preferred(windows: PartnerServiceReview["preferredWindows"]) {
   return (
@@ -18,11 +20,28 @@ function preferred(windows: PartnerServiceReview["preferredWindows"]) {
       .join("; ") || "Staff to arrange a date"
   );
 }
+function arrival(item: PartnerServiceReview) {
+  if (!item.arrivalStartAt || !item.arrivalEndAt) return null;
+  const start = new Date(item.arrivalStartAt),
+    end = new Date(item.arrivalEndAt);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()))
+    return null;
+  const format = new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "America/New_York",
+  });
+  return `${format.format(start)} – ${format.format(end)} (Eastern)`;
+}
 /** Reads partner requests; the existing CRM scheduling form owns every mutation. */
 export function PartnerServiceReviews({
   canSchedule,
+  accountId,
+  includeScheduled = false,
 }: {
   canSchedule: boolean;
+  accountId?: string;
+  includeScheduled?: boolean;
 }) {
   const [items, setItems] = useState<PartnerServiceReview[]>([]),
     [cursor, setCursor] = useState<string | null>(null);
@@ -40,6 +59,8 @@ export function PartnerServiceReviews({
     setBusy(true);
     setMessage("");
     const result = await loadPartnerServiceReviews({
+      accountId,
+      includeScheduled,
       q: search,
       ...(more && cursor ? { cursor } : {}),
     }).catch(() => null);
@@ -63,8 +84,15 @@ export function PartnerServiceReviews({
     setAppliedQuery(search);
   }
   useEffect(() => {
+    setItems([]);
+    setCursor(null);
+    setDetail(null);
+    setReturnDetail(null);
     void load();
-  }, []);
+    return () => {
+      generation.current += 1;
+    };
+  }, [accountId, includeScheduled]);
   useEffect(() => {
     if (detail) detailRef.current?.focus();
   }, [detail]);
@@ -72,6 +100,7 @@ export function PartnerServiceReviews({
     item: Pick<PartnerServiceReview, "id" | "accountId">,
     previous: PartnerServiceReviewDetail | null = null,
   ) {
+    if (accountId && item.accountId !== accountId) return;
     const current = ++generation.current;
     setBusy(true);
     setDetail(null);
@@ -100,7 +129,9 @@ export function PartnerServiceReviews({
           id="partner-service-reviews-heading"
           className="text-lg font-semibold text-slate-950"
         >
-          New service requests needing review
+          {includeScheduled
+            ? "Company jobs & service requests"
+            : "New service requests needing review"}
         </h2>
         <button
           type="button"
@@ -108,39 +139,42 @@ export function PartnerServiceReviews({
           className={teamButtonClass("secondary", "sm")}
           onClick={() => void load()}
         >
-          Refresh requests
+          {includeScheduled ? "Refresh jobs" : "Refresh requests"}
         </button>
       </div>
       <p className="text-sm leading-6 text-slate-600">
-        These jobs do not have a confirmed arrival window. Review scope, pricing
-        and requirements before using the CRM scheduler below.
+        {includeScheduled
+          ? "Open a job to see the location, requested work, photos, and current status. Only jobs awaiting initial scheduling can be scheduled here; existing bookings stay unchanged."
+          : "These jobs do not have a confirmed arrival window. Review scope, pricing and requirements before using the CRM scheduler below."}
       </p>
-      <form
-        method="post"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!busy) void load(false, query);
-        }}
-        className="flex flex-wrap items-end gap-3"
-      >
-        <label className="min-w-0 flex-1 text-sm font-semibold">
-          Find company
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            type="search"
-            maxLength={100}
-            className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-base"
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={busy}
-          className={teamButtonClass("secondary", "sm")}
+      {!accountId ? (
+        <form
+          method="post"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!busy) void load(false, query);
+          }}
+          className="flex flex-wrap items-end gap-3"
         >
-          Search requests
-        </button>
-      </form>
+          <label className="min-w-0 flex-1 text-sm font-semibold">
+            Find company
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              type="search"
+              maxLength={100}
+              className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-base"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={busy}
+            className={teamButtonClass("secondary", "sm")}
+          >
+            Search requests
+          </button>
+        </form>
+      ) : null}
       {message ? (
         <p
           role="alert"
@@ -164,10 +198,21 @@ export function PartnerServiceReviews({
               className="min-h-11 w-full py-3 text-left"
             >
               <span className="block font-semibold text-primary-900">
-                {item.accountName} · {item.service}
+                {!accountId ? `${item.accountName} · ` : ""}
+                {item.service}
               </span>
               <span className="mt-1 block text-sm text-slate-600">
-                {item.siteName} · {preferred(item.preferredWindows)}
+                {item.siteName} ·{" "}
+                {arrival(item) ??
+                  (includeScheduled &&
+                  ![
+                    "requested",
+                    "requested_review",
+                    "under_review",
+                    "approval_needed",
+                  ].includes(item.status)
+                    ? "Arrival window not recorded"
+                    : preferred(item.preferredWindows))}
               </span>
               <span className="mt-1 block text-xs text-slate-500">
                 {item.status.replaceAll("_", " ")} · received{" "}
@@ -188,7 +233,9 @@ export function PartnerServiceReviews({
       </ul>
       {!busy && !message && !items.length ? (
         <p className="text-sm text-slate-600">
-          No unscheduled partner requests match this view.
+          {includeScheduled
+            ? "No jobs have been linked to this company yet."
+            : "No unscheduled partner requests match this view."}
         </p>
       ) : null}
       {cursor ? (
@@ -198,7 +245,7 @@ export function PartnerServiceReviews({
           className={teamButtonClass("secondary", "sm")}
           onClick={() => void load(true)}
         >
-          Load older requests
+          {includeScheduled ? "Load older jobs" : "Load older requests"}
         </button>
       ) : null}
       {detail ? (
@@ -211,6 +258,10 @@ export function PartnerServiceReviews({
           <h3 className="text-lg font-semibold">
             {detail.accountName} · {detail.service}
           </h3>
+          <p className="text-sm font-medium">
+            Status: {detail.status.replaceAll("_", " ")}
+            {arrival(detail) ? ` · ${arrival(detail)}` : ""}
+          </p>
           {returnDetail ? (
             <button
               type="button"
@@ -260,11 +311,13 @@ export function PartnerServiceReviews({
                   .join(", ")
               : "Site details need staff review."}
           </p>
-          <p className="text-sm">
-            <strong>Preferred dates:</strong>{" "}
-            {preferred(detail.preferredWindows)}. These are requests, not
-            reservations.
-          </p>
+          {detail.canSchedule ? (
+            <p className="text-sm">
+              <strong>Preferred dates:</strong>{" "}
+              {preferred(detail.preferredWindows)}. These are requests, not
+              reservations.
+            </p>
+          ) : null}
           {detail.reasons.length ? (
             <p className="text-sm text-amber-900">
               <strong>Review needed:</strong>{" "}
@@ -391,13 +444,34 @@ export function PartnerServiceReviews({
               }}
             />
           ) : (
-            <p className="text-sm text-slate-600">
-              {detail.status === "approval_needed"
-                ? "Resolve the required company approval before scheduling."
-                : detail.canSchedule
-                  ? "Your role can read requests but cannot schedule them."
-                  : "This request is no longer awaiting initial scheduling. Refresh to see the current queue."}
-            </p>
+            <div className="space-y-3">
+              <p className="text-sm text-slate-600">
+                {detail.status === "approval_needed"
+                  ? "Resolve the required company approval before scheduling."
+                  : detail.canSchedule
+                    ? "Your role can read requests but cannot schedule them."
+                    : includeScheduled
+                      ? "This job is not awaiting initial scheduling. Use the CRM job tools for any further changes."
+                      : "This request is no longer awaiting initial scheduling. Refresh to see the current queue."}
+              </p>
+              {includeScheduled &&
+              detail.appointment.startAt &&
+              formatCalendarDayKey(new Date(detail.appointment.startAt)) ? (
+                <a
+                  href={teamSurfaceHref("calendar", {
+                    query: {
+                      calView: "day",
+                      cal: formatCalendarDayKey(
+                        new Date(detail.appointment.startAt),
+                      ),
+                    },
+                  })}
+                  className={teamButtonClass("secondary")}
+                >
+                  Open this day in CRM Calendar
+                </a>
+              ) : null}
+            </div>
           )}
         </div>
       ) : null}
