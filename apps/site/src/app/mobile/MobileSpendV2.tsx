@@ -321,6 +321,8 @@ type OverviewPayload = {
       group: "crew" | "sales" | "management" | "adjustments";
       serviceType: string | null;
       compensationType: "hourly" | "percentage" | null;
+      poolRateBps?: number;
+      crewCount?: number;
       amountCents: number;
       jobCount: number | null;
       workedMinutes: number | null;
@@ -3292,7 +3294,7 @@ export function ExpenseLaborDetails({
 }: {
   labor: OverviewPayload["labor"];
 }) {
-  const rows =
+  const rows: NonNullable<OverviewPayload["labor"]["rows"]> =
     labor.rows ??
     [
       {
@@ -3352,13 +3354,23 @@ export function ExpenseLaborDetails({
                     ·{" "}
                     {row.compensationType === "hourly"
                       ? "hourly"
-                      : "commission"}
+                      : row.poolRateBps !== undefined
+                        ? `${(row.poolRateBps / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}% crew pool`
+                        : "commission"}
                   </span>
                 ) : null}
                 {row.group === "crew" &&
                 (row.workedMinutes !== null || row.jobCount !== null) ? (
                   <span className="mt-1 block text-slate-400">
                     {[
+                      row.crewCount !== undefined
+                        ? `${row.crewCount} crew`
+                        : null,
+                      row.poolRateBps !== undefined &&
+                      row.crewCount !== undefined &&
+                      row.crewCount > 0
+                        ? `${(row.poolRateBps / 100 / row.crewCount).toLocaleString("en-US", { maximumFractionDigits: 2 })}% each`
+                        : null,
                       row.workedMinutes !== null
                         ? `${(row.workedMinutes / 60).toLocaleString("en-US", { maximumFractionDigits: 2 })} crew ${row.workedMinutes === 60 ? "hour" : "hours"}`
                         : null,
@@ -3381,6 +3393,9 @@ export function ExpenseLaborDetails({
         <p className="text-xs text-slate-400">No labor recorded this week.</p>
       )}
       <p className="text-xs leading-5 text-slate-400">
+        {rows.some((row) => row.poolRateBps !== undefined)
+          ? "Crew pools are split among the workers on each job. Sales, management and other payroll are added separately. "
+          : null}
         Reimbursements stay in Payout Runs and are not counted as labor.
       </p>
     </div>

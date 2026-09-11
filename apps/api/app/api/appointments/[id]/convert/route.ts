@@ -980,6 +980,7 @@ export async function POST(
             memberId: entry.memberId,
             splitBps: entry.splitBps,
             fixedJobRateBps: entry.fixedJobRateBps ?? null,
+            poolRateBps: entry.poolRateBps ?? null,
             hourlyRateCents: entry.hourlyRateCents ?? null,
             workedMinutes: entry.workedMinutes ?? null,
             createdAt: committedAt,

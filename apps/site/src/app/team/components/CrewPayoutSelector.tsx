@@ -2,6 +2,10 @@
 
 import React from "react";
 import {
+  resolveCrewLaborMemberRateBps,
+  resolveCrewLaborPoolRateBps,
+} from "@myst-os/pricing";
+import {
   hourlyPayoutCents,
   parseHourlyRateCents,
   parseWorkedMinutes,
@@ -115,6 +119,11 @@ export function CrewPayoutSelector({
   const selectedMembers = visibleMembers.filter((member) =>
     selectedSet.has(member.id),
   );
+  const crewCount = selectedMembers.length;
+  const poolPercent = resolveCrewLaborPoolRateBps(crewCount) / 100;
+  const memberPercent = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+  }).format(resolveCrewLaborMemberRateBps(crewCount) / 100);
   const memberPayout = (memberId: string) => {
     const rate = parseHourlyRateCents(rates[memberId]);
     const minutes = parseWorkedMinutes(hours[memberId]);
@@ -210,6 +219,10 @@ export function CrewPayoutSelector({
                   <span className="shrink-0 text-sm font-semibold tabular-nums">
                     {formatMoney(payout)}
                   </span>
+                ) : checked && !isMoving && showSplitPercentages ? (
+                  <span className="shrink-0 text-sm font-semibold tabular-nums">
+                    {memberPercent}%
+                  </span>
                 ) : null}
               </label>
               {checked && isMoving ? (
@@ -292,15 +305,24 @@ export function CrewPayoutSelector({
             </span>
           ) : null}
         </div>
-      ) : selectedMembers.length ? (
+      ) : crewCount ? (
         <p
+          aria-live="polite"
           className={`text-xs leading-5 ${dark ? "text-slate-400" : "text-slate-600"}`}
         >
           {showSplitPercentages
-            ? "Payroll applies the current crew split when saved."
-            : "Crew pay follows the current Payroll split."}
+            ? `${poolPercent}% labor pool · ${memberPercent}% of the job total per person. Split equally between ${crewCount} ${crewCount === 1 ? "person" : "people"}. Payroll and job expenses update when saved.`
+            : `The labor pool is split equally between ${crewCount} ${crewCount === 1 ? "person" : "people"}. Payroll and job expenses update when saved.`}
         </p>
-      ) : null}
+      ) : (
+        <p
+          aria-live="polite"
+          className={`text-xs leading-5 ${dark ? "text-slate-400" : "text-slate-600"}`}
+        >
+          Select at least one crew member. Labor is 20% for 1–2 people and 30%
+          for 3 or more, split equally.
+        </p>
+      )}
     </fieldset>
   );
 }

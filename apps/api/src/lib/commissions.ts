@@ -1,4 +1,5 @@
 import { DateTime } from "luxon";
+import { resolveCrewLaborPoolRateBps } from "@myst-os/pricing";
 import type { MutationResult } from "@myst-os/sdk";
 import { and, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { DatabaseClient } from "@/db";
@@ -37,7 +38,7 @@ import {
   markAttachedReimbursementClaimsPaid,
 } from "@/lib/expense-submissions";
 import {
-  resolveLockedCrewPayout,
+  resolveDynamicCrewPayout,
   type ConfiguredCrewPayoutRule,
   type LockedCrewPayoutResolution,
 } from "@/lib/locked-crew-payout";
@@ -568,79 +569,12 @@ export async function getCommissionCrewSplitConfigurationStatus(
   };
 }
 
-/** Resolve current crew payout configuration at the server boundary. */
-export async function resolveConfiguredCrewPayout(
-  db: Pick<DatabaseClient, "select">,
+/** Resolve the current policy at the server boundary, never client weights or legacy overrides. */
+export function resolveConfiguredCrewPayout(
+  _db: Pick<DatabaseClient, "select">,
   memberIds: string[],
 ): Promise<LockedCrewPayoutResolution> {
-  try {
-    const status = await getCommissionCrewSplitConfigurationStatus(db);
-    if (!status.ready) {
-      return {
-        ok: false,
-        normalizedMemberIds: [...new Set(memberIds.map((id) => id.trim()))]
-          .filter(Boolean)
-          .sort(),
-        reason: "invalid_rule",
-      };
-    }
-    const resolved = resolveLockedCrewPayout(memberIds, status.rules);
-    if (!resolved.ok || resolved.splits.length === 0) return resolved;
-
-    const members = await db
-      .select({
-        memberId: teamMembers.id,
-        fixedJobRateBps: teamMembers.fixedCrewJobRateBps,
-      })
-      .from(teamMembers)
-      .where(
-        inArray(
-          teamMembers.id,
-          resolved.splits.map((split) => split.memberId),
-        ),
-      );
-    const fixedRateByMemberId = new Map(
-      members.map((member) => [member.memberId, member.fixedJobRateBps]),
-    );
-    const fixedRateTotalBps = members.reduce(
-      (sum, member) => sum + (member.fixedJobRateBps ?? 0),
-      0,
-    );
-    if (
-      members.length !== resolved.splits.length ||
-      members.some(
-        (member) =>
-          member.fixedJobRateBps !== null &&
-          (!Number.isInteger(member.fixedJobRateBps) ||
-            member.fixedJobRateBps < 0),
-      ) ||
-      fixedRateTotalBps > DEFAULT_CREW_POOL_RATE_BPS
-    ) {
-      return {
-        ok: false,
-        normalizedMemberIds: resolved.splits.map((split) => split.memberId),
-        reason: "invalid_rule",
-      };
-    }
-
-    return {
-      ...resolved,
-      splits: resolved.splits.map((split) => {
-        const fixedJobRateBps = fixedRateByMemberId.get(split.memberId);
-        return fixedJobRateBps === null || fixedJobRateBps === undefined
-          ? split
-          : { ...split, fixedJobRateBps };
-      }),
-    };
-  } catch (error) {
-    const code = extractPgCode(error);
-    if (code === "42P01" || code === "42703") {
-      throw commissionRecipientConfigurationFailure(
-        "Apply the latest crew payout configuration migration before completing financial work.",
-      );
-    }
-    throw error;
-  }
+  return Promise.resolve(resolveDynamicCrewPayout(memberIds));
 }
 
 function asWeekday(value: number): 1 | 2 | 3 | 4 | 5 | 6 | 7 {
@@ -1123,21 +1057,31 @@ export function allocateCrewCompensationCents(
   );
 }
 
-function getEffectiveCrewPoolRateBps(
-  _tx: Pick<DatabaseClient, "select">,
-  input: {
-    defaultCrewPoolRateBps: number;
-  },
-): {
-  crewPoolRateBps: number;
-  overrideLocalDate: string | null;
-  source: "default";
-} {
-  return {
-    crewPoolRateBps: input.defaultCrewPoolRateBps,
-    overrideLocalDate: null,
-    source: "default",
-  };
+/** A missing snapshot identifies historical percentage compensation. */
+export function resolveSavedCrewPoolRateBps(
+  crew: ReadonlyArray<{
+    poolRateBps?: number | null;
+    splitBps: number;
+    fixedJobRateBps?: number | null;
+  }>,
+): number {
+  if (crew.every((entry) => entry.poolRateBps == null)) {
+    return DEFAULT_CREW_POOL_RATE_BPS;
+  }
+  const expectedRateBps = resolveCrewLaborPoolRateBps(crew.length);
+  if (
+    crew.some(
+      (entry) =>
+        entry.poolRateBps !== expectedRateBps ||
+        entry.splitBps !== 1 ||
+        entry.fixedJobRateBps != null,
+    )
+  ) {
+    throw commissionRecipientConfigurationFailure(
+      "Review the selected crew before recalculating this job's labor.",
+    );
+  }
+  return expectedRateBps;
 }
 
 async function savePayoutRunReportHtmlSerialized(
@@ -1471,6 +1415,7 @@ export async function recalculateAppointmentCommissions(
         memberId: string;
         splitBps: number;
         fixedJobRateBps: number | null;
+        poolRateBps: number | null;
         hourlyRateCents: number | null;
         workedMinutes: number | null;
       }> = [];
@@ -1480,6 +1425,7 @@ export async function recalculateAppointmentCommissions(
             memberId: appointmentCrewMembers.memberId,
             splitBps: appointmentCrewMembers.splitBps,
             fixedJobRateBps: appointmentCrewMembers.fixedJobRateBps,
+            poolRateBps: appointmentCrewMembers.poolRateBps,
             hourlyRateCents: appointmentCrewMembers.hourlyRateCents,
             workedMinutes: appointmentCrewMembers.workedMinutes,
           })
@@ -1528,13 +1474,11 @@ export async function recalculateAppointmentCommissions(
           });
         }
       } else if (crew.length > 0 && totalSplitBps > 0) {
-        const effectiveCrewPool = getEffectiveCrewPoolRateBps(tx, {
-          defaultCrewPoolRateBps: settings.crewPoolRateBps,
-        });
-        const poolCents = computeBpsAmount(
-          baseCents,
-          effectiveCrewPool.crewPoolRateBps,
+        const poolRateBps = resolveSavedCrewPoolRateBps(crew);
+        const dynamicCrewPool = crew.every(
+          (entry) => entry.poolRateBps != null,
         );
+        const poolCents = computeBpsAmount(baseCents, poolRateBps);
         const allocations = allocateCrewCompensationCents(
           baseCents,
           poolCents,
@@ -1550,14 +1494,12 @@ export async function recalculateAppointmentCommissions(
             amountCents: entry.cents,
             meta: {
               ...percentageMeta,
-              poolRateBps: effectiveCrewPool.crewPoolRateBps,
+              poolRateBps,
               splitBps: entry.splitBps,
               fixedJobRateBps: entry.fixedJobRateBps,
               totalSplitBps,
-              poolSource: effectiveCrewPool.source,
-              ...(effectiveCrewPool.overrideLocalDate
-                ? { poolOverrideLocalDate: effectiveCrewPool.overrideLocalDate }
-                : {}),
+              poolSource: dynamicCrewPool ? "crew_size" : "default",
+              ...(dynamicCrewPool ? { crewCount: crew.length } : {}),
             },
           });
         }
@@ -2116,6 +2058,21 @@ export async function lockPayoutRun(
         compensationType: hourly ? "hourly" : "percentage",
         group: row.role === "marketing" ? "management" : row.role,
         amountCents: cents,
+        ...(row.role === "crew" &&
+        !hourly &&
+        typeof row.meta?.["poolRateBps"] === "number" &&
+        Number.isSafeInteger(row.meta["poolRateBps"]) &&
+        row.meta["poolRateBps"] >= 0 &&
+        row.meta["poolRateBps"] <= 10_000
+          ? { poolRateBps: row.meta["poolRateBps"] }
+          : {}),
+        ...(row.role === "crew" &&
+        !hourly &&
+        typeof row.meta?.["crewCount"] === "number" &&
+        Number.isSafeInteger(row.meta["crewCount"]) &&
+        row.meta["crewCount"] > 0
+          ? { crewCount: row.meta["crewCount"] }
+          : {}),
         ...(hourly
           ? {
               hourlyRateCents: row.meta?.["hourlyRateCents"] as number,

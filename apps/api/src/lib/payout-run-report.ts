@@ -264,6 +264,22 @@ export function describeCommissionMath(
   const totalSplitBps = readMetaNumber(meta, "totalSplitBps");
   const poolSource =
     typeof meta?.["poolSource"] === "string" ? meta["poolSource"] : null;
+  const crewCount = readMetaNumber(meta, "crewCount");
+
+  if (
+    poolSource === "crew_size" &&
+    poolRateBps !== null &&
+    crewCount !== null &&
+    Number.isSafeInteger(crewCount) &&
+    crewCount > 0 &&
+    splitBps === 1 &&
+    totalSplitBps === crewCount
+  ) {
+    return {
+      mathLabel: `${fmtPercentFromBps(poolRateBps)} crew pool / ${crewCount} crew (equal split)`,
+      effectivePercentLabel: fmtPercent(poolRateBps / 100 / crewCount),
+    };
+  }
 
   if (
     poolRateBps === null ||

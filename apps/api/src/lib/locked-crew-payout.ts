@@ -1,8 +1,12 @@
+import { resolveCrewLaborPoolRateBps } from "@myst-os/pricing";
+
 export type LockedCrewPayoutSplit = {
   memberId: string;
   splitBps: number;
   /** Guaranteed commission rate against the completed job total. */
   fixedJobRateBps?: number;
+  /** Completion-time snapshot; absent for historical percentage payouts. */
+  poolRateBps?: number;
 };
 
 export type ConfiguredCrewPayoutRule = {
@@ -38,6 +42,23 @@ function buildEqualSplits(memberIds: string[]): LockedCrewPayoutSplit[] {
     memberId,
     splitBps: 1,
   }));
+}
+
+/** New completions always split their crew-size pool equally. */
+export function resolveDynamicCrewPayout(
+  memberIds: string[],
+): Extract<LockedCrewPayoutResolution, { ok: true }> {
+  const normalized = normalizeMemberIds(memberIds);
+  const poolRateBps = resolveCrewLaborPoolRateBps(normalized.length);
+  return {
+    ok: true,
+    splits: buildEqualSplits(normalized).map((split) => ({
+      ...split,
+      poolRateBps,
+    })),
+    ruleKey: "crew-size-equal",
+    isFallback: false,
+  };
 }
 
 function normalizeConfiguredRule(

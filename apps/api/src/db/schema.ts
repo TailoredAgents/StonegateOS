@@ -6882,6 +6882,7 @@ export const appointmentCrewMembers = pgTable(
       .references(() => teamMembers.id, { onDelete: "restrict" }),
     splitBps: integer("split_bps").default(0).notNull(),
     fixedJobRateBps: integer("fixed_job_rate_bps"),
+    poolRateBps: integer("pool_rate_bps"),
     hourlyRateCents: integer("hourly_rate_cents"),
     workedMinutes: integer("worked_minutes"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -6889,6 +6890,10 @@ export const appointmentCrewMembers = pgTable(
       .notNull(),
   },
   (table) => ({
+    dynamicLaborCheck: check(
+      "appointment_crew_members_dynamic_labor_check",
+      sql`${table.poolRateBps} IS NULL OR (${table.poolRateBps} IN (2000, 3000) AND ${table.splitBps} = 1 AND ${table.fixedJobRateBps} IS NULL AND ${table.hourlyRateCents} IS NULL AND ${table.workedMinutes} IS NULL)`,
+    ),
     hourlyLaborCheck: check(
       "appointment_crew_members_hourly_labor_check",
       sql`(${table.hourlyRateCents} IS NULL AND ${table.workedMinutes} IS NULL) OR (${table.hourlyRateCents} IS NOT NULL AND ${table.workedMinutes} IS NOT NULL AND ${table.hourlyRateCents} > 0 AND ${table.workedMinutes} > 0 AND ${table.workedMinutes} <= 525600 AND round(${table.hourlyRateCents}::numeric * ${table.workedMinutes} / 60) <= 2147483647 AND ${table.splitBps} = 0 AND ${table.fixedJobRateBps} IS NULL)`,
@@ -6989,6 +6994,9 @@ export type PayoutLaborDetail = {
   amountCents: number;
   hourlyRateCents?: number;
   workedMinutes?: number;
+  /** Crew pool facts frozen when the payout is finalized. */
+  poolRateBps?: number;
+  crewCount?: number;
 };
 
 export const payoutRunLines = pgTable(

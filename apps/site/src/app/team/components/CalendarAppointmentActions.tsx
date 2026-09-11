@@ -499,7 +499,6 @@ export function CalendarAppointmentActions({
                     serviceType={serviceType}
                     initialCrewMembers={crewMembers}
                     teamMembers={teamMembers}
-                    showSplitPercentages={false}
                     stacked
                   />
 

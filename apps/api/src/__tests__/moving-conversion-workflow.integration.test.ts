@@ -266,6 +266,91 @@ describeOrSkip("moving quote conversion database workflow", () => {
             receipts.filter((row) => row.status === "succeeded"),
           ).toHaveLength(1);
 
+          // Percentage conversion uses the same completion boundary and
+          // persists the server-owned pool even when legacy guarantees exist.
+          const additionalCrew = await tx
+            .insert(teamMembers)
+            .values([
+              { name: "Devon", active: true, fixedCrewJobRateBps: 1000 },
+              { name: "Jed", active: true, fixedCrewJobRateBps: 1000 },
+            ])
+            .returning({ id: teamMembers.id });
+          const percentageQuote = await createQuote();
+          const percentagePayload = {
+            ...payload,
+            bookingDetails: {
+              serviceType: "junk_removal",
+              source: { type: "google" },
+              pricing: { mode: "exact" },
+              loadSize: { kind: "quarter_to_half" },
+            },
+            completion: {
+              ...payload.completion,
+              crewMembers: [owner, mover, ...additionalCrew].map(
+                (member, index) => ({
+                  memberId: member.id,
+                  splitBps: index === 0 ? 10000 : 0,
+                }),
+              ),
+            },
+          };
+          const percentageKey = `percentage-convert-${randomUUID()}`;
+          const percentageResponse = await convertQuote(
+            makeRequest(
+              percentageQuote.id,
+              percentageQuote.updatedAt,
+              percentageKey,
+              percentagePayload,
+            ),
+            { params: Promise.resolve({ id: percentageQuote.id }) },
+          );
+          const percentageResult: unknown = await percentageResponse.json();
+          expect(percentageResponse.status).toBe(200);
+          expect(percentageResult).toMatchObject({
+            ok: true,
+            data: { status: "completed", completedAtomically: true },
+          });
+          const percentageCrew = await tx
+            .select()
+            .from(appointmentCrewMembers)
+            .where(
+              eq(appointmentCrewMembers.appointmentId, percentageQuote.id),
+            );
+          expect(percentageCrew).toHaveLength(4);
+          expect(
+            percentageCrew.every(
+              (member) =>
+                member.poolRateBps === 3000 &&
+                member.splitBps === 1 &&
+                member.fixedJobRateBps === null &&
+                member.hourlyRateCents === null,
+            ),
+          ).toBe(true);
+          const percentageEarnings = await tx
+            .select()
+            .from(appointmentCommissions)
+            .where(
+              eq(appointmentCommissions.appointmentId, percentageQuote.id),
+            );
+          expect(
+            percentageEarnings
+              .filter((row) => row.role === "crew")
+              .map((row) => row.amountCents),
+          ).toEqual([4500, 4500, 4500, 4500]);
+          const percentageReplay = await convertQuote(
+            makeRequest(
+              percentageQuote.id,
+              percentageQuote.updatedAt,
+              percentageKey,
+              percentagePayload,
+            ),
+            { params: Promise.resolve({ id: percentageQuote.id }) },
+          );
+          expect(await percentageReplay.json()).toEqual(percentageResult);
+          expect(percentageReplay.headers.get("idempotency-replayed")).toBe(
+            "true",
+          );
+
           const period = resolveCurrentPayoutPeriod(completedAt, settings);
           await tx.insert(payoutRuns).values({
             timezone: period.timezone,

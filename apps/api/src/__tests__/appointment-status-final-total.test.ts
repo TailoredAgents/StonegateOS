@@ -3,6 +3,11 @@ import { NextRequest as RuntimeNextRequest } from "next/server";
 
 const appointmentId = "11111111-1111-4111-8111-111111111111";
 const crewMemberId = "22222222-2222-4222-8222-222222222222";
+const jeffreyId = crewMemberId;
+const jedId = "66666666-6666-4666-8666-666666666666";
+const devonId = "77777777-7777-4777-8777-777777777777";
+const austinId = "88888888-8888-4888-8888-888888888888";
+const staffIds = [jeffreyId, jedId, devonId, austinId];
 const actorId = "33333333-3333-4333-8333-333333333333";
 const currentVersion = new Date("2026-08-08T12:00:00.000Z");
 const expectAnyString: unknown = expect.any(String);
@@ -35,6 +40,8 @@ const mockAppointmentCrewMembersTable = {
   appointmentId: "appointment_crew_members.appointment_id",
   memberId: "appointment_crew_members.member_id",
   splitBps: "appointment_crew_members.split_bps",
+  poolRateBps: "appointment_crew_members.pool_rate_bps",
+  fixedJobRateBps: "appointment_crew_members.fixed_job_rate_bps",
 };
 const mockLeadsTable = { id: "leads.id", status: "leads.status" };
 const mockOutboxEventsTable = { name: "outbox_events" };
@@ -67,6 +74,8 @@ let appointment: AppointmentState;
 let crewRows: Array<{
   memberId: string;
   splitBps: number;
+  poolRateBps?: number | null;
+  fixedJobRateBps?: number | null;
   hourlyRateCents?: number | null;
   workedMinutes?: number | null;
 }>;
@@ -190,6 +199,17 @@ const mockTransaction = {
         crewRows = values.map((value) => ({
           memberId: String((value as Record<string, unknown>)["memberId"]),
           splitBps: Number((value as Record<string, unknown>)["splitBps"]),
+          ...(typeof (value as { poolRateBps?: number }).poolRateBps ===
+          "number"
+            ? { poolRateBps: (value as { poolRateBps: number }).poolRateBps }
+            : {}),
+          ...(typeof (value as { fixedJobRateBps?: number }).fixedJobRateBps ===
+          "number"
+            ? {
+                fixedJobRateBps: (value as { fixedJobRateBps: number })
+                  .fixedJobRateBps,
+              }
+            : {}),
           hourlyRateCents: (value as { hourlyRateCents?: number | null })
             .hourlyRateCents,
           workedMinutes: (value as { workedMinutes?: number | null })
@@ -357,6 +377,7 @@ jest.mock("@/lib/team-mutation-idempotency", () => ({
 }));
 
 import { setVerifiedRequestActor } from "@/lib/verified-actor-context";
+import { resolveDynamicCrewPayout } from "@/lib/locked-crew-payout";
 import { POST as updateAppointmentStatus } from "../../app/api/appointments/[id]/status/route";
 
 function resetAppointment(overrides: Partial<AppointmentState> = {}): void {
@@ -485,15 +506,7 @@ describe("appointment status mutation integrity", () => {
     mockKillSwitch.mockReturnValue(null);
     mockResolveConfiguredCrewPayout.mockImplementation(
       (_database: unknown, memberIds: string[]) =>
-        Promise.resolve({
-          ok: true,
-          splits: memberIds.map((memberId) => ({
-            memberId,
-            splitBps: 10_000,
-          })),
-          ruleKey: "solo",
-          isFallback: true,
-        }),
+        Promise.resolve(resolveDynamicCrewPayout(memberIds)),
     );
     mockLockCompletedPayoutPeriod.mockResolvedValue({
       ok: true,
@@ -503,6 +516,227 @@ describe("appointment status mutation integrity", () => {
       payoutRunIds: ["55555555-5555-4555-8555-555555555555"],
     });
     mockRecalculateCommissions.mockResolvedValue(undefined);
+  });
+
+  it.each([
+    [1, 2000],
+    [2, 2000],
+    [3, 3000],
+    [4, 3000],
+  ])(
+    "snapshots the server-owned labor pool for %i selected staff",
+    async (count, poolRateBps) => {
+      const memberIds = staffIds.slice(0, count);
+      activeTeamMemberIds = new Set(memberIds);
+      const response = await updateAppointmentStatus(
+        request({
+          status: "completed",
+          finalTotalCents: 100000,
+          expectedFinalTotalCents: null,
+          crewMembers: memberIds.map((memberId, index) => ({
+            memberId,
+            // A client cannot turn an equal share into a weighted payout.
+            splitBps: index === 0 ? 10000 : 0,
+          })),
+        }),
+        context(),
+      );
+      expect(response.status).toBe(200);
+      expect(crewRows).toEqual(
+        memberIds.map((memberId) => ({
+          memberId,
+          splitBps: 1,
+          poolRateBps,
+          hourlyRateCents: null,
+          workedMinutes: null,
+        })),
+      );
+      expect(mockRecalculateCommissions).toHaveBeenCalledWith(
+        mockTransaction,
+        appointmentId,
+        { payoutRunIds: ["55555555-5555-4555-8555-555555555555"] },
+      );
+      expect(
+        mockRequirePermission.mock.calls.flatMap((call: unknown[]) => call[1]),
+      ).not.toContain("access.manage");
+    },
+  );
+
+  it("applies dynamic pay when first completing a job with previously saved crew", async () => {
+    activeTeamMemberIds = new Set(staffIds.slice(0, 3));
+    crewRows = [
+      { memberId: jeffreyId, splitBps: 7000 },
+      { memberId: jedId, splitBps: 3000, fixedJobRateBps: 1000 },
+      { memberId: devonId, splitBps: 0 },
+    ];
+    const response = await updateAppointmentStatus(
+      request({
+        status: "completed",
+        finalTotalCents: 100000,
+        expectedFinalTotalCents: null,
+      }),
+      context(),
+    );
+    expect(response.status).toBe(200);
+    expect(crewRows).toHaveLength(3);
+    for (const member of crewRows) {
+      expect(member).toMatchObject({ splitBps: 1, poolRateBps: 3000 });
+      expect(member.fixedJobRateBps).toBeUndefined();
+    }
+    expect(mockRecalculateCommissions).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, 3000])(
+    "preserves saved percentage policy %s during a total-only correction",
+    async (poolRateBps) => {
+      resetAppointment({
+        status: "completed",
+        completedAt: new Date("2026-08-08T13:15:00Z"),
+        finalTotalCents: 60000,
+      });
+      crewRows = staffIds.slice(0, 3).map((memberId, index) => ({
+        memberId,
+        splitBps: poolRateBps === null ? index + 1 : 1,
+        poolRateBps,
+        fixedJobRateBps: poolRateBps === null && index === 1 ? 1000 : null,
+      }));
+      const before = crewRows.map((row) => ({ ...row }));
+      const response = await updateAppointmentStatus(
+        request({
+          status: "completed",
+          finalTotalCents: 65000,
+          expectedFinalTotalCents: 60000,
+        }),
+        context(),
+      );
+      expect(response.status).toBe(200);
+      expect(crewRows).toEqual(before);
+      expect(mockResolveConfiguredCrewPayout).not.toHaveBeenCalled();
+      expect(mockRecalculateCommissions).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("updates crew from two through three and four while refreshing draft payroll", async () => {
+    resetAppointment({
+      status: "completed",
+      completedAt: new Date("2026-08-08T13:15:00Z"),
+      finalTotalCents: 100000,
+    });
+    activeTeamMemberIds = new Set(staffIds);
+    for (const count of [2, 3, 4]) {
+      const response = await updateAppointmentStatus(
+        request(
+          {
+            status: "completed",
+            crewMembers: staffIds
+              .slice(0, count)
+              .map((memberId) => ({ memberId, splitBps: 1 })),
+          },
+          { version: appointment.updatedAt.toISOString() },
+        ),
+        context(),
+      );
+      expect(response.status).toBe(200);
+      expect(crewRows).toHaveLength(count);
+      expect(
+        crewRows.every(
+          (member) =>
+            member.splitBps === 1 &&
+            member.poolRateBps === (count === 2 ? 2000 : 3000),
+        ),
+      ).toBe(true);
+    }
+    expect(mockRecalculateCommissions).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["locked", "paid"])(
+    "does not replace the crew snapshot in a %s period",
+    async (status) => {
+      resetAppointment({
+        status: "completed",
+        completedAt: new Date("2026-08-08T13:15:00Z"),
+        finalTotalCents: 100000,
+      });
+      crewRows = staffIds
+        .slice(0, 2)
+        .map((memberId) => ({ memberId, splitBps: 1, poolRateBps: 2000 }));
+      const before = crewRows.map((row) => ({ ...row }));
+      activeTeamMemberIds = new Set(staffIds);
+      mockLockCompletedPayoutPeriod.mockResolvedValueOnce({
+        ok: false,
+        reason: "payout_period_finalized",
+        finalizedRunStatus: status,
+      });
+      const response = await updateAppointmentStatus(
+        request({
+          status: "completed",
+          crewMembers: staffIds.map((memberId) => ({ memberId, splitBps: 1 })),
+        }),
+        context(),
+      );
+      expect(response.status).toBe(409);
+      expect(crewRows).toEqual(before);
+      expect(appointmentUpdateCount).toBe(0);
+      expect(mockRecalculateCommissions).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { memberId: crewMemberId, splitBps: 1, poolRateBps: 9000 },
+    { memberId: crewMemberId, splitBps: 1, fixedJobRateBps: 9000 },
+  ])(
+    "rejects client-supplied payout snapshots before any write",
+    async (crewMember) => {
+      const response = await updateAppointmentStatus(
+        request({ status: "completed", crewMembers: [crewMember] }),
+        context(),
+      );
+      expect(response.status).toBe(422);
+      expect(mockClaim).not.toHaveBeenCalled();
+      expect(appointmentUpdateCount).toBe(0);
+    },
+  );
+
+  it("replays percentage completion without replacing the labor snapshot", async () => {
+    activeTeamMemberIds = new Set(staffIds);
+    const payload = {
+      status: "completed",
+      finalTotalCents: 100000,
+      expectedFinalTotalCents: null,
+      crewMembers: staffIds.map((memberId) => ({ memberId, splitBps: 1 })),
+    };
+    const first = await updateAppointmentStatus(request(payload), context());
+    const firstBody: unknown = await first.json();
+    expect(first.status).toBe(200);
+    const before = crewRows.map((row) => ({ ...row }));
+    mockClaim.mockResolvedValueOnce({
+      kind: "replay",
+      replay: { result: firstBody, status: 200, correlationId: "crew-replay" },
+    });
+    const replay = await updateAppointmentStatus(request(payload), context());
+    expect(await replay.json()).toEqual(firstBody);
+    expect(crewRows).toEqual(before);
+    expect(appointmentUpdateCount).toBe(1);
+    expect(mockRecalculateCommissions).toHaveBeenCalledTimes(1);
+  });
+
+  it("rolls back the new labor snapshot if completion cannot commit", async () => {
+    activeTeamMemberIds = new Set(staffIds);
+    const before = crewRows.map((row) => ({ ...row }));
+    failIdempotencyCompletion = true;
+    const response = await updateAppointmentStatus(
+      request({
+        status: "completed",
+        finalTotalCents: 100000,
+        expectedFinalTotalCents: null,
+        crewMembers: staffIds.map((memberId) => ({ memberId, splitBps: 1 })),
+      }),
+      context(),
+    );
+    expect(response.status).toBeGreaterThanOrEqual(500);
+    expect(crewRows).toEqual(before);
+    expect(appointment.status).toBe("confirmed");
+    expect(appointmentUpdateCount).toBe(0);
   });
 
   it("saves hourly moving crew and refreshes payroll in the completion transaction", async () => {
@@ -825,7 +1059,8 @@ describe("appointment status mutation integrity", () => {
     expect(crewRows).toEqual([
       {
         memberId: crewMemberId,
-        splitBps: 10000,
+        splitBps: 1,
+        poolRateBps: 2000,
         hourlyRateCents: null,
         workedMinutes: null,
       },
@@ -1023,7 +1258,8 @@ describe("appointment status mutation integrity", () => {
     expect(crewRows).toEqual([
       {
         memberId: crewMemberId,
-        splitBps: 10_000,
+        splitBps: 1,
+        poolRateBps: 2000,
         hourlyRateCents: null,
         workedMinutes: null,
       },

@@ -1182,7 +1182,6 @@ function AppointmentCard({
                     teamMembers={teamMembers}
                     serviceType={a.bookingDetails?.serviceType}
                     initialCrewMembers={a.crewMembers}
-                    showSplitPercentages={false}
                   />
                 </div>
 

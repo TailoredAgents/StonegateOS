@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import React from "react";
+import {
+  resolveCrewLaborMemberRateBps,
+  resolveCrewLaborPoolRateBps,
+} from "@myst-os/pricing";
 import { SubmitButton } from "@/components/SubmitButton";
 import { requireCurrentTeamPrincipal } from "@/lib/team-principal";
 import { callAdminApiAs } from "../lib/api";
@@ -27,17 +31,6 @@ type CommissionSettings = {
     name: string | null;
     active: boolean;
     splitBps: number;
-  }>;
-  crewSplitRulesReady?: boolean;
-  crewSplitRules?: Array<{
-    ruleKey: string;
-    ready: boolean;
-    recipients: Array<{
-      memberId: string;
-      name: string | null;
-      active: boolean;
-      splitBps: number;
-    }>;
   }>;
 };
 
@@ -248,8 +241,6 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
     managementSplits.reduce((sum, split) => sum + split.splitBps, 0);
   const managementReady =
     commissionSettings?.managementReady === true && managementTotalSplitBps > 0;
-  const crewSplitRules = commissionSettings?.crewSplitRules ?? [];
-  const crewSplitRulesReady = commissionSettings?.crewSplitRulesReady !== false;
 
   return (
     <section className="space-y-4">
@@ -258,8 +249,8 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
         <p className={TEAM_SECTION_SUBTITLE}>
           Weekly payouts use the current Monday-Sunday week. Moving jobs pay
           each crew member their recorded hourly rate × hours worked. Other jobs
-          use the configured labor pool, and management uses the active
-          recipients shown below.
+          split a 20% labor pool for 1–2 people or 30% for 3 or more equally.
+          Management uses the active recipients shown below.
         </p>
       </header>
 
@@ -765,69 +756,37 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                 Labor pool
               </span>
               <div className="mt-1 text-base font-semibold text-slate-900">
-                {fmtPercent(commissionSettings.crewPoolRateBps)}%
+                {fmtPercent(resolveCrewLaborPoolRateBps(2))}% for 1–2 people
+                <br />
+                {fmtPercent(resolveCrewLaborPoolRateBps(3))}% for 3 or more
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                Applies to completed jobs other than moving jobs.
+                Based on the crew selected at completion. Payroll and job
+                expenses use the same labor total. Moving jobs use recorded
+                hourly pay.
               </div>
             </div>
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 px-4 py-3">
               <div className="text-xs font-medium text-slate-600">
-                Crew split overrides
+                Equal crew pay
               </div>
               <div className="mt-1 text-sm text-slate-700">
-                Most crew combinations split the configured{" "}
-                {fmtPercent(commissionSettings.crewPoolRateBps)}% labor pool
-                evenly.
+                Everyone selected receives an equal share of the labor pool.
               </div>
-              {!crewSplitRulesReady ? (
-                <p className="mt-2 text-xs font-medium text-rose-700">
-                  A configured override contains an inactive or invalid
-                  recipient. Percentage-pay job completions are blocked until it
-                  is repaired.
-                </p>
-              ) : crewSplitRules.length > 0 ? (
-                <div className="mt-2 space-y-2">
-                  {crewSplitRules.map((rule) => {
-                    const totalWeight = rule.recipients.reduce(
-                      (sum, recipient) => sum + recipient.splitBps,
-                      0,
-                    );
-                    return (
-                      <div
-                        key={rule.ruleKey}
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600"
-                      >
-                        <div className="font-semibold text-slate-800">
-                          Configured {rule.recipients.length}-person override
-                        </div>
-                        <ul className="mt-1 space-y-1">
-                          {rule.recipients.map((recipient) => (
-                            <li key={recipient.memberId}>
-                              {recipient.name ?? "Unnamed team member"}:{" "}
-                              {fmtPercent(
-                                totalWeight > 0
-                                  ? Math.round(
-                                      (commissionSettings.crewPoolRateBps *
-                                        recipient.splitBps) /
-                                        totalWeight,
-                                    )
-                                  : 0,
-                              )}
-                              % of the job
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="mt-2 text-xs text-slate-500">
-                  No overrides are configured; every multi-person crew splits
-                  the labor pool evenly.
-                </p>
-              )}
+              <ul className="mt-2 space-y-1 text-xs text-slate-600">
+                {[1, 2, 3, 4].map((crewCount) => (
+                  <li key={crewCount}>
+                    {crewCount} {crewCount === 1 ? "person" : "people"}:{" "}
+                    {fmtPercent(resolveCrewLaborMemberRateBps(crewCount))}% of
+                    the job total each
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-slate-500">
+                Fixed member rates and crew split overrides are retired for new
+                completions. Saved historical payouts keep their recorded rates
+                unless the crew is explicitly corrected.
+              </p>
             </div>
           </div>
         ) : (
@@ -842,8 +801,8 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
           Labor override days
         </h3>
         <p className="mt-1 text-sm text-slate-600">
-          Retired. Percentage jobs use the configured labor pool and moving jobs
-          use recorded hourly pay. Saved override days are ignored.
+          Retired. Percentage jobs use the labor pool for their crew size and
+          moving jobs use recorded hourly pay. Saved override days are ignored.
         </p>
 
         {overrideError ? (

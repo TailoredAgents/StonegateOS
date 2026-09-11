@@ -121,6 +121,61 @@ void test("legacy labor keeps its actual role totals without inventing hours", (
   assert.doesNotMatch(html, /hourly|crew hours|Sales|Management/u);
 });
 
+void test("dynamic labor detail distinguishes the crew pool and crew size from management pay", () => {
+  const html = renderToStaticMarkup(
+    createElement(ExpenseLaborDetails, {
+      labor: {
+        state: "actual",
+        amountCents: 89_000,
+        subrows: {
+          crewCents: 80_000,
+          managementCents: 9_000,
+          salesCents: 0,
+          otherPayrollAdjustmentsCents: 0,
+        },
+        rows: [
+          ...[
+            { crewCount: 2, poolRateBps: 2_000, amountCents: 20_000 },
+            { crewCount: 3, poolRateBps: 3_000, amountCents: 30_000 },
+            { crewCount: 4, poolRateBps: 3_000, amountCents: 30_000 },
+          ].map((row) => ({
+            ...row,
+            id: `crew-${row.crewCount}`,
+            group: "crew" as const,
+            label: "Junk removal",
+            serviceType: "junk_removal",
+            compensationType: "percentage" as const,
+            jobCount: 1,
+            workedMinutes: null,
+          })),
+          {
+            id: "management",
+            group: "management",
+            label: "Management",
+            serviceType: null,
+            compensationType: null,
+            amountCents: 9_000,
+            jobCount: 3,
+            workedMinutes: null,
+          },
+        ],
+      },
+    }),
+  );
+  assert.match(html, /Labor \(Actual\)/u);
+  assert.match(html, /20% crew pool/u);
+  assert.match(html, /30% crew pool/u);
+  assert.match(html, /2 crew · 10% each · 1 job/u);
+  assert.match(html, /3 crew · 10% each · 1 job/u);
+  assert.match(html, /4 crew · 7.5% each · 1 job/u);
+  assert.match(html, /Management/u);
+  assert.match(html, /\$890\.00/u);
+  assert.match(
+    html,
+    /Sales, management and other payroll are added separately/u,
+  );
+});
+
 void test("an empty labor week has one clear empty state", () => {
   const html = renderToStaticMarkup(
     createElement(ExpenseLaborDetails, {

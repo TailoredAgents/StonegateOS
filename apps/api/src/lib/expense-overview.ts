@@ -21,6 +21,9 @@ export type ExpenseOverviewLaborDetailInput = {
   serviceType?: string | null;
   compensationType?: ExpenseOverviewCompensationType | null;
   workedMinutes?: number | null;
+  /** Persisted crew pool facts; absent on historical payroll without them. */
+  poolRateBps?: number;
+  crewCount?: number;
 };
 
 export type ExpenseOverviewCategoryInput = {
@@ -181,6 +184,9 @@ export type ExpenseOverviewLaborRow = {
   jobCount: number | null;
   /** Sum of worker time, not the elapsed duration of the job. */
   workedMinutes: number | null;
+  /** The job's total crew percentage, independent of sales and management. */
+  poolRateBps?: number;
+  crewCount?: number;
 };
 
 export type ExpenseOverviewAdvertisingBreakdown = {
@@ -641,7 +647,15 @@ function laborRows(
         group === "crew" ? detail.serviceType?.trim() || null : null;
       const compensationType =
         group === "crew" ? (detail.compensationType ?? null) : null;
-      const id = `${group}:${serviceType ?? "all"}:${compensationType ?? "all"}`;
+      const poolRateBps =
+        compensationType === "percentage" ? detail.poolRateBps : undefined;
+      const crewCount =
+        compensationType === "percentage" ? detail.crewCount : undefined;
+      const poolKey =
+        poolRateBps !== undefined || crewCount !== undefined
+          ? `:${poolRateBps ?? "unknown"}:${crewCount ?? "unknown"}`
+          : "";
+      const id = `${group}:${serviceType ?? "all"}:${compensationType ?? "all"}${poolKey}`;
       const existing = grouped.get(id) ?? {
         row: {
           id,
@@ -655,6 +669,8 @@ function laborRows(
           amountCents: 0,
           jobCount: 0,
           workedMinutes: compensationType === "hourly" ? 0 : null,
+          ...(poolRateBps !== undefined ? { poolRateBps } : {}),
+          ...(crewCount !== undefined ? { crewCount } : {}),
         },
         jobIds: new Set<string>(),
       };

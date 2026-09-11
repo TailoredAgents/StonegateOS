@@ -229,6 +229,26 @@ function serviceTypeFromDetails(
     : null;
 }
 
+function crewPoolDetails(
+  details: Record<string, unknown> | null | undefined,
+): Pick<ExpenseOverviewLaborDetailInput, "poolRateBps" | "crewCount"> {
+  const poolRateBps = details?.["poolRateBps"];
+  const crewCount = details?.["crewCount"];
+  return {
+    ...(typeof poolRateBps === "number" &&
+    Number.isSafeInteger(poolRateBps) &&
+    poolRateBps >= 0 &&
+    poolRateBps <= 10_000
+      ? { poolRateBps }
+      : {}),
+    ...(typeof crewCount === "number" &&
+    Number.isSafeInteger(crewCount) &&
+    crewCount > 0
+      ? { crewCount }
+      : {}),
+  };
+}
+
 function frozenLaborDetails(value: unknown): ExpenseOverviewLaborDetailInput[] {
   if (!Array.isArray(value)) return [];
   const details: ExpenseOverviewLaborDetailInput[] = [];
@@ -263,6 +283,7 @@ function frozenLaborDetails(value: unknown): ExpenseOverviewLaborDetailInput[] {
       serviceType: serviceTypeFromDetails(row),
       compensationType: row["compensationType"] as "hourly" | "percentage",
       ...(hourly ? { workedMinutes: workedMinutes as number } : {}),
+      ...(row["group"] === "crew" && !hourly ? crewPoolDetails(row) : {}),
     });
   }
   return details;
@@ -527,6 +548,10 @@ export function mapExpenseOverviewRows(input: {
         commission.meta?.["compensationType"] === "hourly"
           ? "hourly"
           : "percentage",
+      ...(commission.role === "crew" &&
+      commission.meta?.["compensationType"] !== "hourly"
+        ? crewPoolDetails(commission.meta)
+        : {}),
       ...(commission.role === "crew" &&
       commission.meta?.["compensationType"] === "hourly"
         ? {

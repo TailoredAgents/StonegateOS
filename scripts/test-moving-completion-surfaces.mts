@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import ts from "typescript";
 import { chromium, expect } from "@playwright/test";
+import { parseCrewPayoutFormData as parseCrewPayoutFormDataForTest } from "../apps/site/src/app/team/lib/crew-payout-form";
 
 const repo = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/u, "");
 const require = createRequire(`${repo}/package.json`);
@@ -104,9 +105,10 @@ import {AppointmentCard} from 'myday-form-fixture';
 import {parseCrewPayoutFormData} from './src/app/team/lib/crew-payout-form';
 const params=new URLSearchParams(location.search), surface=params.get('surface')||'calendar';
 const permissions=!params.has('readonly'), saved=params.has('saved');
-const teamMembers=[{id:'${member}',name:'Alex',active:true}];
-const bookingDetails={serviceType:'moving',source:{type:'team_member',teamMemberId:'${member}'},pricing:{mode:'exact'}};
-const crewMembers=saved?[{memberId:'${member}',hourlyRateCents:2750,workedMinutes:135}]:[];
+const dynamic=params.has('dynamic');
+const teamMembers=dynamic?[{id:'${member}',name:'Jeffrey',active:true},{id:'33333333-3333-4333-8333-333333333333',name:'Jed',active:true},{id:'44444444-4444-4444-8444-444444444444',name:'Austin',active:true},{id:'55555555-5555-4555-8555-555555555555',name:'Devon',active:true}]:[{id:'${member}',name:'Alex',active:true}];
+const bookingDetails={serviceType:dynamic?'junk_removal':'moving',source:{type:'team_member',teamMemberId:'${member}'},pricing:{mode:'exact'}};
+const crewMembers=saved?(dynamic?teamMembers.slice(0,2).map(member=>({memberId:member.id})):[{memberId:'${member}',hourlyRateCents:2750,workedMinutes:135}]):[];
 const event={id:'db:${id}',appointmentId:'${id}',appointmentType:surface==='convert'?'in_person_quote':'job',status:saved?'completed':'confirmed',source:'db',title:'Moving Job',start:'2026-09-10T14:00:00.000Z',end:'2026-09-10T15:00:00.000Z',version:'${version}',quotedTotalCents:65000,finalTotalCents:saved?65000:null,bookingDetails,crewMembers};
 window.__actions=[];window.__refreshes=0;
 window.__capture=async(name,data)=>{window.__actions.push({name,data:Array.from(data.entries()),crew:parseCrewPayoutFormData(data)});await new Promise(resolve=>{if(window.__pause)window.__release=resolve;else setTimeout(resolve,180)});};
@@ -115,7 +117,7 @@ function App(){return <main><h1>Moving completion</h1>{surface==='calendar'?<Cal
 createRoot(document.getElementById('root')).render(<App/>);`;
 
 void test(
-  "actual moving completion surfaces preserve inputs, permissions, corrections and booking changes",
+  "completion surfaces preserve hourly inputs and calculate dynamic equal labor for every crew size",
   { timeout: 120000 },
   async () => {
     const bundle = await build({
@@ -513,6 +515,82 @@ void test(
       ).toHaveCount(0);
       await visit("calendar", "&readonly");
       await expect(page.locator('[name="crewMemberId"]')).toHaveCount(0);
+
+      for (const surface of ["calendar", "mobile", "myday", "convert"]) {
+        await visit(surface, "&dynamic");
+        if (surface === "convert") {
+          await page.getByText("Convert to job", { exact: true }).click();
+          await page
+            .getByRole("button", { name: "Exact", exact: true })
+            .click();
+          await page.locator('[name="quotedTotal"]').fill("650");
+        } else if (surface !== "calendar") {
+          await page.getByText("Complete job", { exact: true }).click();
+        }
+        await expect(page.locator('[name="crewMemberId"]')).toHaveCount(4);
+        await expect(
+          page.getByRole("checkbox", { name: "Devon" }),
+        ).toBeVisible();
+        const preview = page.getByText(/labor pool ·/);
+        await page.getByRole("checkbox", { name: /^Jeffrey/ }).check();
+        await expect(preview).toContainText("20% labor pool · 20%");
+        await page.getByRole("checkbox", { name: /^Jed/ }).check();
+        await expect(preview).toContainText("20% labor pool · 10%");
+        await page.getByRole("checkbox", { name: /^Devon/ }).check();
+        await expect(preview).toContainText("30% labor pool · 10%");
+        await page.getByRole("checkbox", { name: /^Austin/ }).check();
+        await expect(preview).toContainText("30% labor pool · 7.5%");
+        await page.getByRole("checkbox", { name: /^Jed/ }).uncheck();
+        await expect(preview).toContainText("30% labor pool · 10%");
+        await page.getByRole("checkbox", { name: /^Jeffrey/ }).uncheck();
+        await expect(preview).toContainText("20% labor pool · 10%");
+        await page.getByRole("checkbox", { name: /^Jeffrey/ }).check();
+        await page.getByRole("checkbox", { name: /^Jed/ }).check();
+        await expect(page.locator('[name^="crewHourlyRate:"]')).toHaveCount(0);
+        if (surface === "calendar") {
+          await page.locator('[name="crewConfirmed"]').check();
+          await page
+            .getByRole("button", { name: "Complete job", exact: true })
+            .click();
+          await expect.poll(() => requests.length).toBe(4);
+          assert.deepEqual(parseCrewPayoutFormDataForTest(requests[3].form), {
+            ok: true,
+            crewMembers: [
+              member,
+              "33333333-3333-4333-8333-333333333333",
+              "44444444-4444-4444-8444-444444444444",
+              "55555555-5555-4555-8555-555555555555",
+            ]
+              .sort()
+              .map((memberId) => ({ memberId, splitBps: 1 })),
+          });
+        } else {
+          if (surface === "convert")
+            await page.locator('[name="finalTotal"]').fill("650");
+          await page
+            .getByRole("button", {
+              name:
+                surface === "convert" ? "Convert + complete" : "Mark complete",
+              exact: true,
+            })
+            .click();
+          await expect
+            .poll(() => page.evaluate(() => window.__actions.length))
+            .toBe(1);
+          const completed = await page.evaluate(() => window.__actions[0]);
+          assert.equal(completed.crew.ok, true);
+          assert.equal(completed.crew.crewMembers.length, 4);
+          assert.ok(
+            completed.crew.crewMembers.every((entry) => entry.splitBps === 1),
+          );
+          assert.ok(
+            completed.crew.crewMembers.some(
+              (entry) =>
+                entry.memberId === "55555555-5555-4555-8555-555555555555",
+            ),
+          );
+        }
+      }
       assert.deepEqual(errors, []);
     } finally {
       await browser.close();

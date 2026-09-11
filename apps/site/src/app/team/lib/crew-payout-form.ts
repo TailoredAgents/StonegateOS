@@ -65,7 +65,7 @@ export function parseCrewPayoutFormData(
     return { ok: false, error: "Select no more than 50 crew members." };
   }
   if (!isMoving) {
-    // Percentage weights remain authoritative in the API's payroll settings.
+    // The API resolves the labor pool from this roster and splits it equally.
     return {
       ok: true,
       crewMembers: memberIds.map((memberId) => ({ memberId, splitBps: 1 })),

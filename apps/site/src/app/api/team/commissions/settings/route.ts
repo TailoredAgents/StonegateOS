@@ -6,7 +6,7 @@ import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 
 const SALES_RATE_BPS = 0;
 const MANAGEMENT_RATE_BPS = 1700;
-const LABOR_RATE_BPS = 2000;
+const BASE_LABOR_RATE_BPS = 2000;
 
 export const dynamic = "force-dynamic";
 
@@ -29,13 +29,15 @@ export async function POST(request: NextRequest): Promise<Response> {
   const redirectTo = getSafeRedirectUrl(request, "/team?tab=commissions");
   const formData = await request.formData();
   const crewPoolRateBps =
-    parsePercentToBps(formData.get("crewPoolRatePercent")) ?? LABOR_RATE_BPS;
+    parsePercentToBps(formData.get("crewPoolRatePercent")) ??
+    BASE_LABOR_RATE_BPS;
 
-  if (crewPoolRateBps !== LABOR_RATE_BPS) {
+  if (crewPoolRateBps !== BASE_LABOR_RATE_BPS) {
     const response = NextResponse.redirect(redirectTo, 303);
     response.cookies.set({
       name: "myst-flash-error",
-      value: "Labor is fixed at 20%.",
+      value:
+        "Labor is automatic: 20% for 1–2 people and 30% for 3 or more, split equally.",
       path: "/",
     });
     return response;

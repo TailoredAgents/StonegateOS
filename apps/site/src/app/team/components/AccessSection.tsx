@@ -613,28 +613,6 @@ export async function AccessSection(): Promise<React.ReactElement> {
                         save a unique phone before using phone login.
                       </p>
                     ) : null}
-                    <input
-                      name="defaultCrewSplitPercent"
-                      defaultValue={
-                        member.defaultCrewSplitBps !== null
-                          ? String(member.defaultCrewSplitBps / 100)
-                          : ""
-                      }
-                      placeholder="Crew split % (e.g. 50)"
-                      inputMode="decimal"
-                      className="w-full rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 sm:w-[170px]"
-                    />
-                    <input
-                      name="fixedCrewJobRatePercent"
-                      defaultValue={
-                        member.fixedCrewJobRateBps !== null
-                          ? String(member.fixedCrewJobRateBps / 100)
-                          : ""
-                      }
-                      placeholder="Guaranteed job % (e.g. 10)"
-                      inputMode="decimal"
-                      className="w-full rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 sm:w-[200px]"
-                    />
                     <SubmitButton
                       className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
                       pendingLabel="Saving..."
@@ -642,6 +620,26 @@ export async function AccessSection(): Promise<React.ReactElement> {
                       Update
                     </SubmitButton>
                   </div>
+
+                  {typeof member.defaultCrewSplitBps === "number" ||
+                  typeof member.fixedCrewJobRateBps === "number" ? (
+                    <p className="text-xs leading-5 text-slate-500">
+                      Historical crew settings (retired):{" "}
+                      {[
+                        typeof member.defaultCrewSplitBps === "number"
+                          ? `${member.defaultCrewSplitBps / 100}% split weight`
+                          : null,
+                        typeof member.fixedCrewJobRateBps === "number"
+                          ? `${member.fixedCrewJobRateBps / 100}% fixed job rate`
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join("; ")}
+                      . New completions use equal shares of the labor pool for
+                      the selected crew size. Moving jobs use recorded hourly
+                      pay.
+                    </p>
+                  ) : null}
 
                   {PERMISSION_OPTIONS.length ? (
                     <details className="rounded-2xl border border-slate-200 bg-white/70 px-4 py-3">

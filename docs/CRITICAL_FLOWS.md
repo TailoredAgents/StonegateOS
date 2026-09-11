@@ -42,10 +42,11 @@ These are the workflows we treat as production-critical. Any change that touches
    - Mark complete updates appointment status and revenue metrics.
 
 2. Commissions
-   - Commissions calculate from final amount paid.
-   - Sales commission is retired; management is 17% split 12% Jeffrey / 5% Austin.
-   - Labor is fixed at 20%; most crew combinations split labor evenly.
-   - Jeffrey + Austin + Devon jobs split labor as Jeffrey 3%, Austin 10%, and Devon 7%.
+   - Percentage commissions calculate from the final job total.
+   - Sales commission is retired; management follows the active dated policy.
+   - Percentage crew labor is 20% for 1–2 people and 30% for 3 or more, split equally; all four receive 7.5% each.
+   - Devon is selectable alongside Austin, Jeffrey, and Jed without changing account permissions. Moving labor stays hourly.
+   - Saved historical compensation survives total-only corrections. Crew corrections refresh draft payroll and Spend; locked/paid periods require adjustments.
    - Weekly payout run can be generated and exported.
 
 3. Partner portal (if enabled)

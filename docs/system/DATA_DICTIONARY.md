@@ -113,11 +113,14 @@ Revenue summaries are served by API routes such as:
 If enabled, commissions and payout runs are tracked in tables such as:
 - `commission_settings`, `appointment_commissions`, `payout_runs`, `payout_run_lines`
 
-Current policy: sales commission is retired for new calculations; management is
-17% split 12% to Jeffrey and 5% to Austin; labor is fixed at 20%.
-Most crews split labor evenly; Jeffrey + Austin + Devon jobs use an adjusted
-labor split so Jeffrey receives 3%, Austin receives 10%, and Devon receives
-7%.
+Current policy: sales commission is retired for new calculations; management
+uses dated rate versions. Percentage crew labor is 20% for 1–2 people and 30%
+for 3 or more, divided equally. Moving jobs use hourly compensation.
+`appointment_crew_members.pool_rate_bps` snapshots the percentage pool;
+null preserves historical percentage assignments or denotes hourly labor.
+`payout_run_lines.labor_details` freezes compensation type, amount, and available
+pool/count or hourly details when payroll is locked. See
+[dynamic crew labor](../operations/dynamic-crew-labor.md).
 
 ---
 

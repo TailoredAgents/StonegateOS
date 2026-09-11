@@ -63,6 +63,194 @@ describe("expense overview repository boundaries", () => {
 });
 
 describe("expense overview repository mapping", () => {
+  it.each(["estimated", "locked", "paid"] as const)(
+    "reports %s dynamic crew pools by job size with management separate and no payout double count",
+    (state) => {
+      const completedAt = new Date("2026-08-20T16:00:00.000Z");
+      const crewJobs = [
+        { id: "two-crew", crewCount: 2, poolRateBps: 2_000, payCents: 10_000 },
+        {
+          id: "three-crew",
+          crewCount: 3,
+          poolRateBps: 3_000,
+          payCents: 10_000,
+        },
+        { id: "four-crew", crewCount: 4, poolRateBps: 3_000, payCents: 7_500 },
+      ];
+      const commissions = crewJobs.flatMap((job) => [
+        ...Array.from({ length: job.crewCount }, () => ({
+          appointmentId: job.id,
+          completedAt,
+          role: "crew" as const,
+          amountCents: job.payCents,
+          meta: {
+            serviceType: "junk_removal",
+            compensationType: "percentage",
+            poolRateBps: job.poolRateBps,
+            crewCount: job.crewCount,
+          },
+        })),
+        {
+          appointmentId: job.id,
+          completedAt,
+          role: "marketing" as const,
+          amountCents: 3_000,
+          meta: { serviceType: "junk_removal", compensationType: "percentage" },
+        },
+      ]);
+      const mapped = mapExpenseOverviewRows({
+        weekStart: WEEK_START,
+        rows: baseRows({
+          jobs: crewJobs.map((job) => ({
+            id: job.id,
+            status: "completed",
+            appointmentType: "job",
+            completedAt,
+            finalTotalCents: 100_000,
+          })),
+          commissions:
+            state === "estimated"
+              ? commissions
+              : commissions.map((commission) => ({
+                  ...commission,
+                  amountCents: 99_999,
+                  meta: {
+                    ...commission.meta,
+                    poolRateBps: 2_000,
+                    crewCount: 2,
+                  },
+                })),
+          payoutLines:
+            state === "estimated"
+              ? []
+              : commissions.map((commission) => ({
+                  payoutRunId: "payout",
+                  status: state,
+                  periodStart: new Date("2026-08-17T04:00:00.000Z"),
+                  crewCents:
+                    commission.role === "crew" ? commission.amountCents : 0,
+                  salesCents: 0,
+                  marketingCents:
+                    commission.role === "marketing"
+                      ? commission.amountCents
+                      : 0,
+                  laborDetails: [
+                    {
+                      appointmentId: commission.appointmentId,
+                      group: commission.role === "crew" ? "crew" : "management",
+                      amountCents: commission.amountCents,
+                      ...commission.meta,
+                    },
+                  ],
+                })),
+          payoutAdjustments: [
+            {
+              payoutRunId: "payout",
+              status: state === "estimated" ? "draft" : state,
+              periodStart: new Date("2026-08-17T04:00:00.000Z"),
+              kind: "reimbursement",
+              amountCents: 5_000,
+            },
+          ],
+          expenses: [
+            {
+              id: "generated-payroll",
+              amountCents: 89_000,
+              currency: "USD",
+              legacyCategory: "Commissions",
+              categoryId: null,
+              categoryName: null,
+              categoryNeedsReview: false,
+              paidAt: completedAt,
+              lifecycleStatus: "posted",
+              reviewStatus: "approved",
+              source: "payout_run",
+              reversalOfExpenseId: null,
+            },
+          ],
+        }),
+      });
+      const overview = buildExpenseOverview(mapped);
+      expect(overview).toMatchObject({
+        revenueCents: 300_000,
+        laborCents: 89_000,
+        ordinaryExpensesCents: 0,
+        totalExpensesCents: 89_000,
+        operatingProfitCents: 211_000,
+        labor: {
+          state: state === "estimated" ? "estimated" : "actual",
+          subrows: {
+            crewCents: 80_000,
+            managementCents: 9_000,
+            otherPayrollAdjustmentsCents: 0,
+          },
+        },
+      });
+      expect(overview.labor.rows).toEqual([
+        expect.objectContaining({
+          poolRateBps: 2_000,
+          crewCount: 2,
+          amountCents: 20_000,
+          jobCount: 1,
+        }),
+        expect.objectContaining({
+          poolRateBps: 3_000,
+          crewCount: 3,
+          amountCents: 30_000,
+          jobCount: 1,
+        }),
+        expect.objectContaining({
+          poolRateBps: 3_000,
+          crewCount: 4,
+          amountCents: 30_000,
+          jobCount: 1,
+        }),
+        expect.objectContaining({
+          group: "management",
+          amountCents: 9_000,
+          jobCount: 3,
+        }),
+      ]);
+      expect(
+        overview.labor.rows.reduce((sum, row) => sum + row.amountCents, 0),
+      ).toBe(overview.laborCents);
+      expect(overview.labor.rows[3]).not.toHaveProperty("poolRateBps");
+      expect(overview.labor.rows[3]).not.toHaveProperty("crewCount");
+    },
+  );
+
+  it("omits invalid optional pool facts without changing immutable payout amounts", () => {
+    const mapped = mapExpenseOverviewRows({
+      weekStart: WEEK_START,
+      rows: baseRows({
+        payoutLines: [
+          {
+            payoutRunId: "payout",
+            status: "paid",
+            periodStart: new Date("2026-08-17T04:00:00.000Z"),
+            crewCents: 20_000,
+            salesCents: 0,
+            marketingCents: 0,
+            laborDetails: [
+              {
+                appointmentId: "historical-job",
+                group: "crew",
+                compensationType: "percentage",
+                amountCents: 20_000,
+                poolRateBps: "2000",
+                crewCount: 0,
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const overview = buildExpenseOverview(mapped);
+    expect(overview.laborCents).toBe(20_000);
+    expect(overview.labor.rows[0]).not.toHaveProperty("poolRateBps");
+    expect(overview.labor.rows[0]).not.toHaveProperty("crewCount");
+  });
+
   it("maps hourly commission metadata and service types for estimated labor", () => {
     const completedAt = new Date("2026-08-20T16:00:00.000Z");
     const mapped = mapExpenseOverviewRows({

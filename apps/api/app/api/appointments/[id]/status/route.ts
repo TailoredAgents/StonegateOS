@@ -254,6 +254,7 @@ async function readExistingCrewMembers(
       memberId: appointmentCrewMembers.memberId,
       splitBps: appointmentCrewMembers.splitBps,
       fixedJobRateBps: appointmentCrewMembers.fixedJobRateBps,
+      poolRateBps: appointmentCrewMembers.poolRateBps,
       hourlyRateCents: appointmentCrewMembers.hourlyRateCents,
       workedMinutes: appointmentCrewMembers.workedMinutes,
     })
@@ -1021,6 +1022,30 @@ export async function POST(
         );
       }
 
+      // A first completion can use a previously saved crew without sending it
+      // again. Snapshot today's equal-split policy before creating earnings.
+      // Total-only corrections to completed work retain the original snapshot.
+      if (
+        status === "completed" &&
+        !isQuoteOnly &&
+        !isMoving &&
+        crewMembers === undefined &&
+        existing.status !== "completed" &&
+        existing.completedAt == null
+      ) {
+        const resolvedCrew = await resolveConfiguredCrewPayout(
+          tx as unknown as typeof database,
+          existingCrewMembers.map((entry) => entry.memberId),
+        );
+        if (!resolvedCrew.ok) {
+          throw new TeamMutationFailure(
+            "conflict",
+            "Review the crew before completing this job.",
+          );
+        }
+        crewMembers = resolvedCrew.splits;
+      }
+
       let finalTotalCentsToSet: number | null | undefined;
       const effectiveQuotedTotalCents =
         bookingDetailsUpdate === undefined
@@ -1541,6 +1566,7 @@ export async function POST(
               memberId: entry.memberId,
               splitBps: entry.splitBps,
               fixedJobRateBps: entry.fixedJobRateBps ?? null,
+              poolRateBps: entry.poolRateBps ?? null,
               hourlyRateCents: entry.hourlyRateCents ?? null,
               workedMinutes: entry.workedMinutes ?? null,
               createdAt: committedAt,

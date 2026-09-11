@@ -38,7 +38,7 @@ test("moving completion carries each person's exact rate and worked minutes", ()
   assert.equal(hourlyPayoutCents(3000, 195), 9750);
 });
 
-test("unselected rows do not pay and nonmoving crew keeps server-defined percentage weights", () => {
+test("unselected rows do not pay and nonmoving crew submits equal percentage weights", () => {
   const data = movingForm();
   data.delete("crewMemberId");
   data.append("crewMemberId", bob);
@@ -124,6 +124,52 @@ test("percentage completion keeps hourly fields out of the form", () => {
   );
   assert.match(markup, /name="crewCompensationMode" value="percentage"/);
   assert.doesNotMatch(markup, /crewHourlyRate|crewHours|Crew labor total/);
+  assert.match(markup, /20% labor pool/);
+  assert.match(markup, /20% of the job total per person/);
+});
+
+test("completion includes all four staff and previews the crew-size pool and equal pay", () => {
+  const teamMembers = [
+    { id: alice, name: "Jeffrey" },
+    { id: bob, name: "Jed" },
+    { id: "33333333-3333-4333-8333-333333333333", name: "Austin" },
+    { id: "44444444-4444-4444-8444-444444444444", name: "Devon" },
+  ];
+  for (const [crewCount, pool, perPerson] of [
+    [1, 20, 20],
+    [2, 20, 10],
+    [3, 30, 10],
+    [4, 30, 7.5],
+  ]) {
+    const markup = renderToStaticMarkup(
+      createElement(CrewPayoutSelector, {
+        teamMembers,
+        serviceType: "junk_removal",
+        initialCrewMembers: teamMembers
+          .slice(0, crewCount)
+          .map((member) => ({ memberId: member.id })),
+      }),
+    );
+    assert.equal((markup.match(/name="crewMemberId"/g) ?? []).length, 4);
+    assert.match(markup, /Devon/);
+    assert.ok(markup.includes(`${pool}% labor pool`));
+    assert.ok(markup.includes(`${perPerson}% of the job total per person`));
+    assert.match(markup, /Payroll and job expenses update when saved/);
+    assert.doesNotMatch(
+      markup,
+      /current crew split|Payroll split|crewHourlyRate/,
+    );
+  }
+});
+
+test("percentage completion asks for crew selection before showing a payout", () => {
+  const markup = renderToStaticMarkup(
+    createElement(CrewPayoutSelector, {
+      teamMembers: [{ id: alice, name: "Jeffrey" }],
+    }),
+  );
+  assert.match(markup, /Select at least one crew member/);
+  assert.doesNotMatch(markup, /0% labor pool|of the job total per person/);
 });
 
 test("convert-only can save booking details without completing optional crew inputs", () => {

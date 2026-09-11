@@ -373,6 +373,10 @@ type TeamMemberSummary = {
   } | null;
 };
 
+type TeamDirectoryMember = Pick<TeamMemberSummary, "id" | "name"> & {
+  active?: boolean;
+};
+
 type AccessResponse = {
   roles?: RoleSummary[];
   members?: TeamMemberSummary[];
@@ -888,7 +892,7 @@ function MobileCompleteAppointmentForm({
   appointmentId: string;
   calendarDay: string;
   screen: "myday" | "calendar";
-  teamMembers: TeamMemberSummary[];
+  teamMembers: TeamDirectoryMember[];
   currentTeamMemberId: string;
   currentTeamMemberName: string;
   canCollectPayments: boolean;
@@ -1102,7 +1106,6 @@ function MobileCompleteAppointmentForm({
                   ) : null}
                   <CrewPayoutSelector
                     teamMembers={teamMembers}
-                    showSplitPercentages={false}
                     requireHourlyInputs={false}
                     theme="dark"
                     stacked
@@ -1186,7 +1189,6 @@ function MobileCompleteAppointmentForm({
           teamMembers={teamMembers}
           serviceType={event.bookingDetails?.serviceType}
           initialCrewMembers={event.crewMembers}
-          showSplitPercentages={false}
           theme="dark"
           stacked
         />
@@ -1361,7 +1363,7 @@ function MobileWeekAgenda({
   canManageCommissions: boolean;
   canOverrideAppointmentConflicts: boolean;
   canSendCustomerMessages: boolean;
-  teamMembers: TeamMemberSummary[];
+  teamMembers: TeamDirectoryMember[];
   currentTeamMemberId: string;
   currentTeamMemberName: string;
 }) {
@@ -1838,9 +1840,9 @@ async function loadMobileAccess(): Promise<{
   };
 }
 
-async function loadMobileTeamMembers(): Promise<TeamMemberSummary[]> {
+async function loadMobileTeamMembers(): Promise<TeamDirectoryMember[]> {
   const response = await callAdminApiForCurrentSession(
-    "/api/admin/team/members",
+    "/api/admin/team/directory",
     {
       method: "GET",
     },
@@ -1848,7 +1850,7 @@ async function loadMobileTeamMembers(): Promise<TeamMemberSummary[]> {
   if (!response.ok) return [];
   const payload = (await response
     .json()
-    .catch(() => null)) as AccessResponse | null;
+    .catch(() => null)) as { members?: TeamDirectoryMember[] } | null;
   return Array.isArray(payload?.members)
     ? payload.members.filter((member) => member.active !== false)
     : [];

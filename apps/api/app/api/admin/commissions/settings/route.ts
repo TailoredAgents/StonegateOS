@@ -1,11 +1,11 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { resolveCrewLaborPoolRateBps } from "@myst-os/pricing";
 import { commissionSettings, getDb } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import {
-  getCommissionCrewSplitConfigurationStatus,
   getCommissionManagementConfigurationStatus,
   getOrCreateCommissionSettings,
   recalculateCurrentPayoutPeriodAppointments,
@@ -23,6 +23,35 @@ const SettingsSchema = z.object({
   marketingMemberId: z.string().uuid().nullable().optional(),
 });
 
+const crewPoolPolicy = {
+  kind: "crew_count",
+  split: "equal",
+  tiers: [
+    {
+      minimumCrewSize: 1,
+      maximumCrewSize: 2,
+      poolRateBps: resolveCrewLaborPoolRateBps(2),
+    },
+    {
+      minimumCrewSize: 3,
+      maximumCrewSize: null,
+      poolRateBps: resolveCrewLaborPoolRateBps(3),
+    },
+  ],
+  moving: "hourly",
+} as const;
+
+function withCrewPoolPolicy<T extends object>(settings: T) {
+  return {
+    ...settings,
+    crewPoolPolicy,
+    // Older clients can still read these fields. Named percentage overrides
+    // are retired; new completion pay depends only on the selected crew count.
+    crewSplitRulesReady: true,
+    crewSplitRules: [],
+  };
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -33,20 +62,18 @@ export async function GET(request: NextRequest): Promise<Response> {
   const db = getDb();
   try {
     const settings = await getOrCreateCommissionSettings(db);
-    const [management, crewSplits] = await Promise.all([
-      getCommissionManagementConfigurationStatus(db, settings.marketingRateBps),
-      getCommissionCrewSplitConfigurationStatus(db),
-    ]);
+    const management = await getCommissionManagementConfigurationStatus(
+      db,
+      settings.marketingRateBps,
+    );
     return NextResponse.json({
       ok: true,
-      settings: {
+      settings: withCrewPoolPolicy({
         ...settings,
         managementReady: management.ready,
         managementTotalSplitBps: management.totalSplitBps,
         managementSplits: management.recipients,
-        crewSplitRulesReady: crewSplits.ready,
-        crewSplitRules: crewSplits.rules,
-      },
+      }),
     });
   } catch (error) {
     const code =
@@ -126,7 +153,9 @@ export async function PUT(request: NextRequest): Promise<Response> {
 
   // The stored 17% baseline remains historical. Active dated policies must be
   // reflected in responses, even when an owner changes only the payout schedule.
-  const effectiveSettings = await getOrCreateCommissionSettings(db);
+  const effectiveSettings = withCrewPoolPolicy(
+    await getOrCreateCommissionSettings(db),
+  );
 
   await recalculateCurrentPayoutPeriodAppointments(db);
 

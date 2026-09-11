@@ -92,6 +92,7 @@ export type CompletionCrewMember = {
   memberId: string;
   splitBps: number;
   fixedJobRateBps?: number | null;
+  poolRateBps?: number | null;
   hourlyRateCents?: number | null;
   workedMinutes?: number | null;
 };
@@ -102,7 +103,7 @@ export function normalizeCompletionCrew(
   return crew
     .map((entry) =>
       "hourlyRateCents" in entry
-        ? { ...entry, splitBps: 0, fixedJobRateBps: null }
+        ? { ...entry, splitBps: 0, fixedJobRateBps: null, poolRateBps: null }
         : { ...entry, hourlyRateCents: null, workedMinutes: null },
     )
     .sort((a, b) => a.memberId.localeCompare(b.memberId));
@@ -120,7 +121,8 @@ export function hasValidCrewCompensationMode(
           workedMinutes: entry.workedMinutes,
         }).success &&
         entry.splitBps === 0 &&
-        entry.fixedJobRateBps == null
+        entry.fixedJobRateBps == null &&
+        entry.poolRateBps == null
       : entry.hourlyRateCents == null && entry.workedMinutes == null,
   );
 }
