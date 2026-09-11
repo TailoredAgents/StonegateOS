@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { NextRequest } from "next/server";
+import { getSafeRedirectUrl } from "../../../site/src/app/api/team/redirects";
 import {
   isSameOriginTeamRequest,
   teamRequestRequiresOrigin,
@@ -97,6 +99,126 @@ describe("Site Team mutation origin boundary", () => {
     expect(authSource.slice(originGuard, sessionResolution)).toContain(
       'error: "forbidden"',
     );
+  });
+
+  it("recovers Next's normalized loopback URL only from configured Site authority and matching Host", () => {
+    const incoming = new NextRequest(
+      "http://127.0.0.1:3100/api/team/commissions/payout-runs",
+      {
+        method: "POST",
+        headers: {
+          host: "127.0.0.1:3100",
+          origin: "http://127.0.0.1:3100",
+          "sec-fetch-site": "same-origin",
+          "x-forwarded-host": "attacker.test",
+          "x-forwarded-proto": "https",
+        },
+      },
+    );
+    expect(new URL(incoming.url).origin).toBe("http://localhost:3100");
+    expect(
+      isSameOriginTeamRequest(incoming, {
+        configuredSiteUrls: ["http://127.0.0.1:3100"],
+      }),
+    ).toBe(true);
+    expect(isSameOriginTeamRequest(incoming, { configuredSiteUrls: [] })).toBe(
+      false,
+    );
+    expect(
+      isSameOriginTeamRequest(incoming, {
+        configuredSiteUrls: ["http://127.0.0.1:3200"],
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["http://127.0.0.1:3200", "127.0.0.1:3100"],
+    ["https://127.0.0.1:3100", "127.0.0.1:3100"],
+    ["http://localhost:3100", "127.0.0.1:3100"],
+    ["https://attacker.test", "127.0.0.1:3100"],
+    ["http://127.0.0.1:3100", "127.0.0.1:3100,attacker.test"],
+    ["http://127.0.0.1:3100", "127.0.0.1:3100@attacker.test"],
+    ["http://127.0.0.1:3100", "attacker.test"],
+  ])(
+    "rejects mismatched Origin %s and Host %s despite forged forwarding metadata",
+    (origin, host) => {
+      const incoming = new NextRequest(
+        "http://127.0.0.1:3100/api/team/commissions/payout-runs",
+        {
+          method: "POST",
+          headers: {
+            host,
+            origin,
+            "sec-fetch-site": "same-origin",
+            "x-forwarded-host": "127.0.0.1:3100",
+            "x-forwarded-proto": "http",
+          },
+        },
+      );
+      expect(
+        isSameOriginTeamRequest(incoming, {
+          configuredSiteUrls: ["http://127.0.0.1:3100"],
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("accepts a configured public HTTPS origin behind Next's internal HTTP URL", () => {
+    const incoming = new Request(
+      "http://localhost:3000/api/team/commissions/payout-runs",
+      {
+        method: "POST",
+        headers: {
+          host: "crm.stonegate.test",
+          origin: "https://crm.stonegate.test",
+          "sec-fetch-site": "same-origin",
+        },
+      },
+    );
+    expect(
+      isSameOriginTeamRequest(incoming, {
+        configuredSiteUrls: ["https://crm.stonegate.test"],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps payout redirects on the configured browser origin and ignores forwarded hosts and foreign referers", () => {
+    const previous = process.env["SITE_URL"];
+    const previousPublic = process.env["NEXT_PUBLIC_SITE_URL"];
+    process.env["SITE_URL"] = "http://127.0.0.1:3100";
+    delete process.env["NEXT_PUBLIC_SITE_URL"];
+    try {
+      const incoming = (referer: string) =>
+        new NextRequest(
+          "http://127.0.0.1:3100/api/team/commissions/payout-runs",
+          {
+            headers: {
+              host: "127.0.0.1:3100",
+              referer,
+              "x-forwarded-host": "attacker.test",
+              "x-forwarded-proto": "https",
+            },
+          },
+        );
+      expect(
+        getSafeRedirectUrl(
+          incoming("http://127.0.0.1:3100/team/admin/commissions?run=current"),
+          "/team/admin/commissions",
+        ).href,
+      ).toBe("http://127.0.0.1:3100/team/admin/commissions?run=current");
+      expect(
+        getSafeRedirectUrl(
+          incoming("https://attacker.test/steal"),
+          "/team/admin/commissions",
+        ).href,
+      ).toBe("http://127.0.0.1:3100/team/admin/commissions");
+    } finally {
+      if (previous === undefined) delete process.env["SITE_URL"];
+      else process.env["SITE_URL"] = previous;
+      if (previousPublic === undefined)
+        delete process.env["NEXT_PUBLIC_SITE_URL"];
+      else process.env["NEXT_PUBLIC_SITE_URL"] = previousPublic;
+    }
   });
 
   it("routes every Site Team HTTP mutation through the shared principal and origin gate", () => {

@@ -14,6 +14,7 @@ export type LoadSizeKind =
   | "custom";
 export type AppointmentServiceType =
   | "junk_removal"
+  | "moving"
   | "land_clearing"
   | "demolition"
   | "rental_dumpster";
@@ -45,6 +46,9 @@ export type AppointmentBookingDetails = {
   loadSize?: {
     kind: LoadSizeKind;
     customLoads?: number | null;
+  } | null;
+  moving?: {
+    destinationAddress?: string | null;
   } | null;
   landClearing?: {
     areaScope: string;
@@ -106,6 +110,7 @@ export const APPOINTMENT_SERVICE_TYPE_OPTIONS: Array<{
   label: string;
 }> = [
   { value: "junk_removal", label: "Junk removal" },
+  { value: "moving", label: "Moving Job" },
   { value: "land_clearing", label: "Land clearing" },
   { value: "demolition", label: "Demolition" },
   { value: "rental_dumpster", label: "Rental dumpster" },
@@ -290,6 +295,28 @@ export function parseAppointmentBookingFormData(
     rangeMaxCents:
       modeRaw === "range" || modeRaw === "both" ? rangeMaxCents : null,
   };
+
+  if (serviceTypeRaw === "moving") {
+    const destinationAddress = readText(
+      formData.get("movingDestinationAddress"),
+    );
+    if (destinationAddress && destinationAddress.length > 240) {
+      return {
+        ok: false,
+        error: "Destination address must be 240 characters or fewer.",
+      };
+    }
+    return {
+      ok: true,
+      quotedTotalCents: modeRaw === "range" ? null : quotedTotalCents,
+      bookingDetails: {
+        serviceType: serviceTypeRaw,
+        source: sourceResult.value,
+        pricing,
+        moving: { destinationAddress },
+      },
+    };
+  }
 
   if (serviceTypeRaw === "junk_removal") {
     const loadSizeRaw = readText(formData.get("loadSize"));
@@ -532,6 +559,11 @@ export function formatAppointmentJobDetails(
     return formatAppointmentLoadSize(details);
   }
 
+  if (serviceType === "moving") {
+    const destination = details?.moving?.destinationAddress?.trim();
+    return destination ? `Destination: ${destination}` : null;
+  }
+
   if (serviceType === "land_clearing") {
     const areaScope = details?.landClearing?.areaScope?.trim();
     const access = details?.landClearing?.accessDifficulty;
@@ -716,6 +748,7 @@ function isAppointmentServiceType(
 ): value is AppointmentServiceType {
   return (
     value === "junk_removal" ||
+    value === "moving" ||
     value === "land_clearing" ||
     value === "demolition" ||
     value === "rental_dumpster"
@@ -751,6 +784,8 @@ function formatServiceTypeLabel(value: AppointmentServiceType): string {
   switch (value) {
     case "junk_removal":
       return "Junk removal";
+    case "moving":
+      return "Moving Job";
     case "land_clearing":
       return "Land clearing";
     case "demolition":

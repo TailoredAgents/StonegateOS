@@ -45,7 +45,18 @@ import {
   type TeamMutationIdempotencyClaim,
   teamMutationIdempotencyReplayResponse,
 } from "@/lib/team-mutation-idempotency";
-import { resolveConfiguredCrewPayout } from "@/lib/commissions";
+import {
+  resolveConfiguredCrewPayout,
+  lockCompletedAppointmentPayoutPeriodInTransaction,
+  recalculateAppointmentCommissionsAndRefreshDraftPayoutsInTransaction,
+} from "@/lib/commissions";
+import {
+  CompletionCrewMembersSchema,
+  hasValidCrewCompensationMode,
+  isMovingCommissionJob,
+  normalizeCompletionCrew,
+  type CompletionCrewMember,
+} from "@/lib/hourly-labor";
 import {
   expireStalePaymentAttemptsForAppointment,
   getBlockingSquareAttempt,
@@ -72,13 +83,6 @@ const MAXIMUM_CENTS = 2_147_483_647;
 const APPOINTMENT_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
-const CrewMemberSchema = z
-  .object({
-    memberId: z.string().uuid(),
-    splitBps: z.number().int().min(0).max(10_000),
-  })
-  .strict();
-
 const CompletionSchema = z
   .object({
     finalTotalCents: z.number().int().min(0).max(MAXIMUM_CENTS).optional(),
@@ -95,7 +99,10 @@ const CompletionSchema = z
     marketingMemberId: z.string().uuid().nullable().optional(),
     crew: z.string().trim().max(200).nullable().optional(),
     owner: z.string().trim().max(200).nullable().optional(),
-    crewMembers: z.array(CrewMemberSchema).min(1).max(50),
+    crewMembers: CompletionCrewMembersSchema.refine(
+      (crew) => crew.length > 0,
+      "Select at least one crew member.",
+    ),
   })
   .strict();
 
@@ -399,25 +406,42 @@ export async function POST(
     // database at all.
     const database = getDb();
     db = database;
-    let crewMembers: Array<{ memberId: string; splitBps: number }> | undefined;
+    let crewMembers: CompletionCrewMember[] | undefined;
     if (parsed.data.completion) {
-      const resolvedCrew = await resolveConfiguredCrewPayout(
-        database,
-        parsed.data.completion.crewMembers.map((entry) => entry.memberId),
-      );
-      if (!resolvedCrew.ok || resolvedCrew.splits.length === 0) {
+      crewMembers = normalizeCompletionCrew(parsed.data.completion.crewMembers);
+      const isMoving = isMovingCommissionJob({ bookingDetails });
+      if (!hasValidCrewCompensationMode(isMoving, crewMembers)) {
         throw new TeamMutationFailure(
-          "conflict",
-          "Crew payout configuration is unavailable. No conversion was saved; ask an owner to repair Payroll settings.",
+          "invalid",
+          isMoving
+            ? "Enter an hourly rate and hours worked for each moving crew member."
+            : "Hourly labor is only available for Moving Jobs.",
           {
             fieldErrors: {
-              crewMembers:
-                "Payroll crew recipients require administrator review.",
+              crewMembers: "Review the crew pay for this job type.",
             },
           },
         );
       }
-      crewMembers = resolvedCrew.splits;
+      if (!isMoving) {
+        const resolvedCrew = await resolveConfiguredCrewPayout(
+          database,
+          crewMembers.map((entry) => entry.memberId),
+        );
+        if (!resolvedCrew.ok || resolvedCrew.splits.length === 0) {
+          throw new TeamMutationFailure(
+            "conflict",
+            "Crew payout configuration is unavailable. No conversion was saved; ask an owner to repair Payroll settings.",
+            {
+              fieldErrors: {
+                crewMembers:
+                  "Payroll crew recipients require administrator review.",
+              },
+            },
+          );
+        }
+        crewMembers = resolvedCrew.splits;
+      }
     }
 
     const claimPayload = {
@@ -865,6 +889,36 @@ export async function POST(
       );
       if (completion && !completion.completedAt) completedAt = committedAt;
 
+      let commissionPayoutRunIds: string[] = [];
+      if (completion) {
+        const payoutPeriod =
+          await lockCompletedAppointmentPayoutPeriodInTransaction(
+            tx,
+            completedAt,
+          );
+        if (!payoutPeriod.ok) {
+          return storeTerminalFailure(
+            tx,
+            mutation,
+            claimed.claim,
+            conversionFailure(
+              "conflict",
+              payoutPeriod.reason === "payout_period_finalized"
+                ? "This completion time belongs to a locked or paid payout period. Use an open payout week."
+                : "Enter a valid completion time before completing this job.",
+              {
+                fieldErrors: {
+                  completedAt:
+                    "Choose a completion time in an open payout period.",
+                },
+              },
+            ),
+            409,
+          );
+        }
+        commissionPayoutRunIds = payoutPeriod.payoutRunIds;
+      }
+
       const [updated] = await tx
         .update(appointments)
         .set({
@@ -925,8 +979,19 @@ export async function POST(
             appointmentId,
             memberId: entry.memberId,
             splitBps: entry.splitBps,
+            fixedJobRateBps: entry.fixedJobRateBps ?? null,
+            hourlyRateCents: entry.hourlyRateCents ?? null,
+            workedMinutes: entry.workedMinutes ?? null,
             createdAt: committedAt,
           })),
+        );
+      }
+
+      if (completion) {
+        await recalculateAppointmentCommissionsAndRefreshDraftPayoutsInTransaction(
+          tx,
+          appointmentId,
+          { payoutRunIds: commissionPayoutRunIds },
         );
       }
 
@@ -1006,7 +1071,7 @@ export async function POST(
           // status handler turn it into an unapproved customer message.
           statusChanged: false,
           lifecycleStatusChanged,
-          refreshCommissions: Boolean(completion),
+          refreshCommissions: false,
           calendarEventId: null,
           correlationId: mutation.correlationId,
           version: updated.updatedAt.toISOString(),

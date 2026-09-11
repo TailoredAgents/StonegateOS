@@ -15,6 +15,7 @@ type Props = {
   conflictingEvents?: CalendarEvent[];
   canUpdateAppointments?: boolean;
   canCollectPayments?: boolean;
+  canManageCommissions?: boolean;
   canSendCustomerMessages?: boolean;
   canManageAppointmentMedia?: boolean;
   canOverrideScheduleConflicts?: boolean;
@@ -28,6 +29,7 @@ export function CalendarEventDetail({
   conflictingEvents = [],
   canUpdateAppointments = false,
   canCollectPayments = false,
+  canManageCommissions = false,
   canSendCustomerMessages = false,
   canManageAppointmentMedia = false,
   canOverrideScheduleConflicts = false,
@@ -189,11 +191,20 @@ export function CalendarEventDetail({
           <CalendarAppointmentActions
             appointmentId={appointmentId}
             appointmentType={event.appointmentType ?? null}
+            serviceType={event.bookingDetails?.serviceType}
+            crewMembers={event.crewMembers}
             start={event.start}
             version={event.version ?? null}
             quotedTotalCents={event.quotedTotalCents ?? null}
             finalTotalCents={event.finalTotalCents ?? null}
             isQuoteOnly={isInPersonQuote}
+            correctionOnly={
+              normalizedStatus === "completed" &&
+              event.bookingDetails?.serviceType === "moving" &&
+              canManageCommissions &&
+              canCollectPayments &&
+              canUpdateAppointments
+            }
             canEditStatus={Boolean(canEditStatus)}
             canUpdateAppointments={canUpdateAppointments}
             canCollectPayments={canCollectPayments}

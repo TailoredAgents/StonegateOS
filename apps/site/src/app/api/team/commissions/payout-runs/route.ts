@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { requireTeamPrincipal } from "@/app/api/team/auth";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
+import { resolveRequestOrigin } from "../../../../../lib/request-origin";
 import {
   isTeamMutationSuccessEnvelope,
   readTeamMutationError,
@@ -155,7 +156,10 @@ async function payoutMutationFeedback(
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const fallback = new URL("/team/admin/commissions", request.url);
+  const fallback = new URL(
+    "/team/admin/commissions",
+    resolveRequestOrigin(request),
+  );
   const auth = await requireTeamPrincipal(request, {
     permissions: ["commissions.manage", "commissions.pay"],
     permissionMode: "any",

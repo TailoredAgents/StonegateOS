@@ -9,6 +9,7 @@ import { TEAM_SESSION_COOKIE } from "@/lib/team-session";
 import { callAdminApiForCurrentSession } from "../team/lib/api";
 import { callTeamApi, callTeamPublicApi } from "../team/login/lib/api";
 import { parseAppointmentBookingFormData } from "../team/lib/booking-details";
+import { parseCrewPayoutFormData } from "../team/lib/crew-payout-form";
 import {
   readManualCallAttemptResponseMetadata,
   readManualCallMutationSuccess,
@@ -1332,17 +1333,13 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
         }
       }
 
-      const crewMembers = formData
-        .getAll("crewMemberId")
-        .filter(
-          (value): value is string =>
-            typeof value === "string" && value.trim().length > 0,
-        )
-        .map((memberId) => ({ memberId: memberId.trim(), splitBps: 10000 }));
-      if (crewMembers.length === 0) {
-        redirect(`${redirectPath}&error=crew_required` as Route);
+      const crewResult = parseCrewPayoutFormData(formData);
+      if (!crewResult.ok) {
+        redirect(
+          `${redirectPath}&error=${encodeURIComponent(crewResult.error)}` as Route,
+        );
       }
-      payload["crewMembers"] = crewMembers;
+      payload["crewMembers"] = crewResult.crewMembers;
     }
   }
 
@@ -1502,15 +1499,14 @@ export async function convertMobileQuoteToJobAction(formData: FormData) {
       redirect(`${redirectPath}&error=amount_required` as Route);
     }
 
-    const crewMembers = formData
-      .getAll("crewMemberId")
-      .filter(
-        (value): value is string =>
-          typeof value === "string" && value.trim().length > 0,
-      )
-      .map((memberId) => ({ memberId: memberId.trim(), splitBps: 10000 }));
-    if (crewMembers.length === 0) {
-      redirect(`${redirectPath}&error=crew_required` as Route);
+    const crewResult = parseCrewPayoutFormData(
+      formData,
+      bookingDetailsResult.bookingDetails?.serviceType === "moving",
+    );
+    if (!crewResult.ok) {
+      redirect(
+        `${redirectPath}&error=${encodeURIComponent(crewResult.error)}` as Route,
+      );
     }
 
     const expectedFinalTotalRaw = formData.get("expectedFinalTotalCents");
@@ -1543,7 +1539,7 @@ export async function convertMobileQuoteToJobAction(formData: FormData) {
     completionPayload = {
       finalTotalCents,
       expectedFinalTotalCents,
-      crewMembers,
+      crewMembers: crewResult.crewMembers,
       ...(isCorrection ? { finalTotalChangeReason } : {}),
     };
   }

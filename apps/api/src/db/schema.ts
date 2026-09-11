@@ -96,6 +96,7 @@ export type AppointmentLeadSourceType =
 export type AppointmentPriceMode = "range" | "exact" | "both";
 export type AppointmentServiceType =
   | "junk_removal"
+  | "moving"
   | "land_clearing"
   | "demolition"
   | "rental_dumpster";
@@ -131,6 +132,9 @@ export type AppointmentBookingDetails = {
   loadSize?: {
     kind: AppointmentLoadSizeKind;
     customLoads?: number | null;
+  } | null;
+  moving?: {
+    destinationAddress?: string | null;
   } | null;
   landClearing?: {
     areaScope: string;
@@ -6878,11 +6882,17 @@ export const appointmentCrewMembers = pgTable(
       .references(() => teamMembers.id, { onDelete: "restrict" }),
     splitBps: integer("split_bps").default(0).notNull(),
     fixedJobRateBps: integer("fixed_job_rate_bps"),
+    hourlyRateCents: integer("hourly_rate_cents"),
+    workedMinutes: integer("worked_minutes"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
   (table) => ({
+    hourlyLaborCheck: check(
+      "appointment_crew_members_hourly_labor_check",
+      sql`(${table.hourlyRateCents} IS NULL AND ${table.workedMinutes} IS NULL) OR (${table.hourlyRateCents} IS NOT NULL AND ${table.workedMinutes} IS NOT NULL AND ${table.hourlyRateCents} > 0 AND ${table.workedMinutes} > 0 AND ${table.workedMinutes} <= 525600 AND round(${table.hourlyRateCents}::numeric * ${table.workedMinutes} / 60) <= 2147483647 AND ${table.splitBps} = 0 AND ${table.fixedJobRateBps} IS NULL)`,
+    ),
     apptIdx: index("appointment_crew_members_appt_idx").on(table.appointmentId),
     uniqueIdx: uniqueIndex("appointment_crew_members_unique").on(
       table.appointmentId,
@@ -6971,6 +6981,16 @@ export const payoutRuns = pgTable(
   }),
 );
 
+export type PayoutLaborDetail = {
+  appointmentId: string;
+  serviceType: string | null;
+  compensationType: "hourly" | "percentage";
+  group: "crew" | "sales" | "management";
+  amountCents: number;
+  hourlyRateCents?: number;
+  workedMinutes?: number;
+};
+
 export const payoutRunLines = pgTable(
   "payout_run_lines",
   {
@@ -6986,6 +7006,7 @@ export const payoutRunLines = pgTable(
     crewCents: integer("crew_cents").default(0).notNull(),
     adjustmentsCents: integer("adjustments_cents").default(0).notNull(),
     totalCents: integer("total_cents").default(0).notNull(),
+    laborDetails: jsonb("labor_details").$type<PayoutLaborDetail[] | null>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),

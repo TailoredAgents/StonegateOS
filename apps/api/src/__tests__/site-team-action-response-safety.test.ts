@@ -32,6 +32,15 @@ function assignedIdentifier(call: ts.CallExpression): ts.Identifier | null {
   }
 
   const declaration = current.parent;
+  if (
+    declaration &&
+    ts.isBinaryExpression(declaration) &&
+    declaration.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+    declaration.right === current &&
+    ts.isIdentifier(declaration.left)
+  ) {
+    return declaration.left;
+  }
   return declaration &&
     ts.isVariableDeclaration(declaration) &&
     ts.isIdentifier(declaration.name)
@@ -105,6 +114,40 @@ function functionSource(
 }
 
 describe("Site Team server action response safety", () => {
+  it.each([
+    [
+      "let response; try { response = await callAdminApiAs(); } catch { return; } if (!response.ok) return;",
+      true,
+    ],
+    [
+      "let response; try { response = await callAdminApiAs(); } catch { return; }",
+      false,
+    ],
+    [
+      "const response = await callAdminApiAs(); if (!response.ok) return;",
+      true,
+    ],
+    ["await callAdminApiAs();", false],
+  ])(
+    "recognizes checked responses across assignment forms: %s",
+    (body, expected) => {
+      const source = ts.createSourceFile(
+        "fixture.ts",
+        `async function action() { ${body} }`,
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      let actual: boolean | undefined;
+      visit(source, (node) => {
+        if (
+          ts.isCallExpression(node) &&
+          node.expression.getText(source) === "callAdminApiAs"
+        )
+          actual = callResultIsChecked(node);
+      });
+      expect(actual).toBe(expected);
+    },
+  );
   const sourceFiles = ACTION_FILES.map((path) =>
     ts.createSourceFile(
       path,

@@ -1,4 +1,5 @@
 import { DateTime } from "luxon";
+import type { AppointmentBookingDetails } from "@/db/schema";
 import {
   parseGoogleCalendarEventMutationResponse,
   parseGoogleCalendarTokenResponse,
@@ -60,6 +61,7 @@ export function resolveAppointmentCalendarContent(input: {
   leadNotes: unknown;
   partnerServiceKey: unknown;
   quotedScopeText: unknown;
+  bookingDetails?: AppointmentBookingDetails | null;
 }): AppointmentCalendarContent {
   const leadServices = Array.isArray(input.leadServices)
     ? input.leadServices
@@ -69,18 +71,26 @@ export function resolveAppointmentCalendarContent(input: {
         .slice(0, 20)
     : [];
   const partnerServiceKey = boundedCalendarText(input.partnerServiceKey, 120);
-  const services =
-    leadServices.length > 0
+  const isMoving = input.bookingDetails?.serviceType === "moving";
+  const services = isMoving
+    ? ["Moving Job"]
+    : leadServices.length > 0
       ? leadServices
       : partnerServiceKey
         ? [partnerServiceKey]
         : [];
 
+  const destination = isMoving
+    ? boundedCalendarText(input.bookingDetails?.moving?.destinationAddress, 240)
+    : null;
+  const notes =
+    boundedCalendarText(input.leadNotes, 4_000) ??
+    boundedCalendarText(input.quotedScopeText, 4_000);
   return Object.freeze({
     services: Object.freeze(services),
-    notes:
-      boundedCalendarText(input.leadNotes, 4_000) ??
-      boundedCalendarText(input.quotedScopeText, 4_000),
+    notes: destination
+      ? [`Destination: ${destination}`, notes].filter(Boolean).join("\n\n")
+      : notes,
   });
 }
 

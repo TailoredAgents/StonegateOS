@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { DatabaseClient } from "@/db";
+import { parseCrewPayoutFormData } from "../../../site/src/app/team/lib/crew-payout-form";
 import {
   allocateCrewPoolCents,
   validateCommissionManagementSplits,
@@ -203,7 +204,7 @@ describe("commission recipient integrity", () => {
       calculationStart,
     );
     const eligibilityCheck = commissionSource.indexOf(
-      "await validateCommissionRowsBeforeWrite(tx",
+      "await validateCommissionRowsBeforeWrite(",
       configurationRead,
     );
     const destructiveReplace = commissionSource.indexOf(
@@ -250,9 +251,22 @@ describe("commission recipient integrity", () => {
     );
     expect(commissionSource).toContain("resolveConfiguredCrewPayout(");
     expect(commissionSource).toContain("combinationCounts");
+    expect(teamStatusProxySource).toContain("parseCrewPayoutFormData(");
     expect(teamStatusProxySource).toContain(
-      "weights are deliberately non-authoritative",
+      'payload["crewMembers"] = crewResult.crewMembers',
     );
+    const form = new FormData();
+    form.append("crewMemberId", "member-a");
+    form.append("crewMemberId", "member-b");
+    form.set("splitBps", "10000");
+    form.set("crewSplit:member-a", "9999");
+    expect(parseCrewPayoutFormData(form)).toEqual({
+      ok: true,
+      crewMembers: [
+        { memberId: "member-a", splitBps: 1 },
+        { memberId: "member-b", splitBps: 1 },
+      ],
+    });
     expect(commissionsUiSource).not.toContain("Jeffrey + Austin + Devon labor");
   });
 

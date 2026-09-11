@@ -1164,6 +1164,10 @@
     {
       "idx": 169, "version": "7", "when": 1795737600000,
       "tag": "0172_partner_additional_service_jobs", "breakpoints": true
+    },
+    {
+      "idx": 170, "version": "7", "when": 1795824000000,
+      "tag": "0173_moving_hourly_labor", "breakpoints": true
     }
   ]
 }

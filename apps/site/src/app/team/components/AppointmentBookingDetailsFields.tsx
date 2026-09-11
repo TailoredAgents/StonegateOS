@@ -434,6 +434,26 @@ export function AppointmentBookingDetailsFields({
         </>
       ) : null}
 
+      {effectiveServiceType === "moving" ? (
+        <label className={`${labelClassName} ${sectionClassName}`}>
+          <span>
+            Destination address{" "}
+            <span className="font-normal text-slate-500">(optional)</span>
+          </span>
+          <input
+            name="movingDestinationAddress"
+            maxLength={240}
+            defaultValue={bookingDetails?.moving?.destinationAddress ?? ""}
+            placeholder="Street, city, state, ZIP"
+            className={fieldClassName}
+          />
+          <span className="text-xs font-normal text-slate-500">
+            Leave blank for a move at the same property. Crew hours and hourly
+            pay are entered at completion.
+          </span>
+        </label>
+      ) : null}
+
       {effectiveServiceType === "rental_dumpster" ? (
         <>
           <label className={labelClassName}>

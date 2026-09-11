@@ -315,6 +315,16 @@ type OverviewPayload = {
   labor: {
     state: "actual" | "estimated";
     amountCents: number;
+    rows?: Array<{
+      id: string;
+      label: string;
+      group: "crew" | "sales" | "management" | "adjustments";
+      serviceType: string | null;
+      compensationType: "hourly" | "percentage" | null;
+      amountCents: number;
+      jobCount: number | null;
+      workedMinutes: number | null;
+    }>;
     subrows: {
       crewCents: number;
       salesCents: number;
@@ -3189,7 +3199,7 @@ export function expenseOverviewReasonDetail(
     case "missing_ad_entries":
       return `${period.missingAdEntries.length} day${period.missingAdEntries.length === 1 ? "" : "s"} missing Facebook or Google ad entries`;
     case "missing_commission_data":
-      return `${period.missingCommissionDataCount} completed job${period.missingCommissionDataCount === 1 ? "" : "s"} missing commission data`;
+      return `${period.missingCommissionDataCount} completed job${period.missingCommissionDataCount === 1 ? "" : "s"} missing payroll data`;
     case "missing_final_totals":
       return `${period.missingFinalTotalCount} completed job${period.missingFinalTotalCount === 1 ? "" : "s"} missing a final total`;
     case "pending_expenses":
@@ -3274,6 +3284,106 @@ function DumpActivityPanel({ activity }: { activity: ExpenseDumpActivity }) {
         </p>
       ) : null}
     </section>
+  );
+}
+
+export function ExpenseLaborDetails({
+  labor,
+}: {
+  labor: OverviewPayload["labor"];
+}) {
+  const rows =
+    labor.rows ??
+    [
+      {
+        id: "crew",
+        label: "Crew",
+        group: "crew" as const,
+        amountCents: labor.subrows.crewCents,
+      },
+      {
+        id: "sales",
+        label: "Sales",
+        group: "sales" as const,
+        amountCents: labor.subrows.salesCents,
+      },
+      {
+        id: "management",
+        label: "Management",
+        group: "management" as const,
+        amountCents: labor.subrows.managementCents,
+      },
+      {
+        id: "adjustments",
+        label: "Other payroll",
+        group: "adjustments" as const,
+        amountCents: labor.subrows.otherPayrollAdjustmentsCents,
+      },
+    ]
+      .filter((row) => row.amountCents !== 0)
+      .map((row) => ({
+        ...row,
+        serviceType: null,
+        compensationType: null,
+        jobCount: null,
+        workedMinutes: null,
+      }));
+
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-between gap-3">
+        <span>Labor ({labor.state === "actual" ? "Actual" : "Estimated"})</span>
+        <strong className="tabular-nums">
+          {formatExpenseMoney(labor.amountCents)}
+        </strong>
+      </div>
+      {rows.length > 0 ? (
+        <dl className="space-y-3 pl-3 text-xs">
+          {rows.map((row) => (
+            <div
+              key={row.id}
+              className="flex items-start justify-between gap-3"
+            >
+              <dt className="text-slate-300">
+                {row.label}
+                {row.compensationType ? (
+                  <span className="text-slate-400">
+                    {" "}
+                    ·{" "}
+                    {row.compensationType === "hourly"
+                      ? "hourly"
+                      : "commission"}
+                  </span>
+                ) : null}
+                {row.group === "crew" &&
+                (row.workedMinutes !== null || row.jobCount !== null) ? (
+                  <span className="mt-1 block text-slate-400">
+                    {[
+                      row.workedMinutes !== null
+                        ? `${(row.workedMinutes / 60).toLocaleString("en-US", { maximumFractionDigits: 2 })} crew ${row.workedMinutes === 60 ? "hour" : "hours"}`
+                        : null,
+                      row.jobCount !== null
+                        ? `${row.jobCount} ${row.jobCount === 1 ? "job" : "jobs"}`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                ) : null}
+              </dt>
+              <dd className="shrink-0 tabular-nums text-slate-200">
+                {formatExpenseMoney(row.amountCents)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <p className="text-xs text-slate-400">No labor recorded this week.</p>
+      )}
+      <p className="text-xs leading-5 text-slate-400">
+        Reimbursements stay in Payout Runs and are not counted as labor.
+      </p>
+    </div>
   );
 }
 
@@ -3661,46 +3771,7 @@ function OverviewView({
               Labor and advertising detail
             </summary>
             <div className="mt-3 space-y-3 border-t border-white/10 pt-3 text-sm">
-              <div className="flex justify-between">
-                <span>
-                  Labor (
-                  {overview.labor.state === "actual" ? "Actual" : "Estimated"})
-                </span>
-                <strong>
-                  {formatExpenseMoney(overview.labor.amountCents)}
-                </strong>
-              </div>
-              <div className="space-y-1 pl-3 text-xs text-slate-400">
-                <div className="flex justify-between">
-                  <span>Crew</span>
-                  <span>
-                    {formatExpenseMoney(overview.labor.subrows.crewCents)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Sales</span>
-                  <span>
-                    {formatExpenseMoney(overview.labor.subrows.salesCents)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Management</span>
-                  <span>
-                    {formatExpenseMoney(overview.labor.subrows.managementCents)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Other payroll</span>
-                  <span>
-                    {formatExpenseMoney(
-                      overview.labor.subrows.otherPayrollAdjustmentsCents,
-                    )}
-                  </span>
-                </div>
-              </div>
-              <p className="text-xs leading-5 text-slate-400">
-                Reimbursements stay in Payout Runs and are not counted as labor.
-              </p>
+              <ExpenseLaborDetails labor={overview.labor} />
               <div className="flex justify-between border-t border-white/10 pt-3">
                 <span>Advertising</span>
                 <strong>

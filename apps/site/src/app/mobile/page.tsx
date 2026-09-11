@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { SubmitButton } from "@/components/SubmitButton";
 import Link from "next/link";
 import type { Route } from "next";
 import { redirect } from "next/navigation";
@@ -51,6 +52,8 @@ import { MobileAppointmentPricingFields } from "./MobileAppointmentPricingFields
 import { MobileAppointmentCard } from "./MobileAppointmentCard";
 import { MobileAppointmentDetail } from "./MobileAppointmentDetail";
 import { MobileCompletionFinalTotalFields } from "./MobileCompletionFinalTotalFields";
+import { CrewPayoutSelector } from "../team/components/CrewPayoutSelector";
+import type { SavedCrewPayout } from "../team/lib/crew-payout-form";
 import { MobileLogoutForm } from "./MobileLogoutForm";
 import { MobileOfflineRuntime } from "./MobileOfflineRuntime";
 import { MobilePayoutCreateButton } from "./MobilePayoutCreateButton";
@@ -274,6 +277,7 @@ type CalendarEvent = {
   paymentSummary?: AppointmentPaymentSummary;
   paymentLedgerAvailable?: boolean;
   bookingDetails?: AppointmentBookingDetails | null;
+  crewMembers?: SavedCrewPayout[];
   eta?: EtaSummary;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
 };
@@ -726,7 +730,10 @@ function eventKindLabel(event: CalendarEvent): string {
   if (isQuoteOnlyAppointmentType(event.appointmentType))
     return "In-person quote";
   if (event.source !== "db") return "Calendar event";
-  return event.status ? formatStage(event.status) : "Confirmed";
+  const statusLabel = event.status ? formatStage(event.status) : "Confirmed";
+  return event.bookingDetails?.serviceType === "moving"
+    ? `Moving Job · ${statusLabel}`
+    : statusLabel;
 }
 
 function eventCardTone(
@@ -898,7 +905,7 @@ function MobileCompleteAppointmentForm({
   const canCorrectCompletedJob =
     !isQuoteOnly &&
     status === "completed" &&
-    canManagePayments &&
+    (canManagePayments || event.bookingDetails?.serviceType === "moving") &&
     canManageCommissions;
   if (
     !appointmentId ||
@@ -1093,57 +1100,34 @@ function MobileCompleteAppointmentForm({
                       />
                     </label>
                   ) : null}
-                  <div className="rounded-md border border-white/10 bg-slate-950 p-3">
-                    <p className="text-xs font-semibold text-slate-300">
-                      Who worked
-                    </p>
-                    <div className="mt-2 grid grid-cols-1 gap-2">
-                      {teamMembers.length ? (
-                        teamMembers.map((member) => (
-                          <label
-                            key={member.id}
-                            className="flex cursor-pointer items-center gap-3 rounded-md border border-white/10 bg-slate-900 px-3 py-3 text-sm text-slate-200"
-                          >
-                            <input
-                              name="crewMemberId"
-                              type="checkbox"
-                              value={member.id}
-                              className="h-5 w-5 rounded border-slate-500 bg-slate-950 accent-emerald-300"
-                            />
-                            <span className="min-w-0 truncate">
-                              {member.name}
-                            </span>
-                          </label>
-                        ))
-                      ) : (
-                        <p className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100">
-                          No active team members loaded. Refresh before
-                          completing this job.
-                        </p>
-                      )}
-                    </div>
-                  </div>
+                  <CrewPayoutSelector
+                    teamMembers={teamMembers}
+                    showSplitPercentages={false}
+                    requireHourlyInputs={false}
+                    theme="dark"
+                    stacked
+                  />
                 </>
               ) : null}
               <div className="grid grid-cols-1 gap-2">
                 {canCollectPayments ? (
-                  <button
-                    type="submit"
+                  <SubmitButton
+                    pendingLabel="Saving…"
                     name="completionMode"
                     value="complete"
                     className="w-full rounded-md bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950"
                   >
                     Convert + complete
-                  </button>
+                  </SubmitButton>
                 ) : null}
-                <button
-                  type="submit"
+                <SubmitButton
+                  pendingLabel="Saving…"
                   name="completionMode"
                   value="convert"
                   className="w-full rounded-md border border-cyan-300/30 bg-slate-950 px-3 py-2 text-sm font-semibold text-cyan-100"
                 >
                   Convert only
-                </button>
+                </SubmitButton>
               </div>
             </form>
           </details>
@@ -1189,41 +1173,23 @@ function MobileCompleteAppointmentForm({
           initialPaymentSummary={event.paymentSummary ?? null}
           pricingContext={pricingContext}
           canManagePayments={canManagePayments}
+          forceReadOnly={status === "completed" && !canManagePayments}
         />
         {status === "completed" ? (
           <p className="rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-2 text-xs leading-5 text-cyan-100">
-            Enter the correct final total and reselect everyone who worked.
-            Saving refreshes commissions and any draft payout.
+            Review the final total and saved crew details. Saving refreshes
+            labor, commissions, and any draft payout.
           </p>
         ) : null}
-        <div className="rounded-md border border-white/10 bg-slate-950 p-3">
-          <p className="text-xs font-semibold text-slate-300">
-            Select who worked
-          </p>
-          <div className="mt-2 grid grid-cols-1 gap-2">
-            {teamMembers.length ? (
-              teamMembers.map((member) => (
-                <label
-                  key={member.id}
-                  className="flex cursor-pointer items-center gap-3 rounded-md border border-white/10 bg-slate-900 px-3 py-3 text-sm text-slate-200"
-                >
-                  <input
-                    name="crewMemberId"
-                    type="checkbox"
-                    value={member.id}
-                    className="h-5 w-5 rounded border-slate-500 bg-slate-950 accent-emerald-300"
-                  />
-                  <span className="min-w-0 truncate">{member.name}</span>
-                </label>
-              ))
-            ) : (
-              <p className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100">
-                No active team members loaded. Refresh before marking this job
-                complete.
-              </p>
-            )}
-          </div>
-        </div>
+        <CrewPayoutSelector
+          key={`${appointmentId}:${event.version ?? ""}`}
+          teamMembers={teamMembers}
+          serviceType={event.bookingDetails?.serviceType}
+          initialCrewMembers={event.crewMembers}
+          showSplitPercentages={false}
+          theme="dark"
+          stacked
+        />
         {canManageMedia && status !== "completed" ? (
           <details className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">
             <summary className="min-h-11 cursor-pointer py-2 font-semibold">
@@ -1245,31 +1211,33 @@ function MobileCompleteAppointmentForm({
             </label>
           </details>
         ) : null}
-        {canSendCustomerMessages ? (
-          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-3 text-sm text-cyan-100">
-            <input
-              name="sendReviewRequest"
-              type="checkbox"
-              className="mt-0.5 h-5 w-5 rounded border-slate-500 bg-slate-950 accent-cyan-300"
-            />
-            <span>
-              Request a review by SMS after completion. This is off unless you
-              check it; saving only queues the request and does not confirm
-              delivery.
-            </span>
-          </label>
-        ) : (
-          <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-400">
-            The customer will not be sent a review request. Message-send
-            permission is required.
-          </p>
-        )}
-        <button
-          type="submit"
+        {status !== "completed" ? (
+          canSendCustomerMessages ? (
+            <label className="flex cursor-pointer items-start gap-3 rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-3 text-sm text-cyan-100">
+              <input
+                name="sendReviewRequest"
+                type="checkbox"
+                className="mt-0.5 h-5 w-5 rounded border-slate-500 bg-slate-950 accent-cyan-300"
+              />
+              <span>
+                Request a review by SMS after completion. This is off unless you
+                check it; saving only queues the request and does not confirm
+                delivery.
+              </span>
+            </label>
+          ) : (
+            <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-400">
+              The customer will not be sent a review request. Message-send
+              permission is required.
+            </p>
+          )
+        ) : null}
+        <SubmitButton
+          pendingLabel="Saving…"
           className="w-full rounded-md bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950"
         >
           {status === "completed" ? "Save completed job" : "Mark complete"}
-        </button>
+        </SubmitButton>
       </form>
     </details>
   );
@@ -1504,6 +1472,7 @@ function MobileWeekAgenda({
                       <div className="space-y-3">
                         {appointmentId ? (
                           <MobileAppointmentDetail
+                            bookingDetails={event.bookingDetails}
                             appointmentId={appointmentId}
                             appointmentVersion={event.version ?? null}
                             employeeId={currentTeamMemberId}
@@ -3399,6 +3368,7 @@ export default async function MobileHomePage({
                           {appointmentId ? (
                             <div className="space-y-3">
                               <MobileAppointmentDetail
+                                bookingDetails={event.bookingDetails}
                                 appointmentId={appointmentId}
                                 appointmentVersion={event.version ?? null}
                                 employeeId={session.teamMember.id}

@@ -348,7 +348,7 @@ export function MobileAppointmentCard({
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1.5">
         <span
-          className={`max-w-36 truncate rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${appointmentCardStatusClassName(statusTone)}`}
+          className={`max-w-36 whitespace-normal break-words rounded-full px-2.5 py-1 text-right text-[11px] font-semibold uppercase tracking-[0.08em] ${appointmentCardStatusClassName(statusTone)}`}
         >
           {statusLabel}
         </span>

@@ -256,10 +256,10 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
       <header className={TEAM_CARD_PADDED}>
         <h2 className={TEAM_SECTION_TITLE}>Commissions</h2>
         <p className={TEAM_SECTION_SUBTITLE}>
-          Weekly payouts use the current Monday-Sunday week and final amount
-          paid. Sales commission is retired for new calculations, management
-          uses the active recipients shown below, and labor stays at 20% of the
-          job total regardless of the crew.
+          Weekly payouts use the current Monday-Sunday week. Moving jobs pay
+          each crew member their recorded hourly rate × hours worked. Other jobs
+          use the configured labor pool, and management uses the active
+          recipients shown below.
         </p>
       </header>
 
@@ -715,8 +715,8 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
       <div className={TEAM_CARD_PADDED}>
         <h3 className="text-lg font-semibold text-slate-900">Settings</h3>
         <p className="mt-1 text-sm text-slate-600">
-          Sales, management, and labor rates are fixed under the current
-          commission structure.
+          These settings apply to percentage pay. Moving crew rates and hours
+          are recorded when completing each job.
         </p>
 
         {commissionSettings ? (
@@ -768,7 +768,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                 {fmtPercent(commissionSettings.crewPoolRateBps)}%
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                Fixed for every completed job.
+                Applies to completed jobs other than moving jobs.
               </div>
             </div>
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 px-4 py-3">
@@ -783,8 +783,8 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
               {!crewSplitRulesReady ? (
                 <p className="mt-2 text-xs font-medium text-rose-700">
                   A configured override contains an inactive or invalid
-                  recipient. Crew-backed job completions are blocked until it is
-                  repaired.
+                  recipient. Percentage-pay job completions are blocked until it
+                  is repaired.
                 </p>
               ) : crewSplitRules.length > 0 ? (
                 <div className="mt-2 space-y-2">
@@ -842,8 +842,8 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
           Labor override days
         </h3>
         <p className="mt-1 text-sm text-slate-600">
-          Retired. Labor now stays at 20% for every completed job, so saved
-          override days are ignored by new commission calculations.
+          Retired. Percentage jobs use the configured labor pool and moving jobs
+          use recorded hourly pay. Saved override days are ignored.
         </p>
 
         {overrideError ? (

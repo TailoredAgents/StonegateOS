@@ -58,7 +58,11 @@ describe("appointment quote-to-job conversion atomicity contract", () => {
     expect(route).toContain("readBoundedJsonRequest(request");
     expect(route).toContain("deadlineMs: 8_000");
     expect(route).toContain("ConvertSchema.safeParse(body)");
-    expect(route.match(/\.strict\(\)/gu)?.length).toBeGreaterThanOrEqual(3);
+    expect(route.match(/\.strict\(\)/gu)?.length).toBeGreaterThanOrEqual(2);
+    expect(route).toContain("crewMembers: CompletionCrewMembersSchema");
+    expect(
+      read("apps/api/src/lib/hourly-labor.ts").match(/\.strict\(\)/gu)?.length,
+    ).toBe(2);
     expect(route).toContain("APPOINTMENT_ID_PATTERN.test(appointmentId)");
     expect(route).toContain("new Date(value).toISOString() !== value");
     expect(route).toContain("expectedStatus:");

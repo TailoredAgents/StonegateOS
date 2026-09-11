@@ -64,7 +64,12 @@ type AppointmentState = {
 };
 
 let appointment: AppointmentState;
-let crewRows: Array<{ memberId: string; splitBps: number }>;
+let crewRows: Array<{
+  memberId: string;
+  splitBps: number;
+  hourlyRateCents?: number | null;
+  workedMinutes?: number | null;
+}>;
 let insertedRows: Array<{ table: unknown; values: unknown }>;
 let appointmentUpdateCount: number;
 let leadUpdateCount: number;
@@ -185,6 +190,10 @@ const mockTransaction = {
         crewRows = values.map((value) => ({
           memberId: String((value as Record<string, unknown>)["memberId"]),
           splitBps: Number((value as Record<string, unknown>)["splitBps"]),
+          hourlyRateCents: (value as { hourlyRateCents?: number | null })
+            .hourlyRateCents,
+          workedMinutes: (value as { workedMinutes?: number | null })
+            .workedMinutes,
         }));
       }
       return Promise.resolve(undefined);
@@ -496,6 +505,374 @@ describe("appointment status mutation integrity", () => {
     mockRecalculateCommissions.mockResolvedValue(undefined);
   });
 
+  it("saves hourly moving crew and refreshes payroll in the completion transaction", async () => {
+    resetAppointment({ bookingDetails: { serviceType: "moving" } });
+    const response = await updateAppointmentStatus(
+      request({
+        status: "completed",
+        expectedVersion: currentVersion.toISOString(),
+        finalTotalCents: 60000,
+        expectedFinalTotalCents: null,
+        crewMembers: [
+          { memberId: crewMemberId, hourlyRateCents: 3000, workedMinutes: 150 },
+        ],
+      }),
+      context(),
+    );
+    expect(response.status).toBe(200);
+    expect(crewRows).toEqual([
+      {
+        memberId: crewMemberId,
+        splitBps: 0,
+        hourlyRateCents: 3000,
+        workedMinutes: 150,
+      },
+    ]);
+    expect(mockResolveConfiguredCrewPayout).not.toHaveBeenCalled();
+    expect(mockRecalculateCommissions).toHaveBeenCalledTimes(1);
+    expect(transactionOrder.indexOf("appointment")).toBeLessThan(
+      transactionOrder.indexOf("idempotency"),
+    );
+  });
+
+  it.each([
+    ["moving", { memberId: crewMemberId, splitBps: 10000 }],
+    [
+      "junk_removal",
+      { memberId: crewMemberId, hourlyRateCents: 3000, workedMinutes: 150 },
+    ],
+  ])(
+    "rejects the wrong crew compensation for %s",
+    async (serviceType, member) => {
+      resetAppointment({ bookingDetails: { serviceType } });
+      const response = await updateAppointmentStatus(
+        request({
+          status: "completed",
+          expectedVersion: currentVersion.toISOString(),
+          finalTotalCents: 60000,
+          expectedFinalTotalCents: null,
+          crewMembers: [member],
+        }),
+        context(),
+      );
+      expect(response.status).toBe(422);
+      expect(appointmentUpdateCount).toBe(0);
+      expect(mockRecalculateCommissions).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves saved hourly crew when correcting only the moving job total", async () => {
+    resetAppointment({
+      status: "completed",
+      completedAt: new Date("2026-08-08T13:15:00Z"),
+      finalTotalCents: 60000,
+      bookingDetails: { serviceType: "moving" },
+    });
+    crewRows = [
+      {
+        memberId: crewMemberId,
+        splitBps: 0,
+        hourlyRateCents: 3000,
+        workedMinutes: 150,
+      },
+    ];
+    const response = await updateAppointmentStatus(
+      request({
+        status: "completed",
+        expectedVersion: currentVersion.toISOString(),
+        finalTotalCents: 65000,
+        expectedFinalTotalCents: 60000,
+      }),
+      context(),
+    );
+    expect(response.status).toBe(200);
+    expect(crewRows[0]).toMatchObject({
+      hourlyRateCents: 3000,
+      workedMinutes: 150,
+    });
+    expect(mockResolveConfiguredCrewPayout).not.toHaveBeenCalled();
+    expect(mockRecalculateCommissions).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["locked", "paid"])(
+    "blocks hourly corrections in a %s payout period",
+    async (status) => {
+      resetAppointment({
+        status: "completed",
+        completedAt: new Date("2026-08-08T13:15:00Z"),
+        finalTotalCents: 60000,
+        bookingDetails: { serviceType: "moving" },
+      });
+      crewRows = [
+        {
+          memberId: crewMemberId,
+          splitBps: 0,
+          hourlyRateCents: 3000,
+          workedMinutes: 150,
+        },
+      ];
+      mockLockCompletedPayoutPeriod.mockResolvedValueOnce({
+        ok: false,
+        reason: "payout_period_finalized",
+        finalizedRunStatus: status,
+      });
+      const response = await updateAppointmentStatus(
+        request({
+          status: "completed",
+          expectedVersion: currentVersion.toISOString(),
+          crewMembers: [
+            {
+              memberId: crewMemberId,
+              hourlyRateCents: 3500,
+              workedMinutes: 180,
+            },
+          ],
+        }),
+        context(),
+      );
+      expect(response.status).toBe(409);
+      expect(crewRows[0]).toMatchObject({
+        hourlyRateCents: 3000,
+        workedMinutes: 150,
+      });
+      expect(appointmentUpdateCount).toBe(0);
+      expect(mockRecalculateCommissions).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires payment permission for hourly-only input even when the final total is already known", async () => {
+    resetAppointment({
+      finalTotalCents: 60000,
+      bookingDetails: { serviceType: "moving" },
+    });
+    mockRequirePermission
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        Response.json({ error: "forbidden" }, { status: 403 }),
+      );
+    const response = await updateAppointmentStatus(
+      request({
+        status: "completed",
+        crewMembers: [
+          { memberId: crewMemberId, hourlyRateCents: 3000, workedMinutes: 150 },
+        ],
+      }),
+      context(),
+    );
+    expect(response.status).toBe(403);
+    expect(mockRequirePermission).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      ["appointments.update", "payments.collect"],
+      expect.objectContaining({ mode: "all" }),
+    );
+    expect(mockClaim).not.toHaveBeenCalled();
+    expect(appointmentUpdateCount).toBe(0);
+  });
+
+  it.each([
+    { memberId: crewMemberId, hourlyRateCents: 3000 },
+    { memberId: crewMemberId, hourlyRateCents: 3000, workedMinutes: 0 },
+    { memberId: crewMemberId, hourlyRateCents: 3000, workedMinutes: 1.5 },
+    {
+      memberId: crewMemberId,
+      hourlyRateCents: 3000,
+      workedMinutes: 150,
+      splitBps: 1,
+    },
+  ])(
+    "rejects incomplete or mixed hourly payloads before claiming a mutation",
+    async (member) => {
+      resetAppointment({ bookingDetails: { serviceType: "moving" } });
+      const response = await updateAppointmentStatus(
+        request({ status: "completed", crewMembers: [member] }),
+        context(),
+      );
+      expect(response.status).toBe(422);
+      expect(mockClaim).not.toHaveBeenCalled();
+      expect(appointmentUpdateCount).toBe(0);
+    },
+  );
+
+  it("rejects an inactive mover without falling back to percentage crew settings", async () => {
+    resetAppointment({
+      finalTotalCents: 60000,
+      bookingDetails: { serviceType: "moving" },
+    });
+    activeTeamMemberIds.clear();
+    const response = await updateAppointmentStatus(
+      request({
+        status: "completed",
+        crewMembers: [
+          { memberId: crewMemberId, hourlyRateCents: 3000, workedMinutes: 150 },
+        ],
+      }),
+      context(),
+    );
+    expect(response.status).toBe(422);
+    expect(mockResolveConfiguredCrewPayout).not.toHaveBeenCalled();
+    expect(appointmentUpdateCount).toBe(0);
+  });
+
+  it("allows a zero-price moving completion while recording paid hourly work", async () => {
+    resetAppointment({ bookingDetails: { serviceType: "moving" } });
+    const response = await updateAppointmentStatus(
+      request({
+        status: "completed",
+        finalTotalCents: 0,
+        expectedFinalTotalCents: null,
+        crewMembers: [
+          { memberId: crewMemberId, hourlyRateCents: 3000, workedMinutes: 150 },
+        ],
+      }),
+      context(),
+    );
+    expect(response.status).toBe(200);
+    expect(appointment.finalTotalCents).toBe(0);
+    expect(crewRows[0]).toMatchObject({
+      hourlyRateCents: 3000,
+      workedMinutes: 150,
+    });
+    expect(mockRecalculateCommissions).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays a successful hourly completion without rewriting worker time", async () => {
+    resetAppointment({ bookingDetails: { serviceType: "moving" } });
+    const payload = {
+      status: "completed",
+      finalTotalCents: 60000,
+      expectedFinalTotalCents: null,
+      crewMembers: [
+        { memberId: crewMemberId, hourlyRateCents: 3000, workedMinutes: 150 },
+      ],
+    };
+    const first = await updateAppointmentStatus(request(payload), context());
+    const firstBody: unknown = await first.json();
+    expect(first.status).toBe(200);
+    mockClaim.mockResolvedValueOnce({
+      kind: "replay",
+      replay: {
+        result: firstBody,
+        status: 200,
+        correlationId: "moving-replay",
+      },
+    });
+    const replay = await updateAppointmentStatus(request(payload), context());
+    expect(await replay.json()).toEqual(firstBody);
+    expect(replay.headers.get("idempotency-replayed")).toBe("true");
+    expect(appointmentUpdateCount).toBe(1);
+    expect(mockRecalculateCommissions).toHaveBeenCalledTimes(1);
+    expect(crewRows[0]).toMatchObject({
+      hourlyRateCents: 3000,
+      workedMinutes: 150,
+    });
+  });
+
+  it("reopens hourly work in its open payout week and clears earned commissions", async () => {
+    resetAppointment({
+      status: "completed",
+      completedAt: new Date("2026-08-08T13:15:00Z"),
+      finalTotalCents: 60000,
+      bookingDetails: { serviceType: "moving" },
+    });
+    crewRows = [
+      {
+        memberId: crewMemberId,
+        splitBps: 0,
+        hourlyRateCents: 3000,
+        workedMinutes: 150,
+      },
+    ];
+    const response = await updateAppointmentStatus(
+      request({ status: "confirmed" }),
+      context(),
+    );
+    expect(response.status).toBe(200);
+    expect(appointment.completedAt).toBeNull();
+    expect(crewRows[0]).toMatchObject({
+      hourlyRateCents: 3000,
+      workedMinutes: 150,
+    });
+    expect(mockRecalculateCommissions).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces hourly crew with server-owned percentage pay when job type is corrected", async () => {
+    resetAppointment({
+      status: "completed",
+      completedAt: new Date("2026-08-08T13:15:00Z"),
+      finalTotalCents: 60000,
+      bookingDetails: { serviceType: "moving" },
+    });
+    crewRows = [
+      {
+        memberId: crewMemberId,
+        splitBps: 0,
+        hourlyRateCents: 3000,
+        workedMinutes: 150,
+      },
+    ];
+    const response = await updateAppointmentStatus(
+      request({
+        status: "completed",
+        quotedTotalCents: 40000,
+        bookingDetails: updatedBookingDetails,
+        crewMembers: [{ memberId: crewMemberId, splitBps: 0 }],
+      }),
+      context(),
+    );
+    expect(response.status).toBe(200);
+    expect(appointment.bookingDetails?.serviceType).toBe("junk_removal");
+    expect(crewRows).toEqual([
+      {
+        memberId: crewMemberId,
+        splitBps: 10000,
+        hourlyRateCents: null,
+        workedMinutes: null,
+      },
+    ]);
+    expect(mockResolveConfiguredCrewPayout).toHaveBeenCalledTimes(1);
+    expect(mockRecalculateCommissions).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps worker pay untouched when a job-total correction hits an active payment", async () => {
+    resetAppointment({
+      status: "completed",
+      completedAt: new Date("2026-08-08T13:15:00Z"),
+      finalTotalCents: 60000,
+      bookingDetails: { serviceType: "moving" },
+    });
+    crewRows = [
+      {
+        memberId: crewMemberId,
+        splitBps: 0,
+        hourlyRateCents: 3000,
+        workedMinutes: 150,
+      },
+    ];
+    mockGetBlockingSquareAttempt.mockResolvedValueOnce({
+      id: "square-active",
+      status: "pending",
+    });
+    const response = await updateAppointmentStatus(
+      request({
+        status: "completed",
+        finalTotalCents: 55000,
+        expectedFinalTotalCents: 60000,
+        crewMembers: [
+          { memberId: crewMemberId, hourlyRateCents: 4000, workedMinutes: 180 },
+        ],
+      }),
+      context(),
+    );
+    expect(response.status).toBe(409);
+    expect(appointmentUpdateCount).toBe(0);
+    expect(crewRows[0]).toMatchObject({
+      hourlyRateCents: 3000,
+      workedMinutes: 150,
+    });
+    expect(mockRecalculateCommissions).not.toHaveBeenCalled();
+  });
+
   it("denies the request before reading params, body, or opening the database", async () => {
     mockRequirePermission.mockResolvedValueOnce(
       Response.json({ error: "forbidden" }, { status: 403 }),
@@ -643,7 +1020,14 @@ describe("appointment status mutation integrity", () => {
       },
     });
     expect(appointment.finalTotalCents).toBe(47_500);
-    expect(crewRows).toEqual([{ memberId: crewMemberId, splitBps: 10_000 }]);
+    expect(crewRows).toEqual([
+      {
+        memberId: crewMemberId,
+        splitBps: 10_000,
+        hourlyRateCents: null,
+        workedMinutes: null,
+      },
+    ]);
     expect(mockAcquireScheduleConflictLock).toHaveBeenCalledWith(
       mockTransaction,
     );

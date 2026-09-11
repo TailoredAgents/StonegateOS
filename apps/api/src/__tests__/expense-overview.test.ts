@@ -404,7 +404,7 @@ describe("expense overview calculations", () => {
     );
 
     expect(result.revenueCents).toBe(42_500);
-    expect(result.labor).toEqual({
+    expect(result.labor).toMatchObject({
       state: "estimated",
       amountCents: 15_725,
       subrows: {
@@ -475,7 +475,7 @@ describe("expense overview calculations", () => {
       }),
     );
 
-    expect(result.labor).toEqual({
+    expect(result.labor).toMatchObject({
       state: "actual",
       amountCents: 21_000,
       subrows: {
@@ -488,6 +488,268 @@ describe("expense overview calculations", () => {
     expect(result.ordinaryExpensesCents).toBe(1_000);
     expect(result.totalExpensesCents).toBe(22_000);
     expect(result.missingCommissionDataCount).toBe(0);
+  });
+
+  it("reports hourly moving work alongside percentage crew pay without counting a job per worker", () => {
+    const completedAt = "2026-08-20T16:00:00.000Z";
+    const result = buildExpenseOverview(
+      baseInput({
+        jobs: ["move", "junk"].map((id) => ({
+          id,
+          status: "completed",
+          appointmentType: "job",
+          completedAt,
+          finalTotalCents: 100_000,
+        })),
+        commissions: [
+          {
+            appointmentId: "move",
+            completedAt,
+            group: "crew",
+            amountCents: 11_250,
+            serviceType: "moving",
+            compensationType: "hourly",
+            workedMinutes: 270,
+          },
+          {
+            appointmentId: "move",
+            completedAt,
+            group: "crew",
+            amountCents: 9_000,
+            serviceType: "moving",
+            compensationType: "hourly",
+            workedMinutes: 180,
+          },
+          {
+            appointmentId: "junk",
+            completedAt,
+            group: "crew",
+            amountCents: 20_000,
+            serviceType: "junk_removal",
+            compensationType: "percentage",
+          },
+          {
+            appointmentId: "move",
+            completedAt,
+            group: "sales",
+            amountCents: 5_000,
+            serviceType: "moving",
+            compensationType: "percentage",
+          },
+          {
+            appointmentId: "junk",
+            completedAt,
+            group: "management",
+            amountCents: 3_000,
+            compensationType: "percentage",
+          },
+          {
+            appointmentId: "move",
+            completedAt: "2026-08-11T16:00:00.000Z",
+            group: "crew",
+            amountCents: 99_999,
+            serviceType: "moving",
+            compensationType: "hourly",
+            workedMinutes: 1_000,
+          },
+        ],
+        payrollAdjustments: [
+          { accruedAt: "2026-08-20", amountCents: 1_000, kind: "payroll" },
+          {
+            accruedAt: "2026-08-20",
+            amountCents: 2_000,
+            kind: "reimbursement",
+          },
+        ],
+      }),
+    );
+
+    expect(result.laborCents).toBe(49_250);
+    expect(result.labor.rows).toEqual([
+      {
+        id: "crew:junk_removal:percentage",
+        label: "Junk removal",
+        group: "crew",
+        serviceType: "junk_removal",
+        compensationType: "percentage",
+        amountCents: 20_000,
+        jobCount: 1,
+        workedMinutes: null,
+      },
+      {
+        id: "crew:moving:hourly",
+        label: "Moving",
+        group: "crew",
+        serviceType: "moving",
+        compensationType: "hourly",
+        amountCents: 20_250,
+        jobCount: 1,
+        workedMinutes: 450,
+      },
+      {
+        id: "sales:all:all",
+        label: "Sales",
+        group: "sales",
+        serviceType: null,
+        compensationType: null,
+        amountCents: 5_000,
+        jobCount: 1,
+        workedMinutes: null,
+      },
+      {
+        id: "management:all:all",
+        label: "Management",
+        group: "management",
+        serviceType: null,
+        compensationType: null,
+        amountCents: 3_000,
+        jobCount: 1,
+        workedMinutes: null,
+      },
+      {
+        id: "adjustments",
+        label: "Other payroll",
+        group: "adjustments",
+        serviceType: null,
+        compensationType: null,
+        amountCents: 1_000,
+        jobCount: null,
+        workedMinutes: null,
+      },
+    ]);
+    expect(
+      result.labor.rows.reduce((total, row) => total + row.amountCents, 0),
+    ).toBe(result.laborCents);
+    expect(result.missingCommissionDataCount).toBe(0);
+  });
+
+  it.each(["locked", "paid"] as const)(
+    "keeps %s hourly labor facts from the payout snapshot when live work changes",
+    (status) => {
+      const completedAt = "2026-08-20T16:00:00.000Z";
+      const result = buildExpenseOverview(
+        baseInput({
+          jobs: [
+            {
+              id: "move",
+              status: "completed",
+              appointmentType: "job",
+              completedAt,
+              finalTotalCents: 100_000,
+            },
+          ],
+          commissions: [
+            {
+              appointmentId: "move",
+              completedAt,
+              group: "crew",
+              amountCents: 50_000,
+              serviceType: "moving",
+              compensationType: "hourly",
+              workedMinutes: 600,
+            },
+          ],
+          payoutSnapshots: [
+            {
+              weekStart: WEEK_START,
+              status,
+              crewCents: 12_500,
+              salesCents: 0,
+              managementCents: 0,
+              otherPayrollAdjustmentsCents: 0,
+              laborDetails: [
+                {
+                  appointmentId: "move",
+                  group: "crew",
+                  amountCents: 12_500,
+                  serviceType: "moving",
+                  compensationType: "hourly",
+                  workedMinutes: 300,
+                },
+              ],
+            },
+          ],
+          expenses: [
+            {
+              id: "payroll",
+              amountCents: 12_500,
+              purchaseDate: "2026-08-21",
+              lifecycleStatus: "posted",
+              source: "payout_run",
+              category: { id: "commissions", label: "Commissions" },
+            },
+          ],
+        }),
+      );
+
+      expect(result.labor.state).toBe("actual");
+      expect(result.labor.rows).toEqual([
+        expect.objectContaining({
+          label: "Moving",
+          amountCents: 12_500,
+          workedMinutes: 300,
+          jobCount: 1,
+        }),
+      ]);
+      expect(result.laborCents).toBe(12_500);
+      expect(result.totalExpensesCents).toBe(12_500);
+      expect(result.ordinaryExpensesCents).toBe(0);
+    },
+  );
+
+  it("keeps legacy and unreconciled payout totals without inventing historical hours", () => {
+    for (const laborDetails of [
+      undefined,
+      [
+        {
+          appointmentId: "move",
+          group: "crew" as const,
+          amountCents: 9_000,
+          serviceType: "moving",
+          compensationType: "hourly" as const,
+          workedMinutes: 120,
+        },
+      ],
+    ]) {
+      const result = buildExpenseOverview(
+        baseInput({
+          payoutSnapshots: [
+            {
+              weekStart: WEEK_START,
+              status: "paid",
+              crewCents: 10_000,
+              salesCents: 0,
+              managementCents: 0,
+              otherPayrollAdjustmentsCents: -1_000,
+              laborDetails,
+            },
+          ],
+        }),
+      );
+      expect(result.labor.rows).toEqual([
+        {
+          id: "crew",
+          label: "Crew",
+          group: "crew",
+          serviceType: null,
+          compensationType: null,
+          amountCents: 10_000,
+          workedMinutes: null,
+          jobCount: null,
+        },
+        {
+          id: "adjustments",
+          label: "Other payroll",
+          group: "adjustments",
+          serviceType: null,
+          compensationType: null,
+          amountCents: -1_000,
+          workedMinutes: null,
+          jobCount: null,
+        },
+      ]);
+      expect(result.laborCents).toBe(9_000);
+    }
   });
 
   it("counts only the active correction and excludes drafts, voids, and rejections", () => {

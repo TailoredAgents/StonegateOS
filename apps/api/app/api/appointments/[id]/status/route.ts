@@ -47,6 +47,13 @@ import {
   resolveConfiguredCrewPayout,
 } from "@/lib/commissions";
 import {
+  CompletionCrewMembersSchema,
+  hasValidCrewCompensationMode,
+  isMovingCommissionJob,
+  normalizeCompletionCrew,
+  type CompletionCrewMember,
+} from "@/lib/hourly-labor";
+import {
   expireStalePaymentAttemptsForAppointment,
   getBlockingSquareAttempt,
   getFinalTotalPaymentLock,
@@ -105,13 +112,6 @@ const PAYMENT_AND_COMPLETION_OVERRIDE_STATUS_POLICY = {
   risk: "financial",
 } satisfies ActionPolicy;
 
-const CrewMemberSchema = z
-  .object({
-    memberId: z.string().uuid(),
-    splitBps: z.number().int().min(0).max(10_000),
-  })
-  .strict();
-
 const StatusSchema = z
   .object({
     status: z.enum([
@@ -151,7 +151,7 @@ const StatusSchema = z
     // two values must be byte-for-byte identical after header normalization.
     expectedVersion: z.string().trim().max(100).optional(),
     completedAt: z.string().trim().min(1).max(100).optional(),
-    crewMembers: z.array(CrewMemberSchema).max(50).optional(),
+    crewMembers: CompletionCrewMembersSchema.optional(),
   })
   .strict();
 
@@ -248,11 +248,14 @@ async function storeTerminalFailure(
 async function readExistingCrewMembers(
   tx: TeamMutationTransaction,
   appointmentId: string,
-): Promise<Array<{ memberId: string; splitBps: number }>> {
+): Promise<CompletionCrewMember[]> {
   return tx
     .select({
       memberId: appointmentCrewMembers.memberId,
       splitBps: appointmentCrewMembers.splitBps,
+      fixedJobRateBps: appointmentCrewMembers.fixedJobRateBps,
+      hourlyRateCents: appointmentCrewMembers.hourlyRateCents,
+      workedMinutes: appointmentCrewMembers.workedMinutes,
     })
     .from(appointmentCrewMembers)
     .where(eq(appointmentCrewMembers.appointmentId, appointmentId));
@@ -266,7 +269,8 @@ function includesFinancialChanges(
     input.bookingDetails !== undefined ||
     input.finalTotalCents !== undefined ||
     input.finalTotalSameAsQuoted !== undefined ||
-    input.cardTipCents !== undefined
+    input.cardTipCents !== undefined ||
+    input.crewMembers?.some((member) => "hourlyRateCents" in member) === true
   );
 }
 
@@ -722,32 +726,10 @@ export async function POST(
       }
     }
 
-    let crewMembers:
-      | Array<{
-          memberId: string;
-          splitBps: number;
-          fixedJobRateBps?: number;
-        }>
-      | undefined = parsed.data.crewMembers;
-    if (crewMembers !== undefined) {
-      const resolvedCrewPayout = await resolveConfiguredCrewPayout(
-        database,
-        crewMembers.map((entry) => entry.memberId),
-      );
-      if (!resolvedCrewPayout.ok) {
-        throw new TeamMutationFailure(
-          "conflict",
-          "Crew payout configuration is unavailable. No completion was saved; ask an owner to repair Payroll settings.",
-          {
-            fieldErrors: {
-              crewMembers:
-                "Payroll crew recipients require administrator review.",
-            },
-          },
-        );
-      }
-      crewMembers = resolvedCrewPayout.splits;
-    }
+    let crewMembers =
+      parsed.data.crewMembers === undefined
+        ? undefined
+        : normalizeCompletionCrew(parsed.data.crewMembers);
 
     const status = parsed.data.status;
     const claimPayload = {
@@ -868,6 +850,54 @@ export async function POST(
         );
       }
 
+      const isMoving = isMovingCommissionJob({
+        bookingDetails:
+          bookingDetailsUpdate === undefined
+            ? existing.bookingDetails
+            : bookingDetailsUpdate,
+      });
+      if (crewMembers !== undefined) {
+        if (!hasValidCrewCompensationMode(isMoving, crewMembers)) {
+          return storeTerminalFailure(
+            tx,
+            mutation,
+            claimed.claim,
+            statusFailure(
+              "invalid",
+              "invalid_crew_compensation",
+              isMoving
+                ? "Enter an hourly rate and hours worked for each moving crew member."
+                : "Hourly labor is only available for Moving Jobs.",
+              {
+                fieldErrors: {
+                  crewMembers: "Review the crew pay for this job type.",
+                },
+              },
+            ),
+            422,
+          );
+        }
+        if (!isMoving) {
+          const resolvedCrewPayout = await resolveConfiguredCrewPayout(
+            tx as unknown as typeof database,
+            crewMembers.map((entry) => entry.memberId),
+          );
+          if (!resolvedCrewPayout.ok) {
+            throw new TeamMutationFailure(
+              "conflict",
+              "Crew payout configuration is unavailable. No completion was saved; ask an owner to repair Payroll settings.",
+              {
+                fieldErrors: {
+                  crewMembers:
+                    "Payroll crew recipients require administrator review.",
+                },
+              },
+            );
+          }
+          crewMembers = resolvedCrewPayout.splits;
+        }
+      }
+
       const submittedAttributionMemberIds = Array.from(
         new Set([
           ...(crewMembers?.map((member) => member.memberId) ?? []),
@@ -959,6 +989,31 @@ export async function POST(
             {
               fieldErrors: {
                 crewMembers: "Select at least one crew member.",
+              },
+            },
+          ),
+          422,
+        );
+      }
+
+      if (
+        status === "completed" &&
+        !isQuoteOnly &&
+        !hasValidCrewCompensationMode(isMoving, effectiveCrewMembers)
+      ) {
+        return storeTerminalFailure(
+          tx,
+          mutation,
+          claimed.claim,
+          statusFailure(
+            "invalid",
+            "invalid_crew_compensation",
+            "Review each crew member's pay before completing this job.",
+            {
+              fieldErrors: {
+                crewMembers: isMoving
+                  ? "Enter an hourly rate and hours worked for every selected member."
+                  : "Select the crew again to apply this job's percentage pay.",
               },
             },
           ),
@@ -1486,6 +1541,8 @@ export async function POST(
               memberId: entry.memberId,
               splitBps: entry.splitBps,
               fixedJobRateBps: entry.fixedJobRateBps ?? null,
+              hourlyRateCents: entry.hourlyRateCents ?? null,
+              workedMinutes: entry.workedMinutes ?? null,
               createdAt: committedAt,
             })),
           );

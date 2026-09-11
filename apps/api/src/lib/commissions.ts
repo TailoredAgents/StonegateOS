@@ -16,6 +16,16 @@ import {
   payoutRuns,
   teamMembers,
 } from "@/db";
+import type { PayoutLaborDetail } from "@/db/schema";
+import {
+  calculateHourlyLaborCents,
+  hasValidCrewCompensationMode,
+  isMovingCommissionJob,
+} from "@/lib/hourly-labor";
+export {
+  calculateHourlyLaborCents,
+  isMovingCommissionJob,
+} from "@/lib/hourly-labor";
 import type { AuditActor } from "@/lib/audit";
 import { readManagementRateVersion } from "@/lib/management-commission-rates";
 import {
@@ -1208,8 +1218,17 @@ async function readCommissionManagementSplits(
 
 async function validateCommissionRowsBeforeWrite(
   tx: TransactionExecutor,
-  rows: ReadonlyArray<{ memberId?: string | null }>,
+  rows: ReadonlyArray<{ memberId?: string | null; role?: string }>,
+  unchangedEarnedHourlyMemberIds: ReadonlySet<string> = new Set(),
 ): Promise<void> {
+  const activeRecipientIds = new Set(
+    rows.flatMap((row) =>
+      typeof row.memberId === "string" &&
+      (row.role !== "crew" || !unchangedEarnedHourlyMemberIds.has(row.memberId))
+        ? [row.memberId]
+        : [],
+    ),
+  );
   const recipientIds = Array.from(
     new Set(
       rows.flatMap((row) =>
@@ -1239,7 +1258,15 @@ async function validateCommissionRowsBeforeWrite(
     }
     throw error;
   }
-  validateCommissionRecipientMembers(recipientIds, members);
+  validateCommissionRecipientMembers(
+    recipientIds,
+    members.map((member) => ({
+      ...member,
+      // Existing hourly wages remain owed when a worker leaves. Missing
+      // recipients and any newly changed compensation still fail closed.
+      active: member.active || !activeRecipientIds.has(member.id),
+    })),
+  );
 }
 
 export async function recalculateAppointmentCommissions(
@@ -1285,6 +1312,7 @@ export async function recalculateAppointmentCommissions(
             marketingMemberId: string | null;
             completedAt: Date | null;
             startAt: Date | null;
+            bookingDetails: unknown;
           }
         | undefined;
 
@@ -1299,6 +1327,7 @@ export async function recalculateAppointmentCommissions(
             marketingMemberId: appointments.marketingMemberId,
             completedAt: appointments.completedAt,
             startAt: appointments.startAt,
+            bookingDetails: appointments.bookingDetails,
           })
           .from(appointments)
           .where(eq(appointments.id, appointmentId))
@@ -1318,6 +1347,7 @@ export async function recalculateAppointmentCommissions(
             finalTotalCents: appointments.finalTotalCents,
             completedAt: appointments.completedAt,
             startAt: appointments.startAt,
+            bookingDetails: appointments.bookingDetails,
           })
           .from(appointments)
           .where(eq(appointments.id, appointmentId))
@@ -1361,6 +1391,14 @@ export async function recalculateAppointmentCommissions(
         return;
       }
 
+      const isMoving = isMovingCommissionJob(row);
+      const serviceType =
+        isRecord(row.bookingDetails) &&
+        typeof row.bookingDetails["serviceType"] === "string"
+          ? row.bookingDetails["serviceType"]
+          : null;
+      const percentageMeta = { compensationType: "percentage", serviceType };
+
       const commissionRows: Array<typeof appointmentCommissions.$inferInsert> =
         [];
 
@@ -1372,7 +1410,7 @@ export async function recalculateAppointmentCommissions(
           role: "sales",
           baseCents,
           amountCents: computeBpsAmount(baseCents, settings.salesRateBps),
-          meta: { rateBps: settings.salesRateBps },
+          meta: { ...percentageMeta, rateBps: settings.salesRateBps },
         });
       }
 
@@ -1412,6 +1450,7 @@ export async function recalculateAppointmentCommissions(
           baseCents,
           amountCents: entry.cents,
           meta: {
+            ...percentageMeta,
             rateBps: managementRateBps,
             totalRateBps: managementRateBps,
             splitBps: entry.splitBps,
@@ -1432,6 +1471,8 @@ export async function recalculateAppointmentCommissions(
         memberId: string;
         splitBps: number;
         fixedJobRateBps: number | null;
+        hourlyRateCents: number | null;
+        workedMinutes: number | null;
       }> = [];
       try {
         crew = await tx
@@ -1439,6 +1480,8 @@ export async function recalculateAppointmentCommissions(
             memberId: appointmentCrewMembers.memberId,
             splitBps: appointmentCrewMembers.splitBps,
             fixedJobRateBps: appointmentCrewMembers.fixedJobRateBps,
+            hourlyRateCents: appointmentCrewMembers.hourlyRateCents,
+            workedMinutes: appointmentCrewMembers.workedMinutes,
           })
           .from(appointmentCrewMembers)
           .where(eq(appointmentCrewMembers.appointmentId, appointmentId));
@@ -1457,7 +1500,34 @@ export async function recalculateAppointmentCommissions(
         (sum, entry) => sum + (entry.splitBps ?? 0),
         0,
       );
-      if (crew.length > 0 && totalSplitBps > 0) {
+      if (
+        !hasValidCrewCompensationMode(isMoving, crew) ||
+        (isMoving && crew.length === 0)
+      ) {
+        throw commissionRecipientConfigurationFailure(
+          "Review the hourly rate and hours worked for every moving crew member before creating payouts.",
+        );
+      }
+      if (isMoving) {
+        for (const entry of crew) {
+          commissionRows.push({
+            appointmentId,
+            memberId: entry.memberId,
+            role: "crew",
+            baseCents,
+            amountCents: calculateHourlyLaborCents(
+              entry.hourlyRateCents!,
+              entry.workedMinutes!,
+            ),
+            meta: {
+              compensationType: "hourly",
+              serviceType: "moving",
+              hourlyRateCents: entry.hourlyRateCents,
+              workedMinutes: entry.workedMinutes,
+            },
+          });
+        }
+      } else if (crew.length > 0 && totalSplitBps > 0) {
         const effectiveCrewPool = getEffectiveCrewPoolRateBps(tx, {
           defaultCrewPoolRateBps: settings.crewPoolRateBps,
         });
@@ -1479,6 +1549,7 @@ export async function recalculateAppointmentCommissions(
             baseCents,
             amountCents: entry.cents,
             meta: {
+              ...percentageMeta,
               poolRateBps: effectiveCrewPool.crewPoolRateBps,
               splitBps: entry.splitBps,
               fixedJobRateBps: entry.fixedJobRateBps,
@@ -1492,16 +1563,54 @@ export async function recalculateAppointmentCommissions(
         }
       }
 
-      // Do not delete or replace existing commission rows until every target
-      // member has been proved present and active under a row lock. A missing
-      // configuration is therefore a deterministic conflict, not a late FK
-      // exception after the appointment mutation has started.
-      await validateCommissionRowsBeforeWrite(tx, [
-        ...commissionRows,
-        ...managementSplits,
-        ...(soldBy && settings.salesRateBps > 0 ? [{ memberId: soldBy }] : []),
-        ...(totalSplitBps > 0 && settings.crewPoolRateBps > 0 ? crew : []),
-      ]);
+      const unchangedEarnedHourlyMemberIds = new Set<string>();
+      if (isMoving) {
+        const earnedCrew = await tx
+          .select({
+            memberId: appointmentCommissions.memberId,
+            amountCents: appointmentCommissions.amountCents,
+            meta: appointmentCommissions.meta,
+          })
+          .from(appointmentCommissions)
+          .where(
+            and(
+              eq(appointmentCommissions.appointmentId, appointmentId),
+              eq(appointmentCommissions.role, "crew"),
+            ),
+          );
+        for (const earned of earnedCrew) {
+          const next = commissionRows.find(
+            (entry) =>
+              entry.role === "crew" && entry.memberId === earned.memberId,
+          );
+          if (
+            earned.memberId &&
+            next &&
+            earned.meta?.["compensationType"] === "hourly" &&
+            earned.meta["serviceType"] === "moving" &&
+            earned.meta["hourlyRateCents"] === next.meta?.["hourlyRateCents"] &&
+            earned.meta["workedMinutes"] === next.meta?.["workedMinutes"] &&
+            earned.amountCents === next.amountCents
+          ) {
+            unchangedEarnedHourlyMemberIds.add(earned.memberId);
+          }
+        }
+      }
+      // Validate every recipient before replacing earnings. Existing unchanged
+      // hourly wages may be paid to former crew; all new or changed pay and
+      // every configured management/sales recipient still require active membership.
+      await validateCommissionRowsBeforeWrite(
+        tx,
+        [
+          ...commissionRows,
+          ...managementSplits,
+          ...(soldBy && settings.salesRateBps > 0
+            ? [{ memberId: soldBy }]
+            : []),
+          ...(totalSplitBps > 0 && settings.crewPoolRateBps > 0 ? crew : []),
+        ],
+        unchangedEarnedHourlyMemberIds,
+      );
 
       try {
         await tx
@@ -1928,10 +2037,9 @@ export async function lockPayoutRun(
       .select({
         memberId: appointmentCommissions.memberId,
         role: appointmentCommissions.role,
-        amountCents:
-          sql<number>`sum(${appointmentCommissions.amountCents})`.mapWith(
-            Number,
-          ),
+        amountCents: appointmentCommissions.amountCents,
+        appointmentId: appointmentCommissions.appointmentId,
+        meta: appointmentCommissions.meta,
       })
       .from(appointmentCommissions)
       .innerJoin(
@@ -1945,8 +2053,7 @@ export async function lockPayoutRun(
           eq(appointments.status, "completed"),
           serviceWorkAppointmentTypePredicate(appointments.type),
         ),
-      )
-      .groupBy(appointmentCommissions.memberId, appointmentCommissions.role);
+      );
 
     const adjustmentRows = await tx
       .select({
@@ -1986,6 +2093,7 @@ export async function lockPayoutRun(
       adjustments: number;
     };
     const totalsByMember = new Map<string, Totals>();
+    const laborByMember = new Map<string, PayoutLaborDetail[]>();
     for (const row of commissionRows) {
       const memberId = row.memberId;
       if (!memberId || !memberSet.has(memberId)) continue;
@@ -1996,6 +2104,26 @@ export async function lockPayoutRun(
         adjustments: 0,
       };
       const cents = Number(row.amountCents ?? 0);
+      const hourly =
+        row.role === "crew" && row.meta?.["compensationType"] === "hourly";
+      const laborDetails = laborByMember.get(memberId) ?? [];
+      laborDetails.push({
+        appointmentId: row.appointmentId,
+        serviceType:
+          typeof row.meta?.["serviceType"] === "string"
+            ? row.meta["serviceType"]
+            : null,
+        compensationType: hourly ? "hourly" : "percentage",
+        group: row.role === "marketing" ? "management" : row.role,
+        amountCents: cents,
+        ...(hourly
+          ? {
+              hourlyRateCents: row.meta?.["hourlyRateCents"] as number,
+              workedMinutes: row.meta?.["workedMinutes"] as number,
+            }
+          : {}),
+      });
+      laborByMember.set(memberId, laborDetails);
       if (row.role === "sales") totals.sales += cents;
       if (row.role === "marketing") totals.marketing += cents;
       if (row.role === "crew") totals.crew += cents;
@@ -2025,6 +2153,7 @@ export async function lockPayoutRun(
         crewCents: totals.crew,
         adjustmentsCents: totals.adjustments,
         totalCents,
+        laborDetails: laborByMember.get(memberId) ?? [],
       });
     }
 

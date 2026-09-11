@@ -86,7 +86,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           labor:
             overview.labor.state === "actual"
               ? "Finalized payout snapshot."
-              : "Persisted appointment commissions accrued when work was completed.",
+              : "Hourly labor and commissions accrued when work was completed.",
           advertising:
             "Manual daily entries only; provider analytics are excluded.",
         },

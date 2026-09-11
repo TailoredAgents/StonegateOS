@@ -8,6 +8,7 @@ import {
   type TeamSessionVerificationResult,
 } from "@/lib/team-principal";
 import { isSameOriginTeamRequest } from "@/lib/team-request-origin";
+import { resolveRequestOrigin } from "../../../lib/request-origin";
 
 type PermissionMode = "any" | "all";
 
@@ -65,7 +66,11 @@ function deniedResponse(
     return { ok: false, response };
   }
 
-  const redirectTo = options.redirectTo ?? new URL("/team", request.url);
+  const requestedRedirect = options.redirectTo ?? new URL("/team", request.url);
+  const redirectTo = new URL(resolveRequestOrigin(request));
+  redirectTo.pathname = requestedRedirect.pathname;
+  redirectTo.search = requestedRedirect.search;
+  redirectTo.hash = requestedRedirect.hash;
   const response = NextResponse.redirect(redirectTo, 303);
   response.cookies.set({
     name: "myst-flash-error",

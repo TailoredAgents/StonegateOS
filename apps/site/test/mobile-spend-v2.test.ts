@@ -6,6 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   MobileSpendV2,
+  ExpenseLaborDetails,
   buildExpenseDumpCorrectionBody,
   buildExpenseDumpSubmissionDetails,
   expenseAddChoices,
@@ -51,6 +52,94 @@ import {
 } from "../src/app/mobile/spend-v2-utils";
 
 const siteRoot = fileURLToPath(new URL("..", import.meta.url));
+
+void test("labor detail shows moving hours and applicable compensation types without empty role rows", () => {
+  const html = renderToStaticMarkup(
+    createElement(ExpenseLaborDetails, {
+      labor: {
+        state: "estimated",
+        amountCents: 32_500,
+        subrows: {
+          crewCents: 32_500,
+          salesCents: 0,
+          managementCents: 0,
+          otherPayrollAdjustmentsCents: 0,
+        },
+        rows: [
+          {
+            id: "moving",
+            label: "Moving",
+            group: "crew",
+            serviceType: "moving",
+            compensationType: "hourly",
+            amountCents: 12_500,
+            workedMinutes: 300,
+            jobCount: 1,
+          },
+          {
+            id: "junk",
+            label: "Junk removal",
+            group: "crew",
+            serviceType: "junk_removal",
+            compensationType: "percentage",
+            amountCents: 20_000,
+            workedMinutes: null,
+            jobCount: 2,
+          },
+        ],
+      },
+    }),
+  );
+  assert.match(html, /Labor \(Estimated\)/u);
+  assert.match(html, /Moving/u);
+  assert.match(html, /hourly/u);
+  assert.match(html, /5 crew hours · 1 job/u);
+  assert.match(html, /Junk removal/u);
+  assert.match(html, /commission/u);
+  assert.match(html, /2 jobs/u);
+  assert.match(html, /\$125\.00/u);
+  assert.doesNotMatch(html, /Sales|Management|Other payroll/u);
+});
+
+void test("legacy labor keeps its actual role totals without inventing hours", () => {
+  const html = renderToStaticMarkup(
+    createElement(ExpenseLaborDetails, {
+      labor: {
+        state: "actual",
+        amountCents: 12_500,
+        subrows: {
+          crewCents: 12_500,
+          salesCents: 0,
+          managementCents: 0,
+          otherPayrollAdjustmentsCents: 0,
+        },
+      },
+    }),
+  );
+  assert.match(html, /Labor \(Actual\)/u);
+  assert.match(html, /Crew/u);
+  assert.doesNotMatch(html, /hourly|crew hours|Sales|Management/u);
+});
+
+void test("an empty labor week has one clear empty state", () => {
+  const html = renderToStaticMarkup(
+    createElement(ExpenseLaborDetails, {
+      labor: {
+        state: "estimated",
+        amountCents: 0,
+        rows: [],
+        subrows: {
+          crewCents: 0,
+          salesCents: 0,
+          managementCents: 0,
+          otherPayrollAdjustmentsCents: 0,
+        },
+      },
+    }),
+  );
+  assert.match(html, /No labor recorded this week/u);
+  assert.doesNotMatch(html, /<dl/u);
+});
 
 void test("money input remains exact in integer cents", () => {
   assert.equal(moneyInputToCents("$1,234.56"), 123_456);
@@ -859,7 +948,7 @@ void test("overview completeness explains every production reason", () => {
   );
   assert.match(
     expenseOverviewReasonDetail("missing_commission_data", period),
-    /4 completed jobs missing commission/u,
+    /4 completed jobs missing payroll/u,
   );
   assert.match(
     expenseOverviewReasonDetail("missing_final_totals", period),

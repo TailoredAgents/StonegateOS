@@ -62,6 +62,11 @@ type CalendarEvent = {
   bookingDetails?: AppointmentBookingDetails | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
   crewMemberIds?: string[];
+  crewMembers?: Array<{
+    memberId: string;
+    hourlyRateCents: number | null;
+    workedMinutes: number | null;
+  }>;
   crewNames?: string[];
   eta?: {
     status: string | null;
@@ -179,6 +184,12 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (permissionError) return permissionError;
   const canReadPayments =
     (await requirePermission(request, "payments.read")) === null;
+  const canReadCrewPay =
+    (await requirePermission(request, [
+      "payments.collect",
+      "commissions.read",
+      "commissions.manage",
+    ])) === null;
   const paymentLedgerAvailable =
     canReadPayments && (await isPaymentLedgerSchemaAvailable());
 
@@ -238,7 +249,12 @@ export async function GET(request: NextRequest): Promise<Response> {
   );
   const crewByAppointmentId = new Map<
     string,
-    Array<{ memberId: string; name: string }>
+    Array<{
+      memberId: string;
+      name: string;
+      hourlyRateCents: number | null;
+      workedMinutes: number | null;
+    }>
   >();
   const [etaSummaryMap, mediaSummaryMap, paymentSummaryMap] = await Promise.all(
     [
@@ -280,6 +296,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       .select({
         appointmentId: appointmentCrewMembers.appointmentId,
         memberId: appointmentCrewMembers.memberId,
+        hourlyRateCents: appointmentCrewMembers.hourlyRateCents,
+        workedMinutes: appointmentCrewMembers.workedMinutes,
         name: teamMembers.name,
       })
       .from(appointmentCrewMembers)
@@ -292,6 +310,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       const list = crewByAppointmentId.get(row.appointmentId) ?? [];
       list.push({
         memberId: row.memberId,
+        hourlyRateCents: row.hourlyRateCents,
+        workedMinutes: row.workedMinutes,
         name: row.name?.trim() || "Inactive crew member",
       });
       crewByAppointmentId.set(row.appointmentId, list);
@@ -419,6 +439,13 @@ export async function GET(request: NextRequest): Promise<Response> {
         },
         notes,
         crewMemberIds: crew.map((member) => member.memberId),
+        crewMembers: crew.map(
+          ({ memberId, hourlyRateCents, workedMinutes }) => ({
+            memberId,
+            hourlyRateCents: canReadCrewPay ? hourlyRateCents : null,
+            workedMinutes: canReadCrewPay ? workedMinutes : null,
+          }),
+        ),
         crewNames,
       };
     });

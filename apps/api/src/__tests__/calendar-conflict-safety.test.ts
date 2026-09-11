@@ -314,11 +314,11 @@ describe("Calendar route enforcement source contracts", () => {
   it("encodes overlap-boundary dates through their timestamp columns", () => {
     const source = read("apps/api/src/lib/appointment-schedule-conflicts.ts");
 
-    expect(source).toContain(
-      "sql.param(\n          interval.startAt,\n          appointments.startAt,\n        )",
+    expect(source).toMatch(
+      /sql\.param\(\s*interval\.startAt,\s*appointments\.startAt,?\s*\)/u,
     );
-    expect(source).toContain(
-      "sql.param(\n                interval.startAt,\n                appointmentHolds.startAt,\n              )",
+    expect(source).toMatch(
+      /sql\.param\(\s*interval\.startAt,\s*appointmentHolds\.startAt,?\s*\)/u,
     );
   });
 

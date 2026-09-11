@@ -4,6 +4,7 @@ import { callAdminApiAs } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 import { requireTeamPrincipal } from "@/app/api/team/auth";
 import { parseAppointmentBookingFormData } from "@/app/team/lib/booking-details";
+import { parseCrewPayoutFormData } from "@/app/team/lib/crew-payout-form";
 import { isTeamMutationSuccessEnvelope } from "@/app/team/lib/mutation-feedback";
 import { hasTeamPermission } from "@/lib/team-principal";
 
@@ -293,24 +294,16 @@ export async function POST(request: NextRequest): Promise<Response> {
       payload["cardTipCents"] = cardTipCents;
     }
 
-    const crewIds = formData
-      .getAll("crewMemberId")
-      .filter((value): value is string => typeof value === "string");
-    if (crewIds.length === 0) {
-      return failureResponse(
-        returnJson,
-        redirectTo,
-        "Select at least one crew member before marking complete.",
-      );
+    const crewResult = parseCrewPayoutFormData(
+      formData,
+      shouldUpdateBookingDetails
+        ? formData.get("serviceType") === "moving"
+        : undefined,
+    );
+    if (!crewResult.ok) {
+      return failureResponse(returnJson, redirectTo, crewResult.error);
     }
-
-    // The API resolves authoritative weights from current commission
-    // configuration. The Site forwards only the selected identities; submitted
-    // weights are deliberately non-authoritative.
-    payload["crewMembers"] = [...new Set(crewIds.map((id) => id.trim()))]
-      .filter(Boolean)
-      .sort()
-      .map((memberId) => ({ memberId, splitBps: 1 }));
+    payload["crewMembers"] = crewResult.crewMembers;
   }
 
   if (shouldUpdateBookingDetails) {

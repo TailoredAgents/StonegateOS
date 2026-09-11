@@ -63,6 +63,167 @@ describe("expense overview repository boundaries", () => {
 });
 
 describe("expense overview repository mapping", () => {
+  it("maps hourly commission metadata and service types for estimated labor", () => {
+    const completedAt = new Date("2026-08-20T16:00:00.000Z");
+    const mapped = mapExpenseOverviewRows({
+      weekStart: WEEK_START,
+      rows: baseRows({
+        jobs: [
+          {
+            id: "move",
+            status: "completed",
+            appointmentType: "job",
+            completedAt,
+            finalTotalCents: 100_000,
+            bookingDetails: { serviceType: "moving" },
+          },
+          {
+            id: "junk",
+            status: "completed",
+            appointmentType: "job",
+            completedAt,
+            finalTotalCents: 100_000,
+            bookingDetails: { serviceType: "junk_removal" },
+          },
+        ],
+        commissions: [
+          {
+            appointmentId: "move",
+            completedAt,
+            role: "crew",
+            amountCents: 12_500,
+            meta: {
+              compensationType: "hourly",
+              serviceType: "moving",
+              hourlyRateCents: 2_500,
+              workedMinutes: 300,
+            },
+          },
+          {
+            appointmentId: "junk",
+            completedAt,
+            role: "crew",
+            amountCents: 20_000,
+          },
+        ],
+      }),
+    });
+    expect(mapped.commissions).toEqual([
+      {
+        appointmentId: "move",
+        completedAt,
+        group: "crew",
+        amountCents: 12_500,
+        serviceType: "moving",
+        compensationType: "hourly",
+        workedMinutes: 300,
+      },
+      {
+        appointmentId: "junk",
+        completedAt,
+        group: "crew",
+        amountCents: 20_000,
+        serviceType: "junk_removal",
+        compensationType: "percentage",
+      },
+    ]);
+    const overview = buildExpenseOverview(mapped);
+    expect(overview.labor.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Moving",
+          compensationType: "hourly",
+          workedMinutes: 300,
+          amountCents: 12_500,
+        }),
+        expect.objectContaining({
+          label: "Junk removal",
+          compensationType: "percentage",
+          workedMinutes: null,
+          amountCents: 20_000,
+        }),
+      ]),
+    );
+  });
+
+  it("combines immutable per-worker payout details while counting each moving job once", () => {
+    const detail = {
+      appointmentId: "move",
+      group: "crew",
+      serviceType: "moving",
+      compensationType: "hourly",
+      amountCents: 12_500,
+      workedMinutes: 300,
+      hourlyRateCents: 2_500,
+    };
+    const line = {
+      payoutRunId: "payout",
+      status: "paid" as const,
+      periodStart: new Date("2026-08-17T04:00:00.000Z"),
+      crewCents: 12_500,
+      salesCents: 0,
+      marketingCents: 0,
+      laborDetails: [detail],
+    };
+    const mapped = mapExpenseOverviewRows({
+      weekStart: WEEK_START,
+      rows: baseRows({ payoutLines: [line, { ...line }] }),
+    });
+    const overview = buildExpenseOverview(mapped);
+    expect(overview.labor.state).toBe("actual");
+    expect(overview.laborCents).toBe(25_000);
+    expect(overview.labor.rows).toEqual([
+      expect.objectContaining({
+        label: "Moving",
+        amountCents: 25_000,
+        workedMinutes: 600,
+        jobCount: 1,
+      }),
+    ]);
+  });
+
+  it("preserves locked totals when historical payout detail is absent or invalid", () => {
+    for (const laborDetails of [
+      null,
+      [
+        {
+          appointmentId: "move",
+          group: "crew",
+          amountCents: 12_500,
+          compensationType: "hourly",
+          workedMinutes: "300",
+        },
+      ],
+    ]) {
+      const mapped = mapExpenseOverviewRows({
+        weekStart: WEEK_START,
+        rows: baseRows({
+          payoutLines: [
+            {
+              payoutRunId: "payout",
+              status: "locked",
+              periodStart: new Date("2026-08-17T04:00:00.000Z"),
+              crewCents: 12_500,
+              salesCents: 0,
+              marketingCents: 0,
+              laborDetails,
+            },
+          ],
+        }),
+      });
+      const overview = buildExpenseOverview(mapped);
+      expect(overview.laborCents).toBe(12_500);
+      expect(overview.labor.rows).toEqual([
+        expect.objectContaining({
+          label: "Crew",
+          amountCents: 12_500,
+          workedMinutes: null,
+          jobCount: null,
+        }),
+      ]);
+    }
+  });
+
   it("keeps legacy service-work revenue and labor aligned while rejecting rogue quote rows", () => {
     const mapped = mapExpenseOverviewRows({
       weekStart: WEEK_START,
@@ -123,7 +284,7 @@ describe("expense overview repository mapping", () => {
     const overview = buildExpenseOverview(mapped);
 
     expect(overview.revenueCents).toBe(42_500);
-    expect(overview.labor).toEqual({
+    expect(overview.labor).toMatchObject({
       state: "estimated",
       amountCents: 15_725,
       subrows: {

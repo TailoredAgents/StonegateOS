@@ -47,6 +47,7 @@ const mockCalendarRows = [
 ];
 
 let mockSelectCall = 0;
+let mockCrewRows: Array<Record<string, unknown>> = [];
 const mockGetAppointmentPaymentSummaryMap = jest.fn();
 const mockRequirePermission = jest.fn().mockResolvedValue(null);
 
@@ -66,7 +67,12 @@ function mockThenableQuery(rows: Array<Record<string, unknown>>) {
 
 const mockDb = {
   select: jest.fn(() => {
-    const rows = mockSelectCall === 0 ? mockCalendarRows : [];
+    const rows =
+      mockSelectCall === 0
+        ? mockCalendarRows
+        : mockSelectCall === 2
+          ? mockCrewRows
+          : [];
     mockSelectCall += 1;
     return mockThenableQuery(rows);
   }),
@@ -85,6 +91,8 @@ jest.mock("@/db", () => ({
   appointmentCrewMembers: {
     appointmentId: "appointment_crew_members.appointment_id",
     memberId: "appointment_crew_members.member_id",
+    hourlyRateCents: "appointment_crew_members.hourly_rate_cents",
+    workedMinutes: "appointment_crew_members.worked_minutes",
   },
   appointmentNotes: {
     id: "appointment_notes.id",
@@ -183,6 +191,7 @@ function calendarRequest(): NextRequest {
 describe("calendar payment fallback without the ledger schema", () => {
   beforeEach(() => {
     mockSelectCall = 0;
+    mockCrewRows = [];
     mockDb.select.mockClear();
     mockGetAppointmentPaymentSummaryMap.mockClear();
     mockRequirePermission.mockReset();
@@ -253,4 +262,85 @@ describe("calendar payment fallback without the ledger schema", () => {
       expect(appointment).not.toHaveProperty("paymentSummary");
     }
   });
+
+  it("keeps crew identities but redacts individual pay from calendar-only readers", async () => {
+    const memberId = "33333333-3333-4333-8333-333333333333";
+    mockCrewRows = [
+      {
+        appointmentId: appointmentWithTotalId,
+        memberId,
+        name: "Alex",
+        hourlyRateCents: 2750,
+        workedMinutes: 135,
+      },
+    ];
+    mockRequirePermission.mockImplementation(
+      (_request: NextRequest, permission: string) =>
+        permission === "appointments.read"
+          ? null
+          : new Response(null, { status: 403 }),
+    );
+
+    const response = await getCalendarFeed(calendarRequest());
+    const body = (await response.json()) as {
+      appointments: Array<Record<string, unknown>>;
+    };
+    expect(response.status).toBe(200);
+    const appointment = body.appointments.find(
+      (item) => item["appointmentId"] === appointmentWithTotalId,
+    );
+    expect(appointment).toMatchObject({
+      crewMemberIds: [memberId],
+      crewNames: ["Alex"],
+      crewMembers: [{ memberId }],
+    });
+    expect(appointment?.["crewMembers"]).toEqual([
+      {
+        memberId,
+        hourlyRateCents: null,
+        workedMinutes: null,
+      },
+    ]);
+  });
+
+  it.each(["payments.collect", "commissions.read", "commissions.manage"])(
+    "returns saved hourly pay for %s so authorized completion corrections can prefill",
+    async (payPermission) => {
+      const memberId = "33333333-3333-4333-8333-333333333333";
+      mockCrewRows = [
+        {
+          appointmentId: appointmentWithTotalId,
+          memberId,
+          name: "Alex",
+          hourlyRateCents: 2750,
+          workedMinutes: 135,
+        },
+      ];
+      mockRequirePermission.mockImplementation(
+        (_request: NextRequest, permission: string | string[]) =>
+          (Array.isArray(permission) ? permission : [permission]).some((item) =>
+            ["appointments.read", payPermission].includes(item),
+          )
+            ? null
+            : new Response(null, { status: 403 }),
+      );
+
+      const response = await getCalendarFeed(calendarRequest());
+      const body = (await response.json()) as {
+        appointments: Array<Record<string, unknown>>;
+      };
+      expect(response.status).toBe(200);
+      const appointment = body.appointments.find(
+        (item) => item["appointmentId"] === appointmentWithTotalId,
+      );
+      expect(appointment?.["crewMembers"]).toEqual([
+        {
+          memberId,
+          hourlyRateCents: 2750,
+          workedMinutes: 135,
+        },
+      ]);
+      expect(appointment).not.toHaveProperty("paymentSummary");
+    },
+  );
 });

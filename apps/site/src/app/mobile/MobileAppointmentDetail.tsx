@@ -2,6 +2,10 @@
 
 import * as React from "react";
 import {
+  formatAppointmentJobDetails,
+  type AppointmentBookingDetails,
+} from "../team/lib/booking-details";
+import {
   MobilePaymentPanel,
   type AppointmentPaymentSummary,
 } from "./MobilePaymentPanel";
@@ -30,6 +34,7 @@ export function MobileAppointmentDetail({
   canReadPayments,
   canCollectPayments,
   canManagePayments,
+  bookingDetails,
 }: {
   appointmentId: string;
   appointmentVersion: string | null;
@@ -44,6 +49,7 @@ export function MobileAppointmentDetail({
   canReadPayments: boolean;
   canCollectPayments: boolean;
   canManagePayments: boolean;
+  bookingDetails?: AppointmentBookingDetails | null;
 }) {
   const [needsScope, setNeedsScope] = React.useState(mediaSummary.needsScope);
 
@@ -53,6 +59,16 @@ export function MobileAppointmentDetail({
 
   return (
     <>
+      {bookingDetails?.serviceType === "moving" ? (
+        <div className="rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-3">
+          <p className="text-sm font-semibold text-cyan-100">Moving Job</p>
+          {formatAppointmentJobDetails(bookingDetails) ? (
+            <p className="mt-1 break-words text-sm leading-6 text-slate-200">
+              {formatAppointmentJobDetails(bookingDetails)}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <MobileQuotedWorkPanel
         appointmentId={appointmentId}
         employeeId={employeeId}

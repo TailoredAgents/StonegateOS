@@ -1,3 +1,5 @@
+import { resolveRequestOrigin } from "./request-origin";
+
 const SAFE_REQUEST_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 type TeamOriginRequest = Pick<Request, "headers" | "method" | "url">;
@@ -12,7 +14,10 @@ export function teamRequestRequiresOrigin(method: string): boolean {
  * origin. SameSite cookies remain useful defense in depth, but are not the
  * authorization boundary and are not consistently enforced by every client.
  */
-export function isSameOriginTeamRequest(request: TeamOriginRequest): boolean {
+export function isSameOriginTeamRequest(
+  request: TeamOriginRequest,
+  options: { configuredSiteUrls?: readonly (string | undefined)[] } = {},
+): boolean {
   if (!teamRequestRequiresOrigin(request.method)) return true;
 
   const rawOrigin = request.headers.get("origin")?.trim() ?? "";
@@ -22,7 +27,7 @@ export function isSameOriginTeamRequest(request: TeamOriginRequest): boolean {
 
   try {
     const origin = new URL(rawOrigin);
-    const target = new URL(request.url);
+    const targetOrigin = resolveRequestOrigin(request, options);
     return (
       !origin.username &&
       !origin.password &&
@@ -30,7 +35,7 @@ export function isSameOriginTeamRequest(request: TeamOriginRequest): boolean {
       !origin.search &&
       !origin.hash &&
       (origin.protocol === "http:" || origin.protocol === "https:") &&
-      origin.origin.toLowerCase() === target.origin.toLowerCase()
+      origin.origin.toLowerCase() === targetOrigin.toLowerCase()
     );
   } catch {
     return false;

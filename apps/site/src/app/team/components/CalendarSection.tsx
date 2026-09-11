@@ -1,4 +1,6 @@
 import React from "react";
+import type { AppointmentBookingDetails } from "../lib/booking-details";
+import type { SavedCrewPayout } from "../lib/crew-payout-form";
 import {
   hasTeamPermission,
   requireCurrentTeamPrincipal,
@@ -29,6 +31,8 @@ type CalendarEvent = {
   finalTotalCents?: number | null;
   version?: string | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
+  bookingDetails?: AppointmentBookingDetails | null;
+  crewMembers?: SavedCrewPayout[];
   crewMemberIds?: string[];
   crewNames?: string[];
 };
@@ -83,6 +87,10 @@ export async function CalendarSection({
     "appointments.update",
   );
   const canCollectPayments = hasTeamPermission(principal, "payments.collect");
+  const canManageCommissions = hasTeamPermission(
+    principal,
+    "commissions.manage",
+  );
   const canSendCustomerMessages = hasTeamPermission(principal, "messages.send");
   const canManageAppointmentMedia = hasTeamPermission(
     principal,
@@ -137,6 +145,7 @@ export async function CalendarSection({
         teamMembers={teamMembers}
         canUpdateAppointments={canUpdateAppointments}
         canCollectPayments={canCollectPayments}
+        canManageCommissions={canManageCommissions}
         canSendCustomerMessages={canSendCustomerMessages}
         canManageAppointmentMedia={canManageAppointmentMedia}
         canOverrideScheduleConflicts={canOverrideScheduleConflicts}

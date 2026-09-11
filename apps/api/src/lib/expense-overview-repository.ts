@@ -20,6 +20,7 @@ import {
   type ExpenseOverviewAdPlatform,
   type ExpenseOverviewCategoryInput,
   type ExpenseOverviewInput,
+  type ExpenseOverviewLaborDetailInput,
   type ExpenseOverviewLaborGroup,
 } from "@/lib/expense-overview";
 import { serviceWorkAppointmentTypePredicate } from "@/lib/appointment-kind";
@@ -36,6 +37,7 @@ export type ExpenseOverviewRepositoryRows = {
     appointmentType: string;
     completedAt: Date | null;
     finalTotalCents: number | null;
+    bookingDetails?: Record<string, unknown> | null;
   }>;
   expenses: Array<{
     id: string;
@@ -70,6 +72,7 @@ export type ExpenseOverviewRepositoryRows = {
     completedAt: Date;
     role: CommissionRole;
     amountCents: number;
+    meta?: Record<string, unknown> | null;
   }>;
   payoutLines: Array<{
     payoutRunId: string;
@@ -78,6 +81,7 @@ export type ExpenseOverviewRepositoryRows = {
     crewCents: number | null;
     salesCents: number | null;
     marketingCents: number | null;
+    laborDetails?: unknown;
   }>;
   payoutAdjustments: Array<{
     payoutRunId: string;
@@ -213,7 +217,56 @@ type MutablePayoutSnapshot = {
   salesCents: number;
   managementCents: number;
   otherPayrollAdjustmentsCents: number;
+  laborDetails?: ExpenseOverviewLaborDetailInput[];
 };
+
+function serviceTypeFromDetails(
+  details: Record<string, unknown> | null | undefined,
+): string | null {
+  const serviceType = details?.["serviceType"];
+  return typeof serviceType === "string" && serviceType.trim()
+    ? serviceType.trim()
+    : null;
+}
+
+function frozenLaborDetails(value: unknown): ExpenseOverviewLaborDetailInput[] {
+  if (!Array.isArray(value)) return [];
+  const details: ExpenseOverviewLaborDetailInput[] = [];
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+      return [];
+    const row = candidate as Record<string, unknown>;
+    if (
+      typeof row["appointmentId"] !== "string" ||
+      !row["appointmentId"].trim() ||
+      !["crew", "sales", "management"].includes(String(row["group"])) ||
+      typeof row["amountCents"] !== "number" ||
+      !Number.isSafeInteger(row["amountCents"]) ||
+      row["amountCents"] < 0 ||
+      !["hourly", "percentage"].includes(String(row["compensationType"]))
+    )
+      return [];
+    const hourly =
+      row["group"] === "crew" && row["compensationType"] === "hourly";
+    const workedMinutes = row["workedMinutes"];
+    if (
+      hourly &&
+      (typeof workedMinutes !== "number" ||
+        !Number.isSafeInteger(workedMinutes) ||
+        workedMinutes <= 0)
+    )
+      return [];
+    details.push({
+      appointmentId: row["appointmentId"],
+      group: row["group"] as ExpenseOverviewLaborGroup,
+      amountCents: row["amountCents"],
+      serviceType: serviceTypeFromDetails(row),
+      compensationType: row["compensationType"] as "hourly" | "percentage",
+      ...(hourly ? { workedMinutes: workedMinutes as number } : {}),
+    });
+  }
+  return details;
+}
 
 function isCurrentWeekDate(
   date: Date,
@@ -402,6 +455,11 @@ export function mapExpenseOverviewRows(input: {
       line.marketingCents ?? 0,
       "payout management total",
     );
+    const details = frozenLaborDetails(line.laborDetails);
+    if (details.length > 0) {
+      existing.laborDetails ??= [];
+      existing.laborDetails.push(...details);
+    }
     payoutSnapshotsByRun.set(line.payoutRunId, existing);
   }
 
@@ -442,6 +500,12 @@ export function mapExpenseOverviewRows(input: {
       expense.reviewStatus === "pending" &&
       periodForDate(easternDate(expense.paidAt)) === "prior",
   ).length;
+  const serviceTypeByJob = new Map(
+    input.rows.jobs.map((job) => [
+      job.id,
+      serviceTypeFromDetails(job.bookingDetails),
+    ]),
+  );
 
   return {
     weekStart: input.weekStart,
@@ -455,6 +519,23 @@ export function mapExpenseOverviewRows(input: {
       completedAt: commission.completedAt,
       group: commissionGroup(commission.role),
       amountCents: commission.amountCents,
+      serviceType:
+        serviceTypeFromDetails(commission.meta) ??
+        serviceTypeByJob.get(commission.appointmentId) ??
+        null,
+      compensationType:
+        commission.meta?.["compensationType"] === "hourly"
+          ? "hourly"
+          : "percentage",
+      ...(commission.role === "crew" &&
+      commission.meta?.["compensationType"] === "hourly"
+        ? {
+            workedMinutes:
+              typeof commission.meta["workedMinutes"] === "number"
+                ? commission.meta["workedMinutes"]
+                : null,
+          }
+        : {}),
     })),
     payrollAdjustments,
     payoutSnapshots: [...payoutSnapshotsByRun.values()],
@@ -506,6 +587,7 @@ export async function loadExpenseOverviewInput(
         appointmentType: appointments.type,
         completedAt: appointments.completedAt,
         finalTotalCents: appointments.finalTotalCents,
+        bookingDetails: appointments.bookingDetails,
       })
       .from(appointments)
       .where(
@@ -591,6 +673,7 @@ export async function loadExpenseOverviewInput(
         completedAt: appointments.completedAt,
         role: appointmentCommissions.role,
         amountCents: appointmentCommissions.amountCents,
+        meta: appointmentCommissions.meta,
       })
       .from(appointmentCommissions)
       .innerJoin(
@@ -614,6 +697,7 @@ export async function loadExpenseOverviewInput(
         crewCents: payoutRunLines.crewCents,
         salesCents: payoutRunLines.salesCents,
         marketingCents: payoutRunLines.marketingCents,
+        laborDetails: payoutRunLines.laborDetails,
       })
       .from(payoutRuns)
       .leftJoin(payoutRunLines, eq(payoutRuns.id, payoutRunLines.payoutRunId))

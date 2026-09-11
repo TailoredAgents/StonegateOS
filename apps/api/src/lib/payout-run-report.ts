@@ -236,6 +236,29 @@ export function describeCommissionMath(
     };
   }
 
+  if (meta?.["compensationType"] === "hourly") {
+    const hourlyRateCents = readMetaNumber(meta, "hourlyRateCents");
+    const workedMinutes = readMetaNumber(meta, "workedMinutes");
+    const duration =
+      workedMinutes === null
+        ? ""
+        : [
+            Math.floor(workedMinutes / 60) > 0
+              ? `${Math.floor(workedMinutes / 60)}h`
+              : "",
+            workedMinutes % 60 > 0 ? `${workedMinutes % 60}m` : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
+    return {
+      mathLabel:
+        hourlyRateCents !== null && workedMinutes !== null
+          ? `${fmtMoney(hourlyRateCents)}/hr x ${duration}`
+          : "Hourly pay details unavailable",
+      effectivePercentLabel: "Hourly",
+    };
+  }
+
   const poolRateBps = readMetaNumber(meta, "poolRateBps");
   const splitBps = readMetaNumber(meta, "splitBps");
   const totalSplitBps = readMetaNumber(meta, "totalSplitBps");
@@ -645,7 +668,7 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
                       <th>Role</th>
                       <th>Base</th>
                       <th>Math</th>
-                      <th>Effective %</th>
+                      <th>Pay basis</th>
                       <th>Commission</th>
                     </tr>
                   </thead>

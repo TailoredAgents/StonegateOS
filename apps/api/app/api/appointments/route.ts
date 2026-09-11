@@ -19,6 +19,7 @@ import {
   properties,
   leads,
   appointmentAttachments,
+  appointmentCrewMembers,
   appointmentTasks,
   crmPipeline,
   crmTasks,
@@ -85,6 +86,12 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
   const permissionError = await requirePermission(request, "appointments.read");
   if (permissionError) return permissionError;
+  const canReadCrewPay =
+    (await requirePermission(request, [
+      "payments.collect",
+      "commissions.read",
+      "commissions.manage",
+    ])) === null;
 
   const db = getDb();
   const statusFilter = parseStatusParam(
@@ -192,6 +199,30 @@ export async function GET(request: NextRequest): Promise<Response> {
   const appointmentIds = baseRows
     .map((row) => row.id)
     .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const crewByAppointmentId = new Map<
+    string,
+    Array<{
+      memberId: string;
+      hourlyRateCents: number | null;
+      workedMinutes: number | null;
+    }>
+  >();
+  if (appointmentIds.length > 0) {
+    const crewRows = await db
+      .select({
+        appointmentId: appointmentCrewMembers.appointmentId,
+        memberId: appointmentCrewMembers.memberId,
+        hourlyRateCents: appointmentCrewMembers.hourlyRateCents,
+        workedMinutes: appointmentCrewMembers.workedMinutes,
+      })
+      .from(appointmentCrewMembers)
+      .where(inArray(appointmentCrewMembers.appointmentId, appointmentIds));
+    for (const { appointmentId, ...member } of crewRows) {
+      const members = crewByAppointmentId.get(appointmentId) ?? [];
+      members.push(member);
+      crewByAppointmentId.set(appointmentId, members);
+    }
+  }
   const contactIds = Array.from(
     new Set(
       baseRows
@@ -386,6 +417,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       leadNotes: null,
       partnerServiceKey: row.partnerServiceKey,
       quotedScopeText: row.quotedScopeText,
+      bookingDetails,
     });
     const contactName =
       row.contactFirstName && row.contactLastName
@@ -438,6 +470,11 @@ export async function GET(request: NextRequest): Promise<Response> {
       calendarEventId: row.calendarEventId,
       rescheduleToken: row.rescheduleToken,
       crew: row.crew ?? null,
+      crewMembers: (crewByAppointmentId.get(row.id) ?? []).map((member) => ({
+        memberId: member.memberId,
+        hourlyRateCents: canReadCrewPay ? member.hourlyRateCents : null,
+        workedMinutes: canReadCrewPay ? member.workedMinutes : null,
+      })),
       owner: row.owner ?? null,
       eta: etaSummaryMap.get(row.id) ?? {
         status: null,

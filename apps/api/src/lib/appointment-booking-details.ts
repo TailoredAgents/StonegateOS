@@ -14,6 +14,7 @@ const sourceTypeSchema = z.enum([
 const priceModeSchema = z.enum(["range", "exact", "both"]);
 const serviceTypeSchema = z.enum([
   "junk_removal",
+  "moving",
   "land_clearing",
   "demolition",
   "rental_dumpster",
@@ -203,16 +204,30 @@ export const appointmentBookingDetailsSchema = z
     landClearing: landClearingSchema.optional().nullable(),
     demolition: demolitionSchema.optional().nullable(),
     rentalDumpster: rentalDumpsterSchema.optional().nullable(),
+    moving: z
+      .object({
+        destinationAddress: z
+          .string()
+          .trim()
+          .min(1)
+          .max(240)
+          .optional()
+          .nullable(),
+      })
+      .strict()
+      .optional()
+      .nullable(),
   })
   .strict()
   .superRefine((value, ctx) => {
     const serviceType =
       value.serviceType ?? (value.loadSize ? "junk_removal" : undefined);
     const detailsByService = {
-      junk_removal: ["landClearing", "demolition", "rentalDumpster"],
-      land_clearing: ["loadSize", "demolition", "rentalDumpster"],
-      demolition: ["loadSize", "landClearing", "rentalDumpster"],
-      rental_dumpster: ["loadSize", "landClearing", "demolition"],
+      junk_removal: ["landClearing", "demolition", "rentalDumpster", "moving"],
+      land_clearing: ["loadSize", "demolition", "rentalDumpster", "moving"],
+      demolition: ["loadSize", "landClearing", "rentalDumpster", "moving"],
+      rental_dumpster: ["loadSize", "landClearing", "demolition", "moving"],
+      moving: ["loadSize", "landClearing", "demolition", "rentalDumpster"],
     } as const;
     if (!serviceType) return;
     for (const field of detailsByService[serviceType]) {
@@ -261,6 +276,17 @@ export const appointmentBookingDetailsSchema = z
             rangeMinCents: value.pricing.rangeMinCents ?? null,
             rangeMaxCents: value.pricing.rangeMaxCents ?? null,
           };
+
+    if (serviceType === "moving") {
+      return {
+        serviceType,
+        source,
+        pricing,
+        moving: {
+          destinationAddress: value.moving?.destinationAddress ?? null,
+        },
+      };
+    }
 
     if (serviceType === "junk_removal") {
       if (!value.loadSize) {

@@ -9,13 +9,17 @@ export function SubmitButton({
   label,
   pendingLabel,
   className,
-  disabled
+  disabled,
+  name,
+  value,
 }: {
   children?: React.ReactNode;
   label?: string;
   pendingLabel?: string;
   className?: string;
   disabled?: boolean;
+  name?: string;
+  value?: string;
 }) {
   const { pending } = useFormStatus();
   const router = useRouter();
@@ -66,8 +70,14 @@ export function SubmitButton({
 
   const isDisabled = pending || disabled;
   return (
-    <button type="submit" className={className} disabled={isDisabled}>
-      {pending ? pendingLabel ?? "Saving..." : children ?? label ?? "Save"}
+    <button
+      type="submit"
+      name={name}
+      value={value}
+      className={className}
+      disabled={isDisabled}
+    >
+      {pending ? (pendingLabel ?? "Saving...") : (children ?? label ?? "Save")}
     </button>
   );
 }

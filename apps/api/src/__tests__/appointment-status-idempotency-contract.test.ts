@@ -273,7 +273,12 @@ describe("appointment status idempotency source contract", () => {
     expect(myDaySource).toContain(
       "canUpdateAppointments && (item.isQuoteOnly || canCollectPayments)",
     );
-    expect(myDaySource).toContain("!isCompleted && canUpdateAppointments ? (");
+    expect(myDaySource).toContain(
+      "(!isCompleted || canCorrectMovingCrew) && canUpdateAppointments",
+    );
+    expect(myDaySource).toMatch(
+      /const canCorrectMovingCrew =\s*isCompleted &&\s*a.bookingDetails\?\.serviceType === "moving" &&\s*canCollectPayments &&\s*canManageCommissions/u,
+    );
     expect(myDaySource).toContain(") : canCollectPayments ? (");
   });
 });

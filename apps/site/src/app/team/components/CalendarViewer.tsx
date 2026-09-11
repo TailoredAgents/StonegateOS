@@ -40,6 +40,7 @@ type Props = {
   teamMembers: Array<{ id: string; name: string }>;
   canUpdateAppointments: boolean;
   canCollectPayments: boolean;
+  canManageCommissions?: boolean;
   canSendCustomerMessages: boolean;
   canManageAppointmentMedia: boolean;
   canOverrideScheduleConflicts: boolean;
@@ -54,6 +55,7 @@ export function CalendarViewer({
   teamMembers,
   canUpdateAppointments,
   canCollectPayments,
+  canManageCommissions = false,
   canSendCustomerMessages,
   canManageAppointmentMedia,
   canOverrideScheduleConflicts,
@@ -811,6 +813,7 @@ export function CalendarViewer({
                   conflictingEvents={selectedConflicts}
                   canUpdateAppointments={canUpdateAppointments}
                   canCollectPayments={canCollectPayments}
+                  canManageCommissions={canManageCommissions}
                   canSendCustomerMessages={canSendCustomerMessages}
                   canManageAppointmentMedia={canManageAppointmentMedia}
                   canOverrideScheduleConflicts={canOverrideScheduleConflicts}

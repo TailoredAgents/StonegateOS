@@ -45,6 +45,7 @@ export function MobileCompletionFinalTotalFields({
   initialPaymentSummary,
   pricingContext,
   canManagePayments,
+  forceReadOnly = false,
 }: {
   appointmentId: string;
   initialFinalTotalCents: number | null;
@@ -52,6 +53,7 @@ export function MobileCompletionFinalTotalFields({
   initialPaymentSummary: AppointmentPaymentSummary | null;
   pricingContext: string | null;
   canManagePayments: boolean;
+  forceReadOnly?: boolean;
 }) {
   const incomingFinalTotalCents =
     initialPaymentSummary?.jobTotalCents ?? initialFinalTotalCents;
@@ -129,7 +131,7 @@ export function MobileCompletionFinalTotalFields({
     };
   }, [appointmentId, applyIncomingTotal]);
 
-  const canEdit = canManagePayments || !paymentRecorded;
+  const canEdit = !forceReadOnly && (canManagePayments || !paymentRecorded);
 
   if (!canEdit) {
     return (
@@ -140,8 +142,7 @@ export function MobileCompletionFinalTotalFields({
           {formatMoney(latestFinalTotalCents)}
         </p>
         <p className="mt-1 text-xs leading-5 text-slate-500">
-          This job already has a recorded payment. Ask someone with payment
-          management access to change the total.
+          Ask someone with payment management access to change the total.
         </p>
       </div>
     );

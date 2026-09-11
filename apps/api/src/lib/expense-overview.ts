@@ -11,6 +11,17 @@ export type ExpenseOverviewDate = Date | string;
 export type ExpenseOverviewAdPlatform = (typeof AD_PLATFORMS)[number];
 export type ExpenseOverviewLaborGroup = "crew" | "sales" | "management";
 export type ExpenseOverviewLaborState = "actual" | "estimated";
+export type ExpenseOverviewCompensationType = "hourly" | "percentage";
+
+/** Per-job payroll facts, also frozen on finalized payout lines. */
+export type ExpenseOverviewLaborDetailInput = {
+  appointmentId: string;
+  group: ExpenseOverviewLaborGroup;
+  amountCents: number;
+  serviceType?: string | null;
+  compensationType?: ExpenseOverviewCompensationType | null;
+  workedMinutes?: number | null;
+};
 
 export type ExpenseOverviewCategoryInput = {
   /** Stable category identifier. Historical unknowns should retain their own ID. */
@@ -54,11 +65,8 @@ export type ExpenseOverviewJobInput = {
   commissionDataExpected?: boolean;
 };
 
-export type ExpenseOverviewCommissionInput = {
-  appointmentId: string;
+export type ExpenseOverviewCommissionInput = ExpenseOverviewLaborDetailInput & {
   completedAt: ExpenseOverviewDate;
-  group: ExpenseOverviewLaborGroup;
-  amountCents: number;
 };
 
 export type ExpenseOverviewPayrollAdjustmentInput = {
@@ -76,6 +84,8 @@ export type ExpenseOverviewPayoutSnapshotInput = {
   managementCents: number;
   /** Must exclude reimbursement adjustments. */
   otherPayrollAdjustmentsCents: number;
+  /** Absent on historical payouts without a per-job labor snapshot. */
+  laborDetails?: readonly ExpenseOverviewLaborDetailInput[];
 };
 
 export type ExpenseOverviewDailyAdInput = {
@@ -150,12 +160,27 @@ export type ExpenseOverviewCategory = {
 export type ExpenseOverviewLaborBreakdown = {
   state: ExpenseOverviewLaborState;
   amountCents: number;
+  /** Only applicable labor types; these rows sum to amountCents. */
+  rows: ExpenseOverviewLaborRow[];
   subrows: {
     crewCents: number;
     salesCents: number;
     managementCents: number;
     otherPayrollAdjustmentsCents: number;
   };
+};
+
+export type ExpenseOverviewLaborRow = {
+  id: string;
+  label: string;
+  group: ExpenseOverviewLaborGroup | "adjustments";
+  serviceType: string | null;
+  compensationType: ExpenseOverviewCompensationType | null;
+  amountCents: number;
+  /** Null when a historical payout has no per-job detail. */
+  jobCount: number | null;
+  /** Sum of worker time, not the elapsed duration of the job. */
+  workedMinutes: number | null;
 };
 
 export type ExpenseOverviewAdvertisingBreakdown = {
@@ -557,6 +582,134 @@ function selectPayoutSnapshot(
   return snapshots[0] ?? null;
 }
 
+const LABOR_GROUP_LABELS = {
+  crew: "Crew",
+  sales: "Sales",
+  management: "Management",
+} as const;
+
+function laborServiceLabel(serviceType: string): string {
+  const labels: Record<string, string> = {
+    moving: "Moving",
+    junk_removal: "Junk removal",
+    land_clearing: "Land clearing",
+    demolition: "Demolition",
+    rental_dumpster: "Dumpster rental",
+  };
+  return labels[serviceType] ?? serviceType.replace(/_/gu, " ");
+}
+
+function laborRows(
+  subrows: ExpenseOverviewLaborBreakdown["subrows"],
+  details: readonly ExpenseOverviewLaborDetailInput[],
+): ExpenseOverviewLaborRow[] {
+  const rows: ExpenseOverviewLaborRow[] = [];
+  for (const group of ["crew", "sales", "management"] as const) {
+    const groupTotal = subrows[`${group}Cents`];
+    const groupDetails = details.filter((detail) => detail.group === group);
+    const detailTotal = groupDetails.reduce(
+      (total, detail) =>
+        addCents(total, detail.amountCents, "labor detail total"),
+      0,
+    );
+    // Legacy payouts have immutable totals but no immutable job detail. Never
+    // infer their hours or compensation type from mutable appointment records.
+    if (groupDetails.length === 0 || detailTotal !== groupTotal) {
+      if (groupTotal !== 0) {
+        rows.push({
+          id: group,
+          label: LABOR_GROUP_LABELS[group],
+          group,
+          serviceType: null,
+          compensationType: null,
+          amountCents: groupTotal,
+          jobCount: null,
+          workedMinutes: null,
+        });
+      }
+      continue;
+    }
+    const grouped = new Map<
+      string,
+      { row: ExpenseOverviewLaborRow; jobIds: Set<string> }
+    >();
+    for (const detail of groupDetails) {
+      assertSafeCents(detail.amountCents, "labor detail amount", {
+        nonnegative: true,
+      });
+      const serviceType =
+        group === "crew" ? detail.serviceType?.trim() || null : null;
+      const compensationType =
+        group === "crew" ? (detail.compensationType ?? null) : null;
+      const id = `${group}:${serviceType ?? "all"}:${compensationType ?? "all"}`;
+      const existing = grouped.get(id) ?? {
+        row: {
+          id,
+          label:
+            group === "crew" && serviceType
+              ? laborServiceLabel(serviceType)
+              : LABOR_GROUP_LABELS[group],
+          group,
+          serviceType,
+          compensationType,
+          amountCents: 0,
+          jobCount: 0,
+          workedMinutes: compensationType === "hourly" ? 0 : null,
+        },
+        jobIds: new Set<string>(),
+      };
+      existing.row.amountCents = addCents(
+        existing.row.amountCents,
+        detail.amountCents,
+        "labor row amount",
+      );
+      existing.jobIds.add(detail.appointmentId);
+      existing.row.jobCount = existing.jobIds.size;
+      if (compensationType === "hourly") {
+        if (
+          detail.workedMinutes === null ||
+          detail.workedMinutes === undefined
+        ) {
+          existing.row.workedMinutes = null;
+        } else {
+          assertCount(detail.workedMinutes, "hourly labor minutes");
+          if (existing.row.workedMinutes !== null) {
+            existing.row.workedMinutes = addCents(
+              existing.row.workedMinutes,
+              detail.workedMinutes,
+              "hourly labor minutes",
+            );
+          }
+        }
+      }
+      grouped.set(id, existing);
+    }
+    rows.push(
+      ...[...grouped.values()]
+        .map(({ row }) => row)
+        .filter((row) => row.amountCents !== 0 || (row.workedMinutes ?? 0) > 0)
+        .sort(
+          (left, right) =>
+            left.label.localeCompare(right.label) ||
+            left.id.localeCompare(right.id),
+        ),
+    );
+  }
+  if (subrows.otherPayrollAdjustmentsCents !== 0) {
+    rows.push({
+      id: "adjustments",
+      label: "Other payroll",
+      group: "adjustments",
+      serviceType: null,
+      compensationType: null,
+      amountCents: subrows.otherPayrollAdjustmentsCents,
+      jobCount: null,
+      workedMinutes: null,
+    });
+  }
+  return rows;
+}
+
 function calculateLabor(
   input: ExpenseOverviewInput,
   period: Period,
@@ -584,16 +737,18 @@ function calculateLabor(
       snapshot.managementCents,
       snapshot.otherPayrollAdjustmentsCents,
     ].reduce((total, value) => addCents(total, value, "actual labor total"), 0);
+    const subrows = {
+      crewCents: snapshot.crewCents,
+      salesCents: snapshot.salesCents,
+      managementCents: snapshot.managementCents,
+      otherPayrollAdjustmentsCents: snapshot.otherPayrollAdjustmentsCents,
+    };
     return {
       labor: {
         state: "actual",
         amountCents,
-        subrows: {
-          crewCents: snapshot.crewCents,
-          salesCents: snapshot.salesCents,
-          managementCents: snapshot.managementCents,
-          otherPayrollAdjustmentsCents: snapshot.otherPayrollAdjustmentsCents,
-        },
+        subrows,
+        rows: laborRows(subrows, snapshot.laborDetails ?? []),
       },
       missingCommissionDataCount: 0,
     };
@@ -623,6 +778,7 @@ function calculateLabor(
       .map((job) => job.id),
   );
   const appointmentIdsWithCommissionData = new Set<string>();
+  const laborDetails: ExpenseOverviewLaborDetailInput[] = [];
   for (const commission of input.commissions) {
     const date = easternDateKey(
       commission.completedAt,
@@ -638,6 +794,7 @@ function calculateLabor(
       nonnegative: true,
     });
     appointmentIdsWithCommissionData.add(commission.appointmentId);
+    laborDetails.push(commission);
     if (commission.group === "crew") {
       subrows.crewCents = addCents(
         subrows.crewCents,
@@ -695,7 +852,12 @@ function calculateLabor(
     0,
   );
   return {
-    labor: { state: "estimated", amountCents, subrows },
+    labor: {
+      state: "estimated",
+      amountCents,
+      subrows,
+      rows: laborRows(subrows, laborDetails),
+    },
     missingCommissionDataCount,
   };
 }

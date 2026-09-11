@@ -3461,6 +3461,7 @@ async function handleAppointmentCalendarSyncRequested(
       leadNotes: leads.notes,
       partnerServiceKey: partnerBookings.serviceKey,
       quotedScopeText: appointments.quotedScopeText,
+      bookingDetails: appointments.bookingDetails,
     })
     .from(appointments)
     .leftJoin(contacts, eq(appointments.contactId, contacts.id))
@@ -3598,6 +3599,7 @@ async function handleAppointmentCalendarSyncRequested(
     leadNotes: appointment.leadNotes,
     partnerServiceKey: appointment.partnerServiceKey,
     quotedScopeText: appointment.quotedScopeText,
+    bookingDetails: appointment.bookingDetails,
   });
   const calendarPayload: AppointmentCalendarPayload = {
     appointmentId,

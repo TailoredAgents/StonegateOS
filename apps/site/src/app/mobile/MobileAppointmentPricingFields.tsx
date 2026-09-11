@@ -1,9 +1,13 @@
 "use client";
 
 import React from "react";
+import {
+  APPOINTMENT_SERVICE_TYPE_OPTIONS,
+  type AppointmentServiceType,
+} from "../team/lib/booking-details";
 
 type AppointmentType = "job" | "in_person_quote";
-type ServiceType = "junk_removal" | "land_clearing" | "demolition" | "rental_dumpster";
+type ServiceType = AppointmentServiceType;
 type PriceMode = "range" | "exact" | "both";
 
 const inputClass =
@@ -12,13 +16,16 @@ const labelClass = "block";
 
 export function MobileAppointmentPricingFields({
   sourceTeamMemberId,
-  fixedAppointmentType
+  fixedAppointmentType,
 }: {
   sourceTeamMemberId: string;
   fixedAppointmentType?: AppointmentType;
 }) {
-  const [appointmentType, setAppointmentType] = React.useState<AppointmentType>(fixedAppointmentType ?? "job");
-  const [serviceType, setServiceType] = React.useState<ServiceType>("junk_removal");
+  const [appointmentType, setAppointmentType] = React.useState<AppointmentType>(
+    fixedAppointmentType ?? "job",
+  );
+  const [serviceType, setServiceType] =
+    React.useState<ServiceType>("junk_removal");
   const [priceMode, setPriceMode] = React.useState<PriceMode>("range");
   const [loadSize, setLoadSize] = React.useState("quarter_to_half");
 
@@ -35,14 +42,21 @@ export function MobileAppointmentPricingFields({
   }, [serviceType]);
 
   const isJob = appointmentType === "job";
-  const effectivePriceMode = serviceType === "rental_dumpster" ? "exact" : priceMode;
-  const showExact = isJob && (effectivePriceMode === "exact" || effectivePriceMode === "both");
-  const showRange = isJob && (effectivePriceMode === "range" || effectivePriceMode === "both");
+  const effectivePriceMode =
+    serviceType === "rental_dumpster" ? "exact" : priceMode;
+  const showExact =
+    isJob && (effectivePriceMode === "exact" || effectivePriceMode === "both");
+  const showRange =
+    isJob && (effectivePriceMode === "range" || effectivePriceMode === "both");
 
   return (
     <div className="space-y-3 rounded-lg border border-cyan-300/20 bg-cyan-300/10 p-3">
       <input type="hidden" name="sourceType" value="team_member" />
-      <input type="hidden" name="sourceTeamMemberId" value={sourceTeamMemberId} />
+      <input
+        type="hidden"
+        name="sourceTeamMemberId"
+        value={sourceTeamMemberId}
+      />
 
       {!fixedAppointmentType ? (
         <div className="grid grid-cols-2 gap-2">
@@ -75,18 +89,23 @@ export function MobileAppointmentPricingFields({
       {isJob ? (
         <>
           <label className={labelClass}>
-            <span className="text-xs font-semibold text-slate-300">Job type</span>
+            <span className="text-xs font-semibold text-slate-300">
+              Job type
+            </span>
             <select
               name="serviceType"
               value={serviceType}
-              onChange={(event) => setServiceType(event.target.value as ServiceType)}
+              onChange={(event) =>
+                setServiceType(event.target.value as ServiceType)
+              }
               className={inputClass}
               required
             >
-              <option value="junk_removal">Junk removal</option>
-              <option value="land_clearing">Land clearing</option>
-              <option value="demolition">Demolition</option>
-              <option value="rental_dumpster">Rental dumpster</option>
+              {APPOINTMENT_SERVICE_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </label>
 
@@ -97,7 +116,7 @@ export function MobileAppointmentPricingFields({
                 {[
                   ["range", "Range"],
                   ["exact", "Exact"],
-                  ["both", "Both"]
+                  ["both", "Both"],
                 ].map(([value, label]) => (
                   <button
                     key={value}
@@ -115,27 +134,59 @@ export function MobileAppointmentPricingFields({
               </div>
             </div>
           ) : null}
-          <input type="hidden" name="priceInputMode" value={effectivePriceMode} />
+          <input
+            type="hidden"
+            name="priceInputMode"
+            value={effectivePriceMode}
+          />
 
-          <div className={showRange && showExact ? "grid grid-cols-2 gap-2" : "space-y-2"}>
+          <div
+            className={
+              showRange && showExact ? "grid grid-cols-2 gap-2" : "space-y-2"
+            }
+          >
             {showRange ? (
               <>
                 <label className={labelClass}>
-                  <span className="text-xs font-semibold text-slate-300">Range min $</span>
-                  <input name="priceRangeMin" inputMode="decimal" required={showRange} placeholder="300" className={inputClass} />
+                  <span className="text-xs font-semibold text-slate-300">
+                    Range min $
+                  </span>
+                  <input
+                    name="priceRangeMin"
+                    inputMode="decimal"
+                    required={showRange}
+                    placeholder="300"
+                    className={inputClass}
+                  />
                 </label>
                 <label className={labelClass}>
-                  <span className="text-xs font-semibold text-slate-300">Range max $</span>
-                  <input name="priceRangeMax" inputMode="decimal" required={showRange} placeholder="450" className={inputClass} />
+                  <span className="text-xs font-semibold text-slate-300">
+                    Range max $
+                  </span>
+                  <input
+                    name="priceRangeMax"
+                    inputMode="decimal"
+                    required={showRange}
+                    placeholder="450"
+                    className={inputClass}
+                  />
                 </label>
               </>
             ) : null}
             {showExact ? (
               <label className={showRange ? "col-span-2 block" : labelClass}>
                 <span className="text-xs font-semibold text-slate-300">
-                  {serviceType === "rental_dumpster" ? "Exact price $" : "Exact quote $"}
+                  {serviceType === "rental_dumpster"
+                    ? "Exact price $"
+                    : "Exact quote $"}
                 </span>
-                <input name="quotedTotal" inputMode="decimal" required={showExact} placeholder="450" className={inputClass} />
+                <input
+                  name="quotedTotal"
+                  inputMode="decimal"
+                  required={showExact}
+                  placeholder="450"
+                  className={inputClass}
+                />
               </label>
             ) : null}
           </div>
@@ -143,7 +194,9 @@ export function MobileAppointmentPricingFields({
           {serviceType === "junk_removal" ? (
             <div className="grid grid-cols-2 gap-2">
               <label className={labelClass}>
-                <span className="text-xs font-semibold text-slate-300">Load size</span>
+                <span className="text-xs font-semibold text-slate-300">
+                  Load size
+                </span>
                 <select
                   name="loadSize"
                   value={loadSize}
@@ -159,8 +212,18 @@ export function MobileAppointmentPricingFields({
               </label>
               {loadSize === "custom" ? (
                 <label className={labelClass}>
-                  <span className="text-xs font-semibold text-slate-300">Loads</span>
-                  <input name="customLoads" type="number" min={0.25} step={0.25} required className={inputClass} placeholder="1.5" />
+                  <span className="text-xs font-semibold text-slate-300">
+                    Loads
+                  </span>
+                  <input
+                    name="customLoads"
+                    type="number"
+                    min={0.25}
+                    step={0.25}
+                    required
+                    className={inputClass}
+                    placeholder="1.5"
+                  />
                 </label>
               ) : null}
             </div>
@@ -169,21 +232,42 @@ export function MobileAppointmentPricingFields({
           {serviceType === "land_clearing" ? (
             <div className="space-y-2">
               <label className={labelClass}>
-                <span className="text-xs font-semibold text-slate-300">Area / scope</span>
-                <input name="landClearingAreaScope" required className={inputClass} placeholder="Backyard brush line" />
+                <span className="text-xs font-semibold text-slate-300">
+                  Area / scope
+                </span>
+                <input
+                  name="landClearingAreaScope"
+                  required
+                  className={inputClass}
+                  placeholder="Backyard brush line"
+                />
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <label className={labelClass}>
-                  <span className="text-xs font-semibold text-slate-300">Access</span>
-                  <select name="landClearingAccessDifficulty" required className={inputClass} defaultValue="moderate">
+                  <span className="text-xs font-semibold text-slate-300">
+                    Access
+                  </span>
+                  <select
+                    name="landClearingAccessDifficulty"
+                    required
+                    className={inputClass}
+                    defaultValue="moderate"
+                  >
                     <option value="easy">Easy</option>
                     <option value="moderate">Moderate</option>
                     <option value="hard">Hard</option>
                   </select>
                 </label>
                 <label className={labelClass}>
-                  <span className="text-xs font-semibold text-slate-300">Haul away</span>
-                  <select name="landClearingHaulAway" required className={inputClass} defaultValue="yes">
+                  <span className="text-xs font-semibold text-slate-300">
+                    Haul away
+                  </span>
+                  <select
+                    name="landClearingHaulAway"
+                    required
+                    className={inputClass}
+                    defaultValue="yes"
+                  >
                     <option value="yes">Yes</option>
                     <option value="no">No</option>
                   </select>
@@ -196,8 +280,15 @@ export function MobileAppointmentPricingFields({
             <div className="space-y-2">
               <div className="grid grid-cols-2 gap-2">
                 <label className={labelClass}>
-                  <span className="text-xs font-semibold text-slate-300">Demo type</span>
-                  <select name="demolitionType" required className={inputClass} defaultValue="shed">
+                  <span className="text-xs font-semibold text-slate-300">
+                    Demo type
+                  </span>
+                  <select
+                    name="demolitionType"
+                    required
+                    className={inputClass}
+                    defaultValue="shed"
+                  >
                     <option value="shed">Shed</option>
                     <option value="deck">Deck</option>
                     <option value="fence">Fence</option>
@@ -207,39 +298,92 @@ export function MobileAppointmentPricingFields({
                   </select>
                 </label>
                 <label className={labelClass}>
-                  <span className="text-xs font-semibold text-slate-300">Haul away</span>
-                  <select name="demolitionHaulAway" required className={inputClass} defaultValue="yes">
+                  <span className="text-xs font-semibold text-slate-300">
+                    Haul away
+                  </span>
+                  <select
+                    name="demolitionHaulAway"
+                    required
+                    className={inputClass}
+                    defaultValue="yes"
+                  >
                     <option value="yes">Yes</option>
                     <option value="no">No</option>
                   </select>
                 </label>
               </div>
               <label className={labelClass}>
-                <span className="text-xs font-semibold text-slate-300">Scope size</span>
-                <input name="demolitionScopeSize" required className={inputClass} placeholder="10x12 shed" />
+                <span className="text-xs font-semibold text-slate-300">
+                  Scope size
+                </span>
+                <input
+                  name="demolitionScopeSize"
+                  required
+                  className={inputClass}
+                  placeholder="10x12 shed"
+                />
               </label>
             </div>
+          ) : null}
+
+          {serviceType === "moving" ? (
+            <label className={labelClass}>
+              <span className="text-xs font-semibold text-slate-300">
+                Destination address (optional)
+              </span>
+              <input
+                name="movingDestinationAddress"
+                maxLength={240}
+                className={inputClass}
+                placeholder="Street, city, state, ZIP"
+              />
+              <span className="mt-1 block text-xs text-slate-400">
+                Leave blank for a move at the same property. Enter crew hours
+                and hourly pay at completion.
+              </span>
+            </label>
           ) : null}
 
           {serviceType === "rental_dumpster" ? (
             <div className="space-y-2">
               <div className="grid grid-cols-2 gap-2">
                 <label className={labelClass}>
-                  <span className="text-xs font-semibold text-slate-300">Dumpster</span>
-                  <select name="dumpsterSize" required className={inputClass} defaultValue="15_yard">
+                  <span className="text-xs font-semibold text-slate-300">
+                    Dumpster
+                  </span>
+                  <select
+                    name="dumpsterSize"
+                    required
+                    className={inputClass}
+                    defaultValue="15_yard"
+                  >
                     <option value="10_yard">10-yard</option>
                     <option value="15_yard">15-yard</option>
                     <option value="20_yard">20-yard</option>
                   </select>
                 </label>
                 <label className={labelClass}>
-                  <span className="text-xs font-semibold text-slate-300">Pickup</span>
-                  <input name="dumpsterPickupDate" type="date" required className={inputClass} />
+                  <span className="text-xs font-semibold text-slate-300">
+                    Pickup
+                  </span>
+                  <input
+                    name="dumpsterPickupDate"
+                    type="date"
+                    required
+                    className={inputClass}
+                  />
                 </label>
               </div>
               <label className={labelClass}>
-                <span className="text-xs font-semibold text-slate-300">Placement</span>
-                <input name="dumpsterPlacementLocation" required className={inputClass} placeholder="Driveway, right side" />
+                <span className="text-xs font-semibold text-slate-300">
+                  Placement
+                </span>
+                <input
+                  name="dumpsterPlacementLocation"
+                  required
+                  className={inputClass}
+                  placeholder="Driveway, right side"
+                />
               </label>
             </div>
           ) : null}

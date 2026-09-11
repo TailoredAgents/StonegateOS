@@ -1,4 +1,6 @@
 import React from "react";
+import type { AppointmentBookingDetails } from "../lib/booking-details";
+import type { SavedCrewPayout } from "../lib/crew-payout-form";
 import {
   addCalendarDays,
   calendarDayKeyForLabel,
@@ -32,6 +34,8 @@ export type CalendarEvent = {
   finalTotalCents?: number | null;
   version?: string | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
+  bookingDetails?: AppointmentBookingDetails | null;
+  crewMembers?: SavedCrewPayout[];
   crewMemberIds?: string[];
   crewNames?: string[];
 };

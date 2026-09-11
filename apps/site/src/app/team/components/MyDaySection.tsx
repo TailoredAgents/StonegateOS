@@ -31,6 +31,7 @@ import {
 } from "./AppointmentMetadataEditorForms";
 import { CrewCompletionBookingDetailsEditor } from "./CrewCompletionBookingDetailsEditor";
 import { CrewPayoutSelector } from "./CrewPayoutSelector";
+import type { SavedCrewPayout } from "../lib/crew-payout-form";
 import { labelForPipelineStage } from "./pipeline.stages";
 import { TEAM_CARD_PADDED, TEAM_EMPTY_STATE, teamButtonClass } from "./team-ui";
 
@@ -259,6 +260,7 @@ interface AppointmentDto {
   quotedTotalCents: number | null;
   finalTotalCents: number | null;
   bookingDetails: AppointmentBookingDetails | null;
+  crewMembers?: SavedCrewPayout[];
   soldByMemberId: string | null;
   services: string[];
   rescheduleToken: string;
@@ -621,6 +623,11 @@ function AppointmentCard({
   const mapsHref = buildMapsHref(a.property);
   const hasPhone = Boolean(a.contact.phone && a.contact.id);
   const isCompleted = a.status === "completed";
+  const canCorrectMovingCrew =
+    isCompleted &&
+    a.bookingDetails?.serviceType === "moving" &&
+    canCollectPayments &&
+    canManageCommissions;
   const canConvertQuote =
     item.isQuoteOnly &&
     canUpdateAppointments &&
@@ -956,7 +963,7 @@ function AppointmentCard({
         />
       ) : null}
 
-      {!isCompleted && canUpdateAppointments ? (
+      {(!isCompleted || canCorrectMovingCrew) && canUpdateAppointments ? (
         <div className="mt-4 space-y-3">
           {item.isQuoteOnly ? (
             <>
@@ -1083,7 +1090,7 @@ function AppointmentCard({
               className="group rounded-2xl border border-emerald-200 bg-white p-3"
             >
               <summary className={summaryButtonClass("primary")}>
-                Complete job
+                {isCompleted ? "Correct crew pay" : "Complete job"}
               </summary>
               <form
                 action="/api/team/appointments/status"
@@ -1115,6 +1122,7 @@ function AppointmentCard({
                 <label className="flex flex-col gap-1">
                   <span>Final job total</span>
                   <input
+                    readOnly={isCompleted}
                     name="finalTotal"
                     type="number"
                     min={0}
@@ -1138,13 +1146,15 @@ function AppointmentCard({
                     : "Tips are recorded by the payment flow and kept separate from job revenue."}
                 </div>
 
-                <CrewCompletionBookingDetailsEditor
-                  teamMembers={teamMembers}
-                  bookingDetails={a.bookingDetails}
-                  quotedTotalCents={a.quotedTotalCents}
-                />
+                {!isCompleted ? (
+                  <CrewCompletionBookingDetailsEditor
+                    teamMembers={teamMembers}
+                    bookingDetails={a.bookingDetails}
+                    quotedTotalCents={a.quotedTotalCents}
+                  />
+                ) : null}
 
-                {canManageAppointmentMedia ? (
+                {canManageAppointmentMedia && !isCompleted ? (
                   <details className="sm:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
                     <summary className="min-h-11 cursor-pointer py-2 font-semibold">
                       Missing-proof exception
@@ -1166,19 +1176,17 @@ function AppointmentCard({
                   </details>
                 ) : null}
 
-                <details className="sm:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
-                  <summary className="cursor-pointer font-medium select-none">
-                    Commissions
-                  </summary>
-                  <div className="mt-3 space-y-3">
-                    <CrewPayoutSelector
-                      teamMembers={teamMembers}
-                      showSplitPercentages={false}
-                    />
-                  </div>
-                </details>
+                <div className="sm:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <CrewPayoutSelector
+                    key={`${a.id}:${a.updatedAt}`}
+                    teamMembers={teamMembers}
+                    serviceType={a.bookingDetails?.serviceType}
+                    initialCrewMembers={a.crewMembers}
+                    showSplitPercentages={false}
+                  />
+                </div>
 
-                {canSendCustomerMessages ? (
+                {canSendCustomerMessages && !isCompleted ? (
                   <label className="sm:col-span-2 flex min-h-11 items-start gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-900">
                     <input
                       type="checkbox"
@@ -1203,14 +1211,14 @@ function AppointmentCard({
                     className={teamButtonClass("primary", "sm")}
                     pendingLabel="Saving..."
                   >
-                    Mark complete
+                    {isCompleted ? "Save crew correction" : "Mark complete"}
                   </SubmitButton>
                 </div>
               </form>
             </details>
           ) : null}
 
-          {mode === "manage" ? (
+          {!isCompleted && mode === "manage" ? (
             <details className="group rounded-2xl border border-slate-200 bg-white p-3">
               <summary className={summaryButtonClass("secondary")}>
                 Manage
