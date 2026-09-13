@@ -469,7 +469,7 @@ export function MobileAppointmentCard({
         <article
           aria-label={`Appointment with ${customerName}`}
           data-appointment-id={cardId}
-          className="overflow-hidden rounded-xl border border-white/10 bg-slate-900/90 shadow-sm shadow-black/20"
+          className={`overflow-hidden rounded-xl border shadow-sm shadow-black/20 ${appointmentCardSurfaceClassName(statusTone)}`}
         >
           {isPartner ? (
             <div className="border-b border-cyan-200/10 bg-cyan-300/[0.06] px-4 py-1.5 text-xs font-semibold leading-5 text-cyan-100">
@@ -480,7 +480,9 @@ export function MobileAppointmentCard({
           ) : null}
           <div className="px-4 pt-3">
             <div className="flex items-start justify-between gap-3">
-              <p className="min-w-0 text-sm font-semibold leading-6 text-slate-200">
+              <p
+                className={`min-w-0 text-sm font-semibold leading-6 ${appointmentCardTimeClassName(statusTone)}`}
+              >
                 {timeLabel}
               </p>
               <span
