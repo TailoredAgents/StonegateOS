@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { inboxComposerIsBusy } from "../inbox-composer-drafts";
 
 const POLL_BASE_MS = 8_000;
 const POLL_MAX_MS = 60_000;
@@ -11,47 +12,6 @@ type SnapshotPayload = {
     signature?: string;
   };
 };
-
-function getComposeTextarea(): HTMLTextAreaElement | null {
-  const node = document.getElementById("inbox-thread-body");
-  return node instanceof HTMLTextAreaElement ? node : null;
-}
-
-function isComposeDirty(): boolean {
-  const textarea = getComposeTextarea();
-  return Boolean(textarea?.value?.trim().length);
-}
-
-function isComposeFocused(): boolean {
-  const textarea = getComposeTextarea();
-  return Boolean(textarea && document.activeElement === textarea);
-}
-
-function storeComposeDraft(storageKey: string): void {
-  try {
-    const textarea = getComposeTextarea();
-    const value = textarea?.value ?? "";
-    if (value.trim().length === 0) {
-      sessionStorage.removeItem(storageKey);
-      return;
-    }
-    sessionStorage.setItem(storageKey, value);
-  } catch {
-    // Storage may be unavailable in privacy-restricted browsers.
-  }
-}
-
-function restoreComposeDraft(storageKey: string): void {
-  try {
-    const saved = sessionStorage.getItem(storageKey);
-    if (!saved || saved.trim().length === 0) return;
-    const textarea = getComposeTextarea();
-    if (!textarea || textarea.value.trim().length > 0) return;
-    textarea.value = saved;
-  } catch {
-    // Storage may be unavailable in privacy-restricted browsers.
-  }
-}
 
 function readSnapshotSignature(payload: SnapshotPayload | null): string {
   const signature = payload?.snapshot?.signature;
@@ -116,7 +76,6 @@ export function InboxLiveUpdatesClient(props: {
   const [pollError, setPollError] = React.useState<string | null>(null);
   const timelineSignatureRef = React.useRef(props.initialTimelineSignature);
   const threadsSignatureRef = React.useRef(props.initialThreadsSignature);
-  const restoreTimerRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     timelineSignatureRef.current = props.initialTimelineSignature;
@@ -130,37 +89,12 @@ export function InboxLiveUpdatesClient(props: {
     props.initialThreadsSignature,
   ]);
 
-  const storageKey =
-    props.threadId && props.threadId.trim().length
-      ? `inbox-compose:${props.threadId}:${props.channel}`
-      : `inbox-compose:unknown:${props.channel}`;
-
   const doRefresh = React.useCallback(
-    (reason: "auto" | "manual") => {
-      if (reason === "manual") storeComposeDraft(storageKey);
+    (_reason: "auto" | "manual") => {
       router.refresh();
-      if (restoreTimerRef.current !== null) {
-        window.clearTimeout(restoreTimerRef.current);
-      }
-      restoreTimerRef.current = window.setTimeout(() => {
-        restoreComposeDraft(storageKey);
-        restoreTimerRef.current = null;
-      }, 350);
     },
-    [router, storageKey],
+    [router],
   );
-
-  React.useEffect(() => {
-    restoreComposeDraft(storageKey);
-  }, [storageKey]);
-
-  React.useEffect(() => {
-    return () => {
-      if (restoreTimerRef.current !== null) {
-        window.clearTimeout(restoreTimerRef.current);
-      }
-    };
-  }, []);
 
   React.useEffect(() => {
     let stopped = false;
@@ -207,7 +141,7 @@ export function InboxLiveUpdatesClient(props: {
         threadsUrl.searchParams.set("limit", "50");
         threadsUrl.searchParams.set("snapshot", "1");
         threadsUrl.searchParams.set("queue", props.queue);
-        if (props.view && props.view !== "all" && !props.q) {
+        if (props.view && props.view !== "all") {
           threadsUrl.searchParams.set("view", props.view);
         }
         if (props.status && props.status !== "all") {
@@ -277,11 +211,7 @@ export function InboxLiveUpdatesClient(props: {
         }
 
         if (changed) {
-          if (
-            !props.isViewingNewest ||
-            isComposeDirty() ||
-            isComposeFocused()
-          ) {
+          if (!props.isViewingNewest || inboxComposerIsBusy()) {
             setHasUpdate(true);
           } else {
             setHasUpdate(false);

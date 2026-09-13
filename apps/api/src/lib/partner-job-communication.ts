@@ -23,6 +23,8 @@ type StaffJobMessageInput = {
   audience: "partner" | "internal";
   body: string;
   attachmentIds: string[];
+  expectedContactId?: string | null;
+  expectedChannel?: string | null;
   mutation: TeamMutationContext;
 };
 export async function sendStaffPartnerJobMessage(input: StaffJobMessageInput) {
@@ -36,6 +38,10 @@ export async function sendStaffPartnerJobMessageInTransaction(
   input: StaffJobMessageInput,
 ) {
   const { mutation } = input;
+  const hasExpectedContact = Object.prototype.hasOwnProperty.call(
+    input,
+    "expectedContactId",
+  );
   if (!mutation.actor.id || !mutation.idempotencyKeyHash)
     throw new TeamMutationFailure(
       "unauthorized",
@@ -48,6 +54,12 @@ export async function sendStaffPartnerJobMessageInTransaction(
         audience: input.audience,
         body: input.body,
         attachmentIds: [...input.attachmentIds].sort(),
+        ...(hasExpectedContact
+          ? {
+              expectedContactId: input.expectedContactId,
+              channel: input.expectedChannel,
+            }
+          : {}),
       }),
     )
     .digest("hex");
@@ -67,6 +79,15 @@ export async function sendStaffPartnerJobMessageInTransaction(
     throw new TeamMutationFailure("invalid", "Job conversation not found.", {
       status: 404,
     });
+  if (
+    hasExpectedContact &&
+    (input.expectedContactId !== null ||
+      thread.contactId !== null ||
+      input.expectedChannel !== "web" ||
+      thread.channel !== "web")
+  ) {
+    throw new TeamMutationFailure("conflict", "thread_context_mismatch");
+  }
   const [job] = await tx
     .select({
       id: partnerBookings.id,

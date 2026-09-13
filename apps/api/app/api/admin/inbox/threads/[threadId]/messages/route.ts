@@ -16,7 +16,16 @@ import {
   TeamMutationFailure,
   beginTeamMutation,
   teamMutationExceptionResponse,
+  teamMutationResultResponse,
+  teamMutationSuccessResult,
+  type TeamMutationContext,
 } from "@/lib/team-mutation";
+import {
+  claimTeamMutationIdempotency,
+  completeTeamMutationIdempotency,
+  settleTeamMutationIdempotencyFailure,
+  type TeamMutationIdempotencyClaim,
+} from "@/lib/team-mutation-idempotency";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
@@ -42,6 +51,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+type InboxMessageResponse = {
+  message: {
+    id: string;
+    threadId: string;
+    direction: string;
+    channel: string;
+    deliveryStatus: string;
+    createdAt: string;
+  };
+};
+
+const legacySendErrors = new Map([
+  ["thread_not_found", 404],
+  ["dnc_confirmation_required", 400],
+  ["missing_recipient", 400],
+  ["thread_context_mismatch", 409],
+]);
+
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ threadId: string }> },
@@ -57,7 +84,9 @@ export async function POST(
     return NextResponse.json({ error: "thread_id_required" }, { status: 400 });
   }
 
-  const payload = (await readBoundedJsonRequest(request, { maximumBytes: 64 * 1024 }).catch(() => null)) as {
+  const payload = (await readBoundedJsonRequest(request, {
+    maximumBytes: 64 * 1024,
+  }).catch(() => null)) as {
     body?: string;
     subject?: string;
     direction?: string;
@@ -68,9 +97,20 @@ export async function POST(
     allowDncOverride?: boolean;
     audience?: string;
     attachmentIds?: unknown;
+    expectedContactId?: string | null;
   } | null;
 
   if (!payload || typeof payload !== "object") {
+    return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
+  }
+  const hasExpectedContact = Object.prototype.hasOwnProperty.call(
+    payload,
+    "expectedContactId",
+  );
+  if (
+    hasExpectedContact &&
+    !z.string().uuid().nullable().safeParse(payload.expectedContactId).success
+  ) {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
 
@@ -105,30 +145,185 @@ export async function POST(
   const actor = getAuditActorFromRequest(request);
   const db = getDb();
 
-  const [portalThread] = await db.select({ id: conversationThreads.id, jobId: conversationThreads.partnerBookingId })
-    .from(conversationThreads).where(and(eq(conversationThreads.id, threadId), eq(conversationThreads.portalVisible, true), genericInboxThreadScopeCondition())).limit(1);
+  const [portalThread] = await db
+    .select({
+      id: conversationThreads.id,
+      jobId: conversationThreads.partnerBookingId,
+      channel: conversationThreads.channel,
+      contactId: conversationThreads.contactId,
+    })
+    .from(conversationThreads)
+    .where(
+      and(
+        eq(conversationThreads.id, threadId),
+        eq(conversationThreads.portalVisible, true),
+        genericInboxThreadScopeCondition(),
+      ),
+    )
+    .limit(1);
   if (portalThread?.jobId) {
-    const parsed = z.object({ audience: z.enum(["partner", "internal"]), body: z.string().trim().min(1).max(5_000), attachmentIds: z.array(z.string().uuid()).max(10).default([]) }).safeParse({ audience: payload.audience, body, attachmentIds: payload.attachmentIds });
-    if (!parsed.success || mediaUrls.length || toAddress || fromAddress) return NextResponse.json({ error: "invalid_fields", message: "Choose Reply to partner or Internal note and use files belonging to this job." }, { status: 422 });
-    const boundary = await beginTeamMutation(request, { principalTypes: ["human"], requiredPermissions: ["messages.send", "partners.accounts.read"], risk: parsed.data.audience === "partner" ? "external" : "normal", requiresIdempotency: true, auditAction: "partner.job_message.staff_created" }, parsed.data.audience === "internal" ? { ignoredPermissionKillSwitches: ["external_sends"] } : {});
+    if (
+      hasExpectedContact &&
+      (payload.expectedContactId !== null ||
+        portalThread.contactId !== null ||
+        channel !== "web" ||
+        portalThread.channel !== "web")
+    ) {
+      return NextResponse.json(
+        { error: "thread_context_mismatch" },
+        { status: 409 },
+      );
+    }
+    const parsed = z
+      .object({
+        audience: z.enum(["partner", "internal"]),
+        body: z.string().trim().min(1).max(5_000),
+        attachmentIds: z.array(z.string().uuid()).max(10).default([]),
+      })
+      .safeParse({
+        audience: payload.audience,
+        body,
+        attachmentIds: payload.attachmentIds,
+      });
+    if (!parsed.success || mediaUrls.length || toAddress || fromAddress)
+      return NextResponse.json(
+        {
+          error: "invalid_fields",
+          message:
+            "Choose Reply to partner or Internal note and use files belonging to this job.",
+        },
+        { status: 422 },
+      );
+    const boundary = await beginTeamMutation(
+      request,
+      {
+        principalTypes: ["human"],
+        requiredPermissions: ["messages.send", "partners.accounts.read"],
+        risk: parsed.data.audience === "partner" ? "external" : "normal",
+        requiresIdempotency: true,
+        auditAction: "partner.job_message.staff_created",
+      },
+      parsed.data.audience === "internal"
+        ? { ignoredPermissionKillSwitches: ["external_sends"] }
+        : {},
+    );
     if (!boundary.ok) return boundary.response;
     try {
-      const message = await sendStaffPartnerJobMessage({ threadId, ...parsed.data, mutation: boundary.mutation });
-      return NextResponse.json({ message }, { headers: { "Cache-Control": "private, no-store" } });
-    } catch (error) { return teamMutationExceptionResponse(error, boundary.mutation); }
+      const message = await sendStaffPartnerJobMessage({
+        threadId,
+        ...parsed.data,
+        ...(hasExpectedContact
+          ? {
+              expectedContactId: payload.expectedContactId,
+              expectedChannel: channel,
+            }
+          : {}),
+        mutation: boundary.mutation,
+      });
+      return NextResponse.json(
+        { message },
+        { headers: { "Cache-Control": "private, no-store" } },
+      );
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "thread_context_mismatch"
+      ) {
+        return NextResponse.json({ error: error.message }, { status: 409 });
+      }
+      return teamMutationExceptionResponse(error, boundary.mutation);
+    }
   }
 
   if (!body && mediaUrls.length === 0) {
     return NextResponse.json({ error: "body_required" }, { status: 400 });
   }
 
+  // Existing callers may omit a key. A supplied key always uses the durable
+  // boundary, including validation of malformed/empty keys.
+  let mutation: TeamMutationContext | null = null;
+  if (request.headers.has("idempotency-key")) {
+    const boundary = await beginTeamMutation(request, {
+      principalTypes: ["human", "service"],
+      requiredPermissions: ["messages.send"],
+      risk: direction === "outbound" ? "external" : "normal",
+      requiresIdempotency: true,
+      auditAction:
+        direction === "inbound" ? "message.received" : "message.queued",
+    });
+    if (!boundary.ok) return boundary.response;
+    mutation = {
+      ...boundary.mutation,
+      // Keep a single key namespace even if a retry changes direction. The
+      // established audit writer still records the original action above.
+      policy: {
+        ...boundary.mutation.policy,
+        auditAction: "inbox.message.created",
+      },
+    };
+  }
+
+  let claim: TeamMutationIdempotencyClaim | null = null;
   let result: {
     message: typeof conversationMessages.$inferSelect;
     messageChannel: string;
     contactId: string | null;
     salespersonMemberId: string | null;
+    response: InboxMessageResponse;
   };
   try {
+    if (mutation) {
+      const claimed = await claimTeamMutationIdempotency(db, mutation, {
+        route: "POST /api/admin/inbox/threads/:threadId/messages",
+        entityType: "conversation_thread",
+        entityId: threadId,
+        payload,
+      });
+      if (claimed.kind === "replay") {
+        // A saved receipt cannot bypass a thread that has since moved out of
+        // the generic Inbox's staff scope.
+        const [visibleThread] = await db
+          .select({ id: conversationThreads.id })
+          .from(conversationThreads)
+          .where(
+            and(
+              eq(conversationThreads.id, threadId),
+              genericInboxThreadScopeCondition(),
+            ),
+          )
+          .limit(1);
+        if (!visibleThread)
+          return NextResponse.json(
+            { error: "thread_not_found" },
+            { status: 404 },
+          );
+        const replay = claimed.replay;
+        const headers = {
+          "Cache-Control": "private, no-store",
+          "idempotency-replayed": "true",
+          "x-correlation-id": replay.correlationId,
+        };
+        if (replay.result.ok) {
+          return NextResponse.json(replay.result.data as InboxMessageResponse, {
+            status: replay.status,
+            headers,
+          });
+        }
+        if (legacySendErrors.has(replay.result.message)) {
+          return NextResponse.json(
+            { error: replay.result.message },
+            { status: replay.status, headers },
+          );
+        }
+        return teamMutationResultResponse(
+          replay.result,
+          replay.status,
+          replay.correlationId,
+          headers,
+        );
+      }
+      claim = claimed.claim;
+    }
     result = await db.transaction(async (tx) => {
       const [thread] = await tx
         .select({
@@ -145,10 +340,18 @@ export async function POST(
             genericInboxThreadScopeCondition(),
           ),
         )
+        .for("update", { of: conversationThreads })
         .limit(1);
 
       if (!thread) {
         throw new Error("thread_not_found");
+      }
+      if (
+        hasExpectedContact &&
+        (thread.contactId !== payload.expectedContactId ||
+          channel !== thread.channel)
+      ) {
+        throw new Error("thread_context_mismatch");
       }
       if (direction === "outbound" && thread.contactId) {
         await requireActiveContactForDirectOutbound(tx, thread.contactId);
@@ -386,39 +589,114 @@ export async function POST(
         }
       }
 
+      const response: InboxMessageResponse = {
+        message: {
+          id: message.id,
+          threadId: message.threadId,
+          direction: message.direction,
+          channel: message.channel,
+          deliveryStatus: message.deliveryStatus,
+          createdAt: message.createdAt.toISOString(),
+        },
+      };
+      if (mutation && claim) {
+        const audit = await mutation.audit.insertSuccess(tx, {
+          entityType: "conversation_message",
+          entityId: message.id,
+          metadata: { threadId, channel: messageChannel, direction },
+          committedAt: now,
+        });
+        const receipt = teamMutationSuccessResult(mutation, response, {
+          auditEventId: audit.auditEventId,
+          committedAt: audit.committedAt,
+          entityType: "conversation_message",
+          entityId: message.id,
+        });
+        await completeTeamMutationIdempotency(
+          tx,
+          mutation,
+          claim,
+          receipt,
+          200,
+        );
+      }
+
       return {
         message,
         messageChannel,
         contactId: thread.contactId ?? null,
         salespersonMemberId,
+        response,
       };
     });
   } catch (error) {
+    if (mutation) {
+      const legacyStatus =
+        error instanceof Error
+          ? legacySendErrors.get(error.message)
+          : undefined;
+      const failure =
+        legacyStatus && error instanceof Error
+          ? new TeamMutationFailure(
+              legacyStatus === 409 ? "conflict" : "invalid",
+              error.message,
+              {
+                status: legacyStatus,
+              },
+            )
+          : error;
+      if (claim) {
+        try {
+          await settleTeamMutationIdempotencyFailure(
+            db,
+            mutation,
+            claim,
+            failure,
+          );
+        } catch {
+          // The bounded claim lease still allows safe recovery. Never clear
+          // the client key or expose message content in error logging.
+          console.error("[inbox-message] idempotency_settlement_failed", {
+            operationId: mutation.operationId,
+            correlationId: mutation.correlationId,
+          });
+        }
+      }
+      if (legacyStatus && error instanceof Error) {
+        return NextResponse.json(
+          { error: error.message },
+          { status: legacyStatus },
+        );
+      }
+      return teamMutationExceptionResponse(failure, mutation);
+    }
     if (error instanceof TeamMutationFailure) {
       return teamMutationExceptionResponse(error);
     }
     const message =
       error instanceof Error ? error.message : "message_create_failed";
-    const status = message === "thread_not_found" ? 404 : 400;
+    const status = legacySendErrors.get(message) ?? 400;
     return NextResponse.json({ error: message }, { status });
   }
 
-  await recordAuditEvent({
-    actor,
-    action: direction === "inbound" ? "message.received" : "message.queued",
-    entityType: "conversation_message",
-    entityId: result.message.id,
-    meta: { threadId, channel: result.messageChannel, direction },
-  });
+  if (!mutation)
+    await recordAuditEvent({
+      actor,
+      action: direction === "inbound" ? "message.received" : "message.queued",
+      entityType: "conversation_message",
+      entityId: result.message.id,
+      meta: { threadId, channel: result.messageChannel, direction },
+    });
 
-  return NextResponse.json({
-    message: {
-      id: result.message.id,
-      threadId: result.message.threadId,
-      direction: result.message.direction,
-      channel: result.message.channel,
-      deliveryStatus: result.message.deliveryStatus,
-      createdAt: result.message.createdAt.toISOString(),
-    },
-  });
+  return NextResponse.json(
+    result.response,
+    mutation
+      ? {
+          headers: {
+            "Cache-Control": "private, no-store",
+            "x-correlation-id": mutation.correlationId,
+          },
+        }
+      : undefined,
+  );
 }

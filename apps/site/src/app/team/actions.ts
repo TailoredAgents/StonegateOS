@@ -11,6 +11,12 @@ import {
 } from "@/lib/team-principal";
 import { callAdminApiAs } from "./lib/api";
 import {
+  isInboxPreparedMessage,
+  type InboxPrepareResult,
+  type InboxPreparedMessage,
+  type InboxSendResult,
+} from "./inbox-composer-types";
+import {
   buildStoredContactSource,
   parseAppointmentBookingFormData,
   parseLeadSourceFormData,
@@ -6734,199 +6740,312 @@ export async function updateThreadAction(formData: FormData) {
   revalidatePath("/team");
 }
 
-export async function sendThreadMessageAction(formData: FormData) {
-  const principal = await requireCurrentTeamPrincipal();
-  const jar = await cookies();
-  const threadId = formData.get("threadId");
-  const contactId = formData.get("contactId");
-  const channel = formData.get("channel");
-  const body = formData.get("body");
-  const subject = formData.get("subject");
-
-  const resolvedChannel = typeof channel === "string" ? channel.trim() : "";
-  const attachments = formData
-    .getAll("attachments")
-    .filter((value): value is File => value instanceof File && value.size > 0);
-
-  let resolvedThreadId = typeof threadId === "string" ? threadId.trim() : "";
-  if (resolvedThreadId.length === 0) {
-    const ensuredContactId =
-      typeof contactId === "string" ? contactId.trim() : "";
-    const ensuredChannel = resolvedChannel;
-
-    if (!ensuredContactId || !ensuredChannel) {
-      jar.set({
-        name: "myst-flash-error",
-        value: "Thread ID missing",
-        path: "/",
-      });
-      revalidatePath("/team");
-      return;
+export async function prepareInboxMessageAction(
+  formData: FormData,
+): Promise<InboxPrepareResult> {
+  try {
+    const principal = await requireCurrentTeamPrincipal();
+    if (!hasTeamPermission(principal, "messages.send"))
+      return {
+        ok: false,
+        error: "You do not have permission to send messages.",
+      };
+    const read = (name: string) => {
+      const value = formData.get(name);
+      return typeof value === "string" ? value.trim() : "";
+    };
+    const channel = read("channel");
+    const contactId = read("contactId") || null;
+    let threadId = read("threadId");
+    const body = read("body"),
+      subject = read("subject"),
+      audience = read("audience");
+    const operationKey = read("idempotencyKey");
+    if (
+      !["sms", "email", "dm", "web"].includes(channel) ||
+      !/^[A-Za-z0-9:_-]{16,160}$/u.test(operationKey) ||
+      (contactId !== null && !isUuid(contactId)) ||
+      (threadId && !isUuid(threadId))
+    ) {
+      return {
+        ok: false,
+        error:
+          "The reply details are invalid. Reopen this conversation and try again.",
+      };
     }
-
-    if (ensuredChannel === "dm") {
-      jar.set({
-        name: "myst-flash-error",
-        value: "Messenger thread not found yet.",
-        path: "/",
-      });
-      revalidatePath("/team");
-      return;
-    }
-
-    const ensureRes = await callAdminApiAs(
-      principal,
-      "/api/admin/inbox/threads/ensure",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          contactId: ensuredContactId,
-          channel: ensuredChannel,
-        }),
-      },
-    );
-
-    if (!ensureRes.ok) {
-      const message = await readErrorMessage(
-        ensureRes,
-        "Unable to open a thread for this contact",
+    const attachments = formData
+      .getAll("attachments")
+      .filter(
+        (value): value is File => typeof value !== "string" && value.size > 0,
       );
-      jar.set({ name: "myst-flash-error", value: message, path: "/" });
-      revalidatePath("/team");
-      return;
-    }
-
-    const ensurePayload = (await ensureRes.json().catch(() => null)) as {
-      threadId?: string;
-    } | null;
-    resolvedThreadId =
-      typeof ensurePayload?.threadId === "string"
-        ? ensurePayload.threadId.trim()
-        : "";
-    if (!resolvedThreadId) {
-      jar.set({
-        name: "myst-flash-error",
-        value: "Unable to open a thread for this contact",
-        path: "/",
-      });
-      revalidatePath("/team");
-      return;
-    }
-  }
-  const trimmedBody = typeof body === "string" ? body.trim() : "";
-  if (trimmedBody.length === 0 && attachments.length === 0) {
-    jar.set({
-      name: "myst-flash-error",
-      value: "Add a message or attach photos first",
-      path: "/",
-    });
-    revalidatePath("/team");
-    return;
-  }
-
-  const payload: Record<string, unknown> = {
-    body: trimmedBody,
-    direction: "outbound",
-    ...(resolvedChannel ? { channel: resolvedChannel } : {}),
-    ...(typeof formData.get("audience") === "string" ? { audience: formData.get("audience") } : {}),
-  };
-  const requestedOperationKey = formData.get("idempotencyKey");
-  const operationKey = typeof requestedOperationKey === "string" && /^[A-Za-z0-9:_-]{16,160}$/u.test(requestedOperationKey)
-    ? requestedOperationKey : `staff-message:${crypto.randomUUID()}`;
-  if (typeof subject === "string" && subject.trim().length > 0) {
-    payload["subject"] = subject.trim();
-  }
-
-  if (attachments.length > 0) {
-    if (resolvedChannel !== "sms" && resolvedChannel !== "dm") {
-      jar.set({
-        name: "myst-flash-error",
-        value:
-          "Attachments are only supported for SMS and Messenger right now.",
-        path: "/",
-      });
-      revalidatePath("/team");
-      return;
-    }
-
-    const uploadForm = new FormData();
-    for (const file of attachments) {
-      uploadForm.append("file", file, file.name);
-    }
-
-    const uploadRes = await callAdminApiAs(
-      principal,
-      "/api/admin/inbox/uploads",
-      {
-        method: "POST",
-        body: uploadForm,
-      },
-    );
-
-    if (!uploadRes.ok) {
-      const message = await readErrorMessage(
-        uploadRes,
-        "Unable to upload attachments",
+    if (!body && !attachments.length)
+      return { ok: false, error: "Add a message or attach photos first." };
+    if (
+      channel === "web" &&
+      (!threadId || !["partner", "internal"].includes(audience))
+    )
+      return { ok: false, error: "Choose Reply to partner or Internal note." };
+    if (attachments.length && !["sms", "dm"].includes(channel))
+      return {
+        ok: false,
+        error: "Attachments are supported for SMS and Messenger.",
+      };
+    if (!threadId) {
+      if (!contactId || (channel !== "sms" && channel !== "email"))
+        return {
+          ok: false,
+          error: "Open an existing conversation before replying.",
+        };
+      const ensureRes = await callAdminApiAs(
+        principal,
+        "/api/admin/inbox/threads/ensure",
+        { method: "POST", body: JSON.stringify({ contactId, channel }) },
       );
-      jar.set({ name: "myst-flash-error", value: message, path: "/" });
-      revalidatePath("/team");
-      return;
+      if (!ensureRes.ok)
+        return {
+          ok: false,
+          error: await readErrorMessage(
+            ensureRes,
+            "Unable to open this conversation.",
+          ),
+        };
+      const ensured = (await ensureRes.json().catch(() => null)) as {
+        threadId?: unknown;
+      } | null;
+      if (typeof ensured?.threadId !== "string" || !isUuid(ensured.threadId))
+        return {
+          ok: false,
+          error:
+            "The conversation could not be confirmed. Your reply is saved.",
+        };
+      threadId = ensured.threadId;
     }
-
-    const uploadPayload = (await uploadRes.json().catch(() => null)) as {
-      uploads?: { url?: unknown }[];
-    } | null;
-    const mediaUrls =
-      uploadPayload?.uploads
-        ?.map((item) =>
-          item && typeof item.url === "string" ? item.url.trim() : "",
+    // The send endpoint verifies this expected recipient/channel in its existing
+    // transaction. Message history can be unavailable without blocking a reply.
+    const payload: InboxPreparedMessage["payload"] = {
+      body,
+      direction: "outbound",
+      channel: channel as InboxPreparedMessage["channel"],
+      expectedContactId: contactId,
+    };
+    if (subject && channel === "email") payload.subject = subject;
+    if (channel === "web")
+      payload.audience = audience as "partner" | "internal";
+    if (attachments.length) {
+      const uploads = new FormData();
+      for (const file of attachments) uploads.append("file", file, file.name);
+      const uploadRes = await callAdminApiAs(
+        principal,
+        "/api/admin/inbox/uploads",
+        { method: "POST", body: uploads },
+      );
+      if (!uploadRes.ok)
+        return {
+          ok: false,
+          error: await readErrorMessage(
+            uploadRes,
+            "Unable to upload attachments. Your reply is saved.",
+          ),
+        };
+      const uploaded = (await uploadRes.json().catch(() => null)) as {
+        uploads?: Array<{ url?: unknown }>;
+      } | null;
+      if (
+        !Array.isArray(uploaded?.uploads) ||
+        uploaded.uploads.length !== attachments.length ||
+        uploaded.uploads.some(
+          (item) =>
+            typeof item?.url !== "string" || !/^https?:\/\//u.test(item.url),
         )
-        .filter((url) => url.length > 0) ?? [];
-
-    if (mediaUrls.length === 0) {
-      jar.set({
-        name: "myst-flash-error",
-        value: "Unable to upload attachments",
-        path: "/",
-      });
-      revalidatePath("/team");
-      return;
+      ) {
+        return {
+          ok: false,
+          error:
+            "The attachments could not be confirmed. Nothing was sent; try attaching them again.",
+        };
+      }
+      payload.mediaUrls = uploaded.uploads.map((item) => String(item.url));
     }
-
-    payload["mediaUrls"] = mediaUrls;
+    return {
+      ok: true,
+      prepared: {
+        version: 1,
+        employeeId: principal.memberId,
+        threadId,
+        contactId,
+        channel: payload.channel,
+        operationKey,
+        payload,
+      },
+    };
+  } catch {
+    return {
+      ok: false,
+      error:
+        "Unable to prepare your reply. Nothing was sent; your draft is saved.",
+    };
   }
+}
 
-  const response = await callAdminApiAs(
-    principal,
-    `/api/admin/inbox/threads/${resolvedThreadId}/messages`,
-    {
-      method: "POST",
-      headers: { "Idempotency-Key": operationKey },
-      body: JSON.stringify(payload),
-    },
-  );
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to send message");
-    jar.set({ name: "myst-flash-error", value: message, path: "/" });
-    revalidatePath("/team");
-    return;
+export async function sendPreparedInboxMessageAction(
+  input: InboxPreparedMessage,
+): Promise<InboxSendResult> {
+  if (!isInboxPreparedMessage(input))
+    return {
+      ok: false,
+      error: "The saved send request is invalid. Your reply has been kept.",
+    };
+  let principal: TeamRequestPrincipal;
+  try {
+    principal = await requireCurrentTeamPrincipal();
+  } catch {
+    return {
+      ok: false,
+      uncertain: true,
+      error:
+        "Sign in again before checking the send. Your original request is saved.",
+    };
   }
+  if (
+    principal.memberId !== input.employeeId ||
+    !hasTeamPermission(principal, "messages.send")
+  )
+    return {
+      ok: false,
+      uncertain: true,
+      error:
+        "You do not have permission to check this reply. The original request is saved.",
+    };
+  try {
+    // A retry uses this exact key and prepared payload, including existing uploads.
+    const response = await callAdminApiAs(
+      principal,
+      `/api/admin/inbox/threads/${encodeURIComponent(input.threadId)}/messages`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": input.operationKey },
+        body: JSON.stringify(input.payload),
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!response.ok) {
+      const uncertain =
+        response.status >= 500 ||
+        response.status === 408 ||
+        response.status === 401 ||
+        response.status === 403 ||
+        response.status === 429 ||
+        (response.status === 409 &&
+          payload?.["error"] !== "thread_context_mismatch");
+      const unresolvedConflict =
+        response.status === 409 &&
+        uncertain &&
+        !response.headers.has("Retry-After") &&
+        payload?.["retryable"] !== true;
+      const error =
+        typeof payload?.["message"] === "string"
+          ? payload["message"]
+          : typeof payload?.["error"] === "string"
+            ? payload["error"]
+            : "Unable to send your reply.";
+      const friendlyErrors: Record<string, string> = {
+        missing_recipient:
+          "This customer has no address for the selected message channel.",
+        dnc_confirmation_required:
+          "This contact is marked Do not contact. The reply was not sent.",
+        thread_not_found:
+          "This conversation is no longer available. Your reply is saved.",
+        body_required: "Add a message or attach photos first.",
+        thread_context_mismatch:
+          "This conversation's recipient changed. Reopen the correct customer before sending; your reply is saved.",
+      };
+      return {
+        ok: false,
+        uncertain,
+        error: unresolvedConflict
+          ? "The original send could not be confirmed. Check this conversation's messages before sending again. Your original request and draft are kept."
+          : uncertain
+            ? "The send has not been confirmed. Check the previous send before trying a new reply."
+            : (friendlyErrors[error] ?? error),
+      };
+    }
+    const message = payload?.["message"] as Record<string, unknown> | undefined;
+    const expectedDirection =
+      input.payload.audience === "internal" ? "internal" : "outbound";
+    if (
+      !message ||
+      typeof message["id"] !== "string" ||
+      !isUuid(message["id"]) ||
+      message["threadId"] !== input.threadId ||
+      message["channel"] !== input.channel ||
+      message["direction"] !== expectedDirection ||
+      typeof message["deliveryStatus"] !== "string" ||
+      !["queued", "sent", "delivered", "failed"].includes(
+        message["deliveryStatus"],
+      ) ||
+      typeof message["createdAt"] !== "string" ||
+      !Number.isFinite(Date.parse(message["createdAt"]))
+    ) {
+      return {
+        ok: false,
+        uncertain: true,
+        error:
+          "The send response was incomplete. Check the previous send; your reply is saved.",
+      };
+    }
+    const status = message["deliveryStatus"];
+    revalidatePath(teamSurfaceHref("inbox"));
+    return {
+      ok: true,
+      threadId: input.threadId,
+      messageId: message["id"],
+      channel: input.channel,
+      deliveryStatus: status,
+      message:
+        input.payload.audience === "internal"
+          ? "Internal note saved."
+          : status === "delivered"
+            ? "Message delivered."
+            : status === "sent"
+              ? "Message sent."
+              : status === "failed"
+                ? "Message saved, but delivery failed. See the message for retry options."
+                : "Message queued for sending.",
+    };
+  } catch {
+    return {
+      ok: false,
+      uncertain: true,
+      error:
+        "The send has not been confirmed. Check the previous send; your reply is saved.",
+    };
+  }
+}
 
+export async function sendThreadMessageAction(formData: FormData) {
+  if (!formData.get("idempotencyKey"))
+    formData.set("idempotencyKey", `team-inbox:${crypto.randomUUID()}`);
+  const prepared = await prepareInboxMessageAction(formData);
+  const result = prepared.ok
+    ? await sendPreparedInboxMessageAction(prepared.prepared)
+    : prepared;
+  const jar = await cookies();
   jar.set({
-    name: "myst-flash",
-    value: attachments.length ? "Message + photos queued" : "Message queued",
+    name: result.ok ? "myst-flash" : "myst-flash-error",
+    value: result.ok ? result.message : result.error,
     path: "/",
   });
   revalidatePath("/team");
-  const resolvedContactId =
-    typeof contactId === "string" ? contactId.trim() : "";
+  if (!result.ok || !prepared.ok) return;
   redirect(
     teamSurfaceHref("inbox", {
       query: {
-        threadId: resolvedThreadId,
-        channel: resolvedChannel || undefined,
-        contactId: resolvedContactId || undefined,
+        threadId: result.threadId,
+        channel: result.channel,
+        contactId: prepared.prepared.contactId || undefined,
         r: Date.now(),
       },
     }),
