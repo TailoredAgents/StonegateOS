@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { isMobileSquarePaymentsEnabled } from "../lib/square-payment-feature";
 
 const reasons: Record<string, string> = {
   app_missing: "The Square Point of Sale app did not open.",
@@ -10,10 +11,8 @@ const reasons: Record<string, string> = {
   not_logged_in: "Square Point of Sale is not signed in.",
   user_id_mismatch:
     "Square Point of Sale is signed in to a different Stonegate location.",
-  user_not_activated:
-    "This Square account is not activated for card payments.",
-  user_not_active:
-    "This Square account is not activated for card payments.",
+  user_not_activated: "This Square account is not activated for card payments.",
+  user_not_active: "This Square account is not activated for card payments.",
   user_not_logged_in: "Square Point of Sale is not signed in.",
 };
 
@@ -22,6 +21,25 @@ export default async function SquareSetupPage({
 }: {
   searchParams?: Promise<{ reason?: string }>;
 }) {
+  if (!isMobileSquarePaymentsEnabled()) {
+    return (
+      <main className="min-h-screen bg-slate-950 px-4 py-8 text-white">
+        <div className="mx-auto max-w-xl space-y-4">
+          <h1 className="text-2xl font-semibold">Square is paused</h1>
+          <p className="text-sm leading-6 text-slate-300">
+            Square payment controls are hidden for now. You can still finish
+            jobs and record cash or check payments.
+          </p>
+          <Link
+            href="/mobile?screen=myday"
+            className="inline-flex min-h-11 items-center rounded-lg bg-cyan-300 px-4 py-3 text-sm font-semibold text-slate-950"
+          >
+            Return to Today
+          </Link>
+        </div>
+      </main>
+    );
+  }
   const params = (await searchParams) ?? {};
   const reason =
     typeof params.reason === "string"
@@ -35,13 +53,11 @@ export default async function SquareSetupPage({
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-200">
             Square setup
           </p>
-          <h1 className="mt-2 text-2xl font-semibold">
-            Get Tap to Pay ready
-          </h1>
+          <h1 className="mt-2 text-2xl font-semibold">Get Tap to Pay ready</h1>
           <p className="mt-2 text-sm leading-6 text-amber-100">
             {reason ??
-              "Complete these checks before accepting a Stonegate payment."}
-            {" "}No appointment has been marked paid.
+              "Complete these checks before accepting a Stonegate payment."}{" "}
+            No appointment has been marked paid.
           </p>
         </header>
 

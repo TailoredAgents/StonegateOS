@@ -25,12 +25,15 @@ function mobileDestination(
   input: {
     status: SquareReturnData["status"];
     attemptId?: string;
+    appointmentId?: string;
     errorCode?: string;
   },
 ): URL {
   const destination = new URL("/mobile", origin);
   destination.searchParams.set("screen", "myday");
   destination.searchParams.set("payment", input.status);
+  if (input.appointmentId)
+    destination.searchParams.set("jobId", input.appointmentId);
   if (input.attemptId) {
     destination.searchParams.set("paymentAttempt", input.attemptId);
   }
@@ -258,6 +261,7 @@ export async function GET(request: Request): Promise<Response> {
     mobileDestination(requestUrl.origin, {
       status: result.data.status,
       attemptId: result.data.attemptId,
+      appointmentId: result.data.appointmentId,
       ...(result.data.errorCode ? { errorCode: result.data.errorCode } : {}),
     }),
   );

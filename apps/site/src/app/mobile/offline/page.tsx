@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { MobileAppointmentCard } from "../MobileAppointmentCard";
 import {
   MOBILE_MEDIA_QUEUE_EVENT,
   MOBILE_STALE_QUEUE_MS,
@@ -369,71 +370,37 @@ export default function MobileOfflinePage() {
           </div>
         ) : (
           jobs.map((job) => (
-            <details
+            <MobileAppointmentCard
               key={job.appointmentId}
-              className="overflow-hidden rounded-lg border border-white/10 bg-slate-900"
+              cardId={job.appointmentId}
+              employeeId={job.employeeId}
+              timeLabel={`${formatTime(job.start)} – ${formatTime(job.end)}`}
+              customerName={job.contactName}
+              serviceCategoryLabel={job.serviceCategoryLabel ?? "Job"}
+              partnerAffiliation={job.partnerAffiliation ?? null}
+              statusLabel={
+                job.status === "completed"
+                  ? "Completed"
+                  : job.status === "canceled"
+                    ? "Canceled"
+                    : job.status === "requested"
+                      ? "Requested"
+                      : "Confirmed"
+              }
+              statusTone={
+                job.status === "completed"
+                  ? "completed"
+                  : job.status === "canceled"
+                    ? "canceled"
+                    : "default"
+              }
+              address={job.address}
+              mapsHref={job.address ? directionsHref(job.address) : null}
+              quotedScopeText={job.quotedScopeText}
+              mediaSummary={job.mediaSummary}
+              paymentSummary={job.paymentSummary}
             >
-              <summary className="cursor-pointer list-none p-4">
-                <p className="text-sm font-semibold text-cyan-100">
-                  {formatTime(job.start)} – {formatTime(job.end)}
-                </p>
-                <h2 className="mt-1 text-lg font-semibold">
-                  {job.contactName}
-                </h2>
-                {job.address ? (
-                  <a
-                    href={directionsHref(job.address)}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={(event) => event.stopPropagation()}
-                    className="mt-1 block text-sm font-semibold text-cyan-100 underline-offset-4 hover:underline"
-                  >
-                    {job.address}
-                  </a>
-                ) : null}
-              </summary>
               <div className="space-y-4 border-t border-white/10 p-4">
-                <section>
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
-                    Quoted to remove
-                  </p>
-                  <p
-                    className={`mt-2 whitespace-pre-wrap rounded-md border p-3 text-sm leading-6 ${
-                      job.quotedScopeText
-                        ? "border-white/10 bg-slate-950 text-slate-200"
-                        : "border-amber-300/30 bg-amber-300/10 text-amber-100"
-                    }`}
-                  >
-                    {job.quotedScopeText ||
-                      "Scope is missing. Payment and completion remain blocked until staff fills it in online."}
-                  </p>
-                </section>
-
-                {job.media.length ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    {job.media.map((item) => (
-                      <figure
-                        key={item.mediaId}
-                        className="overflow-hidden rounded-md border border-white/10 bg-slate-950"
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={item.objectUrl}
-                          alt={item.caption || "Quoted work"}
-                          className="aspect-square w-full object-cover"
-                        />
-                        <figcaption className="p-2 text-xs text-slate-300">
-                          {item.caption || "Quoted work"}
-                        </figcaption>
-                      </figure>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="rounded-md border border-dashed border-white/10 p-3 text-sm text-slate-400">
-                    No quoted-work images were cached.
-                  </p>
-                )}
-
                 {job.canCaptureMedia ? (
                   <>
                     <label className="block">
@@ -492,6 +459,31 @@ export default function MobileOfflinePage() {
                   </>
                 ) : null}
 
+                {job.media.length ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    {job.media.map((item) => (
+                      <figure
+                        key={item.mediaId}
+                        className="overflow-hidden rounded-md border border-white/10 bg-slate-950"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={item.objectUrl}
+                          alt={item.caption || "Quoted work"}
+                          className="aspect-square w-full object-cover"
+                        />
+                        <figcaption className="p-2 text-xs text-slate-300">
+                          {item.caption || "Quoted work"}
+                        </figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="rounded-md border border-dashed border-white/10 p-3 text-sm text-slate-400">
+                    No quoted-work images were cached.
+                  </p>
+                )}
+
                 {job.queue.length ? (
                   <div className="space-y-2">
                     <p className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-200">
@@ -514,7 +506,7 @@ export default function MobileOfflinePage() {
                   </button>
                 ) : null}
               </div>
-            </details>
+            </MobileAppointmentCard>
           ))
         )}
 

@@ -1,4 +1,5 @@
 import { binaryUploadSha256Hex } from "./binary-upload";
+import type { MobilePartnerAffiliation } from "./booking-presentation";
 
 export const MOBILE_MEDIA_QUEUE_EVENT = "stonegate:media-queue-change";
 export const MOBILE_MEDIA_SYNC_ISSUE_EVENT = "stonegate:media-sync-issue";
@@ -58,6 +59,8 @@ export type OfflineAppointmentSnapshot = {
   appointmentId: string;
   dayKey: string;
   contactName: string;
+  serviceCategoryLabel?: string | null;
+  partnerAffiliation?: MobilePartnerAffiliation | null;
   address: string | null;
   start: string;
   end: string;

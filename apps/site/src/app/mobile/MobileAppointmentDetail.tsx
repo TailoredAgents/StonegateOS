@@ -35,6 +35,8 @@ export function MobileAppointmentDetail({
   canCollectPayments,
   canManagePayments,
   bookingDetails,
+  modern = false,
+  squarePaymentsEnabled = false,
 }: {
   appointmentId: string;
   appointmentVersion: string | null;
@@ -50,6 +52,8 @@ export function MobileAppointmentDetail({
   canCollectPayments: boolean;
   canManagePayments: boolean;
   bookingDetails?: AppointmentBookingDetails | null;
+  modern?: boolean;
+  squarePaymentsEnabled?: boolean;
 }) {
   const [needsScope, setNeedsScope] = React.useState(mediaSummary.needsScope);
 
@@ -70,6 +74,7 @@ export function MobileAppointmentDetail({
         </div>
       ) : null}
       <MobileQuotedWorkPanel
+        modern={modern}
         appointmentId={appointmentId}
         employeeId={employeeId}
         initialScope={quotedScopeText}
@@ -80,6 +85,8 @@ export function MobileAppointmentDetail({
       />
       {canReadPayments && paymentSummary ? (
         <MobilePaymentPanel
+          modern={modern}
+          squarePaymentsEnabled={squarePaymentsEnabled}
           appointmentId={appointmentId}
           initialVersion={appointmentVersion}
           initialSummary={paymentSummary}

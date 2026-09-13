@@ -1,4 +1,23 @@
 import { randomUUID } from "node:crypto";
+import { MobileCompletionOptions } from "./MobileCompletionOptions";
+import {
+  MobileBookingReturnTracker,
+  MobileBookingReturnRestore,
+} from "./MobileBookingReturn";
+import { MobileCompletionForm } from "./MobileCompletionDraft";
+import { isMobileSquarePaymentsEnabled } from "./lib/square-payment-feature";
+import { MobileAppointmentNoteForm } from "./MobileAppointmentNoteForm";
+import {
+  MobileBookingMoreActions,
+  MobileBookingQuickActions,
+} from "./MobileBookingTools";
+import { isMobileBookingCardsV2Enabled } from "./lib/booking-card-feature";
+import {
+  mobileBookingHref,
+  mobileServiceCategory,
+  readMobileBookingReturn,
+  type MobilePartnerAffiliation,
+} from "./lib/booking-presentation";
 import { SubmitButton } from "@/components/SubmitButton";
 import Link from "next/link";
 import type { Route } from "next";
@@ -30,10 +49,8 @@ import {
   createMobileQuoteAction,
   createMobileTeamMemberAction,
   markMobileThreadHandledAction,
-  openMobileAppointmentThreadAction,
   openMobileContactThreadAction,
   runMobilePayoutAction,
-  rescheduleMobileAppointmentAction,
   sendMobileTeamInviteAction,
   startMobileContactCallAction,
   sendMobileQuoteAction,
@@ -263,6 +280,9 @@ type CalendarEvent = {
   end: string;
   appointmentId?: string;
   appointmentType?: string | null;
+  contactId?: string | null;
+  serviceCategoryLabel?: string | null;
+  partnerAffiliation?: MobilePartnerAffiliation | null;
   rescheduleToken?: string | null;
   contactName?: string | null;
   address?: string | null;
@@ -735,7 +755,8 @@ function eventKindLabel(event: CalendarEvent): string {
     return "In-person quote";
   if (event.source !== "db") return "Calendar event";
   const statusLabel = event.status ? formatStage(event.status) : "Confirmed";
-  return event.bookingDetails?.serviceType === "moving"
+  return !isMobileBookingCardsV2Enabled() &&
+    event.bookingDetails?.serviceType === "moving"
     ? `Moving Job · ${statusLabel}`
     : statusLabel;
 }
@@ -902,6 +923,7 @@ function MobileCompleteAppointmentForm({
   canOverrideAppointmentConflicts: boolean;
   canSendCustomerMessages: boolean;
 }) {
+  const modern = isMobileBookingCardsV2Enabled();
   const status = (event.status ?? "").trim().toLowerCase();
   const isQuoteOnly = isQuoteOnlyAppointmentType(event.appointmentType);
   const canConvertCompletedQuote =
@@ -1105,6 +1127,7 @@ function MobileCompleteAppointmentForm({
                     </label>
                   ) : null}
                   <CrewPayoutSelector
+                    compact={modern}
                     teamMembers={teamMembers}
                     requireHourlyInputs={false}
                     theme="dark"
@@ -1118,7 +1141,7 @@ function MobileCompleteAppointmentForm({
                     pendingLabel="Saving…"
                     name="completionMode"
                     value="complete"
-                    className="w-full rounded-md bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950"
+                    className="min-h-11 w-full rounded-lg bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950"
                   >
                     Convert + complete
                   </SubmitButton>
@@ -1142,13 +1165,46 @@ function MobileCompleteAppointmentForm({
   if (!canCollectPayments) return null;
 
   return (
-    <details className="rounded-md border border-emerald-300/30 bg-emerald-300/10 p-3">
-      <summary className="cursor-pointer list-none text-sm font-semibold text-emerald-100">
-        {status === "completed" ? "Correct completed job" : "Complete job"}
+    <details
+      data-mobile-completion
+      className="rounded-lg border border-emerald-300/20 bg-slate-950 p-3"
+    >
+      <summary className="flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-emerald-100">
+        {status === "completed"
+          ? "Correct completed job"
+          : modern
+            ? "Completion review"
+            : "Complete job"}
       </summary>
-      <form
-        action={updateMobileAppointmentStatusAction}
-        className="mt-3 space-y-3"
+      <MobileCompletionForm
+        modern={modern}
+        employeeId={currentTeamMemberId}
+        appointmentId={appointmentId}
+        appointmentVersion={event.version ?? null}
+        appointmentCompleted={status === "completed"}
+        serverValues={{
+          finalTotal: amountDefault,
+          expectedFinalTotalCents:
+            finalTotalCents === null ? "null" : String(finalTotalCents),
+          crewMemberIds:
+            event.crewMembers?.map((member) => member.memberId) ?? [],
+          crewRates: Object.fromEntries(
+            (event.crewMembers ?? []).map((member) => [
+              member.memberId,
+              member.hourlyRateCents
+                ? (member.hourlyRateCents / 100).toFixed(2)
+                : "",
+            ]),
+          ),
+          crewHours: Object.fromEntries(
+            (event.crewMembers ?? []).map((member) => [
+              member.memberId,
+              member.workedMinutes
+                ? String(Number((member.workedMinutes / 60).toFixed(6)))
+                : "",
+            ]),
+          ),
+        }}
       >
         <input type="hidden" name="appointmentId" value={appointmentId} />
         <input
@@ -1170,6 +1226,7 @@ function MobileCompleteAppointmentForm({
         />
         <input type="hidden" name="status" value="completed" />
         <MobileCompletionFinalTotalFields
+          modern={modern}
           appointmentId={appointmentId}
           initialFinalTotalCents={finalTotalCents}
           quotedTotalCents={normalizeCents(event.quotedTotalCents)}
@@ -1185,63 +1242,296 @@ function MobileCompleteAppointmentForm({
           </p>
         ) : null}
         <CrewPayoutSelector
-          key={`${appointmentId}:${event.version ?? ""}`}
+          compact={modern}
+          key={
+            modern ? appointmentId : `${appointmentId}:${event.version ?? ""}`
+          }
           teamMembers={teamMembers}
           serviceType={event.bookingDetails?.serviceType}
           initialCrewMembers={event.crewMembers}
           theme="dark"
           stacked
         />
-        {canManageMedia && status !== "completed" ? (
-          <details className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">
-            <summary className="min-h-11 cursor-pointer py-2 font-semibold">
-              Missing-proof exception
-            </summary>
-            <label className="mt-2 block">
-              <span className="block text-xs leading-5">
-                Use only if required partner proof cannot be captured. This is
-                recorded in the job history.
-              </span>
-              <textarea
-                name="proofOverrideReason"
-                minLength={10}
-                maxLength={500}
-                rows={3}
-                className="mt-2 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-amber-300"
-                placeholder="Explain why proof cannot be provided"
-              />
-            </label>
-          </details>
-        ) : null}
-        {status !== "completed" ? (
-          canSendCustomerMessages ? (
-            <label className="flex cursor-pointer items-start gap-3 rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-3 text-sm text-cyan-100">
-              <input
-                name="sendReviewRequest"
-                type="checkbox"
-                className="mt-0.5 h-5 w-5 rounded border-slate-500 bg-slate-950 accent-cyan-300"
-              />
-              <span>
-                Request a review by SMS after completion. This is off unless you
-                check it; saving only queues the request and does not confirm
-                delivery.
-              </span>
-            </label>
-          ) : (
-            <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-400">
-              The customer will not be sent a review request. Message-send
-              permission is required.
-            </p>
-          )
-        ) : null}
+        {modern ? (
+          status !== "completed" ? (
+            <MobileCompletionOptions
+              partnerJob={
+                event.partnerAffiliation?.basis === "partner_booking" ||
+                event.partnerAffiliation?.basis === "appointment_account"
+              }
+              canManageMedia={canManageMedia}
+              canSendCustomerMessages={canSendCustomerMessages}
+            />
+          ) : null
+        ) : (
+          <>
+            {canManageMedia &&
+            status !== "completed" &&
+            (!modern ||
+              event.partnerAffiliation?.basis !== "contact_partner") ? (
+              <details className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">
+                <summary className="min-h-11 cursor-pointer py-2 font-semibold">
+                  Missing-proof exception
+                </summary>
+                <label className="mt-2 block">
+                  <span className="block text-xs leading-5">
+                    Use only if required partner proof cannot be captured. This
+                    is recorded in the job history.
+                  </span>
+                  <textarea
+                    name="proofOverrideReason"
+                    minLength={10}
+                    maxLength={500}
+                    rows={3}
+                    className="mt-2 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-amber-300"
+                    placeholder="Explain why proof cannot be provided"
+                  />
+                </label>
+              </details>
+            ) : null}
+            {status !== "completed" ? (
+              canSendCustomerMessages ? (
+                <label className="flex cursor-pointer items-start gap-3 rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-3 text-sm text-cyan-100">
+                  <input
+                    name="sendReviewRequest"
+                    type="checkbox"
+                    className="mt-0.5 h-5 w-5 rounded border-slate-500 bg-slate-950 accent-cyan-300"
+                  />
+                  <span>
+                    Request a review by SMS after completion. This is off unless
+                    you check it; saving only queues the request and does not
+                    confirm delivery.
+                  </span>
+                </label>
+              ) : (
+                <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-400">
+                  The customer will not be sent a review request. Message-send
+                  permission is required.
+                </p>
+              )
+            ) : null}
+          </>
+        )}
         <SubmitButton
           pendingLabel="Saving…"
-          className="w-full rounded-md bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950"
+          className="min-h-11 w-full rounded-lg bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950"
         >
-          {status === "completed" ? "Save completed job" : "Mark complete"}
+          {status === "completed"
+            ? "Save completed job"
+            : modern
+              ? "Finish job"
+              : "Mark complete"}
         </SubmitButton>
-      </form>
+      </MobileCompletionForm>
     </details>
+  );
+}
+
+function MobileBooking({
+  event,
+  date,
+  screen,
+  teamMembers,
+  currentTeamMemberId,
+  currentTeamMemberName,
+  canUpdateAppointments,
+  canOpenMessageThreads,
+  canPlaceCalls,
+  canCaptureMedia,
+  canManageMedia,
+  canReadPayments,
+  canCollectPayments,
+  canManagePayments,
+  canManageCommissions,
+  canOverrideAppointmentConflicts,
+  canSendCustomerMessages,
+}: {
+  event: CalendarEvent;
+  date: string;
+  screen: "myday" | "calendar";
+  teamMembers: TeamDirectoryMember[];
+  currentTeamMemberId: string;
+  currentTeamMemberName: string;
+  canUpdateAppointments: boolean;
+  canOpenMessageThreads: boolean;
+  canPlaceCalls: boolean;
+  canCaptureMedia: boolean;
+  canManageMedia: boolean;
+  canReadPayments: boolean;
+  canCollectPayments: boolean;
+  canManagePayments: boolean;
+  canManageCommissions: boolean;
+  canOverrideAppointmentConflicts: boolean;
+  canSendCustomerMessages: boolean;
+}) {
+  const modern = isMobileBookingCardsV2Enabled();
+  const appointmentId =
+    event.appointmentId ??
+    (event.id.startsWith("db:") ? event.id.slice(3) : "");
+  const canUpdate = Boolean(
+    canUpdateAppointments &&
+      appointmentId &&
+      event.version &&
+      event.source === "db",
+  );
+  const isQuoteOnly = isQuoteOnlyAppointmentType(event.appointmentType);
+  const quickActions =
+    appointmentId && event.source === "db" ? (
+      <MobileBookingQuickActions
+        appointmentId={appointmentId}
+        contactId={event.contactId}
+        date={date}
+        screen={screen}
+        canCall={canPlaceCalls}
+        canMessage={canOpenMessageThreads}
+      />
+    ) : null;
+  return (
+    <MobileAppointmentCard
+      cardId={appointmentId || event.id}
+      jobHref={mobileBookingHref(screen, date, appointmentId || event.id)}
+      employeeId={currentTeamMemberId}
+      appointmentVersion={event.version ?? null}
+      modern={modern}
+      serviceCategoryLabel={mobileServiceCategory(event)}
+      partnerAffiliation={event.partnerAffiliation ?? null}
+      timeLabel={`${formatTime(event.start)} – ${formatTime(event.end)}`}
+      customerName={event.contactName ?? event.title}
+      statusLabel={eventKindLabel(event)}
+      statusTone={eventCardTone(event)}
+      address={event.address}
+      mapsHref={buildMapsDirectionsHref(event.address)}
+      quotedScopeText={event.quotedScopeText}
+      mediaSummary={appointmentId ? eventMediaSummary(event) : null}
+      paymentSummary={
+        appointmentId && !isQuoteOnly ? eventPaymentSummary(event) : null
+      }
+      amountLabel={formatEventAmountBadge(event)}
+      hasDetails={Boolean(appointmentId)}
+      quickActions={modern ? quickActions : null}
+    >
+      {appointmentId ? (
+        <>
+          {modern ? (
+            <MobileBookingReturnTracker
+              employeeId={currentTeamMemberId}
+              appointmentId={appointmentId}
+              date={date}
+              screen={screen}
+            />
+          ) : null}
+          {modern && event.status?.toLowerCase() === "completed" ? (
+            <p
+              role="status"
+              className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-3 text-sm text-emerald-100"
+            >
+              Job completed.
+            </p>
+          ) : null}
+          <MobileAppointmentDetail
+            modern={modern}
+            squarePaymentsEnabled={isMobileSquarePaymentsEnabled()}
+            bookingDetails={event.bookingDetails}
+            appointmentId={appointmentId}
+            appointmentVersion={event.version ?? null}
+            employeeId={currentTeamMemberId}
+            notes={event.notes}
+            quotedScopeText={event.quotedScopeText ?? null}
+            mediaSummary={eventMediaSummary(event)}
+            paymentSummary={eventPaymentSummary(event)}
+            paymentLedgerAvailable={event.paymentLedgerAvailable !== false}
+            canCaptureMedia={canCaptureMedia}
+            canManageMedia={canManageMedia}
+            canReadPayments={canReadPayments && !isQuoteOnly}
+            canCollectPayments={
+              canCollectPayments && canCollectPaymentForEvent(event)
+            }
+            canManagePayments={canManagePayments}
+          />
+          {canUpdate ? (
+            modern ? (
+              <MobileAppointmentNoteForm
+                employeeId={currentTeamMemberId}
+                appointmentId={appointmentId}
+                appointmentVersion={event.version!}
+              />
+            ) : (
+              <details className="rounded-lg border border-white/10 px-3">
+                <summary className="flex min-h-11 cursor-pointer items-center text-sm font-semibold text-cyan-100">
+                  Add note
+                </summary>
+                <form
+                  action={addMobileAppointmentNoteAction}
+                  className="space-y-3 pb-3"
+                >
+                  <input
+                    type="hidden"
+                    name="appointmentId"
+                    value={appointmentId}
+                  />
+                  <input
+                    type="hidden"
+                    name="expectedVersion"
+                    value={event.version ?? ""}
+                  />
+                  <input
+                    type="hidden"
+                    name="idempotencyKey"
+                    value={`mobile-appointment-note:${randomUUID()}`}
+                  />
+                  <input type="hidden" name="date" value={date} />
+                  <input type="hidden" name="screen" value={screen} />
+                  <textarea
+                    name="body"
+                    required
+                    rows={3}
+                    className="w-full rounded-lg border border-white/10 bg-slate-900 p-3 text-base"
+                    placeholder="Gate code, access instructions, job notes…"
+                  />
+                  <button
+                    type="submit"
+                    className="min-h-11 w-full rounded-lg bg-cyan-300 px-3 py-2 font-semibold text-slate-950"
+                  >
+                    Save note
+                  </button>
+                </form>
+              </details>
+            )
+          ) : null}
+          {!modern ? <div className="flex gap-2">{quickActions}</div> : null}
+          {canUpdate ? (
+            <>
+              <MobileCompleteAppointmentForm
+                event={event}
+                appointmentId={appointmentId}
+                calendarDay={date}
+                screen={screen}
+                teamMembers={teamMembers}
+                currentTeamMemberId={currentTeamMemberId}
+                currentTeamMemberName={currentTeamMemberName}
+                canCollectPayments={canCollectPayments}
+                canManagePayments={canManagePayments}
+                canManageCommissions={canManageCommissions}
+                canManageMedia={canManageMedia}
+                canOverrideAppointmentConflicts={
+                  canOverrideAppointmentConflicts
+                }
+                canSendCustomerMessages={canSendCustomerMessages}
+              />
+              <MobileBookingMoreActions
+                appointmentId={appointmentId}
+                appointmentVersion={event.version!}
+                date={date}
+                screen={screen}
+                canceled={isCanceledEvent(event)}
+                startTime={formatTimeInputValue(event.start)}
+                canSendCustomerMessages={canSendCustomerMessages}
+              />
+            </>
+          ) : null}
+        </>
+      ) : null}
+    </MobileAppointmentCard>
   );
 }
 
@@ -1250,33 +1540,37 @@ function MobileWeekStrip({
   days,
   events,
   screen,
+  compact = false,
 }: {
   activeDay: string;
   days: string[];
   events: CalendarEvent[];
   screen: "myday" | "calendar";
+  compact?: boolean;
 }) {
   const weekProjectedLabel = formatProjectedRange(events);
   return (
     <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">
-            Week
-          </p>
-          <h2 className="mt-1 text-lg font-semibold">
-            {formatDateLabel(days[0] ?? activeDay)} -{" "}
-            {formatDateLabel(days[6] ?? activeDay)}
-          </h2>
+      {!compact ? (
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">
+              Week
+            </p>
+            <h2 className="mt-1 text-lg font-semibold">
+              {formatDateLabel(days[0] ?? activeDay)} -{" "}
+              {formatDateLabel(days[6] ?? activeDay)}
+            </h2>
+          </div>
+          <div className="text-right">
+            <p className="text-xs text-slate-400">Week projected</p>
+            <p className="text-xl font-semibold text-cyan-200">
+              {weekProjectedLabel}
+            </p>
+          </div>
         </div>
-        <div className="text-right">
-          <p className="text-xs text-slate-400">Week projected</p>
-          <p className="text-xl font-semibold text-cyan-200">
-            {weekProjectedLabel}
-          </p>
-        </div>
-      </div>
-      <div className="mt-4 grid grid-cols-7 gap-1.5">
+      ) : null}
+      <div className={`${compact ? "" : "mt-4"} grid grid-cols-7 gap-1.5`}>
         {days.map((dayKey) => {
           const dayEvents = eventsForDay(events, dayKey);
           const dayProjectedLabel = formatCompactProjectedRange(dayEvents);
@@ -1307,15 +1601,17 @@ function MobileWeekStrip({
               <span className="mt-1 block text-base font-semibold leading-none">
                 {dayNumberLabel(dayKey)}
               </span>
-              <span
-                className={
-                  active
-                    ? "mt-1 block truncate text-[10px] font-semibold text-slate-800"
-                    : "mt-1 block truncate text-[10px] font-semibold text-cyan-200"
-                }
-              >
-                {dayProjectedLabel}
-              </span>
+              {!compact ? (
+                <span
+                  className={
+                    active
+                      ? "mt-1 block truncate text-[10px] font-semibold text-slate-800"
+                      : "mt-1 block truncate text-[10px] font-semibold text-cyan-200"
+                  }
+                >
+                  {dayProjectedLabel}
+                </span>
+              ) : null}
               <span
                 className={
                   active
@@ -1339,6 +1635,7 @@ function MobileWeekAgenda({
   events,
   canUpdateAppointments,
   canOpenMessageThreads,
+  canPlaceCalls,
   canCaptureMedia,
   canManageMedia,
   canReadPayments,
@@ -1355,6 +1652,7 @@ function MobileWeekAgenda({
   events: CalendarEvent[];
   canUpdateAppointments: boolean;
   canOpenMessageThreads: boolean;
+  canPlaceCalls: boolean;
   canCaptureMedia: boolean;
   canManageMedia: boolean;
   canReadPayments: boolean;
@@ -1433,251 +1731,30 @@ function MobileWeekAgenda({
 
             <div className="space-y-2 p-3">
               {dayEvents.length ? (
-                dayEvents.map((event) => {
-                  const appointmentId =
-                    event.appointmentId ??
-                    (event.id.startsWith("db:")
-                      ? event.id.replace(/^db:/, "")
-                      : "");
-                  const canUpdate = Boolean(
-                    canUpdateAppointments &&
-                      appointmentId &&
-                      event.version &&
-                      event.source === "db",
-                  );
-                  const isQuoteOnly = isQuoteOnlyAppointmentType(
-                    event.appointmentType,
-                  );
-                  const mapsHref = buildMapsDirectionsHref(event.address);
-                  return (
-                    <MobileAppointmentCard
-                      key={event.id}
-                      cardId={appointmentId || event.id}
-                      timeLabel={`${formatTime(event.start)} – ${formatTime(event.end)}`}
-                      customerName={event.contactName ?? event.title}
-                      statusLabel={eventKindLabel(event)}
-                      statusTone={eventCardTone(event)}
-                      address={event.address}
-                      mapsHref={mapsHref}
-                      quotedScopeText={event.quotedScopeText}
-                      mediaSummary={
-                        appointmentId ? eventMediaSummary(event) : null
-                      }
-                      paymentSummary={
-                        appointmentId && !isQuoteOnly
-                          ? eventPaymentSummary(event)
-                          : null
-                      }
-                      amountLabel={formatEventAmountBadge(event)}
-                      hasDetails={Boolean(appointmentId)}
-                    >
-                      <div className="space-y-3">
-                        {appointmentId ? (
-                          <MobileAppointmentDetail
-                            bookingDetails={event.bookingDetails}
-                            appointmentId={appointmentId}
-                            appointmentVersion={event.version ?? null}
-                            employeeId={currentTeamMemberId}
-                            notes={event.notes}
-                            quotedScopeText={event.quotedScopeText ?? null}
-                            mediaSummary={eventMediaSummary(event)}
-                            paymentSummary={eventPaymentSummary(event)}
-                            paymentLedgerAvailable={
-                              event.paymentLedgerAvailable !== false
-                            }
-                            canCaptureMedia={canCaptureMedia}
-                            canManageMedia={canManageMedia}
-                            canReadPayments={canReadPayments && !isQuoteOnly}
-                            canCollectPayments={
-                              canCollectPayments &&
-                              canCollectPaymentForEvent(event)
-                            }
-                            canManagePayments={canManagePayments}
-                          />
-                        ) : null}
-
-                        {appointmentId &&
-                        event.source === "db" &&
-                        canOpenMessageThreads ? (
-                          <form action={openMobileAppointmentThreadAction}>
-                            <input
-                              type="hidden"
-                              name="appointmentId"
-                              value={appointmentId}
-                            />
-                            <input type="hidden" name="date" value={dayKey} />
-                            <input
-                              type="hidden"
-                              name="screen"
-                              value="calendar"
-                            />
-                            <button
-                              type="submit"
-                              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200"
-                            >
-                              <MessageSquare
-                                className="h-4 w-4"
-                                aria-hidden="true"
-                              />
-                              Message
-                            </button>
-                          </form>
-                        ) : null}
-
-                        {canUpdate ? (
-                          <>
-                            <MobileCompleteAppointmentForm
-                              event={event}
-                              appointmentId={appointmentId}
-                              calendarDay={dayKey}
-                              screen="calendar"
-                              teamMembers={teamMembers}
-                              currentTeamMemberId={currentTeamMemberId}
-                              currentTeamMemberName={currentTeamMemberName}
-                              canCollectPayments={canCollectPayments}
-                              canManagePayments={canManagePayments}
-                              canManageCommissions={canManageCommissions}
-                              canManageMedia={canManageMedia}
-                              canOverrideAppointmentConflicts={
-                                canOverrideAppointmentConflicts
-                              }
-                              canSendCustomerMessages={canSendCustomerMessages}
-                            />
-                            <details className="rounded-md border border-white/10 bg-slate-900 px-3">
-                              <summary className="flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-slate-300">
-                                More appointment actions
-                              </summary>
-                              <div className="space-y-2 pb-3">
-                                {!isCanceledEvent(event) ? (
-                                  <form
-                                    action={updateMobileAppointmentStatusAction}
-                                    className="space-y-2"
-                                  >
-                                    <input
-                                      type="hidden"
-                                      name="appointmentId"
-                                      value={appointmentId}
-                                    />
-                                    <input
-                                      type="hidden"
-                                      name="expectedVersion"
-                                      value={event.version ?? ""}
-                                    />
-                                    <input
-                                      type="hidden"
-                                      name="idempotencyKey"
-                                      value={`mobile-appointment-status:${randomUUID()}`}
-                                    />
-                                    <input
-                                      type="hidden"
-                                      name="date"
-                                      value={dayKey}
-                                    />
-                                    <input
-                                      type="hidden"
-                                      name="screen"
-                                      value="calendar"
-                                    />
-                                    {canSendCustomerMessages ? (
-                                      <label className="flex cursor-pointer items-start gap-3 rounded-md border border-rose-300/20 bg-rose-300/10 px-3 py-3 text-xs leading-5 text-rose-100">
-                                        <input
-                                          name="sendCustomerNotification"
-                                          type="checkbox"
-                                          className="mt-0.5 h-5 w-5 rounded border-slate-500 bg-slate-950 accent-rose-300"
-                                        />
-                                        <span>
-                                          Also request a cancellation notice for
-                                          the customer. This is off unless
-                                          checked, and delivery is not confirmed
-                                          by this action.
-                                        </span>
-                                      </label>
-                                    ) : (
-                                      <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-400">
-                                        Canceling will not notify the customer.
-                                        Message-send permission is required.
-                                      </p>
-                                    )}
-                                    <button
-                                      type="submit"
-                                      name="status"
-                                      value="canceled"
-                                      className="min-h-11 w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm font-semibold text-rose-100"
-                                    >
-                                      Cancel appointment
-                                    </button>
-                                  </form>
-                                ) : (
-                                  <div className="flex min-h-11 w-full items-center justify-center rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm font-semibold text-rose-100">
-                                    Canceled
-                                  </div>
-                                )}
-                                <details className="rounded-md border border-white/10 bg-slate-950 px-3">
-                                  <summary className="flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-cyan-100">
-                                    Reschedule
-                                  </summary>
-                                  <form
-                                    action={rescheduleMobileAppointmentAction}
-                                    className="space-y-3 pb-3"
-                                  >
-                                    <input
-                                      type="hidden"
-                                      name="appointmentId"
-                                      value={appointmentId}
-                                    />
-                                    <input
-                                      type="hidden"
-                                      name="currentDate"
-                                      value={dayKey}
-                                    />
-                                    <label className="block">
-                                      <span className="text-xs font-semibold text-slate-300">
-                                        Date
-                                      </span>
-                                      <input
-                                        type="date"
-                                        name="preferredDate"
-                                        defaultValue={formatDayKey(
-                                          new Date(event.start),
-                                        )}
-                                        required
-                                        className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
-                                      />
-                                    </label>
-                                    <label className="block">
-                                      <span className="text-xs font-semibold text-slate-300">
-                                        Time
-                                      </span>
-                                      <input
-                                        type="time"
-                                        name="startTime"
-                                        defaultValue={formatTimeInputValue(
-                                          event.start,
-                                        )}
-                                        step={60}
-                                        required
-                                        className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
-                                      />
-                                      <span className="mt-1 block text-xs text-slate-500">
-                                        Eastern time
-                                      </span>
-                                    </label>
-                                    <button
-                                      type="submit"
-                                      className="min-h-11 w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
-                                    >
-                                      Save new time
-                                    </button>
-                                  </form>
-                                </details>
-                              </div>
-                            </details>
-                          </>
-                        ) : null}
-                      </div>
-                    </MobileAppointmentCard>
-                  );
-                })
+                dayEvents.map((event) => (
+                  <MobileBooking
+                    key={event.id}
+                    event={event}
+                    date={dayKey}
+                    screen="calendar"
+                    teamMembers={teamMembers}
+                    currentTeamMemberId={currentTeamMemberId}
+                    currentTeamMemberName={currentTeamMemberName}
+                    canUpdateAppointments={canUpdateAppointments}
+                    canOpenMessageThreads={canOpenMessageThreads}
+                    canPlaceCalls={canPlaceCalls}
+                    canCaptureMedia={canCaptureMedia}
+                    canManageMedia={canManageMedia}
+                    canReadPayments={canReadPayments}
+                    canCollectPayments={canCollectPayments}
+                    canManagePayments={canManagePayments}
+                    canManageCommissions={canManageCommissions}
+                    canOverrideAppointmentConflicts={
+                      canOverrideAppointmentConflicts
+                    }
+                    canSendCustomerMessages={canSendCustomerMessages}
+                  />
+                ))
               ) : (
                 <div className="rounded-md border border-dashed border-white/15 bg-slate-900 p-4 text-sm leading-6 text-slate-400">
                   No appointments.
@@ -1848,9 +1925,9 @@ async function loadMobileTeamMembers(): Promise<TeamDirectoryMember[]> {
     },
   );
   if (!response.ok) return [];
-  const payload = (await response
-    .json()
-    .catch(() => null)) as { members?: TeamDirectoryMember[] } | null;
+  const payload = (await response.json().catch(() => null)) as {
+    members?: TeamDirectoryMember[];
+  } | null;
   return Array.isArray(payload?.members)
     ? payload.members.filter((member) => member.active !== false)
     : [];
@@ -1879,6 +1956,8 @@ export default async function MobileHomePage({
 }: {
   searchParams?: Promise<{
     screen?: string;
+    jobId?: string;
+    bookingReturn?: string;
     setup?: string;
     threadId?: string;
     contactId?: string;
@@ -1919,20 +1998,57 @@ export default async function MobileHomePage({
   }
 
   const params = (await searchParams) ?? {};
+  const modernBookings = isMobileBookingCardsV2Enabled();
+  const crewNavigation =
+    modernBookings && session.teamMember.roleSlug === "crew";
+  const defaultScreen =
+    crewNavigation && session.allowedScreens.includes("myday")
+      ? "myday"
+      : session.allowedScreens.includes("inbox")
+        ? "inbox"
+        : (session.allowedScreens[0] ?? "settings");
+  const selectedJobId = params.jobId?.trim() ?? "";
+  const bookingReturn = readMobileBookingReturn(params.bookingReturn);
   const requestedScreen =
-    typeof params.screen === "string" ? params.screen : "inbox";
+    typeof params.screen === "string"
+      ? params.screen
+      : params.threadId
+        ? "inbox"
+        : defaultScreen;
   const activeScreen = session.allowedScreens.includes(requestedScreen)
     ? requestedScreen
-    : "inbox";
+    : defaultScreen;
   if (activeScreen === "quotes" && isQuoteV2StaffFeatureEnabled()) {
     redirect(quoteWorkspaceHref("manage"));
   }
   if (activeScreen === "partners") {
     redirect("/team/partners");
   }
-  const visibleNav = navItems.filter((item) =>
+  const allowedNav = navItems.filter((item) =>
     session.allowedScreens.includes(item.id),
   );
+  const visibleNav = crewNavigation
+    ? ["myday", "calendar", "inbox", "settings"].flatMap((id) => {
+        const item = allowedNav.find((entry) => entry.id === id);
+        return item
+          ? [
+              {
+                ...item,
+                href:
+                  id === "inbox"
+                    ? ("/mobile?screen=inbox" as Route)
+                    : item.href,
+                label:
+                  id === "calendar"
+                    ? "Schedule"
+                    : id === "inbox"
+                      ? "Messages"
+                      : item.label,
+              },
+            ]
+          : [];
+      })
+    : allowedNav;
   const activeLabel =
     navItems.find((item) => item.id === activeScreen)?.label ?? "Inbox";
   const needsPasswordSetup =
@@ -2251,6 +2367,8 @@ export default async function MobileHomePage({
       return {
         appointmentId,
         contactName: event.contactName ?? event.title,
+        serviceCategoryLabel: mobileServiceCategory(event),
+        partnerAffiliation: event.partnerAffiliation ?? null,
         address: event.address ?? null,
         start: event.start,
         end: event.end,
@@ -2264,8 +2382,61 @@ export default async function MobileHomePage({
     })
     .filter((event) => Boolean(event.appointmentId));
 
+  const completedTodayEvents = visibleTodayEvents.filter(
+    (event) =>
+      event.status === "completed" &&
+      (event.appointmentId ?? event.id.replace(/^db:/u, "")) !== selectedJobId,
+  );
+  const remainingTodayEvents = visibleTodayEvents.filter(
+    (event) => !completedTodayEvents.includes(event),
+  );
+  const nextScheduledEvent =
+    remainingTodayEvents.find(
+      (event) =>
+        event.status !== "completed" && Date.parse(event.start) >= Date.now(),
+    ) ?? remainingTodayEvents.find((event) => event.status !== "completed");
+  const completedAttentionCount = completedTodayEvents.filter(
+    (event) =>
+      (event.paymentSummary?.balanceCents ?? 0) > 0 ||
+      event.paymentSummary?.status === "needs_review" ||
+      (event.mediaSummary?.pendingCount ?? 0) > 0,
+  ).length;
+  const renderTodayBooking = (event: CalendarEvent) => (
+    <div key={event.id}>
+      {modernBookings && event.id === nextScheduledEvent?.id ? (
+        <p className="mb-2 text-xs font-semibold text-cyan-200">
+          Next scheduled
+        </p>
+      ) : null}
+      <MobileBooking
+        event={event}
+        date={calendarDay}
+        screen="myday"
+        teamMembers={teamMembers}
+        currentTeamMemberId={session.teamMember.id}
+        currentTeamMemberName={session.teamMember.name}
+        canUpdateAppointments={canUpdateAppointments}
+        canOpenMessageThreads={canOpenMessageThreads}
+        canPlaceCalls={canPlaceCalls}
+        canCaptureMedia={canCaptureMedia}
+        canManageMedia={canManageMedia}
+        canReadPayments={canReadPayments}
+        canCollectPayments={canCollectPayments}
+        canManagePayments={canManagePayments}
+        canManageCommissions={canManageCommissions}
+        canOverrideAppointmentConflicts={canOverrideAppointmentConflicts}
+        canSendCustomerMessages={canStartMessageThreads}
+      />
+    </div>
+  );
+
   return (
     <main className="min-h-dvh bg-slate-950 text-white">
+      <MobileBookingReturnRestore
+        employeeId={session.teamMember.id}
+        appointmentId={selectedJobId}
+        paymentReturn={Boolean(params.payment)}
+      />
       <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col">
         <header className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/95 px-4 pb-3 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur">
           <div className="flex items-center justify-between gap-3">
@@ -2655,6 +2826,14 @@ export default async function MobileHomePage({
                     </div>
                   ) : null}
 
+                  {bookingReturn ? (
+                    <Link
+                      href={bookingReturn as Route}
+                      className="mx-4 my-3 flex min-h-11 items-center justify-center rounded-lg border border-white/15 text-sm font-semibold text-cyan-100"
+                    >
+                      Back to job
+                    </Link>
+                  ) : null}
                   <MobileThreadConversation
                     key={selectedThread.thread.id}
                     isPartnerJob={Boolean(selectedThread.thread.partnerJob)}
@@ -3269,236 +3448,132 @@ export default async function MobileHomePage({
           ) : activeScreen === "myday" ? (
             <div className="space-y-4">
               <MobileWeekStrip
+                compact={modernBookings}
                 activeDay={calendarDay}
                 days={calendarWeekDays}
                 events={calendarWeekEvents}
                 screen="myday"
               />
 
-              <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">
-                  My Day
-                </p>
-                <h2 className="mt-1 text-lg font-semibold">
-                  {formatDateLabel(calendarDay)}
-                </h2>
-                <div className="mt-4 grid grid-cols-3 gap-2">
-                  <div className="rounded-md border border-white/10 bg-slate-900 p-3">
-                    <p className="text-xs text-slate-400">Stops</p>
-                    <p className="mt-1 text-xl font-semibold">
-                      {visibleTodayEvents.length}
-                    </p>
-                  </div>
-                  <div className="rounded-md border border-white/10 bg-slate-900 p-3">
-                    <p className="text-xs text-slate-400">Jobs</p>
-                    <p className="mt-1 text-xl font-semibold">
-                      {mobileJobEvents.length}
-                    </p>
-                  </div>
-                  <div className="rounded-md border border-white/10 bg-slate-900 p-3">
-                    <p className="text-xs text-slate-400">Projected</p>
-                    <p className="mt-1 text-lg font-semibold text-cyan-200">
-                      {formatProjectedRange(visibleTodayEvents)}
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  <Link
-                    href="/mobile"
-                    className="rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-center text-sm font-semibold text-slate-200"
-                  >
-                    Inbox
-                  </Link>
-                  <Link
-                    href="/mobile?screen=calendar"
-                    className="rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-center text-sm font-semibold text-slate-950"
-                  >
-                    Calendar
-                  </Link>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-base font-semibold">
-                    Today&apos;s Appointments
+              {modernBookings ? (
+                <div className="px-1">
+                  <h2 className="text-lg font-semibold">
+                    {formatDateLabel(calendarDay)}
                   </h2>
-                  <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">
-                    {visibleTodayEvents.length}
-                  </span>
+                  <p className="mt-1 text-sm text-slate-400">
+                    {visibleTodayEvents.length} bookings ·{" "}
+                    {
+                      visibleTodayEvents.filter(
+                        (event) => event.status === "completed",
+                      ).length
+                    }{" "}
+                    finished ·{" "}
+                    {
+                      visibleTodayEvents.filter(
+                        (event) => event.status !== "completed",
+                      ).length
+                    }{" "}
+                    remaining
+                  </p>
                 </div>
-                <div className="mt-3 space-y-2">
+              ) : (
+                <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">
+                    My Day
+                  </p>
+                  <h2 className="mt-1 text-lg font-semibold">
+                    {formatDateLabel(calendarDay)}
+                  </h2>
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    <div className="rounded-md border border-white/10 bg-slate-900 p-3">
+                      <p className="text-xs text-slate-400">Stops</p>
+                      <p className="mt-1 text-xl font-semibold">
+                        {visibleTodayEvents.length}
+                      </p>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-slate-900 p-3">
+                      <p className="text-xs text-slate-400">Jobs</p>
+                      <p className="mt-1 text-xl font-semibold">
+                        {mobileJobEvents.length}
+                      </p>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-slate-900 p-3">
+                      <p className="text-xs text-slate-400">Projected</p>
+                      <p className="mt-1 text-lg font-semibold text-cyan-200">
+                        {formatProjectedRange(visibleTodayEvents)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    <Link
+                      href="/mobile"
+                      className="rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-center text-sm font-semibold text-slate-200"
+                    >
+                      Inbox
+                    </Link>
+                    <Link
+                      href="/mobile?screen=calendar"
+                      className="rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-center text-sm font-semibold text-slate-950"
+                    >
+                      Calendar
+                    </Link>
+                  </div>
+                </div>
+              )}
+
+              <div
+                className={
+                  modernBookings
+                    ? "space-y-3"
+                    : "rounded-lg border border-white/10 bg-white/[0.08] p-4"
+                }
+              >
+                {!modernBookings ? (
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-base font-semibold">
+                      {calendarDay === offlineTodayKey
+                        ? "Today’s bookings"
+                        : "Bookings"}
+                    </h2>
+                    <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">
+                      {visibleTodayEvents.length}
+                    </span>
+                  </div>
+                ) : null}
+                <div
+                  className={modernBookings ? "space-y-3" : "mt-3 space-y-2"}
+                >
                   {visibleTodayEvents.length > 0 ? (
-                    visibleTodayEvents.map((event) => {
-                      const appointmentId =
-                        event.appointmentId ??
-                        (event.id.startsWith("db:")
-                          ? event.id.replace(/^db:/, "")
-                          : "");
-                      const canUpdate = Boolean(
-                        canUpdateAppointments &&
-                          appointmentId &&
-                          event.version &&
-                          event.source === "db",
-                      );
-                      const isQuoteOnly = isQuoteOnlyAppointmentType(
-                        event.appointmentType,
-                      );
-                      const mapsHref = buildMapsDirectionsHref(event.address);
-                      return (
-                        <MobileAppointmentCard
-                          key={event.id}
-                          cardId={appointmentId || event.id}
-                          timeLabel={`${formatTime(event.start)} – ${formatTime(event.end)}`}
-                          customerName={event.contactName ?? event.title}
-                          statusLabel={eventKindLabel(event)}
-                          statusTone={eventCardTone(event)}
-                          address={event.address}
-                          mapsHref={mapsHref}
-                          quotedScopeText={event.quotedScopeText}
-                          mediaSummary={
-                            appointmentId ? eventMediaSummary(event) : null
-                          }
-                          paymentSummary={
-                            appointmentId && !isQuoteOnly
-                              ? eventPaymentSummary(event)
-                              : null
-                          }
-                          amountLabel={formatEventAmountBadge(event)}
-                          hasDetails={Boolean(appointmentId)}
-                        >
-                          {appointmentId ? (
-                            <div className="space-y-3">
-                              <MobileAppointmentDetail
-                                bookingDetails={event.bookingDetails}
-                                appointmentId={appointmentId}
-                                appointmentVersion={event.version ?? null}
-                                employeeId={session.teamMember.id}
-                                notes={event.notes}
-                                quotedScopeText={event.quotedScopeText ?? null}
-                                mediaSummary={eventMediaSummary(event)}
-                                paymentSummary={eventPaymentSummary(event)}
-                                paymentLedgerAvailable={
-                                  event.paymentLedgerAvailable !== false
-                                }
-                                canCaptureMedia={canCaptureMedia}
-                                canManageMedia={canManageMedia}
-                                canReadPayments={
-                                  canReadPayments && !isQuoteOnly
-                                }
-                                canCollectPayments={
-                                  canCollectPayments &&
-                                  canCollectPaymentForEvent(event)
-                                }
-                                canManagePayments={canManagePayments}
-                              />
+                    modernBookings ? (
+                      <>
+                        {remainingTodayEvents.map(renderTodayBooking)}
+                        {completedTodayEvents.length ? (
+                          <details
+                            className="rounded-xl border border-white/10 px-3"
+                            data-mobile-completed-group
+                          >
+                            <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-2 text-sm font-semibold text-slate-300">
+                              <span>
+                                Finished ({completedTodayEvents.length})
+                              </span>
+                              {completedAttentionCount ? (
+                                <span className="text-xs text-amber-100">
+                                  {completedAttentionCount} need attention
+                                </span>
+                              ) : null}
+                            </summary>
+                            <div className="space-y-3 pb-3">
+                              {completedTodayEvents.map(renderTodayBooking)}
                             </div>
-                          ) : null}
-                          {canUpdate ? (
-                            <details className="rounded-md border border-white/10 bg-slate-950 p-3">
-                              <summary className="flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-cyan-100">
-                                Add note
-                              </summary>
-                              <form
-                                action={addMobileAppointmentNoteAction}
-                                className="mt-3 space-y-3"
-                              >
-                                <input
-                                  type="hidden"
-                                  name="appointmentId"
-                                  value={appointmentId}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="expectedVersion"
-                                  value={event.version ?? ""}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="idempotencyKey"
-                                  value={`mobile-appointment-note:${randomUUID()}`}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="date"
-                                  value={calendarDay}
-                                />
-                                <textarea
-                                  name="body"
-                                  required
-                                  rows={3}
-                                  className="w-full resize-none rounded-md border border-white/10 bg-slate-900 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
-                                  placeholder="Gate code, call notes, customer context..."
-                                />
-                                <button
-                                  type="submit"
-                                  className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
-                                >
-                                  Save note
-                                </button>
-                              </form>
-                            </details>
-                          ) : null}
-                          {appointmentId &&
-                          event.source === "db" &&
-                          canOpenMessageThreads ? (
-                            <div>
-                              <form action={openMobileAppointmentThreadAction}>
-                                <input
-                                  type="hidden"
-                                  name="appointmentId"
-                                  value={appointmentId}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="date"
-                                  value={calendarDay}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="screen"
-                                  value="myday"
-                                />
-                                <button
-                                  type="submit"
-                                  className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold text-slate-200"
-                                >
-                                  <MessageSquare
-                                    className="h-4 w-4"
-                                    aria-hidden="true"
-                                  />
-                                  Message
-                                </button>
-                              </form>
-                            </div>
-                          ) : null}
-                          {canUpdate ? (
-                            <div>
-                              <MobileCompleteAppointmentForm
-                                event={event}
-                                appointmentId={appointmentId}
-                                calendarDay={calendarDay}
-                                screen="myday"
-                                teamMembers={teamMembers}
-                                currentTeamMemberId={session.teamMember.id}
-                                currentTeamMemberName={session.teamMember.name}
-                                canCollectPayments={canCollectPayments}
-                                canManagePayments={canManagePayments}
-                                canManageCommissions={canManageCommissions}
-                                canManageMedia={canManageMedia}
-                                canOverrideAppointmentConflicts={
-                                  canOverrideAppointmentConflicts
-                                }
-                                canSendCustomerMessages={canStartMessageThreads}
-                              />
-                            </div>
-                          ) : null}
-                        </MobileAppointmentCard>
-                      );
-                    })
+                          </details>
+                        ) : null}
+                      </>
+                    ) : (
+                      visibleTodayEvents.map(renderTodayBooking)
+                    )
                   ) : (
                     <div className="rounded-md border border-dashed border-white/15 bg-slate-900 p-4 text-sm leading-6 text-slate-300">
-                      No appointments today.
+                      No appointments for this day.
                     </div>
                   )}
                 </div>
@@ -4572,6 +4647,7 @@ export default async function MobileHomePage({
               </div>
 
               <MobileWeekStrip
+                compact={modernBookings}
                 activeDay={calendarDay}
                 days={calendarWeekDays}
                 events={calendarWeekEvents}
@@ -4583,6 +4659,7 @@ export default async function MobileHomePage({
                 events={calendarWeekEvents}
                 canUpdateAppointments={canUpdateAppointments}
                 canOpenMessageThreads={canOpenMessageThreads}
+                canPlaceCalls={canPlaceCalls}
                 canCaptureMedia={canCaptureMedia}
                 canManageMedia={canManageMedia}
                 canReadPayments={canReadPayments}
@@ -5387,6 +5464,25 @@ export default async function MobileHomePage({
             </MobileSpendErrorBoundary>
           ) : activeScreen === "settings" ? (
             <div className="space-y-4">
+              {crewNavigation ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {allowedNav
+                    .filter(
+                      (item) =>
+                        !visibleNav.some((visible) => visible.id === item.id),
+                    )
+                    .map((item) => (
+                      <Link
+                        key={item.id}
+                        href={item.href}
+                        className="flex min-h-14 items-center gap-2 rounded-lg border border-white/10 bg-slate-900 px-3 text-sm font-semibold"
+                      >
+                        <item.icon className="h-5 w-5" aria-hidden="true" />
+                        {item.label}
+                      </Link>
+                    ))}
+                </div>
+              ) : null}
               <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">
                   Account
@@ -5495,19 +5591,23 @@ export default async function MobileHomePage({
             </div>
           )}
 
-          <div className="rounded-lg border border-white/10 bg-slate-900 p-4">
-            <h2 className="text-base font-semibold">Allowed mobile screens</h2>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {session.allowedScreens.map((screen) => (
-                <span
-                  key={screen}
-                  className="rounded-full border border-white/10 bg-white/[0.08] px-3 py-1 text-xs font-semibold capitalize text-slate-200"
-                >
-                  {screen}
-                </span>
-              ))}
+          {!modernBookings || activeScreen === "settings" ? (
+            <div className="rounded-lg border border-white/10 bg-slate-900 p-4">
+              <h2 className="text-base font-semibold">
+                Allowed mobile screens
+              </h2>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {session.allowedScreens.map((screen) => (
+                  <span
+                    key={screen}
+                    className="rounded-full border border-white/10 bg-white/[0.08] px-3 py-1 text-xs font-semibold capitalize text-slate-200"
+                  >
+                    {screen}
+                  </span>
+                ))}
+              </div>
             </div>
-          </div>
+          ) : null}
         </section>
 
         <nav className="sticky bottom-0 border-t border-white/10 bg-slate-950/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur">

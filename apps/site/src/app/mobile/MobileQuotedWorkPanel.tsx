@@ -141,9 +141,14 @@ function friendlyError(value: unknown): string {
   return "The photo could not be prepared. It was not removed from your library.";
 }
 
-function syncIssueMessage(issue: MobileMediaSyncIssueEventDetail): string {
+function syncIssueMessage(
+  issue: MobileMediaSyncIssueEventDetail,
+  modern = false,
+): string {
   if (issue.code === "quoted_scope_required") {
-    return "Add and save the “Quoted to remove” summary. These photos are safe on this phone and will upload afterward.";
+    return modern
+      ? "Add and save the work details. These photos are saved on this phone and will upload afterward."
+      : "Add and save the “Quoted to remove” summary. These photos are safe on this phone and will upload afterward.";
   }
   if (
     issue.code === "appointment_media_writes_disabled" ||
@@ -185,6 +190,7 @@ export function MobileQuotedWorkPanel({
   canCapture,
   canManage,
   onScopeRequirementChange,
+  modern = false,
 }: {
   appointmentId: string;
   employeeId: string;
@@ -193,6 +199,7 @@ export function MobileQuotedWorkPanel({
   canCapture: boolean;
   canManage: boolean;
   onScopeRequirementChange?: (needsScope: boolean) => void;
+  modern?: boolean;
 }) {
   const router = useRouter();
   const [loaded, setLoaded] = React.useState(false);
@@ -366,7 +373,11 @@ export function MobileQuotedWorkPanel({
         })),
       );
       if (!cached.length)
-        setMessage("Quoted-work photos are unavailable right now.");
+        setMessage(
+          modern
+            ? "Photos are unavailable right now."
+            : "Quoted-work photos are unavailable right now.",
+        );
     } finally {
       setLoaded(true);
       setLoading(false);
@@ -376,6 +387,7 @@ export function MobileQuotedWorkPanel({
     appointmentId,
     employeeId,
     initialScope,
+    modern,
     onScopeRequirementChange,
     publishSummary,
     refreshQueue,
@@ -403,7 +415,7 @@ export function MobileQuotedWorkPanel({
         detail?.employeeId === employeeId &&
         detail.appointmentId === appointmentId
       ) {
-        setMessage(syncIssueMessage(detail));
+        setMessage(syncIssueMessage(detail, modern));
       }
     };
     const queueTimer = window.setInterval(() => {
@@ -416,7 +428,7 @@ export function MobileQuotedWorkPanel({
       window.removeEventListener(MOBILE_MEDIA_SYNC_ISSUE_EVENT, onSyncIssue);
       window.clearInterval(queueTimer);
     };
-  }, [appointmentId, employeeId, load, loaded, refreshQueue, router]);
+  }, [appointmentId, employeeId, load, loaded, modern, refreshQueue, router]);
 
   const addFiles = async (files: FileList | null, input: HTMLInputElement) => {
     try {
@@ -430,8 +442,12 @@ export function MobileQuotedWorkPanel({
       if (!scope.trim()) {
         setMessage(
           canManage
-            ? "Add the “Quoted to remove” summary before adding photos."
-            : "This appointment needs a quoted-work summary before photos can be added. Ask the office to add it first.",
+            ? modern
+              ? "Add the work details before adding photos."
+              : "Add the “Quoted to remove” summary before adding photos."
+            : modern
+              ? "This job needs work details before photos can be added. Ask the office to add them first."
+              : "This appointment needs a quoted-work summary before photos can be added. Ask the office to add it first.",
         );
         return;
       }
@@ -467,7 +483,11 @@ export function MobileQuotedWorkPanel({
   const saveScope = async () => {
     const nextScope = scope.trim();
     if (!nextScope) {
-      setMessage("Add the quoted-to-remove summary before saving.");
+      setMessage(
+        modern
+          ? "Add the work details before saving."
+          : "Add the quoted-to-remove summary before saving.",
+      );
       return;
     }
     // An older gallery request may still be in flight. Keep its stale scope
@@ -493,7 +513,11 @@ export function MobileQuotedWorkPanel({
         setSummary(nextSummary);
         onScopeRequirementChange?.(false);
         publishSummary(nextSummary, nextScope);
-        setMessage("Quoted scope saved. Any waiting photos will upload now.");
+        setMessage(
+          modern
+            ? "Work details saved. Any waiting photos will upload now."
+            : "Quoted scope saved. Any waiting photos will upload now.",
+        );
         void requestQueuedMediaSync(employeeId)
           .then(refreshQueue)
           .catch(() => undefined);
@@ -613,9 +637,107 @@ export function MobileQuotedWorkPanel({
     setBusy(null);
   };
 
+  const photoCapture = canCapture ? (
+    <section data-mobile-photo-actions className="space-y-2">
+      {!modern ? (
+        <label className="block">
+          <span className="text-xs font-semibold text-slate-300">
+            Caption for new photos (optional)
+          </span>
+          <input
+            value={newCaption}
+            onChange={(event) => setNewCaption(event.target.value)}
+            maxLength={500}
+            className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white"
+            placeholder="Items behind the shed"
+          />
+        </label>
+      ) : null}
+      <div className="grid grid-cols-2 gap-2">
+        <label className="min-h-11 cursor-pointer rounded-md bg-cyan-300 px-3 py-3 text-center text-sm font-semibold text-slate-950">
+          {busy === "upload"
+            ? "Preparing…"
+            : modern
+              ? "Take photo"
+              : "Take photos"}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            capture="environment"
+            disabled={busy === "upload"}
+            className="sr-only"
+            onChange={(event) => {
+              const input = event.currentTarget;
+              void addFiles(input.files, input);
+            }}
+          />
+        </label>
+        <label className="min-h-11 cursor-pointer rounded-md border border-cyan-300/40 bg-slate-900 px-3 py-3 text-center text-sm font-semibold text-cyan-100">
+          Choose photos
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            multiple
+            disabled={busy === "upload"}
+            className="sr-only"
+            onChange={(event) => {
+              const input = event.currentTarget;
+              void addFiles(input.files, input);
+            }}
+          />
+        </label>
+      </div>
+      {modern ? (
+        <details className="rounded-md border border-white/10 px-3">
+          <summary className="flex min-h-11 cursor-pointer items-center text-sm text-slate-300">
+            Add a photo caption (optional)
+          </summary>
+          <div className="pb-3">
+            <label className="block">
+              <span className="text-xs font-semibold text-slate-300">
+                Caption for new photos (optional)
+              </span>
+              <input
+                value={newCaption}
+                onChange={(event) => setNewCaption(event.target.value)}
+                maxLength={500}
+                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white"
+                placeholder="Items behind the shed"
+              />
+            </label>
+          </div>
+        </details>
+      ) : null}
+    </section>
+  ) : null;
+
   return (
     <>
+      {modern ? photoCapture : null}
+      {modern && message ? (
+        <p
+          role="status"
+          className="rounded-md border border-cyan-300/20 bg-cyan-300/10 p-3 text-sm leading-5 text-cyan-100"
+        >
+          {message}
+        </p>
+      ) : null}
+      {modern && queue.length ? (
+        <p role="status" className="text-sm text-slate-300">
+          {queue.some(
+            (item) => item.status === "failed" || isInterruptedQueueRow(item),
+          )
+            ? "Photo upload needs attention. Open Photos to retry."
+            : queue.some(
+                  (item) =>
+                    item.status === "uploading" || item.status === "finalizing",
+                )
+              ? "Photo uploading…"
+              : `${queue.length} photo${queue.length === 1 ? "" : "s"} saved on this phone, waiting to upload.`}
+        </p>
+      ) : null}
       <details
+        data-mobile-work-details
         className={`rounded-md border p-3 ${
           summary.needsScope
             ? "border-amber-300/40 bg-amber-300/10"
@@ -629,10 +751,12 @@ export function MobileQuotedWorkPanel({
           if (!loaded) void load();
         }}
       >
-        <summary className="cursor-pointer list-none">
+        <summary className="min-h-11 cursor-pointer list-none">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-semibold text-white">Quoted Work</p>
+              <p className="text-sm font-semibold text-white">
+                {modern ? "Photos" : "Quoted Work"}
+              </p>
               <p className="mt-0.5 text-xs text-slate-400">
                 {summary.readyCount} photo{summary.readyCount === 1 ? "" : "s"}
                 {summary.pendingCount
@@ -642,7 +766,7 @@ export function MobileQuotedWorkPanel({
             </div>
             {summary.needsScope ? (
               <span className="rounded-full bg-amber-300 px-2 py-1 text-[11px] font-semibold text-slate-950">
-                Scope needed
+                {modern ? "Work details needed" : "Scope needed"}
               </span>
             ) : (
               <span className="text-xs font-semibold text-cyan-100">Open</span>
@@ -665,13 +789,21 @@ export function MobileQuotedWorkPanel({
                   : "border-white/10 bg-slate-900 text-slate-200"
               }`}
             >
-              {managing ? "Done managing quoted work" : "Manage quoted work"}
+              {modern
+                ? managing
+                  ? "Close photo options"
+                  : "More photo options"
+                : managing
+                  ? "Done managing quoted work"
+                  : "Manage quoted work"}
             </button>
           ) : null}
           {loading ? (
-            <p className="text-sm text-slate-400">Loading quoted work…</p>
+            <p className="text-sm text-slate-400">
+              {modern ? "Loading photos…" : "Loading quoted work…"}
+            </p>
           ) : null}
-          {message ? (
+          {!modern && message ? (
             <p
               role="status"
               className="rounded-md border border-cyan-300/20 bg-cyan-300/10 p-2 text-xs leading-5 text-cyan-100"
@@ -680,50 +812,62 @@ export function MobileQuotedWorkPanel({
             </p>
           ) : null}
 
-          <section>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
-              Quoted to remove
-            </p>
-            {canManage && managing ? (
-              <>
-                <textarea
-                  value={scope}
-                  onChange={(event) => {
-                    scopeRevision.current += 1;
-                    setScope(event.target.value);
-                  }}
-                  maxLength={4000}
-                  rows={4}
-                  className="mt-2 w-full resize-y rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base leading-6 text-white outline-none focus:border-cyan-300"
-                  placeholder="Example: Remove the sectional, two mattresses, and boxed garage items shown below."
-                />
-                <div className="mt-2 flex items-center justify-between gap-3">
-                  <span className="text-xs text-slate-500">
-                    {scope.length}/4,000
-                  </span>
-                  <button
-                    type="button"
-                    disabled={busy === "scope"}
-                    onClick={() => void saveScope()}
-                    className="rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-xs font-semibold text-slate-950 disabled:opacity-60"
-                  >
-                    {busy === "scope" ? "Saving…" : "Save scope"}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p
-                className={`mt-2 whitespace-pre-wrap rounded-md border p-3 text-sm leading-6 ${
-                  scope
-                    ? "border-white/10 bg-slate-900 text-slate-200"
-                    : "border-amber-300/30 bg-amber-300/10 text-amber-100"
-                }`}
-              >
-                {scope ||
-                  "Quoted scope is missing. Ask the office to fill it in before payment or completion."}
+          {!modern || managing || summary.needsScope ? (
+            <section>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                {modern ? "Work details" : "Quoted to remove"}
               </p>
-            )}
-          </section>
+              {canManage && managing ? (
+                <>
+                  <textarea
+                    value={scope}
+                    onChange={(event) => {
+                      scopeRevision.current += 1;
+                      setScope(event.target.value);
+                    }}
+                    maxLength={4000}
+                    rows={4}
+                    className="mt-2 w-full resize-y rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base leading-6 text-white outline-none focus:border-cyan-300"
+                    placeholder={
+                      modern
+                        ? "Describe the agreed work, access instructions, and any exclusions."
+                        : "Example: Remove the sectional, two mattresses, and boxed garage items shown below."
+                    }
+                  />
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="text-xs text-slate-500">
+                      {scope.length}/4,000
+                    </span>
+                    <button
+                      type="button"
+                      disabled={busy === "scope"}
+                      onClick={() => void saveScope()}
+                      className="rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-xs font-semibold text-slate-950 disabled:opacity-60"
+                    >
+                      {busy === "scope"
+                        ? "Saving…"
+                        : modern
+                          ? "Save work details"
+                          : "Save scope"}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p
+                  className={`mt-2 whitespace-pre-wrap rounded-md border p-3 text-sm leading-6 ${
+                    scope
+                      ? "border-white/10 bg-slate-900 text-slate-200"
+                      : "border-amber-300/30 bg-amber-300/10 text-amber-100"
+                  }`}
+                >
+                  {scope ||
+                    (modern
+                      ? "Work details are missing. Ask the office to add them before payment or completion."
+                      : "Quoted scope is missing. Ask the office to fill it in before payment or completion.")}
+                </p>
+              )}
+            </section>
+          ) : null}
 
           {items.length ? (
             <div className="grid grid-cols-2 gap-2">
@@ -742,7 +886,10 @@ export function MobileQuotedWorkPanel({
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={item.thumbnailUrl ?? item.displayUrl ?? ""}
-                        alt={item.caption || `Quoted work photo ${index + 1}`}
+                        alt={
+                          item.caption ||
+                          `${modern ? "Work" : "Quoted work"} photo ${index + 1}`
+                        }
                         className="aspect-square w-full object-cover"
                       />
                     ) : (
@@ -761,7 +908,11 @@ export function MobileQuotedWorkPanel({
                   <div className="space-y-2 p-2">
                     <p className="text-[11px] font-semibold text-slate-400">
                       {sourceLabel(item.source)}
-                      {item.status !== "ready" ? ` · ${item.status}` : ""}
+                      {item.status !== "ready"
+                        ? ` · ${item.status}`
+                        : modern
+                          ? " · Photo uploaded"
+                          : ""}
                     </p>
                     {canManage && managing ? (
                       <>
@@ -890,56 +1041,11 @@ export function MobileQuotedWorkPanel({
             </div>
           ) : loaded && !loading ? (
             <p className="rounded-md border border-dashed border-white/10 p-3 text-sm text-slate-400">
-              No quoted-work photos yet.
+              {modern ? "No photos yet." : "No quoted-work photos yet."}
             </p>
           ) : null}
 
-          {canCapture ? (
-            <section className="space-y-2">
-              <label className="block">
-                <span className="text-xs font-semibold text-slate-300">
-                  Caption for new photos (optional)
-                </span>
-                <input
-                  value={newCaption}
-                  onChange={(event) => setNewCaption(event.target.value)}
-                  maxLength={500}
-                  className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white"
-                  placeholder="Items behind the shed"
-                />
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="cursor-pointer rounded-md bg-cyan-300 px-3 py-3 text-center text-sm font-semibold text-slate-950">
-                  {busy === "upload" ? "Preparing…" : "Take photos"}
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-                    capture="environment"
-                    disabled={busy === "upload"}
-                    className="sr-only"
-                    onChange={(event) => {
-                      const input = event.currentTarget;
-                      void addFiles(input.files, input);
-                    }}
-                  />
-                </label>
-                <label className="cursor-pointer rounded-md border border-cyan-300/40 bg-slate-900 px-3 py-3 text-center text-sm font-semibold text-cyan-100">
-                  Choose photos
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-                    multiple
-                    disabled={busy === "upload"}
-                    className="sr-only"
-                    onChange={(event) => {
-                      const input = event.currentTarget;
-                      void addFiles(input.files, input);
-                    }}
-                  />
-                </label>
-              </div>
-            </section>
-          ) : null}
+          {!modern ? photoCapture : null}
 
           {queue.length ? (
             <section className="space-y-2">
@@ -957,7 +1063,13 @@ export function MobileQuotedWorkPanel({
                         {item.filename}
                       </p>
                       <p className="mt-1 capitalize text-slate-400">
-                        {item.status}
+                        {modern
+                          ? item.status === "queued"
+                            ? "Saved on this phone"
+                            : item.status === "failed"
+                              ? "Upload failed"
+                              : "Photo uploading"
+                          : item.status}
                         {item.error ? ` · ${item.error}` : ""}
                       </p>
                     </div>

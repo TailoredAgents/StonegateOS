@@ -4,7 +4,8 @@ import {
   parseGoogleCalendarEventListResponse,
   resolveGoogleCalendarApiEndpoint,
 } from "@myst-os/sdk";
-import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import {
   getDb,
   appointmentNotes,
@@ -12,6 +13,9 @@ import {
   appointments,
   contacts,
   crmTasks,
+  partnerAccounts,
+  partnerBookings,
+  partnerServiceCatalog,
   properties,
   teamMembers,
   type AppointmentBookingDetails,
@@ -24,6 +28,11 @@ import {
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { resolveEasternDayBoundary } from "@/lib/appointment-time";
 import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
+import {
+  loadCalendarCardIdentityRows,
+  resolveCalendarCardIdentity,
+  type CalendarPartnerAffiliation,
+} from "@/lib/calendar-card-identity";
 import {
   getEtaSummariesForAppointments,
   type EtaAppointmentSummary,
@@ -45,7 +54,10 @@ type CalendarEvent = {
   start: string;
   end: string;
   appointmentId?: string;
+  contactId?: string | null;
   appointmentType?: string | null;
+  serviceCategoryLabel?: string | null;
+  partnerAffiliation?: CalendarPartnerAffiliation | null;
   rescheduleToken?: string | null;
   contactName?: string | null;
   address?: string | null;
@@ -351,6 +363,61 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
   }
 
+  const cardIdentityRows = await loadCalendarCardIdentityRows(
+    appointmentIds,
+    () => {
+      const legacyPartner = alias(contacts, "calendar_partner_contact");
+      // Keep optional partner/catalog tables out of the core appointment read.
+      // This contains no prices, proof rules or partner account administration.
+      return db.transaction(async (tx) => {
+        // Bound the database work as well as the response deadline: a label
+        // read must not keep occupying a pooled connection after fallback.
+        await tx.execute(sql`set local statement_timeout = '750ms'`);
+        return tx
+          .select({
+            appointmentId: appointments.id,
+            bookingId: partnerBookings.id,
+            bookingAccountId: partnerBookings.partnerAccountId,
+            appointmentAccountId: appointments.partnerAccountId,
+            contactAccountId: contacts.partnerAccountId,
+            contactPartnerStatus: contacts.partnerStatus,
+            accountName: partnerAccounts.name,
+            legacyPartnerCompany: legacyPartner.company,
+            legacyPartnerFirstName: legacyPartner.firstName,
+            legacyPartnerLastName: legacyPartner.lastName,
+            contactCompany: contacts.company,
+            contactFirstName: contacts.firstName,
+            contactLastName: contacts.lastName,
+            partnerServiceKey: partnerBookings.serviceKey,
+            partnerServiceLabel: partnerServiceCatalog.label,
+          })
+          .from(appointments)
+          .leftJoin(contacts, eq(appointments.contactId, contacts.id))
+          .leftJoin(
+            partnerBookings,
+            eq(partnerBookings.appointmentId, appointments.id),
+          )
+          .leftJoin(
+            legacyPartner,
+            eq(partnerBookings.orgContactId, legacyPartner.id),
+          )
+          .leftJoin(
+            partnerAccounts,
+            eq(
+              partnerAccounts.id,
+              sql`coalesce(${partnerBookings.partnerAccountId}, ${appointments.partnerAccountId}, ${contacts.partnerAccountId})`,
+            ),
+          )
+          .leftJoin(
+            partnerServiceCatalog,
+            eq(partnerBookings.serviceKey, partnerServiceCatalog.key),
+          )
+          .where(inArray(appointments.id, appointmentIds));
+      });
+    },
+    (event) => console.warn(`calendar_card_identity_${event}`),
+  );
+
   const appointmentsEvents: CalendarEvent[] = dbRows
     .filter((row) => row.startAt)
     .map((row) => {
@@ -395,10 +462,17 @@ export async function GET(request: NextRequest): Promise<Response> {
             .filter(Boolean),
         ]),
       );
+      const bookingDetails = parseAppointmentBookingDetails(row.bookingDetails);
+      const cardIdentity = resolveCalendarCardIdentity({
+        bookingDetails,
+        enrichment: cardIdentityRows.get(row.id),
+      });
       return {
         id: `db:${row.id}`,
         appointmentId: row.id,
+        contactId: row.contactId ?? null,
         appointmentType: row.type ?? null,
+        ...cardIdentity,
         rescheduleToken: row.rescheduleToken,
         title: contactName ?? "Appointment",
         source: "db",
@@ -428,7 +502,7 @@ export async function GET(request: NextRequest): Promise<Response> {
                 : fallbackPaymentSummary(row.finalTotalCents ?? null),
             }
           : {}),
-        bookingDetails: parseAppointmentBookingDetails(row.bookingDetails),
+        bookingDetails,
         eta: etaSummaryMap.get(row.id) ?? {
           status: null,
           eventType: null,

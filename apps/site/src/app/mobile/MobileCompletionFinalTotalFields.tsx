@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useMobileCompletionDraft } from "./mobile-completion-draft-context";
 import type { AppointmentPaymentSummary } from "./MobilePaymentPanel";
 import {
   MOBILE_APPOINTMENT_SUMMARY_EVENT,
@@ -46,6 +47,7 @@ export function MobileCompletionFinalTotalFields({
   pricingContext,
   canManagePayments,
   forceReadOnly = false,
+  modern = false,
 }: {
   appointmentId: string;
   initialFinalTotalCents: number | null;
@@ -54,6 +56,7 @@ export function MobileCompletionFinalTotalFields({
   pricingContext: string | null;
   canManagePayments: boolean;
   forceReadOnly?: boolean;
+  modern?: boolean;
 }) {
   const incomingFinalTotalCents =
     initialPaymentSummary?.jobTotalCents ?? initialFinalTotalCents;
@@ -68,6 +71,10 @@ export function MobileCompletionFinalTotalFields({
     incomingFinalTotalCents,
   );
   const [totalConflict, setTotalConflict] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
+  const [changeReason, setChangeReason] = React.useState("");
+  const completionDraft = useMobileCompletionDraft();
+  const restoredDraftRevisionRef = React.useRef<number | null>(null);
   const [value, setValue] = React.useState(
     dollars(incomingFinalTotalCents ?? quotedTotalCents),
   );
@@ -133,6 +140,49 @@ export function MobileCompletionFinalTotalFields({
 
   const canEdit = !forceReadOnly && (canManagePayments || !paymentRecorded);
 
+  React.useEffect(() => {
+    const draft = completionDraft?.draft;
+    if (
+      !modern ||
+      !draft ||
+      !canEdit ||
+      restoredDraftRevisionRef.current === completionDraft?.revision
+    )
+      return;
+    restoredDraftRevisionRef.current = completionDraft?.revision ?? null;
+    if (draft.finalTotal !== undefined) {
+      const rawBaseline = draft.expectedFinalTotalCents;
+      const baseline =
+        rawBaseline === "null"
+          ? null
+          : rawBaseline !== undefined &&
+              /^\d+$/u.test(rawBaseline) &&
+              Number.isSafeInteger(Number(rawBaseline))
+            ? Number(rawBaseline)
+            : incomingFinalTotalCents;
+      expectedFinalTotalCentsRef.current = baseline;
+      setExpectedFinalTotalCents(baseline);
+      valueRef.current = draft.finalTotal;
+      setValue(draft.finalTotal);
+      dirtyRef.current = parseDollars(draft.finalTotal) !== baseline;
+      setEditing(true);
+      applyIncomingTotal(incomingFinalTotalCents);
+    }
+    if (draft.finalTotalChangeReason !== undefined) {
+      setChangeReason(draft.finalTotalChangeReason);
+    }
+  }, [
+    modern,
+    completionDraft?.draft,
+    completionDraft?.revision,
+    canEdit,
+    applyIncomingTotal,
+    incomingFinalTotalCents,
+  ]);
+
+  const showEditor =
+    !modern || editing || totalConflict || parseDollars(value) === null;
+
   if (!canEdit) {
     return (
       <div className="rounded-md border border-emerald-300/20 bg-slate-950 px-3 py-2">
@@ -150,7 +200,9 @@ export function MobileCompletionFinalTotalFields({
 
   return (
     <>
-      {latestFinalTotalCents === null && pricingContext ? (
+      {latestFinalTotalCents === null &&
+      pricingContext &&
+      (!modern || parseDollars(value) === null) ? (
         <div className="rounded-md border border-emerald-300/20 bg-slate-950 px-3 py-2 text-sm font-semibold text-emerald-100">
           {pricingContext}
         </div>
@@ -189,54 +241,90 @@ export function MobileCompletionFinalTotalFields({
           </button>
         </div>
       ) : null}
-      <label className="block">
-        <span className="text-xs font-semibold text-slate-300">
-          Final job total
-        </span>
-        <input
-          name="finalTotal"
-          type="number"
-          min={0}
-          step="0.01"
-          required
-          value={value}
-          onChange={(event) => {
-            const nextValue = event.target.value;
-            const nextCents = parseDollars(nextValue);
-            if (
-              totalConflict &&
-              latestFinalTotalCents !== expectedFinalTotalCents &&
-              nextCents === latestFinalTotalCents
-            ) {
-              dirtyRef.current = false;
-              expectedFinalTotalCentsRef.current = latestFinalTotalCents;
-              setExpectedFinalTotalCents(latestFinalTotalCents);
-              setTotalConflict(false);
-            } else {
-              dirtyRef.current = nextCents !== expectedFinalTotalCents;
-            }
-            valueRef.current = nextValue;
-            setValue(nextValue);
-          }}
-          className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-          placeholder="350"
-        />
-      </label>
-      {paymentRecorded && canManagePayments ? (
+      {!showEditor ? (
+        <div className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-slate-950 px-3 py-2">
+          <input type="hidden" name="finalTotal" value={value} />
+          <div>
+            <p className="text-xs font-semibold text-slate-400">
+              Final job total
+            </p>
+            <p className="mt-1 text-base font-semibold text-white">
+              {formatMoney(parseDollars(value))}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="min-h-11 rounded-md px-3 text-sm font-semibold text-cyan-100"
+          >
+            Change total
+          </button>
+        </div>
+      ) : (
         <label className="block">
           <span className="text-xs font-semibold text-slate-300">
-            Reason for changing a paid job
+            Final job total
           </span>
           <input
-            name="finalTotalChangeReason"
-            type="text"
-            maxLength={500}
+            name="finalTotal"
+            type="number"
+            min={0}
+            step="0.01"
+            required
+            value={value}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              const nextCents = parseDollars(nextValue);
+              if (
+                totalConflict &&
+                latestFinalTotalCents !== expectedFinalTotalCents &&
+                nextCents === latestFinalTotalCents
+              ) {
+                dirtyRef.current = false;
+                expectedFinalTotalCentsRef.current = latestFinalTotalCents;
+                setExpectedFinalTotalCents(latestFinalTotalCents);
+                setTotalConflict(false);
+              } else {
+                dirtyRef.current = nextCents !== expectedFinalTotalCents;
+              }
+              valueRef.current = nextValue;
+              setValue(nextValue);
+            }}
             className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-            placeholder="Required only if the total changes"
+            placeholder="350"
           />
         </label>
+      )}
+      {paymentRecorded && canManagePayments ? (
+        modern && !showEditor ? (
+          <input
+            type="hidden"
+            name="finalTotalChangeReason"
+            value={changeReason}
+          />
+        ) : (
+          <label className="block">
+            <span className="text-xs font-semibold text-slate-300">
+              Reason for changing a paid job
+            </span>
+            <input
+              name="finalTotalChangeReason"
+              type="text"
+              maxLength={500}
+              {...(modern
+                ? {
+                    value: changeReason,
+                    onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+                      setChangeReason(event.target.value),
+                  }
+                : {})}
+              className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+              placeholder="Required only if the total changes"
+            />
+          </label>
+        )
       ) : null}
-      {paymentRecorded ? (
+      {paymentRecorded && showEditor ? (
         <p className="mt-1 text-xs leading-5 text-slate-500">
           This job already has a recorded payment. Payment-management access is
           required to change its total, and the total cannot be less than the

@@ -2,9 +2,11 @@
 
 import { mobileLogoutAction } from "./actions";
 import { clearActiveOfflineIdentity } from "./lib/offline-media";
+import { clearMobileJobDrafts } from "./lib/mobile-job-drafts";
 
 export function MobileLogoutForm() {
   const logout = async () => {
+    clearMobileJobDrafts();
     await clearActiveOfflineIdentity();
     await mobileLogoutAction();
   };

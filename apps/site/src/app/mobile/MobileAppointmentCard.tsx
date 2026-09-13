@@ -1,7 +1,10 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
+import type { Route } from "next";
 import { ChevronDown, MapPin } from "lucide-react";
+import { MobileJobView } from "./MobileJobView";
 import type { AppointmentPaymentSummary } from "./MobilePaymentPanel";
 import type { AppointmentMediaSummary } from "./MobileQuotedWorkPanel";
 import {
@@ -20,6 +23,25 @@ type SummaryChip = {
   label: string;
   tone: "neutral" | "success" | "warning" | "danger";
 };
+
+export type MobileBookingPartnerAffiliation = {
+  accountId: string | null;
+  bookingId: string | null;
+  displayName: string | null;
+  basis: string;
+};
+
+type MobileJobHistoryState = {
+  cardId: string;
+  returnLocation: string;
+};
+
+function currentHistoryState(): Record<string, unknown> {
+  const value: unknown = window.history.state;
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
 
 function chipClassName(tone: SummaryChip["tone"]): string {
   if (tone === "danger") {
@@ -143,6 +165,11 @@ export function MobileAppointmentCard({
   mediaSummary,
   paymentSummary,
   amountLabel,
+  serviceCategoryLabel,
+  partnerAffiliation,
+  modern = true,
+  quickActions,
+  jobHref,
   hasDetails = true,
   children,
 }: {
@@ -157,10 +184,20 @@ export function MobileAppointmentCard({
   mediaSummary?: AppointmentMediaSummary | null;
   paymentSummary?: AppointmentPaymentSummary | null;
   amountLabel?: string | null;
+  serviceCategoryLabel?: string | null;
+  partnerAffiliation?: MobileBookingPartnerAffiliation | null;
+  employeeId?: string;
+  appointmentVersion?: string | null;
+  modern?: boolean;
+  quickActions?: React.ReactNode;
+  jobHref?: string;
   hasDetails?: boolean;
   children?: React.ReactNode;
 }) {
+  const router = useRouter();
   const [open, setOpen] = React.useState(false);
+  const openAtLocation = React.useRef(false);
+  const openedFromList = React.useRef<MobileJobHistoryState | null>(null);
   const [currentScope, setCurrentScope] = React.useState(quotedScopeText);
   const [currentMediaSummary, setCurrentMediaSummary] =
     React.useState(mediaSummary);
@@ -181,7 +218,16 @@ export function MobileAppointmentCard({
   const incomingPaymentSnapshot = paymentSummarySnapshot(paymentSummary);
   const reactId = React.useId();
   const detailsId = `mobile-appointment-details-${reactId.replaceAll(":", "")}`;
+  const titleId = `${detailsId}-title`;
   const canExpand = hasDetails && React.Children.count(children) > 0;
+  const categoryLabel = serviceCategoryLabel?.trim() || "Job";
+  const isPartner = Boolean(
+    partnerAffiliation &&
+      (partnerAffiliation.basis === "partner_booking" ||
+        partnerAffiliation.basis === "appointment_account") &&
+      (partnerAffiliation.accountId || partnerAffiliation.bookingId),
+  );
+  const partnerName = partnerAffiliation?.displayName?.trim() || null;
   const scope = currentScope?.trim() ?? "";
   const normalizedAmountLabel = amountLabel?.trim() ?? "";
   const completedAmountLabel =
@@ -242,7 +288,10 @@ export function MobileAppointmentCard({
   React.useEffect(() => {
     const closeWhenAnotherCardOpens = (event: Event) => {
       const detail = (event as CustomEvent<{ cardId?: string }>).detail;
-      if (detail?.cardId && detail.cardId !== cardId) setOpen(false);
+      if (detail?.cardId && detail.cardId !== cardId) {
+        openAtLocation.current = false;
+        setOpen(false);
+      }
     };
     window.addEventListener(
       "stonegate:mobile-appointment-open",
@@ -255,6 +304,20 @@ export function MobileAppointmentCard({
       );
     };
   }, [cardId]);
+
+  React.useEffect(() => {
+    if (!modern || !canExpand) return;
+    const syncFromLocation = () => {
+      const jobId = new URL(window.location.href).searchParams.get("jobId");
+      const wasOpen = openAtLocation.current;
+      openAtLocation.current = jobId === cardId;
+      setOpen(openAtLocation.current);
+      if (wasOpen && !jobId) requestAnimationFrame(() => router.refresh());
+    };
+    syncFromLocation();
+    window.addEventListener("popstate", syncFromLocation);
+    return () => window.removeEventListener("popstate", syncFromLocation);
+  }, [cardId, modern, canExpand, router]);
 
   React.useEffect(() => {
     if (scopeOverride.current?.base === quotedScopeText) {
@@ -324,7 +387,42 @@ export function MobileAppointmentCard({
 
   const toggleOpen = () => {
     const next = !open;
+    openAtLocation.current = next;
     if (next) {
+      if (modern) {
+        const url = new URL(window.location.href);
+        const returnLocation = `${url.pathname}${url.search}${url.hash}`;
+        if (jobHref) {
+          try {
+            const jobUrl = new URL(jobHref, window.location.origin);
+            if (
+              jobUrl.origin === url.origin &&
+              jobUrl.pathname === url.pathname
+            ) {
+              const screen = jobUrl.searchParams.get("screen");
+              const date = jobUrl.searchParams.get("date");
+              if (screen === "myday" || screen === "calendar")
+                url.searchParams.set("screen", screen);
+              if (date && /^\d{4}-\d{2}-\d{2}$/u.test(date))
+                url.searchParams.set("date", date);
+            }
+          } catch {
+            // Missing optional link context must not prevent opening the job.
+          }
+        }
+        url.searchParams.set("jobId", cardId);
+        const state: MobileJobHistoryState = { cardId, returnLocation };
+        // A router refresh clears custom history state, but must not lose the
+        // list entry that this mounted card should return to after a save.
+        openedFromList.current = state;
+        window.history.pushState(
+          // Next copies its own state. Spreading history.state here would pass
+          // its internal marker and bypass canonical-URL synchronization.
+          { stonegateMobileJob: state },
+          "",
+          `${url.pathname}${url.search}${url.hash}`,
+        );
+      }
       window.dispatchEvent(
         new CustomEvent("stonegate:mobile-appointment-open", {
           detail: { cardId },
@@ -333,6 +431,162 @@ export function MobileAppointmentCard({
     }
     setOpen(next);
   };
+
+  const closeJob = () => {
+    openAtLocation.current = false;
+    setOpen(false);
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("jobId") !== cardId) return;
+    const state = (currentHistoryState()["stonegateMobileJob"] ??
+      openedFromList.current) as MobileJobHistoryState | null | undefined;
+    if (state?.cardId === cardId && state.returnLocation) {
+      window.addEventListener(
+        "popstate",
+        () => {
+          requestAnimationFrame(() => router.refresh());
+        },
+        { once: true },
+      );
+      window.history.back();
+    } else {
+      url.searchParams.delete("jobId");
+      // A direct job link has no known list entry to traverse. Use a router
+      // navigation so the server also receives the cleared selection.
+      router.replace(`${url.pathname}${url.search}${url.hash}` as Route, {
+        scroll: false,
+      });
+    }
+  };
+
+  if (modern) {
+    const attention = chips.filter(
+      (chip) =>
+        chip.key === "scope" ||
+        (chip.key === "payment" && chip.tone !== "success"),
+    );
+    return (
+      <>
+        <article
+          aria-label={`Appointment with ${customerName}`}
+          data-appointment-id={cardId}
+          className="overflow-hidden rounded-xl border border-white/10 bg-slate-900/90 shadow-sm shadow-black/20"
+        >
+          {isPartner ? (
+            <div className="border-b border-cyan-200/10 bg-cyan-300/[0.06] px-4 py-1.5 text-xs font-semibold leading-5 text-cyan-100">
+              <span className="break-words">
+                Partner{partnerName ? ` · ${partnerName}` : ""}
+              </span>
+            </div>
+          ) : null}
+          <div className="px-4 pt-3">
+            <div className="flex items-start justify-between gap-3">
+              <p className="min-w-0 text-sm font-semibold leading-6 text-slate-200">
+                {timeLabel}
+              </p>
+              <span
+                className={`max-w-[50%] shrink-0 break-words rounded-full px-2.5 py-1 text-xs font-semibold ${appointmentCardStatusClassName(statusTone)}`}
+              >
+                {statusLabel}
+              </span>
+            </div>
+            <p className="mt-1 text-xs font-semibold leading-5 text-cyan-100">
+              {categoryLabel}
+            </p>
+            {canExpand ? (
+              <button
+                type="button"
+                aria-label={`Open job for ${customerName}`}
+                aria-haspopup="dialog"
+                aria-expanded={open}
+                aria-controls={open ? detailsId : undefined}
+                onClick={toggleOpen}
+                className="block min-h-11 w-full rounded-lg py-1 text-left text-lg font-semibold leading-6 text-white outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+              >
+                {customerName}
+              </button>
+            ) : (
+              <p className="py-1 text-lg font-semibold leading-6 text-white">
+                {customerName}
+              </p>
+            )}
+          </div>
+
+          {address ? (
+            mapsHref ? (
+              <a
+                href={mapsHref}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`Open directions to ${address}`}
+                className="flex min-h-11 items-center gap-2 px-4 py-2 text-sm font-medium leading-5 text-cyan-100 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-300"
+              >
+                <MapPin className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 flex-1 break-words">{address}</span>
+                <span className="shrink-0 text-xs">Directions</span>
+              </a>
+            ) : (
+              <p className="px-4 py-2 text-sm leading-5 text-slate-300">
+                {address}
+              </p>
+            )
+          ) : null}
+          {scope ? (
+            <p
+              className={`mx-4 mb-3 whitespace-pre-wrap break-words text-sm leading-5 text-slate-300 ${canExpand ? "line-clamp-2" : ""}`}
+            >
+              {scope}
+            </p>
+          ) : null}
+          {attention.length ? (
+            <p
+              className={`px-4 pb-3 text-xs font-medium leading-5 ${attention.some((chip) => chip.tone === "danger") ? "text-rose-200" : "text-amber-100"}`}
+            >
+              {attention.map((chip) => chip.label).join(" · ")}
+            </p>
+          ) : null}
+          {canExpand || quickActions ? (
+            <div className="flex flex-wrap items-center gap-2 border-t border-white/10 px-3 py-2">
+              {quickActions}
+              {canExpand ? (
+                <button
+                  type="button"
+                  onClick={toggleOpen}
+                  aria-haspopup="dialog"
+                  aria-expanded={open}
+                  className="ml-auto inline-flex min-h-11 items-center justify-center rounded-lg bg-white/[0.07] px-3 py-2 text-sm font-semibold text-white outline-none hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-cyan-300"
+                >
+                  Open job
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </article>
+        {open && canExpand ? (
+          <MobileJobView
+            id={detailsId}
+            appointmentId={cardId}
+            titleId={titleId}
+            customerName={customerName}
+            timeLabel={timeLabel}
+            categoryLabel={categoryLabel}
+            statusLabel={statusLabel}
+            statusClassName={appointmentCardStatusClassName(statusTone)}
+            partnerName={partnerName}
+            isPartner={isPartner}
+            address={address}
+            mapsHref={mapsHref}
+            scope={scope}
+            canFinish={statusTone !== "completed" && statusTone !== "canceled"}
+            originLocation={openedFromList.current?.returnLocation}
+            quickActions={quickActions}
+            onClose={closeJob}
+          >
+            {children}
+          </MobileJobView>
+        ) : null}
+      </>
+    );
+  }
 
   const headerContent = (
     <>

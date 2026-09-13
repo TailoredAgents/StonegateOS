@@ -26,6 +26,11 @@ import { readTeamMutationSuccess } from "../team/lib/mutation-feedback";
 import { callAdminMutationWithSafeReplay } from "../team/lib/team-mutation-transport";
 import { requireCurrentTeamPrincipal } from "@/lib/team-principal";
 import type { MobileSession } from "./lib/session";
+import type { MobileBookingActionResult } from "./mobile-booking-action-result";
+import {
+  mobileBookingHref,
+  readMobileBookingReturn,
+} from "./lib/booking-presentation";
 import {
   hasMobilePermission,
   resolveMobileSessionFromCookies,
@@ -187,6 +192,13 @@ function mobileScheduleRedirect(
   return `/mobile?${params.toString()}` as Route;
 }
 
+function mobileThreadHref(threadId: string, bookingReturn?: unknown): Route {
+  const params = new URLSearchParams({ screen: "inbox", threadId });
+  const returnTo = readMobileBookingReturn(bookingReturn);
+  if (returnTo) params.set("bookingReturn", returnTo);
+  return `/mobile?${params.toString()}` as Route;
+}
+
 type MobileAppointmentLookupResponse = {
   appointments?: Array<{
     id?: string;
@@ -216,14 +228,13 @@ export async function sendMobileThreadMessageAction(formData: FormData) {
   const threadId = typeof threadIdRaw === "string" ? threadIdRaw.trim() : "";
   const channel = typeof channelRaw === "string" ? channelRaw.trim() : "";
   const body = typeof bodyRaw === "string" ? bodyRaw.trim() : "";
+  const threadHref = mobileThreadHref(threadId, formData.get("bookingReturn"));
 
   if (!threadId) {
-    redirect("/mobile?error=thread_required");
+    redirect("/mobile?screen=inbox&error=thread_required");
   }
   if (!body) {
-    redirect(
-      `/mobile?threadId=${encodeURIComponent(threadId)}&error=message_required`,
-    );
+    redirect(mobileReturnWithParam(threadHref, "error", "message_required"));
   }
 
   const response = await callAdminApiForCurrentSession(
@@ -240,13 +251,11 @@ export async function sendMobileThreadMessageAction(formData: FormData) {
 
   if (!response.ok) {
     const message = await readErrorMessage(response, "send_failed");
-    redirect(
-      `/mobile?threadId=${encodeURIComponent(threadId)}&error=${encodeURIComponent(message)}`,
-    );
+    redirect(mobileReturnWithParam(threadHref, "error", message));
   }
 
   revalidatePath("/mobile");
-  redirect(`/mobile?threadId=${encodeURIComponent(threadId)}&sent=1`);
+  redirect(`${threadHref}&sent=1` as Route);
 }
 
 export async function openMobileAppointmentThreadAction(formData: FormData) {
@@ -258,11 +267,11 @@ export async function openMobileAppointmentThreadAction(formData: FormData) {
   const appointmentId =
     typeof appointmentIdRaw === "string" ? appointmentIdRaw.trim() : "";
   const dayKey = typeof dateRaw === "string" ? dateRaw.trim() : "";
-  const screen = typeof screenRaw === "string" ? screenRaw.trim() : "myday";
-  const returnTo = mobileScheduleRedirect(screen, dayKey);
+  const screen = screenRaw === "calendar" ? "calendar" : "myday";
+  const returnTo = mobileBookingHref(screen, dayKey, appointmentId) as Route;
 
   if (!appointmentId) {
-    redirect(mobileScheduleRedirect(screen, dayKey, "appointment_required"));
+    redirect(mobileReturnWithParam(returnTo, "error", "appointment_required"));
   }
 
   const window = parseDayWindow(dayKey);
@@ -274,18 +283,23 @@ export async function openMobileAppointmentThreadAction(formData: FormData) {
     appointmentParams.set("startAtTo", window.startAtTo);
   }
 
-  const appointmentResponse = await callAdminApiForCurrentSession(
-    `/api/appointments?${appointmentParams.toString()}`,
-    {
-      method: "GET",
-    },
-  );
+  let appointmentResponse: Response;
+  try {
+    appointmentResponse = await callAdminApiForCurrentSession(
+      `/api/appointments?${appointmentParams.toString()}`,
+      { method: "GET" },
+    );
+  } catch {
+    redirect(
+      mobileReturnWithParam(returnTo, "error", "appointment_lookup_failed"),
+    );
+  }
   if (!appointmentResponse.ok) {
     const message = await readErrorMessage(
       appointmentResponse,
       "appointment_lookup_failed",
     );
-    redirect(mobileScheduleRedirect(screen, dayKey, message));
+    redirect(mobileReturnWithParam(returnTo, "error", message));
   }
 
   const appointmentPayload = (await appointmentResponse
@@ -300,21 +314,24 @@ export async function openMobileAppointmentThreadAction(formData: FormData) {
       : "";
 
   if (!contactId || contactId === "unknown") {
-    redirect(mobileScheduleRedirect(screen, dayKey, "contact_not_found"));
+    redirect(mobileReturnWithParam(returnTo, "error", "contact_not_found"));
   }
 
-  const threadsResponse = await callAdminApiForCurrentSession(
-    `/api/admin/inbox/threads?contactId=${encodeURIComponent(contactId)}&limit=1`,
-    {
-      method: "GET",
-    },
-  );
+  let threadsResponse: Response;
+  try {
+    threadsResponse = await callAdminApiForCurrentSession(
+      `/api/admin/inbox/threads?contactId=${encodeURIComponent(contactId)}&limit=1`,
+      { method: "GET" },
+    );
+  } catch {
+    redirect(mobileReturnWithParam(returnTo, "error", "thread_lookup_failed"));
+  }
   if (!threadsResponse.ok) {
     const message = await readErrorMessage(
       threadsResponse,
       "thread_lookup_failed",
     );
-    redirect(mobileScheduleRedirect(screen, dayKey, message));
+    redirect(mobileReturnWithParam(returnTo, "error", message));
   }
 
   const threadsPayload = (await threadsResponse
@@ -326,19 +343,21 @@ export async function openMobileAppointmentThreadAction(formData: FormData) {
       ?.id?.trim() ?? "";
 
   if (existingThreadId) {
-    redirect(
-      `/mobile?threadId=${encodeURIComponent(existingThreadId)}` as Route,
-    );
+    redirect(mobileThreadHref(existingThreadId, returnTo));
   }
 
   if (hasMobilePermission(session.teamMember.permissions, "messages.send")) {
-    const ensureResponse = await callAdminApiForCurrentSession(
-      "/api/admin/inbox/threads/ensure",
-      {
-        method: "POST",
-        body: JSON.stringify({ contactId, channel: "sms" }),
-      },
-    );
+    let ensureResponse: Response;
+    try {
+      ensureResponse = await callAdminApiForCurrentSession(
+        "/api/admin/inbox/threads/ensure",
+        { method: "POST", body: JSON.stringify({ contactId, channel: "sms" }) },
+      );
+    } catch {
+      redirect(
+        mobileReturnWithParam(returnTo, "error", "thread_create_failed"),
+      );
+    }
 
     if (ensureResponse.ok) {
       const ensurePayload = (await ensureResponse
@@ -349,9 +368,7 @@ export async function openMobileAppointmentThreadAction(formData: FormData) {
           ? ensurePayload.threadId.trim()
           : "";
       if (ensuredThreadId) {
-        redirect(
-          `/mobile?threadId=${encodeURIComponent(ensuredThreadId)}` as Route,
-        );
+        redirect(mobileThreadHref(ensuredThreadId, returnTo));
       }
     }
   }
@@ -434,7 +451,7 @@ export async function openMobileContactThreadAction(formData: FormData) {
   }
 
   revalidatePath("/mobile");
-  redirect(`/mobile?threadId=${encodeURIComponent(threadId)}` as Route);
+  redirect(mobileThreadHref(threadId, returnTo));
 }
 
 export async function startMobileContactCallAction(formData: FormData) {
@@ -593,8 +610,9 @@ export async function markMobileThreadHandledAction(formData: FormData) {
 
   const threadIdRaw = formData.get("threadId");
   const threadId = typeof threadIdRaw === "string" ? threadIdRaw.trim() : "";
+  const threadHref = mobileThreadHref(threadId, formData.get("bookingReturn"));
   if (!threadId) {
-    redirect("/mobile?error=thread_required" as Route);
+    redirect("/mobile?screen=inbox&error=thread_required" as Route);
   }
 
   const response = await callAdminApiForCurrentSession(
@@ -607,15 +625,11 @@ export async function markMobileThreadHandledAction(formData: FormData) {
 
   if (!response.ok) {
     const message = await readErrorMessage(response, "mark_handled_failed");
-    redirect(
-      `/mobile?threadId=${encodeURIComponent(threadId)}&error=${encodeURIComponent(message)}` as Route,
-    );
+    redirect(`${threadHref}&error=${encodeURIComponent(message)}` as Route);
   }
 
   revalidatePath("/mobile");
-  redirect(
-    `/mobile?threadId=${encodeURIComponent(threadId)}&handled=1` as Route,
-  );
+  redirect(`${threadHref}&handled=1` as Route);
 }
 
 export async function closeMobileThreadAction(formData: FormData) {
@@ -625,6 +639,7 @@ export async function closeMobileThreadAction(formData: FormData) {
   const closeReasonRaw = formData.get("closeReason");
   const dncReasonRaw = formData.get("doNotContactReason");
   const threadId = typeof threadIdRaw === "string" ? threadIdRaw.trim() : "";
+  const threadHref = mobileThreadHref(threadId, formData.get("bookingReturn"));
   const closeReason =
     typeof closeReasonRaw === "string" ? closeReasonRaw.trim() : "";
   const doNotContactReason =
@@ -632,12 +647,10 @@ export async function closeMobileThreadAction(formData: FormData) {
   const allowedReasons = new Set(["lost", "do_not_contact", "closed"]);
 
   if (!threadId) {
-    redirect("/mobile?error=thread_required" as Route);
+    redirect("/mobile?screen=inbox&error=thread_required" as Route);
   }
   if (!allowedReasons.has(closeReason)) {
-    redirect(
-      `/mobile?threadId=${encodeURIComponent(threadId)}&error=invalid_close_reason` as Route,
-    );
+    redirect(`${threadHref}&error=invalid_close_reason` as Route);
   }
 
   const response = await callAdminApiForCurrentSession(
@@ -661,13 +674,14 @@ export async function closeMobileThreadAction(formData: FormData) {
 
   if (!response.ok) {
     const message = await readErrorMessage(response, "close_failed");
-    redirect(
-      `/mobile?threadId=${encodeURIComponent(threadId)}&error=${encodeURIComponent(message)}` as Route,
-    );
+    redirect(`${threadHref}&error=${encodeURIComponent(message)}` as Route);
   }
 
   revalidatePath("/mobile");
-  redirect(`/mobile?closed=1` as Route);
+  const bookingReturn = readMobileBookingReturn(formData.get("bookingReturn"));
+  const closedParams = new URLSearchParams({ screen: "inbox", closed: "1" });
+  if (bookingReturn) closedParams.set("bookingReturn", bookingReturn);
+  redirect(`/mobile?${closedParams.toString()}` as Route);
 }
 
 function makeNoteTitle(body: string): string {
@@ -999,9 +1013,7 @@ export async function updateMobileTeamMemberAction(formData: FormData) {
   const roleId = typeof roleIdRaw === "string" ? roleIdRaw.trim() : "";
   const phone = typeof phoneRaw === "string" ? phoneRaw.trim() : "";
   const expectedUpdatedAt =
-    typeof expectedUpdatedAtRaw === "string"
-      ? expectedUpdatedAtRaw.trim()
-      : "";
+    typeof expectedUpdatedAtRaw === "string" ? expectedUpdatedAtRaw.trim() : "";
   const idempotencyKey =
     typeof idempotencyKeyRaw === "string" ? idempotencyKeyRaw.trim() : "";
 
@@ -1206,13 +1218,111 @@ export async function updateMobileContactAction(formData: FormData) {
   redirect(makeRedirect({ contact: "1" }));
 }
 
+function mobileBookingActionReturnPath(
+  formData: FormData,
+  defaultScreen: "myday" | "calendar",
+): Route {
+  const screenRaw = formData.get("screen");
+  const screen =
+    screenRaw === "myday" || screenRaw === "calendar"
+      ? screenRaw
+      : defaultScreen;
+  const date = formData.get("date");
+  const appointmentId = formData.get("appointmentId");
+  return mobileBookingHref(
+    screen,
+    typeof date === "string" ? date.trim() : "",
+    typeof appointmentId === "string" ? appointmentId.trim() : null,
+  ) as Route;
+}
+
+function mobileBookingFailure(
+  error: string,
+  submitted = false,
+  uncertain = false,
+): Extract<MobileBookingActionResult, { ok: false }> {
+  return { ok: false, error, submitted, uncertain };
+}
+
+async function mobileMutationOutcomeIsUncertain(
+  response: Response,
+): Promise<boolean> {
+  if (response.status >= 500 || response.status === 408) return true;
+  if (response.status !== 409) return false;
+  if (response.headers.has("Retry-After")) return true;
+  const payload = (await response
+    .clone()
+    .json()
+    .catch(() => null)) as unknown;
+  if (!payload || typeof payload !== "object") return false;
+  const values = payload as Record<string, unknown>;
+  const inProgressCodes = new Set([
+    "request_in_progress",
+    "operation_in_progress",
+    "idempotency_in_progress",
+  ]);
+  if (
+    [values["code"], values["error"]].some(
+      (value) => typeof value === "string" && inProgressCodes.has(value),
+    )
+  )
+    return true;
+  // The existing mutation API uses code=conflict and this message. Retain the
+  // key even if an intermediary omitted its Retry-After response header.
+  return (
+    values["code"] === "conflict" &&
+    typeof values["message"] === "string" &&
+    /\balready in progress\b/iu.test(values["message"])
+  );
+}
+
+type MobileStatusActionResult =
+  | Extract<MobileBookingActionResult, { ok: false }>
+  | (Extract<MobileBookingActionResult, { ok: true }> & {
+      calendarSync: "requested" | "not_required";
+      customerNotification: "requested" | "not_requested";
+      reviewRequest: "requested" | "not_requested";
+    });
+
 export async function updateMobileAppointmentStatusAction(formData: FormData) {
-  await requireMobilePermission("appointments.update");
+  const session = await requireMobilePermission("appointments.update");
+  const redirectPath = mobileBookingActionReturnPath(formData, "calendar");
+  const result = await executeMobileAppointmentStatus(formData, session);
+  if (!result.ok) {
+    redirect(
+      `${redirectPath}&error=${encodeURIComponent(result.error)}` as Route,
+    );
+  }
+  redirect(
+    `${redirectPath}&appointment=1&customerNotification=${result.customerNotification}&reviewRequest=${result.reviewRequest}&calendarSync=${result.calendarSync}` as Route,
+  );
+}
+
+export async function saveMobileAppointmentCompletionAction(
+  formData: FormData,
+): Promise<MobileBookingActionResult> {
+  const session = await resolveMobileSessionFromCookies();
+  if (!session)
+    return mobileBookingFailure(
+      "Sign in again to save this job. Your entries are still here.",
+    );
+  return executeMobileAppointmentStatus(formData, session);
+}
+
+async function executeMobileAppointmentStatus(
+  formData: FormData,
+  session: MobileSession,
+): Promise<MobileStatusActionResult> {
+  if (
+    !hasMobilePermission(session.teamMember.permissions, "appointments.update")
+  ) {
+    return mobileBookingFailure(
+      "You do not have permission to update this appointment.",
+    );
+  }
 
   const appointmentIdRaw = formData.get("appointmentId");
   const statusRaw = formData.get("status");
-  const dateRaw = formData.get("date");
-  const screenRaw = formData.get("screen");
   const expectedVersion = parseMobileAppointmentVersion(
     formData.get("expectedVersion"),
   );
@@ -1228,39 +1338,32 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
   const appointmentId =
     typeof appointmentIdRaw === "string" ? appointmentIdRaw.trim() : "";
   const status = typeof statusRaw === "string" ? statusRaw.trim() : "";
-  const date = typeof dateRaw === "string" ? dateRaw.trim() : "";
-  const screen =
-    typeof screenRaw === "string" && screenRaw.trim() === "myday"
-      ? "myday"
-      : "calendar";
-  const redirectPath = (
-    date
-      ? `/mobile?screen=${screen}&date=${encodeURIComponent(date)}`
-      : `/mobile?screen=${screen}`
-  ) as Route;
-
   if (!appointmentId) {
-    redirect(`${redirectPath}&error=appointment_required` as Route);
+    return mobileBookingFailure("appointment_required");
   }
   if (!expectedVersion || !idempotencyKey) {
-    redirect(
-      `${redirectPath}&error=${encodeURIComponent("This appointment form is stale. Refresh before making the change.")}` as Route,
+    return mobileBookingFailure(
+      "This appointment form is stale. Refresh before making the change.",
     );
   }
   if (sendCustomerNotification === null || sendReviewRequest === null) {
-    redirect(
-      `${redirectPath}&error=${encodeURIComponent("The customer-message choices are invalid. Review them before retrying.")}` as Route,
+    return mobileBookingFailure(
+      "The customer-message choices are invalid. Review them before retrying.",
     );
   }
   if (sendCustomerNotification || sendReviewRequest) {
-    await requireMobilePermission("messages.send");
+    if (!hasMobilePermission(session.teamMember.permissions, "messages.send")) {
+      return mobileBookingFailure(
+        "You do not have permission to send customer messages.",
+      );
+    }
   }
   if (
     !["requested", "confirmed", "completed", "no_show", "canceled"].includes(
       status,
     )
   ) {
-    redirect(`${redirectPath}&error=invalid_status` as Route);
+    return mobileBookingFailure("invalid_status");
   }
 
   const payload: Record<string, unknown> = {
@@ -1278,12 +1381,21 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
     proofOverrideReason &&
     (proofOverrideReason.length < 10 || proofOverrideReason.length > 500)
   ) {
-    redirect(
-      `${redirectPath}&error=${encodeURIComponent("A proof exception reason must be between 10 and 500 characters.")}` as Route,
+    return mobileBookingFailure(
+      "A proof exception reason must be between 10 and 500 characters.",
     );
   }
   if (proofOverrideReason) {
-    await requireMobilePermission("appointment_media.manage");
+    if (
+      !hasMobilePermission(
+        session.teamMember.permissions,
+        "appointment_media.manage",
+      )
+    ) {
+      return mobileBookingFailure(
+        "You do not have permission to record a proof exception.",
+      );
+    }
     payload["proofOverrideReason"] = proofOverrideReason;
   }
   if (status === "completed") {
@@ -1300,7 +1412,7 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
       if (!preserveFinalTotal) {
         const finalTotalCents = parseUsdToCents(formData.get("finalTotal"));
         if (finalTotalCents === null) {
-          redirect(`${redirectPath}&error=amount_required` as Route);
+          return mobileBookingFailure("amount_required");
         }
         payload["finalTotalCents"] = finalTotalCents;
         const expectedFinalTotalCentsRaw = formData.get(
@@ -1317,7 +1429,7 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
             !Number.isInteger(expectedFinalTotalCents) ||
             expectedFinalTotalCents < 0
           ) {
-            redirect(`${redirectPath}&error=invalid_expected_total` as Route);
+            return mobileBookingFailure("invalid_expected_total");
           }
           payload["expectedFinalTotalCents"] = expectedFinalTotalCents;
         }
@@ -1335,9 +1447,7 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
 
       const crewResult = parseCrewPayoutFormData(formData);
       if (!crewResult.ok) {
-        redirect(
-          `${redirectPath}&error=${encodeURIComponent(crewResult.error)}` as Route,
-        );
+        return mobileBookingFailure(crewResult.error);
       }
       payload["crewMembers"] = crewResult.crewMembers;
     }
@@ -1357,17 +1467,20 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
       },
     );
   } catch {
-    redirect(
-      `${redirectPath}&error=${encodeURIComponent("The appointment result could not be confirmed. Refresh before retrying; the saved version will prevent a duplicate change.")}` as Route,
+    return mobileBookingFailure(
+      "The appointment result could not be confirmed. Keep this form open and retry the same request.",
+      true,
+      true,
     );
   }
 
   if (!response.ok) {
+    const uncertain = await mobileMutationOutcomeIsUncertain(response);
     const message = await readErrorMessage(
       response,
       "appointment_update_failed",
     );
-    redirect(`${redirectPath}&error=${encodeURIComponent(message)}` as Route);
+    return mobileBookingFailure(message, true, uncertain);
   }
 
   const envelope = await readTeamMutationSuccess<{
@@ -1380,6 +1493,8 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
   }>(response);
   if (
     !envelope ||
+    !envelope.data ||
+    typeof envelope.data !== "object" ||
     envelope.data.appointmentId !== appointmentId ||
     envelope.data.status !== status ||
     envelope.receipt.entityType !== "appointment" ||
@@ -1394,15 +1509,25 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
     envelope.data.reviewRequest !==
       (sendReviewRequest ? "requested" : "not_requested")
   ) {
-    redirect(
-      `${redirectPath}&error=${encodeURIComponent("The appointment service returned an unreadable save receipt. Refresh before retrying; no success is being claimed.")}` as Route,
+    return mobileBookingFailure(
+      "The appointment service returned an unreadable save receipt; no success is being claimed. Keep this form open and retry the same request.",
+      true,
+      true,
     );
   }
 
   revalidatePath("/mobile");
-  redirect(
-    `${redirectPath}&appointment=1&customerNotification=${sendCustomerNotification ? "requested" : "not_requested"}&reviewRequest=${sendReviewRequest ? "requested" : "not_requested"}&calendarSync=${envelope.data.calendarSync}` as Route,
-  );
+  return {
+    ok: true,
+    appointmentId,
+    version: envelope.data.version,
+    message: status === "completed" ? "Job completed." : "Appointment updated.",
+    calendarSync: envelope.data.calendarSync,
+    customerNotification: sendCustomerNotification
+      ? "requested"
+      : "not_requested",
+    reviewRequest: sendReviewRequest ? "requested" : "not_requested",
+  };
 }
 
 export async function convertMobileQuoteToJobAction(formData: FormData) {
@@ -1616,10 +1741,41 @@ export async function convertMobileQuoteToJobAction(formData: FormData) {
 }
 
 export async function addMobileAppointmentNoteAction(formData: FormData) {
-  await requireMobilePermission("appointments.update");
+  const session = await requireMobilePermission("appointments.update");
+  const redirectPath = mobileBookingActionReturnPath(formData, "myday");
+  const result = await executeMobileAppointmentNote(formData, session);
+  if (!result.ok) {
+    redirect(
+      `${redirectPath}&error=${encodeURIComponent(result.error)}` as Route,
+    );
+  }
+  redirect(`${redirectPath}&note=1` as Route);
+}
+
+export async function saveMobileAppointmentNoteAction(
+  formData: FormData,
+): Promise<MobileBookingActionResult> {
+  const session = await resolveMobileSessionFromCookies();
+  if (!session)
+    return mobileBookingFailure(
+      "Sign in again to save this note. Your entries are still here.",
+    );
+  return executeMobileAppointmentNote(formData, session);
+}
+
+async function executeMobileAppointmentNote(
+  formData: FormData,
+  session: MobileSession,
+): Promise<MobileBookingActionResult> {
+  if (
+    !hasMobilePermission(session.teamMember.permissions, "appointments.update")
+  ) {
+    return mobileBookingFailure(
+      "You do not have permission to add appointment notes.",
+    );
+  }
 
   const appointmentIdRaw = formData.get("appointmentId");
-  const dateRaw = formData.get("date");
   const bodyRaw = formData.get("body");
   const expectedVersion = parseMobileAppointmentVersion(
     formData.get("expectedVersion"),
@@ -1627,23 +1783,17 @@ export async function addMobileAppointmentNoteAction(formData: FormData) {
   const idempotencyKey = parseMobileMutationKey(formData.get("idempotencyKey"));
   const appointmentId =
     typeof appointmentIdRaw === "string" ? appointmentIdRaw.trim() : "";
-  const date = typeof dateRaw === "string" ? dateRaw.trim() : "";
   const body = typeof bodyRaw === "string" ? bodyRaw.trim() : "";
-  const redirectPath = (
-    date
-      ? `/mobile?screen=myday&date=${encodeURIComponent(date)}`
-      : "/mobile?screen=myday"
-  ) as Route;
 
   if (!appointmentId) {
-    redirect(`${redirectPath}&error=appointment_required` as Route);
+    return mobileBookingFailure("appointment_required");
   }
   if (!body) {
-    redirect(`${redirectPath}&error=note_required` as Route);
+    return mobileBookingFailure("note_required");
   }
   if (!expectedVersion || !idempotencyKey) {
-    redirect(
-      `${redirectPath}&error=${encodeURIComponent("This note form is stale. Refresh the appointment before saving it.")}` as Route,
+    return mobileBookingFailure(
+      "This note form is stale. Refresh the appointment before saving it.",
     );
   }
 
@@ -1661,14 +1811,17 @@ export async function addMobileAppointmentNoteAction(formData: FormData) {
       },
     );
   } catch {
-    redirect(
-      `${redirectPath}&error=${encodeURIComponent("The note result could not be confirmed. Refresh before retrying; the saved version will prevent a duplicate note.")}` as Route,
+    return mobileBookingFailure(
+      "The note result could not be confirmed. Keep this form open and retry the same request.",
+      true,
+      true,
     );
   }
 
   if (!response.ok) {
+    const uncertain = await mobileMutationOutcomeIsUncertain(response);
     const message = await readErrorMessage(response, "note_save_failed");
-    redirect(`${redirectPath}&error=${encodeURIComponent(message)}` as Route);
+    return mobileBookingFailure(message, true, uncertain);
   }
 
   const envelope = await readTeamMutationSuccess<{
@@ -1677,19 +1830,28 @@ export async function addMobileAppointmentNoteAction(formData: FormData) {
   }>(response);
   if (
     !envelope ||
+    !envelope.data ||
+    typeof envelope.data !== "object" ||
     envelope.data.note?.appointmentId !== appointmentId ||
     typeof envelope.data.note?.id !== "string" ||
     envelope.receipt.entityType !== "appointment_note" ||
     envelope.receipt.entityId !== envelope.data.note.id ||
     typeof envelope.data.version !== "string"
   ) {
-    redirect(
-      `${redirectPath}&error=${encodeURIComponent("The appointment service returned an unreadable note receipt. Refresh before retrying; no success is being claimed.")}` as Route,
+    return mobileBookingFailure(
+      "The appointment service returned an unreadable note receipt; no success is being claimed. Keep this form open and retry the same request.",
+      true,
+      true,
     );
   }
 
   revalidatePath("/mobile");
-  redirect(`${redirectPath}&note=1` as Route);
+  return {
+    ok: true,
+    appointmentId,
+    version: envelope.data.version,
+    message: "Note saved.",
+  };
 }
 
 export async function rescheduleMobileAppointmentAction(formData: FormData) {
@@ -1698,7 +1860,8 @@ export async function rescheduleMobileAppointmentAction(formData: FormData) {
   const appointmentIdRaw = formData.get("appointmentId");
   const preferredDateRaw = formData.get("preferredDate");
   const startTimeRaw = formData.get("startTime");
-  const currentDateRaw = formData.get("currentDate");
+  const currentDateRaw = formData.get("currentDate") ?? formData.get("date");
+  const screen = formData.get("screen") === "myday" ? "myday" : "calendar";
   const appointmentId =
     typeof appointmentIdRaw === "string" ? appointmentIdRaw.trim() : "";
   const preferredDate =
@@ -1706,10 +1869,10 @@ export async function rescheduleMobileAppointmentAction(formData: FormData) {
   const startTime = typeof startTimeRaw === "string" ? startTimeRaw.trim() : "";
   const currentDate =
     typeof currentDateRaw === "string" ? currentDateRaw.trim() : "";
-  const redirectPath = (
-    currentDate
-      ? `/mobile?screen=calendar&date=${encodeURIComponent(currentDate)}`
-      : "/mobile?screen=calendar"
+  const redirectPath = mobileBookingHref(
+    screen,
+    currentDate,
+    appointmentId,
   ) as Route;
 
   if (!appointmentId) {
@@ -1719,25 +1882,54 @@ export async function rescheduleMobileAppointmentAction(formData: FormData) {
     redirect(`${redirectPath}&error=new_time_required` as Route);
   }
 
-  const response = await callAdminApiForCurrentSession(
-    `/api/web/appointments/${encodeURIComponent(appointmentId)}/reschedule`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        preferredDate,
-        startTime,
-      }),
-    },
-  );
+  let response: Response;
+  try {
+    response = await callAdminApiForCurrentSession(
+      `/api/web/appointments/${encodeURIComponent(appointmentId)}/reschedule`,
+      {
+        method: "POST",
+        body: JSON.stringify({ preferredDate, startTime }),
+      },
+    );
+  } catch {
+    redirect(
+      mobileReturnWithParam(
+        redirectPath,
+        "error",
+        "The new schedule could not be confirmed. Reopen the job before trying again.",
+      ),
+    );
+  }
 
   if (!response.ok) {
     const message = await readErrorMessage(response, "reschedule_failed");
     redirect(`${redirectPath}&error=${encodeURIComponent(message)}` as Route);
   }
 
+  const result = (await response.json().catch(() => null)) as {
+    ok?: unknown;
+    appointmentId?: unknown;
+    preferredDate?: unknown;
+    version?: unknown;
+  } | null;
+  if (
+    result?.ok !== true ||
+    result.appointmentId !== appointmentId ||
+    result.preferredDate !== preferredDate ||
+    !parseMobileAppointmentVersion(result.version)
+  ) {
+    redirect(
+      mobileReturnWithParam(
+        redirectPath,
+        "error",
+        "The new schedule returned an unreadable result. Reopen the job before trying again; no success is being claimed.",
+      ),
+    );
+  }
+
   revalidatePath("/mobile");
   redirect(
-    `/mobile?screen=calendar&date=${encodeURIComponent(preferredDate)}&appointment=1` as Route,
+    `${mobileBookingHref(screen, preferredDate, appointmentId)}&appointment=1` as Route,
   );
 }
 

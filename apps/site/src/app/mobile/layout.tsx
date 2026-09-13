@@ -6,22 +6,25 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: "StonegateOS",
-    statusBarStyle: "black-translucent"
+    statusBarStyle: "black-translucent",
   },
   robots: {
     index: false,
-    follow: false
-  }
+    follow: false,
+  },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
   viewportFit: "cover",
-  themeColor: "#020617"
+  themeColor: "#020617",
 };
 
-export default function MobileLayout({ children }: { children: React.ReactNode }) {
+export default function MobileLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return children;
 }

@@ -14,6 +14,7 @@ import {
   appointmentCardSurfaceClassName,
   appointmentCardTimeClassName,
 } from "../../../apps/site/src/app/mobile/mobile-appointment-card-styles";
+import { isMobileSquarePaymentsEnabled } from "../../../apps/site/src/app/mobile/lib/square-payment-feature";
 
 type PaymentSummary = {
   status:
@@ -45,7 +46,95 @@ const unpaidPaymentSummary: PaymentSummary = {
 
 const browserDecodablePng = readFileSync("apps/site/public/favicon-32.png");
 
-test("keeps quote and canceled appointment surface colors distinct", () => {
+function bookingCard(page: Page, appointmentId: string): Locator {
+  return page.locator(`article[data-appointment-id="${appointmentId}"]`);
+}
+
+function openedJob(page: Page, appointmentId: string): Locator {
+  return page.locator(`dialog[open][data-appointment-id="${appointmentId}"]`);
+}
+
+// The dialog is portaled alongside the schedule, so the article remains in the
+// DOM while its job is open. Resolve exactly one surface as the user navigates.
+function jobSurface(page: Page, appointmentId: string): Locator {
+  const dialog = `dialog[open][data-appointment-id="${appointmentId}"]`;
+  return page.locator(
+    `${dialog}, body:not(:has(${dialog})) article[data-appointment-id="${appointmentId}"]`,
+  );
+}
+
+async function closeBooking(page: Page, appointmentId: string): Promise<void> {
+  await openedJob(page, appointmentId)
+    .getByRole("button", { name: "Back to jobs" })
+    .click();
+  await expect(openedJob(page, appointmentId)).toHaveCount(0);
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("jobId"))
+    .toBe(null);
+}
+
+async function openCompletionReview(
+  page: Page,
+  appointmentId: string,
+): Promise<void> {
+  const dialog = openedJob(page, appointmentId);
+  await dialog
+    .locator("footer")
+    .getByRole("button", { name: "Finish job", exact: true })
+    .click();
+  await expect(dialog.locator("[data-mobile-completion]")).toHaveAttribute(
+    "open",
+    "",
+  );
+}
+
+async function editCompletionTotal(
+  page: Page,
+  appointmentId: string,
+): Promise<Locator> {
+  const form = openedJob(page, appointmentId).locator(
+    "[data-mobile-completion-form]",
+  );
+  const field = form.locator('input[name="finalTotal"]');
+  if ((await field.getAttribute("type")) === "hidden") {
+    await form
+      .getByRole("button", { name: "Change total", exact: true })
+      .click();
+  }
+  return field;
+}
+
+async function editCompletionCrew(
+  page: Page,
+  appointmentId: string,
+): Promise<void> {
+  const form = openedJob(page, appointmentId).locator(
+    "[data-mobile-completion-form]",
+  );
+  const change = form.getByRole("button", { name: "Change crew", exact: true });
+  if (await change.isVisible()) await change.click();
+}
+
+async function submitCompletion(
+  page: Page,
+  appointmentId: string,
+  correction = false,
+): Promise<void> {
+  const form = openedJob(page, appointmentId).locator(
+    "[data-mobile-completion-form]",
+  );
+  await form
+    .getByRole("button", {
+      name: correction ? "Save completed job" : "Finish job",
+      exact: true,
+    })
+    .click();
+  await expect(
+    form.getByRole("status").filter({ hasText: "Job completed" }),
+  ).toBeVisible({ timeout: 30_000 });
+}
+
+test("keeps legacy quote and canceled appointment surface colors distinct", () => {
   expect(appointmentCardSurfaceClassName("quote")).toContain(
     "border-sky-300/30 bg-sky-300/10",
   );
@@ -118,8 +207,10 @@ async function openSeededPayment(
   startAt: Date,
 ): Promise<void> {
   await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-  const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
-  const cardToggle = card.getByRole("button", { name: /E2E Contact/u });
+  const card = jobSurface(page, appointmentId);
+  const cardToggle = bookingCard(page, appointmentId).getByRole("button", {
+    name: /E2E Contact/u,
+  });
   await expect(card).toBeVisible();
   await cardToggle.click();
   await expect(cardToggle).toHaveAttribute("aria-expanded", "true");
@@ -181,10 +272,10 @@ test.describe("Mobile appointment quoted work and payments", () => {
     for (const screen of ["myday", "calendar"] as const) {
       await page.goto(`/mobile?screen=${screen}&date=${appointmentDay}`);
 
-      const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+      const card = jobSurface(page, appointmentId);
       await expect(card).toBeVisible({ timeout: 30_000 });
 
-      const toggle = card.getByRole("button", {
+      const toggle = bookingCard(page, appointmentId).getByRole("button", {
         name: /E2E Contact/u,
       });
       const directions = card.getByRole("link", {
@@ -195,21 +286,15 @@ test.describe("Mobile appointment quoted work and payments", () => {
       await expect(card.getByText("Confirmed", { exact: true })).toHaveClass(
         /bg-emerald-300\/10/u,
       );
-      await expect(card).toHaveClass(/border-emerald-300\/30/u);
-      await expect(card).toHaveClass(/bg-emerald-300\/10/u);
-      const collapsedScope = card.getByText(`Quoted work: ${quotedScopeText}`, {
+      await expect(card.getByText("Job", { exact: true })).toBeVisible();
+      await expect(card).toHaveClass(/border-white\/10/u);
+      await expect(card).toHaveClass(/bg-slate-900\/90/u);
+      const collapsedScope = card.getByText(quotedScopeText, {
         exact: true,
       });
       await expect(collapsedScope).toBeVisible();
-      await expect(collapsedScope).not.toHaveClass(/line-clamp/u);
-      expect(
-        await collapsedScope.evaluate(
-          (element) => element.scrollHeight <= element.clientHeight + 1,
-        ),
-      ).toBe(true);
-      await expect(card.getByText("Quoted Work", { exact: true })).toHaveCount(
-        0,
-      );
+      await expect(collapsedScope).toHaveClass(/line-clamp-2/u);
+      await expect(card.getByText("Photos", { exact: true })).toHaveCount(0);
       await expect(card.getByText("Payment", { exact: true })).toHaveCount(0);
 
       await expect(directions).toBeVisible();
@@ -230,11 +315,25 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
       await toggle.click();
       await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      await expect(openedJob(page, appointmentId)).toBeVisible();
       await expect(
-        card.getByText("Quoted Work", { exact: true }),
-      ).toBeVisible();
+        card.getByRole("region", { name: "Work details" }),
+      ).toContainText(quotedScopeText);
+      await expect(
+        card.getByText(quotedScopeText, { exact: true }),
+      ).not.toHaveClass(/line-clamp/u);
+      expect(new URL(page.url()).searchParams.get("jobId")).toBe(appointmentId);
+      await expect(card.getByText("Photos", { exact: true })).toBeVisible();
       await expect(card.getByText("Payment", { exact: true })).toBeVisible();
       await expectNoEtaControls(card);
+      const finish = card
+        .locator("footer")
+        .getByRole("button", { name: "Finish job", exact: true });
+      await expect(finish).toBeEnabled();
+      await expectMinimumTapHeight(finish);
+      await closeBooking(page, appointmentId);
+      await expect(toggle).toBeFocused();
+      expect(new URL(page.url()).searchParams.get("date")).toBe(appointmentDay);
     }
   });
 
@@ -255,7 +354,17 @@ test.describe("Mobile appointment quoted work and payments", () => {
       await ensureE2ECommissionPrincipals();
       const { appointmentId, startAt } = await seededAppointment({
         finalTotalCents: 32_500,
+        quotedScopeText: "Remove the sofa. Leave the donation bin in place.",
       });
+      await page.route(
+        `**/api/mobile/appointments/${appointmentId}/media`,
+        (route) =>
+          route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "Gallery temporarily unavailable" }),
+          }),
+      );
       const payoutRunId = await createE2EDraftPayoutRun();
       const finalTotalCents =
         47_500 + screenOffsetCents + (browserName === "webkit" ? 100 : 0);
@@ -264,34 +373,36 @@ test.describe("Mobile appointment quoted work and payments", () => {
         `/mobile?screen=${screen}&date=${encodeURIComponent(appointmentDay)}`,
       );
 
-      const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
-      const cardToggle = card.getByRole("button", { name: /E2E Contact/u });
+      const card = jobSurface(page, appointmentId);
+      const cardToggle = bookingCard(page, appointmentId).getByRole("button", {
+        name: /E2E Contact/u,
+      });
       await expect(card).toBeVisible({ timeout: 30_000 });
       await cardToggle.click();
-      await card.getByText("Complete job", { exact: true }).click();
+      // A failed optional gallery must not change existing completion eligibility.
+      const galleryFailure = page.waitForResponse(
+        (response) =>
+          response
+            .url()
+            .endsWith(`/api/mobile/appointments/${appointmentId}/media`) &&
+          response.status() === 503,
+      );
+      await card.getByText("Photos", { exact: true }).click();
+      await galleryFailure;
+      await openCompletionReview(page, appointmentId);
 
-      const finalTotal = card.locator('input[name="finalTotal"]');
+      const finalTotal = await editCompletionTotal(page, appointmentId);
       await expect(finalTotal).toHaveValue("325.00");
       await finalTotal.fill((finalTotalCents / 100).toFixed(2));
+      await editCompletionCrew(page, appointmentId);
       await card.locator('input[name="crewMemberId"]').first().check();
-
-      await Promise.all([
-        page.waitForURL(/appointment=1/u),
-        card.getByRole("button", { name: "Mark complete" }).click(),
-      ]);
-
-      const completedCardAmount = new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency: "USD",
-        maximumFractionDigits: 0,
-      }).format(finalTotalCents / 100);
       await expect(
-        page
-          .locator(`[data-appointment-id="${appointmentId}"]`)
-          .getByText(`Final total ${completedCardAmount}`, {
-            exact: true,
-          }),
-      ).toBeVisible();
+        card.locator('input[name="sendReviewRequest"]'),
+      ).not.toBeChecked();
+      await submitCompletion(page, appointmentId);
+      await expect(card.locator('input[name="finalTotal"]')).toHaveValue(
+        (finalTotalCents / 100).toFixed(2),
+      );
       await expect
         .poll(async () => getE2EAppointmentCompletion(appointmentId), {
           timeout: 20_000,
@@ -355,29 +466,25 @@ test.describe("Mobile appointment quoted work and payments", () => {
     const mobileUrl = `/mobile?screen=calendar&date=${encodeURIComponent(appointmentDay)}`;
 
     await page.goto(mobileUrl);
-    let card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    let card = jobSurface(page, appointmentId);
     await card.getByRole("button", { name: /E2E Contact/u }).click();
-    await card.getByText("Complete job", { exact: true }).click();
-    await card.locator('input[name="finalTotal"]').fill("475.00");
+    await openCompletionReview(page, appointmentId);
+    await (await editCompletionTotal(page, appointmentId)).fill("475.00");
+    await editCompletionCrew(page, appointmentId);
     await card.locator('input[name="crewMemberId"]').first().check();
-    await Promise.all([
-      page.waitForURL(/appointment=1/u),
-      card.getByRole("button", { name: "Mark complete" }).click(),
-    ]);
+    await submitCompletion(page, appointmentId);
 
     await page.goto(mobileUrl);
-    card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    card = jobSurface(page, appointmentId);
     await card.getByRole("button", { name: /E2E Contact/u }).click();
-    await card.getByText("Correct completed job", { exact: true }).click();
+    await card.locator("[data-mobile-completion] > summary").click();
     await expect(card.locator('input[name="finalTotal"]')).toHaveValue(
       "475.00",
     );
-    await card.locator('input[name="finalTotal"]').fill("1050.00");
+    await (await editCompletionTotal(page, appointmentId)).fill("1050.00");
+    await editCompletionCrew(page, appointmentId);
     await card.locator('input[name="crewMemberId"]').first().check();
-    await Promise.all([
-      page.waitForURL(/appointment=1/u),
-      card.getByRole("button", { name: "Save completed job" }).click(),
-    ]);
+    await submitCompletion(page, appointmentId, true);
 
     await expect
       .poll(async () => getE2EAppointmentCompletion(appointmentId), {
@@ -461,9 +568,9 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    const card = jobSurface(page, appointmentId);
     await card.getByRole("button", { name: /E2E Contact/u }).click();
-    await card.getByText("Quoted Work", { exact: true }).click();
+    await card.getByText("Photos", { exact: true }).click();
 
     const input = page
       .locator("label", { hasText: "Choose photos" })
@@ -474,10 +581,9 @@ test.describe("Mobile appointment quoted work and payments", () => {
       buffer: browserDecodablePng,
     });
     await expect(
-      page.getByText(
-        "Add the “Quoted to remove” summary before adding photos.",
-        { exact: true },
-      ),
+      page.getByText("Add the work details before adding photos.", {
+        exact: true,
+      }),
     ).toBeVisible();
     expect(uploadIntentRequests).toBe(0);
 
@@ -510,7 +616,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
     await expect(
       page.getByText(
-        "Add and save the “Quoted to remove” summary. These photos are safe on this phone and will upload afterward.",
+        "Add and save the work details. These photos are saved on this phone and will upload afterward.",
         { exact: true },
       ),
     ).toBeVisible();
@@ -619,20 +725,22 @@ test.describe("Mobile appointment quoted work and payments", () => {
         }
       ).__scopeSummaryEvents = () => [...summaryEvents];
     }, appointmentId);
-    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    const card = jobSurface(page, appointmentId);
     await card.getByRole("button", { name: /E2E Contact/u }).click();
-    await card.getByText("Quoted Work", { exact: true }).click();
+    await card.getByText("Photos", { exact: true }).click();
     await expect.poll(() => mediaRequests).toBeGreaterThan(0);
     await expect.poll(() => staleRequestStarted).toBe(true);
-    await page.getByRole("button", { name: "Manage quoted work" }).click();
+    await page.getByRole("button", { name: "More photo options" }).click();
 
     const nextScope = "Remove the blue chair shown in the customer photo.";
-    const scope = page.locator('textarea[placeholder^="Example: Remove"]');
+    const scope = page.locator(
+      'textarea[placeholder^="Describe the agreed work"]',
+    );
     await scope.fill(nextScope);
-    await page.getByRole("button", { name: "Save scope" }).click();
+    await page.getByRole("button", { name: "Save work details" }).click();
     await expect.poll(() => savedScope).toBe(nextScope);
     await expect(
-      page.getByText("Quoted scope saved. Any waiting photos will upload now."),
+      page.getByText("Work details saved. Any waiting photos will upload now."),
     ).toBeVisible();
     const scopeSummaryEvents = () =>
       page.evaluate(
@@ -1131,9 +1239,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    await expect(
-      page.locator(`[data-appointment-id="${appointmentId}"]`),
-    ).toBeVisible();
+    await expect(jobSurface(page, appointmentId)).toBeVisible();
     await page.evaluate(
       async ({
         appointmentId: queuedAppointmentId,
@@ -1461,9 +1567,9 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    const card = jobSurface(page, appointmentId);
     await card.getByRole("button", { name: /E2E Contact/u }).click();
-    await card.getByText("Quoted Work", { exact: true }).click();
+    await card.getByText("Photos", { exact: true }).click();
 
     const input = page
       .locator("label", { hasText: "Choose photos" })
@@ -1881,9 +1987,9 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    const card = jobSurface(page, appointmentId);
     await card.getByRole("button", { name: /E2E Contact/u }).click();
-    await card.getByText("Quoted Work", { exact: true }).click();
+    await card.getByText("Photos", { exact: true }).click();
     const input = page
       .locator("label", { hasText: "Choose photos" })
       .locator('input[type="file"]');
@@ -2002,27 +2108,29 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
 
-    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
-    const cardToggle = card.getByRole("button", { name: /E2E Contact/u });
+    const card = jobSurface(page, appointmentId);
+    const cardToggle = bookingCard(page, appointmentId).getByRole("button", {
+      name: /E2E Contact/u,
+    });
     await expect(card).toBeVisible({ timeout: 30_000 });
     await cardToggle.click();
     await expect(cardToggle).toHaveAttribute("aria-expanded", "true");
 
-    await card.getByText("Quoted Work", { exact: true }).click();
+    await card.getByText("Photos", { exact: true }).click();
     await expect(
-      page.getByText(
+      card.getByText(
         "Remove the sectional and boxed garage items shown in the photos.",
         { exact: true },
       ),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Manage quoted work" }),
+      page.getByRole("button", { name: "More photo options" }),
     ).toBeVisible();
     await expect(
       page.getByRole("img", { name: "Sectional in garage" }),
     ).toBeVisible();
     await expect(page.getByText("Customer MMS", { exact: true })).toBeVisible();
-    await expect(page.getByText("Take photos", { exact: true })).toBeVisible();
+    await expect(page.getByText("Take photo", { exact: true })).toBeVisible();
     await expect(
       page.getByText("Choose photos", { exact: true }),
     ).toBeVisible();
@@ -2032,7 +2140,11 @@ test.describe("Mobile appointment quoted work and payments", () => {
     const acceptPayment = page.getByRole("button", {
       name: "Accept payment · $325.00",
     });
-    await expect(acceptPayment).toBeEnabled();
+    if (isMobileSquarePaymentsEnabled()) {
+      await expect(acceptPayment).toBeEnabled();
+    } else {
+      await expect(acceptPayment).toHaveCount(0);
+    }
     await page.getByText("Record cash or check", { exact: true }).click();
     const recordCash = page.getByRole("button", {
       name: "Record full cash balance",
@@ -2049,7 +2161,9 @@ test.describe("Mobile appointment quoted work and payments", () => {
     await expect(
       page.getByText("Payments are disabled offline.", { exact: true }),
     ).toBeVisible();
-    await expect(acceptPayment).toBeDisabled();
+    if (isMobileSquarePaymentsEnabled()) {
+      await expect(acceptPayment).toBeDisabled();
+    }
     await expect(recordCash).toBeDisabled();
     await page.context().setOffline(false);
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
@@ -2094,7 +2208,10 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
 
     await openSeededPayment(page, appointmentId, startAt);
-    await page.getByText("Edit final job total", { exact: true }).click();
+    await openedJob(page, appointmentId)
+      .locator("[data-mobile-payment]")
+      .getByText("Change total", { exact: true })
+      .click();
     const finalTotal = page.locator('input[placeholder="350.00"]');
     await finalTotal.fill("475.00");
 
@@ -2116,7 +2233,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     await expect(
       page.getByRole("button", { name: "Final job total saved" }),
     ).toBeDisabled();
-    await page.getByText("Complete job", { exact: true }).click();
+    await openCompletionReview(page, appointmentId);
     await expect(page.locator('input[name="finalTotal"]')).toHaveValue(
       "475.00",
     );
@@ -2159,7 +2276,9 @@ test.describe("Mobile appointment quoted work and payments", () => {
       ),
     ).toBeVisible();
     await expect(
-      page.getByText("Edit final job total", { exact: true }),
+      openedJob(page, appointmentId)
+        .locator("[data-mobile-payment]")
+        .getByText("Change total", { exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: /Accept payment/u }),
@@ -2208,7 +2327,10 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
     await openSeededPayment(page, appointmentId, startAt);
     await requestStarted;
-    await page.getByText("Edit final job total", { exact: true }).click();
+    await openedJob(page, appointmentId)
+      .locator("[data-mobile-payment]")
+      .getByText("Change total", { exact: true })
+      .click();
     const finalTotal = page.locator('input[placeholder="350.00"]');
     await finalTotal.fill("475.00");
 
@@ -2264,12 +2386,14 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
-    const cardToggle = card.getByRole("button", { name: /E2E Contact/u });
+    const card = jobSurface(page, appointmentId);
+    const cardToggle = bookingCard(page, appointmentId).getByRole("button", {
+      name: /E2E Contact/u,
+    });
     await expect(card).toBeVisible();
     await cardToggle.click();
-    await card.getByText("Complete job", { exact: true }).click();
-    const completionTotal = card.locator('input[name="finalTotal"]');
+    await openCompletionReview(page, appointmentId);
+    const completionTotal = await editCompletionTotal(page, appointmentId);
     await completionTotal.fill("500.00");
 
     await card.getByText("Payment", { exact: true }).click();
@@ -2325,6 +2449,10 @@ test.describe("Mobile appointment quoted work and payments", () => {
     test.skip(
       !isMobile,
       "This workflow is covered by the mobile browser projects.",
+    );
+    test.skip(
+      !isMobileSquarePaymentsEnabled(),
+      "Square launch controls are paused. Set MOBILE_SQUARE_PAYMENTS_ENABLED=true for both the site and E2E runner to test the mocked handoff.",
     );
 
     const { appointmentId, startAt } = await seededAppointment();
@@ -2399,6 +2527,10 @@ test.describe("Mobile appointment quoted work and payments", () => {
       !isMobile,
       "This workflow is covered by the mobile browser projects.",
     );
+    test.skip(
+      !isMobileSquarePaymentsEnabled(),
+      "Square launch controls are paused. Set MOBILE_SQUARE_PAYMENTS_ENABLED=true for both the site and E2E runner to test the mocked resume.",
+    );
 
     const { appointmentId, startAt } = await seededAppointment();
     const activeSummary: PaymentSummary = {
@@ -2430,7 +2562,10 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
 
     await openSeededPayment(page, appointmentId, startAt);
-    await page.getByText("Edit final job total", { exact: true }).click();
+    await openedJob(page, appointmentId)
+      .locator("[data-mobile-payment]")
+      .getByText("Change total", { exact: true })
+      .click();
     const finalTotal = page.locator('input[placeholder="350.00"]');
     await expect(finalTotal).toBeDisabled();
     await expect(
@@ -2525,13 +2660,18 @@ test.describe("Mobile appointment quoted work and payments", () => {
         page.getByText("$0.00 remaining", { exact: true }),
       ).toBeVisible();
 
-      const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
-      const cardToggle = card.getByRole("button", {
+      const card = jobSurface(page, appointmentId);
+      const cardToggle = bookingCard(page, appointmentId).getByRole("button", {
         name: /E2E Contact/u,
       });
-      await cardToggle.click();
+      await expect(
+        card
+          .locator("[data-mobile-payment]")
+          .getByText("Paid", { exact: true }),
+      ).toBeVisible();
+      await closeBooking(page, appointmentId);
       await expect(cardToggle).toHaveAttribute("aria-expanded", "false");
-      await expect(card.getByText("Paid", { exact: true })).toBeVisible();
+      await expect(card.getByText("Paid", { exact: true })).toHaveCount(0);
       await expect(card.getByText("$325 due", { exact: true })).toHaveCount(0);
 
       expect(manualRequests).toBe(1);
@@ -2568,15 +2708,26 @@ test.describe("Mobile appointment quoted work and payments", () => {
     ).toBeVisible();
 
     await page.goto("/mobile/square-setup?reason=illegal_location_id");
-    await expect(
-      page.getByRole("heading", { name: "Get Tap to Pay ready" }),
-    ).toBeVisible();
-    await expect(
-      page.getByText(/signed in to a different Stonegate location/u),
-    ).toBeVisible();
-    await expect(
-      page.getByText(/No appointment has been marked paid/u),
-    ).toBeVisible();
+    if (isMobileSquarePaymentsEnabled()) {
+      await expect(
+        page.getByRole("heading", { name: "Get Tap to Pay ready" }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(/signed in to a different Stonegate location/u),
+      ).toBeVisible();
+      await expect(
+        page.getByText(/No appointment has been marked paid/u),
+      ).toBeVisible();
+    } else {
+      await expect(
+        page.getByRole("heading", { name: "Square is paused" }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("link", { name: "Return to Today" }),
+      ).toHaveAttribute("href", "/mobile?screen=myday");
+      await expect(page.getByRole("link", { name: "iPhone" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "Android" })).toHaveCount(0);
+    }
   });
 
   test("renders verified, canceled, and review return states without completing the job", async ({
@@ -2628,15 +2779,17 @@ test.describe("Mobile appointment quoted work and payments", () => {
     const photoCaption = `${browserName} blue chair ${testInfo.retry}-${Date.now()}`;
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
-    const cardToggle = card.getByRole("button", {
+    const card = jobSurface(page, appointmentId);
+    const cardToggle = bookingCard(page, appointmentId).getByRole("button", {
       name: /E2E Contact/u,
     });
     await cardToggle.click();
-    await page.getByText("Quoted Work", { exact: true }).click();
-    await page.getByRole("button", { name: "Manage quoted work" }).click();
+    await page.getByText("Photos", { exact: true }).click();
+    await page.getByRole("button", { name: "More photo options" }).click();
 
-    const scope = page.locator('textarea[placeholder^="Example: Remove"]');
+    const scope = page.locator(
+      'textarea[placeholder^="Describe the agreed work"]',
+    );
     await scope.fill("Remove the blue chair shown in the crew photo.");
     const scopeSaved = page.waitForResponse(
       (response) =>
@@ -2646,12 +2799,15 @@ test.describe("Mobile appointment quoted work and payments", () => {
         response.ok(),
       { timeout: 45_000 },
     );
-    await page.getByRole("button", { name: "Save scope" }).click();
+    await page.getByRole("button", { name: "Save work details" }).click();
     await scopeSaved;
-    await expect(page.getByText("Quoted scope saved.")).toBeVisible({
+    await expect(page.getByText("Work details saved.")).toBeVisible({
       timeout: 30_000,
     });
 
+    await card
+      .getByText("Add a photo caption (optional)", { exact: true })
+      .click();
     await page.getByPlaceholder("Items behind the shed").fill(photoCaption);
     const readyMediaLoaded = page.waitForResponse(
       async (response) => {
@@ -2702,21 +2858,23 @@ test.describe("Mobile appointment quoted work and payments", () => {
       0,
     );
 
-    await cardToggle.click();
-    await expect(cardToggle).toHaveAttribute("aria-expanded", "false");
-    await expect(
-      card.getByText(
-        "Quoted work: Remove the blue chair shown in the crew photo.",
-        { exact: true },
-      ),
-    ).toBeVisible();
-    const photoCount = card.getByText(/^\d+ photos?$/u);
+    const photoCount = card
+      .locator("[data-mobile-work-details] > summary")
+      .getByText(/^\d+ photos?$/u);
     await expect(photoCount).toBeVisible();
     await expect
       .poll(async () =>
         Number.parseInt((await photoCount.textContent()) ?? "0", 10),
       )
       .toBeGreaterThan(0);
+    await closeBooking(page, appointmentId);
+    await expect(cardToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(
+      card.getByText("Remove the blue chair shown in the crew photo.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(card.getByText(/^\d+ photos?$/u)).toHaveCount(0);
     await expect(card.getByText("Scope needed", { exact: true })).toHaveCount(
       0,
     );
@@ -2932,17 +3090,24 @@ test.describe("Mobile non-owner final-total lock", () => {
     await expect(
       page.getByText("Refunded", { exact: true }).first(),
     ).toBeVisible();
+    const acceptPayment = page.getByRole("button", {
+      name: "Accept payment · $325.00",
+    });
+    if (isMobileSquarePaymentsEnabled()) {
+      await expect(acceptPayment).toBeEnabled();
+    } else {
+      await expect(acceptPayment).toHaveCount(0);
+    }
     await expect(
-      page.getByRole("button", { name: "Accept payment · $325.00" }),
-    ).toBeEnabled();
-    await expect(
-      page.getByText("Edit final job total", { exact: true }),
+      openedJob(page, appointmentId)
+        .locator("[data-mobile-payment]")
+        .getByText("Change total", { exact: true }),
     ).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: /final job total/iu }),
     ).toHaveCount(0);
     await expect(page.locator('input[placeholder="350.00"]')).toHaveCount(0);
-    await page.getByText("Complete job", { exact: true }).click();
+    await openCompletionReview(page, appointmentId);
     await expect(page.locator('input[name="finalTotal"]')).toHaveCount(0);
     await expect(page.locator('input[name="preserveFinalTotal"]')).toHaveValue(
       "1",
@@ -2967,7 +3132,7 @@ test.describe("Mobile payment permission boundary", () => {
 
     const { appointmentId, startAt } = await seededAppointment();
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    const card = jobSurface(page, appointmentId);
     await card.getByRole("button", { name: /E2E Contact/u }).click();
     await expect(card.getByText("Payment", { exact: true })).toHaveCount(0);
 
@@ -3020,8 +3185,8 @@ test.describe("Mobile appointment action permission boundary", () => {
 
     for (const screen of ["myday", "calendar"] as const) {
       await page.goto(`/mobile?screen=${screen}&date=${appointmentDay}`);
-      const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
-      const toggle = card.getByRole("button", {
+      const card = jobSurface(page, appointmentId);
+      const toggle = bookingCard(page, appointmentId).getByRole("button", {
         name: /E2E Contact/u,
       });
 
@@ -3030,12 +3195,10 @@ test.describe("Mobile appointment action permission boundary", () => {
       await expect(
         card.getByRole("button", { name: "Message", exact: true }),
       ).toBeVisible();
-      await expect(card.getByText("Complete job", { exact: true })).toHaveCount(
-        0,
-      );
       await expect(
-        card.getByText("More appointment actions", { exact: true }),
+        card.getByRole("button", { name: "Finish job", exact: true }),
       ).toHaveCount(0);
+      await expect(card.getByText("More", { exact: true })).toHaveCount(0);
       await expect(card.getByText("Add note", { exact: true })).toHaveCount(0);
     }
   });

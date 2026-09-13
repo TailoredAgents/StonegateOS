@@ -160,6 +160,8 @@ export function MobilePaymentPanel({
   canCollect,
   canManagePayments,
   needsScope,
+  modern = false,
+  squarePaymentsEnabled = false,
 }: {
   appointmentId: string;
   initialVersion: string | null;
@@ -168,6 +170,8 @@ export function MobilePaymentPanel({
   canCollect: boolean;
   canManagePayments: boolean;
   needsScope: boolean;
+  modern?: boolean;
+  squarePaymentsEnabled?: boolean;
 }) {
   const router = useRouter();
   const [summary, setSummary] = React.useState(initialSummary);
@@ -490,13 +494,18 @@ export function MobilePaymentPanel({
   };
 
   const acceptSquare = async () => {
+    if (!squarePaymentsEnabled) return;
     if (paymentActionInFlightRef.current) return;
     if (!online) {
       setMessage("Payments are disabled offline.");
       return;
     }
     if (needsScope) {
-      setMessage("Add the quoted-to-remove summary before taking payment.");
+      setMessage(
+        modern
+          ? "Add work details before taking payment."
+          : "Add the quoted-to-remove summary before taking payment.",
+      );
       return;
     }
     if (summary.activeAttemptId) {
@@ -643,7 +652,11 @@ export function MobilePaymentPanel({
       return;
     }
     if (needsScope) {
-      setMessage("Add the quoted-to-remove summary before recording payment.");
+      setMessage(
+        modern
+          ? "Add work details before recording payment."
+          : "Add the quoted-to-remove summary before recording payment.",
+      );
       return;
     }
     paymentActionInFlightRef.current = true;
@@ -811,9 +824,11 @@ export function MobilePaymentPanel({
       setBusy(null);
     }
   };
+  const MoneyDetails = modern ? "details" : "div";
 
   return (
     <details
+      data-mobile-payment
       className="rounded-md border border-white/10 bg-slate-950 p-3"
       onToggle={(event) => {
         if (event.currentTarget.open && !loaded) void load();
@@ -849,7 +864,9 @@ export function MobilePaymentPanel({
         ) : null}
         {needsScope ? (
           <p className="rounded-md border border-amber-300/30 bg-amber-300/10 p-3 text-sm text-amber-100">
-            Add the quoted-to-remove summary before accepting payment.
+            {modern
+              ? "Add work details before accepting payment."
+              : "Add the quoted-to-remove summary before accepting payment."}
           </p>
         ) : null}
         {summary.status === "needs_review" ? (
@@ -866,7 +883,12 @@ export function MobilePaymentPanel({
           </p>
         ) : null}
 
-        <div className="rounded-md border border-white/10 bg-slate-900 p-3 text-sm">
+        <MoneyDetails className="rounded-md border border-white/10 bg-slate-900 p-3 text-sm">
+          {modern ? (
+            <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-slate-200">
+              Payment details
+            </summary>
+          ) : null}
           <div className="flex items-center justify-between gap-3">
             <span className="text-slate-400">
               {ledgerAvailable ? "Balance" : "Final job total"}
@@ -909,7 +931,7 @@ export function MobilePaymentPanel({
               </span>
             </div>
           ) : null}
-        </div>
+        </MoneyDetails>
 
         {canCollect ? (
           <>
@@ -937,7 +959,7 @@ export function MobilePaymentPanel({
             ) : canEditFinalTotal ? (
               <details className="rounded-md border border-white/10 bg-slate-900 p-3">
                 <summary className="cursor-pointer text-sm font-semibold text-slate-200">
-                  Edit final job total
+                  {modern ? "Change total" : "Edit final job total"}
                 </summary>
                 <div className="mt-3 space-y-3">
                   <label className="block">
@@ -988,7 +1010,8 @@ export function MobilePaymentPanel({
               </details>
             ) : null}
 
-            {canEditFinalTotal ? (
+            {canEditFinalTotal &&
+            (!modern || finalTotalIsDirty || busy === "total") ? (
               <button
                 type="button"
                 disabled={
@@ -1011,32 +1034,39 @@ export function MobilePaymentPanel({
 
             {ledgerAvailable ? (
               <>
-                <button
-                  type="button"
-                  disabled={
-                    (!canStartNewPayment && !canResumeSquare) || busy !== null
-                  }
-                  onClick={() => void acceptSquare()}
-                  className="w-full rounded-md bg-emerald-300 px-3 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {busy === "square"
-                    ? "Opening Square…"
-                    : canResumeSquare
-                      ? "Resume payment in Square"
-                      : summary.activeAttemptId
-                        ? "Square verification in progress"
-                        : `Accept payment${
-                            typeof actionBalance === "number" &&
-                            actionBalance > 0
-                              ? ` · ${formatMoney(actionBalance)}`
-                              : ""
-                          }`}
-                </button>
-                <p className="text-xs leading-5 text-slate-400">
-                  Square opens on this phone for Tap to Pay, tip, and receipt. A
-                  return from Square is provisional until StonegateOS verifies
-                  the provider payment.
-                </p>
+                {squarePaymentsEnabled ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={
+                        (!canStartNewPayment && !canResumeSquare) ||
+                        busy !== null
+                      }
+                      onClick={() => void acceptSquare()}
+                      className="w-full rounded-md bg-emerald-300 px-3 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {busy === "square"
+                        ? "Opening Square…"
+                        : canResumeSquare
+                          ? "Resume payment in Square"
+                          : summary.activeAttemptId
+                            ? modern
+                              ? "Checking payment…"
+                              : "Square verification in progress"
+                            : `Accept payment${
+                                typeof actionBalance === "number" &&
+                                actionBalance > 0
+                                  ? ` · ${formatMoney(actionBalance)}`
+                                  : ""
+                              }`}
+                    </button>
+                    <p className="text-xs leading-5 text-slate-400">
+                      {modern
+                        ? "Square opens for card payment. Wait for the confirmed payment status when you return."
+                        : "Square opens on this phone for Tap to Pay, tip, and receipt. A return from Square is provisional until StonegateOS verifies the provider payment."}
+                    </p>
+                  </>
+                ) : null}
 
                 <details className="rounded-md border border-white/10 bg-slate-900 p-3">
                   <summary className="cursor-pointer text-sm font-semibold text-slate-200">
