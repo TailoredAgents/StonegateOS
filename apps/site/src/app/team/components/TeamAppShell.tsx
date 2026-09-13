@@ -638,13 +638,24 @@ export function TeamAppShell(props: {
   children: React.ReactNode;
 }): React.ReactElement {
   const router = useRouter();
+  const inboxViewport = props.activeId === "inbox";
+  const accountMenuRef = React.useRef<HTMLDetailsElement>(null);
   const searchParams = useSearchParams();
   const [isPending, startTransition] = React.useTransition();
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [collapsedGroups, setCollapsedGroups] = React.useState<
     Record<string, boolean>
-  >({});
+  >(() =>
+    inboxViewport
+      ? Object.fromEntries(
+          props.groups.map((group) => [
+            group.id,
+            !group.items.some((item) => item.id === props.activeId),
+          ]),
+        )
+      : {},
+  );
   const [theme, setTheme] = React.useState<"light" | "dark">("light");
   const [motion, setMotion] = React.useState<TeamMotionPreference>("system");
   const mobileMenuButtonRef = React.useRef<HTMLButtonElement>(null);
@@ -737,6 +748,7 @@ export function TeamAppShell(props: {
 
   const handleNavigate = React.useCallback(
     (href: string) => {
+      if (accountMenuRef.current) accountMenuRef.current.open = false;
       mobileFocusDestinationRef.current = "main";
       setMobileOpen(false);
       startTransition(() => {
@@ -834,12 +846,37 @@ export function TeamAppShell(props: {
   }, [closeMobileNavigation, mobileOpen]);
 
   const switchToClassic = React.useCallback(() => {
+    if (accountMenuRef.current) accountMenuRef.current.open = false;
     mobileFocusDestinationRef.current = "main";
     setMobileOpen(false);
     startTransition(() => {
       router.push(props.classicHref as Route);
     });
   }, [props.classicHref, router]);
+
+  React.useEffect(() => {
+    function closeAccountMenu(event: PointerEvent): void {
+      const menu = accountMenuRef.current;
+      if (
+        menu?.open &&
+        event.target instanceof Node &&
+        !menu.contains(event.target)
+      )
+        menu.open = false;
+    }
+    function handleAccountEscape(event: KeyboardEvent): void {
+      const menu = accountMenuRef.current;
+      if (event.key !== "Escape" || !menu?.open) return;
+      menu.open = false;
+      menu.querySelector("summary")?.focus();
+    }
+    document.addEventListener("pointerdown", closeAccountMenu);
+    document.addEventListener("keydown", handleAccountEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeAccountMenu);
+      document.removeEventListener("keydown", handleAccountEscape);
+    };
+  }, []);
 
   const hasClassic = Boolean(props.classicHref);
   const hasLayoutParam = searchParams.get("layout");
@@ -952,7 +989,8 @@ export function TeamAppShell(props: {
             {props.groups.map((group) => {
               const isGroupCollapsed = isCollapsed
                 ? false
-                : Boolean(collapsedGroups[group.id]);
+                : Boolean(collapsedGroups[group.id]) &&
+                  !group.items.some((item) => item.id === props.activeId);
               return (
                 <div key={group.id} className="space-y-2">
                   {isCollapsed ? null : (
@@ -1089,7 +1127,7 @@ export function TeamAppShell(props: {
             {isCollapsed ? null : <span>Collapse</span>}
           </button>
         )}
-        {hasClassic ? (
+        {hasClassic && !inboxViewport ? (
           <button
             type="button"
             onClick={switchToClassic}
@@ -1109,18 +1147,27 @@ export function TeamAppShell(props: {
   return (
     <div
       className={cn(
-        "min-h-screen bg-[color:var(--team-app-bg)] text-[color:var(--team-text)] transition-colors",
+        "bg-[color:var(--team-app-bg)] text-[color:var(--team-text)] transition-colors",
+        inboxViewport ? "h-dvh overflow-hidden" : "min-h-screen",
         themeClass,
       )}
     >
-      <div inert={mobileOpen ? true : undefined} className="min-h-screen">
+      <div
+        inert={mobileOpen ? true : undefined}
+        className={inboxViewport ? "h-full min-h-0" : "min-h-screen"}
+      >
         <a
           href={`#${TEAM_MAIN_ID}`}
           className="sr-only fixed left-4 top-4 z-[100] rounded-xl bg-primary-700 px-4 py-3 font-semibold text-white shadow-xl focus:not-sr-only focus:outline-none focus:ring-2 focus:ring-primary-300"
         >
           Skip to main content
         </a>
-        <div className="flex min-h-screen w-full">
+        <div
+          className={cn(
+            "flex w-full",
+            inboxViewport ? "h-full min-h-0" : "min-h-screen",
+          )}
+        >
           <aside
             aria-label="Team sidebar"
             className={cn(
@@ -1131,8 +1178,8 @@ export function TeamAppShell(props: {
             {renderSidebarContent({ isCollapsed: collapsed, isMobile: false })}
           </aside>
 
-          <div className="flex min-w-0 flex-1 flex-col">
-            <header className="sticky top-0 z-40 border-b border-[color:var(--team-border)] bg-[color:var(--team-header-bg)] backdrop-blur">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <header className="sticky top-0 z-40 shrink-0 border-b border-[color:var(--team-border)] bg-[color:var(--team-header-bg)] backdrop-blur">
               <div className="flex w-full items-center justify-between gap-3 px-4 py-2.5 sm:gap-4 sm:px-6 sm:py-3">
                 <div className="flex min-w-0 flex-1 items-center gap-3">
                   <button
@@ -1177,86 +1224,203 @@ export function TeamAppShell(props: {
                     {isPending ? `Loading ${props.title}` : ""}
                   </span>
                 </div>
-                <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-                  {utilityItems.map((item) => {
-                    const active = item.id === props.activeId;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => handleNavigate(item.href)}
-                        aria-label={item.label}
-                        className={cn(
-                          "hidden min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-2xl border px-3 text-xs font-semibold shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary-200 sm:inline-flex",
-                          active
-                            ? "border-primary-200 bg-primary-50 text-primary-800"
-                            : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text)] hover:border-primary-200 hover:text-primary-800",
-                        )}
-                        aria-current={active ? "page" : undefined}
-                      >
-                        <span className="[&>svg]:h-4 [&>svg]:w-4">
-                          {iconForTab(item.id)}
-                        </span>
-                        <span className="hidden sm:inline">{item.label}</span>
-                      </button>
-                    );
-                  })}
-                  <button
-                    type="button"
-                    onClick={handleToggleTheme}
-                    className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
-                    aria-label={
-                      theme === "dark" ? "Use light theme" : "Use dark theme"
-                    }
-                  >
-                    {theme === "dark" ? (
-                      <IconSun className="h-4 w-4" />
-                    ) : (
-                      <IconMoon className="h-4 w-4" />
-                    )}
-                    <span className="hidden sm:inline">
-                      {theme === "dark" ? "Light" : "Dark"}
-                    </span>
-                  </button>
-                  <div className="hidden items-center gap-2 xl:flex">
-                    <AccessPill
-                      label="Crew"
-                      enabled={props.access.hasCrew || props.access.hasOwner}
-                      tone="emerald"
-                    />
-                    <AccessPill
-                      label="Office"
-                      enabled={props.access.hasOffice || props.access.hasOwner}
-                      tone="sky"
-                    />
-                    <AccessPill
-                      label="Owner"
-                      enabled={props.access.hasOwner}
-                      tone="primary"
-                    />
-                  </div>
-                  {props.user ? (
-                    <div className="hidden text-right text-xs text-[color:var(--team-text-muted)] lg:block">
-                      <div className="font-semibold text-[color:var(--team-text)]">
-                        {props.user.name}
-                      </div>
-                      {props.user.email ? (
-                        <div className="truncate">{props.user.email}</div>
+                {inboxViewport ? (
+                  <details ref={accountMenuRef} className="relative shrink-0">
+                    <summary
+                      aria-label="Account and settings"
+                      className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-300"
+                    >
+                      <IconGear className="h-4 w-4" />
+                      <span className="max-w-24 truncate">
+                        {props.user?.name || "Settings"}
+                      </span>
+                      <IconChevronDown className="h-4 w-4" />
+                    </summary>
+                    <div className="absolute right-0 z-50 mt-2 w-72 max-w-[calc(100vw-2rem)] space-y-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-3 shadow-xl">
+                      {props.user ? (
+                        <div className="border-b border-[color:var(--team-border)] pb-3 text-xs">
+                          <p className="font-semibold">{props.user.name}</p>
+                          {props.user.email ? (
+                            <p className="mt-1 break-all text-[color:var(--team-text-muted)]">
+                              {props.user.email}
+                            </p>
+                          ) : null}
+                        </div>
                       ) : null}
+                      <div className="space-y-1">
+                        {utilityItems.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => handleNavigate(item.href)}
+                            className="flex min-h-11 w-full items-center gap-2 rounded-lg px-2 text-left text-sm hover:bg-[color:var(--team-panel-alt)]"
+                          >
+                            <span className="[&>svg]:h-4 [&>svg]:w-4">
+                              {iconForTab(item.id)}
+                            </span>
+                            {item.label}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={handleToggleTheme}
+                          aria-label={
+                            theme === "dark"
+                              ? "Use light theme"
+                              : "Use dark theme"
+                          }
+                          className="flex min-h-11 w-full items-center gap-2 rounded-lg px-2 text-left text-sm hover:bg-[color:var(--team-panel-alt)]"
+                        >
+                          {theme === "dark" ? (
+                            <IconSun className="h-4 w-4" />
+                          ) : (
+                            <IconMoon className="h-4 w-4" />
+                          )}
+                          {theme === "dark" ? "Light mode" : "Dark mode"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const query = new URLSearchParams(
+                              searchParams.toString(),
+                            );
+                            query.set("tools", "diagnostics");
+                            handleNavigate(`/team/inbox?${query.toString()}`);
+                          }}
+                          className="min-h-11 w-full rounded-lg px-2 text-left text-sm hover:bg-[color:var(--team-panel-alt)]"
+                        >
+                          Inbox diagnostics
+                        </button>
+                        {hasClassic ? (
+                          <button
+                            type="button"
+                            onClick={switchToClassic}
+                            disabled={isClassic}
+                            className="min-h-11 w-full rounded-lg px-2 text-left text-sm hover:bg-[color:var(--team-panel-alt)]"
+                          >
+                            Classic layout
+                          </button>
+                        ) : null}
+                      </div>
+                      <details className="border-t border-[color:var(--team-border)] pt-3">
+                        <summary className="cursor-pointer text-xs font-semibold">
+                          Your access
+                        </summary>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <AccessPill
+                            label="Crew"
+                            enabled={
+                              props.access.hasCrew || props.access.hasOwner
+                            }
+                            tone="emerald"
+                          />
+                          <AccessPill
+                            label="Office"
+                            enabled={
+                              props.access.hasOffice || props.access.hasOwner
+                            }
+                            tone="sky"
+                          />
+                          <AccessPill
+                            label="Owner"
+                            enabled={props.access.hasOwner}
+                            tone="primary"
+                          />
+                        </div>
+                      </details>
                     </div>
-                  ) : null}
-                </div>
+                  </details>
+                ) : (
+                  <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+                    {utilityItems.map((item) => {
+                      const active = item.id === props.activeId;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => handleNavigate(item.href)}
+                          aria-label={item.label}
+                          className={cn(
+                            "hidden min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-2xl border px-3 text-xs font-semibold shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary-200 sm:inline-flex",
+                            active
+                              ? "border-primary-200 bg-primary-50 text-primary-800"
+                              : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text)] hover:border-primary-200 hover:text-primary-800",
+                          )}
+                          aria-current={active ? "page" : undefined}
+                        >
+                          <span className="[&>svg]:h-4 [&>svg]:w-4">
+                            {iconForTab(item.id)}
+                          </span>
+                          <span className="hidden sm:inline">{item.label}</span>
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={handleToggleTheme}
+                      className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
+                      aria-label={
+                        theme === "dark" ? "Use light theme" : "Use dark theme"
+                      }
+                    >
+                      {theme === "dark" ? (
+                        <IconSun className="h-4 w-4" />
+                      ) : (
+                        <IconMoon className="h-4 w-4" />
+                      )}
+                      <span className="hidden sm:inline">
+                        {theme === "dark" ? "Light" : "Dark"}
+                      </span>
+                    </button>
+                    <div className="hidden items-center gap-2 xl:flex">
+                      <AccessPill
+                        label="Crew"
+                        enabled={props.access.hasCrew || props.access.hasOwner}
+                        tone="emerald"
+                      />
+                      <AccessPill
+                        label="Office"
+                        enabled={
+                          props.access.hasOffice || props.access.hasOwner
+                        }
+                        tone="sky"
+                      />
+                      <AccessPill
+                        label="Owner"
+                        enabled={props.access.hasOwner}
+                        tone="primary"
+                      />
+                    </div>
+                    {props.user ? (
+                      <div className="hidden text-right text-xs text-[color:var(--team-text-muted)] lg:block">
+                        <div className="font-semibold text-[color:var(--team-text)]">
+                          {props.user.name}
+                        </div>
+                        {props.user.email ? (
+                          <div className="truncate">{props.user.email}</div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
             </header>
 
-            <div className="flex-1">
+            <div
+              className={cn(
+                "flex-1",
+                inboxViewport ? "flex min-h-0 flex-col overflow-hidden" : "",
+              )}
+            >
               <main
                 id={TEAM_MAIN_ID}
                 tabIndex={-1}
                 aria-labelledby="team-page-title"
                 aria-busy={isPending}
                 className={cn(
-                  "w-full space-y-5 px-4 py-5 focus:outline-none sm:space-y-6 sm:px-6 sm:py-8 sm:pb-8",
+                  inboxViewport
+                    ? "flex min-h-0 w-full flex-1 flex-col gap-2 overflow-hidden px-2 py-2 focus:outline-none sm:px-4 lg:pb-3"
+                    : "w-full space-y-5 px-4 py-5 focus:outline-none sm:space-y-6 sm:px-6 sm:py-8 sm:pb-8",
                   mobileNavItems.length > 0
                     ? "pb-[calc(env(safe-area-inset-bottom,0px)+5.75rem)]"
                     : "pb-5",

@@ -137,16 +137,16 @@ describe("Site Inbox new-lead contracts", () => {
     ).toBeNull();
   });
 
-  it("loads the persisted queue and never uses the retired cookie as queue state", () => {
+  it("keeps the retired lead banner and its fetch out of the inbox", () => {
     const pageSource = readFileSync(join(SITE_TEAM_ROOT, "page.tsx"), "utf8");
     const componentSource = readFileSync(
       join(SITE_TEAM_ROOT, "components/InboxNewLeadNotice.tsx"),
       "utf8",
     );
 
-    expect(pageSource).toContain('"/api/admin/inbox/new-leads/next"');
-    expect(pageSource).toContain("parseInboxNewLeadFeed");
-    expect(pageSource).toContain("No empty queue is being assumed");
+    expect(pageSource).not.toContain('"/api/admin/inbox/new-leads/next"');
+    expect(pageSource).not.toContain("parseInboxNewLeadFeed");
+    expect(pageSource).not.toContain("InboxNewLeadNotice");
     expect(pageSource).not.toContain('jar.get("myst-new-lead-dismissed")');
     expect(pageSource).not.toContain('jar.get("myst-new-lead-hidden-until")');
     expect(componentSource).toContain("acknowledgeNewLeadAction");

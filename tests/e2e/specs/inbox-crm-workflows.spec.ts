@@ -192,12 +192,17 @@ test.describe("Inbox CRM drawers", () => {
     });
 
     await page.goto(`/team?tab=inbox&contactId=${seed.contactId}&channel=sms`);
-    await expect(page.getByText("Customer workspace")).toBeVisible();
-    await expect(page.getByText("Customer likely wants a quote")).toBeVisible();
-    await expect(page.getByText("1 upcoming")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Customer details", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Suggested next step", { exact: true }),
+    ).toHaveCount(0);
 
     await test.step("Quote drawer creates a quote and fills composer", async () => {
-      await page.getByRole("button", { name: "Start workflow" }).click();
+      await page
+        .getByRole("button", { name: "Create quote", exact: true })
+        .click();
       await expect(
         page.getByRole("heading", { name: "Create quote" }),
       ).toBeVisible();
@@ -218,7 +223,11 @@ test.describe("Inbox CRM drawers", () => {
       await page
         .getByRole("button", { name: "Create quote and draft reply" })
         .click();
-      await expect(page.getByText("Draft added to the composer")).toBeVisible();
+      await expect(
+        page.getByText("Saved. Review the prepared reply before sending.", {
+          exact: true,
+        }),
+      ).toBeVisible();
       await expect(page.locator("#inbox-thread-body")).toHaveValue(
         /I put together your quote here:/,
       );
@@ -227,10 +236,8 @@ test.describe("Inbox CRM drawers", () => {
     await test.step("Booking drawer creates appointment and fills composer", async () => {
       currentWorkspace = workspaceFixture(seed, "booking");
       await page.reload();
-      await expect(
-        page.getByText("Customer likely wants to get scheduled"),
-      ).toBeVisible();
-      await page.getByRole("button", { name: "Start workflow" }).click();
+      await page.locator("#inbox-thread-body").fill("");
+      await page.getByRole("button", { name: "Book", exact: true }).click();
       await expect(
         page.getByRole("heading", { name: "Book appointment" }),
       ).toBeVisible();
@@ -255,7 +262,11 @@ test.describe("Inbox CRM drawers", () => {
       await page
         .getByRole("button", { name: "Book and draft confirmation" })
         .click();
-      await expect(page.getByText("Draft added to the composer")).toBeVisible();
+      await expect(
+        page.getByText("Saved. Review the prepared reply before sending.", {
+          exact: true,
+        }),
+      ).toBeVisible();
       await expect(page.locator("#inbox-thread-body")).toHaveValue(
         /You're booked for/,
       );
@@ -267,10 +278,17 @@ test.describe("Inbox CRM drawers", () => {
     await test.step("Reschedule drawer updates appointment and fills composer", async () => {
       currentWorkspace = workspaceFixture(seed, "reschedule");
       await page.reload();
-      await expect(
-        page.getByText("Customer likely wants to change an appointment"),
-      ).toBeVisible();
-      await page.getByRole("button", { name: "Start workflow" }).click();
+      await page.locator("#inbox-thread-body").fill("");
+      await page
+        .getByRole("button", { name: "Customer details", exact: true })
+        .click();
+      await page
+        .locator("dialog summary")
+        .filter({ hasText: /^Appointments/ })
+        .click();
+      await page
+        .getByRole("button", { name: "Reschedule", exact: true })
+        .click();
       await expect(
         page.getByRole("heading", { name: "Reschedule appointment" }),
       ).toBeVisible();
@@ -281,7 +299,11 @@ test.describe("Inbox CRM drawers", () => {
         .getByRole("button", { name: "Reschedule and draft confirmation" })
         .click();
 
-      await expect(page.getByText("Draft added to the composer")).toBeVisible();
+      await expect(
+        page.getByText("Saved. Review the prepared reply before sending.", {
+          exact: true,
+        }),
+      ).toBeVisible();
       await expect(page.locator("#inbox-thread-body")).toHaveValue(
         /I moved your appointment to/,
       );

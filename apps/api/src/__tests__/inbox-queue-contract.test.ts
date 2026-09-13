@@ -17,7 +17,7 @@ describe("Inbox first-class queue contract", () => {
   const failedSendsRoute = apiSource(
     "app/api/admin/inbox/failed-sends/route.ts",
   );
-  const section = siteSource("src/app/team/components/InboxSection.tsx");
+  const section = siteSource("src/app/team/components/InboxView.tsx");
   const liveUpdates = siteSource(
     "src/app/team/components/InboxLiveUpdatesClient.tsx",
   );
@@ -69,40 +69,26 @@ describe("Inbox first-class queue contract", () => {
     ).toHaveLength(2);
   });
 
-  it("keeps list reads bounded and returns selected-queue pagination", () => {
+  it("keeps list reads bounded while the API retains backward-compatible queue counts", () => {
     expect(route).toContain("sortedRowsQuery.limit(limit).offset(offset)");
     expect(route).toContain(
       "nextOffset: nextOffset < total ? nextOffset : null",
     );
-    expect(section).toContain('params.set("limit", "50")');
-    expect(section).toContain('aria-label="Inbox pages"');
-    expect(section).toContain("queueCounts?.failed ?? null");
-    expect(section).toContain("!isInboxPagination(");
-    expect(section).toContain("!isInboxSnapshotSignature(snapshotSignature)");
-    expect(section).toContain(
-      "The Inbox returned an incomplete queue response.",
-    );
-    expect(section).not.toContain("total: threads.length");
+    const loader = siteSource("src/app/team/inbox-loader.ts");
+    expect(loader).toContain("isInboxPagination(");
+    expect(loader).toContain("isInboxSnapshotSignature(");
+    expect(section).toContain('aria-label="Conversation list pages"');
     expect(inboxState).toContain("Number(limit) !== expectedLimit");
     expect(inboxState).toContain("Number(offset) !== expectedOffset");
-    expect(inboxState).toContain(
-      'typeof value === "string" && value.trim().length > 0',
-    );
     expect(inboxState).toContain("Number(nextOffset) === expectedNextOffset");
-    expect(section).not.toContain(
-      "count: threads.filter((thread) => thread.needsAttention).length",
-    );
   });
 
   it("carries queue, page, thread, contact, and channel through canonical URLs", () => {
     expect(threadPage).toContain(
       'setOptional(params, "inbox_queue", input.queue)',
     );
-    expect(section).toContain("queue: activeQueue,");
-    expect(section).toContain("offset: threadPagination.offset");
-    expect(section).toContain("threadId: t.id");
-    expect(section).toContain("contactId: t.contact.id");
-    expect(section).toContain("channel: t.channel");
+    expect(section).toContain("buildInboxConversationQuery(");
+    expect(section).toContain("offset: list.pagination.offset");
     expect(page).toContain("params?.inbox_queue");
     expect(loaders).toContain("queue?: string;");
     expect(proxy).toContain('"queue",');
@@ -111,14 +97,20 @@ describe("Inbox first-class queue contract", () => {
     );
   });
 
-  it("shows four named queues and never turns a failed load into zero", () => {
-    for (const label of ["Needs Reply", "Waiting", "Failed", "All"]) {
-      expect(section).toContain(`label: "${label}"`);
-    }
-    expect(section).toContain("Thread count unavailable");
-    expect(section).toContain("This is not an empty Inbox");
-    expect(section).toContain('item.count === null ? "—" : item.count');
-    expect(section).toContain("Use the Failed queue to work every");
-    expect(section).toContain("affected thread.");
+  it("moves useful filters into a collapsed panel and removes routine status controls", () => {
+    const controls = siteSource(
+      "src/app/team/components/InboxNavigationClient.tsx",
+    );
+    for (const label of [
+      "All conversations",
+      "Needs a reply",
+      "Delivery problems",
+    ])
+      expect(controls).toContain(label);
+    expect(controls).toContain("hidden={!open}");
+    expect(controls).not.toContain('<option value="waiting">');
+    expect(section).not.toContain("ownerQuickActions");
+    expect(section).not.toContain("threadStatusControls");
+    expect(section).not.toContain("updateThreadAction");
   });
 });

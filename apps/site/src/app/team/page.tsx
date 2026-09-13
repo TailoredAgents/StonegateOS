@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import React from "react";
 import type { Route } from "next";
 import { cookies } from "next/headers";
@@ -41,11 +40,6 @@ import {
   parsePersonalSessionInventory,
   type PersonalSessionInventory,
 } from "./settings-sessions";
-import {
-  parseInboxNewLeadFeed,
-  type InboxNewLeadFeed,
-} from "./inbox-new-leads";
-import { InboxNewLeadNotice } from "./components/InboxNewLeadNotice";
 
 export const metadata = {
   title: "Stonegate Team Console",
@@ -625,36 +619,6 @@ export default async function TeamPage({
     }
   }
 
-  let newLeadFeed: InboxNewLeadFeed | null = null;
-  let newLeadFeedError: string | null = null;
-  if (tab === "inbox" && hasPermission("messages.read")) {
-    try {
-      const response = await callAdminApiAs(
-        principal,
-        "/api/admin/inbox/new-leads/next",
-        { timeoutMs: 8_000 },
-      );
-      if (!response.ok) {
-        newLeadFeedError =
-          response.status === 403
-            ? "Your current access does not allow this new-lead queue. No empty queue is being assumed."
-            : `The new-lead queue could not be verified (HTTP ${response.status}). No empty queue is being assumed.`;
-      } else {
-        newLeadFeed = parseInboxNewLeadFeed(
-          await response.json().catch(() => null),
-        );
-        if (!newLeadFeed) {
-          newLeadFeedError =
-            "The new-lead service returned an incomplete response. No empty queue is being assumed.";
-        }
-      }
-    } catch {
-      newLeadFeedError =
-        "The new-lead service is temporarily unreachable. Refresh before relying on this queue.";
-    }
-  }
-  const newLeadAcknowledgementKey = newLeadFeed?.next ? randomUUID() : null;
-
   const surfaceContext: TeamSurfaceLoaderContext = {
     calendarSearchParams: params,
     inbox: {
@@ -802,13 +766,6 @@ export default async function TeamPage({
         </div>
       ) : null}
       {flash || flashError ? <FlashClearer /> : null}
-      {tab === "inbox" ? (
-        <InboxNewLeadNotice
-          feed={newLeadFeed}
-          error={newLeadFeedError}
-          acknowledgementKey={newLeadAcknowledgementKey}
-        />
-      ) : null}
 
       <React.Suspense
         fallback={<TeamSkeletonCard title={TEAM_SURFACE_LOADING_TITLES[tab]} />}

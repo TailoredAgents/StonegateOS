@@ -39,9 +39,7 @@ describe("Team workflow drawer accessibility contract", () => {
 
   it("routes every Inbox customer workflow through the shared drawer", () => {
     expect(inbox).toContain("<TeamWorkflowDrawer");
-    expect(inbox).toContain(
-      "Complete this customer workflow without losing the current conversation.",
-    );
+    expect(inbox).toContain("title={drawerTitle(drawer)}");
     expect(inbox).not.toContain("function WorkflowDrawer(");
   });
 });

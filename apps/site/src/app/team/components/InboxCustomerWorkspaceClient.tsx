@@ -2,13 +2,7 @@
 
 import React, { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
-import {
-  CalendarClock,
-  FileText,
-  MapPin,
-  NotebookPen,
-  RefreshCw,
-} from "lucide-react";
+import { CalendarClock, FileText, MapPin, NotebookPen } from "lucide-react";
 import {
   addPropertyAction,
   bookInboxAppointmentAction,
@@ -22,14 +16,14 @@ import {
 } from "../lib/booking-details";
 import { quoteWorkspaceHref } from "../quotes-workspace";
 import {
-  detectCustomerIntent,
   type CustomerWorkspace,
   type CustomerWorkspaceAppointment,
-  type CustomerWorkspaceIntent,
   type CustomerWorkspaceProperty,
 } from "../lib/customer-workspace";
+import { insertInboxComposerDraft } from "../inbox-composer-drafts";
 import { AppointmentBookingDetailsFields } from "./AppointmentBookingDetailsFields";
 import { TeamWorkflowDrawer } from "./TeamWorkflowDrawer";
+import { ContactNameEditorClient } from "./ContactNameEditorClient";
 import { TEAM_INPUT_COMPACT, TEAM_SELECT, teamButtonClass } from "./team-ui";
 
 type QuoteServiceOption = {
@@ -51,7 +45,11 @@ type TeamMemberOption = {
 
 type Props = {
   contactId: string;
+  employeeId?: string;
+  threadId?: string | null;
   activeChannel: string;
+  details?: React.ReactNode;
+  primaryActions?: React.ReactNode;
   latestInboundBody?: string | null;
   aiActionType?: string | null;
   services: QuoteServiceOption[];
@@ -60,6 +58,7 @@ type Props = {
 };
 
 type Drawer =
+  | "details"
   | "quote"
   | "booking"
   | "reschedule"
@@ -94,42 +93,6 @@ function propertyLabel(
   return `${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}`;
 }
 
-function intentLabel(intent: CustomerWorkspaceIntent): string {
-  switch (intent) {
-    case "quote":
-      return "Customer likely wants a quote";
-    case "booking":
-      return "Customer likely wants to get scheduled";
-    case "reschedule":
-      return "Customer likely wants to change an appointment";
-    case "missing_info":
-      return "Customer info is missing";
-    default:
-      return "No specific workflow detected";
-  }
-}
-
-function drawerForIntent(
-  intent: CustomerWorkspaceIntent,
-  workspace: CustomerWorkspace | null,
-): Drawer {
-  if (intent === "quote") return "quote";
-  if (intent === "booking") return "booking";
-  if (intent === "reschedule") {
-    return workspace?.upcomingAppointments.length ? "reschedule" : "booking";
-  }
-  if (intent === "missing_info") return "contact";
-  return null;
-}
-
-function fillComposer(text: string): void {
-  const textarea = document.getElementById("inbox-thread-body");
-  if (!(textarea instanceof HTMLTextAreaElement)) return;
-  textarea.value = text;
-  textarea.dispatchEvent(new Event("input", { bubbles: true }));
-  textarea.focus();
-}
-
 function formString(formData: FormData, key: string): string {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
@@ -137,69 +100,79 @@ function formString(formData: FormData, key: string): string {
 
 export function InboxCustomerWorkspaceClient({
   contactId,
+  employeeId,
+  threadId,
   activeChannel,
-  latestInboundBody,
-  aiActionType,
+  details,
+  primaryActions,
   services,
   zones,
   teamMembers,
 }: Props): React.ReactElement {
   const [workspace, setWorkspace] = useState<CustomerWorkspace | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<Drawer>(null);
-  const [selectedAppointmentId, setSelectedAppointmentId] =
-    useState<string>("");
+  const [selectedAppointmentId, setSelectedAppointmentId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const requestRef = React.useRef<AbortController | null>(null);
 
   const loadWorkspace = React.useCallback(async () => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch(
         `/api/team/contacts/workspace?contactId=${encodeURIComponent(contactId)}`,
-        {
-          cache: "no-store",
-        },
+        { cache: "no-store", signal: controller.signal },
       );
       const data = (await response.json().catch(() => null)) as
         | CustomerWorkspace
         | { ok?: false; message?: string }
         | null;
-      if (!response.ok || !data?.ok) {
+      if (controller.signal.aborted) return;
+      if (!response.ok || !data?.ok || data.contact.id !== contactId) {
         setError(
           data && "message" in data && data.message
             ? data.message
-            : "Unable to load customer workspace.",
+            : "Customer details could not load.",
         );
-        setWorkspace(null);
         return;
       }
       setWorkspace(data);
-      setSelectedAppointmentId(
-        (current) => current || data.upcomingAppointments[0]?.id || "",
+      setSelectedAppointmentId((current) =>
+        data.upcomingAppointments.some(
+          (appointment) => appointment.id === current,
+        )
+          ? current
+          : data.upcomingAppointments[0]?.id || "",
       );
     } catch {
-      setError("Unable to load customer workspace.");
-      setWorkspace(null);
+      if (!controller.signal.aborted)
+        setError("Customer details could not load.");
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }, [contactId]);
 
   useEffect(() => {
-    void loadWorkspace();
-  }, [loadWorkspace]);
+    setWorkspace(null);
+    setDrawer(null);
+    setLoading(false);
+    setError(null);
+    setNotice(null);
+    setSelectedAppointmentId("");
+    return () => requestRef.current?.abort();
+  }, [contactId]);
 
-  const detectedIntent = useMemo(
-    () => detectCustomerIntent(latestInboundBody, aiActionType),
-    [latestInboundBody, aiActionType],
-  );
-  const effectiveIntent =
-    detectedIntent !== "none"
-      ? detectedIntent
-      : (workspace?.recommendedIntent ?? "none");
+  function openDrawer(next: Exclude<Drawer, null>): void {
+    setDrawer(next);
+    if (!workspace && !loading) void loadWorkspace();
+  }
+
   const selectedAppointment =
     workspace?.upcomingAppointments.find(
       (appointment) => appointment.id === selectedAppointmentId,
@@ -213,14 +186,24 @@ export function InboxCustomerWorkspaceClient({
     draftText?: string;
   }): void {
     if (!result.ok) {
-      setNotice(result.error ?? "Unable to complete workflow.");
+      setNotice(result.error ?? "Unable to save. Your entries are still here.");
       return;
     }
     if (result.draftText) {
-      fillComposer(result.draftText);
-      setNotice(
-        "Draft added to the composer. Review it, then send when ready.",
-      );
+      const channel =
+        activeChannel === "sms" ||
+        activeChannel === "email" ||
+        activeChannel === "dm"
+          ? activeChannel
+          : "web";
+      insertInboxComposerDraft({
+        employeeId,
+        contactId,
+        threadId,
+        channel,
+        body: result.draftText,
+      });
+      setNotice("Saved. Review the prepared reply before sending.");
     } else {
       setNotice("Saved.");
     }
@@ -228,363 +211,346 @@ export function InboxCustomerWorkspaceClient({
     void loadWorkspace();
   }
 
-  const missing = workspace?.missingFields ?? [];
-  const canMessage = Boolean(
-    workspace?.contact.phone ||
-      workspace?.contact.phoneE164 ||
-      workspace?.contact.email,
-  );
+  const disclosureClass =
+    "rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-3";
+  const summaryClass =
+    "cursor-pointer text-sm font-semibold text-[color:var(--team-text)]";
+  const detailsLoading = loading ? (
+    <p
+      className="py-3 text-sm text-[color:var(--team-text-muted)]"
+      role="status"
+    >
+      Loading customer details…
+    </p>
+  ) : error ? (
+    <div
+      className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+      role="alert"
+    >
+      <p>{error}</p>
+      <button
+        type="button"
+        className={teamButtonClass("secondary", "sm")}
+        onClick={() => void loadWorkspace()}
+      >
+        Retry details
+      </button>
+    </div>
+  ) : null;
 
   return (
-    <section className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] p-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Customer workspace
-          </div>
-          {loading ? (
-            <p className="mt-2 text-sm text-slate-500">
-              Loading customer context...
-            </p>
-          ) : error ? (
-            <p className="mt-2 text-sm text-rose-600">{error}</p>
-          ) : workspace ? (
-            <div className="mt-2 space-y-2">
-              <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
-                <span>
-                  {workspace.contact.phone ??
-                    workspace.contact.phoneE164 ??
-                    "No phone"}
-                </span>
-                <span className="text-slate-300">|</span>
-                <span>{workspace.contact.email ?? "No email"}</span>
-                <span className="text-slate-300">|</span>
-                <span>{workspace.contact.pipeline.stage ?? "No stage"}</span>
-              </div>
-              <div className="flex flex-wrap gap-2 text-xs">
-                <span className="rounded-full border border-slate-200 bg-white px-2 py-1">
-                  {workspace.properties.length} address
-                  {workspace.properties.length === 1 ? "" : "es"}
-                </span>
-                <span className="rounded-full border border-slate-200 bg-white px-2 py-1">
-                  {workspace.upcomingAppointments.length} upcoming
-                </span>
-                <span className="rounded-full border border-slate-200 bg-white px-2 py-1">
-                  {workspace.quotes.length} recent quotes
-                </span>
-                <span className="rounded-full border border-slate-200 bg-white px-2 py-1">
-                  {workspace.contact.notesCount} notes
-                </span>
-              </div>
-              {missing.length ? (
-                <div className="text-xs font-medium text-amber-700">
-                  Missing:{" "}
-                  {missing.map((item) => item.replace(/_/g, " ")).join(", ")}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={teamButtonClass("primary", "sm")}
-            onClick={() => setDrawer("quote")}
-          >
-            <FileText className="mr-1 h-4 w-4" aria-hidden="true" />
-            Create quote
-          </button>
-          <button
-            type="button"
-            className={teamButtonClass("secondary", "sm")}
-            onClick={() => setDrawer("booking")}
-          >
-            <CalendarClock className="mr-1 h-4 w-4" aria-hidden="true" />
-            Book
-          </button>
-          <button
-            type="button"
-            className={teamButtonClass("secondary", "sm")}
-            onClick={() =>
-              setDrawer(
-                workspace?.upcomingAppointments.length
-                  ? "reschedule"
-                  : "booking",
-              )
-            }
-          >
-            <RefreshCw className="mr-1 h-4 w-4" aria-hidden="true" />
-            Reschedule
-          </button>
-          <button
-            type="button"
-            className={teamButtonClass("secondary", "sm")}
-            onClick={() => setDrawer("address")}
-          >
-            <MapPin className="mr-1 h-4 w-4" aria-hidden="true" />
-            Add address
-          </button>
-          <button
-            type="button"
-            className={teamButtonClass("secondary", "sm")}
-            onClick={() => setDrawer("note")}
-          >
-            <NotebookPen className="mr-1 h-4 w-4" aria-hidden="true" />
-            Add note
-          </button>
-        </div>
+    <div data-inbox-customer-workspace className="min-w-0">
+      <div
+        className="flex flex-wrap items-center gap-1 sm:gap-2"
+        aria-label="Customer actions"
+      >
+        {primaryActions}
+        <button
+          type="button"
+          className={teamButtonClass("secondary", "sm") + " max-sm:px-2"}
+          onClick={() => openDrawer("quote")}
+          aria-label="Create quote"
+        >
+          <FileText
+            className="mr-1 hidden h-4 w-4 sm:block"
+            aria-hidden="true"
+          />
+          <span className="text-xs sm:hidden">Quote</span>
+          <span className="hidden text-xs sm:inline">Create quote</span>
+        </button>
+        <button
+          type="button"
+          className={teamButtonClass("secondary", "sm") + " max-sm:px-2"}
+          onClick={() => openDrawer("booking")}
+        >
+          <CalendarClock
+            className="mr-1 hidden h-4 w-4 sm:block"
+            aria-hidden="true"
+          />
+          Book
+        </button>
+        <button
+          type="button"
+          className={teamButtonClass("secondary", "sm") + " max-sm:px-2"}
+          onClick={() => openDrawer("details")}
+          aria-haspopup="dialog"
+          aria-label="Customer details"
+        >
+          <span className="text-xs sm:hidden">Details</span>
+          <span className="hidden text-xs sm:inline">Customer details</span>
+        </button>
       </div>
-
-      {workspace ? (
-        <div className="mt-4 grid gap-3 xl:grid-cols-[1fr_1fr]">
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Suggested next step
-              </div>
-              <span className="rounded-full bg-primary-50 px-2 py-1 text-[11px] font-semibold text-primary-700">
-                {activeChannel.toUpperCase()}
-              </span>
-            </div>
-            <p className="mt-2 text-sm font-semibold text-slate-900">
-              {intentLabel(effectiveIntent)}
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              The CRM will prepare an editable message; nothing sends
-              automatically.
-            </p>
-            {effectiveIntent !== "none" ? (
-              <button
-                type="button"
-                className={`${teamButtonClass("primary", "sm")} mt-3`}
-                onClick={() =>
-                  setDrawer(drawerForIntent(effectiveIntent, workspace))
-                }
-              >
-                Start workflow
-              </button>
-            ) : null}
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Upcoming appointments
-            </div>
-            <div className="mt-2 space-y-2">
-              {workspace.upcomingAppointments.length ? (
-                workspace.upcomingAppointments
-                  .slice(0, 3)
-                  .map((appointment) => (
-                    <div
-                      key={appointment.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600"
-                    >
-                      <span>
-                        <span className="font-semibold text-slate-800">
-                          {formatDateTime(appointment.startAt)}
-                        </span>
-                        {appointment.property
-                          ? ` | ${appointment.property.addressLine1}`
-                          : ""}
-                      </span>
-                      <button
-                        type="button"
-                        className="font-semibold text-primary-700 hover:text-primary-900"
-                        onClick={() => {
-                          setSelectedAppointmentId(appointment.id);
-                          setDrawer("reschedule");
-                        }}
-                      >
-                        Reschedule
-                      </button>
-                    </div>
-                  ))
-              ) : (
-                <p className="text-xs text-slate-500">
-                  No upcoming appointments found.
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {workspace?.quotes.length ? (
-        <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Recent quotes
-          </div>
-          <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
-            {workspace.quotes.slice(0, 4).map((quote) => (
-              <div
-                key={quote.id}
-                className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-semibold text-slate-800">
-                    {quote.quoteNumber ?? quote.id.slice(0, 8)}
-                  </span>
-                  <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                    {quote.displayStatus ?? quote.status}
-                  </span>
-                </div>
-                <div className="mt-1">
-                  {typeof quote.total === "number"
-                    ? moneyFormatter.format(quote.total)
-                    : "Total unavailable"}
-                </div>
-                <div className="mt-2 flex flex-wrap gap-1 text-[11px] text-slate-500">
-                  <span className="rounded-full bg-white px-2 py-0.5">
-                    PDF{" "}
-                    {quote.pdfDownloadCount > 0
-                      ? `${quote.pdfDownloadCount}x`
-                      : "not downloaded"}
-                  </span>
-                  {quote.lastPdfDownloadedAt ? (
-                    <span className="rounded-full bg-white px-2 py-0.5">
-                      Last PDF {formatDateTime(quote.lastPdfDownloadedAt)}
-                    </span>
-                  ) : null}
-                  {quote.changeRequestCount > 0 ? (
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
-                      {quote.changeRequestCount} change request
-                      {quote.changeRequestCount === 1 ? "" : "s"}
-                    </span>
-                  ) : null}
-                </div>
-                {quote.latestChangeRequest ? (
-                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
-                    {quote.latestChangeRequest.reason ?? "Change requested"}
-                    {quote.latestChangeRequest.createdAt
-                      ? ` | ${formatDateTime(quote.latestChangeRequest.createdAt)}`
-                      : ""}
-                  </div>
-                ) : null}
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {quote.shareToken ? (
-                    <Link
-                      href={`/quote/${quote.shareToken}?preview=1`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-semibold text-primary-700 hover:text-primary-900"
-                    >
-                      Preview quote
-                    </Link>
-                  ) : (
-                    <Link
-                      href={quoteWorkspaceHref("manage")}
-                      className="font-semibold text-primary-700 hover:text-primary-900"
-                    >
-                      Open in Quotes
-                    </Link>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {notice ? (
-        <p className="mt-3 text-sm font-medium text-primary-700">{notice}</p>
-      ) : null}
-      {!canMessage && workspace ? (
-        <p className="mt-3 text-xs font-medium text-amber-700">
-          Add a phone or email before sending the prepared message.
+      {notice && !drawer ? (
+        <p
+          role="status"
+          className="mt-2 text-xs text-[color:var(--team-text-muted)]"
+        >
+          {notice}
         </p>
       ) : null}
-
-      {drawer && workspace ? (
+      {drawer ? (
         <TeamWorkflowDrawer
           title={drawerTitle(drawer)}
-          description="Complete this customer workflow without losing the current conversation."
           onClose={() => setDrawer(null)}
         >
-          {drawer === "quote" ? (
-            <QuoteDrawer
-              workspace={workspace}
-              services={services}
-              zones={zones}
-              isPending={isPending}
-              onSubmit={(formData) => {
-                startTransition(async () => {
-                  handleActionResult(await createInboxQuoteAction(formData));
-                });
-              }}
-            />
+          {notice ? (
+            <p
+              role="status"
+              className="mb-3 text-sm text-[color:var(--team-text-muted)]"
+            >
+              {notice}
+            </p>
           ) : null}
-          {drawer === "booking" ? (
-            <BookingDrawer
-              workspace={workspace}
-              teamMembers={teamMembers}
-              isPending={isPending}
-              onSubmit={(formData) => {
-                startTransition(async () => {
-                  handleActionResult(
-                    await bookInboxAppointmentAction(formData),
-                  );
-                });
-              }}
-            />
+          {detailsLoading}
+          {drawer === "details" ? (
+            <div className="space-y-3">
+              {workspace ? (
+                <>
+                  <details className={disclosureClass}>
+                    <summary className={summaryClass}>
+                      Contact information
+                    </summary>
+                    <div className="mt-3 space-y-2 text-sm text-[color:var(--team-text-muted)]">
+                      <p>
+                        {workspace.contact.name ||
+                          workspace.contact.phoneE164 ||
+                          workspace.contact.phone ||
+                          "Customer"}
+                      </p>
+                      <ContactNameEditorClient
+                        contactId={contactId}
+                        contactName={workspace.contact.name}
+                        onSaved={() => void loadWorkspace()}
+                      />
+                      {workspace.contact.phoneE164 ||
+                      workspace.contact.phone ? (
+                        <p>
+                          {workspace.contact.phoneE164 ||
+                            workspace.contact.phone}
+                        </p>
+                      ) : null}
+                      {workspace.contact.email ? (
+                        <p>{workspace.contact.email}</p>
+                      ) : null}
+                      <button
+                        type="button"
+                        className={teamButtonClass("secondary", "sm")}
+                        onClick={() => openDrawer("contact")}
+                      >
+                        Edit contact
+                      </button>
+                    </div>
+                  </details>
+                  <details className={disclosureClass}>
+                    <summary className={summaryClass}>Addresses</summary>
+                    <div className="mt-3 space-y-3 text-sm text-[color:var(--team-text-muted)]">
+                      {workspace.properties.map((property) => (
+                        <p key={property.id}>{propertyLabel(property)}</p>
+                      ))}
+                      <button
+                        type="button"
+                        className={teamButtonClass("secondary", "sm")}
+                        onClick={() => openDrawer("address")}
+                      >
+                        <MapPin className="mr-1 h-4 w-4" aria-hidden="true" />
+                        Add address
+                      </button>
+                    </div>
+                  </details>
+                  {workspace.upcomingAppointments.length ? (
+                    <details className={disclosureClass}>
+                      <summary className={summaryClass}>
+                        Appointments ({workspace.upcomingAppointments.length})
+                      </summary>
+                      <div className="mt-3 space-y-3">
+                        {workspace.upcomingAppointments.map((appointment) => (
+                          <div
+                            key={appointment.id}
+                            className="flex flex-wrap items-center justify-between gap-3 text-sm"
+                          >
+                            <div>
+                              <p className="font-medium">
+                                {formatDateTime(appointment.startAt)}
+                              </p>
+                              {appointment.property ? (
+                                <p className="text-xs text-[color:var(--team-text-muted)]">
+                                  {propertyLabel(appointment.property)}
+                                </p>
+                              ) : null}
+                            </div>
+                            <button
+                              type="button"
+                              className={teamButtonClass("secondary", "sm")}
+                              onClick={() => {
+                                setSelectedAppointmentId(appointment.id);
+                                openDrawer("reschedule");
+                              }}
+                            >
+                              Reschedule
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
+                  {workspace.quotes.length ? (
+                    <details className={disclosureClass}>
+                      <summary className={summaryClass}>
+                        Quotes ({workspace.quotes.length})
+                      </summary>
+                      <div className="mt-3 space-y-3 text-sm">
+                        {workspace.quotes.map((quote) => (
+                          <div
+                            key={quote.id}
+                            className="rounded-lg border border-[color:var(--team-border)] p-3"
+                          >
+                            <div className="flex flex-wrap justify-between gap-2">
+                              <span className="font-semibold">
+                                {quote.quoteNumber ?? "Quote"}
+                              </span>
+                              {typeof quote.total === "number" ? (
+                                <span>
+                                  {moneyFormatter.format(quote.total)}
+                                </span>
+                              ) : null}
+                            </div>
+                            {quote.latestChangeRequest ? (
+                              <p className="mt-2 text-xs text-amber-700">
+                                {quote.latestChangeRequest.reason ??
+                                  "Customer requested a change"}
+                              </p>
+                            ) : null}
+                            <Link
+                              href={
+                                quote.shareToken
+                                  ? `/quote/${quote.shareToken}?preview=1`
+                                  : quoteWorkspaceHref("manage")
+                              }
+                              target={quote.shareToken ? "_blank" : undefined}
+                              rel={quote.shareToken ? "noreferrer" : undefined}
+                              className="mt-2 inline-flex min-h-11 items-center font-semibold text-primary-700"
+                            >
+                              {quote.shareToken
+                                ? "Preview quote"
+                                : "Open in Quotes"}
+                            </Link>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
+                  {!details ? (
+                    <details className={disclosureClass}>
+                      <summary className={summaryClass}>Add a note</summary>
+                      <button
+                        type="button"
+                        className={`${teamButtonClass("secondary", "sm")} mt-3`}
+                        onClick={() => openDrawer("note")}
+                      >
+                        <NotebookPen
+                          className="mr-1 h-4 w-4"
+                          aria-hidden="true"
+                        />
+                        Add note
+                      </button>
+                    </details>
+                  ) : null}
+                </>
+              ) : null}
+              {details}
+            </div>
           ) : null}
-          {drawer === "reschedule" ? (
-            <RescheduleDrawer
-              appointments={workspace.upcomingAppointments}
-              selectedAppointment={selectedAppointment}
-              selectedAppointmentId={selectedAppointmentId}
-              setSelectedAppointmentId={setSelectedAppointmentId}
-              isPending={isPending}
-              onSubmit={(formData) => {
-                startTransition(async () => {
-                  handleActionResult(
-                    await rescheduleInboxAppointmentAction(formData),
-                  );
-                });
-              }}
-            />
-          ) : null}
-          {drawer === "contact" ? (
-            <ContactDrawer
-              workspace={workspace}
-              isPending={isPending}
-              onSaved={() => {
-                setDrawer(null);
-                void loadWorkspace();
-              }}
-            />
-          ) : null}
-          {drawer === "address" ? (
-            <AddressDrawer
-              contactId={workspace.contact.id}
-              isPending={isPending}
-              onSubmit={(formData) => {
-                startTransition(async () => {
-                  await addPropertyAction(formData);
-                  setDrawer(null);
-                  setNotice("Address saved.");
-                  void loadWorkspace();
-                });
-              }}
-            />
-          ) : null}
-          {drawer === "note" ? (
-            <NoteDrawer
-              contactId={workspace.contact.id}
-              onSaved={() => {
-                setDrawer(null);
-                setNotice("Note saved.");
-                void loadWorkspace();
-              }}
-            />
+          {workspace && !loading && !error ? (
+            <>
+              {drawer === "quote" ? (
+                <QuoteDrawer
+                  workspace={workspace}
+                  services={services}
+                  zones={zones}
+                  isPending={isPending}
+                  onSubmit={(formData) => {
+                    startTransition(async () => {
+                      handleActionResult(
+                        await createInboxQuoteAction(formData),
+                      );
+                    });
+                  }}
+                />
+              ) : null}
+              {drawer === "booking" ? (
+                <BookingDrawer
+                  workspace={workspace}
+                  teamMembers={teamMembers}
+                  isPending={isPending}
+                  onSubmit={(formData) => {
+                    startTransition(async () => {
+                      handleActionResult(
+                        await bookInboxAppointmentAction(formData),
+                      );
+                    });
+                  }}
+                />
+              ) : null}
+              {drawer === "reschedule" ? (
+                <RescheduleDrawer
+                  appointments={workspace.upcomingAppointments}
+                  selectedAppointment={selectedAppointment}
+                  selectedAppointmentId={selectedAppointmentId}
+                  setSelectedAppointmentId={setSelectedAppointmentId}
+                  isPending={isPending}
+                  onSubmit={(formData) => {
+                    startTransition(async () => {
+                      handleActionResult(
+                        await rescheduleInboxAppointmentAction(formData),
+                      );
+                    });
+                  }}
+                />
+              ) : null}
+              {drawer === "contact" ? (
+                <ContactDrawer
+                  workspace={workspace}
+                  isPending={isPending}
+                  onSaved={() => {
+                    setDrawer(null);
+                    void loadWorkspace();
+                  }}
+                />
+              ) : null}
+              {drawer === "address" ? (
+                <AddressDrawer
+                  contactId={workspace.contact.id}
+                  isPending={isPending}
+                  onSubmit={(formData) => {
+                    startTransition(async () => {
+                      await addPropertyAction(formData);
+                      setDrawer(null);
+                      setNotice("Address saved.");
+                      void loadWorkspace();
+                    });
+                  }}
+                />
+              ) : null}
+              {drawer === "note" ? (
+                <NoteDrawer
+                  contactId={workspace.contact.id}
+                  onSaved={() => {
+                    setDrawer(null);
+                    setNotice("Note saved.");
+                    void loadWorkspace();
+                  }}
+                />
+              ) : null}
+            </>
           ) : null}
         </TeamWorkflowDrawer>
       ) : null}
-    </section>
+    </div>
   );
 }
 
 function drawerTitle(drawer: Exclude<Drawer, null>): string {
+  if (drawer === "details") return "Customer details";
   if (drawer === "quote") return "Create quote";
   if (drawer === "booking") return "Book appointment";
   if (drawer === "reschedule") return "Reschedule appointment";

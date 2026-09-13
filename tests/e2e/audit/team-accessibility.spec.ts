@@ -113,10 +113,11 @@ test.describe("authenticated Team WCAG scans @team-a11y", () => {
           `/team/inbox?contactId=${encodeURIComponent(seed.contactId)}&channel=sms`,
           { waitUntil: "domcontentloaded" },
         );
-        await expect(page.getByText("Customer workspace")).toBeVisible();
-        await page.getByRole("button", { name: "Create quote" }).click();
+        await expect(page.getByRole("button", { name: "Customer details", exact: true })).toBeVisible();
+        await page.getByRole("button", { name: "Create quote", exact: true }).click();
         const dialog = page.getByRole("dialog", { name: "Create quote" });
         await expect(dialog).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "Create quote and draft reply", exact: true })).toBeVisible();
         await expectTeamStateToPassAutomatedWcag({
           page,
           testInfo,

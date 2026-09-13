@@ -25,7 +25,12 @@ type NextActionPayload = {
     tone?: "good" | "warn" | "bad" | "neutral" | null;
   } | null;
   closeLoopPolicySummary?: {
-    mode?: "suggest_only" | "autosend_allowed" | "live_autonomy_allowed" | "blocked" | null;
+    mode?:
+      | "suggest_only"
+      | "autosend_allowed"
+      | "live_autonomy_allowed"
+      | "blocked"
+      | null;
     label?: string | null;
     detail?: string | null;
     tone?: "good" | "warn" | "bad" | "neutral" | null;
@@ -49,7 +54,11 @@ type NextActionPayload = {
       id?: string | null;
     } | null;
     derived?: {
-      dmEntrySource?: "facebook_ad_lead" | "organic_messenger" | "unknown" | null;
+      dmEntrySource?:
+        | "facebook_ad_lead"
+        | "organic_messenger"
+        | "unknown"
+        | null;
       exceptionSignals?: string[] | null;
     } | null;
     automation?: Array<{
@@ -65,6 +74,7 @@ type NextActionPayload = {
 type Props = {
   contactId: string;
   compact?: boolean;
+  readOnly?: boolean;
 };
 
 function formatLabel(value: string | null | undefined): string {
@@ -101,17 +111,20 @@ function getLifecycleStageSummary(actionType: string | null | undefined): {
     case "appointment_checkin":
       return {
         label: "Pre-appointment protection",
-        detail: "The agent wants to send a light reassurance touch before the booked appointment.",
+        detail:
+          "The agent wants to send a light reassurance touch before the booked appointment.",
       };
     case "appointment_support":
       return {
         label: "Booked-job support",
-        detail: "The customer is already booked and the next move is handling timing, logistics, or a light reschedule-save reply.",
+        detail:
+          "The customer is already booked and the next move is handling timing, logistics, or a light reschedule-save reply.",
       };
     case "post_job_checkin":
       return {
         label: "Post-job follow-up",
-        detail: "The job is done and the next move is a short human-style satisfaction check-in.",
+        detail:
+          "The job is done and the next move is a short human-style satisfaction check-in.",
       };
     default:
       return null;
@@ -130,8 +143,11 @@ function formatTimestamp(value: string | null | undefined): string | null {
   }).format(parsed);
 }
 
-function toneClasses(value: "good" | "warn" | "bad" | "neutral" | null | undefined): string {
-  if (value === "good") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+function toneClasses(
+  value: "good" | "warn" | "bad" | "neutral" | null | undefined,
+): string {
+  if (value === "good")
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
   if (value === "warn") return "border-amber-200 bg-amber-50 text-amber-800";
   if (value === "bad") return "border-rose-200 bg-rose-50 text-rose-700";
   return "border-slate-200 bg-slate-50 text-slate-700";
@@ -147,33 +163,47 @@ function getLearningSignalFact(facts: string[]): string | null {
   );
 }
 
-function summarizeExceptionSignals(signals: string[]): { headline: string; details: string[] } | null {
+function summarizeExceptionSignals(
+  signals: string[],
+): { headline: string; details: string[] } | null {
   if (signals.length === 0) return null;
 
   const details: string[] = [];
   if (signals.includes("frustrated_or_dispute")) {
-    details.push("Customer tone suggests frustration, dispute risk, or a complaint path.");
+    details.push(
+      "Customer tone suggests frustration, dispute risk, or a complaint path.",
+    );
   }
   if (signals.includes("hazardous_scope")) {
     details.push("Scope may involve hazardous or unsupported material.");
   }
   if (signals.includes("high_risk_demo_scope")) {
-    details.push("Demolition scope looks larger or riskier than the normal auto-handled jobs.");
+    details.push(
+      "Demolition scope looks larger or riskier than the normal auto-handled jobs.",
+    );
   }
   if (signals.includes("scope_pricing_contradiction")) {
-    details.push("Photos, stated scope, and quote signals disagree too much to trust the next pricing touch.");
+    details.push(
+      "Photos, stated scope, and quote signals disagree too much to trust the next pricing touch.",
+    );
   }
   if (signals.includes("schedule_urgency_contradiction")) {
-    details.push("Requested timing conflicts with the current appointment or quote assumptions.");
+    details.push(
+      "Requested timing conflicts with the current appointment or quote assumptions.",
+    );
   }
   if (signals.includes("operational_scope_contradiction")) {
-    details.push("Access, carry, or multi-area scope looks more complex than the current estimate assumptions.");
+    details.push(
+      "Access, carry, or multi-area scope looks more complex than the current estimate assumptions.",
+    );
   }
   if (signals.includes("out_of_area")) {
     details.push("Known ZIP appears outside the current service-area policy.");
   }
   if (signals.includes("unsupported_service_scope")) {
-    details.push("Requested work may fall outside the supported junk, brush, or approved demo scope.");
+    details.push(
+      "Requested work may fall outside the supported junk, brush, or approved demo scope.",
+    );
   }
 
   return {
@@ -185,7 +215,10 @@ function summarizeExceptionSignals(signals: string[]): { headline: string; detai
   };
 }
 
-function compactText(value: string | null | undefined, maxLen = 220): string | null {
+function compactText(
+  value: string | null | undefined,
+  maxLen = 220,
+): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.replace(/\s+/g, " ").trim();
   if (!normalized) return null;
@@ -193,9 +226,15 @@ function compactText(value: string | null | undefined, maxLen = 220): string | n
   return `${normalized.slice(0, Math.max(0, maxLen - 3))}...`;
 }
 
-export function ContactSalesAgentNextActionClient({ contactId, compact = false }: Props): React.ReactElement {
+export function ContactSalesAgentNextActionClient({
+  contactId,
+  compact = false,
+  readOnly = false,
+}: Props): React.ReactElement {
   const [payload, setPayload] = React.useState<NextActionPayload | null>(null);
-  const [status, setStatus] = React.useState<"idle" | "loading" | "error">("loading");
+  const [status, setStatus] = React.useState<"idle" | "loading" | "error">(
+    "loading",
+  );
   const [refreshing, setRefreshing] = React.useState(false);
   const [actionPending, setActionPending] = React.useState<string | null>(null);
   const [reviewNote, setReviewNote] = React.useState("");
@@ -203,15 +242,22 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
   const requestUrl = `/api/team/contacts/sales-agent-next-action?contactId=${encodeURIComponent(contactId)}&includeQuotePrice=1`;
 
   const refresh = React.useCallback(async () => {
+    if (readOnly) return;
     setRefreshing(true);
     try {
       const response = await fetch(requestUrl, {
         method: "POST",
         headers: { Accept: "application/json" },
       });
-      const data = (await response.json().catch(() => null)) as NextActionPayload | null;
+      const data = (await response
+        .json()
+        .catch(() => null)) as NextActionPayload | null;
       if (!response.ok || !data?.ok) {
-        throw new Error(typeof data?.error === "string" ? data.error : "Unable to load next action.");
+        throw new Error(
+          typeof data?.error === "string"
+            ? data.error
+            : "Unable to load next action.",
+        );
       }
       setPayload(data);
       setStatus("idle");
@@ -221,7 +267,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
     } finally {
       setRefreshing(false);
     }
-  }, [requestUrl]);
+  }, [requestUrl, readOnly]);
 
   React.useEffect(() => {
     const controller = new AbortController();
@@ -233,9 +279,15 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
           headers: { Accept: "application/json" },
           signal: controller.signal,
         });
-        const data = (await response.json().catch(() => null)) as NextActionPayload | null;
+        const data = (await response
+          .json()
+          .catch(() => null)) as NextActionPayload | null;
         if (!response.ok || !data?.ok) {
-          throw new Error(typeof data?.error === "string" ? data.error : "Unable to load next action.");
+          throw new Error(
+            typeof data?.error === "string"
+              ? data.error
+              : "Unable to load next action.",
+          );
         }
         setPayload(data);
         setStatus("idle");
@@ -253,7 +305,9 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
   const dueAt = formatTimestamp(nextAction?.dueAt);
   const updatedAt = formatTimestamp(nextAction?.updatedAt);
   const automationState =
-    (payload?.liveContext?.automation ?? []).find((row) => row?.channel === nextAction?.channel) ?? null;
+    (payload?.liveContext?.automation ?? []).find(
+      (row) => row?.channel === nextAction?.channel,
+    ) ?? null;
   const leadId = payload?.liveContext?.latestLead?.id ?? null;
   const canControlAutomation = Boolean(leadId && nextAction?.channel);
   const isDismissed = nextAction?.status === "dismissed";
@@ -266,37 +320,53 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
       : isPaused
         ? "drafts_only"
         : "normal";
-  const facts =
-    Array.isArray(nextAction?.facts)
-      ? nextAction.facts.filter((item) => typeof item === "string" && item.trim().length > 0)
-      : [];
+  const facts = Array.isArray(nextAction?.facts)
+    ? nextAction.facts.filter(
+        (item) => typeof item === "string" && item.trim().length > 0,
+      )
+    : [];
   const learningSignalFact = getLearningSignalFact(facts);
   const executionState = payload?.executionState ?? null;
   const closeLoopPolicySummary = payload?.closeLoopPolicySummary ?? null;
   const recentHumanReview = payload?.recentHumanReview ?? null;
-  const recentHumanReviewUpdatedAt = formatTimestamp(recentHumanReview?.updatedAt);
-  const recentHumanReviewDetail = compactText(recentHumanReview?.detail, compact ? 140 : 260);
+  const recentHumanReviewUpdatedAt = formatTimestamp(
+    recentHumanReview?.updatedAt,
+  );
+  const recentHumanReviewDetail = compactText(
+    recentHumanReview?.detail,
+    compact ? 140 : 260,
+  );
   const autopilot = payload?.autopilot ?? null;
   const dmEntrySource = payload?.liveContext?.derived?.dmEntrySource ?? null;
-  const exceptionSignals = Array.isArray(payload?.liveContext?.derived?.exceptionSignals)
+  const exceptionSignals = Array.isArray(
+    payload?.liveContext?.derived?.exceptionSignals,
+  )
     ? payload?.liveContext?.derived?.exceptionSignals.filter(
-        (value): value is string => typeof value === "string" && value.trim().length > 0,
+        (value): value is string =>
+          typeof value === "string" && value.trim().length > 0,
       )
     : [];
   const exceptionSummary = summarizeExceptionSignals(exceptionSignals);
   const isHumanReviewHold =
-    nextAction?.actionType === "human_follow_up" || executionState?.code === "human_review" || exceptionSummary !== null;
-  const canResumeToAgent = canControlAutomation && (isPaused || isHumanTakeover);
+    nextAction?.actionType === "human_follow_up" ||
+    executionState?.code === "human_review" ||
+    exceptionSummary !== null;
+  const canResumeToAgent =
+    canControlAutomation && (isPaused || isHumanTakeover);
   const lifecycleStage = getLifecycleStageSummary(nextAction?.actionType);
 
   const runControl = React.useCallback(
     async (action: "dismiss" | "pause" | "human_takeover" | "resume") => {
+      if (readOnly) return;
       setActionPending(action);
       try {
         const trimmedReviewNote = reviewNote.trim();
         const response = await fetch(requestUrl, {
           method: "PATCH",
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify({
             action,
             channel: nextAction?.channel ?? null,
@@ -306,35 +376,54 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                 : null,
           }),
         });
-        const data = (await response.json().catch(() => null)) as NextActionPayload | null;
+        const data = (await response
+          .json()
+          .catch(() => null)) as NextActionPayload | null;
         if (!response.ok || !data?.ok) {
-          throw new Error(typeof data?.error === "string" ? data.error : "Unable to update controls.");
+          throw new Error(
+            typeof data?.error === "string"
+              ? data.error
+              : "Unable to update controls.",
+          );
         }
         setPayload(data);
         setStatus("idle");
         if (action === "dismiss" || action === "resume") {
           setReviewNote("");
         }
+        window.dispatchEvent(
+          new CustomEvent("stonegate:inbox-automation-updated", {
+            detail: { contactId },
+          }),
+        );
       } catch {
         setStatus("error");
       } finally {
         setActionPending(null);
       }
     },
-    [requestUrl, nextAction?.channel, reviewNote],
+    [requestUrl, nextAction?.channel, reviewNote, readOnly, contactId],
   );
 
   if (compact) {
     return (
-      <div className={`rounded-2xl border p-3 text-xs ${toneClasses(executionState?.tone)}`}>
+      <div
+        className={`rounded-2xl border p-3 text-xs ${toneClasses(executionState?.tone)}`}
+      >
         {status === "loading" ? (
           <div>Loading agent state...</div>
         ) : status === "error" ? (
           <div>Unable to load agent state.</div>
         ) : executionState?.label ? (
           <>
-            <div className="font-semibold uppercase tracking-wide">{executionState.label}</div>
-            {executionState.detail ? <div className="mt-1 text-[11px] opacity-90">{executionState.detail}</div> : null}
+            <div className="font-semibold uppercase tracking-wide">
+              {executionState.label}
+            </div>
+            {executionState.detail ? (
+              <div className="mt-1 text-[11px] opacity-90">
+                {executionState.detail}
+              </div>
+            ) : null}
             {lifecycleStage ? (
               <div className="mt-2 rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
                 <div className="font-medium">{lifecycleStage.label}</div>
@@ -342,9 +431,15 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
               </div>
             ) : null}
             {closeLoopPolicySummary?.label ? (
-              <div className={`mt-2 rounded-xl border px-2 py-1 text-[11px] ${toneClasses(closeLoopPolicySummary.tone)}`}>
-                <div className="font-medium">{closeLoopPolicySummary.label}</div>
-                {closeLoopPolicySummary.detail ? <div className="mt-1">{closeLoopPolicySummary.detail}</div> : null}
+              <div
+                className={`mt-2 rounded-xl border px-2 py-1 text-[11px] ${toneClasses(closeLoopPolicySummary.tone)}`}
+              >
+                <div className="font-medium">
+                  {closeLoopPolicySummary.label}
+                </div>
+                {closeLoopPolicySummary.detail ? (
+                  <div className="mt-1">{closeLoopPolicySummary.detail}</div>
+                ) : null}
               </div>
             ) : null}
             {learningSignalFact ? (
@@ -354,9 +449,17 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
             ) : null}
             {recentHumanReview?.active ? (
               <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
-                <div className="font-medium">{recentHumanReview.label ?? "Recently reviewed"}</div>
-                {recentHumanReviewDetail ? <div className="mt-1">{recentHumanReviewDetail}</div> : null}
-                {recentHumanReviewUpdatedAt ? <div className="mt-1 text-amber-800">{recentHumanReviewUpdatedAt}</div> : null}
+                <div className="font-medium">
+                  {recentHumanReview.label ?? "Recently reviewed"}
+                </div>
+                {recentHumanReviewDetail ? (
+                  <div className="mt-1">{recentHumanReviewDetail}</div>
+                ) : null}
+                {recentHumanReviewUpdatedAt ? (
+                  <div className="mt-1 text-amber-800">
+                    {recentHumanReviewUpdatedAt}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {exceptionSummary ? (
@@ -370,11 +473,13 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                 ))}
               </div>
             ) : null}
-            {isHumanReviewHold ? (
+            {!readOnly && isHumanReviewHold ? (
               <div className="mt-2 space-y-2">
                 <textarea
                   value={reviewNote}
-                  onChange={(event) => setReviewNote(event.target.value.slice(0, 1000))}
+                  onChange={(event) =>
+                    setReviewNote(event.target.value.slice(0, 1000))
+                  }
                   rows={2}
                   placeholder="Optional review note for the agent"
                   className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none transition focus:border-slate-400"
@@ -387,7 +492,11 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                     onClick={() => void runControl("dismiss")}
                     disabled={actionPending !== null || isDismissed}
                   >
-                    {actionPending === "dismiss" ? "Clearing..." : isDismissed ? "Hold cleared" : "Mark reviewed"}
+                    {actionPending === "dismiss"
+                      ? "Clearing..."
+                      : isDismissed
+                        ? "Hold cleared"
+                        : "Mark reviewed"}
                   </button>
                   {canResumeToAgent ? (
                     <button
@@ -396,7 +505,9 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                       onClick={() => void runControl("resume")}
                       disabled={actionPending !== null}
                     >
-                      {actionPending === "resume" ? "Saving..." : "Hand back to agent"}
+                      {actionPending === "resume"
+                        ? "Saving..."
+                        : "Hand back to agent"}
                     </button>
                   ) : null}
                 </div>
@@ -416,17 +527,23 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
     <div className="rounded-2xl border border-slate-200 bg-white p-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sales Agent</div>
-          <div className="text-sm font-semibold text-slate-900">Next best action</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Sales Agent
+          </div>
+          <div className="text-sm font-semibold text-slate-900">
+            Next best action
+          </div>
         </div>
-        <button
-          type="button"
-          className={teamButtonClass("secondary", "sm")}
-          onClick={() => void refresh()}
-          disabled={refreshing}
-        >
-          {refreshing ? "Refreshing..." : "Refresh"}
-        </button>
+        {!readOnly ? (
+          <button
+            type="button"
+            className={teamButtonClass("secondary", "sm")}
+            onClick={() => void refresh()}
+            disabled={refreshing}
+          >
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
+        ) : null}
       </div>
 
       <div className="mt-3 space-y-3 text-xs text-slate-600">
@@ -437,9 +554,17 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
         ) : nextAction ? (
           <>
             {executionState?.label ? (
-              <div className={`rounded-xl border px-3 py-2 text-[11px] ${toneClasses(executionState.tone)}`}>
-                <div className="font-semibold uppercase tracking-wide">{executionState.label}</div>
-                {executionState.detail ? <div className="mt-1 normal-case tracking-normal">{executionState.detail}</div> : null}
+              <div
+                className={`rounded-xl border px-3 py-2 text-[11px] ${toneClasses(executionState.tone)}`}
+              >
+                <div className="font-semibold uppercase tracking-wide">
+                  {executionState.label}
+                </div>
+                {executionState.detail ? (
+                  <div className="mt-1 normal-case tracking-normal">
+                    {executionState.detail}
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
@@ -451,24 +576,36 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
 
             {lifecycleStage ? (
               <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-[11px] text-sky-900">
-                <div className="font-semibold uppercase tracking-wide text-sky-700">{lifecycleStage.label}</div>
+                <div className="font-semibold uppercase tracking-wide text-sky-700">
+                  {lifecycleStage.label}
+                </div>
                 <div className="mt-1">{lifecycleStage.detail}</div>
               </div>
             ) : null}
 
             {closeLoopPolicySummary?.label ? (
-              <div className={`rounded-xl border px-3 py-2 text-[11px] ${toneClasses(closeLoopPolicySummary.tone)}`}>
-                <div className="font-semibold uppercase tracking-wide">{closeLoopPolicySummary.label}</div>
-                {closeLoopPolicySummary.detail ? <div className="mt-1">{closeLoopPolicySummary.detail}</div> : null}
+              <div
+                className={`rounded-xl border px-3 py-2 text-[11px] ${toneClasses(closeLoopPolicySummary.tone)}`}
+              >
+                <div className="font-semibold uppercase tracking-wide">
+                  {closeLoopPolicySummary.label}
+                </div>
+                {closeLoopPolicySummary.detail ? (
+                  <div className="mt-1">{closeLoopPolicySummary.detail}</div>
+                ) : null}
               </div>
             ) : null}
 
-            {isHumanReviewHold ? (
+            {!readOnly && isHumanReviewHold ? (
               <div className="space-y-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Human review resolution</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Human review resolution
+                </div>
                 <textarea
                   value={reviewNote}
-                  onChange={(event) => setReviewNote(event.target.value.slice(0, 1000))}
+                  onChange={(event) =>
+                    setReviewNote(event.target.value.slice(0, 1000))
+                  }
                   rows={3}
                   placeholder="Optional review note for the agent"
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-slate-400"
@@ -481,7 +618,11 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                     onClick={() => void runControl("dismiss")}
                     disabled={actionPending !== null || isDismissed}
                   >
-                    {actionPending === "dismiss" ? "Clearing..." : isDismissed ? "Hold cleared" : "Mark reviewed"}
+                    {actionPending === "dismiss"
+                      ? "Clearing..."
+                      : isDismissed
+                        ? "Hold cleared"
+                        : "Mark reviewed"}
                   </button>
                   {canResumeToAgent ? (
                     <button
@@ -490,53 +631,95 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                       onClick={() => void runControl("resume")}
                       disabled={actionPending !== null}
                     >
-                      {actionPending === "resume" ? "Saving..." : "Hand back to agent"}
+                      {actionPending === "resume"
+                        ? "Saving..."
+                        : "Hand back to agent"}
                     </button>
                   ) : null}
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-                  Mark reviewed clears the current human-review hold from the queue. Hand back to agent also resumes normal automation if this lead was manually paused. Any note you add here is saved into the contact notes the agent already reads.
+                  Mark reviewed clears the current human-review hold from the
+                  queue. Hand back to agent also resumes normal automation if
+                  this lead was manually paused. Any note you add here is saved
+                  into the contact notes the agent already reads.
                 </div>
               </div>
             ) : null}
 
-            <div className="space-y-2">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Per-contact override</div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className={teamButtonClass(contactOverrideMode === "drafts_only" ? "primary" : "secondary", "sm")}
-                  onClick={() => void runControl("pause")}
-                  disabled={actionPending !== null || !canControlAutomation || isPaused}
-                >
-                  {actionPending === "pause" ? "Saving..." : "Drafts only"}
-                </button>
-                <button
-                  type="button"
-                  className={teamButtonClass(contactOverrideMode === "human_takeover" ? "primary" : "secondary", "sm")}
-                  onClick={() => void runControl("human_takeover")}
-                  disabled={actionPending !== null || !canControlAutomation || isHumanTakeover}
-                >
-                  {actionPending === "human_takeover" ? "Saving..." : "Human only"}
-                </button>
-                <button
-                  type="button"
-                  className={teamButtonClass(contactOverrideMode === "normal" ? "primary" : "secondary", "sm")}
-                  onClick={() => void runControl("resume")}
-                  disabled={actionPending !== null || !canControlAutomation || (!isPaused && !isHumanTakeover)}
-                >
-                  {actionPending === "resume" ? "Saving..." : "Resume normal"}
-                </button>
-                <button
-                  type="button"
-                  className={teamButtonClass("secondary", "sm")}
-                  onClick={() => void runControl("dismiss")}
-                  disabled={actionPending !== null || isDismissed}
-                >
-                  {actionPending === "dismiss" ? "Dismissing..." : isDismissed ? "Dismissed" : "Dismiss action"}
-                </button>
+            {!readOnly ? (
+              <div className="space-y-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Per-contact override
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className={teamButtonClass(
+                      contactOverrideMode === "drafts_only"
+                        ? "primary"
+                        : "secondary",
+                      "sm",
+                    )}
+                    onClick={() => void runControl("pause")}
+                    disabled={
+                      actionPending !== null ||
+                      !canControlAutomation ||
+                      isPaused
+                    }
+                  >
+                    {actionPending === "pause" ? "Saving..." : "Drafts only"}
+                  </button>
+                  <button
+                    type="button"
+                    className={teamButtonClass(
+                      contactOverrideMode === "human_takeover"
+                        ? "primary"
+                        : "secondary",
+                      "sm",
+                    )}
+                    onClick={() => void runControl("human_takeover")}
+                    disabled={
+                      actionPending !== null ||
+                      !canControlAutomation ||
+                      isHumanTakeover
+                    }
+                  >
+                    {actionPending === "human_takeover"
+                      ? "Saving..."
+                      : "Human only"}
+                  </button>
+                  <button
+                    type="button"
+                    className={teamButtonClass(
+                      contactOverrideMode === "normal"
+                        ? "primary"
+                        : "secondary",
+                      "sm",
+                    )}
+                    onClick={() => void runControl("resume")}
+                    disabled={
+                      actionPending !== null ||
+                      !canControlAutomation ||
+                      (!isPaused && !isHumanTakeover)
+                    }
+                  >
+                    {actionPending === "resume" ? "Saving..." : "Resume normal"}
+                  </button>
+                  <button
+                    type="button"
+                    className={teamButtonClass("secondary", "sm")}
+                    onClick={() => void runControl("dismiss")}
+                    disabled={actionPending !== null || isDismissed}
+                  >
+                    {actionPending === "dismiss"
+                      ? "Dismissing..."
+                      : isDismissed
+                        ? "Dismissed"
+                        : "Dismiss action"}
+                  </button>
+                </div>
               </div>
-            </div>
+            ) : null}
 
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
               {contactOverrideMode === "dnc"
@@ -577,7 +760,9 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
               </div>
               {dmEntrySource ? (
                 <div>
-                  <div className="font-semibold text-slate-700">Messenger entry</div>
+                  <div className="font-semibold text-slate-700">
+                    Messenger entry
+                  </div>
                   <div>{formatLabel(dmEntrySource)}</div>
                 </div>
               ) : null}
@@ -628,10 +813,16 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
 
             {recentHumanReview?.active ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
-                <div className="font-semibold">{recentHumanReview.label ?? "Recently reviewed"}</div>
-                {recentHumanReviewDetail ? <div className="mt-1">{recentHumanReviewDetail}</div> : null}
+                <div className="font-semibold">
+                  {recentHumanReview.label ?? "Recently reviewed"}
+                </div>
+                {recentHumanReviewDetail ? (
+                  <div className="mt-1">{recentHumanReviewDetail}</div>
+                ) : null}
                 {recentHumanReviewUpdatedAt ? (
-                  <div className="mt-1 text-amber-800">Saved {recentHumanReviewUpdatedAt}</div>
+                  <div className="mt-1 text-amber-800">
+                    Saved {recentHumanReviewUpdatedAt}
+                  </div>
                 ) : null}
               </div>
             ) : null}
@@ -660,7 +851,9 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
             ) : null}
 
             {updatedAt ? (
-              <div className="text-[11px] text-slate-500">Updated {updatedAt}</div>
+              <div className="text-[11px] text-slate-500">
+                Updated {updatedAt}
+              </div>
             ) : null}
           </>
         ) : (

@@ -80,7 +80,9 @@
     "discord:agent": "tsx scripts/discord-agent-bot.ts",
     "discord:agent:prod": "NODE_ENV=production tsx scripts/discord-agent-bot.ts",
     "smoke": "tsx scripts/smoke.ts",
-    "geocode:backfill": "tsx scripts/geocode-backfill.ts"
+    "geocode:backfill": "tsx scripts/geocode-backfill.ts",
+    "test:team-inbox": "tsx --test apps/site/test/inbox-loader.test.ts scripts/test-inbox-composer-actions.mts scripts/test-inbox-composer.mts scripts/test-inbox-workspace-shell.mts scripts/test-inbox-automation-notice.mts",
+    "test:team-inbox-page": "tsx --test scripts/test-team-inbox-page.mts"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.5.0",

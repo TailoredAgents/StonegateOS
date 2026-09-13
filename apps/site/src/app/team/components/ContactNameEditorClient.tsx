@@ -17,10 +17,12 @@ function splitName(fullName: string): InitialName {
 
 export function ContactNameEditorClient({
   contactId,
-  contactName
+  contactName,
+  onSaved,
 }: {
   contactId: string;
   contactName: string;
+  onSaved?: () => void;
 }) {
   const router = useRouter();
   const initial = useMemo(() => splitName(contactName), [contactName]);
@@ -58,6 +60,7 @@ export function ContactNameEditorClient({
       }
 
       setOpen(false);
+      onSaved?.();
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to update contact name");

@@ -77,6 +77,7 @@ describe("Inbox browser reliability contracts", () => {
     "src/app/team/components/InboxMediaGallery.tsx",
   );
   const inboxSection = siteSource("src/app/team/components/InboxSection.tsx");
+  const view = siteSource("src/app/team/components/InboxView.tsx");
 
   it("uses one abortable recursive poll with compact parallel snapshots", () => {
     expect(liveUpdates).not.toContain("setInterval(");
@@ -109,35 +110,27 @@ describe("Inbox browser reliability contracts", () => {
     expect(mediaGallery).toContain("Preview unavailable");
   });
 
-  it("keeps paging and selection in the URL and never disguises ancillary failure as empty", () => {
-    expect(inboxSection).toContain('params.set("limit", "50")');
-    expect(inboxSection).not.toContain(
-      'params.set("limit", hasSearchFilters ? "200" : "50")',
-    );
-    expect(inboxSection).toContain('aria-label="Inbox pages"');
-    expect(inboxSection).toContain("offset: threadPagination.offset");
-    expect(inboxSection).toContain("requestedChannelParam ??");
-    expect(inboxSection).toContain(
-      "activeThread.id\n      : null) ?? activeChannelThreadId",
-    );
-    expect(inboxSection).toContain("This is not an empty Inbox");
-    expect(inboxSection).toContain(
-      "This does not mean there are no failed sends",
-    );
-    expect(inboxSection).toContain("Customer history is incomplete");
-    expect(inboxSection).toContain("Delivery failed");
-    expect(inboxSection).toContain("Retry delivery");
+  it("keeps strict loading separate from optional tools and routes recovery through the client composer", () => {
+    const loader = siteSource("src/app/team/inbox-loader.ts");
+    expect(inboxSection).toContain("loadInboxList(input, read)");
+    expect(inboxSection).toContain("loadInboxConversation(input, read)");
+    expect(loader).toContain("parseInboxThreadPagePayload(");
+    expect(loader).not.toContain("/api/admin/providers");
+    expect(loader).not.toContain("sales-agent-next-action");
+    expect(view).toContain("InboxRetryClient");
+    expect(view).toContain("InboxComposerClient");
+    expect(view).toContain("Delivery failed");
+    expect(view).toContain("Retry delivery");
   });
 
-  it("keeps the approval-first AI action visible outside optional customer details", () => {
-    expect(inboxSection).toContain(
-      'aria-labelledby="inbox-ai-workspace-title"',
+  it("offers AI drafting without bringing the large workspace back above messages", () => {
+    const tools = siteSource(
+      "src/app/team/components/InboxOptionalToolsClient.tsx",
     );
-    expect(inboxSection).toContain(
-      "{agentWorkspaceCard}\n\n              {activeContactId ? (",
-    );
-    expect(inboxSection).not.toContain(
-      '<summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">\n                          AI workspace',
-    );
+    expect(view).toContain("InboxAiReplyClient");
+    expect(view).not.toContain("agentWorkspaceCard");
+    expect(tools).toContain("Draft a reply");
+    expect(tools).toContain("Automation details");
+    expect(tools).toContain("insertInboxComposerDraft");
   });
 });

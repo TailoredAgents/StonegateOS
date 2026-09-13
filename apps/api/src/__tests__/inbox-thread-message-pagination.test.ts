@@ -423,7 +423,7 @@ describe("selected Inbox thread Site contract", () => {
     const proxy = siteSource(
       "src/app/api/team/inbox/threads/[threadId]/route.ts",
     );
-    const section = siteSource("src/app/team/components/InboxSection.tsx");
+    const section = siteSource("src/app/team/components/InboxView.tsx");
     const liveUpdates = siteSource(
       "src/app/team/components/InboxLiveUpdatesClient.tsx",
     );
@@ -472,26 +472,23 @@ describe("selected Inbox thread Site contract", () => {
     expect(proxy.indexOf("parseInboxThreadRouteId(threadId)")).toBeLessThan(
       proxy.indexOf("await callAdminApiAs("),
     );
-    expect(section).toContain('aria-label="Conversation pages"');
-    expect(section).toContain("Older conversation slice");
-    expect(section).toContain("Return to newest");
-    expect(section).toContain("This is not an empty conversation");
-    expect(section).toContain("Replying from older history");
+    expect(section).toContain('aria-label="Message pages"');
+    expect(section).toContain("Older messages");
+    expect(section).toContain("Latest messages");
+    expect(section).toContain("Messages could not be loaded");
+    expect(section).toContain("historyReturnHref=");
     expect(section).toContain(
-      "the reply is not inserted into this fixed historical",
+      "isViewingNewest={input.messageCursor === undefined}",
     );
-    expect(section).toContain("min-h-[44px]");
     expect(liveUpdates).toContain("!props.isViewingNewest");
     expect(liveUpdates).toContain(
       "You remain on this older conversation page.",
     );
-
-    const sendAction = actions.slice(
-      actions.indexOf("export async function sendThreadMessageAction"),
-      actions.indexOf("export async function retryFailedMessageAction"),
+    const composer = siteSource(
+      "src/app/team/components/InboxComposerClient.tsx",
     );
-    expect(sendAction).toContain('teamSurfaceHref("inbox"');
-    expect(sendAction).not.toContain("inbox_message_cursor");
-    expect(sendAction).not.toContain("messageCursor");
+    expect(composer).toContain("historyReturnHref");
+    expect(composer).toContain("router.replace(");
+    expect(actions).toContain("sendPreparedInboxMessageAction");
   });
 });
