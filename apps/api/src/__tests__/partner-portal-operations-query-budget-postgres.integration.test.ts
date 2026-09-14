@@ -63,6 +63,50 @@ describeWithDatabase("Partner Portal operations query budgets", () => {
     const accountId = randomUUID();
     const plans = await getDb().transaction(async (tx) => {
       await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+      // A nonexistent account gives competing indexes the same tiny estimate.
+      // Plan against a populated temporary copy with every real index available,
+      // so service selectivity is measured without depending on other tests' data.
+      const bookingIndexes = rows(
+        await tx.execute(sql`
+        SELECT indexdef FROM pg_indexes
+        WHERE schemaname = 'public' AND tablename = 'partner_bookings'
+      `),
+      );
+      await tx.execute(sql`
+        CREATE TEMP TABLE partner_bookings
+        (LIKE public.partner_bookings INCLUDING DEFAULTS INCLUDING CONSTRAINTS)
+        ON COMMIT DROP
+      `);
+      for (const index of bookingIndexes) {
+        const definition = index["indexdef"];
+        if (
+          typeof definition !== "string" ||
+          !definition.includes(" ON public.partner_bookings ")
+        ) {
+          throw new Error("Unexpected production booking index definition");
+        }
+        await tx.execute(
+          sql.raw(
+            definition.replace(
+              " ON public.partner_bookings ",
+              " ON pg_temp.partner_bookings ",
+            ),
+          ),
+        );
+      }
+      await tx.execute(sql`
+        INSERT INTO pg_temp.partner_bookings
+          (id, org_contact_id, appointment_id, partner_account_id, service_key, created_at)
+        SELECT
+          md5('query-budget-booking-' || n)::uuid,
+          ${accountId}::uuid,
+          md5('query-budget-appointment-' || n)::uuid,
+          ${accountId}::uuid,
+          CASE WHEN n % 100 = 0 THEN 'standard_pickup' ELSE 'other_service' END,
+          '2026-08-01T00:00:00Z'::timestamptz + n * interval '1 minute'
+        FROM generate_series(1, 10000) AS fixture(n)
+      `);
+      await tx.execute(sql`ANALYZE pg_temp.partner_bookings`);
       const funnel = await tx.execute(sql`
         EXPLAIN (FORMAT JSON)
         SELECT "key", sum("count")
