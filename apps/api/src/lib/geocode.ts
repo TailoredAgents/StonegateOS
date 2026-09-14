@@ -290,6 +290,7 @@ export async function verifyAddress(
     country: "US",
     types: "address",
     autocomplete: "false",
+    permanent: "true",
   });
   try {
     const response = await fetch(

@@ -13,6 +13,10 @@ import {
 import type { BookingWizardLocation } from "./PartnerBookingWizard";
 import { toBookingLocation, isPartnerLocation } from "../lib/booking-location";
 import {
+  PartnerAddressAutocomplete,
+  type SuggestedPartnerAddress,
+} from "./PartnerAddressAutocomplete";
+import {
   PartnerNotice,
   partnerFieldClass,
   partnerPrimaryButtonClass,
@@ -56,6 +60,7 @@ export function PartnerInlineLocationForm({
     text: string;
   } | null>(null);
   const headingId = React.useId();
+  const selectedAddress = React.useRef<SuggestedPartnerAddress | null>(null);
   const createAttempt = React.useRef<{ body: string; key: string } | null>(
     null,
   );
@@ -143,6 +148,7 @@ export function PartnerInlineLocationForm({
           : "Location saved and selected. Stonegate will review its service area before confirming.",
     });
     setForm(EMPTY_FORM);
+    selectedAddress.current = null;
     setOpen(false);
   };
 
@@ -209,20 +215,35 @@ export function PartnerInlineLocationForm({
                 placeholder="Property, listing, building, or jobsite"
               />
             </label>
-            <label htmlFor={`${headingId}-line1`}>
-              <span className="text-sm font-semibold text-slate-700">
-                Street address
-              </span>
-              <input
-                id={`${headingId}-line1`}
-                required
-                maxLength={200}
-                autoComplete="address-line1"
-                value={form.line1}
-                onChange={(event) => update("line1", event.target.value)}
-                className={partnerFieldClass}
-              />
-            </label>
+            <PartnerAddressAutocomplete
+              id={`${headingId}-line1`}
+              value={form.line1}
+              disabled={pending}
+              onChange={(value) => {
+                const selected = selectedAddress.current;
+                selectedAddress.current = null;
+                setForm((current) => ({
+                  ...current,
+                  line1: value,
+                  ...(selected && value !== selected.line1
+                    ? {
+                        city:
+                          current.city === selected.city ? "" : current.city,
+                        state:
+                          current.state === selected.state ? "" : current.state,
+                        postalCode:
+                          current.postalCode === selected.postalCode
+                            ? ""
+                            : current.postalCode,
+                      }
+                    : {}),
+                }));
+              }}
+              onSelect={(address) => {
+                selectedAddress.current = address;
+                setForm((current) => ({ ...current, ...address }));
+              }}
+            />
             <label className="sm:col-span-2" htmlFor={`${headingId}-line2`}>
               <span className="text-sm font-semibold text-slate-700">
                 Suite, unit, building, or floor{" "}

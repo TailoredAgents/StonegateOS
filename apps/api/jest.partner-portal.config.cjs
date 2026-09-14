@@ -17,6 +17,7 @@ module.exports = {
     "<rootDir>/src/__tests__/partner-service-reports.test.ts",
     "<rootDir>/src/__tests__/partner-activation-*.test.ts",
     "<rootDir>/src/__tests__/partner-access-*.test.ts",
+    "<rootDir>/src/__tests__/partner-address-suggestions.test.ts",
     "<rootDir>/src/__tests__/partner-account-*.test.ts",
     "<rootDir>/src/__tests__/partner-approval-*.test.ts",
     "<rootDir>/src/__tests__/partner-auth-*.test.ts",

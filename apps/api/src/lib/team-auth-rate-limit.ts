@@ -21,6 +21,7 @@ export type TeamAuthRateLimitAction =
   | "partner_approval_decision"
   | "partner_quote_decision"
   | "partner_document_download"
+  | "partner_address_suggestions"
   | "partner_payment_checkout"
   | "partner_member_management"
   | "partner_invitation_management"
@@ -125,6 +126,10 @@ export const TEAM_AUTH_RATE_LIMIT_POLICIES: Record<
   partner_document_download: {
     ip: { limit: 240, windowMs: 60 * 60 * 1_000 },
     identity: { limit: 120, windowMs: 60 * 60 * 1_000 },
+  },
+  partner_address_suggestions: {
+    ip: { limit: 360, windowMs: 60 * 1_000 },
+    identity: { limit: 90, windowMs: 60 * 1_000 },
   },
   partner_payment_checkout: {
     ip: { limit: 60, windowMs: 60 * 60 * 1_000 },
