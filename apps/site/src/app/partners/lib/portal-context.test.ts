@@ -103,6 +103,7 @@ void test("service availability preserves sign-in and reading while disabling ch
     "media.upload",
     "proof.request",
     "messages.send",
+    "quotes.respond",
   ];
   payload.membership.capabilities = capabilities;
   payload.accounts[1]!.capabilities = capabilities;
@@ -121,6 +122,7 @@ void test("service availability preserves sign-in and reading while disabling ch
     "uploadMedia",
     "shareProof",
     "sendMessages",
+    "respondQuotes",
   ] as const)
     assert.equal(context.permissions[permission], false);
 });
@@ -224,7 +226,37 @@ void test("the context binds capabilities to the one selected account membership
     shareProof: false,
     readMessages: false,
     sendMessages: false,
+    respondQuotes: false,
   });
+});
+
+void test("quote responses require the selected role and effective writes while billing stays readable", async () => {
+  for (const [canRespond, writes, reads, expected] of [
+    [true, true, true, true],
+    [false, true, true, false],
+    [true, false, true, false],
+    [true, true, false, false],
+  ] as const) {
+    const payload = selectedAccountPayload();
+    payload.availability.writes = writes;
+    payload.availability.reads = reads;
+    const capabilities = [
+      "account.read",
+      "quotes.read",
+      "invoices.read",
+      ...(canRespond ? ["quotes.respond"] : []),
+    ];
+    payload.membership.capabilities = capabilities;
+    payload.accounts[1]!.capabilities = capabilities;
+    const context = await resolvePartnerPortalContext(() =>
+      Promise.resolve(jsonResponse(payload)),
+    );
+    assert.equal(context.status, "authenticated");
+    if (context.status !== "authenticated") continue;
+    assert.equal(context.capabilities.billing, true);
+    assert.equal(context.permissions.respondQuotes, expected);
+    assert.equal(context.availability.reads, reads);
+  }
 });
 
 void test("a mismatched current account and membership fails closed", async () => {

@@ -56,7 +56,10 @@ jobs:
       - name: Build production API
         run: pnpm exec tsx scripts/run-partner-access-local.mts api build
       - name: Build production website
-        run: pnpm exec tsx scripts/run-partner-access-local.mts site build
+        run: |
+          # Turbopack needs the generated Contentlayer files before a clean build.
+          pnpm --filter site typecheck
+          pnpm exec tsx scripts/run-partner-access-local.mts site build
       - name: Real activation, every tab, first location and first request
         shell: bash
         run: |

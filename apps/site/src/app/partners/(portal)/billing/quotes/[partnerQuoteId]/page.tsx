@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Download, FileClock, ShieldCheck } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
+import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
 import { PartnerQuoteDecisionForm } from "@/app/partners/components/PartnerQuoteDecisionForm";
 import {
   PartnerNotice,
@@ -62,30 +63,6 @@ async function loadQuote(partnerQuoteId: string): Promise<LoadState> {
   };
 }
 
-async function loadSignerDefaults(): Promise<{
-  name: string;
-  company: string;
-}> {
-  const response = await callPartnerApi("/api/portal/v2/me", {
-    timeoutMs: 12_000,
-  }).catch(() => null);
-  if (!response?.ok) return { name: "", company: "" };
-  const payload = (await response.json().catch(() => null)) as {
-    partnerUser?: { name?: unknown };
-    account?: { name?: unknown };
-  } | null;
-  return {
-    name:
-      typeof payload?.partnerUser?.name === "string"
-        ? payload.partnerUser.name.slice(0, 160)
-        : "",
-    company:
-      typeof payload?.account?.name === "string"
-        ? payload.account.name.slice(0, 200)
-        : "",
-  };
-}
-
 function quoteTotal(quote: PartnerQuoteDetail): string {
   if (!quote.amounts) return "Pending finalization";
   if ("total" in quote.amounts) return formatPartnerMoney(quote.amounts.total);
@@ -141,10 +118,10 @@ export default async function PartnerQuoteDetailPage({
 }) {
   const { partnerQuoteId } = await params;
   if (!isUuid(partnerQuoteId)) notFound();
-  const [state, signer] = await Promise.all([
-    loadQuote(partnerQuoteId),
-    loadSignerDefaults(),
-  ]);
+  const context = await getPartnerPortalContext();
+  if (context.status !== "authenticated" || !context.availability.reads)
+    return null;
+  const state = await loadQuote(partnerQuoteId);
 
   if (state.status !== "ready") {
     return (
@@ -390,9 +367,11 @@ export default async function PartnerQuoteDetailPage({
         <PartnerQuoteDecisionForm
           quoteId={quote.id}
           initialEtag={state.etag}
-          allowedActions={quote.allowedActions}
-          signerName={signer.name}
-          signerCompany={signer.company}
+          allowedActions={
+            context.permissions.respondQuotes ? quote.allowedActions : []
+          }
+          signerName={context.user.name.slice(0, 160)}
+          signerCompany={context.accountLabel.slice(0, 200)}
           consentVersion={document.terms.consentVersion}
           optionGroups={document.pricing.optionGroups}
           lineItems={document.pricing.lineItems}

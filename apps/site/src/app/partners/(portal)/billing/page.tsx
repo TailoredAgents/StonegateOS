@@ -316,7 +316,10 @@ export default async function PartnerBillingPage({
               icon={<FileClock className="h-6 w-6" aria-hidden="true" />}
             />
           ) : (
-            <QuoteList items={quotes.items} />
+            <QuoteList
+              items={quotes.items}
+              canRespond={context.permissions.respondQuotes}
+            />
           )}
           {quotes.status === "ready" ? (
             <PartnerCollectionPagination
@@ -770,7 +773,13 @@ function InvoiceList({
   );
 }
 
-function QuoteList({ items }: { items: PartnerQuote[] }) {
+function QuoteList({
+  items,
+  canRespond,
+}: {
+  items: PartnerQuote[];
+  canRespond: boolean;
+}) {
   return (
     <ul className="grid gap-3 lg:grid-cols-2">
       {items.map((quote) => (
@@ -811,7 +820,9 @@ function QuoteList({ items }: { items: PartnerQuote[] }) {
               href={`/partners/billing/quotes/${quote.id}` as Route}
               className="inline-flex min-h-11 items-center text-sm font-semibold text-primary-800 underline underline-offset-4"
             >
-              {quote.actionable ? "Review and respond" : "Review quote"}
+              {quote.actionable && canRespond
+                ? "Review and respond"
+                : "Review quote"}
             </Link>
             {quote.documentId ? (
               <PartnerDocumentDownloadButton

@@ -78,6 +78,7 @@ export type PartnerPortalPermissions = {
   shareProof: boolean;
   readMessages: boolean;
   sendMessages: boolean;
+  respondQuotes: boolean;
 };
 
 export type PartnerPortalAccount = {
@@ -363,6 +364,7 @@ function actionPermissions(
     shareProof: capabilities.has("proof.request"),
     readMessages: capabilities.has("messages.read"),
     sendMessages: capabilities.has("messages.send"),
+    respondQuotes: capabilities.has("quotes.respond"),
   };
 }
 
@@ -403,6 +405,7 @@ export async function resolvePartnerPortalContext(
     "manageLocations",
     "shareProof",
     "sendMessages",
+    "respondQuotes",
   ] as const) {
     permissions[key] = permissions[key] && availability.writes;
   }
