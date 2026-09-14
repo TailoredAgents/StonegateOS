@@ -372,15 +372,18 @@ describeOrSkip(
       const allowed = await GET(request());
       expect(allowed.status).toBe(200);
       expect(allowed.headers.get("cache-control")).toContain("no-store");
-      const body = await allowed.json();
+      const body: unknown = await allowed.json();
       expect(body).toMatchObject({
         ok: true,
         laborCents: 10350,
         totalExpensesCents: 11550,
         labor: { state: "estimated" },
       });
-      expect(body.labor.rows).toContainEqual(
-        expect.objectContaining({ label: "Moving", workedMinutes: 162 }),
+      expect(body).toHaveProperty(
+        "labor.rows",
+        expect.arrayContaining([
+          expect.objectContaining({ label: "Moving", workedMinutes: 162 }),
+        ]),
       );
       expect((await GET(request(crewToken))).status).toBe(403);
       expect((await GET(request("expired-or-invented-token"))).status).toBe(
@@ -460,7 +463,8 @@ describeOrSkip(
             jobCount: 1,
           }),
         );
-        expect((await (await GET(request())).json()).labor).toEqual(
+        expect(await (await GET(request())).json()).toHaveProperty(
+          "labor",
           overview.labor,
         );
       }

@@ -1,9 +1,14 @@
 import { eq } from "drizzle-orm";
 
+const jest = import.meta.jest;
+const mockModule = jest.unstable_mockModule as unknown as (
+  moduleName: string,
+  factory: () => Record<string, unknown>,
+) => void;
 const mockGetMediaObject = jest.fn(() =>
   Promise.resolve(Buffer.from("receipt")),
 );
-const mockExtractExpenseReceiptWithOpenAi = jest.fn();
+const mockExtractExpenseReceiptWithOpenAi = jest.fn<Promise<never>, []>();
 const mockRecordProviderFailure = jest.fn(() => Promise.resolve());
 const mockRecordProviderSuccess = jest.fn(() => Promise.resolve());
 
@@ -18,16 +23,25 @@ class MockExpenseReceiptAnalysisProviderError extends Error {
   }
 }
 
-jest.mock("@/lib/media-storage", () => ({
+function unexpectedMediaOperation(): never {
+  throw new Error("Unexpected storage operation in receipt analysis test");
+}
+
+mockModule("@/lib/media-storage", () => ({
   getMediaObject: mockGetMediaObject,
+  createMediaReadUrl: unexpectedMediaOperation,
+  createMediaUploadUrl: unexpectedMediaOperation,
+  getMediaStorageProvider: unexpectedMediaOperation,
+  headMediaObject: unexpectedMediaOperation,
+  putImmutableMediaObject: unexpectedMediaOperation,
 }));
 
-jest.mock("@/lib/expense-receipt-openai", () => ({
+mockModule("@/lib/expense-receipt-openai", () => ({
   ExpenseReceiptAnalysisProviderError: MockExpenseReceiptAnalysisProviderError,
   extractExpenseReceiptWithOpenAi: mockExtractExpenseReceiptWithOpenAi,
 }));
 
-jest.mock("@/lib/provider-health", () => ({
+mockModule("@/lib/provider-health", () => ({
   recordProviderFailure: mockRecordProviderFailure,
   recordProviderSuccess: mockRecordProviderSuccess,
 }));
@@ -38,10 +52,10 @@ import {
   getDb,
   teamMembers,
 } from "@/db";
-import {
+const {
   processExpenseReceiptAnalysisOutbox,
   toExpenseReceiptCaptureStatusDto,
-} from "@/lib/expense-receipt-captures";
+} = await import("@/lib/expense-receipt-captures");
 
 const hasDatabase = Boolean(process.env["DATABASE_URL"]);
 const describeOrSkip = hasDatabase ? describe : describe.skip;

@@ -40,7 +40,7 @@ void test("activation inspection uses the configured Site origin, never the API 
       cookie: "credential=secret",
       authorization: "Bearer secret",
     }),
-    siteOrigin!,
+    siteOrigin,
     { trustedProxyHops: "1" },
   );
   assert.equal(headers.get("origin"), "https://stonegate.example");

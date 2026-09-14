@@ -48,7 +48,7 @@ afterEach(() => {
   Reflect.deleteProperty(globalThis, "window");
 });
 
-test("drafts isolate employee, appointment and form and report changed booking versions", () => {
+void test("drafts isolate employee, appointment and form and report changed booking versions", () => {
   const values = { total: "0", crew: ["Alex"], requestKey: "saved-request" };
   assert.equal(writeMobileJobDraft(scope, values).persisted, true);
   assert.deepEqual(readMobileJobDraft(scope)?.values, values);
@@ -73,7 +73,7 @@ test("drafts isolate employee, appointment and form and report changed booking v
   );
 });
 
-test("denied browser storage keeps a session draft without claiming persistence", () => {
+void test("denied browser storage keeps a session draft without claiming persistence", () => {
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
@@ -93,7 +93,7 @@ test("denied browser storage keeps a session draft without claiming persistence"
   assert.equal(readMobileJobDraft(scope), null);
 });
 
-test("logout clears only the requested employee's drafts", () => {
+void test("logout clears only the requested employee's drafts", () => {
   writeMobileJobDraft(scope, { note: "A" });
   const other = { ...scope, employeeId: "employee-b" };
   writeMobileJobDraft(other, { note: "B" });
@@ -104,11 +104,13 @@ test("logout clears only the requested employee's drafts", () => {
   assert.equal(storage.length, 0);
 });
 
-test("expired and corrupt stored drafts are ignored and retained records are bounded", () => {
+void test("expired and corrupt stored drafts are ignored and retained records are bounded", () => {
   writeMobileJobDraft(scope, { note: "expired" });
   const key = storage.key(0)!;
+  const saved: unknown = JSON.parse(storage.getItem(key)!);
+  assert.ok(saved && typeof saved === "object" && !Array.isArray(saved));
   const expired = {
-    ...JSON.parse(storage.getItem(key)!),
+    ...saved,
     updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
   };
   clearMobileJobDraft(scope);

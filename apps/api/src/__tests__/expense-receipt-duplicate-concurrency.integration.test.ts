@@ -7,6 +7,7 @@ import {
 } from "@/lib/expense-receipt-confirmation";
 import { TeamMutationFailure } from "@/lib/team-mutation";
 
+const jest = import.meta.jest;
 const hasDatabase = Boolean(process.env["DATABASE_URL"]);
 const describeOrSkip = hasDatabase ? describe : describe.skip;
 

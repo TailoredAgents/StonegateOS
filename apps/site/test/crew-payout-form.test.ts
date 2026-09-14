@@ -24,7 +24,7 @@ function movingForm(): FormData {
   return data;
 }
 
-test("moving completion carries each person's exact rate and worked minutes", () => {
+void test("moving completion carries each person's exact rate and worked minutes", () => {
   const data = movingForm();
   data.append("crewMemberId", alice);
   assert.deepEqual(parseCrewPayoutFormData(data), {
@@ -38,7 +38,7 @@ test("moving completion carries each person's exact rate and worked minutes", ()
   assert.equal(hourlyPayoutCents(3000, 195), 9750);
 });
 
-test("unselected rows do not pay and nonmoving crew submits equal percentage weights", () => {
+void test("unselected rows do not pay and nonmoving crew submits equal percentage weights", () => {
   const data = movingForm();
   data.delete("crewMemberId");
   data.append("crewMemberId", bob);
@@ -52,7 +52,7 @@ test("unselected rows do not pay and nonmoving crew submits equal percentage wei
   });
 });
 
-test("conversion uses the selected service and rejects missing moving labor inputs", () => {
+void test("conversion uses the selected service and rejects missing moving labor inputs", () => {
   const data = movingForm();
   data.set("crewCompensationMode", "percentage");
   data.delete(`crewHours:${alice}`);
@@ -61,7 +61,7 @@ test("conversion uses the selected service and rejects missing moving labor inpu
   assert.equal(parseCrewPayoutFormData(data).ok, false);
 });
 
-test("hourly inputs reject invalid money, nonpositive hours and numeric overflow", () => {
+void test("hourly inputs reject invalid money, nonpositive hours and numeric overflow", () => {
   for (const invalid of [
     "",
     "0",
@@ -89,7 +89,7 @@ test("hourly inputs reject invalid money, nonpositive hours and numeric overflow
   assert.equal(parseCrewPayoutFormData(overflowingCrew).ok, false);
 });
 
-test("moving correction prefills saved crew, rate and time without duplicate selection cards", () => {
+void test("moving correction prefills saved crew, rate and time without duplicate selection cards", () => {
   const markup = renderToStaticMarkup(
     createElement(CrewPayoutSelector, {
       teamMembers: [
@@ -114,7 +114,7 @@ test("moving correction prefills saved crew, rate and time without duplicate sel
   assert.doesNotMatch(markup, /aria-label="Bob hourly rate"/);
 });
 
-test("percentage completion keeps hourly fields out of the form", () => {
+void test("percentage completion keeps hourly fields out of the form", () => {
   const markup = renderToStaticMarkup(
     createElement(CrewPayoutSelector, {
       teamMembers: [{ id: alice, name: "Alice" }],
@@ -128,7 +128,7 @@ test("percentage completion keeps hourly fields out of the form", () => {
   assert.match(markup, /20% of the job total per person/);
 });
 
-test("completion includes all four staff and previews the crew-size pool and equal pay", () => {
+void test("completion includes all four staff and previews the crew-size pool and equal pay", () => {
   const teamMembers = [
     { id: alice, name: "Jeffrey" },
     { id: bob, name: "Jed" },
@@ -162,7 +162,7 @@ test("completion includes all four staff and previews the crew-size pool and equ
   }
 });
 
-test("percentage completion asks for crew selection before showing a payout", () => {
+void test("percentage completion asks for crew selection before showing a payout", () => {
   const markup = renderToStaticMarkup(
     createElement(CrewPayoutSelector, {
       teamMembers: [{ id: alice, name: "Jeffrey" }],
@@ -172,7 +172,7 @@ test("percentage completion asks for crew selection before showing a payout", ()
   assert.doesNotMatch(markup, /0% labor pool|of the job total per person/);
 });
 
-test("convert-only can save booking details without completing optional crew inputs", () => {
+void test("convert-only can save booking details without completing optional crew inputs", () => {
   const markup = renderToStaticMarkup(
     createElement(CrewPayoutSelector, {
       teamMembers: [{ id: alice, name: "Alice" }],

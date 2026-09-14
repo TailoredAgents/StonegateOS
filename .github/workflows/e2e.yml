@@ -57,7 +57,7 @@ jobs:
       - name: Typecheck Quote V2 applications
         run: |
           pnpm --filter api typecheck
-          pnpm --filter site exec tsc --project tsconfig.typecheck.json --pretty false
+          pnpm --filter site typecheck
 
       - name: Run mandatory database quote lifecycle test
         run: >-
