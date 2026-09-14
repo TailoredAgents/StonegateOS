@@ -75,7 +75,7 @@ import{PartnerInlineLocationForm}from'./src/app/partners/components/PartnerInlin
 import{PartnerLocationManager}from'./src/app/partners/components/PartnerLocationManager';
 import{PartnerSavedRequests}from'./src/app/partners/components/PartnerSavedRequests';
 import{PartnerBookingWizard}from'./src/app/partners/components/PartnerBookingWizard';
-function App(){return location.pathname==='/inline'?<PartnerInlineLocationForm canManage onCreated={()=>{window.created=true}}/>:
+function App(){React.useEffect(()=>{document.documentElement.dataset.harnessReady='true'},[]);return location.pathname==='/inline'?<PartnerInlineLocationForm canManage onCreated={()=>{window.created=true}}/>:
 location.pathname==='/directory'?<PartnerLocationManager initialLocations={[]} initialNextCursor={null} initialDirectoryEtag='"directory-1"' canManage canCreateLocation canFavorite canRequestService canManagePortfolio={false} canExport={false}/>:
 location.pathname==='/saved'?<PartnerSavedRequests canDiscard={false}/>:
 <PartnerBookingWizard locations={[]} services={[]} cancellationPolicy={{minimumNoticeMinutes:0,directCancellationEnabled:false,lateCancellationDisposition:'staff_review',automaticFeeMinor:null,source:'unconfigured',revision:null}} persona={null} supportPhoneE164='+14045550100' supportPhoneDisplay='404-555-0100'/>}
@@ -152,6 +152,8 @@ for (const engine of [chromium, webkit]) {
           draftPosts: { key: string; body: string | null }[] = [],
           validations = 0,
           draftReads = 0;
+        let directoryReadGate: Promise<void> | null = null;
+        let releaseDirectoryRead: (() => void) | null = null;
         await page.route("**/api/partners/portal/**", async (route) => {
           const request = route.request(),
             url = new URL(request.url()),
@@ -174,13 +176,21 @@ for (const engine of [chromium, webkit]) {
               },
             });
           }
-          if (path === "locations" && method === "GET")
+          if (path === "locations" && method === "GET") {
+            await directoryReadGate;
             return answer({
               ok: true,
-              locations: [],
+              locations: [
+                {
+                  ...location,
+                  id: "existing-location",
+                  siteName: "Previously saved location",
+                },
+              ],
               directory: { etag: '"directory-1"' },
               page: { nextCursor: null },
             });
+          }
           if (path === "locations" && method === "POST") {
             locationPosts.push({
               key: request.headers()["idempotency-key"]!,
@@ -222,7 +232,24 @@ for (const engine of [chromium, webkit]) {
         for (const path of ["inline", "directory"]) {
           locationPosts = [];
           validations = 0;
+          const directoryRequest =
+            path === "directory"
+              ? page.waitForRequest(
+                  (request) =>
+                    new URL(request.url()).pathname ===
+                      "/api/partners/portal/locations" &&
+                    request.method() === "GET",
+                )
+              : null;
+          if (path === "directory")
+            directoryReadGate = new Promise<void>((resolve) => {
+              releaseDirectoryRead = resolve;
+            });
           await page.goto(`${base}/${path}`);
+          await expect(page.locator("html")).toHaveAttribute(
+            "data-harness-ready",
+            "true",
+          );
           await page
             .getByRole("button", {
               name:
@@ -241,16 +268,66 @@ for (const engine of [chromium, webkit]) {
             .fill("1 Local Test Way");
           await form.getByLabel("City", { exact: true }).fill("Atlanta");
           await form.getByLabel("ZIP code", { exact: true }).fill("30301");
+          assert.equal(
+            await form.evaluate((element: HTMLFormElement) =>
+              element.checkValidity(),
+            ),
+            true,
+            `${path}: required fields are valid before submit`,
+          );
           const save = form.getByRole("button", {
             name:
               path === "inline" ? "Save and use this location" : "Add location",
             exact: true,
           });
-          await save.click();
+          await directoryRequest;
+          const [firstResponse] = await Promise.all([
+            page.waitForResponse(
+              (response) =>
+                new URL(response.url()).pathname ===
+                  "/api/partners/portal/locations" &&
+                response.request().method() === "POST",
+            ),
+            save.click(),
+          ]);
+          assert.deepEqual(
+            await firstResponse.json(),
+            { ok: true },
+            `${path}: the first save receives the intended incomplete response`,
+          );
+          assert.equal(
+            JSON.parse(locationPosts[0]!.body!).siteName,
+            "First location",
+            `${path}: submitted React form contains the filled name`,
+          );
           await expect(
             page.getByText(/We couldn’t confirm the saved location/u),
+            `${path}: failed save remains visible for a safe retry`,
           ).toBeVisible();
-          await save.click();
+          if (path === "directory") {
+            releaseDirectoryRead!();
+            await expect(
+              page.getByText("Previously saved location", { exact: true }),
+            ).toBeVisible();
+            await expect(
+              page.getByText(/We couldn’t confirm the saved location/u),
+              "directory: a later successful read must not clear the failed save",
+            ).toBeVisible();
+          }
+          const [retryResponse] = await Promise.all([
+            page.waitForResponse(
+              (response) =>
+                new URL(response.url()).pathname ===
+                  "/api/partners/portal/locations" &&
+                response.request().method() === "POST",
+            ),
+            save.click(),
+          ]);
+          assert.deepEqual(
+            await retryResponse.json(),
+            { ok: true, location },
+            `${path}: retry recovers the saved location`,
+          );
           await expect(form).toHaveCount(0);
           assert.equal(locationPosts.length, 2);
           assert.ok(locationPosts[0]?.key);

@@ -230,6 +230,7 @@ export function PartnerLocationManager({
     tone: "success" | "error";
     text: string;
   } | null>(null);
+  const [readError, setReadError] = React.useState<string | null>(null);
   const [pendingAddressSuggestion, setPendingAddressSuggestion] =
     React.useState<PendingAddressSuggestion | null>(null);
   const createAttempt = React.useRef<{
@@ -259,31 +260,27 @@ export function PartnerLocationManager({
           )
             return;
           if (!result.ok) {
-            setMessage({ tone: "error", text: result.error.message });
+            setReadError(result.error.message);
             return;
           }
           const directory = parseLocationDirectory(result.data);
           if (!directory) {
-            setMessage({
-              tone: "error",
-              text: withPortalSupportReference(
+            setReadError(
+              withPortalSupportReference(
                 "Locations could not be refreshed. Your last loaded locations are still shown. Please try again.",
                 portalSupportReferenceFromResponse(result.response),
               ),
-            });
+            );
             return;
           }
           setLocations(directory.locations);
           setNextCursor(directory.nextCursor);
           setDirectoryEtag(directory.etag);
-          setMessage((current) => (current?.tone === "error" ? null : current));
+          setReadError(null);
         })
         .catch(() => {
           if (!controller.signal.aborted)
-            setMessage({
-              tone: "error",
-              text: "Locations could not be searched. Please try again.",
-            });
+            setReadError("Locations could not be searched. Please try again.");
         })
         .finally(() => {
           if (!controller.signal.aborted) setSearching(false);
@@ -806,21 +803,19 @@ export function PartnerLocationManager({
     setBusyId(null);
     if (generation !== searchGeneration.current) return;
     if (!result?.ok) {
-      setMessage({
-        tone: "error",
-        text: result?.error.message ?? "More locations could not be loaded.",
-      });
+      setReadError(
+        result?.error.message ?? "More locations could not be loaded.",
+      );
       return;
     }
     const directory = parseLocationDirectory(result.data);
     if (!directory) {
-      setMessage({
-        tone: "error",
-        text: withPortalSupportReference(
+      setReadError(
+        withPortalSupportReference(
           "More locations could not be loaded. Please try again.",
           portalSupportReferenceFromResponse(result.response),
         ),
-      });
+      );
       return;
     }
     setLocations((current) => {
@@ -833,7 +828,7 @@ export function PartnerLocationManager({
     });
     setNextCursor(directory.nextCursor);
     setDirectoryEtag(directory.etag);
-    setMessage((current) => (current?.tone === "error" ? null : current));
+    setReadError(null);
   };
 
   const exportLocations = async (): Promise<void> => {
@@ -866,6 +861,9 @@ export function PartnerLocationManager({
 
   return (
     <div className="space-y-5">
+      {readError ? (
+        <PartnerNotice tone="error">{readError}</PartnerNotice>
+      ) : null}
       {message ? (
         <PartnerNotice tone={message.tone}>{message.text}</PartnerNotice>
       ) : null}

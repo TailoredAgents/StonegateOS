@@ -1,5 +1,4 @@
 /** Required API pre-deploy check. Reads configuration and database state only. */
-import { closeDbForTests } from "../src/db";
 import { inspectPartnerPortalReadiness } from "../src/lib/partner-portal-readiness";
 import { getApiReadinessSnapshot } from "../src/lib/readiness";
 
@@ -32,6 +31,9 @@ try {
     JSON.stringify({ ok: false, check: "deployment_readiness_unavailable" }),
   );
   process.exitCode = 1;
-} finally {
-  await closeDbForTests();
 }
+
+// This CLI owns no writes or background work. Flush its report before exiting;
+// application pools intentionally stay alive and the test-only closer rejects
+// production use.
+process.stdout.write("", () => process.exit(process.exitCode ?? 0));
