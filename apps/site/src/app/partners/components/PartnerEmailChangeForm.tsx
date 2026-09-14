@@ -74,12 +74,15 @@ export function PartnerEmailChangeForm({
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-50 text-primary-700 ring-1 ring-primary-100">
           <MailCheck className="h-5 w-5" aria-hidden="true" />
         </div>
-        <div>
+        <div className="min-w-0">
           <h2 className="text-lg font-semibold text-slate-950">
             Change the email you use to sign in
           </h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
-            Current email: <span className="font-semibold">{currentEmail}</span>
+            Current email:{" "}
+            <span className="font-semibold [overflow-wrap:anywhere]">
+              {currentEmail}
+            </span>
             . We verify the new address first. Confirming it signs you out on
             every device and does not sign you back in automatically.
           </p>

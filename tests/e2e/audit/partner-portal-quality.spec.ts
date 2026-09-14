@@ -423,10 +423,18 @@ test("Partner Portal authenticated shell, overview, and scheduler are responsive
       },
     ]);
 
-    await page.goto("/partners");
+    await page.goto("/partners/overview");
     await expect(
       page.getByRole("heading", { name: /Welcome back,/u, level: 1 }),
     ).toBeVisible();
+    for (const endpoint of ["overview", "jobs?limit=5", "notifications?state=unread&limit=5"]) {
+      const result = await page.evaluate(async (path) => {
+        const response = await fetch(`/api/partners/portal/${path}`);
+        const body = await response.json().catch(() => null);
+        return { status: response.status, ok: body?.ok };
+      }, endpoint);
+      expect(result, `Home dependency ${endpoint}`).toEqual({ status: 200, ok: true });
+    }
     await expectNoHorizontalOverflow(page);
     await expectTeamStateToPassAutomatedWcag({
       page,

@@ -9,6 +9,7 @@ module.exports = {
   ...base,
   globalSetup: "<rootDir>/scripts/partner-postgres-test-guard.cjs",
   testMatch: [
+    "<rootDir>/src/__tests__/partner-portal-account-readiness.postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-additional-service.postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-additional-service-links.postgres.integration.test.ts",
     "<rootDir>/src/__tests__/partner-statement-refund-scope.postgres.integration.test.ts",

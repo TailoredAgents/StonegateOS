@@ -15,12 +15,12 @@ void test("settings loads the account-native profile and preserves its strong ET
   assert.match(settingsPage, /\/api\/portal\/v2\/account-profile/u);
   assert.match(
     settingsPage,
-    /accountProfileResponse\?\.headers\.get\("etag"\)/u,
+    /accountResult\.response\.headers\.get\("etag"\)/u,
   );
   assert.match(settingsPage, /<PartnerAccountProfileManager/u);
   assert.match(
     settingsPage,
-    /initialProfile=\{accountProfilePayload\?\.profile \?\? null\}/u,
+    /initialProfile=\{\{\s*\.\.\.accountProfilePayload\.profile/u,
   );
 });
 

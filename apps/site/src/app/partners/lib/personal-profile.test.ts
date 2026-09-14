@@ -15,12 +15,12 @@ void test("settings loads the canonical personal profile and preserves its stron
   assert.match(settingsPage, /\/api\/portal\/v2\/personal-profile/u);
   assert.match(
     settingsPage,
-    /personalProfileResponse\?\.headers\.get\("etag"\)/u,
+    /personalResult\.response\.headers\.get\("etag"\)/u,
   );
   assert.match(settingsPage, /<PartnerPersonalProfileManager/u);
   assert.match(
     settingsPage,
-    /initialProfile=\{personalProfilePayload\?\.profile \?\? null\}/u,
+    /initialProfile=\{personalProfilePayload\.profile\}/u,
   );
 });
 

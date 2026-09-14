@@ -1,8 +1,4 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  randomBytes,
-} from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
 const ENVELOPE_VERSION = "v1";
 const ALGORITHM = "aes-256-gcm";
@@ -40,12 +36,14 @@ function decodeKey(value: unknown): Buffer {
   return key;
 }
 
-function loadKeyring(): Keyring {
+function loadKeyring(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): Keyring {
   const currentVersion = positiveKeyVersion(
-    process.env["PARTNER_LOCATION_SECRET_KEY_VERSION"],
+    environment["PARTNER_LOCATION_SECRET_KEY_VERSION"],
   );
   const keys = new Map<number, Buffer>();
-  const serialized = process.env["PARTNER_LOCATION_SECRET_KEYS_JSON"]?.trim();
+  const serialized = environment["PARTNER_LOCATION_SECRET_KEYS_JSON"]?.trim();
   if (serialized) {
     let parsed: unknown;
     try {
@@ -61,13 +59,25 @@ function loadKeyring(): Keyring {
       keys.set(version, decodeKey(rawKey));
     }
   } else {
-    const singleKey = process.env["PARTNER_LOCATION_SECRET_KEY_BASE64"];
+    const singleKey = environment["PARTNER_LOCATION_SECRET_KEY_BASE64"];
     if (singleKey) keys.set(currentVersion, decodeKey(singleKey));
   }
   if (!keys.has(currentVersion)) {
     throw new PartnerLocationSecretConfigurationError();
   }
   return { currentVersion, keys };
+}
+
+/** Shares the exact runtime parser without encrypting data or exposing keys. */
+export function isPartnerLocationSecretConfigured(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  try {
+    loadKeyring(environment);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function aad(keyVersion: number): Buffer {
@@ -134,8 +144,7 @@ export function decryptPartnerLocationSecret(input: {
   });
   decipher.setAAD(aad(input.keyVersion));
   decipher.setAuthTag(tag);
-  return Buffer.concat([
-    decipher.update(encrypted),
-    decipher.final(),
-  ]).toString("utf8");
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString(
+    "utf8",
+  );
 }

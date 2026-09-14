@@ -38,7 +38,9 @@ export type PartnerTeamMember = {
     suspendedAt: string | null;
     updatedAt: string;
   };
-  allowedActions: Array<"role_update" | "suspend" | "reactivate">;
+  allowedActions: Array<
+    "role_update" | "scope_update" | "suspend" | "reactivate"
+  >;
   etag: string;
 };
 
@@ -364,7 +366,13 @@ function MemberCard({
   );
 }
 
-export function PartnerTeamManager({ initial }: { initial: TeamPayload }) {
+export function PartnerTeamManager({
+  initial,
+  readOnly = false,
+}: {
+  initial: TeamPayload;
+  readOnly?: boolean;
+}) {
   const [members, setMembers] = React.useState(initial.members);
   const [nextCursor, setNextCursor] = React.useState(initial.page.nextCursor);
   const [query, setQuery] = React.useState("");
@@ -486,8 +494,8 @@ export function PartnerTeamManager({ initial }: { initial: TeamPayload }) {
         {filtered.map((member) => (
           <MemberCard
             key={member.id}
-            member={member}
-            roles={initial.roles}
+            member={readOnly ? { ...member, allowedActions: [] } : member}
+            roles={readOnly ? [] : initial.roles}
             onUpdated={updateMember}
           />
         ))}

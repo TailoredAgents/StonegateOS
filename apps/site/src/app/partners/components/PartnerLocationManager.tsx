@@ -23,7 +23,17 @@ import {
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
 import type { PartnerLocation, PartnerLocationImport } from "../lib/portal-v2";
-import { createPortalOperationKey, partnerPortalFetch } from "../lib/portal-v2";
+import {
+  createPortalOperationKey,
+  partnerPortalFetch,
+  portalSupportReferenceFromResponse,
+  withPortalSupportReference,
+} from "../lib/portal-v2";
+import {
+  parseLocationDirectory,
+  parseLocationValidation,
+  isPartnerLocation,
+} from "../lib/booking-location";
 import {
   PartnerEmptyState,
   PartnerNotice,
@@ -185,6 +195,9 @@ export function PartnerLocationManager({
   initialNextCursor,
   initialDirectoryEtag,
   canManage,
+  canCreateLocation,
+  canFavorite,
+  canRequestService,
   canManagePortfolio,
   canExport,
 }: {
@@ -192,6 +205,9 @@ export function PartnerLocationManager({
   initialNextCursor: string | null;
   initialDirectoryEtag: string;
   canManage: boolean;
+  canCreateLocation: boolean;
+  canFavorite: boolean;
+  canRequestService: boolean;
   canManagePortfolio: boolean;
   canExport: boolean;
 }) {
@@ -216,6 +232,11 @@ export function PartnerLocationManager({
   } | null>(null);
   const [pendingAddressSuggestion, setPendingAddressSuggestion] =
     React.useState<PendingAddressSuggestion | null>(null);
+  const createAttempt = React.useRef<{
+    body: string;
+    key: string;
+    validation: LocationValidation;
+  } | null>(null);
 
   React.useEffect(() => {
     const generation = ++searchGeneration.current;
@@ -239,12 +260,23 @@ export function PartnerLocationManager({
             return;
           if (!result.ok) {
             setMessage({ tone: "error", text: result.error.message });
-            setNextCursor(null);
             return;
           }
-          setLocations(result.data.locations);
-          setNextCursor(result.data.page.nextCursor);
-          setDirectoryEtag(result.data.directory.etag);
+          const directory = parseLocationDirectory(result.data);
+          if (!directory) {
+            setMessage({
+              tone: "error",
+              text: withPortalSupportReference(
+                "Locations could not be refreshed. Your last loaded locations are still shown. Please try again.",
+                portalSupportReferenceFromResponse(result.response),
+              ),
+            });
+            return;
+          }
+          setLocations(directory.locations);
+          setNextCursor(directory.nextCursor);
+          setDirectoryEtag(directory.etag);
+          setMessage((current) => (current?.tone === "error" ? null : current));
         })
         .catch(() => {
           if (!controller.signal.aborted)
@@ -315,8 +347,19 @@ export function PartnerLocationManager({
       });
       return null;
     }
-    if (result.data.validation.status === "duplicate") {
-      const names = result.data.validation.duplicates
+    const validation = parseLocationValidation(result.data);
+    if (!validation) {
+      setMessage({
+        tone: "error",
+        text: withPortalSupportReference(
+          "The address could not be checked. Try again before saving.",
+          portalSupportReferenceFromResponse(result.response),
+        ),
+      });
+      return null;
+    }
+    if (validation.status === "duplicate") {
+      const names = validation.duplicates
         .slice(0, 2)
         .map((candidate) => candidate.siteName)
         .join(" or ");
@@ -328,7 +371,7 @@ export function PartnerLocationManager({
       });
       return null;
     }
-    return result.data.validation;
+    return validation;
   };
 
   const createLocation = async (
@@ -337,12 +380,19 @@ export function PartnerLocationManager({
   ): Promise<boolean> => {
     setBusyId("new");
     setMessage(null);
-    const validation = await validateLocation(form);
+    const body = JSON.stringify(
+      locationPayload(form, false, canManagePortfolio),
+    );
+    const previousAttempt =
+      createAttempt.current?.body === body ? createAttempt.current : null;
+    const validation =
+      previousAttempt?.validation ?? (await validateLocation(form));
     if (!validation) {
       setBusyId(null);
       return false;
     }
     if (
+      !previousAttempt &&
       !addressDecisionMade &&
       validation.verification.status === "suggested_correction" &&
       validation.verification.suggestedAddress
@@ -356,15 +406,21 @@ export function PartnerLocationManager({
       });
       return false;
     }
+    const attempt = previousAttempt ?? {
+      body,
+      validation,
+      key: createPortalOperationKey("location-create"),
+    };
+    createAttempt.current = attempt;
     const result = await partnerPortalFetch<{
       ok: true;
       location: PartnerLocation;
     }>("locations", {
       method: "POST",
       headers: {
-        "Idempotency-Key": createPortalOperationKey("location-create"),
+        "Idempotency-Key": attempt.key,
       },
-      body: JSON.stringify(locationPayload(form, false, true)),
+      body: attempt.body,
     }).catch(() => null);
     setBusyId(null);
     if (!result?.ok) {
@@ -374,13 +430,25 @@ export function PartnerLocationManager({
       });
       return false;
     }
+    if (!isPartnerLocation(result.data.location)) {
+      setMessage({
+        tone: "error",
+        text: withPortalSupportReference(
+          "We couldn’t confirm the saved location. Keep these details and try Add location again to safely recover the same location.",
+          portalSupportReferenceFromResponse(result.response),
+        ),
+      });
+      return false;
+    }
+    createAttempt.current = null;
     setDirectoryEtag(
       result.response.headers.get("x-location-directory-etag") ?? directoryEtag,
     );
     setLocations((current) =>
-      [...current, result.data.location].sort((a, b) =>
-        (a.siteName ?? "").localeCompare(b.siteName ?? ""),
-      ),
+      [
+        ...current.filter((item) => item.id !== result.data.location.id),
+        result.data.location,
+      ].sort((a, b) => (a.siteName ?? "").localeCompare(b.siteName ?? "")),
     );
     setAdding(false);
     setPendingAddressSuggestion(null);
@@ -744,16 +812,28 @@ export function PartnerLocationManager({
       });
       return;
     }
+    const directory = parseLocationDirectory(result.data);
+    if (!directory) {
+      setMessage({
+        tone: "error",
+        text: withPortalSupportReference(
+          "More locations could not be loaded. Please try again.",
+          portalSupportReferenceFromResponse(result.response),
+        ),
+      });
+      return;
+    }
     setLocations((current) => {
       const merged = new Map(
         current.map((location) => [location.id, location]),
       );
-      for (const location of result.data.locations)
+      for (const location of directory.locations)
         merged.set(location.id, location);
       return [...merged.values()];
     });
-    setNextCursor(result.data.page.nextCursor);
-    setDirectoryEtag(result.data.directory.etag);
+    setNextCursor(directory.nextCursor);
+    setDirectoryEtag(directory.etag);
+    setMessage((current) => (current?.tone === "error" ? null : current));
   };
 
   const exportLocations = async (): Promise<void> => {
@@ -840,7 +920,7 @@ export function PartnerLocationManager({
           </div>
         </section>
       ) : null}
-      {canManagePortfolio || canExport ? (
+      {canCreateLocation || canExport ? (
         <div className="flex flex-wrap justify-end gap-2">
           {canExport ? (
             <button
@@ -860,7 +940,7 @@ export function PartnerLocationManager({
               {busyId === "export" ? "Preparing…" : "Export CSV"}
             </button>
           ) : null}
-          {canManagePortfolio ? (
+          {canCreateLocation ? (
             <button
               type="button"
               onClick={() => setAdding((current) => !current)}
@@ -956,7 +1036,7 @@ export function PartnerLocationManager({
           description={
             search
               ? "Try a different name, address, or property ID."
-              : canManage
+              : canCreateLocation
                 ? "Save your first service location now so future bookings need less typing."
                 : "No service locations are currently visible to your role."
           }
@@ -1105,7 +1185,7 @@ export function PartnerLocationManager({
                   <ServiceAreaBadge status={location.serviceArea.status} />
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
-                  {location.active ? (
+                  {location.active && canFavorite ? (
                     <button
                       type="button"
                       onClick={() => void toggleFavorite(location)}
@@ -1125,7 +1205,7 @@ export function PartnerLocationManager({
                         : "Favorite"}
                     </button>
                   ) : null}
-                  {location.active ? (
+                  {location.active && canRequestService ? (
                     <Link
                       href={
                         `/partners/book?locationId=${encodeURIComponent(location.id)}` as Route

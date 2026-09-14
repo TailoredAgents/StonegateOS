@@ -44,6 +44,22 @@ export default async function PartnerReportsPage({
     searchParams,
     getPartnerPortalContext(),
   ]);
+  if (context.status !== "authenticated" || !context.availability.reads)
+    return null;
+  if (!context.capabilities.reports || context.tools?.["reports"] !== true)
+    return (
+      <div className="space-y-5">
+        <PartnerPageHeader
+          title="Reports"
+          description="View job and billing records shared with your role."
+        />
+        <PartnerNotice tone="info">
+          {!context.capabilities.reports
+            ? "Your role does not include reports. Ask your company administrator for access."
+            : "Reports are turned off for your company. Contact Stonegate if you need a report."}
+        </PartnerNotice>
+      </div>
+    );
   const params: Record<string, string> = {};
   for (const key of filterKeys)
     if (

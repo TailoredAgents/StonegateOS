@@ -25,6 +25,7 @@ import { usePartnerUnsavedChanges } from "../lib/use-partner-unsaved-changes";
 import {
   createPortalOperationKey,
   partnerPortalFetch,
+  portalSupportReferenceFromResponse,
   withPortalSupportReference,
   type PartnerAvailability,
   type PartnerDraft,
@@ -63,9 +64,15 @@ import { PartnerInlineLocationForm } from "./PartnerInlineLocationForm";
 import {
   sortBookingLocations,
   toBookingLocation,
+  isPartnerLocation,
   type BookingLocation,
 } from "../lib/booking-location";
 import type { PartnerLocation } from "../lib/portal-v2";
+import {
+  parseBookingAvailability,
+  parseBookingDraft,
+  parseBookingValidation,
+} from "../lib/booking-page-data";
 
 export type BookingWizardLocation = BookingLocation;
 
@@ -628,6 +635,7 @@ function PartnerBookingWizardSession({
   defaultLocationId = "",
   defaultServiceKey = "",
   canUploadPhotos = false,
+  instantConfirmationAvailable = false,
   canManageLocations = false,
   defaultProofRequirements = { before: 1, after: 1 },
   cancellationPolicy,
@@ -643,6 +651,7 @@ function PartnerBookingWizardSession({
   defaultLocationId?: string;
   defaultServiceKey?: string;
   canUploadPhotos?: boolean;
+  instantConfirmationAvailable?: boolean;
   canManageLocations?: boolean;
   defaultProofRequirements?: { before: number; after: number };
   cancellationPolicy: BookingWizardCancellationPolicy;
@@ -690,6 +699,7 @@ function PartnerBookingWizardSession({
     }),
   );
   const [draft, setDraft] = React.useState<PartnerDraft | null>(initialDraft);
+  const [draftCreationAttempt, setDraftCreationAttempt] = React.useState(0);
   const [step, setStep] = React.useState(0);
   const [furthestStep, setFurthestStep] = React.useState(0);
   const [saveStatus, setSaveStatus] = React.useState<
@@ -800,6 +810,18 @@ function PartnerBookingWizardSession({
             setLocationSearchError(result.error.message);
             return;
           }
+          if (
+            !Array.isArray(result.data.locations) ||
+            !result.data.locations.every(isPartnerLocation)
+          ) {
+            setLocationSearchError(
+              withPortalSupportReference(
+                "Locations could not be searched. Please try again.",
+                portalSupportReferenceFromResponse(result.response),
+              ),
+            );
+            return;
+          }
           const found = result.data.locations.map(toBookingLocation);
           setLocationSearchResults(sortBookingLocations(found));
           setAvailableLocations((current) => [
@@ -807,6 +829,12 @@ function PartnerBookingWizardSession({
               [...current, ...found].map((item) => [item.id, item]),
             ).values(),
           ]);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted)
+            setLocationSearchError(
+              "Locations could not be searched. Please try again.",
+            );
         })
         .finally(() => {
           if (!controller.signal.aborted) setLocationSearching(false);
@@ -882,17 +910,29 @@ function PartnerBookingWizardSession({
         );
         return;
       }
-      setCurrentDraft(result.data.draft);
+      const createdDraft = parseBookingDraft(result.data);
+      if (!createdDraft) {
+        setSaveStatus("error");
+        setMessage(
+          withPortalSupportReference(
+            "We couldn’t check whether your saved request was started. Try again to safely recover the same request.",
+            portalSupportReferenceFromResponse(result.response),
+          ),
+        );
+        return;
+      }
+      setCurrentDraft(createdDraft);
       const savedUrl = new URL(window.location.href);
-      savedUrl.searchParams.set("draftId", result.data.draft.id);
+      savedUrl.searchParams.set("draftId", createdDraft.id);
       window.history.replaceState(window.history.state, "", savedUrl);
       setSaveStatus("saved");
+      setMessage(null);
     };
     void createDraft();
     return () => {
       active = false;
     };
-  }, [initialDraft, setCurrentDraft]);
+  }, [initialDraft, setCurrentDraft, draftCreationAttempt]);
 
   const persist = React.useCallback(
     (snapshot: WizardForm): Promise<boolean> => {
@@ -919,7 +959,18 @@ function PartnerBookingWizardSession({
             setFieldErrors(result.error.fieldErrors);
           return false;
         }
-        setCurrentDraft(result.data.draft);
+        const savedDraft = parseBookingDraft(result.data);
+        if (!savedDraft || savedDraft.id !== current.id) {
+          setSaveStatus("error");
+          setMessage(
+            withPortalSupportReference(
+              "Your changes are still on this screen, but we couldn’t confirm they were saved. Try saving again before continuing.",
+              portalSupportReferenceFromResponse(result.response),
+            ),
+          );
+          return false;
+        }
+        setCurrentDraft(savedDraft);
         setSaveStatus("saved");
         setMessage(null);
         return true;
@@ -1225,9 +1276,20 @@ function PartnerBookingWizardSession({
       }
       return false;
     }
-    setCurrentDraft(validated.data.draft);
-    if (!validated.data.validation.valid) {
-      const errors = validated.data.validation.fieldErrors;
+    const validationResult = parseBookingValidation(validated.data);
+    if (!validationResult || validationResult.draft.id !== savedDraft.id) {
+      setAvailabilityLoading(false);
+      setMessage(
+        withPortalSupportReference(
+          "We couldn’t check this saved request. Your details are still on this screen. Please try again.",
+          portalSupportReferenceFromResponse(validated.response),
+        ),
+      );
+      return false;
+    }
+    setCurrentDraft(validationResult.draft);
+    if (!validationResult.validation.valid) {
+      const errors = validationResult.validation.fieldErrors;
       setAvailabilityLoading(false);
       setFieldErrors(errors);
       setMessage(
@@ -1251,7 +1313,14 @@ function PartnerBookingWizardSession({
       }).toString()}`,
     ).catch(() => null);
     setAvailabilityLoading(false);
-    if (!result?.ok) {
+    const nextAvailability = result?.ok
+      ? parseBookingAvailability(result.data)
+      : null;
+    if (
+      !result?.ok ||
+      !nextAvailability ||
+      nextAvailability.draft.id !== savedDraft.id
+    ) {
       trackPartnerFunnelEvent({
         stage: "availability_degraded",
         persona,
@@ -1262,29 +1331,31 @@ function PartnerBookingWizardSession({
       setMessage(
         withPortalSupportReference(
           "This request needs a schedule review. Your details are saved; choose preferred dates and Stonegate will review them without reserving a slot.",
-          result?.error.correlationId,
+          result?.ok
+            ? portalSupportReferenceFromResponse(result.response)
+            : result?.error.correlationId,
         ),
       );
       return true;
     }
     trackPartnerFunnelEvent({
-      stage: !result.data.availability.instantConfirmationEligible
+      stage: !nextAvailability.instantConfirmationEligible
         ? "availability_review_only"
-        : result.data.availability.windows.some((window) => window.available)
+        : nextAvailability.windows.some((window) => window.available)
           ? "availability_available"
           : "availability_slot_full",
       persona,
       surface: "booking",
       step: 3,
     });
-    setCurrentDraft(result.data.availability.draft);
-    setAvailability(result.data.availability);
+    setCurrentDraft(nextAvailability.draft);
+    setAvailability(nextAvailability);
     setForm((current) =>
-      current.preferredTimezone === result.data.availability.timezone
+      current.preferredTimezone === nextAvailability.timezone
         ? current
         : {
             ...current,
-            preferredTimezone: result.data.availability.timezone,
+            preferredTimezone: nextAvailability.timezone,
           },
     );
     return true;
@@ -1706,6 +1777,22 @@ function PartnerBookingWizardSession({
             >
               {message}
             </PartnerNotice>
+          ) : null}
+
+          {saveStatus === "error" ? (
+            <button
+              type="button"
+              className={cn(partnerSecondaryButtonClass, "mt-3")}
+              onClick={() => {
+                if (draftRef.current) void flushPersist(form);
+                else {
+                  setSaveStatus("creating");
+                  setDraftCreationAttempt((attempt) => attempt + 1);
+                }
+              }}
+            >
+              Try saving again
+            </button>
           ) : null}
 
           <div className="mt-6">
@@ -2982,12 +3069,15 @@ function PartnerBookingWizardSession({
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <h3 className="font-semibold text-slate-950">
-                      Choose a service window
+                      {instantConfirmationAvailable
+                        ? "Choose a service window"
+                        : "Choose your preferred dates"}
                     </h3>
                     <p className="mt-1 text-sm leading-6 text-slate-600">
-                      Pick a two-hour arrival window that works for you. The
-                      exact crew start is planned inside that window. Times are
-                      shown in {selectedTimezone.replace(/_/gu, " ")}.
+                      {instantConfirmationAvailable
+                        ? "Pick a two-hour arrival window that works for you. The exact crew start is planned inside that window."
+                        : "Tell us which dates work for you. Stonegate will review the request and confirm your service time."}{" "}
+                      Times are shown in {selectedTimezone.replace(/_/gu, " ")}.
                     </p>
                   </div>
                   <button
@@ -3007,7 +3097,8 @@ function PartnerBookingWizardSession({
                     Refresh
                   </button>
                 </div>
-                {availability?.calendar.state !== "current" ? (
+                {instantConfirmationAvailable &&
+                availability?.calendar.state !== "current" ? (
                   <PartnerNotice tone="warning" className="mt-4">
                     The connected calendar is{" "}
                     {availability?.calendar.state ?? "not available"}. Available

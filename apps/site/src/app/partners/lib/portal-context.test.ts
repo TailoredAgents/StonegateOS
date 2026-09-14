@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { resolvePartnerPortalContext } from "./portal-context";
+import {
+  parsePartnerPortalAvailability,
+  resolvePartnerPortalContext,
+} from "./portal-context";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const ACCOUNT_A_ID = "22222222-2222-4222-8222-222222222222";
@@ -12,6 +15,13 @@ const MEMBERSHIP_B_ID = "55555555-5555-4555-8555-555555555555";
 function selectedAccountPayload() {
   return {
     ok: true,
+    availability: {
+      reads: true,
+      writes: true,
+      payments: { card: false, ach: false, hosted: false },
+      uploads: { photos: true, documents: false },
+      instantConfirmation: false,
+    },
     partnerUser: {
       id: USER_ID,
       email: "partner@example.test",
@@ -78,6 +88,63 @@ void test("V2 identity outages fail closed without calling the legacy profile", 
   });
   assert.deepEqual(unavailable, { status: "unavailable" });
   assert.deepEqual(calls, ["/api/portal/v2/me", "/api/portal/v2/me"]);
+});
+
+void test("service availability preserves sign-in and reading while disabling changes", async () => {
+  const payload = selectedAccountPayload();
+  payload.availability.writes = false;
+  const capabilities = [
+    "account.read",
+    "jobs.read",
+    "bookings.create",
+    "bookings.update",
+    "bookings.cancel",
+    "properties.manage",
+    "media.upload",
+    "proof.request",
+    "messages.send",
+  ];
+  payload.membership.capabilities = capabilities;
+  payload.accounts[1]!.capabilities = capabilities;
+  const context = await resolvePartnerPortalContext(() =>
+    Promise.resolve(jsonResponse(payload)),
+  );
+  assert.equal(context.status, "authenticated");
+  if (context.status !== "authenticated") return;
+  assert.equal(context.capabilities.jobs, true);
+  assert.equal(context.capabilities.schedule, false);
+  for (const permission of [
+    "scheduleJobs",
+    "updateJobs",
+    "cancelJobs",
+    "manageLocations",
+    "uploadMedia",
+    "shareProof",
+    "sendMessages",
+  ] as const)
+    assert.equal(context.permissions[permission], false);
+});
+
+void test("missing availability fails closed and inconsistent flags cannot enable writes or payments", async () => {
+  const payload = selectedAccountPayload();
+  const context = await resolvePartnerPortalContext(() =>
+    Promise.resolve(jsonResponse({ ...payload, availability: undefined })),
+  );
+  assert.equal(context.status, "unavailable");
+  const availability = parsePartnerPortalAvailability({
+    reads: false,
+    writes: true,
+    payments: { card: true, ach: true, hosted: true },
+    uploads: { photos: true, documents: true },
+    instantConfirmation: true,
+  });
+  assert.deepEqual(availability, {
+    reads: false,
+    writes: false,
+    payments: { card: false, ach: false, hosted: false },
+    uploads: { photos: false, documents: false },
+    instantConfirmation: false,
+  });
 });
 
 void test("malformed V2 identities cannot inherit broad legacy capabilities", async () => {

@@ -1,8 +1,39 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { toBookingLocation, sortBookingLocations } from "./booking-location";
+import {
+  toBookingLocation,
+  sortBookingLocations,
+  parseLocationDirectory,
+} from "./booking-location";
 import { formatPartnerArrivalWindow } from "./partner-arrival-window";
 import type { PartnerLocation } from "./portal-v2";
+
+void test("location refresh distinguishes a valid empty directory from incomplete data", () => {
+  const payload = {
+    ok: true,
+    locations: [],
+    directory: { etag: '"locations-1"' },
+    page: { nextCursor: null },
+  };
+  assert.deepEqual(parseLocationDirectory(payload), {
+    locations: [],
+    nextCursor: null,
+    etag: '"locations-1"',
+  });
+  assert.equal(
+    parseLocationDirectory({ ...payload, locations: undefined }),
+    null,
+  );
+  assert.equal(
+    parseLocationDirectory({
+      ...payload,
+      locations: [{ id: "broken", address: null }],
+    }),
+    null,
+  );
+  assert.equal(parseLocationDirectory({ ...payload, page: {} }), null);
+  assert.equal(parseLocationDirectory({ ...payload, directory: {} }), null);
+});
 
 void test("booking location retains safe defaults, contact, timezone and priority", () => {
   const location = toBookingLocation({

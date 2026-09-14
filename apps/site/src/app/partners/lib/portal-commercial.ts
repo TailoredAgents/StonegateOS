@@ -1,6 +1,10 @@
 import "server-only";
 
 import { callPartnerApi } from "./api";
+import {
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+} from "./portal-load";
 import type {
   PartnerDocument,
   PartnerInvoice,
@@ -18,7 +22,7 @@ export type PartnerCommercialState<T> =
       summary: unknown[];
       page: { nextCursor: string | null; hasMore: boolean };
     }
-  | { status: "forbidden" | "unavailable" | "error" };
+  | { status: "forbidden" | "unavailable" | "error"; message?: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -260,7 +264,9 @@ export function isPartnerDocument(value: unknown): value is PartnerDocument {
   );
 }
 
-export function isPartnerReportSummary(value: unknown): value is PartnerReportSummary {
+export function isPartnerReportSummary(
+  value: unknown,
+): value is PartnerReportSummary {
   if (!isRecord(value)) return false;
   return (
     typeof value["currency"] === "string" &&
@@ -279,35 +285,61 @@ export async function loadPartnerCommercial<T>(
 ): Promise<PartnerCommercialState<T>> {
   const query = new URLSearchParams(filters);
   query.set("limit", "100");
-  const response = await callPartnerApi(`/api/portal/v2/${endpoint}?${query}`, {
-    timeoutMs: 20_000,
-  }).catch(() => null);
-  if (!response) return { status: "unavailable" };
-  if (response.status === 401 || response.status === 403) return { status: "forbidden" };
-  if ([404, 409, 501, 503].includes(response.status)) return { status: "unavailable" };
-  if (!response.ok) return { status: "error" };
-
-  const payload = (await response.json().catch(() => null)) as unknown;
-  if (!isRecord(payload) || payload["ok"] !== true) return { status: "error" };
-  const candidate = Array.isArray(payload[resource])
-    ? payload[resource]
-    : Array.isArray(payload["data"])
-      ? payload["data"]
-      : null;
-  if (!candidate) return { status: "error" };
-  const items = candidate.filter(validate);
-  if (items.length !== candidate.length) return { status: "error" };
-  const rawPage = isRecord(payload["page"]) ? payload["page"] : {};
-  return {
-    status: "ready",
-    items,
-    summary: Array.isArray(payload["summary"]) ? payload["summary"] : [],
-    page: {
-      nextCursor:
-        typeof rawPage["nextCursor"] === "string" ? rawPage["nextCursor"] : null,
-      hasMore: rawPage["hasMore"] === true,
+  const result = await loadPartnerPortalResource(
+    () =>
+      callPartnerApi(`/api/portal/v2/${endpoint}?${query}`, {
+        timeoutMs: 20_000,
+      }),
+    (
+      payload,
+    ): Extract<PartnerCommercialState<T>, { status: "ready" }> | null => {
+      if (!isRecord(payload) || payload["ok"] !== true) return null;
+      const candidate = Array.isArray(payload[resource])
+        ? payload[resource]
+        : Array.isArray(payload["data"])
+          ? payload["data"]
+          : null;
+      if (!candidate) return null;
+      const items = candidate.filter(validate);
+      if (items.length !== candidate.length) return null;
+      const rawPage = payload["page"];
+      if (
+        !isRecord(rawPage) ||
+        typeof rawPage["hasMore"] !== "boolean" ||
+        !(
+          rawPage["nextCursor"] === null ||
+          typeof rawPage["nextCursor"] === "string"
+        )
+      )
+        return null;
+      return {
+        status: "ready",
+        items,
+        summary: Array.isArray(payload["summary"]) ? payload["summary"] : [],
+        page: {
+          nextCursor:
+            typeof rawPage["nextCursor"] === "string"
+              ? rawPage["nextCursor"]
+              : null,
+          hasMore: rawPage["hasMore"] === true,
+        },
+      };
     },
-  };
+  );
+  return result.status === "ok"
+    ? result.value
+    : {
+        status:
+          result.reason === "permission"
+            ? "forbidden"
+            : result.reason === "invalid_response"
+              ? "error"
+              : "unavailable",
+        message: portalLoadErrorMessage(
+          result,
+          `We couldn’t load ${resource}. Please refresh to try again.`,
+        ),
+      };
 }
 
 export function formatPartnerMoney(value: PartnerMoney): string {

@@ -1,0 +1,84 @@
+name: Partner Portal production journey
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  partner-portal-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: portal_test
+          POSTGRES_PASSWORD: portal_local_only
+          POSTGRES_DB: portal_access_browser
+        ports: ["55443:5432"]
+        options: >-
+          --health-cmd "pg_isready -U portal_test -d portal_access_browser"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      storage:
+        image: localstack/localstack:3.8
+        env:
+          SERVICES: s3
+        ports: ["14566:4566"]
+    env:
+      NODE_ENV: test
+      DOTENV_CONFIG_PATH: /dev/null
+      DATABASE_URL: postgresql://portal_test:portal_local_only@127.0.0.1:55443/portal_access_browser
+      DATABASE_SSL: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium webkit
+      - name: Apply all production migrations to the disposable database
+        run: pnpm --filter api exec tsx scripts/migrate-to-target.ts latest
+      - name: Portal API and website regression tests
+        run: pnpm test:partner-portal
+      - name: Browser recovery and worker rendering checks
+        run: |
+          pnpm exec tsx --test scripts/test-partner-home-recovery.mts scripts/test-partner-booking-recovery.mts scripts/test-partner-template-proof-recovery.mts scripts/test-partner-communications-browser.mts
+          pnpm test:partner-portal:worker-runtime
+      - name: Portal PostgreSQL integration tests
+        run: pnpm test:partner-portal:postgres
+      - name: Build production API
+        run: pnpm exec tsx scripts/run-partner-access-local.mts api build
+      - name: Build production website
+        run: pnpm exec tsx scripts/run-partner-access-local.mts site build
+      - name: Real activation, every tab, first location and first request
+        shell: bash
+        run: |
+          mkdir -p artifacts/partner-release
+          pnpm exec tsx scripts/run-partner-access-local.mts api > artifacts/partner-release/api.log 2>&1 &
+          portal_api_pid=$!
+          pnpm exec tsx scripts/run-partner-access-local.mts site > artifacts/partner-release/site.log 2>&1 &
+          portal_site_pid=$!
+          pnpm exec tsx scripts/run-partner-access-https.mts > artifacts/partner-release/proxy.log 2>&1 &
+          portal_proxy_pid=$!
+          trap 'kill "$portal_api_pid" "$portal_site_pid" "$portal_proxy_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3111/api/healthz >/dev/null && curl -kfsS https://localhost:3112/api/healthz >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          pnpm exec tsx --test scripts/test-partner-empty-company.mts
+      - name: Retain local diagnostic logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: partner-production-journey-logs
+          path: artifacts/partner-release
+          retention-days: 7

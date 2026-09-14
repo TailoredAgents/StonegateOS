@@ -41,8 +41,8 @@ describe("partner portal V2 commercial route guards", () => {
       "app/api/portal/v2/quotes/[partnerQuoteId]/document/route.ts",
     );
     const service = source("src/lib/partner-portal-v2-quotes.ts");
-    expect(listRoute).toContain(
-      'requirePartnerCapability(request, "quotes.read")',
+    expect(listRoute).toMatch(
+      /requirePartnerCapability\(\s*request,\s*"quotes.read",?\s*\)/u,
     );
     expect(listRoute).toContain("listCanonicalPartnerQuotes");
     expect(detailRoute).toContain(

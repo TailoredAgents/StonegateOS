@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { PartnerLocationManager } from "../components/PartnerLocationManager";
 
 const manager = readFileSync(
   new URL("../components/PartnerLocationManager.tsx", import.meta.url),
@@ -14,6 +17,44 @@ const proxy = readFileSync(
   new URL("../../api/partners/portal/[...segments]/route.ts", import.meta.url),
   "utf8",
 );
+
+void test("an ordinary account can add its first location with portfolio tools disabled", () => {
+  // tsx uses the repository's preserve-JSX setting; supply React for shared JSX components.
+  const runtime = globalThis as typeof globalThis & { React?: typeof React };
+  const previous = runtime.React;
+  runtime.React = React;
+  try {
+    const props = {
+      initialLocations: [],
+      initialNextCursor: null,
+      initialDirectoryEtag: '"locations-1"',
+      canManage: true,
+      canCreateLocation: true,
+      canManagePortfolio: false,
+      canExport: false,
+      canFavorite: true,
+      canRequestService: true,
+    };
+    const enabled = renderToStaticMarkup(
+      React.createElement(PartnerLocationManager, props),
+    );
+    assert.match(enabled, />Add location<\/button>/u);
+    assert.doesNotMatch(enabled, /Import CSV|Export CSV/u);
+    const readOnly = renderToStaticMarkup(
+      React.createElement(PartnerLocationManager, {
+        ...props,
+        canManage: false,
+        canCreateLocation: false,
+        canFavorite: false,
+        canRequestService: false,
+      }),
+    );
+    assert.doesNotMatch(readOnly, />Add location<\/button>/u);
+  } finally {
+    if (previous) runtime.React = previous;
+    else Reflect.deleteProperty(runtime, "React");
+  }
+});
 
 void test("the location workspace presents portfolio controls without exposing secrets", () => {
   assert.match(manager, /Make default/u);

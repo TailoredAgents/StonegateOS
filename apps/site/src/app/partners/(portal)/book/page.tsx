@@ -1,22 +1,26 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { CalendarClock, MapPin, PhoneCall } from "lucide-react";
+import { CalendarClock, MapPin } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
+import {
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+} from "../../lib/portal-load";
+import {
+  parseLocations,
+  wizardLocation,
+  parseCatalogServices,
+  parseProofDefaults,
+  parseCancellationPolicy,
+  parseBookingDraft,
+} from "../../lib/booking-page-data";
 import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
 import { getPartnerPersonaPresentation } from "@/app/partners/lib/persona-presentation";
 import type {
   PartnerDraft,
   PartnerLocation,
 } from "@/app/partners/lib/portal-v2";
-import {
-  PartnerBookingWizard,
-  type BookingWizardAddOn,
-  type BookingWizardBaseOption,
-  type BookingWizardCancellationPolicy,
-  type BookingWizardLocation,
-  type BookingWizardMoney,
-  type BookingWizardService,
-} from "@/app/partners/components/PartnerBookingWizard";
+import { PartnerBookingWizard } from "@/app/partners/components/PartnerBookingWizard";
 import { PartnerRepeatWorkManager } from "@/app/partners/components/PartnerRepeatWorkManager";
 import {
   PartnerEmptyState,
@@ -27,321 +31,9 @@ import {
   partnerSecondaryButtonClass,
 } from "@/app/partners/components/PartnerPortalUi";
 import { getPublicCompanyProfile } from "@/lib/company";
-import {
-  sortBookingLocations,
-  toBookingLocation,
-} from "../../lib/booking-location";
+import { sortBookingLocations } from "../../lib/booking-location";
 
 export const metadata: Metadata = { title: "Request service" };
-
-type CatalogItem = {
-  key?: string;
-  label?: string | null;
-  description?: string | null;
-  pricingStatus?: string;
-  bookable?: unknown;
-  priceState?: unknown;
-  agreement?: unknown;
-  inclusions?: unknown;
-  exclusions?: unknown;
-  quoteRule?: unknown;
-  basePrice?: unknown;
-  baseOptions?: unknown;
-  addOns?: unknown;
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseLocations(payload: unknown): PartnerLocation[] {
-  if (!isRecord(payload)) return [];
-  const candidate = Array.isArray(payload["data"])
-    ? payload["data"]
-    : Array.isArray(payload["locations"])
-      ? payload["locations"]
-      : [];
-  return candidate.filter((item): item is PartnerLocation => {
-    if (
-      !isRecord(item) ||
-      typeof item["id"] !== "string" ||
-      !isRecord(item["address"])
-    ) {
-      return false;
-    }
-    const address = item["address"];
-    return (
-      typeof address["line1"] === "string" &&
-      typeof address["city"] === "string" &&
-      typeof address["state"] === "string" &&
-      typeof address["postalCode"] === "string" &&
-      item["active"] !== false
-    );
-  });
-}
-
-function wizardLocation(location: PartnerLocation): BookingWizardLocation {
-  return toBookingLocation(location);
-}
-
-function parseMoney(value: unknown): BookingWizardMoney | null {
-  if (!isRecord(value)) return null;
-  const amountMinor = value["amountMinor"];
-  const currency = value["currency"];
-  const minorUnit = value["minorUnit"];
-  if (
-    typeof amountMinor !== "number" ||
-    !Number.isSafeInteger(amountMinor) ||
-    amountMinor < 0 ||
-    typeof currency !== "string" ||
-    !/^[A-Z]{3}$/u.test(currency) ||
-    minorUnit !== 2
-  ) {
-    return null;
-  }
-  return { amountMinor, currency, minorUnit };
-}
-
-function parsePricingStatus(
-  value: unknown,
-): "contracted" | "review_required" | "hidden" {
-  return value === "contracted" ||
-    value === "review_required" ||
-    value === "hidden"
-    ? value
-    : "review_required";
-}
-
-function parsePriceState(
-  value: unknown,
-): "contracted" | "estimate" | "quote_required" | "standard_rate" | null {
-  return value === "contracted" ||
-    value === "estimate" ||
-    value === "quote_required" ||
-    value === "standard_rate"
-    ? value
-    : null;
-}
-
-function parseRateBearingPriceState(
-  value: unknown,
-): "contracted" | "estimate" | "standard_rate" {
-  const state = parsePriceState(value);
-  return state === "contracted" || state === "standard_rate"
-    ? state
-    : "estimate";
-}
-
-function parseBoundedTextList(value: unknown): string[] {
-  return Array.isArray(value) && value.length <= 40
-    ? value.filter(
-        (item): item is string =>
-          typeof item === "string" &&
-          item.trim() === item &&
-          item.length > 0 &&
-          item.length <= 500,
-      )
-    : [];
-}
-
-function parseAgreement(value: unknown): BookingWizardService["agreement"] {
-  if (!isRecord(value)) return null;
-  const label = value["label"];
-  const currency = value["currency"];
-  const effectiveFrom = value["effectiveFrom"];
-  const effectiveTo = value["effectiveTo"];
-  if (
-    typeof label !== "string" ||
-    !label.trim() ||
-    typeof currency !== "string" ||
-    !/^[A-Z]{3}$/u.test(currency) ||
-    typeof effectiveFrom !== "string" ||
-    Number.isNaN(new Date(effectiveFrom).getTime()) ||
-    (effectiveTo !== null &&
-      (typeof effectiveTo !== "string" ||
-        Number.isNaN(new Date(effectiveTo).getTime())))
-  ) {
-    return null;
-  }
-  return { label: label.trim(), currency, effectiveFrom, effectiveTo };
-}
-
-function parseCatalogAddOns(value: unknown): BookingWizardAddOn[] {
-  if (!Array.isArray(value)) return [];
-  const result: BookingWizardAddOn[] = [];
-  const seen = new Set<string>();
-  for (const raw of value.slice(0, 20)) {
-    if (!isRecord(raw)) continue;
-    const key = typeof raw["key"] === "string" ? raw["key"] : "";
-    const label = typeof raw["label"] === "string" ? raw["label"].trim() : "";
-    const unitLabel =
-      typeof raw["unitLabel"] === "string" ? raw["unitLabel"].trim() : "";
-    const minimumQuantity = raw["minimumQuantity"];
-    const maximumQuantity = raw["maximumQuantity"];
-    const instantMaximum = raw["instantConfirmationMaxQuantity"];
-    if (
-      !/^[a-z][a-z0-9_-]{1,79}$/u.test(key) ||
-      !label ||
-      !unitLabel ||
-      seen.has(key) ||
-      typeof minimumQuantity !== "number" ||
-      !Number.isSafeInteger(minimumQuantity) ||
-      typeof maximumQuantity !== "number" ||
-      !Number.isSafeInteger(maximumQuantity) ||
-      minimumQuantity < 1 ||
-      maximumQuantity < minimumQuantity ||
-      maximumQuantity > 100 ||
-      (instantMaximum !== null &&
-        (typeof instantMaximum !== "number" ||
-          !Number.isSafeInteger(instantMaximum) ||
-          instantMaximum < minimumQuantity ||
-          instantMaximum > maximumQuantity))
-    ) {
-      continue;
-    }
-    seen.add(key);
-    result.push({
-      key,
-      label,
-      priceState: parseRateBearingPriceState(raw["priceState"]),
-      ...(typeof raw["description"] === "string" && raw["description"].trim()
-        ? { detail: raw["description"].trim() }
-        : {}),
-      unitLabel,
-      minimumQuantity,
-      maximumQuantity,
-      instantConfirmationMaxQuantity: instantMaximum,
-      requiresReview: raw["requiresReview"] === true,
-      pricingStatus: parsePricingStatus(raw["pricingStatus"]),
-      unitPrice: parseMoney(raw["unitPrice"]),
-    });
-  }
-  return result;
-}
-
-function parseCatalogBaseOptions(value: unknown): BookingWizardBaseOption[] {
-  if (!Array.isArray(value)) return [];
-  const result: BookingWizardBaseOption[] = [];
-  const seen = new Set<string>();
-  for (const raw of value.slice(0, 100)) {
-    if (!isRecord(raw)) continue;
-    const tierKey =
-      typeof raw["tierKey"] === "string" ? raw["tierKey"].trim() : "";
-    const label = typeof raw["label"] === "string" ? raw["label"].trim() : "";
-    if (
-      !/^[a-z0-9][a-z0-9_-]{0,99}$/u.test(tierKey) ||
-      !label ||
-      seen.has(tierKey)
-    ) {
-      continue;
-    }
-    seen.add(tierKey);
-    result.push({
-      tierKey,
-      label,
-      priceState: parseRateBearingPriceState(raw["priceState"]),
-      pricingStatus: parsePricingStatus(raw["pricingStatus"]),
-      price: parseMoney(raw["price"]),
-    });
-  }
-  return result;
-}
-
-function parseCatalogServices(payload: unknown): BookingWizardService[] {
-  if (!isRecord(payload) || !Array.isArray(payload["services"])) return [];
-  const services = new Map<string, BookingWizardService>();
-  for (const raw of payload["services"]) {
-    if (!isRecord(raw)) continue;
-    const item = raw as CatalogItem;
-    const key = item.key?.trim().toLowerCase() ?? "";
-    const label = item.label?.trim() ?? "";
-    if (!/^[a-z][a-z0-9_-]{1,79}$/u.test(key) || !label) continue;
-    services.set(key, {
-      key,
-      label,
-      ...(item.description?.trim() ? { detail: item.description.trim() } : {}),
-      pricingStatus: parsePricingStatus(item.pricingStatus),
-      bookable: item.bookable === true,
-      priceState: parsePriceState(item.priceState) ?? "quote_required",
-      agreement: parseAgreement(item.agreement),
-      inclusions: parseBoundedTextList(item.inclusions),
-      exclusions: parseBoundedTextList(item.exclusions),
-      quoteRule:
-        typeof item.quoteRule === "string" && item.quoteRule.trim()
-          ? item.quoteRule.trim().slice(0, 1_000)
-          : null,
-      basePrice: parseMoney(item.basePrice),
-      baseOptions: parseCatalogBaseOptions(item.baseOptions),
-      addOns: parseCatalogAddOns(item.addOns),
-    });
-  }
-  return [...services.values()].sort((left, right) =>
-    left.label.localeCompare(right.label),
-  );
-}
-
-function parseProofDefaults(payload: unknown): {
-  before: number;
-  after: number;
-} {
-  const defaults = { before: 1, after: 1 };
-  if (!isRecord(payload) || !Array.isArray(payload["requirements"])) {
-    return defaults;
-  }
-  for (const raw of payload["requirements"]) {
-    if (!isRecord(raw)) continue;
-    const category = raw["category"];
-    const minimumCount = raw["minimumCount"];
-    const required = raw["required"];
-    if (
-      (category === "before" || category === "after") &&
-      typeof minimumCount === "number" &&
-      Number.isSafeInteger(minimumCount) &&
-      minimumCount >= 0 &&
-      minimumCount <= 40 &&
-      typeof required === "boolean"
-    ) {
-      defaults[category] = required ? minimumCount : 0;
-    }
-  }
-  return defaults;
-}
-
-function parseCancellationPolicy(
-  payload: unknown,
-): BookingWizardCancellationPolicy | null {
-  if (!isRecord(payload) || !isRecord(payload["policy"])) return null;
-  const policy = payload["policy"];
-  const minimumNoticeMinutes = policy["minimumNoticeMinutes"];
-  const revision = policy["revision"];
-  const source = policy["source"];
-  if (
-    typeof minimumNoticeMinutes !== "number" ||
-    !Number.isSafeInteger(minimumNoticeMinutes) ||
-    minimumNoticeMinutes < 1_440 ||
-    minimumNoticeMinutes > 525_600 ||
-    typeof policy["directCancellationEnabled"] !== "boolean" ||
-    policy["lateCancellationDisposition"] !== "staff_review" ||
-    policy["automaticFeeMinor"] !== null ||
-    !["configured", "unconfigured", "launch_default"].includes(
-      String(source),
-    ) ||
-    (revision !== null &&
-      (typeof revision !== "number" ||
-        !Number.isSafeInteger(revision) ||
-        revision < 1))
-  ) {
-    return null;
-  }
-  return {
-    minimumNoticeMinutes,
-    directCancellationEnabled: policy["directCancellationEnabled"],
-    lateCancellationDisposition: "staff_review",
-    automaticFeeMinor: null,
-    source: source as BookingWizardCancellationPolicy["source"],
-    revision,
-  };
-}
 
 export default async function PartnerBookPage({
   searchParams,
@@ -354,11 +46,31 @@ export default async function PartnerBookPage({
   }>;
 }) {
   const params = (await searchParams) ?? {};
+  const retryQuery = new URLSearchParams();
+  for (const key of [
+    "draftId",
+    "locationId",
+    "propertyId",
+    "serviceKey",
+  ] as const) {
+    if (typeof params[key] === "string") retryQuery.set(key, params[key]);
+  }
+  const retryHref = `/partners/book${retryQuery.size ? `?${retryQuery}` : ""}`;
   const context = await getPartnerPortalContext();
   const personaPresentation = getPartnerPersonaPresentation(
     context.status === "authenticated" ? context.partnerType : null,
   );
   const company = getPublicCompanyProfile();
+  if (context.status === "authenticated" && !context.availability.reads)
+    return null;
+  if (context.status === "authenticated" && !context.availability.writes)
+    return (
+      <PartnerErrorState
+        title="New service requests are temporarily unavailable"
+        description="You can still view your jobs and contact Stonegate for help."
+        retryHref="/partners/book"
+      />
+    );
   if (context.status !== "authenticated" || !context.permissions.scheduleJobs) {
     return (
       <div className="space-y-5 sm:space-y-6">
@@ -383,112 +95,96 @@ export default async function PartnerBookPage({
     );
   }
 
-  const [
-    locationsResponse,
-    catalogResponse,
-    proofDefaultsResponse,
-    cancellationPolicyResponse,
-  ] = await Promise.all([
-    callPartnerApi("/api/portal/v2/locations?limit=100").catch(() => null),
-    callPartnerApi("/api/portal/v2/service-catalog").catch(() => null),
-    callPartnerApi("/api/portal/v2/proof-requirements").catch(() => null),
-    callPartnerApi("/api/portal/v2/cancellation-policy").catch(() => null),
-  ]);
-
-  if (!locationsResponse?.ok) {
-    const unavailable = [404, 409, 501, 503].includes(
-      locationsResponse?.status ?? 503,
-    );
+  const [locationResult, catalogResult, proofResult, cancellationResult] =
+    await Promise.all([
+      loadPartnerPortalResource(
+        () => callPartnerApi("/api/portal/v2/locations?limit=100"),
+        (payload) => {
+          const locations = parseLocations(payload);
+          if (!locations || !payload || typeof payload !== "object")
+            return null;
+          const directory = (
+            payload as {
+              directory: {
+                canCreateLocation: boolean;
+                defaultLocationId?: string | null;
+              };
+            }
+          ).directory;
+          return { locations, directory };
+        },
+      ),
+      loadPartnerPortalResource(
+        () => callPartnerApi("/api/portal/v2/service-catalog"),
+        parseCatalogServices,
+      ),
+      loadPartnerPortalResource(
+        () => callPartnerApi("/api/portal/v2/proof-requirements"),
+        parseProofDefaults,
+      ),
+      loadPartnerPortalResource(
+        () => callPartnerApi("/api/portal/v2/cancellation-policy"),
+        parseCancellationPolicy,
+      ),
+    ]);
+  const failure = [
+    locationResult,
+    catalogResult,
+    proofResult,
+    cancellationResult,
+  ].find((result) => result.status === "error");
+  if (failure?.status === "error")
     return (
-      <div className="space-y-5 sm:space-y-6">
-        <PartnerPageHeader
-          eyebrow="Quick service request"
-          title={personaPresentation.taskLabels.schedule}
-          description="Choose a saved location, add what you need, and select an available service window."
-          breadcrumbs={[
-            { label: "Overview", href: "/partners/overview" },
-            { label: "Request service", href: "/partners/book" },
-          ]}
-        />
-        {unavailable ? (
-          <PartnerPanel>
-            <PartnerEmptyState
-              title="Online requests are not available for this account yet"
-              description="Nothing was submitted and your existing jobs are unchanged. Contact Stonegate and we’ll help start the request."
-              action={{ href: "/partners/help", label: "Get help" }}
-              icon={<PhoneCall className="h-6 w-6" aria-hidden="true" />}
-            />
-          </PartnerPanel>
-        ) : (
-          <PartnerErrorState
-            title="We couldn’t start your request"
-            description="Nothing was submitted. Try again in a moment or contact Stonegate for help."
-            retryHref="/partners/book"
-          />
+      <PartnerErrorState
+        title="We couldn’t start your request"
+        description={portalLoadErrorMessage(
+          failure,
+          "Some request information could not be loaded. Please refresh to try again. Nothing has been submitted.",
         )}
-      </div>
+        retryHref={retryHref}
+      />
     );
-  }
-
-  const locationPayload = (await locationsResponse
-    .json()
-    .catch(() => null)) as unknown;
-  const locations = parseLocations(locationPayload).map(wizardLocation);
-  const directory =
-    isRecord(locationPayload) && isRecord(locationPayload["directory"])
-      ? locationPayload["directory"]
-      : null;
-  const canCreateLocation = directory?.["canManagePortfolio"] === true;
-  const catalogPayload = catalogResponse?.ok
-    ? ((await catalogResponse.json().catch(() => null)) as unknown)
-    : null;
-  const services = parseCatalogServices(catalogPayload);
-  const proofDefaultsPayload = proofDefaultsResponse?.ok
-    ? ((await proofDefaultsResponse.json().catch(() => null)) as unknown)
-    : null;
-  const defaultProofRequirements = parseProofDefaults(proofDefaultsPayload);
-  const cancellationPolicyPayload = cancellationPolicyResponse?.ok
-    ? ((await cancellationPolicyResponse.json().catch(() => null)) as unknown)
-    : null;
-  const cancellationPolicy = parseCancellationPolicy(cancellationPolicyPayload);
-
-  if (!cancellationPolicy) {
-    return (
-      <div className="space-y-5 sm:space-y-6">
-        <PartnerPageHeader
-          eyebrow="Quick service request"
-          title={personaPresentation.taskLabels.schedule}
-          description="Choose a saved location, add what you need, and select an available service window."
-          breadcrumbs={[
-            { label: "Overview", href: "/partners/overview" },
-            { label: "Request service", href: "/partners/book" },
-          ]}
-        />
-        <PartnerErrorState
-          title="Cancellation terms are temporarily unavailable"
-          description="Nothing was submitted. Refresh so you can review the current cancellation and schedule-change terms before sending your request."
-          retryHref="/partners/book"
-        />
-      </div>
-    );
-  }
+  if (
+    locationResult.status !== "ok" ||
+    catalogResult.status !== "ok" ||
+    proofResult.status !== "ok" ||
+    cancellationResult.status !== "ok"
+  )
+    return null;
+  const locations = locationResult.value.locations.map(wizardLocation);
+  const directory = locationResult.value.directory;
+  const canCreateLocation =
+    directory.canCreateLocation && context.permissions.manageLocations;
+  const services = catalogResult.value;
+  const defaultProofRequirements = proofResult.value;
+  const cancellationPolicy = cancellationResult.value;
 
   const draftId =
     typeof params.draftId === "string" ? params.draftId.trim() : "";
   let initialDraft: PartnerDraft | null = null;
-  let draftRecoveryFailed = false;
   if (draftId) {
-    const response = await callPartnerApi(
-      `/api/portal/v2/booking-drafts/${encodeURIComponent(draftId)}`,
-    ).catch(() => null);
-    if (response?.ok) {
-      const payload = (await response.json().catch(() => null)) as {
-        draft?: PartnerDraft;
-      } | null;
-      initialDraft = payload?.draft ?? null;
-    } else {
-      draftRecoveryFailed = true;
-    }
+    const result = await loadPartnerPortalResource(
+      () =>
+        callPartnerApi(
+          `/api/portal/v2/booking-drafts/${encodeURIComponent(draftId)}`,
+        ),
+      (payload) => {
+        const draft = parseBookingDraft(payload);
+        return draft?.id === draftId ? draft : null;
+      },
+    );
+    if (result.status === "error")
+      return (
+        <PartnerErrorState
+          title="We couldn’t reopen your saved request"
+          description={portalLoadErrorMessage(
+            result,
+            "Please try again to reopen this request. A new request has not been started.",
+          )}
+          retryHref={`/partners/book?draftId=${encodeURIComponent(draftId)}`}
+        />
+      );
+    initialDraft = result.value;
   }
 
   const defaultLocationId =
@@ -513,16 +209,34 @@ export default async function PartnerBookPage({
     requestedLocationId &&
     !locations.some((item) => item.id === requestedLocationId)
   ) {
-    const response = await callPartnerApi(
-      `/api/portal/v2/locations/${encodeURIComponent(requestedLocationId)}`,
-    ).catch(() => null);
-    const payload = response?.ok
-      ? ((await response.json().catch(() => null)) as {
-          location?: PartnerLocation;
-        } | null)
-      : null;
-    if (payload?.location?.active)
-      locations.push(wizardLocation(payload.location));
+    const result = await loadPartnerPortalResource(
+      () =>
+        callPartnerApi(
+          `/api/portal/v2/locations/${encodeURIComponent(requestedLocationId)}`,
+        ),
+      (payload) => {
+        if (!payload || typeof payload !== "object") return null;
+        const location = (payload as { location?: PartnerLocation }).location;
+        const parsed = parseLocations({
+          ok: true,
+          locations: [location],
+          directory: { canCreateLocation },
+        });
+        return parsed?.[0]?.id === requestedLocationId ? parsed[0] : null;
+      },
+    );
+    if (result.status === "error")
+      return (
+        <PartnerErrorState
+          title="We couldn’t load the selected location"
+          description={portalLoadErrorMessage(
+            result,
+            "Please try again before continuing this request. No other location has been selected.",
+          )}
+          retryHref={retryHref}
+        />
+      );
+    locations.push(wizardLocation(result.value));
   }
 
   return (
@@ -530,7 +244,11 @@ export default async function PartnerBookPage({
       <PartnerPageHeader
         eyebrow="Quick service request"
         title={personaPresentation.taskLabels.schedule}
-        description="Choose a saved location, add only what this job needs, and select an available two-hour window. Your work saves as you go; requests that need review are labeled clearly before you send them."
+        description={
+          context.availability.instantConfirmation
+            ? "Choose a saved location, describe the work, and check available service times."
+            : "Choose a location, describe the work, and tell us your preferred dates. Stonegate will review your request and confirm the time."
+        }
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Request service", href: "/partners/book" },
@@ -571,13 +289,6 @@ export default async function PartnerBookPage({
         </PartnerNotice>
       ) : null}
 
-      {draftRecoveryFailed ? (
-        <PartnerNotice tone="warning">
-          That saved request link is no longer available. A new request will
-          begin below; nothing has been submitted.
-        </PartnerNotice>
-      ) : null}
-
       {locations.length === 0 && !canCreateLocation ? (
         <PartnerPanel>
           <PartnerEmptyState
@@ -614,6 +325,9 @@ export default async function PartnerBookPage({
               : ""
           }
           canUploadPhotos={context.permissions.uploadMedia}
+          instantConfirmationAvailable={
+            context.availability.instantConfirmation
+          }
           canManageLocations={canCreateLocation}
           requesterContact={{
             name: context.user.name,
@@ -644,6 +358,7 @@ export default async function PartnerBookPage({
                 bulk: context.tools?.["bulk"] === true,
               }}
               canManageSeries={context.permissions.updateJobs}
+              instantConfirmation={context.availability.instantConfirmation}
               persona={context.partnerType}
             />
           </div>

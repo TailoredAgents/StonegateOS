@@ -103,83 +103,83 @@ function singleQueryValue(params: URLSearchParams, key: string): string | null {
 
 export async function GET(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
-  const authorization = await requirePartnerCapability(
-    request,
-    "properties.read",
-  );
-  if (!authorization.ok) {
-    return createPartnerPortalV2ErrorResponse(
-      authorization.error,
-      authorization.status,
-      correlationId,
-    );
-  }
-  const { principal } = authorization;
-  if (!principal.accountId || !principal.membershipId) {
-    return createPartnerPortalV2ErrorResponse(
-      "legacy_scope_unavailable",
-      409,
-      correlationId,
-    );
-  }
-  if (!arePartnerPortalV2ReadsEnabled(principal.accountId)) {
-    return createPartnerPortalV2ErrorResponse(
-      "service_unavailable",
-      503,
-      correlationId,
-    );
-  }
-
-  const params = request.nextUrl.searchParams;
-  const pagination = parsePortalV2Pagination(params, {
-    cursorKind: "partner_locations",
-    validateCursorPayload: isLocationCursorPayload,
-    defaultLimit: 50,
-    maximumLimit: 100,
-    allowedQueryKeys: ALLOWED_QUERY_KEYS,
-  });
-  if (!pagination.ok) {
-    return createPartnerPortalV2DescriptorResponse(
-      createPortalV2ErrorResponse("invalid_cursor", correlationId, {
-        fieldErrors: pagination.fieldErrors,
-      }),
-    );
-  }
-  const active = singleQueryValue(params, "active") ?? "true";
-  const search = singleQueryValue(params, "search");
-  if (
-    active === "duplicate" ||
-    search === "duplicate" ||
-    !["true", "false", "all"].includes(active) ||
-    (search && search.length > 100)
-  ) {
-    return createPartnerPortalV2ErrorResponse(
-      "invalid_fields",
-      422,
-      correlationId,
-    );
-  }
-  const normalizedSearch = search?.toLowerCase() ?? null;
-  const accessScopeKey = partnerJobAccessScopeKey(principal);
-  const filterHash = createHash("sha256")
-    .update(
-      JSON.stringify({ active, search: normalizedSearch, accessScopeKey }),
-      "utf8",
-    )
-    .digest("hex");
-  if (
-    pagination.cursor &&
-    (pagination.cursor.payload.accountId !== principal.accountId ||
-      pagination.cursor.payload.filterHash !== filterHash)
-  ) {
-    return createPartnerPortalV2ErrorResponse(
-      "invalid_cursor",
-      422,
-      correlationId,
-    );
-  }
-
   try {
+    const authorization = await requirePartnerCapability(
+      request,
+      "properties.read",
+    );
+    if (!authorization.ok) {
+      return createPartnerPortalV2ErrorResponse(
+        authorization.error,
+        authorization.status,
+        correlationId,
+      );
+    }
+    const { principal } = authorization;
+    if (!principal.accountId || !principal.membershipId) {
+      return createPartnerPortalV2ErrorResponse(
+        "legacy_scope_unavailable",
+        409,
+        correlationId,
+      );
+    }
+    if (!arePartnerPortalV2ReadsEnabled(principal.accountId)) {
+      return createPartnerPortalV2ErrorResponse(
+        "service_unavailable",
+        503,
+        correlationId,
+      );
+    }
+
+    const params = request.nextUrl.searchParams;
+    const pagination = parsePortalV2Pagination(params, {
+      cursorKind: "partner_locations",
+      validateCursorPayload: isLocationCursorPayload,
+      defaultLimit: 50,
+      maximumLimit: 100,
+      allowedQueryKeys: ALLOWED_QUERY_KEYS,
+    });
+    if (!pagination.ok) {
+      return createPartnerPortalV2DescriptorResponse(
+        createPortalV2ErrorResponse("invalid_cursor", correlationId, {
+          fieldErrors: pagination.fieldErrors,
+        }),
+      );
+    }
+    const active = singleQueryValue(params, "active") ?? "true";
+    const search = singleQueryValue(params, "search");
+    if (
+      active === "duplicate" ||
+      search === "duplicate" ||
+      !["true", "false", "all"].includes(active) ||
+      (search && search.length > 100)
+    ) {
+      return createPartnerPortalV2ErrorResponse(
+        "invalid_fields",
+        422,
+        correlationId,
+      );
+    }
+    const normalizedSearch = search?.toLowerCase() ?? null;
+    const accessScopeKey = partnerJobAccessScopeKey(principal);
+    const filterHash = createHash("sha256")
+      .update(
+        JSON.stringify({ active, search: normalizedSearch, accessScopeKey }),
+        "utf8",
+      )
+      .digest("hex");
+    if (
+      pagination.cursor &&
+      (pagination.cursor.payload.accountId !== principal.accountId ||
+        pagination.cursor.payload.filterHash !== filterHash)
+    ) {
+      return createPartnerPortalV2ErrorResponse(
+        "invalid_cursor",
+        422,
+        correlationId,
+      );
+    }
+
     const cursor = pagination.cursor?.payload;
     const db = getDb();
     const rows = await db
@@ -240,6 +240,10 @@ export async function GET(request: NextRequest): Promise<Response> {
       );
     }
     const accountWide = principal.accessLevel === "account";
+    const canCreateLocation =
+      accountWide &&
+      principal.capabilities.includes("properties.manage") &&
+      arePartnerPortalV2WritesEnabled(principal.accountId);
     const locations = pageRows.map((row) =>
       createPartnerLocationDto(row, {
         defaultLocationId: portfolio.defaultLocationId,
@@ -270,9 +274,10 @@ export async function GET(request: NextRequest): Promise<Response> {
         directory: {
           version: portfolio.directoryVersion,
           defaultLocationId: accountWide ? portfolio.defaultLocationId : null,
+          canCreateLocation,
           canManagePortfolio:
-            accountWide && principal.capabilities.includes("properties.manage") &&
-            await isPartnerToolEnabled(principal.accountId, "portfolio"),
+            canCreateLocation &&
+            (await isPartnerToolEnabled(principal.accountId, "portfolio")),
           etag: partnerLocationDirectoryEtag({
             accountId: principal.accountId,
             version: portfolio.directoryVersion,
@@ -290,12 +295,11 @@ export async function GET(request: NextRequest): Promise<Response> {
       },
     );
   } catch (error) {
-    console.error("[partner-portal-v2] locations list failed", {
+    return createPartnerPortalV2UnexpectedResponse(
       correlationId,
-      accountId: principal.accountId,
-      error: error instanceof Error ? error.name : "unknown",
-    });
-    return createPartnerPortalV2UnexpectedResponse(correlationId, error);
+      error,
+      "locations.read",
+    );
   }
 }
 
@@ -371,8 +375,15 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   try {
     const input = parsed.data;
-    if (input.parentLocationId && !(await isPartnerToolEnabled(principal.accountId, "portfolio"))) {
-      return createPartnerPortalV2ErrorResponse("not_found", 404, correlationId);
+    if (
+      input.parentLocationId &&
+      !(await isPartnerToolEnabled(principal.accountId, "portfolio"))
+    ) {
+      return createPartnerPortalV2ErrorResponse(
+        "not_found",
+        404,
+        correlationId,
+      );
     }
     const verification = await verifyAddress({
       addressLine1: input.address.line1,
@@ -494,10 +505,10 @@ export async function POST(request: NextRequest): Promise<Response> {
                 serviceAreaStatus: reviewRequired
                   ? "review"
                   : trustedCoordinates
-                  ? eligible
-                    ? "eligible"
-                    : "outside"
-                  : "review",
+                    ? eligible
+                      ? "eligible"
+                      : "outside"
+                    : "review",
                 addressVerificationStatus: reviewRequired
                   ? verification.status === "suggested_correction"
                     ? "suggested_correction"
@@ -582,8 +593,7 @@ export async function POST(request: NextRequest): Promise<Response> {
                 partnerAccountId: principal.accountId,
                 geocodeStatus: created.geocodeStatus,
                 serviceAreaStatus: created.serviceAreaStatus,
-                addressVerificationStatus:
-                  created.addressVerificationStatus,
+                addressVerificationStatus: created.addressVerificationStatus,
                 addressReviewQueued: reviewRequired,
                 duplicateCandidateCount: probableDuplicates.length,
                 hasAccessSecret: Boolean(created.accessSecretCiphertext),

@@ -51,6 +51,7 @@ export default async function PartnerAuthenticatedLayout({
         userName={context.user.name}
         userEmail={context.user.email}
         capabilities={context.capabilities}
+        availability={context.availability}
         tools={context.tools}
       >
         {children}

@@ -215,6 +215,10 @@ export async function GET(request: NextRequest): Promise<Response> {
       correlationId,
     );
   } catch (error) {
-    return createPartnerPortalV2UnexpectedResponse(correlationId, error);
+    return createPartnerPortalV2UnexpectedResponse(
+      correlationId,
+      error,
+      "overview.read",
+    );
   }
 }

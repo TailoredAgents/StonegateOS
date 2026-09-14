@@ -2,6 +2,11 @@ import type { Metadata } from "next";
 import { MapPin, ShieldCheck } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
 import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
+import {
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+} from "../../lib/portal-load";
+import { isPartnerLocation } from "../../lib/booking-location";
 import type { PartnerLocation } from "@/app/partners/lib/portal-v2";
 import { PartnerLocationManager } from "@/app/partners/components/PartnerLocationManager";
 import {
@@ -23,6 +28,7 @@ type ParsedLocationDirectory = {
   nextCursor: string | null;
   directoryEtag: string;
   canManagePortfolio: boolean;
+  canCreateLocation: boolean;
 };
 
 function parseLocations(payload: unknown): ParsedLocationDirectory | null {
@@ -36,50 +42,41 @@ function parseLocations(payload: unknown): ParsedLocationDirectory | null {
     return null;
   }
   const locations = payload["locations"];
-  const valid = locations.every((value): value is PartnerLocation => {
-    if (
-      !isRecord(value) ||
-      typeof value["id"] !== "string" ||
-      !isRecord(value["address"])
-    ) {
-      return false;
-    }
-    const address = value["address"];
-    return (
-      typeof address["line1"] === "string" &&
-      typeof address["city"] === "string" &&
-      typeof value["etag"] === "string"
-    );
-  });
+  const valid = locations.every(isPartnerLocation);
   const nextCursor = payload["page"]["nextCursor"];
   const directoryEtag = payload["directory"]["etag"];
   const canManagePortfolio = payload["directory"]["canManagePortfolio"];
+  const canCreateLocation = payload["directory"]["canCreateLocation"];
   return valid &&
     (nextCursor === null || typeof nextCursor === "string") &&
     typeof directoryEtag === "string" &&
-    typeof canManagePortfolio === "boolean"
-    ? { locations, nextCursor, directoryEtag, canManagePortfolio }
+    typeof canManagePortfolio === "boolean" &&
+    typeof canCreateLocation === "boolean"
+    ? {
+        locations,
+        nextCursor,
+        directoryEtag,
+        canManagePortfolio,
+        canCreateLocation,
+      }
     : null;
 }
 
 export default async function PartnerPropertiesPage() {
   const context = await getPartnerPortalContext();
+  if (context.status !== "authenticated" || !context.availability.reads)
+    return null;
   const canView =
     context.status === "authenticated" && context.capabilities.locations;
   const canManage =
     context.status === "authenticated" && context.permissions.manageLocations;
-  const response = canView
-    ? await callPartnerApi(
-        "/api/portal/v2/locations?active=all&limit=100",
-      ).catch(() => null)
+  const result = canView
+    ? await loadPartnerPortalResource(
+        () => callPartnerApi("/api/portal/v2/locations?active=all&limit=100"),
+        parseLocations,
+      )
     : null;
-
-  let directory: ParsedLocationDirectory | null = null;
-  if (response?.ok) {
-    directory = parseLocations(
-      (await response.json().catch(() => null)) as unknown,
-    );
-  }
+  const directory = result?.status === "ok" ? result.value : null;
 
   return (
     <div className="space-y-5 sm:space-y-6">
@@ -115,8 +112,9 @@ export default async function PartnerPropertiesPage() {
         <PartnerPanel>
           {!canManage ? (
             <PartnerNotice tone="info" className="mb-5">
-              Your role can view account locations but cannot add, edit, or
-              archive them.
+              {context.availability.writes
+                ? "Your role can view account locations but cannot add, edit, or archive them."
+                : "Location changes are temporarily unavailable. You can still view saved locations."}
             </PartnerNotice>
           ) : null}
           <PartnerLocationManager
@@ -124,7 +122,11 @@ export default async function PartnerPropertiesPage() {
             initialNextCursor={directory.nextCursor}
             initialDirectoryEtag={directory.directoryEtag}
             canManage={canManage}
+            canCreateLocation={canManage && directory.canCreateLocation}
+            canFavorite={context.availability.writes}
+            canRequestService={context.permissions.scheduleJobs}
             canManagePortfolio={
+              canManage &&
               directory.canManagePortfolio &&
               context.status === "authenticated" &&
               context.tools?.["portfolio"] === true
@@ -139,7 +141,14 @@ export default async function PartnerPropertiesPage() {
       ) : (
         <PartnerErrorState
           title="We couldn’t load your locations"
-          description="We couldn’t verify this account’s saved locations. No address was shown or changed. Try again in a moment."
+          description={
+            result?.status === "error"
+              ? portalLoadErrorMessage(
+                  result,
+                  "Please refresh to load your saved locations.",
+                )
+              : "Please refresh to load your saved locations."
+          }
           retryHref="/partners/properties"
         />
       )}

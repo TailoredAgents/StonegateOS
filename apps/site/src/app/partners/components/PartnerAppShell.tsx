@@ -31,7 +31,9 @@ import type {
   PartnerPortalAccount,
   PartnerCapabilities,
   PartnerCapability,
+  PartnerPortalAvailability,
 } from "../lib/portal-context";
+import { PartnerNotice, PartnerErrorState } from "./PartnerPortalUi";
 import {
   partnerPortalFetch,
   portalSupportReferenceFromResponse,
@@ -300,6 +302,7 @@ export function PartnerAppShell({
   userEmail,
   capabilities,
   tools,
+  availability,
 }: {
   children: React.ReactNode;
   companyName: string;
@@ -310,6 +313,7 @@ export function PartnerAppShell({
   userEmail: string;
   capabilities: PartnerCapabilities;
   tools?: Record<string, boolean>;
+  availability: PartnerPortalAvailability;
 }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = React.useState(false);
@@ -565,7 +569,18 @@ export function PartnerAppShell({
               tabIndex={-1}
               className="mx-auto min-h-0 w-full max-w-7xl flex-1 px-4 pb-28 pt-5 focus:outline-none sm:px-6 sm:pt-6 lg:px-8 lg:pb-10 lg:pt-8"
             >
-              {children}
+              {!availability.reads ? (
+                <PartnerNotice tone="warning" className="mb-5">
+                  Jobs and service requests are temporarily unavailable. You can still get help and manage your sign-in settings.
+                </PartnerNotice>
+              ) : !availability.writes ? (
+                <PartnerNotice tone="info" className="mb-5">
+                  You can view your records. Changes and new requests are temporarily unavailable.
+                </PartnerNotice>
+              ) : null}
+              {!availability.reads && pathname !== "/partners/help" && !pathname.startsWith("/partners/settings") ? (
+                <PartnerErrorState title="We couldn’t load the portal right now" description="Please try again shortly, or contact Stonegate for help with your job." retryHref={pathname} />
+              ) : children}
             </main>
           </div>
         </div>

@@ -3,6 +3,7 @@ import migrationJournal from "@/db/migrations/meta/_journal.json";
 import { getDb, outboxEvents, providerHealth } from "@/db";
 import { inspectTwilioProviderConfiguration } from "@/lib/twilio-provider";
 import { getTwilioWebhookPublicBaseUrl } from "@/lib/twilio-webhook-auth";
+import { inspectPartnerPortalReadiness } from "@/lib/partner-portal-readiness";
 
 type ReadinessState = "ok" | "failed" | "skipped";
 
@@ -16,6 +17,7 @@ export type ApiReadinessSnapshot = {
   checkedAt: string;
   checks: {
     configuration: ReadinessCheck;
+    partnerPortal: ReadinessCheck;
     database: ReadinessCheck;
     migrations: ReadinessCheck;
     outboxWorker: ReadinessCheck;
@@ -174,8 +176,15 @@ export function evaluateRequiredConfiguration(
 export async function getApiReadinessSnapshot(
   now = new Date(),
 ): Promise<ApiReadinessSnapshot> {
+  const portal = inspectPartnerPortalReadiness();
   const checks: ApiReadinessSnapshot["checks"] = {
     configuration: evaluateRequiredConfiguration(),
+    partnerPortal: {
+      state: portal.ok ? "ok" : "failed",
+      detail: portal.issues.length
+        ? `Invalid or missing: ${portal.issues.join(", ")}`
+        : portal.mode,
+    },
     database: { state: "failed", detail: "database check did not run" },
     migrations: { state: "failed", detail: "migration check did not run" },
     outboxWorker: { state: "failed", detail: "worker check did not run" },

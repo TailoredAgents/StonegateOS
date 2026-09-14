@@ -2,16 +2,17 @@ import type { Metadata, Route } from "next";
 import Link from "next/link";
 import { ArrowLeft, ShieldCheck, UsersRound } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
+import { getPartnerPortalContext } from "../../../lib/portal-context";
 import {
-  PartnerTeamManager,
-  type PartnerTeamMember,
-  type PartnerTeamRole,
-} from "@/app/partners/components/PartnerTeamManager";
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+} from "../../../lib/portal-load";
 import {
-  PartnerInvitationManager,
-  type PartnerInvitation,
-  type PartnerInvitationScopeOptions,
-} from "@/app/partners/components/PartnerInvitationManager";
+  parsePortalTeam,
+  parsePortalInvitations,
+} from "../../../lib/portal-settings-load";
+import { PartnerTeamManager } from "@/app/partners/components/PartnerTeamManager";
+import { PartnerInvitationManager } from "@/app/partners/components/PartnerInvitationManager";
 import {
   PartnerErrorState,
   PartnerPageHeader,
@@ -21,59 +22,46 @@ import {
 
 export const metadata: Metadata = { title: "Team access" };
 
-type TeamPayload = {
-  ok: true;
-  members: PartnerTeamMember[];
-  roles: PartnerTeamRole[];
-  invitation: { available: boolean; reason: string | null };
-  page: { limit: number; nextCursor: string | null; hasMore: boolean };
-};
-
 export default async function PartnerTeamSettingsPage() {
-  const [response, invitationResponse] = await Promise.all([
-    callPartnerApi("/api/portal/v2/members?status=all&limit=100").catch(
-      () => null,
-    ),
-    callPartnerApi("/api/portal/v2/invitations?limit=100").catch(() => null),
-  ]);
-  const payload = response?.ok
-    ? ((await response.json().catch(() => null)) as TeamPayload | null)
-    : null;
-  const invitationPayload = invitationResponse?.ok
-    ? ((await invitationResponse.json().catch(() => null)) as {
-        ok: true;
-        invitations: PartnerInvitation[];
-        scopeOptions: PartnerInvitationScopeOptions;
-        page?: { nextCursor: string | null };
-      } | null)
-    : null;
-  if (
-    !payload?.ok ||
-    !Array.isArray(payload.members) ||
-    !Array.isArray(payload.roles) ||
-    !payload.invitation
-  ) {
-    const forbidden = response?.status === 403;
+  const context = await getPartnerPortalContext();
+  if (context.status !== "authenticated") return null;
+  if (!context.availability.reads)
     return (
       <PartnerErrorState
-        title={
-          forbidden
-            ? "Team access is not part of your role"
-            : "We couldn’t load team access"
-        }
-        description={
-          forbidden
-            ? "Ask an account administrator to review your team access and role. Your own portal access is unchanged."
-            : "No team-access settings were changed. Try again, or contact Stonegate if the problem continues."
-        }
-        retryHref={forbidden ? "/partners/settings" : "/partners/settings/team"}
+        title="Company settings are temporarily unavailable"
+        description="Personal sign-in and device settings are still available."
+        retryHref="/partners/settings"
       />
     );
-  }
-
+  const teamResult = await loadPartnerPortalResource(
+    () => callPartnerApi("/api/portal/v2/members?status=all&limit=100"),
+    parsePortalTeam,
+  );
+  if (teamResult.status === "error")
+    return (
+      <PartnerErrorState
+        title="We couldn’t load team access"
+        description={portalLoadErrorMessage(
+          teamResult,
+          "Try again to see your team’s access.",
+        )}
+        retryHref="/partners/settings/team"
+      />
+    );
+  const payload = teamResult.value;
   const canManage =
-    payload.roles.length > 0 ||
-    payload.members.some((member) => member.allowedActions.length > 0);
+    context.availability.writes &&
+    (payload.roles.length > 0 ||
+      payload.members.some((member) => member.allowedActions.length > 0));
+  const invitationResult =
+    canManage && payload.invitation.available
+      ? await loadPartnerPortalResource(
+          () => callPartnerApi("/api/portal/v2/invitations?limit=100"),
+          parsePortalInvitations,
+        )
+      : null;
+  const invitationPayload =
+    invitationResult?.status === "ok" ? invitationResult.value : null;
 
   return (
     <div className="space-y-5 sm:space-y-6">
@@ -145,13 +133,23 @@ export default async function PartnerTeamSettingsPage() {
         ) : (
           <PartnerErrorState
             title="We couldn’t load invitations"
-            description="Your current invitations were not changed. Refresh to see their status or contact Sales for help."
+            description={
+              invitationResult?.status === "error"
+                ? portalLoadErrorMessage(
+                    invitationResult,
+                    "Try again to see invitation status.",
+                  )
+                : "Invitations could not be loaded. Try again."
+            }
             retryHref="/partners/settings/team"
           />
         )
       ) : null}
 
-      <PartnerTeamManager initial={payload} />
+      <PartnerTeamManager
+        initial={payload}
+        readOnly={!context.availability.writes}
+      />
     </div>
   );
 }

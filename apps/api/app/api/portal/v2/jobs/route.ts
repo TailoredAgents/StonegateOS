@@ -143,144 +143,146 @@ function descriptorResponse(
 
 export async function GET(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
-  const authorization = await requirePartnerCapability(request, "jobs.read");
-  if (!authorization.ok) {
-    return createPartnerPortalV2ErrorResponse(
-      authorization.error,
-      authorization.status,
-      correlationId,
-    );
-  }
-  const { principal } = authorization;
-  if (!principal.accountId) {
-    return createPartnerPortalV2ErrorResponse(
-      "legacy_scope_unavailable",
-      409,
-      correlationId,
-    );
-  }
-  if (!arePartnerPortalV2ReadsEnabled(principal.accountId)) {
-    return createPartnerPortalV2ErrorResponse(
-      "service_unavailable",
-      503,
-      correlationId,
-    );
-  }
-
-  const params = request.nextUrl.searchParams;
-  const pagination = parsePortalV2Pagination(params, {
-    cursorKind: "partner_jobs",
-    validateCursorPayload: isJobCursorPayload,
-    defaultLimit: 25,
-    maximumLimit: 100,
-    allowedQueryKeys: ALLOWED_QUERY_KEYS,
-  });
-  if (!pagination.ok) {
-    return descriptorResponse(
-      createPortalV2ErrorResponse("invalid_cursor", correlationId, {
-        fieldErrors: pagination.fieldErrors,
-      }),
-    );
-  }
-
-  const status = singleQueryValue(params, "status");
-  const serviceKey = singleQueryValue(params, "serviceKey");
-  const locationId = singleQueryValue(params, "locationId");
-  const from = singleQueryValue(params, "from");
-  const to = singleQueryValue(params, "to");
-  const search = singleQueryValue(params, "search");
-  if (
-    [status, serviceKey, locationId, from, to, search].includes(
-      DUPLICATE_QUERY_VALUE,
-    )
-  ) {
-    return createPartnerPortalV2ErrorResponse(
-      "invalid_fields",
-      422,
-      correlationId,
-    );
-  }
-  const statuses =
-    status && status !== DUPLICATE_QUERY_VALUE
-      ? statusQueryValues(status)
-      : null;
-  if (
-    (status && status !== DUPLICATE_QUERY_VALUE && !statuses) ||
-    (serviceKey &&
-      serviceKey !== DUPLICATE_QUERY_VALUE &&
-      !/^[a-z][a-z0-9_-]{1,79}$/u.test(serviceKey)) ||
-    (locationId &&
-      locationId !== DUPLICATE_QUERY_VALUE &&
-      !UUID_PATTERN.test(locationId)) ||
-    (search && search !== DUPLICATE_QUERY_VALUE && search.length > 100)
-  ) {
-    return createPartnerPortalV2ErrorResponse(
-      "invalid_fields",
-      422,
-      correlationId,
-    );
-  }
-  let fromDate: Date | null;
-  let toDate: Date | null;
-  const toIsLocalDay =
-    typeof to === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(to);
   try {
-    fromDate = parsePartnerJobDateBoundary(
-      typeof from === "string" ? from : null,
-      false,
-    );
-    toDate = parsePartnerJobDateBoundary(
-      typeof to === "string" ? to : null,
-      true,
-    );
-  } catch {
-    return createPartnerPortalV2ErrorResponse(
-      "invalid_fields",
-      422,
-      correlationId,
-    );
-  }
-  if (
-    (fromDate && !Number.isFinite(fromDate.getTime())) ||
-    (toDate && !Number.isFinite(toDate.getTime())) ||
-    (fromDate && toDate && fromDate > toDate)
-  ) {
-    return createPartnerPortalV2ErrorResponse(
-      "invalid_fields",
-      422,
-      correlationId,
-    );
-  }
+    const authorization = await requirePartnerCapability(request, "jobs.read");
+    if (!authorization.ok) {
+      return createPartnerPortalV2ErrorResponse(
+        authorization.error,
+        authorization.status,
+        correlationId,
+      );
+    }
+    const { principal } = authorization;
+    if (!principal.accountId) {
+      return createPartnerPortalV2ErrorResponse(
+        "legacy_scope_unavailable",
+        409,
+        correlationId,
+      );
+    }
+    if (!arePartnerPortalV2ReadsEnabled(principal.accountId)) {
+      return createPartnerPortalV2ErrorResponse(
+        "service_unavailable",
+        503,
+        correlationId,
+      );
+    }
 
-  const normalizedFilters = {
-    statuses,
-    serviceKey: serviceKey === DUPLICATE_QUERY_VALUE ? null : serviceKey,
-    locationId: locationId === DUPLICATE_QUERY_VALUE ? null : locationId,
-    from: fromDate?.toISOString() ?? null,
-    to: toDate?.toISOString() ?? null,
-    toExclusive: toIsLocalDay,
-    search:
-      search === DUPLICATE_QUERY_VALUE ? null : (search?.toLowerCase() ?? null),
-    authorizationScope: partnerJobAccessScopeKey(principal),
-  };
-  const filterHash = createHash("sha256")
-    .update(JSON.stringify(normalizedFilters), "utf8")
-    .digest("hex");
-  if (
-    pagination.cursor &&
-    (pagination.cursor.payload.accountId !== principal.accountId ||
-      pagination.cursor.payload.filterHash !== filterHash)
-  ) {
-    return descriptorResponse(
-      createPortalV2ErrorResponse("invalid_cursor", correlationId, {
-        fieldErrors: {
-          cursor: "This page cursor belongs to another account or filter.",
-        },
-      }),
-    );
-  }
+    const params = request.nextUrl.searchParams;
+    const pagination = parsePortalV2Pagination(params, {
+      cursorKind: "partner_jobs",
+      validateCursorPayload: isJobCursorPayload,
+      defaultLimit: 25,
+      maximumLimit: 100,
+      allowedQueryKeys: ALLOWED_QUERY_KEYS,
+    });
+    if (!pagination.ok) {
+      return descriptorResponse(
+        createPortalV2ErrorResponse("invalid_cursor", correlationId, {
+          fieldErrors: pagination.fieldErrors,
+        }),
+      );
+    }
 
-  try {
+    const status = singleQueryValue(params, "status");
+    const serviceKey = singleQueryValue(params, "serviceKey");
+    const locationId = singleQueryValue(params, "locationId");
+    const from = singleQueryValue(params, "from");
+    const to = singleQueryValue(params, "to");
+    const search = singleQueryValue(params, "search");
+    if (
+      [status, serviceKey, locationId, from, to, search].includes(
+        DUPLICATE_QUERY_VALUE,
+      )
+    ) {
+      return createPartnerPortalV2ErrorResponse(
+        "invalid_fields",
+        422,
+        correlationId,
+      );
+    }
+    const statuses =
+      status && status !== DUPLICATE_QUERY_VALUE
+        ? statusQueryValues(status)
+        : null;
+    if (
+      (status && status !== DUPLICATE_QUERY_VALUE && !statuses) ||
+      (serviceKey &&
+        serviceKey !== DUPLICATE_QUERY_VALUE &&
+        !/^[a-z][a-z0-9_-]{1,79}$/u.test(serviceKey)) ||
+      (locationId &&
+        locationId !== DUPLICATE_QUERY_VALUE &&
+        !UUID_PATTERN.test(locationId)) ||
+      (search && search !== DUPLICATE_QUERY_VALUE && search.length > 100)
+    ) {
+      return createPartnerPortalV2ErrorResponse(
+        "invalid_fields",
+        422,
+        correlationId,
+      );
+    }
+    let fromDate: Date | null;
+    let toDate: Date | null;
+    const toIsLocalDay =
+      typeof to === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(to);
+    try {
+      fromDate = parsePartnerJobDateBoundary(
+        typeof from === "string" ? from : null,
+        false,
+      );
+      toDate = parsePartnerJobDateBoundary(
+        typeof to === "string" ? to : null,
+        true,
+      );
+    } catch {
+      return createPartnerPortalV2ErrorResponse(
+        "invalid_fields",
+        422,
+        correlationId,
+      );
+    }
+    if (
+      (fromDate && !Number.isFinite(fromDate.getTime())) ||
+      (toDate && !Number.isFinite(toDate.getTime())) ||
+      (fromDate && toDate && fromDate > toDate)
+    ) {
+      return createPartnerPortalV2ErrorResponse(
+        "invalid_fields",
+        422,
+        correlationId,
+      );
+    }
+
+    const normalizedFilters = {
+      statuses,
+      serviceKey: serviceKey === DUPLICATE_QUERY_VALUE ? null : serviceKey,
+      locationId: locationId === DUPLICATE_QUERY_VALUE ? null : locationId,
+      from: fromDate?.toISOString() ?? null,
+      to: toDate?.toISOString() ?? null,
+      toExclusive: toIsLocalDay,
+      search:
+        search === DUPLICATE_QUERY_VALUE
+          ? null
+          : (search?.toLowerCase() ?? null),
+      authorizationScope: partnerJobAccessScopeKey(principal),
+    };
+    const filterHash = createHash("sha256")
+      .update(JSON.stringify(normalizedFilters), "utf8")
+      .digest("hex");
+    if (
+      pagination.cursor &&
+      (pagination.cursor.payload.accountId !== principal.accountId ||
+        pagination.cursor.payload.filterHash !== filterHash)
+    ) {
+      return descriptorResponse(
+        createPortalV2ErrorResponse("invalid_cursor", correlationId, {
+          fieldErrors: {
+            cursor: "This page cursor belongs to another account or filter.",
+          },
+        }),
+      );
+    }
+
     const cursorCreatedAt = pagination.cursor
       ? new Date(pagination.cursor.payload.createdAt)
       : null;
@@ -618,11 +620,10 @@ export async function GET(request: NextRequest): Promise<Response> {
       correlationId,
     );
   } catch (error) {
-    console.error("[partner-portal-v2] jobs list failed", {
+    return createPartnerPortalV2UnexpectedResponse(
       correlationId,
-      accountId: principal.accountId,
-      error: error instanceof Error ? error.name : "unknown",
-    });
-    return createPartnerPortalV2UnexpectedResponse(correlationId, error);
+      error,
+      "jobs.read",
+    );
   }
 }

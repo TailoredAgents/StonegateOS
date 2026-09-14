@@ -32,8 +32,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     const canSchedule =
       authorization.principal.capabilities.includes("bookings.create");
     const canReadRates =
-      (authorization.principal.capabilities.includes("bookings.pricing.read") ||
-        authorization.principal.capabilities.includes("rates.read"));
+      authorization.principal.capabilities.includes("bookings.pricing.read") ||
+      authorization.principal.capabilities.includes("rates.read");
     if (!canSchedule && !canReadRates) {
       return createPartnerPortalV2ErrorResponse(
         "forbidden",
@@ -70,6 +70,10 @@ export async function GET(request: NextRequest): Promise<Response> {
       correlationId,
     );
   } catch (error) {
-    return createPartnerPortalV2UnexpectedResponse(correlationId, error);
+    return createPartnerPortalV2UnexpectedResponse(
+      correlationId,
+      error,
+      "service_catalog.read",
+    );
   }
 }

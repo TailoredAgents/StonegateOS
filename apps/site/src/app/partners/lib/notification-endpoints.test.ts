@@ -150,7 +150,12 @@ void test("settings route loads masked endpoints and preferences fail closed", (
     "utf8",
   );
   assert.match(page, /\/api\/portal\/v2\/notification-endpoints/u);
-  assert.match(page, /parsePartnerSmsEndpoints/u);
+  const loader = readFileSync(
+    new URL("./portal-settings-load.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(page, /parsePortalSmsEndpoints/u);
+  assert.match(loader, /parsePartnerSmsEndpoints\(payload\["endpoints"\]\)/u);
   assert.match(page, /smsEndpoints=\{smsEndpoints\}/u);
   assert.match(page, /"portal\.session\.read"/u);
   assert.match(page, /canManageSmsEndpoints=/u);

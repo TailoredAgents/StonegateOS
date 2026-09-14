@@ -11,6 +11,11 @@ import {
   Search,
 } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
+import {
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+} from "../../lib/portal-load";
+import { parsePortalJobs } from "../../lib/portal-read-models";
 import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
 import type { PartnerJobSummary } from "@/app/partners/lib/portal-v2";
 import {
@@ -116,18 +121,6 @@ function nextStep(status: string): string {
   }
 }
 
-function isJobSummary(value: unknown): value is PartnerJobSummary {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record["id"] === "string" &&
-    typeof record["status"] === "string" &&
-    typeof record["service"] === "object" &&
-    typeof record["schedule"] === "object" &&
-    typeof record["location"] === "object"
-  );
-}
-
 export default async function PartnerBookingsPage({
   searchParams,
 }: {
@@ -163,56 +156,35 @@ export default async function PartnerBookingsPage({
   if (to) query.set("to", to);
   if (cursor) query.set("cursor", cursor);
 
-  const [response, context] = await Promise.all([
-    callPartnerApi(`/api/portal/v2/jobs?${query.toString()}`).catch(() => null),
-    getPartnerPortalContext(),
-  ]);
-  const permissions =
-    context.status === "authenticated" ? context.permissions : null;
-
-  if (!response?.ok) {
-    const unavailable = [404, 409, 501, 503].includes(response?.status ?? 503);
+  const context = await getPartnerPortalContext();
+  if (context.status !== "authenticated" || !context.availability.reads)
+    return null;
+  if (!context.capabilities.jobs)
     return (
-      <div className="space-y-5 sm:space-y-6">
-        <PartnerPageHeader
-          eyebrow="Your service requests"
-          title="Jobs"
-          description="See the status and next step for every Stonegate job in this account."
-          breadcrumbs={[
-            { label: "Overview", href: "/partners/overview" },
-            { label: "Jobs", href: "/partners/bookings" },
-          ]}
-        />
-        {unavailable ? (
-          <PartnerPanel>
-            <PartnerEmptyState
-              title="The upgraded job workspace is not available for this account yet"
-              description="No job data has been changed. Contact Stonegate if you need an immediate status update or service record."
-              action={{ href: "/partners/help", label: "Contact Stonegate" }}
-              icon={
-                <BriefcaseBusiness className="h-6 w-6" aria-hidden="true" />
-              }
-            />
-          </PartnerPanel>
-        ) : (
-          <PartnerErrorState
-            title="We couldn’t load your jobs"
-            description="Your job records are unchanged. Try again in a moment."
-            retryHref="/partners/bookings"
-          />
-        )}
-      </div>
+      <PartnerErrorState
+        title="Job access is not part of your role"
+        description="Ask your company administrator for access to job records."
+        retryHref="/partners/overview"
+      />
     );
-  }
-
-  const payload = (await response.json().catch(() => null)) as {
-    jobs?: unknown[];
-    page?: { nextCursor?: string | null; hasMore?: boolean };
-  } | null;
-  const jobs = (payload?.jobs ?? []).filter(isJobSummary);
-  const nextCursor = payload?.page?.hasMore
-    ? (payload.page.nextCursor ?? null)
-    : null;
+  const permissions = context.permissions;
+  const result = await loadPartnerPortalResource(
+    () => callPartnerApi(`/api/portal/v2/jobs?${query.toString()}`),
+    parsePortalJobs,
+  );
+  if (result.status === "error")
+    return (
+      <PartnerErrorState
+        title="We couldn’t load your jobs"
+        description={portalLoadErrorMessage(
+          result,
+          "Your jobs could not be loaded. Try again, or contact Stonegate for help.",
+        )}
+        retryHref={`/partners/bookings?${query.toString()}` as Route}
+      />
+    );
+  const jobs = result.value.items;
+  const nextCursor = result.value.nextCursor;
 
   return (
     <div className="space-y-5 sm:space-y-6">

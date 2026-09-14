@@ -39,7 +39,12 @@ describe("partner job action public contract", () => {
       "apps/site/src/app/partners/components/PartnerJobActions.tsx",
     );
     expect(page).toContain("parsePartnerJobActionAvailability");
-    expect(page).toContain("actionAvailability={job.actionAvailability}");
+    expect(page).toContain("actionAvailability={actionAvailability}");
+    expect(page).toMatch(
+      /const actionAvailability = portalContext\.availability\.writes\s*\? job\.actionAvailability/u,
+    );
+    expect(page).toContain('code: "portal_read_only"');
+    expect(page).toContain("allowed: false");
     expect(actions).toContain("findPartnerJobAction");
     expect(actions).toContain("Why some actions are unavailable");
     expect(actions).toContain("available_review_required");

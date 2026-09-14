@@ -14,6 +14,11 @@ import {
 } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
 import {
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+  isPortalRecord,
+} from "../../../lib/portal-load";
+import {
   parsePartnerJobActionAvailability,
   type PartnerJobActionAvailability,
 } from "@/app/partners/lib/job-action-availability";
@@ -629,49 +634,52 @@ export default async function PartnerJobDetailPage({
 }) {
   const { jobId } = await params;
   const query: { created?: string } = searchParams ? await searchParams : {};
-  const [response, portalContext] = await Promise.all([
-    callPartnerApi(`/api/portal/v2/jobs/${encodeURIComponent(jobId)}`).catch(
-      () => null,
-    ),
-    getPartnerPortalContext(),
-  ]);
-  if (!response?.ok) {
-    if (response?.status === 404) {
-      return (
-        <PartnerErrorState
-          title="This job could not be found"
-          description="It may belong to another account, or the link may be out of date. Return to Jobs to continue."
-          retryHref="/partners/bookings"
-        />
-      );
-    }
-    const unavailable = [409, 501, 503].includes(response?.status ?? 503);
+  const portalContext = await getPartnerPortalContext();
+  if (
+    portalContext.status !== "authenticated" ||
+    !portalContext.availability.reads
+  )
+    return null;
+  const result = await loadPartnerPortalResource(
+    () => callPartnerApi(`/api/portal/v2/jobs/${encodeURIComponent(jobId)}`),
+    (payload) =>
+      isPortalRecord(payload) && isJobDetail(payload["job"])
+        ? payload["job"]
+        : null,
+  );
+  if (result.status === "error")
     return (
       <PartnerErrorState
         title={
-          unavailable
-            ? "Job details are temporarily unavailable"
+          result.reason === "not_found"
+            ? "This job could not be found"
             : "We couldn’t load this job"
         }
-        description="No job information was changed. Try again in a moment or contact Stonegate for an immediate update."
+        description={portalLoadErrorMessage(
+          result,
+          result.reason === "not_found"
+            ? "The link may be out of date. Open My jobs to see the jobs available to your account."
+            : "Try again to see this job’s current details.",
+        )}
         retryHref={`/partners/bookings/${encodeURIComponent(jobId)}`}
       />
     );
-  }
-  const payload = (await response.json().catch(() => null)) as {
-    job?: unknown;
-  } | null;
-  if (!isJobDetail(payload?.job)) {
-    return (
-      <PartnerErrorState
-        title="This job response was incomplete"
-        description="No information was changed. Refresh or contact Stonegate with this job link."
-        retryHref={`/partners/bookings/${encodeURIComponent(jobId)}`}
-      />
-    );
-  }
-  const job = payload.job;
-  const etag = response.headers.get("etag");
+  const job = result.value;
+  const etag = result.response.headers.get("etag");
+  const allowedActions = portalContext.availability.writes
+    ? job.allowedActions
+    : [];
+  const actionAvailability = portalContext.availability.writes
+    ? job.actionAvailability
+    : job.actionAvailability.map((action) => ({
+        ...action,
+        allowed: false,
+        reason: {
+          code: "portal_read_only",
+          label:
+            "Changes are temporarily unavailable. You can still view your job.",
+        },
+      }));
   const timezone = job.schedule.arrivalWindow?.timezone ?? "America/New_York";
   const preferredWindows = preferredSchedule(job.scope, timezone);
   const address = job.location.address;
@@ -880,8 +888,8 @@ export default async function PartnerJobDetailPage({
           accountId={portalContext.accountId}
           membershipId={portalContext.membershipId}
           jobId={job.id}
-          allowedActions={job.allowedActions}
-          actionAvailability={job.actionAvailability}
+          allowedActions={allowedActions}
+          actionAvailability={actionAvailability}
         />
       ) : null}
 
@@ -1270,8 +1278,8 @@ export default async function PartnerJobDetailPage({
                   portalContext.tools?.["templates"] === true
                 }
                 etag={etag}
-                allowedActions={job.allowedActions}
-                actionAvailability={job.actionAvailability}
+                allowedActions={allowedActions}
+                actionAvailability={actionAvailability}
                 cancellation={job.cancellation}
                 references={job.references}
               />

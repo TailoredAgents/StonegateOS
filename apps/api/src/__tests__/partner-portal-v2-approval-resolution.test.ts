@@ -564,12 +564,39 @@ function lifecycleInput(
     declined: false,
     target: lifecycleTarget(),
     hold: lifecycleHold(),
+    instantConfirmationEnabled: true,
     now: NOW,
     ...overrides,
   };
 }
 
 describe("partner approval final-decision lifecycle planning", () => {
+  it("records approval and releases an old held window when current confirmation is disabled", () => {
+    expect(
+      planPartnerApprovalLifecycle(
+        lifecycleInput({
+          instantConfirmationEnabled: false,
+        }),
+      ),
+    ).toEqual({
+      kind: "approved_needs_reschedule",
+      approvalState: "approved_needs_reschedule",
+      releaseApprovalHold: true,
+    });
+    expect(
+      planPartnerApprovalLifecycle(
+        lifecycleInput({
+          instantConfirmationEnabled: false,
+          hold: lifecycleHold({ partnerAccountId: OTHER_ACCOUNT_ID }),
+        }),
+      ),
+    ).toEqual({
+      kind: "approved_needs_reschedule",
+      approvalState: "approved_needs_reschedule",
+      releaseApprovalHold: false,
+    });
+  });
+
   it("confirms only a valid active account-bound hold", () => {
     const plan = planPartnerApprovalLifecycle(lifecycleInput());
     expect(plan).toEqual({

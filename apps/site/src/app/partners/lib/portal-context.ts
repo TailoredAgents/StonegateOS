@@ -15,6 +15,56 @@ export type PartnerCapability =
 
 export type PartnerCapabilities = Record<PartnerCapability, boolean>;
 
+export type PartnerPortalAvailability = {
+  reads: boolean;
+  writes: boolean;
+  payments: { card: boolean; ach: boolean; hosted: boolean };
+  uploads: { photos: boolean; documents: boolean };
+  instantConfirmation: boolean;
+};
+
+export function parsePartnerPortalAvailability(
+  value: unknown,
+): PartnerPortalAvailability | null {
+  if (
+    !isRecord(value) ||
+    !isRecord(value["payments"]) ||
+    !isRecord(value["uploads"])
+  )
+    return null;
+  const payments = value["payments"];
+  const uploads = value["uploads"];
+  if (
+    ![
+      value["reads"],
+      value["writes"],
+      value["instantConfirmation"],
+      payments["card"],
+      payments["ach"],
+      payments["hosted"],
+      uploads["photos"],
+      uploads["documents"],
+    ].every((item) => typeof item === "boolean")
+  )
+    return null;
+  const reads = value["reads"] === true;
+  const writes = reads && value["writes"] === true;
+  return {
+    reads,
+    writes,
+    payments: {
+      card: writes && payments["card"] === true,
+      ach: writes && payments["card"] === true && payments["ach"] === true,
+      hosted: writes && payments["hosted"] === true,
+    },
+    uploads: {
+      photos: writes && uploads["photos"] === true,
+      documents: writes && uploads["documents"] === true,
+    },
+    instantConfirmation: writes && value["instantConfirmation"] === true,
+  };
+}
+
 export type PartnerPortalPermissions = {
   scheduleJobs: boolean;
   updateJobs: boolean;
@@ -52,6 +102,7 @@ export type PartnerPortalContext = {
     passwordSet: boolean;
   };
   capabilities: PartnerCapabilities;
+  availability: PartnerPortalAvailability;
   permissions: PartnerPortalPermissions;
   tools?: Record<string, boolean>;
 };
@@ -63,6 +114,7 @@ export type PartnerPortalContextResult =
 
 type V2MePayload = {
   ok: true;
+  availability: PartnerPortalAvailability;
   tools: Record<string, boolean>;
   partnerUser: {
     id: string;
@@ -123,6 +175,8 @@ function sameCapabilitySet(left: readonly string[], right: readonly string[]) {
 
 function parseV2MePayload(value: unknown): V2MePayload | null {
   if (!isRecord(value) || value["ok"] !== true) return null;
+  const availability = parsePartnerPortalAvailability(value["availability"]);
+  if (!availability) return null;
   const partnerUser = value["partnerUser"];
   const account = value["account"];
   const membership = value["membership"];
@@ -223,10 +277,30 @@ function parseV2MePayload(value: unknown): V2MePayload | null {
 
   return {
     ok: true,
+    availability,
     tools: (() => {
-      const workflow = (value)["workflow"];
-      const configured = workflow && typeof workflow === "object" && !Array.isArray(workflow) ? (workflow as Record<string, unknown>)["tools"] : null;
-      return Object.fromEntries(["templates", "recurring", "bulk", "reports", "portfolio", "approvals"].map((key) => [key, Boolean(configured && typeof configured === "object" && (configured as Record<string, unknown>)[key] === true)]));
+      const workflow = value["workflow"];
+      const configured =
+        workflow && typeof workflow === "object" && !Array.isArray(workflow)
+          ? (workflow as Record<string, unknown>)["tools"]
+          : null;
+      return Object.fromEntries(
+        [
+          "templates",
+          "recurring",
+          "bulk",
+          "reports",
+          "portfolio",
+          "approvals",
+        ].map((key) => [
+          key,
+          Boolean(
+            configured &&
+              typeof configured === "object" &&
+              (configured as Record<string, unknown>)[key] === true,
+          ),
+        ]),
+      );
     })(),
     partnerUser: {
       id: partnerUserId,
@@ -318,6 +392,22 @@ export async function resolvePartnerPortalContext(
 
   const email = payload.partnerUser.email.trim();
   const rawCapabilities = payload.membership.capabilities;
+  const permissions = actionPermissions(rawCapabilities);
+  const capabilities = navigationCapabilities(rawCapabilities);
+  const { availability } = payload;
+  capabilities.schedule = capabilities.schedule && availability.writes;
+  for (const key of [
+    "scheduleJobs",
+    "updateJobs",
+    "cancelJobs",
+    "manageLocations",
+    "shareProof",
+    "sendMessages",
+  ] as const) {
+    permissions[key] = permissions[key] && availability.writes;
+  }
+  permissions.uploadMedia =
+    permissions.uploadMedia && availability.uploads.photos;
   return {
     status: "authenticated",
     accountId: payload.account.id,
@@ -337,8 +427,9 @@ export async function resolvePartnerPortalContext(
       email,
       passwordSet: payload.partnerUser.passwordSet,
     },
-    capabilities: navigationCapabilities(rawCapabilities),
-    permissions: actionPermissions(rawCapabilities),
+    capabilities,
+    availability,
+    permissions,
     tools: payload.tools,
   };
 }

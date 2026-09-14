@@ -31,7 +31,10 @@ for (const directory of [repo, `${repo}apps/api`, `${repo}apps/site`]) {
 Object.assign(environment, {
   NODE_ENV: "production",
   // Match the API package's production build heap; Site retains its local test budget.
-  NODE_OPTIONS: service === "api" ? "--max-old-space-size=4096" : "--max-old-space-size=6144",
+  NODE_OPTIONS:
+    service === "api"
+      ? "--max-old-space-size=4096"
+      : "--max-old-space-size=6144",
   NEXT_TELEMETRY_DISABLED: "1",
   DATABASE_URL:
     "postgresql://portal_test:portal_local_only@127.0.0.1:55443/portal_access_browser",
@@ -44,6 +47,22 @@ Object.assign(environment, {
   NEXT_PUBLIC_API_BASE_URL: "http://localhost:3111",
   ADMIN_API_KEY: "local-access-browser-only-administration-key",
   QUOTE_PUBLIC_TRUSTED_PROXY_HOPS: "1",
+  QUOTE_RATE_LIMIT_HMAC_SECRET: "local-portal-release-rate-limit-secret-2026",
+  QUOTE_PUBLIC_PROXY_SHARED_SECRET:
+    "local-portal-release-proxy-secret-2026-distinct",
+  TEAM_AUTH_RATE_LIMIT_SECRET:
+    "local-portal-release-team-rate-limit-secret-2026",
+  PARTNER_LOCATION_SECRET_KEY_BASE64: Buffer.alloc(32, 1).toString("base64"),
+  PARTNER_PROOF_SHARE_TOKEN_KEY_BASE64: Buffer.alloc(32, 2).toString("base64"),
+  E2E_RUN_ID: "partner-production-release-rehearsal",
+  TEAM_CRM_AUDIT_MODE: "1",
+  MEDIA_OBJECT_ENDPOINT: "http://127.0.0.1:14566",
+  MEDIA_OBJECT_BUCKET: "partner-release-rehearsal",
+  MEDIA_OBJECT_REGION: "us-east-1",
+  MEDIA_OBJECT_ACCESS_KEY_ID: "test",
+  MEDIA_OBJECT_SECRET_ACCESS_KEY: "test",
+  MEDIA_OBJECT_FORCE_PATH_STYLE: "true",
+  MEDIA_OBJECT_AUTO_CREATE_BUCKET: "false",
   PARTNER_PORTAL_V2_READS_ENABLED: "true",
   PARTNER_PORTAL_V2_WRITES_ENABLED: "true",
   PARTNER_PORTAL_PURPOSE_AUTH_ENABLED: "true",

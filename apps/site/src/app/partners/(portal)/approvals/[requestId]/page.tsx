@@ -14,6 +14,11 @@ import {
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
 import { callPartnerApi } from "@/app/partners/lib/api";
+import {
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+  isPortalRecord,
+} from "../../../lib/portal-load";
 import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
 import {
   approvalStateLabel,
@@ -148,6 +153,8 @@ export default async function PartnerApprovalDetailPage({
 }) {
   const { requestId } = await params;
   const context = await getPartnerPortalContext();
+  if (context.status !== "authenticated" || !context.availability.reads)
+    return null;
 
   if (context.status !== "authenticated" || !context.capabilities.approvals) {
     return (
@@ -172,58 +179,37 @@ export default async function PartnerApprovalDetailPage({
     );
   }
 
-  const response = await callPartnerApi(
-    `/api/portal/v2/approval-requests/${encodeURIComponent(requestId)}`,
-    { timeoutMs: 15_000 },
-  ).catch(() => null);
-
-  if (!response?.ok) {
-    if (response?.status === 404) {
-      return (
-        <PartnerErrorState
-          title="This approval request could not be found"
-          description="It may belong to another account or the link may be out of date. No account details were disclosed."
-          retryHref="/partners/approvals"
-        />
-      );
-    }
-    if (response?.status === 403) {
-      return (
-        <PartnerErrorState
-          title="Approval access is not available"
-          description="Your current account role cannot view this request. No request details were disclosed."
-          retryHref="/partners/approvals"
-        />
-      );
-    }
+  const result = await loadPartnerPortalResource(
+    () =>
+      callPartnerApi(
+        `/api/portal/v2/approval-requests/${encodeURIComponent(requestId)}`,
+        { timeoutMs: 15_000 },
+      ),
+    (payload) =>
+      isPortalRecord(payload) &&
+      isPartnerApprovalDetail(payload["approvalRequest"])
+        ? payload["approvalRequest"]
+        : null,
+  );
+  if (result.status === "error")
     return (
       <PartnerErrorState
-        title="We couldn’t load this approval"
-        description="No decision or schedule hold was changed. Try again before relying on this request."
+        title={
+          result.reason === "not_found"
+            ? "This approval request could not be found"
+            : "We couldn’t load this approval"
+        }
+        description={portalLoadErrorMessage(
+          result,
+          result.reason === "not_found"
+            ? "Open Approvals to see the requests available to your account."
+            : "Try again before reviewing or deciding this request.",
+        )}
         retryHref={`/partners/approvals/${encodeURIComponent(requestId)}`}
       />
     );
-  }
-
-  const payload = (await response.json().catch(() => null)) as {
-    ok?: unknown;
-    approvalRequest?: unknown;
-  } | null;
-  if (
-    payload?.ok !== true ||
-    !isPartnerApprovalDetail(payload.approvalRequest)
-  ) {
-    return (
-      <PartnerErrorState
-        title="This approval response was incomplete"
-        description="No decision was changed. Refresh before reviewing or deciding this request."
-        retryHref={`/partners/approvals/${encodeURIComponent(requestId)}`}
-      />
-    );
-  }
-
-  const approval = payload.approvalRequest;
-  const etag = response.headers.get("etag") ?? approval.etag;
+  const approval = result.value;
+  const etag = result.response.headers.get("etag") ?? approval.etag;
   const request = approval.request;
   const service = request.serviceKey ?? request.serviceType ?? null;
   const address = addressLabel(approval);
@@ -580,15 +566,17 @@ export default async function PartnerApprovalDetailPage({
         ) : null}
       </PartnerPanel>
 
-      <PartnerApprovalDecisionForm
-        requestId={approval.id}
-        initialEtag={etag}
-        initialState={approval.state}
-        requestedByCurrentMember={approval.requestedByCurrentMember}
-        initialCurrentMemberDecision={approval.currentMemberDecision}
-        expiresAt={approval.expiresAt}
-        rulesValid={approval.rulesValid && approval.rules.length > 0}
-      />
+      {context.availability.writes ? (
+        <PartnerApprovalDecisionForm
+          requestId={approval.id}
+          initialEtag={etag}
+          initialState={approval.state}
+          requestedByCurrentMember={approval.requestedByCurrentMember}
+          initialCurrentMemberDecision={approval.currentMemberDecision}
+          expiresAt={approval.expiresAt}
+          rulesValid={approval.rulesValid && approval.rules.length > 0}
+        />
+      ) : null}
     </div>
   );
 }

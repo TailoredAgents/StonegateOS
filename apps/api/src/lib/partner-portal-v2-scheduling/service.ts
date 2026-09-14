@@ -3805,7 +3805,10 @@ export async function resolvePartnerBookingContactAndProperty(input: {
         eq(partnerAccountMemberships.status, "active"),
       ),
     )
-    .for("update")
+    // Keep membership authority stable through submission without conflicting
+    // with the key-share FK checks used by concurrent draft inserts. An
+    // exclusive membership lock here would invert the account/FK lock order.
+    .for("share")
     .limit(1);
   if (!membership) {
     throw new PartnerPortalSchedulingError(

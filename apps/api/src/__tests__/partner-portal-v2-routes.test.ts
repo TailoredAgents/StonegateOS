@@ -11,7 +11,15 @@ const mockRequirePartnerCapability = jest.fn();
 const mockSwitchPartnerSessionAccount = jest.fn();
 const mockRequirePartnerSession = jest.fn();
 const mockGetWorkflow = jest.fn();
-mockModule("@/lib/partner-account-workflows", () => ({ getPartnerAccountWorkflow: mockGetWorkflow, normalizePartnerAccountWorkflow: () => ({ tools: {}, requestableServiceKeys: [], disabledServiceKeys: [], partialPayments: false }) }));
+mockModule("@/lib/partner-account-workflows", () => ({
+  getPartnerAccountWorkflow: mockGetWorkflow,
+  normalizePartnerAccountWorkflow: () => ({
+    tools: {},
+    requestableServiceKeys: [],
+    disabledServiceKeys: [],
+    partialPayments: false,
+  }),
+}));
 
 mockModule("@/lib/partner-account-authorization", () => ({
   resolvePartnerPrincipal: mockResolvePartnerPrincipal,
@@ -25,6 +33,9 @@ mockModule("@/lib/partner-portal-auth", () => ({
 }));
 
 const { GET: getMe } = await import("../../app/api/portal/v2/me/route");
+const { createPartnerPortalV2UnexpectedResponse } = await import(
+  "@/lib/partner-portal-v2-response"
+);
 const { GET: getSession } = await import(
   "../../app/api/portal/v2/session/route"
 );
@@ -33,6 +44,40 @@ const { POST: switchAccount } = await import(
 );
 
 const CORRELATION_ID = "portal-test-correlation-0001";
+
+describe("safe portal exception diagnostics", () => {
+  it("identifies a wrapped driver argument error without logging its submitted values", async () => {
+    const logger = jest
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    try {
+      const cause = Object.assign(
+        new TypeError("secret submitted database value"),
+        { code: "ERR_INVALID_ARG_TYPE" },
+      );
+      const response = createPartnerPortalV2UnexpectedResponse(
+        CORRELATION_ID,
+        new Error("secret SQL wrapper", { cause }),
+        "quotes.read",
+      );
+      expect(response.status).toBe(500);
+      expect(logger).toHaveBeenCalledWith(
+        "[partner-portal-v2] request failed",
+        {
+          correlationId: CORRELATION_ID,
+          operation: "quotes.read",
+          category: "unexpected",
+          errorType: "TypeError",
+          errorCode: "ERR_INVALID_ARG_TYPE",
+        },
+      );
+      expect(JSON.stringify(logger.mock.calls)).not.toContain("secret");
+      expect(JSON.stringify(await response.json())).not.toContain("secret");
+    } finally {
+      logger.mockRestore();
+    }
+  });
+});
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -131,7 +176,19 @@ function authenticatedSession() {
 describe("partner portal v2 identity routes", () => {
   beforeEach(() => {
     jest.resetAllMocks();
-    mockGetWorkflow.mockResolvedValue({ tools: { templates: false, recurring: false, bulk: false, reports: false, portfolio: false, approvals: false }, requestableServiceKeys: [], disabledServiceKeys: [], partialPayments: false });
+    mockGetWorkflow.mockResolvedValue({
+      tools: {
+        templates: false,
+        recurring: false,
+        bulk: false,
+        reports: false,
+        portfolio: false,
+        approvals: false,
+      },
+      requestableServiceKeys: [],
+      disabledServiceKeys: [],
+      partialPayments: false,
+    });
   });
 
   it("returns account-centric identity without session secrets", async () => {
@@ -155,6 +212,13 @@ describe("partner portal v2 identity routes", () => {
     expect(isRecord(body)).toBe(true);
     if (!isRecord(body)) throw new Error("expected object response");
     expect(body["ok"]).toBe(true);
+    expect(body["availability"]).toEqual({
+      reads: true,
+      writes: true,
+      payments: { card: false, ach: false, hosted: false },
+      uploads: { photos: false, documents: false },
+      instantConfirmation: false,
+    });
     const account = body["account"];
     const membership = body["membership"];
     expect(isRecord(account)).toBe(true);
@@ -182,6 +246,46 @@ describe("partner portal v2 identity routes", () => {
     expect(body["accounts"]).toEqual([
       expect.objectContaining({ defaultAccount: true, current: true }),
     ]);
+  });
+
+  it("keeps identity available and explicitly reports maintenance with missing production flags", async () => {
+    const previous = {
+      node: process.env.NODE_ENV,
+      reads: process.env.PARTNER_PORTAL_V2_READS_ENABLED,
+      writes: process.env.PARTNER_PORTAL_V2_WRITES_ENABLED,
+    };
+    process.env.NODE_ENV = "production";
+    delete process.env.PARTNER_PORTAL_V2_READS_ENABLED;
+    delete process.env.PARTNER_PORTAL_V2_WRITES_ENABLED;
+    mockResolvePartnerPrincipal.mockResolvedValue({
+      ok: true,
+      principal: principal(),
+    });
+    try {
+      const response = await getMe(
+        new NextRequest("http://localhost/api/portal/v2/me"),
+      );
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        ok: true,
+        availability: {
+          reads: false,
+          writes: false,
+          payments: { card: false, ach: false, hosted: false },
+          uploads: { photos: false, documents: false },
+          instantConfirmation: false,
+        },
+      });
+    } finally {
+      for (const [key, value] of Object.entries({
+        NODE_ENV: previous.node,
+        PARTNER_PORTAL_V2_READS_ENABLED: previous.reads,
+        PARTNER_PORTAL_V2_WRITES_ENABLED: previous.writes,
+      })) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it("requires the intrinsic session-read capability", async () => {

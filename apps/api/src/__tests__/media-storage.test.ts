@@ -22,6 +22,7 @@ mockModule("@/lib/provider-health", () => ({
 const {
   createMediaUploadUrl,
   getMediaStorageProvider,
+  isMediaStorageConfigured,
   putImmutableMediaObject,
   getMediaObject,
   readMediaStorageConfig,
@@ -40,6 +41,10 @@ describe("appointment media object storage", () => {
     "MEDIA_OBJECT_AUTO_CREATE_BUCKET",
     "LOCALSTACK_ENDPOINT",
     "R2_ACCOUNT_ID",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
     "NODE_ENV",
     "E2E_RUN_ID",
     "TEAM_CRM_AUDIT_MODE",
@@ -59,6 +64,35 @@ describe("appointment media object storage", () => {
     for (const key of keys) {
       if (original[key] === undefined) delete process.env[key];
       else process.env[key] = original[key];
+    }
+  });
+
+  it("reports usable credentials without sending a storage request", () => {
+    process.env["NODE_ENV"] = "production";
+    process.env["MEDIA_OBJECT_ENDPOINT"] =
+      "https://account.r2.cloudflarestorage.com";
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"] = "0";
+    for (const key of [
+      "MEDIA_OBJECT_ACCESS_KEY_ID",
+      "MEDIA_OBJECT_SECRET_ACCESS_KEY",
+      "R2_ACCESS_KEY_ID",
+      "R2_SECRET_ACCESS_KEY",
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+    ]) {
+      delete process.env[key];
+    }
+    const send = jest.spyOn(S3Client.prototype, "send");
+    try {
+      expect(isMediaStorageConfigured()).toBe(false);
+      process.env["R2_ACCESS_KEY_ID"] = "key";
+      process.env["R2_SECRET_ACCESS_KEY"] = "secret";
+      expect(isMediaStorageConfigured()).toBe(true);
+      process.env["MEDIA_OBJECT_ENDPOINT"] = "http://localhost:4566";
+      expect(isMediaStorageConfigured()).toBe(false);
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      send.mockRestore();
     }
   });
 

@@ -39,6 +39,7 @@ import { PartnerBeforeAfterCompare } from "./PartnerBeforeAfterCompare";
 import { PartnerSelectedPhotoPreviews } from "./PartnerSelectedPhotoPreviews";
 import { usePartnerLiveRefresh } from "../lib/use-partner-live-refresh";
 import { usePartnerUnsavedChanges } from "../lib/use-partner-unsaved-changes";
+import { parsePortalProof } from "../lib/portal-read-models";
 
 const ACCEPTED_TYPES = new Set([
   "image/jpeg",
@@ -137,6 +138,7 @@ function PartnerProofWorkspaceSession({
     tone: "success" | "error" | "warning";
     text: string;
   } | null>(null);
+  const [refreshError, setRefreshError] = React.useState<string | null>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const uploadClientIdsRef = React.useRef<string[]>([]);
   const uploadOperationKeyRef = React.useRef<string | null>(null);
@@ -163,13 +165,25 @@ function PartnerProofWorkspaceSession({
         proof: PartnerProof;
       }>(`jobs/${jobId}/proof`, { signal }).catch(() => null);
       if (!result?.ok) {
-        setMessage({
-          tone: "error",
-          text: result?.error.message ?? "Proof could not be refreshed.",
-        });
+        if (!signal?.aborted)
+          setRefreshError(
+            result?.error.message ??
+              "Proof could not be refreshed. Your last loaded files are still shown.",
+          );
         return false;
       }
-      setProof(result.data.proof);
+      const nextProof = parsePortalProof(result.data);
+      if (!nextProof) {
+        setRefreshError(
+          withPortalSupportReference(
+            "Proof could not be refreshed. Your last loaded files are still shown. Please try again.",
+            portalSupportReferenceFromResponse(result.response),
+          ),
+        );
+        return false;
+      }
+      setProof(nextProof);
+      setRefreshError(null);
       return true;
     },
     [jobId],
@@ -552,6 +566,19 @@ function PartnerProofWorkspaceSession({
 
   return (
     <div className="space-y-5">
+      {refreshError ? (
+        <PartnerNotice tone="warning">
+          {refreshError}
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className={cn(partnerSecondaryButtonClass, "mt-3")}
+            disabled={busy}
+          >
+            Try again
+          </button>
+        </PartnerNotice>
+      ) : null}
       {message ? (
         <PartnerNotice tone={message.tone}>{message.text}</PartnerNotice>
       ) : null}
@@ -604,12 +631,16 @@ function PartnerProofWorkspaceSession({
                 id={`proof-upload-${jobId}`}
                 className="font-semibold text-slate-950"
               >
-                Add photos or documents
+                {proof.documentUploadsAvailable
+                  ? "Add photos or documents"
+                  : "Add photos"}
               </h3>
               <p className="mt-1 text-sm leading-6 text-slate-600">
                 Add up to 10 files at a time, 10 MB each. Photos can be JPEG,
-                PNG, WebP, HEIC, or HEIF. Each job supports 40 photos and 10 PDF
-                documents. PDFs stay private while they are checked for safety.
+                PNG, WebP, HEIC, or HEIF. Each job supports 40 photos.
+                {proof.documentUploadsAvailable
+                  ? " You can also add up to 10 PDF documents. PDFs stay private while they are checked for safety."
+                  : " PDF uploads are not available yet. Contact Stonegate if you need to share a document."}
               </p>
             </div>
           </div>
@@ -729,8 +760,8 @@ function PartnerProofWorkspaceSession({
         </section>
       ) : (
         <PartnerNotice tone="info">
-          Your role can view shared proof but cannot upload or remove job
-          photos.
+          You can view shared proof. Adding or removing files is not available
+          right now.
         </PartnerNotice>
       )}
 

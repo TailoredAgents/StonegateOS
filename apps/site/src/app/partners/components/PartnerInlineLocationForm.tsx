@@ -6,10 +6,12 @@ import { cn } from "@myst-os/ui";
 import {
   createPortalOperationKey,
   partnerPortalFetch,
+  portalSupportReferenceFromResponse,
+  withPortalSupportReference,
   type PartnerLocation,
 } from "../lib/portal-v2";
 import type { BookingWizardLocation } from "./PartnerBookingWizard";
-import { toBookingLocation } from "../lib/booking-location";
+import { toBookingLocation, isPartnerLocation } from "../lib/booking-location";
 import {
   PartnerNotice,
   partnerFieldClass,
@@ -54,6 +56,9 @@ export function PartnerInlineLocationForm({
     text: string;
   } | null>(null);
   const headingId = React.useId();
+  const createAttempt = React.useRef<{ body: string; key: string } | null>(
+    null,
+  );
 
   if (!canManage) {
     return (
@@ -73,30 +78,36 @@ export function PartnerInlineLocationForm({
     if (pending) return;
     setPending(true);
     setMessage(null);
+    const body = JSON.stringify({
+      siteName: form.siteName,
+      externalPropertyId: null,
+      address: {
+        line1: form.line1,
+        line2: form.line2 || null,
+        city: form.city,
+        state: form.state,
+        postalCode: form.postalCode,
+      },
+      timezone: "America/New_York",
+      locale: "en-US",
+      access: { details: null, parking: null, loading: null },
+      accessSecret: null,
+      onSiteContact: null,
+    });
+    const attempt =
+      createAttempt.current?.body === body
+        ? createAttempt.current
+        : { body, key: createPortalOperationKey("inline-location") };
+    createAttempt.current = attempt;
     const result = await partnerPortalFetch<{
       ok: true;
       location: PartnerLocation;
     }>("locations", {
       method: "POST",
       headers: {
-        "Idempotency-Key": createPortalOperationKey("inline-location"),
+        "Idempotency-Key": attempt.key,
       },
-      body: JSON.stringify({
-        siteName: form.siteName,
-        externalPropertyId: null,
-        address: {
-          line1: form.line1,
-          line2: form.line2 || null,
-          city: form.city,
-          state: form.state,
-          postalCode: form.postalCode,
-        },
-        timezone: "America/New_York",
-        locale: "en-US",
-        access: { details: null, parking: null, loading: null },
-        accessSecret: null,
-        onSiteContact: null,
-      }),
+      body: attempt.body,
     }).catch(() => null);
     setPending(false);
     if (!result?.ok) {
@@ -108,6 +119,17 @@ export function PartnerInlineLocationForm({
       });
       return;
     }
+    if (!isPartnerLocation(result.data.location)) {
+      setMessage({
+        tone: "error",
+        text: withPortalSupportReference(
+          "We couldn’t confirm the saved location. Keep these details and try again to safely recover the same location.",
+          portalSupportReferenceFromResponse(result.response),
+        ),
+      });
+      return;
+    }
+    createAttempt.current = null;
     const location = toWizardLocation(result.data.location);
     onCreated(location);
     setMessage({

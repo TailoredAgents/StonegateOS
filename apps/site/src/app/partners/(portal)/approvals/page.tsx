@@ -10,6 +10,11 @@ import {
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
 import { callPartnerApi } from "@/app/partners/lib/api";
+import {
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+  parsePortalCollection,
+} from "../../lib/portal-load";
 import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
 import {
   approvalStateLabel,
@@ -45,16 +50,6 @@ const FILTERS: Array<{
   { value: "expired", label: "Expired" },
   { value: "withdrawn", label: "Withdrawn" },
 ];
-
-type ApprovalListPayload = {
-  ok?: unknown;
-  approvalRequests?: unknown;
-  page?: {
-    limit?: unknown;
-    nextCursor?: unknown;
-    hasMore?: unknown;
-  };
-};
 
 function statusClass(state: PartnerApprovalState): string {
   if (state === "approved") {
@@ -98,6 +93,8 @@ export default async function PartnerApprovalsPage({
 }) {
   const params = (await searchParams) ?? {};
   const context = await getPartnerPortalContext();
+  if (context.status !== "authenticated" || !context.availability.reads)
+    return null;
   const rawState = typeof params.state === "string" ? params.state.trim() : "";
   const selectedFilter = FILTERS.some((option) => option.value === rawState)
     ? (rawState as "" | PartnerApprovalState)
@@ -147,81 +144,36 @@ export default async function PartnerApprovalsPage({
   const query = new URLSearchParams({ limit: "25" });
   if (selectedFilter) query.set("state", selectedFilter);
   if (cursor) query.set("cursor", cursor);
-  const response = await callPartnerApi(
-    `/api/portal/v2/approval-requests?${query.toString()}`,
-    { timeoutMs: 15_000 },
-  ).catch(() => null);
-
-  if (!response?.ok) {
-    if (response?.status === 403) {
-      return (
-        <div className="space-y-5 sm:space-y-6">
-          {header}
-          <PartnerPanel>
-            <PartnerNotice tone="info">
-              This account role cannot view approvals. No request details were
-              disclosed.
-            </PartnerNotice>
-          </PartnerPanel>
-        </div>
-      );
-    }
-    if (response?.status === 422) {
-      return (
-        <div className="space-y-5 sm:space-y-6">
-          {header}
-          <PartnerPanel>
-            <PartnerEmptyState
-              title="That approval page link is no longer valid"
-              description="Clear the saved filter or pagination link to reload current account approvals."
-              action={{
-                href: "/partners/approvals",
-                label: "Show current approvals",
-              }}
-              icon={<ClipboardCheck className="h-6 w-6" aria-hidden="true" />}
-            />
-          </PartnerPanel>
-        </div>
-      );
-    }
+  const result = await loadPartnerPortalResource(
+    () =>
+      callPartnerApi(`/api/portal/v2/approval-requests?${query.toString()}`, {
+        timeoutMs: 15_000,
+      }),
+    (payload) =>
+      parsePortalCollection(
+        payload,
+        "approvalRequests",
+        isPartnerApprovalSummary,
+      ),
+  );
+  if (result.status === "error")
     return (
-      <div className="space-y-5 sm:space-y-6">
+      <div className="space-y-5">
         {header}
         <PartnerErrorState
           title="We couldn’t load approvals"
-          description="Nothing was changed. Try again to see the current requests that need a decision."
+          description={portalLoadErrorMessage(
+            result,
+            result.httpStatus === 422
+              ? "This page link is out of date. Open Approvals again to see current requests."
+              : "Your approval requests could not be loaded. Try again.",
+          )}
           retryHref="/partners/approvals"
         />
       </div>
     );
-  }
-
-  const payload = (await response
-    .json()
-    .catch(() => null)) as ApprovalListPayload | null;
-  const rawApprovals = payload?.approvalRequests;
-  if (
-    payload?.ok !== true ||
-    !Array.isArray(rawApprovals) ||
-    !rawApprovals.every(isPartnerApprovalSummary)
-  ) {
-    return (
-      <div className="space-y-5 sm:space-y-6">
-        {header}
-        <PartnerErrorState
-          title="The approval response was incomplete"
-          description="No decision was changed. Refresh before reviewing account requests."
-          retryHref="/partners/approvals"
-        />
-      </div>
-    );
-  }
-  const approvals = rawApprovals;
-  const hasMore = payload.page?.hasMore === true;
-  const nextCursor =
-    hasMore && typeof payload.page?.nextCursor === "string"
-      ? payload.page.nextCursor
-      : null;
+  const approvals = result.value.items;
+  const nextCursor = result.value.nextCursor;
 
   return (
     <div className="space-y-5 sm:space-y-6">

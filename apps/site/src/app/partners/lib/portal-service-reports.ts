@@ -1,6 +1,10 @@
 import "server-only";
 import { z } from "zod";
 import { callPartnerApi } from "./api";
+import {
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+} from "./portal-load";
 const nullableText = z.string().max(200).nullable();
 const choice = z.object({
   id: z.string().max(100),
@@ -81,62 +85,31 @@ export async function loadPartnerServiceReport(
   | { report: PartnerServiceReportView; error: null }
   | { report: null; error: string }
 > {
-  try {
-    const response = await callPartnerApi(`/api/portal/v2/reports?${params}`, {
-      timeoutMs: 20000,
-    });
-    const payload: unknown = await response.json().catch(() => null);
-    if (!response.ok) {
-      if (response.status === 403)
-        return {
-          report: null,
-          error:
-            "Your role does not include this report. Choose a report your team has shared with you.",
-        };
-      if (response.status === 404)
-        return {
-          report: null,
-          error:
-            "Reports are not enabled for this account. Your normal job records and billing documents remain available.",
-        };
+  const result = await loadPartnerPortalResource(
+    () =>
+      callPartnerApi(`/api/portal/v2/reports?${params}`, { timeoutMs: 20_000 }),
+    (payload) => {
+      const parsed = reportSchema.safeParse(payload);
       if (
-        payload &&
-        typeof payload === "object" &&
-        "error" in payload &&
-        [
-          "invalid_fields",
-          "invalid_cursor",
-          "report_changed",
-          "report_too_large",
-        ].includes(String(payload.error)) &&
-        "message" in payload &&
-        typeof payload.message === "string"
-      ) {
-        return { report: null, error: payload.message.slice(0, 500) };
-      }
-      return {
-        report: null,
-        error:
-          "The complete report is unavailable right now. No totals were substituted. Please try again.",
-      };
-    }
-    const parsed = reportSchema.safeParse(payload);
-    if (
-      !parsed.success ||
-      (parsed.data.kind === "operational" &&
-        (parsed.data.summary.length > 0 ||
-          parsed.data.items.some((row) => row.financial)))
-    )
-      return {
-        report: null,
-        error:
-          "The report could not be verified. Please refresh before relying on its totals.",
-      };
-    return { report: parsed.data, error: null };
-  } catch {
-    return {
-      report: null,
-      error: "The complete report is unavailable right now. Please try again.",
-    };
-  }
+        !parsed.success ||
+        (parsed.data.kind === "operational" &&
+          (parsed.data.summary.length > 0 ||
+            parsed.data.items.some((row) => row.financial)))
+      )
+        return null;
+      return parsed.data;
+    },
+  );
+  if (result.status === "ok") return { report: result.value, error: null };
+  const message =
+    result.reason === "invalid_response"
+      ? "The report could not be verified. Try again before relying on its totals."
+      : result.code === "report_changed" || result.code === "invalid_cursor"
+        ? "The report has changed or this page link has expired. Open the first page to see current records."
+        : result.code === "report_too_large"
+          ? "This report contains too many records. Choose a shorter date range."
+          : result.code === "invalid_fields"
+            ? "Check the report dates and filters, then try again."
+            : "The complete report could not be loaded. Please try again.";
+  return { report: null, error: portalLoadErrorMessage(result, message) };
 }

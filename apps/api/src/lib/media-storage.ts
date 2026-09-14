@@ -206,12 +206,10 @@ export function readMediaStorageConfig(): MediaStorageConfig {
   };
 }
 
-function buildClient(): {
-  client: S3Client;
-  config: MediaStorageConfig;
-  bucketReady: Promise<void> | null;
+function readMediaStorageCredentials(config: MediaStorageConfig): {
+  accessKeyId: string;
+  secretAccessKey: string;
 } {
-  const config = readMediaStorageConfig();
   const isLocalEndpoint = isLocalStorageEndpoint(config.endpoint);
   const accessKeyId = firstNonEmpty(
     process.env["MEDIA_OBJECT_ACCESS_KEY_ID"],
@@ -229,6 +227,26 @@ function buildClient(): {
   if (!accessKeyId || !secretAccessKey) {
     throw new Error("media_storage_credentials_missing");
   }
+  return { accessKeyId, secretAccessKey };
+}
+
+/** Configuration only; never sends a storage request or exposes credentials. */
+export function isMediaStorageConfigured(): boolean {
+  try {
+    readMediaStorageCredentials(readMediaStorageConfig());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function buildClient(): {
+  client: S3Client;
+  config: MediaStorageConfig;
+  bucketReady: Promise<void> | null;
+} {
+  const config = readMediaStorageConfig();
+  const { accessKeyId, secretAccessKey } = readMediaStorageCredentials(config);
 
   const client = new S3Client({
     region: config.region,

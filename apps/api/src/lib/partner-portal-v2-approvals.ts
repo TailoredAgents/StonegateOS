@@ -20,6 +20,7 @@ import {
   outboxEvents,
   partnerAccountLocations,
   partnerAccountMemberships,
+  partnerAccountSchedulingPolicies,
   partnerBookingDrafts,
   partnerAccountCostCenters,
   partnerApprovalDecisions,
@@ -31,6 +32,7 @@ import {
   type DatabaseClient,
 } from "@/db";
 import { acquireScheduleConflictLock } from "@/lib/appointment-schedule-conflicts";
+import { isPartnerPortalInstantConfirmationEnabled } from "@/lib/partner-portal-feature-flags";
 import {
   loadActiveMembershipAccesses,
   type PartnerPrincipal,
@@ -1683,7 +1685,7 @@ export type PartnerApprovalLifecyclePlan =
   | Readonly<{
       kind: "approved_needs_reschedule";
       approvalState: "approved_needs_reschedule";
-      releaseApprovalHold: false;
+      releaseApprovalHold: boolean;
     }>
   | Readonly<{
       kind: "decline";
@@ -1727,6 +1729,7 @@ export function planPartnerApprovalLifecycle(input: {
   declined: boolean;
   target: PartnerApprovalLifecycleTarget | null;
   hold: PartnerApprovalLifecycleHold | null;
+  instantConfirmationEnabled: boolean;
   now: Date;
 }): PartnerApprovalLifecyclePlan {
   if (!input.approved && !input.declined) {
@@ -1796,6 +1799,17 @@ export function planPartnerApprovalLifecycle(input: {
       kind: "conflict" as const,
       approvalState: "pending" as const,
       releaseApprovalHold: false as const,
+    });
+  }
+  // A hold created under an earlier policy is not permission to confirm now.
+  // Record the business approval, release its capacity, and leave scheduling
+  // to Stonegate when either the service or company requires manual review.
+  if (!input.instantConfirmationEnabled) {
+    return Object.freeze({
+      kind: "approved_needs_reschedule" as const,
+      approvalState: "approved_needs_reschedule" as const,
+      releaseApprovalHold:
+        holdMatchesRequest && input.hold?.status === "active",
     });
   }
   const activeSchedulableHold = Boolean(
@@ -1869,6 +1883,7 @@ async function loadPartnerApprovalLifecycleContext(input: {
         approvalHoldId: input.request.approvalHoldId,
         approved: false,
         declined: false,
+        instantConfirmationEnabled: false,
         target: null,
         hold: null,
         now: input.now,
@@ -1951,6 +1966,24 @@ async function loadPartnerApprovalLifecycleContext(input: {
           .limit(1)
       )[0] ?? null)
     : null;
+  let instantConfirmationEnabled = false;
+  if (
+    input.approved &&
+    isPartnerPortalInstantConfirmationEnabled(input.accountId)
+  ) {
+    // The decision already owns the scheduling lock also used by policy edits.
+    const [policy] = await input.tx
+      .select({
+        enabled: partnerAccountSchedulingPolicies.instantConfirmationEnabled,
+      })
+      .from(partnerAccountSchedulingPolicies)
+      .where(
+        eq(partnerAccountSchedulingPolicies.partnerAccountId, input.accountId),
+      )
+      .for("share")
+      .limit(1);
+    instantConfirmationEnabled = policy?.enabled === true;
+  }
   return {
     plan: planPartnerApprovalLifecycle({
       accountId: input.accountId,
@@ -1962,6 +1995,7 @@ async function loadPartnerApprovalLifecycleContext(input: {
       declined: input.declined,
       target,
       hold,
+      instantConfirmationEnabled,
       now: input.now,
     }),
     target,
@@ -1987,12 +2021,7 @@ async function applyPartnerApprovalLifecycle(input: {
   const expectedDraftId = input.request.partnerBookingId
     ? (input.target?.bookingDraftId ?? null)
     : input.request.bookingDraftId;
-  if (
-    input.plan.kind === "decline" &&
-    input.plan.releaseApprovalHold &&
-    input.hold &&
-    expectedDraftId
-  ) {
+  if (input.plan.releaseApprovalHold && input.hold && expectedDraftId) {
     const [released] = await input.tx
       .update(appointmentHolds)
       .set({ status: "released", consumedAt: null, updatedAt: input.now })

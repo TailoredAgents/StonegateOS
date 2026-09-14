@@ -103,10 +103,14 @@ function safeText(value: string | null, maximum = 240): string | null {
 }
 
 function currentStatusExpression(now: Date): SQL<string> {
+  // Raw SQL parameters do not infer a Date encoder from the adjacent column.
+  // Bind the timestamp explicitly so postgres-js receives a driver value even
+  // when this company's quote list is empty.
+  const currentTime = sql.param(now, quoteVersions.expiresAt);
   return sql<string>`case
     when ${partnerQuotes.authority} = 'legacy_snapshot' then ${partnerQuotes.status}
     when ${quoteVersions.state} in ('draft', 'ready') then 'draft'
-    when ${quoteVersions.state} = 'issued' and ${quoteVersions.expiresAt} <= ${now} then 'expired'
+    when ${quoteVersions.state} = 'issued' and ${quoteVersions.expiresAt} <= ${currentTime} then 'expired'
     when ${quoteVersions.state} = 'issued' then 'sent'
     else ${quoteVersions.state}
   end`;

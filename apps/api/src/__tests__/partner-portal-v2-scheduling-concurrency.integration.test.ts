@@ -954,9 +954,7 @@ describeWithDatabase(
             `${fixture.locationId},service_request,Review request ${index + 1},Site contact,site@example.test,${day}`,
         ),
       ].join("\n");
-      const principal = principalFor(
-        fixture,
-      ) as unknown as PartnerPrincipal;
+      const principal = principalFor(fixture) as unknown as PartnerPrincipal;
       const invalid = await createPartnerBulkImport({
         actor: fixture.actor,
         principal,
@@ -1047,9 +1045,7 @@ describeWithDatabase(
 
     it("keeps recurring template snapshots immutable, creates real review requests, and extends ongoing tentative dates", async () => {
       const fixture = await createFixture();
-      const principal = principalFor(
-        fixture,
-      ) as unknown as PartnerPrincipal;
+      const principal = principalFor(fixture) as unknown as PartnerPrincipal;
       const draft = await createReadyDraft(fixture);
       const template = await createPartnerServiceTemplate({
         actor: fixture.actor,
@@ -1159,6 +1155,148 @@ describeWithDatabase(
         ),
       ).toBe(true);
     });
+
+    it.each(["global", "account"] as const)(
+      "keeps otherwise eligible held requests and timed recurring templates under staff review when the %s policy disables confirmation",
+      async (disabledPolicy) => {
+        const fixture = await createFixture();
+        const draft = await createReadyDraft(fixture);
+        await getDb()
+          .update(partnerBookingDrafts)
+          .set({
+            preferredWindows: [
+              {
+                localDate: FIRST_SERVICE_DATE,
+                timeOfDay: "morning",
+                timezone: "America/New_York",
+              },
+            ],
+            updatedAt: FIXED_NOW,
+          })
+          .where(eq(partnerBookingDrafts.id, draft.id));
+        const range = dateRange(FIRST_SERVICE_DATE);
+        const before = await getPartnerDraftAvailability({
+          actor: fixture.actor,
+          draftId: draft.id,
+          rangeStartAt: range.start,
+          rangeEndAt: range.end,
+          now: FIXED_NOW,
+        });
+        expect(before.instantConfirmationEligible).toBe(true);
+        const held = await holdFirstWindow(
+          fixture,
+          draft,
+          FIRST_SERVICE_DATE,
+          "manual-policy-hold",
+        );
+        const template = await createPartnerServiceTemplate({
+          actor: fixture.actor,
+          principal: principalFor(fixture) as unknown as PartnerPrincipal,
+          name: "Manual confirmation timed template",
+          draftId: draft.id,
+          idempotencyKeyHash: digest("manual-policy-template"),
+          correlationId: "manual-policy-template",
+        });
+        try {
+          if (disabledPolicy === "global") {
+            process.env["PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED"] =
+              "false";
+          } else {
+            await getDb()
+              .update(partnerAccountSchedulingPolicies)
+              .set({ instantConfirmationEnabled: false, revision: 3 })
+              .where(
+                eq(
+                  partnerAccountSchedulingPolicies.partnerAccountId,
+                  fixture.accountId,
+                ),
+              );
+          }
+          const submission = {
+            actor: fixture.actor,
+            draftId: draft.id,
+            holdId: held.hold.id,
+            ifMatch: draft.etag,
+            idempotencyKeyHash: digest("manual-policy-held-submit"),
+            correlationId: "manual-policy-held-submit",
+            now: FIXED_NOW,
+          };
+          // An account policy change also invalidates an old hold's policy
+          // revision. The normal unscheduled submission remains available.
+          if (disabledPolicy === "account") {
+            await expect(
+              submitPartnerBookingDraft(submission),
+            ).rejects.toMatchObject({
+              code: "slot_unavailable",
+              status: 409,
+            });
+          }
+          const submitted = await submitPartnerBookingDraft({
+            ...submission,
+            holdId: disabledPolicy === "global" ? held.hold.id : null,
+          });
+          expect(submitted.booking.publicStatus).toBe("under_review");
+          const recurring = await createPartnerRecurringSeries({
+            actor: fixture.actor,
+            principal: principalFor(fixture) as unknown as PartnerPrincipal,
+            recurrence: {
+              templateId: template.template.id,
+              name: "Manual confirmation with selected time",
+              frequency: "weekly",
+              startsOn: FIRST_SERVICE_DATE,
+              occurrenceCount: 1,
+              endsOn: null,
+              preferredWindowStart: "08:00",
+            },
+            idempotencyKeyHash: digest("manual-policy-recurring"),
+            correlationId: "manual-policy-recurring",
+            now: FIXED_NOW,
+          });
+          expect(recurring.series.occurrences).toHaveLength(1);
+          expect(recurring.series.occurrences[0]).toMatchObject({
+            state: "review",
+            currentJobStatus: "under_review",
+          });
+          expect(recurring.series.occurrences[0]?.jobId).toBeTruthy();
+          const storedAppointments = await getDb()
+            .select()
+            .from(appointments)
+            .where(eq(appointments.partnerAccountId, fixture.accountId));
+          expect(storedAppointments).toHaveLength(2);
+          for (const appointment of storedAppointments) {
+            expect(appointment).toMatchObject({
+              status: "requested",
+              startAt: null,
+              promisedArrivalStartAt: null,
+              promisedArrivalEndAt: null,
+              schedulePolicyRevision: null,
+            });
+          }
+          const [released] = await getDb()
+            .select()
+            .from(appointmentHolds)
+            .where(eq(appointmentHolds.id, held.hold.id));
+          expect(released?.status).toBe("released");
+          const calendarEvents = await getDb()
+            .select()
+            .from(outboxEvents)
+            .where(
+              and(
+                eq(outboxEvents.type, "appointment.calendar_sync_requested"),
+                sql`${outboxEvents.payload}->>'appointmentId' in (${sql.join(
+                  storedAppointments.map(
+                    (appointment) => sql`${appointment.id}`,
+                  ),
+                  sql`, `,
+                )})`,
+              ),
+            );
+          expect(calendarEvents).toHaveLength(0);
+        } finally {
+          process.env["PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED"] = "true";
+        }
+      },
+    );
 
     it("staff scheduling updates the public two-hour promise atomically and cannot bypass a pending approval", async () => {
       const fixture = await createFixture();
@@ -2163,12 +2301,42 @@ describeWithDatabase(
         .returning({ id: teamMembers.id });
       if (!staff || !choice) throw new Error("review_fixture_missing");
       const selectedResourceIds = [randomUUID(), randomUUID()];
-      await getDb().insert(scheduleResources).values(selectedResourceIds.map((id, index) => ({ id, capacityPoolKey: fixture.poolKey, kind: index === 0 ? "crew" as const : "truck" as const, label: index === 0 ? "Selected review crew" : "Selected review truck", capacityUnits: 1, skillKeys: ["general_field_service"], source: "staff" as const })));
-      await expect(getDb().transaction((tx) => decidePartnerRescheduleRequest(tx, {
-        requestId: request.request.id, decision: "accepted", reason: "Invalid selected resource must preserve current schedule.", startAt: new Date(choice.startAt), selectedResourceIds: [randomUUID(), selectedResourceIds[1]!], expectedVersion: request.request.updatedAt, teamMemberId: staff.id, correlationId: correlation("invalid-resources"), now: FIXED_NOW,
-      }))).rejects.toMatchObject({ status: 409 });
-      const [unchangedSchedule] = await getDb().select({ startAt: appointments.startAt }).from(appointments).where(eq(appointments.id, booking.appointmentId));
-      expect(unchangedSchedule?.startAt?.toISOString().slice(0, 10)).toBe(FIRST_SERVICE_DATE);
+      await getDb()
+        .insert(scheduleResources)
+        .values(
+          selectedResourceIds.map((id, index) => ({
+            id,
+            capacityPoolKey: fixture.poolKey,
+            kind: index === 0 ? ("crew" as const) : ("truck" as const),
+            label:
+              index === 0 ? "Selected review crew" : "Selected review truck",
+            capacityUnits: 1,
+            skillKeys: ["general_field_service"],
+            source: "staff" as const,
+          })),
+        );
+      await expect(
+        getDb().transaction((tx) =>
+          decidePartnerRescheduleRequest(tx, {
+            requestId: request.request.id,
+            decision: "accepted",
+            reason: "Invalid selected resource must preserve current schedule.",
+            startAt: new Date(choice.startAt),
+            selectedResourceIds: [randomUUID(), selectedResourceIds[1]!],
+            expectedVersion: request.request.updatedAt,
+            teamMemberId: staff.id,
+            correlationId: correlation("invalid-resources"),
+            now: FIXED_NOW,
+          }),
+        ),
+      ).rejects.toMatchObject({ status: 409 });
+      const [unchangedSchedule] = await getDb()
+        .select({ startAt: appointments.startAt })
+        .from(appointments)
+        .where(eq(appointments.id, booking.appointmentId));
+      expect(unchangedSchedule?.startAt?.toISOString().slice(0, 10)).toBe(
+        FIRST_SERVICE_DATE,
+      );
       const decided = await getDb().transaction((tx) =>
         decidePartnerRescheduleRequest(tx, {
           requestId: request.request.id,
@@ -2184,8 +2352,13 @@ describeWithDatabase(
       );
       expect(decided.state).toBe("accepted");
       expect(decided.arrivalWindowStartAt).toBe(choice.windowStartAt);
-      const [assigned] = await getDb().select({ resources: appointments.resourceAssignmentSnapshot }).from(appointments).where(eq(appointments.id, booking.appointmentId));
-      expect(assigned?.resources.map((resource) => resource.resourceId).sort()).toEqual(selectedResourceIds.sort());
+      const [assigned] = await getDb()
+        .select({ resources: appointments.resourceAssignmentSnapshot })
+        .from(appointments)
+        .where(eq(appointments.id, booking.appointmentId));
+      expect(
+        assigned?.resources.map((resource) => resource.resourceId).sort(),
+      ).toEqual(selectedResourceIds.sort());
       await expect(
         getDb().transaction((tx) =>
           decidePartnerRescheduleRequest(tx, {

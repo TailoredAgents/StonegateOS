@@ -1,6 +1,10 @@
 import type { NextRequest } from "next/server";
 import { resolvePartnerPrincipal } from "@/lib/partner-account-authorization";
-import { getPartnerAccountWorkflow, normalizePartnerAccountWorkflow } from "@/lib/partner-account-workflows";
+import { getPartnerPortalAvailability } from "@/lib/partner-portal-availability";
+import {
+  getPartnerAccountWorkflow,
+  normalizePartnerAccountWorkflow,
+} from "@/lib/partner-account-workflows";
 import { readPortalV2CorrelationId } from "@/lib/portal-v2-contract";
 import {
   createPartnerPortalV2ErrorResponse,
@@ -21,7 +25,12 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
 
     const { principal } = result;
-    const workflow = principal.accountId ? await getPartnerAccountWorkflow(principal.accountId) : normalizePartnerAccountWorkflow(null);
+    const [workflow, availability] = await Promise.all([
+      principal.accountId
+        ? getPartnerAccountWorkflow(principal.accountId)
+        : normalizePartnerAccountWorkflow(null),
+      getPartnerPortalAvailability(principal),
+    ]);
     const currentAccess = principal.availableAccounts.find(
       (access) =>
         access.accountId === principal.accountId &&
@@ -31,6 +40,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       {
         ok: true,
         workflow,
+        availability,
         partnerUser: {
           id: principal.partnerUserId,
           email: principal.email,
@@ -70,6 +80,10 @@ export async function GET(request: NextRequest): Promise<Response> {
       correlationId,
     );
   } catch (error) {
-    return createPartnerPortalV2UnexpectedResponse(correlationId, error);
+    return createPartnerPortalV2UnexpectedResponse(
+      correlationId,
+      error,
+      "identity.read",
+    );
   }
 }

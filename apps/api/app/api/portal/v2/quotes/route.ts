@@ -15,26 +15,33 @@ import {
 
 export async function GET(request: NextRequest): Promise<Response> {
   const correlationId = readPortalV2CorrelationId(request.headers);
-  const authorization = await requirePartnerCapability(request, "quotes.read");
-  if (!authorization.ok) {
-    return createPartnerPortalV2ErrorResponse(
-      authorization.error,
-      authorization.status,
-      correlationId,
-    );
-  }
-  const { principal } = authorization;
-  if (!principal.accountId || !principal.membershipId) {
-    return createPartnerPortalV2ErrorResponse("not_found", 404, correlationId);
-  }
-  if (!arePartnerPortalV2ReadsEnabled(principal.accountId)) {
-    return createPartnerPortalV2ErrorResponse(
-      "service_unavailable",
-      503,
-      correlationId,
-    );
-  }
   try {
+    const authorization = await requirePartnerCapability(
+      request,
+      "quotes.read",
+    );
+    if (!authorization.ok) {
+      return createPartnerPortalV2ErrorResponse(
+        authorization.error,
+        authorization.status,
+        correlationId,
+      );
+    }
+    const { principal } = authorization;
+    if (!principal.accountId || !principal.membershipId) {
+      return createPartnerPortalV2ErrorResponse(
+        "not_found",
+        404,
+        correlationId,
+      );
+    }
+    if (!arePartnerPortalV2ReadsEnabled(principal.accountId)) {
+      return createPartnerPortalV2ErrorResponse(
+        "service_unavailable",
+        503,
+        correlationId,
+      );
+    }
     const result = await listCanonicalPartnerQuotes({
       principal,
       params: request.nextUrl.searchParams,
@@ -61,6 +68,10 @@ export async function GET(request: NextRequest): Promise<Response> {
       correlationId,
     );
   } catch (error) {
-    return createPartnerPortalV2UnexpectedResponse(correlationId, error);
+    return createPartnerPortalV2UnexpectedResponse(
+      correlationId,
+      error,
+      "quotes.read",
+    );
   }
 }

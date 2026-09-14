@@ -8,16 +8,8 @@ import {
   UsersRound,
 } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
-import {
-  PartnerAccountProfileManager,
-  type PartnerAccountProfile,
-} from "@/app/partners/components/PartnerAccountProfileManager";
-import {
-  PartnerAccountSecurityManager,
-  type PartnerSettingsAccount,
-  type PartnerSettingsPreference,
-  type PartnerSettingsSession,
-} from "@/app/partners/components/PartnerAccountSecurityManager";
+import { PartnerAccountProfileManager } from "@/app/partners/components/PartnerAccountProfileManager";
+import { PartnerAccountSecurityManager } from "@/app/partners/components/PartnerAccountSecurityManager";
 import {
   PartnerErrorState,
   PartnerNotice,
@@ -28,39 +20,24 @@ import {
 } from "@/app/partners/components/PartnerPortalUi";
 import { PartnerPasswordForm } from "@/app/partners/components/PartnerPasswordForm";
 import { PartnerEmailChangeForm } from "@/app/partners/components/PartnerEmailChangeForm";
+import { PartnerPersonalProfileManager } from "@/app/partners/components/PartnerPersonalProfileManager";
+import { PartnerProofDefaultsManager } from "@/app/partners/components/PartnerProofDefaultsManager";
+import { getPartnerPortalContext } from "../../lib/portal-context";
 import {
-  PartnerPersonalProfileManager,
-  type PartnerPersonalProfile,
-} from "@/app/partners/components/PartnerPersonalProfileManager";
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+} from "../../lib/portal-load";
 import {
-  PartnerProofDefaultsManager,
-  type PartnerProofDefault,
-} from "@/app/partners/components/PartnerProofDefaultsManager";
-import { parsePartnerSmsEndpoints } from "@/app/partners/lib/notification-endpoints";
+  parsePortalSettings,
+  parsePortalSessions,
+  parsePortalPreferences,
+  parsePortalProofDefaults,
+  parsePortalAccountProfile,
+  parsePortalPersonalProfile,
+  parsePortalSmsEndpoints,
+} from "../../lib/portal-settings-load";
 
 export const metadata: Metadata = { title: "Settings" };
-
-type MePayload = {
-  ok: true;
-  partnerUser: {
-    email: string;
-    name: string;
-    passwordSet?: boolean;
-  };
-  account: { id: string; name: string; status: string };
-  membership: {
-    id: string;
-    roleKey: string;
-    accessLevel: string;
-    capabilities?: string[];
-  };
-  accounts: PartnerSettingsAccount[];
-};
-
-async function readJson<T>(response: Response | null): Promise<T | null> {
-  if (!response?.ok) return null;
-  return (await response.json().catch(() => null)) as T | null;
-}
 
 export default async function PartnerSettingsPage({
   searchParams,
@@ -79,65 +56,90 @@ export default async function PartnerSettingsPage({
     "We couldn’t save that password. Try again.",
   );
 
+  const context = await getPartnerPortalContext();
+  if (context.status !== "authenticated") return null;
+  const canReadCompany = context.availability.reads && companyView;
   const [
-    meResponse,
-    sessionsResponse,
-    preferencesResponse,
-    smsEndpointsResponse,
-    proofDefaultsResponse,
-    accountProfileResponse,
-    personalProfileResponse,
+    meResult,
+    sessionsResult,
+    preferencesResult,
+    smsResult,
+    proofResult,
+    accountResult,
+    personalResult,
   ] = await Promise.all([
-    callPartnerApi("/api/portal/v2/me").catch(() => null),
-    callPartnerApi("/api/portal/v2/sessions").catch(() => null),
-    callPartnerApi("/api/portal/v2/notification-preferences").catch(() => null),
-    callPartnerApi("/api/portal/v2/notification-endpoints").catch(() => null),
-    callPartnerApi("/api/portal/v2/proof-requirements").catch(() => null),
-    callPartnerApi("/api/portal/v2/account-profile").catch(() => null),
-    callPartnerApi("/api/portal/v2/personal-profile").catch(() => null),
+    loadPartnerPortalResource(
+      () => callPartnerApi("/api/portal/v2/me"),
+      parsePortalSettings,
+    ),
+    !companyView
+      ? loadPartnerPortalResource(
+          () => callPartnerApi("/api/portal/v2/sessions"),
+          parsePortalSessions,
+        )
+      : null,
+    !companyView
+      ? loadPartnerPortalResource(
+          () => callPartnerApi("/api/portal/v2/notification-preferences"),
+          parsePortalPreferences,
+        )
+      : null,
+    !companyView
+      ? loadPartnerPortalResource(
+          () => callPartnerApi("/api/portal/v2/notification-endpoints"),
+          parsePortalSmsEndpoints,
+        )
+      : null,
+    canReadCompany
+      ? loadPartnerPortalResource(
+          () => callPartnerApi("/api/portal/v2/proof-requirements"),
+          parsePortalProofDefaults,
+        )
+      : null,
+    canReadCompany
+      ? loadPartnerPortalResource(
+          () => callPartnerApi("/api/portal/v2/account-profile"),
+          parsePortalAccountProfile,
+        )
+      : null,
+    !companyView && context.availability.reads
+      ? loadPartnerPortalResource(
+          () => callPartnerApi("/api/portal/v2/personal-profile"),
+          parsePortalPersonalProfile,
+        )
+      : null,
   ]);
-
-  const [
-    payload,
-    sessionsPayload,
-    preferencesPayload,
-    smsEndpointsPayload,
-    proofDefaultsPayload,
-    accountProfilePayload,
-    personalProfilePayload,
-  ] = await Promise.all([
-    readJson<MePayload>(meResponse),
-    readJson<{ ok: true; sessions: PartnerSettingsSession[] }>(
-      sessionsResponse,
-    ),
-    readJson<{ ok: true; preferences: PartnerSettingsPreference[] }>(
-      preferencesResponse,
-    ),
-    readJson<{ ok: true; endpoints: unknown }>(smsEndpointsResponse),
-    readJson<{ ok: true; requirements: PartnerProofDefault[] }>(
-      proofDefaultsResponse,
-    ),
-    readJson<{ ok: true; profile: PartnerAccountProfile }>(
-      accountProfileResponse,
-    ),
-    readJson<{ ok: true; profile: PartnerPersonalProfile }>(
-      personalProfileResponse,
-    ),
-  ]);
-  const smsEndpoints = smsEndpointsPayload?.ok
-    ? parsePartnerSmsEndpoints(smsEndpointsPayload.endpoints)
-    : null;
-
-  if (!payload?.ok) {
+  if (meResult.status === "error")
     return (
       <PartnerErrorState
         title="We couldn’t load account settings"
-        description="Your security settings are unchanged. Try again in a moment."
+        description={portalLoadErrorMessage(
+          meResult,
+          "Try again to view your settings.",
+        )}
         retryHref="/partners/settings"
       />
     );
-  }
-
+  const payload = meResult.value;
+  const sessionsPayload =
+    sessionsResult?.status === "ok" ? sessionsResult.value : null;
+  const preferencesPayload =
+    preferencesResult?.status === "ok" ? preferencesResult.value : null;
+  const proofDefaultsPayload =
+    proofResult?.status === "ok" ? proofResult.value : null;
+  const accountProfilePayload =
+    accountResult?.status === "ok" ? accountResult.value : null;
+  const personalProfilePayload =
+    personalResult?.status === "ok" ? personalResult.value : null;
+  const smsEndpoints = smsResult?.status === "ok" ? smsResult.value : null;
+  const sectionErrors = [
+    ["Devices", sessionsResult],
+    ["Update preferences", preferencesResult],
+    ["Text message settings", smsResult],
+    ["Photo preferences", proofResult],
+    ["Company profile", accountResult],
+    ["Personal profile", personalResult],
+  ] as const;
   const passwordSet = Boolean(payload.partnerUser.passwordSet);
   const userName = payload.partnerUser.name?.trim() || "Partner user";
   const userEmail = payload.partnerUser.email?.trim() || "Email unavailable";
@@ -149,6 +151,7 @@ export default async function PartnerSettingsPage({
     "portal.session.read",
   );
   const canManageProofDefaults =
+    context.availability.writes &&
     payload.membership.capabilities?.includes("account.update");
 
   return (
@@ -165,7 +168,7 @@ export default async function PartnerSettingsPage({
           { label: "Settings", href: "/partners/settings" },
         ]}
         actions={
-          companyView && canReadMembers ? (
+          companyView && context.availability.reads && canReadMembers ? (
             <Link
               href={"/partners/settings/team" as Route}
               className={partnerSecondaryButtonClass}
@@ -216,19 +219,42 @@ export default async function PartnerSettingsPage({
         </Link>
       ) : null}
 
+      {sectionErrors.map(([label, result]) =>
+        result?.status === "error" ? (
+          <PartnerErrorState
+            key={label}
+            title={`${label} could not be loaded`}
+            description={portalLoadErrorMessage(
+              result,
+              "Try again to see these settings.",
+            )}
+            retryHref={
+              companyView
+                ? "/partners/settings?view=company"
+                : "/partners/settings"
+            }
+          />
+        ) : null,
+      )}
+      {companyView && !context.availability.reads ? (
+        <PartnerNotice tone="info">
+          Company settings are temporarily unavailable. Your sign-in and device
+          settings are still available under Personal settings.
+        </PartnerNotice>
+      ) : null}
       {!companyView ? (
         <>
-          <div className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
             <PartnerPanel>
               <div className="flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary-50 text-primary-700 ring-1 ring-primary-100">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary-50 text-primary-700 ring-1 ring-primary-100">
                   <UserRound className="h-6 w-6" aria-hidden="true" />
                 </div>
                 <div className="min-w-0">
-                  <h2 className="truncate text-lg font-semibold text-slate-950">
+                  <h2 className="text-lg font-semibold text-slate-950 [overflow-wrap:anywhere]">
                     {userName}
                   </h2>
-                  <p className="mt-0.5 truncate text-sm text-slate-600">
+                  <p className="mt-0.5 text-sm text-slate-600 [overflow-wrap:anywhere]">
                     {payload.membership.roleKey.replaceAll("_", " ")} ·{" "}
                     {payload.account.name}
                   </p>
@@ -288,10 +314,18 @@ export default async function PartnerSettingsPage({
             </PartnerPanel>
           </div>
 
-          <PartnerPersonalProfileManager
-            initialProfile={personalProfilePayload?.profile ?? null}
-            initialEtag={personalProfileResponse?.headers.get("etag") ?? null}
-          />
+          {personalProfilePayload ? (
+            <fieldset disabled={!context.availability.writes}>
+              <PartnerPersonalProfileManager
+                initialProfile={personalProfilePayload.profile}
+                initialEtag={
+                  personalResult?.status === "ok"
+                    ? personalResult.response.headers.get("etag")
+                    : null
+                }
+              />
+            </fieldset>
+          ) : null}
 
           <PartnerEmailChangeForm
             currentEmail={userEmail}
@@ -301,7 +335,11 @@ export default async function PartnerSettingsPage({
           <PartnerAccountSecurityManager
             accounts={accounts}
             sessions={sessionsPayload?.sessions ?? null}
-            sessionsEtag={sessionsResponse?.headers.get("etag") ?? null}
+            sessionsEtag={
+              sessionsResult?.status === "ok"
+                ? sessionsResult.response.headers.get("etag")
+                : null
+            }
             preferences={preferencesPayload?.preferences ?? null}
             smsEndpoints={smsEndpoints}
             canManageSmsEndpoints={Boolean(canManageSmsEndpoints)}
@@ -309,15 +347,37 @@ export default async function PartnerSettingsPage({
         </>
       ) : (
         <>
-          <PartnerAccountProfileManager
-            initialProfile={accountProfilePayload?.profile ?? null}
-            initialEtag={accountProfileResponse?.headers.get("etag") ?? null}
-          />
+          {accountProfilePayload ? (
+            <PartnerAccountProfileManager
+              initialProfile={{
+                ...accountProfilePayload.profile,
+                permissions: {
+                  ...accountProfilePayload.profile.permissions,
+                  canEditOrganization:
+                    context.availability.writes &&
+                    accountProfilePayload.profile.permissions
+                      .canEditOrganization,
+                  canEditBilling:
+                    context.availability.writes &&
+                    accountProfilePayload.profile.permissions.canEditBilling,
+                },
+              }}
+              initialEtag={
+                accountResult?.status === "ok"
+                  ? accountResult.response.headers.get("etag")
+                  : null
+              }
+            />
+          ) : null}
 
           {proofDefaultsPayload?.ok ? (
             <PartnerProofDefaultsManager
               requirements={proofDefaultsPayload.requirements}
-              etag={proofDefaultsResponse?.headers.get("etag") ?? ""}
+              etag={
+                proofResult?.status === "ok"
+                  ? (proofResult.response.headers.get("etag") ?? "")
+                  : ""
+              }
               canEdit={Boolean(canManageProofDefaults)}
             />
           ) : null}

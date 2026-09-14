@@ -37,6 +37,9 @@ describe("partner V2 scheduling-safe service catalog", () => {
 
   it("renders only the account-selected V2 catalog with canonical base options and add-ons", () => {
     const page = source("apps/site/src/app/partners/(portal)/book/page.tsx");
+    const parser = source(
+      "apps/site/src/app/partners/lib/booking-page-data.ts",
+    );
     const billing = source(
       "apps/site/src/app/partners/(portal)/billing/page.tsx",
     );
@@ -46,11 +49,13 @@ describe("partner V2 scheduling-safe service catalog", () => {
     expect(page).toContain("/api/portal/v2/service-catalog");
     expect(page).not.toContain("/api/portal/rates");
     expect(page).not.toContain("mergeServices(");
-    expect(page).toContain(
-      "const services = parseCatalogServices(catalogPayload)",
+    expect(page).toMatch(
+      /loadPartnerPortalResource\(\s*\(\) => callPartnerApi\("\/api\/portal\/v2\/service-catalog"\),\s*parseCatalogServices/u,
     );
-    expect(page).toContain("parseCatalogBaseOptions");
-    expect(page).toContain("parseCatalogAddOns");
+    expect(parser).toContain(
+      "baseOptions: parseCatalogBaseOptions(item.baseOptions)",
+    );
+    expect(parser).toContain("addOns: parseCatalogAddOns(item.addOns)");
     expect(billing).toContain("/api/portal/v2/service-catalog");
     expect(billing).not.toContain("/api/portal/rates");
     expect(billing).toContain("parsePartnerServiceRateCard");

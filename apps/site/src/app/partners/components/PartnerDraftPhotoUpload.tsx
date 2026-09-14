@@ -24,6 +24,7 @@ import {
   uploadPortalFileWithProgress,
 } from "../lib/upload-with-progress";
 import { PartnerSelectedPhotoPreviews } from "./PartnerSelectedPhotoPreviews";
+import { isPortalProofMedia } from "../lib/portal-read-models";
 import {
   PartnerNotice,
   partnerFieldClass,
@@ -91,6 +92,7 @@ export function PartnerDraftPhotoUpload({
   persona?: string | null;
 }) {
   const [state, setState] = React.useState<MediaState>("loading");
+  const [loadError, setLoadError] = React.useState<string | null>(null);
   const [media, setMedia] = React.useState<PartnerProofMedia[]>([]);
   const [files, setFiles] = React.useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = React.useState<number[]>([]);
@@ -130,16 +132,30 @@ export function PartnerDraftPhotoUpload({
             ? "unavailable"
             : "error",
       );
+      setLoadError(
+        result?.error.message ??
+          "Attached photos could not be loaded. Please try again before adding files.",
+      );
       return false;
     }
-    if (!Array.isArray(result.data.media)) {
+    if (
+      !Array.isArray(result.data.media) ||
+      !result.data.media.every(isPortalProofMedia)
+    ) {
       setState("error");
+      setLoadError(
+        withPortalSupportReference(
+          "Attached photos could not be loaded. Please try again before adding files.",
+          portalSupportReferenceFromResponse(result.response),
+        ),
+      );
       return false;
     }
     mediaRef.current = result.data.media;
     setMedia(result.data.media);
     onCountChange(result.data.media.length);
     setState("ready");
+    setLoadError(null);
     return true;
   }, [draftId, onCountChange]);
 
@@ -395,14 +411,22 @@ export function PartnerDraftPhotoUpload({
       </div>
     );
   }
-  if (state !== "ready") {
+  if (state !== "ready" && media.length === 0) {
     return (
       <PartnerNotice tone={state === "error" ? "error" : "warning"}>
-        {state === "forbidden"
-          ? "Your role can request proof but cannot view or upload booking photos."
-          : state === "unavailable"
-            ? "Booking photo attachments are not available for this account yet. You can continue scheduling; no file was uploaded."
-            : "Attached photos could not be loaded. Refresh before adding files."}
+        {loadError ??
+          (state === "forbidden"
+            ? "Your role can request proof but cannot view or upload booking photos."
+            : state === "unavailable"
+              ? "Photos could not be loaded right now. Please try again before adding files. You can continue your request without photos."
+              : "Attached photos could not be loaded. Refresh before adding files.")}
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          className={cn(partnerPrimaryButtonClass, "mt-3")}
+        >
+          Try again
+        </button>
       </PartnerNotice>
     );
   }
@@ -435,7 +459,19 @@ export function PartnerDraftPhotoUpload({
           {message.text}
         </PartnerNotice>
       ) : null}
-      {canUpload ? (
+      {loadError ? (
+        <PartnerNotice tone="warning" className="mt-4">
+          {loadError} Your last loaded photos are still shown.
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className={cn(partnerPrimaryButtonClass, "mt-3")}
+          >
+            Try again
+          </button>
+        </PartnerNotice>
+      ) : null}
+      {canUpload && state === "ready" ? (
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label htmlFor={`draft-photo-category-${draftId}`}>
             <span className="text-sm font-semibold text-slate-700">
@@ -536,7 +572,8 @@ export function PartnerDraftPhotoUpload({
         </div>
       ) : (
         <PartnerNotice tone="info" className="mt-4">
-          Your role can view attached photos but cannot add or remove them.
+          You can view attached photos. Adding or removing photos is not
+          available right now.
         </PartnerNotice>
       )}
 
@@ -594,7 +631,7 @@ export function PartnerDraftPhotoUpload({
                         <ExternalLink className="h-4 w-4" aria-hidden="true" />
                       </a>
                     ) : null}
-                    {canUpload ? (
+                    {canUpload && state === "ready" ? (
                       <button
                         type="button"
                         onClick={() => void remove(item)}

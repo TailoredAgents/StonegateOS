@@ -27,7 +27,7 @@ const manifest = readFileSync(
 
 void test("Commercial administration exposes an account-scoped approval-rule manager", () => {
   assert.match(workspace, /<PartnerApprovalRuleManager/u);
-  assert.match(workspace, /Manage approval rules/u);
+  assert.match(workspace, /Company approval rules/u);
   assert.match(workspace, /includeInactive=true/u);
   assert.match(workspace, /partners\.commercial\.manage/u);
   assert.match(manager, /Every matching active rule applies/u);

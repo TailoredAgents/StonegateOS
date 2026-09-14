@@ -2,6 +2,16 @@ import type { Metadata, Route } from "next";
 import Link from "next/link";
 import { Camera, MapPin, ShieldCheck } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
+import {
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+  type PortalLoadError,
+} from "../../lib/portal-load";
+import {
+  parsePortalJobs,
+  parsePortalJob,
+  parsePortalProof,
+} from "../../lib/portal-read-models";
 import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
 import { PartnerProofWorkspace } from "@/app/partners/components/PartnerProofWorkspace";
 import type {
@@ -11,31 +21,12 @@ import type {
 import {
   PartnerEmptyState,
   PartnerErrorState,
-  PartnerNotice,
   PartnerPageHeader,
   PartnerPanel,
   PartnerStatusBadge,
 } from "@/app/partners/components/PartnerPortalUi";
 
 export const metadata: Metadata = { title: "Photos & proof" };
-
-function isJobSummary(value: unknown): value is PartnerJobSummary {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record["id"] === "string" && typeof record["status"] === "string"
-  );
-}
-
-function isProof(value: unknown): value is PartnerProof {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    Array.isArray(record["media"]) &&
-    Array.isArray(record["packages"]) &&
-    Array.isArray(record["requirements"])
-  );
-}
 
 function jobLabel(job: PartnerJobSummary): string {
   if (job.location.name?.trim()) return job.location.name;
@@ -78,107 +69,93 @@ export default async function PartnerPhotosPage({
       ...(values.jobId ? { jobId: values.jobId } : {}),
       ...(values.cursor ? { cursor: values.cursor } : {}),
     }).toString()}` as Route;
-  const [jobsResponse, portalContext, requestedResponse] = await Promise.all([
-    callPartnerApi(`/api/portal/v2/jobs?${query}`).catch(() => null),
-    getPartnerPortalContext(),
+  const portalContext = await getPartnerPortalContext();
+  if (
+    portalContext.status !== "authenticated" ||
+    !portalContext.availability.reads
+  )
+    return null;
+  if (!portalContext.capabilities.proof)
+    return (
+      <PartnerErrorState
+        title="Photos and proof are not part of your role"
+        description="Ask your company administrator for access to job photos and documents."
+        retryHref="/partners/overview"
+      />
+    );
+  const [jobsResult, requestedResult] = await Promise.all([
+    loadPartnerPortalResource(
+      () => callPartnerApi(`/api/portal/v2/jobs?${query}`),
+      parsePortalJobs,
+    ),
     requestedJobId
-      ? callPartnerApi(
-          `/api/portal/v2/jobs/${encodeURIComponent(requestedJobId)}`,
-        ).catch(() => null)
-      : Promise.resolve(null),
+      ? loadPartnerPortalResource(
+          () =>
+            callPartnerApi(
+              `/api/portal/v2/jobs/${encodeURIComponent(requestedJobId)}`,
+            ),
+          parsePortalJob,
+        )
+      : null,
   ]);
-  const requestedPayload = requestedResponse?.ok
-    ? ((await requestedResponse.json().catch(() => null)) as {
-        job?: PartnerJobSummary;
-      } | null)
-    : null;
-  if (requestedJobId && !isJobSummary(requestedPayload?.job)) {
+  if (requestedResult?.status === "error")
     return (
       <PartnerErrorState
         title="This job could not be opened"
-        description="No other job has been selected. Open My jobs or contact Stonegate for help."
-        retryHref={`/partners/photos?jobId=${encodeURIComponent(requestedJobId)}`}
+        description={portalLoadErrorMessage(
+          requestedResult,
+          "No other job has been selected. Open My jobs or contact Stonegate for help.",
+        )}
+        retryHref={photosHref({ jobId: requestedJobId, cursor })}
       />
     );
-  }
-  if (!jobsResponse?.ok) {
-    const unavailable = [404, 409, 501, 503].includes(
-      jobsResponse?.status ?? 503,
-    );
-    return unavailable ? (
-      <div className="space-y-5 sm:space-y-6">
-        <PartnerPageHeader
-          eyebrow="Job photos in one place"
-          title="Photos & proof"
-          description="Add job photos, see what proof is still needed, and keep the finished record easy to find."
-          breadcrumbs={[
-            { label: "Overview", href: "/partners/overview" },
-            { label: "Photos & proof", href: "/partners/photos" },
-          ]}
-        />
-        <PartnerPanel>
-          <PartnerEmptyState
-            title="Photo and proof tools are not available right now"
-            description="No photos were uploaded or shared. Contact Stonegate and include the job you need documentation for."
-            action={{ href: "/partners/help", label: "Ask for job documents" }}
-            icon={<Camera className="h-6 w-6" aria-hidden="true" />}
-          />
-        </PartnerPanel>
-      </div>
-    ) : (
+  if (jobsResult.status === "error")
+    return (
       <PartnerErrorState
         title="We couldn’t load Photos & proof"
-        description="Your existing job media is unchanged. Try again in a moment."
-        retryHref="/partners/photos"
+        description={portalLoadErrorMessage(
+          jobsResult,
+          "Your job photos could not be loaded. Try again, or contact Stonegate for help.",
+        )}
+        retryHref={photosHref({ jobId: requestedJobId, cursor })}
       />
     );
-  }
-  const jobsPayload = (await jobsResponse.json().catch(() => null)) as {
-    jobs?: unknown[];
-    page?: { hasMore?: boolean; nextCursor?: string | null };
-  } | null;
-  const nextCursor = jobsPayload?.page?.hasMore
-    ? jobsPayload.page.nextCursor
-    : null;
-  const jobs = (jobsPayload?.jobs ?? []).filter(isJobSummary);
-  const selectedJob = requestedJobId
-    ? requestedPayload!.job!
-    : (jobs[0] ?? null);
+  const nextCursor = jobsResult.value.nextCursor;
+  const jobs = [...jobsResult.value.items];
+  const selectedJob =
+    requestedResult?.status === "ok"
+      ? requestedResult.value
+      : (jobs[0] ?? null);
   if (selectedJob && !jobs.some((job) => job.id === selectedJob.id))
     jobs.unshift(selectedJob);
 
   let proof: PartnerProof | null = null;
   let detailActions: string[] = [];
-  let proofUnavailable = false;
+  let proofError: PortalLoadError | null = null;
   if (selectedJob) {
-    const [proofResponse, detailResponse] = await Promise.all([
-      callPartnerApi(
-        `/api/portal/v2/jobs/${encodeURIComponent(selectedJob.id)}/proof`,
-      ).catch(() => null),
-      callPartnerApi(
-        `/api/portal/v2/jobs/${encodeURIComponent(selectedJob.id)}`,
-      ).catch(() => null),
+    const [proofResult, detailResult] = await Promise.all([
+      loadPartnerPortalResource(
+        () =>
+          callPartnerApi(
+            `/api/portal/v2/jobs/${encodeURIComponent(selectedJob.id)}/proof`,
+          ),
+        parsePortalProof,
+      ),
+      requestedResult?.status === "ok"
+        ? requestedResult
+        : loadPartnerPortalResource(
+            () =>
+              callPartnerApi(
+                `/api/portal/v2/jobs/${encodeURIComponent(selectedJob.id)}`,
+              ),
+            parsePortalJob,
+          ),
     ]);
-    if (proofResponse?.ok) {
-      const payload = (await proofResponse.json().catch(() => null)) as {
-        proof?: unknown;
-      } | null;
-      proof = isProof(payload?.proof) ? payload.proof : null;
-    } else {
-      proofUnavailable = [404, 409, 501, 503].includes(
-        proofResponse?.status ?? 503,
-      );
-    }
-    if (detailResponse?.ok) {
-      const payload = (await detailResponse.json().catch(() => null)) as {
-        job?: { allowedActions?: unknown };
-      } | null;
-      detailActions = Array.isArray(payload?.job?.allowedActions)
-        ? payload.job.allowedActions.filter(
-            (value): value is string => typeof value === "string",
-          )
-        : [];
-    }
+    if (proofResult.status === "ok") proof = proofResult.value;
+    else proofError = proofResult;
+    if (detailResult.status === "ok")
+      detailActions = detailResult.value.allowedActions;
+    else proofError ??= detailResult;
   }
 
   return (
@@ -335,6 +312,16 @@ export default async function PartnerPhotosPage({
                 <PartnerStatusBadge status={selectedJob.status} />
               </div>
             </div>
+            {proof && proofError ? (
+              <PartnerErrorState
+                title="Job actions could not be refreshed"
+                description={portalLoadErrorMessage(
+                  proofError,
+                  "Photos are shown below. Try again before uploading or sharing.",
+                )}
+                retryHref={photosHref({ jobId: selectedJob.id, cursor })}
+              />
+            ) : null}
             {proof ? (
               <PartnerProofWorkspace
                 accountId={
@@ -360,21 +347,19 @@ export default async function PartnerPhotosPage({
                     : null
                 }
               />
-            ) : proofUnavailable ? (
-              <PartnerEmptyState
-                title="Photo and proof tools are unavailable for this job"
-                description="No upload or share action was attempted, and the job record is unchanged. Open the job for its current details or contact Stonegate for help."
-                action={{
-                  href: `/partners/bookings/${selectedJob.id}`,
-                  label: "Open job details",
-                }}
-                icon={<Camera className="h-6 w-6" aria-hidden="true" />}
-              />
             ) : (
-              <PartnerNotice tone="error">
-                The proof response was incomplete. Refresh this page before
-                uploading or sharing anything.
-              </PartnerNotice>
+              <PartnerErrorState
+                title="We couldn’t load this job’s photos and proof"
+                description={
+                  proofError
+                    ? portalLoadErrorMessage(
+                        proofError,
+                        "Try again to view the photos and documents for this job.",
+                      )
+                    : "The response was incomplete. Try again."
+                }
+                retryHref={photosHref({ jobId: selectedJob.id, cursor })}
+              />
             )}
           </PartnerPanel>
         </div>

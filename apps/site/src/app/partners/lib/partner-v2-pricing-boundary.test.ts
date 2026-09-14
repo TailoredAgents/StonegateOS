@@ -105,3 +105,51 @@ void test("limited-access hidden prices stay hidden on direct billing loads", ()
     { status: "forbidden" },
   );
 });
+
+void test("a new company with a valid quote-required catalog and no agreement has no saved rates", () => {
+  // Canonical catalog response when the account has no negotiated agreement.
+  const catalog = {
+    ok: true,
+    agreement: null,
+    services: [
+      {
+        key: "service_request",
+        label: "Request service",
+        description:
+          "Tell us what you need removed or taken care of. Stonegate will confirm the details, price, and time with you.",
+        requiredScopeFields: ["description"],
+        defaultProofRequirements: { before: 1, after: 1 },
+        bookable: true,
+        priceState: "quote_required",
+        agreement: null,
+        inclusions: [],
+        exclusions: [],
+        quoteRule:
+          "Stonegate will review your request and confirm the price and time with you.",
+        pricingStatus: "review_required",
+        basePrice: null,
+        baseOptions: [],
+        addOns: [],
+      },
+    ],
+  };
+  assert.deepEqual(parsePartnerServiceRateCard(catalog), {
+    status: "ready",
+    currency: "USD",
+    items: [],
+  });
+  assert.deepEqual(parsePartnerServiceRateCard({ ...catalog, agreement: {} }), {
+    status: "error",
+  });
+  assert.deepEqual(
+    parsePartnerServiceRateCard({ ...catalog, services: undefined }),
+    { status: "error" },
+  );
+  assert.deepEqual(
+    parsePartnerServiceRateCard({
+      ...catalog,
+      services: [{ ...catalog.services[0], baseOptions: null }],
+    }),
+    { status: "error" },
+  );
+});

@@ -277,7 +277,11 @@ export function parsePartnerServiceRateCard(
   }
 
   const agreement = parseAgreement(payload["agreement"]);
-  if (payload["agreement"] !== undefined && !agreement) {
+  if (
+    payload["agreement"] !== undefined &&
+    payload["agreement"] !== null &&
+    !agreement
+  ) {
     return { status: "error" };
   }
   if (items.length === 0 && hiddenPricing) return { status: "forbidden" };

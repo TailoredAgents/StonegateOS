@@ -6,7 +6,7 @@ Use this checklist for changes that affect live operations (Stonegate or any TA 
 
 This checklist applies to:
 
-- `apps/site` (public site + `/team`)
+- `apps/site` (public site + `/team` + `/partners`)
 - `apps/api` (API + admin routes)
 - `outbox-worker` (background jobs)
 
@@ -29,6 +29,20 @@ This checklist applies to:
 4. Deployment safety
    - Prefer small, reversible deploys.
    - For high-risk changes, schedule outside peak hours.
+
+### Required Partner Portal release gate
+
+For changes to portal access, page data, company tools, requests, uploads or worker behavior:
+
+1. Pass the [Partner Portal production journey workflow](../.github/workflows/partner-portal-release.yml). It runs API/Site regressions, browser recovery, worker rendering, real PostgreSQL integration, production builds, and the [new-company journey](../scripts/test-partner-empty-company.mts) against actual local services. The journey must cover activation, every tab, first location, a request awaiting staff review and optional company tools. Record skips and failures; mocked page success and process health alone are insufficient.
+2. Review [render.yaml](../render.yaml) and the effective deployed API **and worker** settings. Explicitly configure reads/writes, purpose authentication, routine magic login, internal test mode and account restrictions; verify required secrets without printing their values. Apply migrations through the existing runner. Check quote signing secrets and the actual trusted-proxy hop configuration when readiness reports an issue.
+3. Match the approved company behavior through normal staff settings. Basic location creation must work independently of portfolio tools. For the [September 13 LandL release](audits/partner-landl-portal-remediation-2026-09-13.md), enable its six company tools, retain staff confirmation for every request, and keep card, ACH and hosted payment collection disabled. Do not enable outbound notifications as part of this release.
+4. After deployment, run the read-only [portal release check](../scripts/check-partner-portal-release.mts): `pnpm check:partner-portal:release`. Supply `PARTNER_PORTAL_CHECK_API_URL`, `PARTNER_PORTAL_CHECK_ACCOUNT_ID` and `PARTNER_PORTAL_CHECK_SESSION` through the environment; use a normal signed-in session and never put credentials in command arguments or logs. `--readiness-only` checks infrastructure without a session, but does not satisfy the account gate. Confirm the expected company and ordinary browser sign-in separately.
+5. Open every relevant tab on the deployed Site and verify truthful empty states, reads, permitted actions, retry behavior and support references. Confirm upload storage/CORS and the deployed worker when those paths changed. Use controlled test accounts for record-creating journeys; keep real company data intact. Record deployment revision, service versions, checks and any remaining limits in the release audit.
+
+A deliberately configured maintenance or read-only state must be shown clearly to partners. It does not satisfy the normal-service portal gate, even when the general health check is green. Keep payment and notification enablement as separate, explicitly approved changes.
+
+The API pre-deploy command must run `scripts/check-partner-portal-deployment.mts` after the existing migration check. It reads configuration and database state, rejects missing settings, and permits explicitly configured maintenance.
 
 ## After deploy (must verify)
 

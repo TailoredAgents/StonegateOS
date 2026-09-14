@@ -13,7 +13,21 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
-import { createPortalOperationKey, partnerPortalFetch } from "../lib/portal-v2";
+import {
+  createPortalOperationKey,
+  partnerPortalFetch,
+  portalSupportReferenceFromResponse,
+  withPortalSupportReference,
+} from "../lib/portal-v2";
+import {
+  parsePortalTemplates,
+  parsePortalRecurringSeries,
+  parsePortalBulkHistory,
+  parsePortalBulkImport,
+  type PortalServiceTemplate as ServiceTemplate,
+  type PortalRecurringSeries as RecurringSeries,
+  type PortalBulkImport as BulkResult,
+} from "../lib/portal-repeat-load";
 import { getPartnerPersonaPresentation } from "../lib/persona-presentation";
 import { confirmPartnerNavigation } from "../lib/use-partner-unsaved-changes";
 import { usePartnerLiveRefresh } from "../lib/use-partner-live-refresh";
@@ -29,64 +43,6 @@ import {
   partnerPrimaryButtonClass,
   partnerSecondaryButtonClass,
 } from "./PartnerPortalUi";
-
-type ServiceTemplate = {
-  active: boolean;
-  reusable?: { description?: string; crewInstructions?: string | null };
-  id: string;
-  name: string;
-  serviceKey: string;
-  locationId: string | null;
-  updatedAt: string;
-  etag: string;
-};
-
-type RecurringOccurrence = {
-  id: string;
-  localDate: string;
-  state: string;
-  draftId: string | null;
-  jobId: string | null;
-  currentJobStatus: string | null;
-  reason: string | null;
-};
-
-type RecurringSeries = {
-  id: string;
-  name: string;
-  state: string;
-  revision: number;
-  etag: string;
-  endsOn: string | null;
-  lifecycle: {
-    action: "pause" | "resume" | "cancel";
-    reason: string;
-    changedAt: string;
-  } | null;
-  occurrences: RecurringOccurrence[];
-};
-
-type BulkResult = {
-  id: string;
-  state: string;
-  etag: string;
-  dryRun: boolean;
-  rowCount: number;
-  validCount: number;
-  errorCount: number;
-  correctionCsv: string;
-  capacityReserved: boolean;
-  pendingCount: number;
-  confirmedCount: number;
-  reviewCount: number;
-  rows: Array<{
-    rowNumber: number;
-    state: string;
-    draftId: string | null;
-    jobId: string | null;
-    errors: Array<{ field?: string; message?: string }>;
-  }>;
-};
 
 function humanize(value: string): string {
   return value
@@ -112,16 +68,23 @@ function downloadText(filename: string, value: string): void {
 
 export function PartnerRepeatWorkManager({
   canManageSeries,
+  canCreateRequests = true,
+  instantConfirmation = false,
   persona,
   enabledTools = { templates: false, recurring: false, bulk: false },
 }: {
   canManageSeries: boolean;
+  canCreateRequests?: boolean;
+  instantConfirmation?: boolean;
   persona: string | null;
   enabledTools?: { templates: boolean; recurring: boolean; bulk: boolean };
 }) {
   const router = useRouter();
   const personaPresentation = getPartnerPersonaPresentation(persona);
   const [templates, setTemplates] = React.useState<ServiceTemplate[]>([]);
+  const [templateError, setTemplateError] = React.useState<string | null>(null);
+  const [seriesError, setSeriesError] = React.useState<string | null>(null);
+  const [bulkError, setBulkError] = React.useState<string | null>(null);
   const [templateCursor, setTemplateCursor] = React.useState<string | null>(
     null,
   );
@@ -178,21 +141,37 @@ export function PartnerRepeatWorkManager({
       }>("recurring-series").catch(() => null),
     ]);
     setLoading(false);
-    if (templateResult?.ok) {
-      setTemplates(templateResult.data.templates);
-      setTemplateCursor(templateResult.data.nextCursor);
+    const templatesPage = templateResult?.ok
+      ? parsePortalTemplates(templateResult.data)
+      : null;
+    const seriesPage = seriesResult?.ok
+      ? parsePortalRecurringSeries(seriesResult.data)
+      : null;
+    if (templatesPage) {
+      setTemplates(templatesPage.templates);
+      setTemplateCursor(templatesPage.nextCursor);
     }
-    if (seriesResult?.ok) {
-      setSeries(seriesResult.data.series);
-      setSeriesCursor(seriesResult.data.nextCursor);
+    if (seriesPage) {
+      setSeries(seriesPage.series);
+      setSeriesCursor(seriesPage.nextCursor);
     }
-    if (!templateResult?.ok || !seriesResult?.ok) {
-      setMessage({
-        tone: "warning",
-        text: "Some repeat-work tools could not be loaded. Your bookings are unchanged.",
-      });
-    }
-  }, [enabledTools.templates, enabledTools.recurring]);
+    setTemplateError(
+      templatesPage
+        ? null
+        : withPortalSupportReference(
+            "Saved templates could not be loaded. Try Refresh.",
+            portalSupportReferenceFromResponse(templateResult?.response),
+          ),
+    );
+    setSeriesError(
+      seriesPage
+        ? null
+        : withPortalSupportReference(
+            "Recurring service could not be loaded. Try Refresh.",
+            portalSupportReferenceFromResponse(seriesResult?.response),
+          ),
+    );
+  }, []);
 
   React.useEffect(() => {
     void load();
@@ -209,46 +188,53 @@ export function PartnerRepeatWorkManager({
       { signal: AbortSignal.timeout(8_000) },
     ).catch(() => null);
     if (generation !== templateGeneration.current) return;
-    if (!result?.ok) {
-      setMessage({
-        tone: "warning",
-        text: "Saved templates could not be loaded. Please try again.",
-      });
+    const parsed = result?.ok ? parsePortalTemplates(result.data) : null;
+    if (!result?.ok || !parsed) {
+      setTemplateError(
+        withPortalSupportReference(
+          "Saved templates could not be loaded. Try Refresh.",
+          portalSupportReferenceFromResponse(result?.response),
+        ),
+      );
       return;
     }
+    setTemplateError(null);
     setTemplates((current) =>
       cursor
         ? [
             ...new Map(
-              [...current, ...result.data.templates].map((item) => [
-                item.id,
-                item,
-              ]),
+              [...current, ...parsed.templates].map((item) => [item.id, item]),
             ).values(),
           ]
-        : result.data.templates,
+        : parsed.templates,
     );
-    setTemplateCursor(result.data.nextCursor);
+    setTemplateCursor(parsed.nextCursor);
   }
 
-  const loadBulkHistory = React.useCallback(
-    async (cursor?: string) => {
-      const result = await partnerPortalFetch<{
-        ok: true;
-        imports: typeof bulkHistory;
-        nextCursor: string | null;
-      }>(
-        `bulk-imports${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
-      ).catch(() => null);
-      if (result?.ok) {
-        setBulkHistory((current) =>
-          cursor ? [...current, ...result.data.imports] : result.data.imports,
-        );
-        setBulkCursor(result.data.nextCursor);
-      }
-    },
-    [enabledTools.bulk],
-  );
+  const loadBulkHistory = React.useCallback(async (cursor?: string) => {
+    const result = await partnerPortalFetch<{
+      ok: true;
+      imports: typeof bulkHistory;
+      nextCursor: string | null;
+    }>(
+      `bulk-imports${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+    ).catch(() => null);
+    const parsed = result?.ok ? parsePortalBulkHistory(result.data) : null;
+    if (parsed) {
+      setBulkHistory((current) =>
+        cursor ? [...current, ...parsed.imports] : parsed.imports,
+      );
+      setBulkCursor(parsed.nextCursor);
+      setBulkError(null);
+    } else {
+      setBulkError(
+        withPortalSupportReference(
+          "Import history could not be loaded. Try Refresh.",
+          portalSupportReferenceFromResponse(result?.response),
+        ),
+      );
+    }
+  }, []);
   React.useEffect(() => {
     void loadBulkHistory();
     if (enabledTools.bulk)
@@ -256,8 +242,12 @@ export function PartnerRepeatWorkManager({
         "locations?limit=1&active=true",
       )
         .then((result) => {
-          if (result.ok)
-            setSampleLocationId(result.data.locations[0]?.id ?? "");
+          if (result.ok && Array.isArray(result.data.locations))
+            setSampleLocationId(
+              typeof result.data.locations[0]?.id === "string"
+                ? result.data.locations[0].id
+                : "",
+            );
         })
         .catch(() => undefined);
   }, [enabledTools.bulk, loadBulkHistory]);
@@ -268,8 +258,9 @@ export function PartnerRepeatWorkManager({
         `bulk-imports/${encodeURIComponent(importId)}`,
         { signal },
       ).catch(() => null);
-      if (result?.ok) {
-        setBulkResult(result.data.import);
+      const parsed = result?.ok ? parsePortalBulkImport(result.data) : null;
+      if (parsed) {
+        setBulkResult(parsed.import);
         if (resetPage) setBulkPage(0);
         return true;
       }
@@ -290,6 +281,7 @@ export function PartnerRepeatWorkManager({
   );
 
   const updateTemplate = async (template: ServiceTemplate, active: boolean) => {
+    if (!canManageSeries) return;
     if (
       !active &&
       !window.confirm(
@@ -329,6 +321,7 @@ export function PartnerRepeatWorkManager({
   };
 
   const applyTemplate = async (templateId: string): Promise<void> => {
+    if (!canCreateRequests) return;
     if (!confirmPartnerNavigation()) return;
     setBusy(`template:${templateId}`);
     setMessage(null);
@@ -359,6 +352,7 @@ export function PartnerRepeatWorkManager({
     event: React.FormEvent<HTMLFormElement>,
   ): Promise<void> => {
     event.preventDefault();
+    if (!canCreateRequests) return;
     const form = new FormData(event.currentTarget);
     const payload = {
       templateId: formString(form, "templateId"),
@@ -400,6 +394,7 @@ export function PartnerRepeatWorkManager({
     item: RecurringSeries,
     action: "pause" | "resume" | "cancel",
   ): Promise<void> => {
+    if (!canManageSeries) return;
     const reason = (lifecycleReasons[item.id] ?? "").trim();
     if (reason.length < 2 || reason.length > 300) {
       setMessage({
@@ -484,6 +479,7 @@ export function PartnerRepeatWorkManager({
   };
 
   const sendBulk = async (dryRun: boolean): Promise<void> => {
+    if (!canCreateRequests) return;
     if (dryRun && (!csvFile || csvText === null)) return;
     if (!dryRun && !bulkResult?.dryRun) return;
     setBusy(dryRun ? "bulk-dry-run" : "bulk-commit");
@@ -513,14 +509,27 @@ export function PartnerRepeatWorkManager({
       });
       return;
     }
-    setBulkResult(result.data.import);
+    const parsed = parsePortalBulkImport(result.data);
+    if (!parsed) {
+      setMessage({
+        tone: "warning",
+        text: withPortalSupportReference(
+          "The import response was incomplete. Refresh its saved history before trying again.",
+          portalSupportReferenceFromResponse(result.response),
+        ),
+      });
+      return;
+    }
+    setBulkResult(parsed.import);
     setBulkPage(0);
     void loadBulkHistory();
     setMessage({
-      tone: result.data.import.errorCount ? "warning" : "success",
+      tone: parsed.import.errorCount ? "warning" : "success",
       text: dryRun
         ? "File check complete. Review every row before saving requests. No job or capacity reservation was created."
-        : "Your requests are saved and processing. Eligible work confirms in the requested window; other work goes to Stonegate for review. You can leave and return to these results.",
+        : instantConfirmation
+          ? "Your requests are saved and processing. Each result shows whether its time is confirmed or needs Stonegate’s review. You can return to these results later."
+          : "Your requests are saved and processing. Stonegate will review each request and confirm its price and arrival time. You can return to these results later.",
     });
   };
 
@@ -548,7 +557,10 @@ export function PartnerRepeatWorkManager({
           </div>
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => {
+              void load();
+              void loadBulkHistory();
+            }}
             disabled={loading}
             className={partnerSecondaryButtonClass}
           >
@@ -563,6 +575,13 @@ export function PartnerRepeatWorkManager({
           </button>
         </div>
 
+        {[templateError, seriesError, bulkError].map((error, index) =>
+          error ? (
+            <PartnerNotice key={index} tone="warning" className="mt-4">
+              {error}
+            </PartnerNotice>
+          ) : null,
+        )}
         {message ? (
           <PartnerNotice tone={message.tone} className="mt-4">
             {message.text}
@@ -684,7 +703,9 @@ export function PartnerRepeatWorkManager({
                           {humanize(template.serviceKey)}
                         </p>
                       </div>
-                      {enabledTools.templates && template.active !== false ? (
+                      {canCreateRequests &&
+                      enabledTools.templates &&
+                      template.active !== false ? (
                         <button
                           type="button"
                           onClick={() => void applyTemplate(template.id)}
@@ -764,7 +785,7 @@ export function PartnerRepeatWorkManager({
                           onSaved={load}
                         />
                       ) : null}
-                      {editingTemplate === template.id ? (
+                      {canManageSeries && editingTemplate === template.id ? (
                         <form
                           className="flex w-full flex-wrap gap-2"
                           onSubmit={(event) => {
@@ -803,7 +824,7 @@ export function PartnerRepeatWorkManager({
                     </li>
                   ))}
                 </ul>
-              ) : (
+              ) : templateError ? null : (
                 <p className="mt-4 text-sm text-slate-600">
                   Open a completed or upcoming job and choose “Save as reusable
                   template.”
@@ -836,7 +857,7 @@ export function PartnerRepeatWorkManager({
                 />
                 Recurring schedule
               </h3>
-              {enabledTools.recurring ? (
+              {canCreateRequests && enabledTools.recurring ? (
                 <form
                   onSubmit={(event) => void createSeries(event)}
                   className="mt-3 space-y-3"
@@ -940,8 +961,9 @@ export function PartnerRepeatWorkManager({
                 </form>
               ) : (
                 <p className="mt-3 text-sm text-slate-600">
-                  New recurring service is disabled. You can still view, pause,
-                  or cancel future tentative work.
+                  {canManageSeries
+                    ? "New recurring service is turned off. You can still view, pause, or cancel future tentative work."
+                    : "New recurring service is unavailable. You can still view your existing schedules."}
                 </p>
               )}
               {series.length ? (
@@ -1171,23 +1193,28 @@ export function PartnerRepeatWorkManager({
             <button
               type="button"
               className={partnerSecondaryButtonClass}
-              onClick={() => void (async () => {
-                const result = await partnerPortalFetch<{
-                  ok: true;
-                  series: RecurringSeries[];
-                  nextCursor: string | null;
-                }>(
-                  `recurring-series?cursor=${encodeURIComponent(seriesCursor)}`,
-                ).catch(() => null);
-                if (result?.ok) {
-                  setSeries((current) => [...current, ...result.data.series]);
-                  setSeriesCursor(result.data.nextCursor);
-                } else
-                  setMessage({
-                    tone: "warning",
-                    text: "Older recurring service could not be loaded. Please try again.",
-                  });
-              })()}
+              onClick={() =>
+                void (async () => {
+                  const result = await partnerPortalFetch<{
+                    ok: true;
+                    series: RecurringSeries[];
+                    nextCursor: string | null;
+                  }>(
+                    `recurring-series?cursor=${encodeURIComponent(seriesCursor)}`,
+                  ).catch(() => null);
+                  const parsed = result?.ok
+                    ? parsePortalRecurringSeries(result.data)
+                    : null;
+                  if (parsed) {
+                    setSeries((current) => [...current, ...parsed.series]);
+                    setSeriesCursor(parsed.nextCursor);
+                  } else
+                    setMessage({
+                      tone: "warning",
+                      text: "Older recurring service could not be loaded. Please try again.",
+                    });
+                })()
+              }
             >
               More recurring service
             </button>
@@ -1209,10 +1236,12 @@ export function PartnerRepeatWorkManager({
               </h3>
               <p className="mt-1 text-sm leading-6 text-slate-600">
                 Upload a CSV to check several requests at once. You review
-                errors before requests are saved, and each job still needs a
-                service window.
+                errors before requests are saved.{" "}
+                {instantConfirmation
+                  ? "Each request shows whether its time is confirmed or needs Stonegate’s review."
+                  : "Stonegate reviews each request and confirms its price and arrival time."}
               </p>
-              {enabledTools.bulk ? (
+              {canCreateRequests && enabledTools.bulk ? (
                 <>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
@@ -1299,35 +1328,47 @@ export function PartnerRepeatWorkManager({
                     <Download className="h-4 w-4" aria-hidden="true" />
                     Download rows to correct
                   </button>
-                  {enabledTools.bulk &&
+                  {canCreateRequests &&
+                  enabledTools.bulk &&
                   !bulkResult.dryRun &&
                   bulkResult.rows.some((row) => row.state === "failed") ? (
                     <button
                       type="button"
                       className={cn(partnerSecondaryButtonClass, "mt-2 ml-2")}
                       disabled={Boolean(busy)}
-                      onClick={() => void (async () => {
-                        setBusy("bulk-retry");
-                        const result = await partnerPortalFetch<{
-                          ok: true;
-                          import: BulkResult;
-                        }>(`bulk-imports/${bulkResult.id}/retry`, {
-                          method: "POST",
-                          headers: {
-                            "Idempotency-Key":
-                              createPortalOperationKey("bulk-retry"),
-                          },
-                        }).catch(() => null);
-                        setBusy(null);
-                        if (result?.ok) setBulkResult(result.data.import);
-                        else
-                          setMessage({
-                            tone: "error",
-                            text:
-                              result?.error.message ??
-                              "Retry could not be started.",
-                          });
-                      })()}
+                      onClick={() =>
+                        void (async () => {
+                          setBusy("bulk-retry");
+                          const result = await partnerPortalFetch<{
+                            ok: true;
+                            import: BulkResult;
+                          }>(`bulk-imports/${bulkResult.id}/retry`, {
+                            method: "POST",
+                            headers: {
+                              "Idempotency-Key":
+                                createPortalOperationKey("bulk-retry"),
+                            },
+                          }).catch(() => null);
+                          setBusy(null);
+                          const parsed = result?.ok
+                            ? parsePortalBulkImport(result.data)
+                            : null;
+                          if (parsed) setBulkResult(parsed.import);
+                          else
+                            setMessage({
+                              tone: "error",
+                              text:
+                                result && !result.ok
+                                  ? result.error.message
+                                  : withPortalSupportReference(
+                                      "The retry result could not be verified. Refresh the saved import before trying again.",
+                                      portalSupportReferenceFromResponse(
+                                        result?.response,
+                                      ),
+                                    ),
+                            });
+                        })()
+                      }
                     >
                       Retry interrupted rows
                     </button>

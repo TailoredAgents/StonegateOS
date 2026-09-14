@@ -2,6 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CalendarClock } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
+import { getPartnerPortalContext } from "../../../../lib/portal-context";
+import {
+  loadPartnerPortalResource,
+  portalLoadErrorMessage,
+  isPortalRecord,
+} from "../../../../lib/portal-load";
+import { isPortalJobSummary } from "../../../../lib/portal-read-models";
 import { PartnerRescheduleFlow } from "@/app/partners/components/PartnerRescheduleFlow";
 import type { PartnerCancellationDecision } from "@/app/partners/components/PartnerJobActions";
 import {
@@ -28,11 +35,12 @@ function isRescheduleJob(value: unknown): value is RescheduleJob {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (
+    isPortalJobSummary(value) &&
     typeof record["id"] === "string" &&
     typeof record["status"] === "string" &&
     typeof record["location"] === "object" &&
     typeof record["schedule"] === "object" &&
-    typeof record["cancellation"] === "object" &&
+    isPortalRecord(record["cancellation"]) &&
     Array.isArray(record["allowedActions"])
   );
 }
@@ -62,34 +70,44 @@ export default async function PartnerReschedulePage({
   params: Promise<{ jobId: string }>;
 }) {
   const { jobId } = await params;
-  const response = await callPartnerApi(
-    `/api/portal/v2/jobs/${encodeURIComponent(jobId)}`,
-  ).catch(() => null);
-  if (!response?.ok) {
+  const context = await getPartnerPortalContext();
+  if (context.status !== "authenticated" || !context.availability.reads)
+    return null;
+  if (!context.availability.writes)
+    return (
+      <PartnerErrorState
+        title="Schedule changes are temporarily unavailable"
+        description="You can still view your job. Contact Stonegate if you need to change its schedule."
+        retryHref={`/partners/bookings/${encodeURIComponent(jobId)}`}
+      />
+    );
+  const result = await loadPartnerPortalResource(
+    () => callPartnerApi(`/api/portal/v2/jobs/${encodeURIComponent(jobId)}`),
+    (payload) =>
+      isPortalRecord(payload) && isRescheduleJob(payload["job"])
+        ? payload["job"]
+        : null,
+  );
+  if (result.status === "error")
     return (
       <PartnerErrorState
         title="This job could not be prepared for rescheduling"
-        description="No schedule was changed. Return to the job and try again after reviewing its current status."
+        description={portalLoadErrorMessage(
+          result,
+          "Return to the job and try again after reviewing its current status.",
+        )}
         retryHref={`/partners/bookings/${encodeURIComponent(jobId)}`}
       />
     );
-  }
-  const payload = (await response.json().catch(() => null)) as {
-    job?: unknown;
-  } | null;
-  if (!isRescheduleJob(payload?.job)) {
-    return (
-      <PartnerErrorState
-        title="The job response was incomplete"
-        description="No schedule was changed. Return to the job and refresh its details."
-        retryHref={`/partners/bookings/${encodeURIComponent(jobId)}`}
-      />
-    );
-  }
-  const job = payload.job;
-  const etag = response.headers.get("etag");
+  const job = result.value;
+  const etag = result.response.headers.get("etag");
   const currentWindow = job.schedule.arrivalWindow;
-  if (!etag || !currentWindow || !job.allowedActions.includes("reschedule")) {
+  if (
+    !context.permissions.updateJobs ||
+    !etag ||
+    !currentWindow ||
+    !job.allowedActions.includes("reschedule")
+  ) {
     return (
       <PartnerErrorState
         title="This job cannot be rescheduled online"

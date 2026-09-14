@@ -36,7 +36,104 @@ export function createPartnerPortalV2ErrorResponse(
 export function createPartnerPortalV2UnexpectedResponse(
   correlationId: string,
   error?: unknown,
+  operation = "portal_request",
 ): Response {
+  // Database wrappers can contain SQL, credentials and submitted values. Log
+  // only a fixed classification, never exception text, stack or request data.
+  let category = "unexpected";
+  let errorType: string | null = null;
+  let errorCode: string | null = null;
+  let current = error;
+  for (
+    let depth = 0;
+    depth < 3 && current && typeof current === "object";
+    depth += 1
+  ) {
+    const record = current as {
+      name?: unknown;
+      code?: unknown;
+      cause?: unknown;
+    };
+    const code = typeof record.code === "string" ? record.code : "";
+    if (
+      typeof record.name === "string" &&
+      [
+        "TypeError",
+        "RangeError",
+        "SyntaxError",
+        "ReferenceError",
+        "PostgresError",
+        "DrizzleQueryError",
+      ].includes(record.name)
+    ) {
+      errorType = record.name;
+    }
+    if (
+      [
+        "ERR_INVALID_ARG_TYPE",
+        "ERR_OUT_OF_RANGE",
+        "ERR_INVALID_URL",
+        "22007",
+        "22008",
+        "22P02",
+        "23502",
+        "23503",
+        "23505",
+        "23514",
+        "40001",
+        "40P01",
+        "42601",
+        "42804",
+        "42P01",
+        "42703",
+        "42883",
+        "08000",
+        "08001",
+        "08003",
+        "08006",
+        "53300",
+        "57P01",
+        "57014",
+        "ECONNREFUSED",
+        "ECONNRESET",
+        "ETIMEDOUT",
+      ].includes(code)
+    ) {
+      errorCode = code;
+    }
+    if (["42P01", "42703", "42883"].includes(code)) {
+      category = "database_schema";
+      break;
+    }
+    if (
+      [
+        "08000",
+        "08001",
+        "08003",
+        "08006",
+        "53300",
+        "57P01",
+        "ECONNREFUSED",
+        "ECONNRESET",
+        "ETIMEDOUT",
+      ].includes(code)
+    ) {
+      category = "database_connection";
+      break;
+    }
+    if (record.code === "57014") {
+      category = "database_timeout";
+      break;
+    }
+    current = record.cause;
+  }
+  console.error("[partner-portal-v2] request failed", {
+    correlationId,
+    operation,
+    category,
+    ...(errorType ? { errorType } : {}),
+    ...(errorCode ? { errorCode } : {}),
+  });
   const failure = createPortalV2UnexpectedErrorResponse(correlationId, error);
   return NextResponse.json(failure.body, {
     status: failure.status,

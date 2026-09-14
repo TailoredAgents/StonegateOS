@@ -9,6 +9,10 @@ import {
   ScrollText,
 } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
+import {
+  getPartnerPortalContext,
+  parsePartnerPortalAvailability,
+} from "../../lib/portal-context";
 import { PartnerCollectionPagination } from "@/app/partners/components/PartnerCollectionPagination";
 import { PartnerDocumentDownloadButton } from "@/app/partners/components/PartnerDocumentDownloadButton";
 import {
@@ -87,16 +91,19 @@ async function loadPaymentAccess(): Promise<PaymentAccess> {
   }
   const payload = (await response.json().catch(() => null)) as {
     ok?: unknown;
+    availability?: unknown;
     partnerUser?: { email?: unknown; name?: unknown };
     membership?: { capabilities?: unknown; accessLevel?: unknown };
   } | null;
   const capabilities = payload?.membership?.capabilities;
+  const availability = parsePartnerPortalAvailability(payload?.availability);
   const canManagePayments =
     payload?.ok === true &&
     ["account", "scoped"].includes(String(payload.membership?.accessLevel)) &&
     Array.isArray(capabilities) &&
-    capabilities.includes("payments.initiate");
-  if (payload?.ok !== true || !Array.isArray(capabilities)) {
+    capabilities.includes("payments.initiate") &&
+    availability?.payments.card === true;
+  if (payload?.ok !== true || !Array.isArray(capabilities) || !availability) {
     return {
       available: false,
       canManagePayments: false,
@@ -108,9 +115,9 @@ async function loadPaymentAccess(): Promise<PaymentAccess> {
   return {
     available: true,
     canManagePayments,
-    canRequestBillingDisputes: capabilities.includes(
-      "invoices.disputes.request",
-    ),
+    canRequestBillingDisputes:
+      availability?.writes === true &&
+      capabilities.includes("invoices.disputes.request"),
     payerEmail:
       typeof payload.partnerUser?.email === "string" &&
       payload.partnerUser.email.length <= 320
@@ -144,6 +151,12 @@ function CollectionFallback({
   state: Exclude<PartnerCommercialState<unknown>, { status: "ready" }>;
   resource: string;
 }) {
+  if (state.message)
+    return (
+      <PartnerNotice tone={state.status === "forbidden" ? "info" : "warning"}>
+        {state.message}
+      </PartnerNotice>
+    );
   if (state.status === "forbidden") {
     return (
       <PartnerNotice tone="info">
@@ -155,8 +168,7 @@ function CollectionFallback({
   if (state.status === "unavailable") {
     return (
       <PartnerNotice tone="warning">
-        {formatLabel(resource)} are not available through the account service
-        yet. No records are being hidden or treated as paid.
+        We couldn’t load {resource} right now. Please refresh to try again.
       </PartnerNotice>
     );
   }
@@ -173,29 +185,58 @@ export default async function PartnerBillingPage({
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const rawParams: Record<string, string | string[] | undefined> = await (searchParams ?? Promise.resolve({}));
+  const context = await getPartnerPortalContext();
+  if (context.status !== "authenticated" || !context.availability.reads)
+    return null;
+  const rawParams: Record<string, string | string[] | undefined> =
+    await (searchParams ?? Promise.resolve({}));
   const params: Record<string, string> = {};
-  for (const name of ["paymentIntentId", "invoicesCursor", "quotesCursor", "statementsCursor", "documentsCursor"]) {
+  for (const name of [
+    "paymentIntentId",
+    "invoicesCursor",
+    "quotesCursor",
+    "statementsCursor",
+    "documentsCursor",
+  ]) {
     const value = rawParams[name];
-    if (typeof value === "string" && value.length <= 8_192) params[name] = value;
+    if (typeof value === "string" && value.length <= 8_192)
+      params[name] = value;
   }
-  const filters = (resource: string) => new URLSearchParams(params[`${resource}Cursor`]
-    ? { cursor: params[`${resource}Cursor`]! } : {});
-  const [
-    rates,
-    invoices,
-    quotes,
-    statements,
-    documents,
-    paymentAccess,
-  ] = await Promise.all([
-    loadRateCard(),
-    loadPartnerCommercial("invoices", "invoices", isPartnerInvoice, filters("invoices")),
-    loadPartnerCommercial("quotes", "quotes", isPartnerQuote, filters("quotes")),
-    loadPartnerCommercial("statements", "statements", isPartnerStatement, filters("statements")),
-    loadPartnerCommercial("documents", "documents", isPartnerDocument, filters("documents")),
-    loadPaymentAccess(),
-  ]);
+  const filters = (resource: string) =>
+    new URLSearchParams(
+      params[`${resource}Cursor`]
+        ? { cursor: params[`${resource}Cursor`]! }
+        : {},
+    );
+  const [rates, invoices, quotes, statements, documents, paymentAccess] =
+    await Promise.all([
+      loadRateCard(),
+      loadPartnerCommercial(
+        "invoices",
+        "invoices",
+        isPartnerInvoice,
+        filters("invoices"),
+      ),
+      loadPartnerCommercial(
+        "quotes",
+        "quotes",
+        isPartnerQuote,
+        filters("quotes"),
+      ),
+      loadPartnerCommercial(
+        "statements",
+        "statements",
+        isPartnerStatement,
+        filters("statements"),
+      ),
+      loadPartnerCommercial(
+        "documents",
+        "documents",
+        isPartnerDocument,
+        filters("documents"),
+      ),
+      loadPaymentAccess(),
+    ]);
   const paymentIntentId = isPartnerPaymentIntentId(params["paymentIntentId"])
     ? params["paymentIntentId"]
     : null;
@@ -205,7 +246,11 @@ export default async function PartnerBillingPage({
       <PartnerPageHeader
         eyebrow="Pricing, bills & records"
         title="Billing & documents"
-        description="Find your invoices, make a payment, and download receipts and job records."
+        description={
+          paymentAccess.canManagePayments
+            ? "Find your invoices, make a payment, and download receipts and job records."
+            : "View invoices, receipts, and billing documents."
+        }
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Billing & documents", href: "/partners/billing" },
@@ -216,10 +261,9 @@ export default async function PartnerBillingPage({
             ? "Protected payment controls are temporarily unavailable. Invoice records remain visible, but no payment has been started or treated as complete."
             : paymentAccess.canManagePayments
               ? "Pay your deposit or invoice securely here by card or enabled bank transfer. Bank transfers remain pending until settlement."
-              : "Billing is read-only for your role. An authorized billing user can pay eligible balances through Square, or you can contact Stonegate for help."}
+              : "You can view your invoices and documents here. Online payment is not available. Contact Stonegate for billing help."}
         </PartnerNotice>
       </PartnerPageHeader>
-
 
       <PartnerPanel>
         <SectionHeading
@@ -245,8 +289,13 @@ export default async function PartnerBillingPage({
             <InvoiceList items={invoices.items} paymentAccess={paymentAccess} />
           )}
           {invoices.status === "ready" ? (
-            <PartnerCollectionPagination basePath="/partners/billing" cursorKey="invoicesCursor"
-              nextCursor={invoices.page.nextCursor} params={params} label="invoices" />
+            <PartnerCollectionPagination
+              basePath="/partners/billing"
+              cursorKey="invoicesCursor"
+              nextCursor={invoices.page.nextCursor}
+              params={params}
+              label="invoices"
+            />
           ) : null}
         </div>
       </PartnerPanel>
@@ -270,8 +319,13 @@ export default async function PartnerBillingPage({
             <QuoteList items={quotes.items} />
           )}
           {quotes.status === "ready" ? (
-            <PartnerCollectionPagination basePath="/partners/billing" cursorKey="quotesCursor"
-              nextCursor={quotes.page.nextCursor} params={params} label="quotes" />
+            <PartnerCollectionPagination
+              basePath="/partners/billing"
+              cursorKey="quotesCursor"
+              nextCursor={quotes.page.nextCursor}
+              params={params}
+              label="quotes"
+            />
           ) : null}
         </div>
       </PartnerPanel>
@@ -295,8 +349,13 @@ export default async function PartnerBillingPage({
             <StatementList items={statements.items} />
           )}
           {statements.status === "ready" ? (
-            <PartnerCollectionPagination basePath="/partners/billing" cursorKey="statementsCursor"
-              nextCursor={statements.page.nextCursor} params={params} label="statements" />
+            <PartnerCollectionPagination
+              basePath="/partners/billing"
+              cursorKey="statementsCursor"
+              nextCursor={statements.page.nextCursor}
+              params={params}
+              label="statements"
+            />
           ) : null}
         </div>
       </PartnerPanel>
@@ -321,58 +380,67 @@ export default async function PartnerBillingPage({
             <DocumentList items={documents.items} />
           )}
           {documents.status === "ready" ? (
-            <PartnerCollectionPagination basePath="/partners/billing" cursorKey="documentsCursor"
-              nextCursor={documents.page.nextCursor} params={params} label="documents" />
+            <PartnerCollectionPagination
+              basePath="/partners/billing"
+              cursorKey="documentsCursor"
+              nextCursor={documents.page.nextCursor}
+              params={params}
+              label="documents"
+            />
           ) : null}
         </div>
       </PartnerPanel>
       <details className="rounded-xl border border-slate-200 bg-white p-5">
-        <summary className="min-h-11 cursor-pointer font-semibold text-slate-900">Service agreement & rates</summary>
+        <summary className="min-h-11 cursor-pointer font-semibold text-slate-900">
+          Service agreement & rates
+        </summary>
         <div className="mt-4">
-        <SectionHeading
-          icon={<CircleDollarSign className="h-5 w-5" aria-hidden="true" />}
-          eyebrow="Current account"
-          title="Service agreement & rates"
-        />
-        {rates.status !== "ready" ? (
-          <div className="mt-5">
-            <PartnerNotice
-              tone={rates.status === "error" ? "error" : "warning"}
-            >
-              {rates.status === "forbidden"
-                ? "Your role does not include account pricing."
-                : rates.status === "error"
-                  ? "We could not load the rate card. Refresh before using these prices."
-                  : "Online account pricing is not available right now. Contact Stonegate for a current quote."}
-            </PartnerNotice>
-          </div>
-        ) : (
-          <div className="mt-5 space-y-5">
-            {rates.agreement ? (
-              <AgreementSummary agreement={rates.agreement} />
-            ) : (
-              <PartnerNotice tone="warning">
-                The account agreement summary is unavailable. Contact Stonegate
-                before relying on these rates or inclusions.
+          <SectionHeading
+            icon={<CircleDollarSign className="h-5 w-5" aria-hidden="true" />}
+            eyebrow="Current account"
+            title="Service agreement & rates"
+          />
+          {rates.status !== "ready" ? (
+            <div className="mt-5">
+              <PartnerNotice
+                tone={rates.status === "error" ? "error" : "warning"}
+              >
+                {rates.status === "forbidden"
+                  ? "Your role does not include account pricing."
+                  : rates.status === "error"
+                    ? "We could not load the rate card. Refresh before using these prices."
+                    : "Online account pricing is not available right now. Contact Stonegate for a current quote."}
               </PartnerNotice>
-            )}
-            {rates.items.length === 0 ? (
-              <PartnerEmptyState
-                title="A quote may be needed for your service"
-                description="No fixed online rates are available here. Review the agreement above or ask Stonegate for current pricing before requesting service."
-                action={{ href: "/partners/help", label: "Ask about pricing" }}
-                icon={
-                  <CircleDollarSign className="h-6 w-6" aria-hidden="true" />
-                }
-              />
-            ) : (
-              <RateCard currency={rates.currency} items={rates.items} />
-            )}
-          </div>
-        )}
+            </div>
+          ) : (
+            <div className="mt-5 space-y-5">
+              {rates.agreement ? (
+                <AgreementSummary agreement={rates.agreement} />
+              ) : (
+                <PartnerNotice tone="warning">
+                  The account agreement summary is unavailable. Contact
+                  Stonegate before relying on these rates or inclusions.
+                </PartnerNotice>
+              )}
+              {rates.items.length === 0 ? (
+                <PartnerEmptyState
+                  title="A quote may be needed for your service"
+                  description="No fixed online rates are available here. Review the agreement above or ask Stonegate for current pricing before requesting service."
+                  action={{
+                    href: "/partners/help",
+                    label: "Ask about pricing",
+                  }}
+                  icon={
+                    <CircleDollarSign className="h-6 w-6" aria-hidden="true" />
+                  }
+                />
+              ) : (
+                <RateCard currency={rates.currency} items={rates.items} />
+              )}
+            </div>
+          )}
         </div>
       </details>
-
     </div>
   );
 }
@@ -642,10 +710,15 @@ function InvoiceList({
                 {formatPartnerMoney(invoice.amounts.balance)}
               </dd>
             </div>
-            {invoice.amounts.credited && invoice.amounts.credited.amountMinor > 0 ? <div>
-              <dt className="text-slate-500">Credits applied</dt>
-              <dd className="mt-1 font-semibold text-slate-950">{formatPartnerMoney(invoice.amounts.credited)}</dd>
-            </div> : null}
+            {invoice.amounts.credited &&
+            invoice.amounts.credited.amountMinor > 0 ? (
+              <div>
+                <dt className="text-slate-500">Credits applied</dt>
+                <dd className="mt-1 font-semibold text-slate-950">
+                  {formatPartnerMoney(invoice.amounts.credited)}
+                </dd>
+              </div>
+            ) : null}
             <div>
               <dt className="text-slate-500">Due date</dt>
               <dd className="mt-1 text-slate-800">

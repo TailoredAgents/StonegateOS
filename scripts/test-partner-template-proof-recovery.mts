@@ -24,6 +24,14 @@ const media = (id: string, category = "before") => ({
   status: "ready",
   filename: `${id}.${category === "document" ? "pdf" : "png"}`,
   byteSize: 100,
+  sortOrder: 0,
+  contentType: category === "document" ? "application/pdf" : "image/png",
+  width: null,
+  height: null,
+  sha256: null,
+  createdAt: "2026-09-09T12:00:00.000Z",
+  readyAt: "2026-09-09T12:00:00.000Z",
+  error: null,
   downloadIntent: null,
 });
 const proof = (files: any[], removed: any[] = []) => ({
@@ -141,6 +149,7 @@ for (const engine of [chromium, webkit]) {
                   name: templateId,
                   serviceKey: "service_request",
                   locationId: null,
+                  updatedAt: "2026-09-09T12:00:00.000Z",
                   etag: `"template-${version}"`,
                   reusable: {
                     description:
@@ -220,7 +229,9 @@ for (const engine of [chromium, webkit]) {
           await page
             .getByRole("button", { name: "More saved requests", exact: true })
             .click();
-          const field = page.getByRole("combobox", { name: /^Use details from/u });
+          const field = page.getByRole("combobox", {
+            name: /^Use details from/u,
+          });
           await field.selectOption("draft-B");
           assert.equal(await field.locator("option").count(), 3);
         }

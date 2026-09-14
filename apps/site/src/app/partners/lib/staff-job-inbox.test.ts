@@ -57,17 +57,32 @@ void test("staff desktop and mobile open direct partner threads with explicit re
     new URL("../../mobile/page.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(desktop, /resolveInboxConversationContext/u);
-  assert.match(
-    desktop,
-    /showConversation = Boolean\(\s*activeContactId \|\| \(isPartnerConversation && selectedThreadId\),?\s*\)/u,
+  const loader = readFileSync(
+    new URL("../../team/inbox-loader.ts", import.meta.url),
+    "utf8",
   );
-  assert.match(
-    desktop,
-    /selectedThreadId && requestedChannel !== "web"[\s\S]{0,80}InboxAutoDraftClient/u,
+  const view = readFileSync(
+    new URL("../../team/components/InboxView.tsx", import.meta.url),
+    "utf8",
   );
-  assert.match(desktop, /Reply to partner/u);
-  assert.match(desktop, /Internal note/u);
+  const composer = readFileSync(
+    new URL("../../team/components/InboxComposerClient.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(desktop, /loadInboxConversation\(input, read\)/u);
+  assert.match(desktop, /conversation=\{conversation\}/u);
+  assert.match(loader, /channel = thread\.partnerJob\s*\? "web"/u);
+  assert.match(
+    loader,
+    /contact = thread\.partnerJob \? null : thread\.contact/u,
+  );
+  assert.match(view, /isPartnerConversation=\{isPartnerConversation\}/u);
+  assert.match(
+    view,
+    /selectedThreadId &&\s*channel !== "web" &&[\s\S]{0,100}InboxAutoDraftClient/u,
+  );
+  assert.match(composer, /Reply to partner/u);
+  assert.match(composer, /Internal note/u);
   assert.match(
     mobile,
     /isPartnerJob=\{Boolean\(selectedThread\.thread\.partnerJob\)\}/u,

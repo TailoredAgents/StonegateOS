@@ -5,7 +5,13 @@ import type { Route } from "next";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, CheckCheck, LoaderCircle } from "lucide-react";
-import { createPortalOperationKey, partnerPortalFetch } from "../lib/portal-v2";
+import {
+  createPortalOperationKey,
+  partnerPortalFetch,
+  portalSupportReferenceFromResponse,
+  withPortalSupportReference,
+} from "../lib/portal-v2";
+import { parsePortalNotifications } from "../lib/portal-read-models";
 import { PartnerNotice, partnerSecondaryButtonClass } from "./PartnerPortalUi";
 
 export type PartnerDashboardNotification = {
@@ -64,21 +70,28 @@ export function PartnerNotificationList({
       { signal: AbortSignal.timeout(8_000) },
     ).catch(() => null);
     setLoadingMore(false);
-    if (!result?.ok) {
-      setError("Older updates could not be loaded. Try again.");
+    const parsed = result?.ok ? parsePortalNotifications(result.data) : null;
+    if (!result?.ok || !parsed) {
+      setError(
+        withPortalSupportReference(
+          "Older updates could not be loaded. Try again.",
+          portalSupportReferenceFromResponse(result?.response),
+        ),
+      );
       return;
     }
-    setError((current) => current === "Older updates could not be loaded. Try again." ? null : current);
+    setError((current) =>
+      current?.startsWith("Older updates could not be loaded. Try again.")
+        ? null
+        : current,
+    );
     loadedOlder.current = true;
     setNotifications((current) => [
       ...new Map(
-        [...current, ...result.data.notifications].map((item) => [
-          item.id,
-          item,
-        ]),
+        [...current, ...parsed.items].map((item) => [item.id, item]),
       ).values(),
     ]);
-    setNextCursor(result.data.page.nextCursor);
+    setNextCursor(parsed.nextCursor);
   };
 
   const markRead = async (

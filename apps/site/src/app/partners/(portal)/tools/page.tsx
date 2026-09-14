@@ -10,8 +10,9 @@ export const metadata: Metadata = { title: "Saved tools & history" };
 
 export default async function PartnerToolsPage() {
   const context = await getPartnerPortalContext();
-  if (context.status !== "authenticated") return null;
-  if (!context.capabilities.schedule)
+  if (context.status !== "authenticated" || !context.availability.reads)
+    return null;
+  if (!context.capabilities.jobs)
     return (
       <PartnerEmptyState
         title="These tools are not part of your role"
@@ -28,6 +29,8 @@ export default async function PartnerToolsPage() {
       <PartnerRepeatWorkManager
         key={context.accountId}
         canManageSeries={context.permissions.updateJobs}
+        canCreateRequests={context.capabilities.schedule}
+        instantConfirmation={context.availability.instantConfirmation}
         persona={context.partnerType}
         enabledTools={{
           templates: context.tools?.["templates"] === true,
