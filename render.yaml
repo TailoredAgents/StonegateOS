@@ -1,6 +1,7 @@
 services:
   - type: web
     name: stonegate-site
+    autoDeployTrigger: checksPass
     runtime: node
     plan: standard
     region: virginia
@@ -68,7 +69,7 @@ services:
       - key: QUOTE_PUBLIC_PROXY_SHARED_SECRET
         sync: false
       - key: QUOTE_PUBLIC_TRUSTED_PROXY_HOPS
-        value: "1"
+        value: "2"
       - key: ADMIN_API_KEY
         sync: false
       - key: ADMIN_SESSION_SECRET
@@ -94,6 +95,7 @@ services:
         - turbo.json
   - type: web
     name: stonegate-api
+    autoDeployTrigger: checksPass
     runtime: node
     plan: standard
     region: virginia
@@ -140,6 +142,7 @@ services:
       else
         echo "[preDeploy] Skipping db:migrate because SKIP_DB_MIGRATE=1"
       fi
+      npx -y pnpm@9.15.9 --filter api exec tsx --tsconfig tsconfig.json scripts/check-partner-portal-deployment.mts
     healthCheckPath: /api/healthz
     envVars:
       - key: NODE_ENV
@@ -161,7 +164,7 @@ services:
       - key: QUOTE_PUBLIC_PROXY_SHARED_SECRET
         sync: false
       - key: QUOTE_PUBLIC_TRUSTED_PROXY_HOPS
-        value: "1"
+        value: "2"
       - key: ADMIN_API_KEY
         sync: false
       - key: TEAM_AUTH_RATE_LIMIT_SECRET
@@ -201,25 +204,24 @@ services:
       - key: MOBILE_OFFLINE_MEDIA_ENABLED
         sync: false
       - key: PARTNER_PORTAL_V2_READS_ENABLED
-        sync: false
+        value: "true"
       - key: PARTNER_PORTAL_V2_WRITES_ENABLED
-        sync: false
+        value: "true"
       - key: PARTNER_PORTAL_PURPOSE_AUTH_ENABLED
-        sync: false
+        value: "true"
       - key: PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED
         value: "false"
       - key: PARTNER_PORTAL_INTERNAL_TEST_MODE
         value: "false"
-      - key: PARTNER_PORTAL_V2_CANARY_ACCOUNT_IDS
-        sync: false
+      # No canary account list: production readiness rejects account restrictions.
       - key: PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED
-        sync: false
+        value: "false"
       - key: PARTNER_PORTAL_EMBEDDED_PAYMENTS_ENABLED
-        sync: false
+        value: "false"
       - key: PARTNER_PORTAL_EMBEDDED_ACH_ENABLED
-        sync: false
+        value: "false"
       - key: PARTNER_PORTAL_HOSTED_PAYMENTS_ENABLED
-        sync: false
+        value: "false"
       - key: PARTNER_PORTAL_OUTBOUND_NOTIFICATIONS_ENABLED
         sync: false
       - key: PARTNER_LOCATION_SECRET_KEYS_JSON
@@ -402,6 +404,7 @@ services:
         - turbo.json
   - type: worker
     name: stonegate-outbox-worker
+    autoDeployTrigger: checksPass
     runtime: node
     plan: standard
     region: virginia
@@ -452,29 +455,36 @@ services:
       - key: MOBILE_OFFLINE_MEDIA_ENABLED
         sync: false
       - key: PARTNER_PORTAL_V2_READS_ENABLED
-        sync: false
+        value: "true"
       - key: PARTNER_PORTAL_V2_WRITES_ENABLED
-        sync: false
+        value: "true"
       - key: PARTNER_PORTAL_PURPOSE_AUTH_ENABLED
-        sync: false
+        value: "true"
       - key: PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED
         value: "false"
       - key: PARTNER_PORTAL_INTERNAL_TEST_MODE
         value: "false"
-      - key: PARTNER_PORTAL_V2_CANARY_ACCOUNT_IDS
-        sync: false
+      # No canary account list: production readiness rejects account restrictions.
       - key: PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED
-        sync: false
+        value: "false"
       - key: PARTNER_PORTAL_EMBEDDED_PAYMENTS_ENABLED
-        sync: false
+        value: "false"
       - key: PARTNER_PORTAL_EMBEDDED_ACH_ENABLED
-        sync: false
+        value: "false"
       - key: PARTNER_PORTAL_HOSTED_PAYMENTS_ENABLED
-        sync: false
+        value: "false"
       - key: PARTNER_PORTAL_OUTBOUND_NOTIFICATIONS_ENABLED
         sync: false
-      - key: PARTNER_RECURRING_HORIZON_EVALUATOR_ENABLED
+      - key: PARTNER_LOCATION_SECRET_KEYS_JSON
         sync: false
+      - key: PARTNER_LOCATION_SECRET_KEY_BASE64
+        sync: false
+      - key: PARTNER_LOCATION_SECRET_KEY_VERSION
+        sync: false
+      - key: PARTNER_PROOF_SHARE_TOKEN_KEY_BASE64
+        sync: false
+      - key: PARTNER_RECURRING_HORIZON_EVALUATOR_ENABLED
+        value: "true"
       - key: PARTNER_RECURRING_HORIZON_BATCH_SIZE
         value: "20"
       - key: PARTNER_RECURRING_HORIZON_INTERVAL_MS

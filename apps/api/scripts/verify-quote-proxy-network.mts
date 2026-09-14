@@ -35,6 +35,31 @@ type ProbeEvidence = {
   window_seconds: number;
   network_hash: string | null;
 };
+let probeStage = "configuration";
+
+function safeInfrastructureReason(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  return (
+    [
+      "ERR_SSL_PROTOCOL_ERROR",
+      "ERR_SSL_WRONG_VERSION_NUMBER",
+      "ERR_SSL_VERSION_OR_CIPHER_MISMATCH",
+      "ERR_CONNECTION_CLOSED",
+      "ERR_CONNECTION_RESET",
+      "ERR_HTTP2_PROTOCOL_ERROR",
+      "ERR_ABORTED",
+      "ERR_NETWORK_CHANGED",
+      "ERR_NAME_NOT_RESOLVED",
+      "ERR_TIMED_OUT",
+      "No resource with given identifier found",
+      "Target page, context or browser has been closed",
+      "ECONNRESET",
+      "ETIMEDOUT",
+      "CONNECT_TIMEOUT",
+    ].find((reason) => error.message.includes(reason)) ??
+    (error.name === "TimeoutError" ? "TimeoutError" : null)
+  );
+}
 
 class ProbeFailure extends Error {
   constructor(readonly code: string) {
@@ -126,16 +151,19 @@ async function execute(): Promise<void> {
   });
   let transport: ProbeTransport | undefined;
   try {
+    probeStage = "transport_start";
     transport = await createProbeTransport(
       mode,
       process.env["QUOTE_PROXY_PROBE_CHROMIUM_HEADLESS"] === "true",
     );
+    probeStage = "database_read_only_guard";
     const [readOnly] =
       await db`select current_setting('transaction_read_only') as enabled`;
     if (readOnly?.["enabled"] !== "on")
       throw new ProbeFailure("database_read_only_not_enforced");
 
     for (const probeTarget of targets) {
+      probeStage = `${probeTarget.label}_trace_before`;
       const expected = await expectedNetworkHash(
         probeTarget,
         secret,
@@ -148,6 +176,7 @@ async function execute(): Promise<void> {
         const capabilityHash = createHash("sha256")
           .update(token, "utf8")
           .digest("hex");
+        probeStage = `${probeTarget.label}_${variant}_collision_check`;
         const [collision] = await db`
           select (
             exists (select 1 from quotes where share_token = ${token})
@@ -166,8 +195,10 @@ async function execute(): Promise<void> {
           // Reserved documentation addresses: never a real person's address.
           headers.set("x-forwarded-for", "192.0.2.22, 198.51.100.33");
           headers.set("x-real-ip", "192.0.2.22");
-          headers.set("cf-connecting-ip", "192.0.2.22");
+          // Cloudflare rejects caller-supplied cf-connecting-ip before Render.
+          // Exercise the XFF prefix that actually reaches the application.
         }
+        probeStage = `${probeTarget.label}_${variant}_request`;
         const response = await transport.request(
           new URL(`/api/public/quotes/${token}`, probeTarget.origin),
           {
@@ -185,6 +216,7 @@ async function execute(): Promise<void> {
         // unique candidate to the exact network row without a timestamp guess.
         // A concurrent later network update can remove that evidence; fail
         // inconclusive instead of attributing another request's bucket.
+        probeStage = `${probeTarget.label}_${variant}_database_evidence`;
         const evidence = await db<ProbeEvidence[]>`
           select c.request_count as candidate_count, c.window_seconds,
                  n.scope_key_hash as network_hash
@@ -221,6 +253,7 @@ async function execute(): Promise<void> {
             "configured_hops_do_not_select_observed_client_network",
           );
       }
+      probeStage = `${probeTarget.label}_trace_after`;
       const stable =
         expected ===
         (await expectedNetworkHash(probeTarget, secret, transport));
@@ -273,6 +306,8 @@ if (!process.argv.includes("--execute")) {
     console.error(
       JSON.stringify({
         ok: false,
+        stage: probeStage,
+        infrastructureReason: safeInfrastructureReason(error),
         code:
           error instanceof ProbeFailure || error instanceof ProbeTransportError
             ? error.code
