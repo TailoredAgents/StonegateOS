@@ -6,6 +6,9 @@
  *   QUOTE_PROXY_PROBE_DATABASE_URL=<read-only database connection URL>
  *   QUOTE_RATE_LIMIT_HMAC_SECRET=<same value deployed on Site and API>
  * Optional: QUOTE_PROXY_PROBE_API_ORIGIN=https://<deployed-api>
+ * Optional: QUOTE_PROXY_PROBE_TRANSPORT=chromium (default: native).
+ * Chromium uses a fresh unauthenticated headed browser; set
+ * QUOTE_PROXY_PROBE_CHROMIUM_HEADLESS=true only when a display is unavailable.
  *
  * Execution sends two ordinary GETs for independently verified nonexistent
  * quote candidates per origin: baseline, then a spoofed forwarding prefix.
@@ -16,6 +19,11 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import postgres from "postgres";
+import {
+  createProbeTransport,
+  ProbeTransportError,
+  type ProbeTransport,
+} from "./quote-proxy-probe-transport";
 import {
   quoteV2CandidateTokenRateLimitHash,
   quoteV2NetworkClass,
@@ -54,41 +62,24 @@ function target(label: ProbeTarget["label"], value: string): ProbeTarget {
   return { label, origin };
 }
 
-async function readBoundedText(response: Response): Promise<string> {
-  if (!response.body) throw new ProbeFailure("missing_response_body");
-  const reader = response.body.getReader();
-  const buffers: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > 8192) throw new ProbeFailure("unexpected_response_size");
-      buffers.push(value);
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
-  return Buffer.concat(buffers).toString("utf8");
-}
-
 async function expectedNetworkHash(
   probeTarget: ProbeTarget,
   secret: string,
+  transport: ProbeTransport,
 ): Promise<string> {
   // The same public origin's Cloudflare trace identifies the actual ingress
   // client without trusting a forwarding header supplied by this script.
-  const response = await fetch(new URL("/cdn-cgi/trace", probeTarget.origin), {
-    method: "GET",
-    redirect: "error",
-    cache: "no-store",
-    signal: AbortSignal.timeout(15000),
-    headers: { Accept: "text/plain" },
-  });
-  if (!response.ok) throw new ProbeFailure("same_origin_trace_unavailable");
-  const trace = await readBoundedText(response);
+  const response = await transport.request(
+    new URL("/cdn-cgi/trace", probeTarget.origin),
+    {
+      timeoutMs: 15000,
+      readBody: true,
+      headers: new Headers({ Accept: "text/plain" }),
+    },
+  );
+  if (response.status !== 200 || !response.text)
+    throw new ProbeFailure("same_origin_trace_unavailable");
+  const trace = response.text;
   const fields = new Map(
     trace.split("\n").map((line) => {
       const separator = line.indexOf("=");
@@ -118,7 +109,9 @@ async function execute(): Promise<void> {
   const targets = [target("site", site)];
   const api = process.env["QUOTE_PROXY_PROBE_API_ORIGIN"]?.trim();
   if (api) targets.push(target("api", api));
-
+  const mode = process.env["QUOTE_PROXY_PROBE_TRANSPORT"]?.trim() ?? "native";
+  if (mode !== "native" && mode !== "chromium")
+    throw new ProbeFailure("invalid_probe_transport");
   const db = postgres(database, {
     max: 1,
     connect_timeout: 10,
@@ -131,14 +124,23 @@ async function execute(): Promise<void> {
     },
     onnotice: () => undefined,
   });
+  let transport: ProbeTransport | undefined;
   try {
+    transport = await createProbeTransport(
+      mode,
+      process.env["QUOTE_PROXY_PROBE_CHROMIUM_HEADLESS"] === "true",
+    );
     const [readOnly] =
       await db`select current_setting('transaction_read_only') as enabled`;
     if (readOnly?.["enabled"] !== "on")
       throw new ProbeFailure("database_read_only_not_enforced");
 
     for (const probeTarget of targets) {
-      const expected = await expectedNetworkHash(probeTarget, secret);
+      const expected = await expectedNetworkHash(
+        probeTarget,
+        secret,
+        transport,
+      );
       const observed: string[] = [];
       for (const variant of ["baseline", "spoofed_prefix"] as const) {
         const token = `probe_${randomBytes(32).toString("base64url")}`;
@@ -166,17 +168,14 @@ async function execute(): Promise<void> {
           headers.set("x-real-ip", "192.0.2.22");
           headers.set("cf-connecting-ip", "192.0.2.22");
         }
-        const response = await fetch(
+        const response = await transport.request(
           new URL(`/api/public/quotes/${token}`, probeTarget.origin),
           {
-            method: "GET",
             headers,
-            redirect: "error",
-            cache: "no-store",
-            signal: AbortSignal.timeout(45000),
+            timeoutMs: 45000,
+            readBody: false,
           },
         );
-        await response.body?.cancel();
         if (response.status !== 404)
           throw new ProbeFailure(
             `probe_expected_not_found_received_${response.status}`,
@@ -210,6 +209,7 @@ async function execute(): Promise<void> {
         console.log(
           JSON.stringify({
             target: probeTarget.label,
+            transport: mode,
             variant,
             responseStatus: response.status,
             clientNetworkMatched: matched,
@@ -222,7 +222,8 @@ async function execute(): Promise<void> {
           );
       }
       const stable =
-        expected === (await expectedNetworkHash(probeTarget, secret));
+        expected ===
+        (await expectedNetworkHash(probeTarget, secret, transport));
       if (!stable) throw new ProbeFailure("client_egress_changed_during_probe");
       if (observed[0] !== observed[1])
         throw new ProbeFailure("spoofed_headers_changed_network_bucket");
@@ -236,7 +237,11 @@ async function execute(): Promise<void> {
       );
     }
   } finally {
-    await db.end({ timeout: 5 });
+    try {
+      await transport?.close();
+    } finally {
+      await db.end({ timeout: 5 });
+    }
   }
 }
 
@@ -253,7 +258,11 @@ if (!process.argv.includes("--execute")) {
         "QUOTE_PROXY_PROBE_DATABASE_URL",
         "QUOTE_RATE_LIMIT_HMAC_SECRET",
       ],
-      optionalEnvironment: ["QUOTE_PROXY_PROBE_API_ORIGIN"],
+      optionalEnvironment: [
+        "QUOTE_PROXY_PROBE_API_ORIGIN",
+        "QUOTE_PROXY_PROBE_TRANSPORT",
+        "QUOTE_PROXY_PROBE_CHROMIUM_HEADLESS",
+      ],
     }),
   );
 } else {
@@ -265,7 +274,7 @@ if (!process.argv.includes("--execute")) {
       JSON.stringify({
         ok: false,
         code:
-          error instanceof ProbeFailure
+          error instanceof ProbeFailure || error instanceof ProbeTransportError
             ? error.code
             : "probe_infrastructure_error",
       }),

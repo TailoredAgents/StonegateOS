@@ -119,7 +119,9 @@ describe("Quote V2 staff management UI", () => {
     );
     expect(hub).toContain("InstantQuotesSection({ compact: true })");
     expect(instant).toContain("Instant quote handoffs");
-    expect(instant).toContain("View learning in Sales HQ");
+    expect(sales).toContain('hasTeamPermission(principal, "quotes.read")');
+    expect(sales).toContain("await InstantQuotesSection()");
+    expect(sales).toContain("{instantQuoteLearning}");
     expect(sales).toContain('id="instant-quote-learning"');
     expect(sales).toContain("Instant quote learning and performance");
   });
