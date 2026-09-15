@@ -200,8 +200,9 @@ alone does not.
 
 Production verification on September 15, 2026:
 
-- The site, API, and outbox worker are live at commit
-  `04d3ed7f70e8d105861b346a2b7ff68e7108ba18`.
+- The reporting release is live on the site at `692c0a4c` and API at
+  `d28925ea`. The existing outbox worker is at `bffb0c3b`. These releases
+  retain the original booking/call tracking implementation from `04d3ed7f`.
 - Site and API readiness checks are healthy; the API and worker conversion
   credentials match and server delivery is enabled.
 - The browser loaded the OpenAI SDK with HTTP 200 and sent one `page_viewed`
@@ -220,7 +221,11 @@ these checks to complete that verification and monitor future changes:
 3. Test repeated callbacks and confirmed-status updates for deduplication.
 4. Test measurement denial, Global Privacy Control, and Do Not Track.
 5. Inspect Marketing → Website analytics and the authenticated
-   `/api/admin/openai/ads/status` endpoint for delivery status.
+   `/api/admin/openai/ads/status` endpoint for delivery status. The campaign
+   performance panel uses `/api/admin/openai/ads/reporting?rangeDays=7` and
+   supports 1, 7, 14, or 30 days. It shows spend, impressions, clicks, combined
+   attributed conversions, and provider cost per conversion. Both routes require
+   `marketing.read` and prevent response caching.
 6. Confirm receipt and attribution in Ads Manager. Delivery acceptance is not
    proof of attribution to an eligible ad click; attributed reporting can lag.
 
