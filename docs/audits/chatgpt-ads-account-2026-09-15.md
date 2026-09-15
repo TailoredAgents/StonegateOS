@@ -70,10 +70,53 @@ limitations remain as described in [the integration guide](../chatgpt-ads.md).
   null/zero results, and unavailable states.
 - Changed-code ESLint passed and API/site typechecks passed.
 - Independent code review found no remaining blocking issues.
+- Desktop (1440px) and mobile (375px) report previews had no document overflow
+  and no WCAG 2A/AA violations in the focused axe check. The campaign table's
+  horizontal scroll region is keyboard accessible.
 - The actual new reporting adapter succeeded against the live Advertiser API
   using GET requests only. The account returned USD, Eastern time, and one
   campaign for September 9–15 inclusive. Delivery metrics and combined
   attributed conversion fields were present; unavailable outcome breakdowns
   and cost per conversion stayed null.
 
-Live deployment details are recorded after the reporting release below.
+## Production base
+
+The intervening CRM release `bffb0c3b` became live while reporting was being
+tested. Reporting runtime commit `d28925eab9145d8dd4aae526074506be96d16807`
+includes that release. Independent comparison confirmed all 47 files changed
+by the CRM release were preserved byte for byte. Both typechecks and all
+57 reporting tests passed again after the merge.
+
+## Live reporting release
+
+| Service | Commit | Deployment | Live at UTC |
+| --- | --- | --- | --- |
+| API | `d28925eab9145d8dd4aae526074506be96d16807` | `dep-daks20u1egvs73bmhklg` | 22:10:35 |
+| Website | `692c0a4c05aa1b770d3132605c726ec6d2851861` | `dep-daks5fe1egvs73bmvq2g` | 22:16:27 |
+
+The website follow-up uses a native refresh link and passed generated-route
+type checking and the production build. The outbox worker remains at the
+existing CRM release `bffb0c3bc495e6dcaaf08b1c26dd55952fc116ff`; reporting
+does not change worker behavior or require its redeployment.
+
+Post-deployment checks passed:
+
+- Correct API, website, and worker release IDs; matching conversion credentials
+  and installed Pixel; conversion delivery and outbox dispatch enabled.
+- Advertiser API credential present only where required on the API service.
+- API and website health/readiness returned 200; database, migrations, worker
+  heartbeat, and outbox queue checks were healthy.
+- Unauthenticated conversion-status and campaign-reporting requests returned
+  401. A signed-in production dashboard check was not performed because no
+  existing human staff session was available; no synthetic session was created.
+- The newly deployed `/book` page again loaded one SDK and sent `page_viewed`
+  successfully (202). A fresh staff-login page loaded no Pixel.
+- No API/site error-level application logs were returned in the initial
+  post-release window starting at 22:16:30 UTC.
+
+The final [production-journey workflow rerun](https://github.com/TailoredAgents/StonegateOS/actions/runs/35030054691)
+passed on exact website commit `692c0a4c05aa1b770d3132605c726ec6d2851861`
+at 22:26:04 UTC. Migrations, API/website regression checks, browser recovery
+and worker rendering, PostgreSQL integration, both production builds, and the
+complete activation/navigation/first-location/first-request browser journey
+all succeeded.
