@@ -7,6 +7,7 @@ import type { NextRequest } from "next/server";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { z } from "zod";
+import { enqueueOpenAiAdsBooking } from "@/lib/openai-ads-capture";
 import {
   appointmentCrewMembers,
   appointments,
@@ -794,6 +795,7 @@ export async function POST(
         .select({
           id: appointments.id,
           leadId: appointments.leadId,
+          contactId: appointments.contactId,
           type: appointments.type,
           calendarEventId: appointments.calendarEventId,
           quotedTotalCents: appointments.quotedTotalCents,
@@ -1588,6 +1590,14 @@ export async function POST(
           .update(leads)
           .set({ status: "scheduled" })
           .where(eq(leads.id, updated.leadId));
+        await enqueueOpenAiAdsBooking(tx, {
+          appointmentId,
+          status,
+          startAt: existing.startAt,
+          contactId: existing.contactId,
+          leadId: updated.leadId,
+          now: committedAt,
+        });
       }
 
       const calendarSync: "not_required" | "requested" =

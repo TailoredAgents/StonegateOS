@@ -1,6 +1,12 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getDb } from "@/db";
+import { callRecords, contacts, getDb } from "@/db";
+import { eq } from "drizzle-orm";
+import {
+  enqueueOpenAiAdsPhoneInquiry,
+  isOpenAiAdsPhoneInquiry,
+} from "@/lib/openai-ads-capture";
+import { normalizePhone } from "../../../web/utils";
 import {
   handleManualCallDialActionCallback,
   ManualCallCallbackError,
@@ -175,6 +181,75 @@ export async function POST(request: NextRequest): Promise<Response> {
         `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`,
         error instanceof SalesEscalationCallbackError ? error.status : 500,
       );
+    }
+  }
+
+  if (mode === "inbound" && payload.callSid && payload.from) {
+    const inquiry = {
+      callSid: payload.callSid,
+      direction: readString(formData.get("Direction")),
+      status: payload.dialCallStatus,
+      duration: payload.dialCallDuration,
+      dialCallStatus: payload.dialCallStatus,
+      dialCallDuration: payload.dialCallDuration,
+      dialBridged: readBoolean(formData.get("DialBridged")),
+      answeredBy: readString(formData.get("AnsweredBy")),
+    };
+    if (isOpenAiAdsPhoneInquiry(inquiry)) {
+      try {
+        const phone = normalizePhone(payload.from).e164;
+        const db = getDb();
+        await db.transaction(async (tx) => {
+          const [contact] = await tx
+            .select({ id: contacts.id })
+            .from(contacts)
+            .where(eq(contacts.phoneE164, phone))
+            .limit(1);
+          const now = new Date();
+          await tx
+            .insert(callRecords)
+            .values({
+              callSid: payload.callSid!,
+              direction: "inbound",
+              mode: "inbound",
+              from: phone,
+              to: payload.to,
+              contactId: contact?.id ?? null,
+              callStatus: "completed",
+              callDurationSec: payload.dialCallDuration,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoUpdate({
+              target: callRecords.callSid,
+              set: {
+                callStatus: "completed",
+                callDurationSec: payload.dialCallDuration,
+                updatedAt: now,
+              },
+            });
+          const result = await enqueueOpenAiAdsPhoneInquiry(tx, {
+            ...inquiry,
+            contactId: contact?.id ?? null,
+            phone,
+            now,
+          });
+          if (result === "no_measurement_context") {
+            console.info("[openai_ads.phone] skipped", { reason: result });
+          }
+        });
+      } catch (error) {
+        console.warn(
+          "[twilio.dial_action] inbound_conversion_persistence_failed",
+          {
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          },
+        );
+        return twimlResponse(
+          `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`,
+          500,
+        );
+      }
     }
   }
 

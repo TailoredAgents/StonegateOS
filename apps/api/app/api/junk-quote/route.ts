@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
 import { getDb, crmPipeline, instantQuotes, leads, outboxEvents } from "@/db";
+import {
+  captureOpenAiAdsAttribution,
+  OpenAiAdsAttributionSchema,
+} from "@/lib/openai-ads-capture";
 import { isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
 import { eq } from "drizzle-orm";
 import {
@@ -104,6 +108,7 @@ function getPreDiscountPrice(
 }
 
 const RequestSchema = z.object({
+  openaiAds: OpenAiAdsAttributionSchema.optional().catch({ consent: false }),
   source: z.string().optional().default("public_site"),
   contact: z.object({
     name: z.string().min(2),
@@ -1172,6 +1177,7 @@ export async function POST(request: NextRequest) {
           fbclid: utm.fbclid,
           referrer,
           formPayload: {
+            openaiAds: captureOpenAiAdsAttribution(body.openaiAds),
             instantQuoteId: quoteId,
             timeframe: body.contact.timeframe,
             zip: body.job.zip.trim(),

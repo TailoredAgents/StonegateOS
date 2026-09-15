@@ -27,6 +27,7 @@ import { resolveOrCreateContactProperty } from "@/lib/property-write";
 import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 import { verifyTwilioWebhookRequest } from "@/lib/twilio-webhook-auth";
 import { normalizePhone } from "../../../web/utils";
+import { enqueueOpenAiAdsPhoneInquiry } from "@/lib/openai-ads-capture";
 
 export const dynamic = "force-dynamic";
 
@@ -254,6 +255,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     dialCallStatus: readString(formData.get("DialCallStatus")),
     dialCallDuration: readNumber(formData.get("DialCallDuration")),
     callDuration: readNumber(formData.get("CallDuration")),
+    answeredBy: readString(formData.get("AnsweredBy")),
   };
 
   console.info("[twilio.call_status]", {
@@ -511,25 +513,11 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 
     try {
-      await db
-        .insert(callRecords)
-        .values({
-          callSid,
-          parentCallSid: payload.parentCallSid ?? null,
-          direction,
-          mode,
-          from: payload.from ?? null,
-          to: payload.to ?? null,
-          contactId: resolvedContactId,
-          assignedTo: resolvedAssignedTo,
-          callStatus: payload.callStatus ?? null,
-          callDurationSec: payload.callDuration ?? null,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: callRecords.callSid,
-          set: {
+      await db.transaction(async (tx) => {
+        await tx
+          .insert(callRecords)
+          .values({
+            callSid,
             parentCallSid: payload.parentCallSid ?? null,
             direction,
             mode,
@@ -539,13 +527,52 @@ export async function POST(request: NextRequest): Promise<Response> {
             assignedTo: resolvedAssignedTo,
             callStatus: payload.callStatus ?? null,
             callDurationSec: payload.callDuration ?? null,
+            createdAt: now,
             updatedAt: now,
-          },
+          })
+          .onConflictDoUpdate({
+            target: callRecords.callSid,
+            set: {
+              parentCallSid: payload.parentCallSid ?? null,
+              direction,
+              mode,
+              from: payload.from ?? null,
+              to: payload.to ?? null,
+              contactId: resolvedContactId,
+              assignedTo: resolvedAssignedTo,
+              callStatus: payload.callStatus ?? null,
+              callDurationSec: payload.callDuration ?? null,
+              updatedAt: now,
+            },
+          });
+        const conversionResult = await enqueueOpenAiAdsPhoneInquiry(tx, {
+          callSid,
+          parentCallSid: payload.parentCallSid,
+          contactId: resolvedContactId,
+          phone: payload.from,
+          direction: payload.direction,
+          status: payload.callStatus,
+          duration: payload.callDuration,
+          dialCallStatus: payload.dialCallStatus,
+          dialCallDuration: payload.dialCallDuration,
+          dialBridged:
+            readString(formData.get("DialBridged")) === "false" ? false : null,
+          answeredBy: payload.answeredBy,
+          now,
         });
+        if (conversionResult === "no_measurement_context") {
+          console.info("[openai_ads.phone] skipped", {
+            reason: conversionResult,
+          });
+        }
+      });
     } catch (error) {
       console.warn("[twilio.call_status] call_record_upsert_failed", {
         hasCallSid: true,
         errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+      return new NextResponse("call_record_persistence_failed", {
+        status: 500,
       });
     }
 

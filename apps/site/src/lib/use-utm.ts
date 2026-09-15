@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from "react";
+import { withOpenAiAdsUtm } from "./openai-ads";
 
 const COOKIE_NAME = "myst_utm";
 const UTM_KEYS: (keyof UtmState)[] = [
@@ -58,8 +59,8 @@ export function useUTM(): UtmState {
   const [utm, setUtm] = React.useState<UtmState>({});
 
   React.useEffect(() => {
-    const initial = parseCookie();
     const params = new URLSearchParams(window.location.search);
+    const initial = params.has("oppref") ? {} : parseCookie();
     const merged: UtmState = { ...initial };
 
     for (const key of ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"] as const) {
@@ -76,9 +77,8 @@ export function useUTM(): UtmState {
     const fbclid = params.get("fbclid");
     if (fbclid) merged.fbclid = fbclid;
 
-    setUtm(merged);
+    setUtm(withOpenAiAdsUtm(merged));
   }, []);
 
   return utm;
 }
-
