@@ -145,6 +145,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       contactSalespersonMemberId: contacts.salespersonMemberId,
       propertyId: properties.id,
       addressLine1: properties.addressLine1,
+      addressLine2: properties.addressLine2,
       city: properties.city,
       state: properties.state,
       postalCode: properties.postalCode,
@@ -461,6 +462,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       property: {
         id: row.propertyId ?? "unknown",
         addressLine1: row.addressLine1 ?? "Undisclosed",
+        addressLine2: row.addressLine2 ?? null,
         city: row.city ?? "",
         state: row.state ?? "",
         postalCode: row.postalCode ?? "",

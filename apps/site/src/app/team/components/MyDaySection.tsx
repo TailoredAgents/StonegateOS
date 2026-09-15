@@ -3,6 +3,7 @@ import React, { type ReactElement } from "react";
 import { CopyButton } from "@/components/CopyButton";
 import { SubmitButton } from "@/components/SubmitButton";
 import { summarizeServiceLabels } from "@/lib/service-labels";
+import { formatPropertyAddress } from "@/lib/property-address";
 import {
   hasTeamPermission,
   requireCurrentTeamPrincipal,
@@ -238,14 +239,7 @@ function summaryButtonClass(
 }
 
 function buildMapsHref(property: AppointmentDto["property"]): string {
-  const query = [
-    property.addressLine1,
-    property.city,
-    property.state,
-    property.postalCode,
-  ]
-    .filter((part) => part && part.trim().length > 0)
-    .join(", ");
+  const query = formatPropertyAddress(property);
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 }
 
@@ -278,6 +272,7 @@ interface AppointmentDto {
   property: {
     id: string | null;
     addressLine1: string;
+    addressLine2?: string | null;
     city: string;
     state: string;
     postalCode: string;
@@ -611,14 +606,7 @@ function AppointmentCard({
   const serviceSummary = item.isQuoteOnly
     ? (item.serviceLabel ?? "In-person quote")
     : (item.serviceLabel ?? summarizeServiceLabels(a.services ?? []));
-  const addressText = [
-    a.property.addressLine1,
-    a.property.city,
-    a.property.state,
-    a.property.postalCode,
-  ]
-    .filter((part) => part && part.trim().length > 0)
-    .join(", ");
+  const addressText = formatPropertyAddress(a.property);
   const hasAddress = addressText.length > 0;
   const mapsHref = buildMapsHref(a.property);
   const hasPhone = Boolean(a.contact.phone && a.contact.id);

@@ -1,5 +1,6 @@
 import { DateTime } from "luxon";
 import type { AppointmentBookingDetails } from "@/db/schema";
+import { formatPropertyAddress } from "@/lib/property-address";
 import {
   parseGoogleCalendarEventMutationResponse,
   parseGoogleCalendarTokenResponse,
@@ -23,6 +24,7 @@ interface CalendarContact {
 
 interface CalendarProperty {
   addressLine1: string;
+  addressLine2?: string | null;
   city: string;
   state: string;
   postalCode: string;
@@ -251,7 +253,7 @@ function buildEventBody(
     payload.contact.phone ? `Phone: ${payload.contact.phone}` : null,
     payload.contact.email ? `Email: ${payload.contact.email}` : null,
     `Services: ${payload.services.join(", ") || "Junk removal"}`,
-    `Location: ${payload.property.addressLine1}, ${payload.property.city}, ${payload.property.state} ${payload.property.postalCode}`,
+    `Location: ${formatPropertyAddress(payload.property)}`,
   ].filter((line): line is string => Boolean(line));
 
   if (payload.notes) {
@@ -364,7 +366,7 @@ export async function createCalendarEvent(
         dateTime: eventBody.end.toISO(),
         timeZone: config.timeZone,
       },
-      location: `${payload.property.addressLine1}, ${payload.property.city}, ${payload.property.state} ${payload.property.postalCode}`,
+      location: formatPropertyAddress(payload.property),
       extendedProperties: {
         private: {
           appointmentId: payload.appointmentId,
@@ -442,7 +444,7 @@ export async function updateCalendarEvent(
         dateTime: eventBody.end.toISO(),
         timeZone: config.timeZone,
       },
-      location: `${payload.property.addressLine1}, ${payload.property.city}, ${payload.property.state} ${payload.property.postalCode}`,
+      location: formatPropertyAddress(payload.property),
       extendedProperties: {
         private: {
           appointmentId: payload.appointmentId,

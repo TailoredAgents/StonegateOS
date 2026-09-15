@@ -3,6 +3,7 @@
 import React from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
+import { formatPropertyAddress } from "@/lib/property-address";
 import type { ContactReminderSummary, ContactSummary } from "./contacts.types";
 import {
   PIPELINE_STAGES,
@@ -143,13 +144,7 @@ function isSystemTask(reminder: ContactReminderSummary): boolean {
 function buildMapsLink(contact: ContactSummary): string | null {
   const property = (contact.properties ?? [])[0];
   if (!property) return null;
-  const parts = [
-    property.addressLine1,
-    property.city,
-    property.state,
-    property.postalCode,
-  ].filter(Boolean);
-  const query = parts.join(", ").trim();
+  const query = formatPropertyAddress(property);
   if (!query) return null;
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 }
@@ -858,8 +853,7 @@ export function ContactsDetailsPaneClient({
                 </option>
                 {bookingProperties.map((property) => (
                   <option key={property.id} value={property.id}>
-                    {property.addressLine1}, {property.city}, {property.state}{" "}
-                    {property.postalCode}
+                    {formatPropertyAddress(property)}
                   </option>
                 ))}
               </select>

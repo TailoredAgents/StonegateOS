@@ -59,7 +59,7 @@ export type CustomerWorkspaceQuote = {
     message: string | null;
     createdAt: string | null;
   } | null;
-  property: Pick<CustomerWorkspaceProperty, "addressLine1" | "city" | "state" | "postalCode"> | null;
+  property: Pick<CustomerWorkspaceProperty, "addressLine1" | "addressLine2" | "city" | "state" | "postalCode"> | null;
 };
 
 export type CustomerWorkspaceMissingField =

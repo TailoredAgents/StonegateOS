@@ -1,6 +1,7 @@
 name: Partner Portal production journey
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:

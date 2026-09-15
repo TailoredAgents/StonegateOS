@@ -180,6 +180,7 @@ function mapQuote(
       text(property["postalCode"])
         ? {
             addressLine1: text(property["addressLine1"]) ?? "",
+            addressLine2: text(property["addressLine2"]),
             city: text(property["city"]) ?? "",
             state: text(property["state"]) ?? "",
             postalCode: text(property["postalCode"]) ?? "",

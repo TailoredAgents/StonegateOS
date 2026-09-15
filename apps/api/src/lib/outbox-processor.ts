@@ -2268,6 +2268,7 @@ function buildCalendarPayloadFromNotification(
     },
     property: {
       addressLine1: notification.property.addressLine1,
+      addressLine2: notification.property.addressLine2 ?? null,
       city: notification.property.city,
       state: notification.property.state,
       postalCode: notification.property.postalCode,
@@ -2389,6 +2390,7 @@ async function buildNotificationPayload(
       contactPhone: contacts.phone,
       contactPhoneE164: contacts.phoneE164,
       propertyAddressLine1: properties.addressLine1,
+      propertyAddressLine2: properties.addressLine2,
       propertyCity: properties.city,
       propertyState: properties.state,
       propertyPostalCode: properties.postalCode,
@@ -2512,6 +2514,7 @@ async function buildNotificationPayload(
     },
     property: {
       addressLine1: row.propertyAddressLine1 ?? "Undisclosed address",
+      addressLine2: row.propertyAddressLine2 ?? null,
       city: row.propertyCity ?? "",
       state: row.propertyState ?? "",
       postalCode: row.propertyPostalCode ?? "",
@@ -3454,6 +3457,7 @@ async function handleAppointmentCalendarSyncRequested(
       contactPhone: contacts.phone,
       contactPhoneE164: contacts.phoneE164,
       propertyAddressLine1: properties.addressLine1,
+      propertyAddressLine2: properties.addressLine2,
       propertyCity: properties.city,
       propertyState: properties.state,
       propertyPostalCode: properties.postalCode,
@@ -3619,6 +3623,7 @@ async function handleAppointmentCalendarSyncRequested(
       addressLine1:
         readStringValue(appointment.propertyAddressLine1) ??
         "Undisclosed address",
+      addressLine2: readStringValue(appointment.propertyAddressLine2),
       city: readStringValue(appointment.propertyCity) ?? "",
       state: readStringValue(appointment.propertyState) ?? "",
       postalCode: readStringValue(appointment.propertyPostalCode) ?? "",
