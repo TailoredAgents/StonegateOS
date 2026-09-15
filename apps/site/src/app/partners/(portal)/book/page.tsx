@@ -75,7 +75,7 @@ export default async function PartnerBookPage({
     return (
       <div className="space-y-5 sm:space-y-6">
         <PartnerPageHeader
-          eyebrow="Quick service request"
+          eyebrow="Partner service request"
           title={personaPresentation.taskLabels.schedule}
           description="Your current role doesn’t include permission to request service."
           breadcrumbs={[
@@ -107,7 +107,6 @@ export default async function PartnerBookPage({
             payload as {
               directory: {
                 canCreateLocation: boolean;
-                defaultLocationId?: string | null;
               };
             }
           ).directory;
@@ -198,13 +197,8 @@ export default async function PartnerBookPage({
       ? params.serviceKey.trim().toLowerCase()
       : "";
 
-  // An explicitly requested site (or an account default) can be outside page one.
-  const requestedLocationId =
-    initialDraft?.locationId ||
-    defaultLocationId ||
-    (typeof directory?.["defaultLocationId"] === "string"
-      ? directory["defaultLocationId"]
-      : "");
+  // Preserve an explicit address or a saved request even when it is outside page one.
+  const requestedLocationId = initialDraft?.locationId || defaultLocationId;
   if (
     requestedLocationId &&
     !locations.some((item) => item.id === requestedLocationId)
@@ -242,12 +236,12 @@ export default async function PartnerBookPage({
   return (
     <div className="space-y-5 sm:space-y-6">
       <PartnerPageHeader
-        eyebrow="Quick service request"
+        eyebrow="Partner service request"
         title={personaPresentation.taskLabels.schedule}
         description={
           context.availability.instantConfirmation
-            ? "Choose a saved location, describe the work, and check available service times."
-            : "Choose a location, describe the work, and tell us your preferred dates. Stonegate will review your request and confirm the time."
+            ? "Enter the service address, describe the work, and review available service times."
+            : "Enter the service address, describe the work, and provide preferred dates. Stonegate will review the request and confirm pricing and scheduling."
         }
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
@@ -257,20 +251,20 @@ export default async function PartnerBookPage({
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-600">
           <span className="inline-flex items-center gap-1.5">
             <ShieldCheckIcon />
-            Details save as you go
+            Continue saves your service address
           </span>
           <span className="inline-flex items-center gap-1.5">
             <CalendarClock
               className="h-4 w-4 text-primary-700"
               aria-hidden="true"
             />
-            Clear availability and review status
+            Review before submitting
           </span>
           <a
             href={`tel:${company.phoneE164}`}
             className="inline-flex min-h-11 items-center font-semibold text-primary-800 underline-offset-4 hover:underline"
           >
-            Need help? {company.phoneDisplay}
+            Contact Stonegate: {company.phoneDisplay}
           </a>
         </div>
       </PartnerPageHeader>
@@ -292,9 +286,9 @@ export default async function PartnerBookPage({
       {locations.length === 0 && !canCreateLocation ? (
         <PartnerPanel>
           <PartnerEmptyState
-            title="Choose or add a location first"
-            description="Save the location once so Stonegate can check service availability and you can reuse its details next time."
-            action={{ href: "/partners/properties", label: "Manage locations" }}
+            title="A service address is required"
+            description="No service addresses are available for this request. Ask your account administrator to add an address or give you access to an existing one, or contact Stonegate for assistance."
+            action={{ href: "/partners/help", label: "Contact Stonegate" }}
             icon={<MapPin className="h-6 w-6" aria-hidden="true" />}
           />
         </PartnerPanel>
@@ -347,7 +341,7 @@ export default async function PartnerBookPage({
       context.tools?.["bulk"] ? (
         <details className="rounded-xl border border-slate-200 bg-white p-4">
           <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-slate-800">
-            Repeat work and other tools
+            Templates, recurring service, and bulk requests
           </summary>
           <div className="mt-4">
             <PartnerRepeatWorkManager

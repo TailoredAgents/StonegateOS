@@ -6,6 +6,12 @@ import test from "node:test";
 import { chromium, webkit, expect, type Page } from "@playwright/test";
 import tailwindConfig from "../apps/site/tailwind.config";
 
+// tsx imports this CommonJS .ts config differently from an ESM .mts runner.
+// Use the actual site theme in either environment, including its color tokens.
+const siteTailwindConfig = (
+  "default" in tailwindConfig ? tailwindConfig.default : tailwindConfig
+) as typeof tailwindConfig;
+
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const require = createRequire(`${repo}/package.json`);
 const siteRequire = createRequire(`${repo}/apps/site/package.json`);
@@ -58,6 +64,33 @@ const emptyMessage =
   "No matching addresses found. You can enter the address manually.";
 const unavailableMessage =
   "Address suggestions are unavailable. You can enter the address manually.";
+const emptyDraft = {
+  id: "11111111-1111-4111-8111-111111111111",
+  state: "draft",
+  etag: '"draft-1"',
+  revision: 1,
+  rescheduleFromJobId: null,
+  additionalServiceFromJobId: null,
+  locationId: null,
+  serviceKey: null,
+  tierKey: null,
+  selectedAddOns: [],
+  scope: {},
+  description: null,
+  crewInstructions: null,
+  accessDetails: null,
+  onSiteContact: null,
+  proofRequirements: {},
+  commercial: {},
+  preferredWindows: [],
+  scheduleAssistancePreference: "none",
+  reviewReasons: [],
+  validation: {},
+  expiresAt: null,
+  submittedAt: null,
+  createdAt: "2026-09-15T12:00:00Z",
+  updatedAt: "2026-09-15T12:00:00Z",
+};
 type HarnessWindow = Window & {
   submittedForms: number;
   createdLocations: number;
@@ -75,7 +108,8 @@ type LocationPost = {
 
 const entry = `import React from 'react';import{createRoot}from'react-dom/client';
 import{PartnerInlineLocationForm}from'./src/app/partners/components/PartnerInlineLocationForm';
-function App(){React.useEffect(()=>{document.documentElement.dataset.harnessReady='true';const count=()=>window.submittedForms++;document.addEventListener('submit',count);return()=>document.removeEventListener('submit',count)},[]);return <main className="mx-auto max-w-3xl p-4"><h1>Request service</h1><PartnerInlineLocationForm canManage onCreated={()=>window.createdLocations++}/></main>}
+import{PartnerBookingWizard}from'./src/app/partners/components/PartnerBookingWizard';
+function App(){React.useEffect(()=>{document.documentElement.dataset.harnessReady='true';const count=()=>window.submittedForms++;document.addEventListener('submit',count);return()=>document.removeEventListener('submit',count)},[]);return <main className="mx-auto max-w-3xl p-4"><h1>Request service</h1>{location.pathname==='/wizard'?<PartnerBookingWizard locations={[{id:'saved-address',name:'Existing warehouse',address:'3 Saved Street, Atlanta, GA 30301',isDefault:true}]} services={[]} canManageLocations cancellationPolicy={{minimumNoticeMinutes:0,directCancellationEnabled:false,lateCancellationDisposition:'staff_review',automaticFeeMinor:null,source:'unconfigured',revision:null}} persona={null} supportPhoneE164='+14045550100' supportPhoneDisplay='404-555-0100' requesterContact={{name:'Test partner',phone:'',email:'partner@example.test'}}/>:<PartnerInlineLocationForm canManage onCreated={()=>window.createdLocations++}/>}</main>}
 createRoot(document.getElementById('root')).render(<App/>);`;
 let assetsPromise: Promise<{ script: Uint8Array; css: string }> | undefined;
 function assets() {
@@ -122,10 +156,12 @@ function assets() {
       }),
       postcss([
         tailwind({
-          ...tailwindConfig,
+          ...siteTailwindConfig,
           content: [
             `${repo}/apps/site/src/app/partners/components/PartnerInlineLocationForm.tsx`,
             `${repo}/apps/site/src/app/partners/components/PartnerAddressAutocomplete.tsx`,
+            `${repo}/apps/site/src/app/partners/components/PartnerBookingWizard.tsx`,
+            `${repo}/apps/site/src/app/partners/components/PartnerSavedRequests.tsx`,
             `${repo}/apps/site/src/app/partners/components/PartnerPortalUi.tsx`,
             { raw: entry, extension: "tsx" },
           ],
@@ -173,12 +209,12 @@ function savedLocation(body: LocationPost, sequence: number) {
 async function openForm(page: Page) {
   await page
     .getByRole("button", {
-      name: "Add a location without leaving",
+      name: "Enter a new address",
       exact: true,
     })
     .click();
   await page
-    .getByLabel("Location name", { exact: true })
+    .getByLabel("Location label (optional)", { exact: true })
     .fill("Service location");
   await page.getByLabel(/Suite, unit, building, or floor/).fill("Suite 5");
   await page.getByLabel("City", { exact: true }).fill("Original city");
@@ -214,6 +250,7 @@ for (const engine of [chromium, webkit]) {
         assert.ok(address && typeof address !== "string");
         const browser = await engine.launch();
         let releaseOld: (() => void) | undefined;
+        let releaseLocation: (() => void) | undefined;
         try {
           const page = await browser.newPage({
             viewport: { width, height: 1000 },
@@ -224,6 +261,8 @@ for (const engine of [chromium, webkit]) {
           const pageErrors: string[] = [],
             requests: string[] = [];
           const locations: LocationPost[] = [];
+          let wizardDraft: Record<string, unknown> = { ...emptyDraft };
+          let locationGate: Promise<void> | undefined;
           page.on("pageerror", (error) => pageErrors.push(error.message));
           // Simulate a transport that cannot cancel an already dispatched lookup.
           // The real component must still reject an older response after new input.
@@ -280,6 +319,40 @@ for (const engine of [chromium, webkit]) {
               }
               if (body.query === "700 Offline Avenue")
                 return route.abort("failed");
+              if (body.query === "400 Session Expired Road") {
+                return route.fulfill({
+                  status: 401,
+                  json: {
+                    ok: false,
+                    error: "unauthenticated",
+                    message: "Sign in again.",
+                  },
+                });
+              }
+              if (body.query === "300 Retry Street") {
+                if (
+                  requests.filter((query) => query === body.query).length === 1
+                )
+                  return route.abort("failed");
+                return route.fulfill({
+                  json: {
+                    ok: true,
+                    suggestions: [
+                      {
+                        id: "retry-address",
+                        label: "300 Retry Street, Roswell, GA 30075",
+                        address: {
+                          line1: "300 Retry Street",
+                          city: "Roswell",
+                          state: "GA",
+                          postalCode: "30075",
+                        },
+                      },
+                    ],
+                    attribution: "© Mapbox",
+                  },
+                });
+              }
               const matches =
                 body.query === "100"
                   ? suggestions
@@ -294,10 +367,41 @@ for (const engine of [chromium, webkit]) {
                 },
               });
             }
+            if (url.pathname === "/api/partners/portal/booking-drafts") {
+              if (request.method() === "GET") {
+                return route.fulfill({
+                  json: { ok: true, drafts: [], page: { nextCursor: null } },
+                });
+              }
+              assert.equal(request.method(), "POST");
+              wizardDraft = { ...emptyDraft, ...request.postDataJSON() };
+              return route.fulfill({ json: { ok: true, draft: wizardDraft } });
+            }
+            if (
+              url.pathname ===
+              `/api/partners/portal/booking-drafts/${emptyDraft.id}`
+            ) {
+              assert.equal(request.method(), "PATCH");
+              wizardDraft = {
+                ...wizardDraft,
+                ...request.postDataJSON(),
+                revision: Number(wizardDraft.revision) + 1,
+                etag: `"draft-${Number(wizardDraft.revision) + 1}"`,
+              };
+              return route.fulfill({ json: { ok: true, draft: wizardDraft } });
+            }
+            if (
+              url.pathname ===
+              `/api/partners/portal/booking-drafts/${emptyDraft.id}/media`
+            ) {
+              assert.equal(request.method(), "GET");
+              return route.fulfill({ json: { ok: true, media: [] } });
+            }
             assert.equal(url.pathname, "/api/partners/portal/locations");
             assert.equal(request.method(), "POST");
             const body = request.postDataJSON() as LocationPost;
             locations.push(body);
+            if (locationGate) await locationGate;
             return route.fulfill({
               json: {
                 ok: true,
@@ -442,6 +546,11 @@ for (const engine of [chromium, webkit]) {
             ["700 Offline Avenue", unavailableMessage, "Decatur", "30030"],
           ]) {
             if (locations.length) await openForm(page);
+            if (street === "700 Offline Avenue") {
+              await page
+                .getByLabel("Location label (optional)", { exact: true })
+                .fill("");
+            }
             await input.fill(street);
             await expect(
               page.getByText(message, { exact: false }),
@@ -458,7 +567,7 @@ for (const engine of [chromium, webkit]) {
             const expectedCount = locations.length + 1;
             await page
               .getByRole("button", {
-                name: "Save and use this location",
+                name: "Use this address",
                 exact: true,
               })
               .click();
@@ -475,6 +584,13 @@ for (const engine of [chromium, webkit]) {
               state: "GA",
               postalCode,
             });
+            if (street === "700 Offline Avenue") {
+              assert.equal(
+                locations.at(-1)?.siteName,
+                street,
+                "An optional empty label uses the street address",
+              );
+            }
           }
 
           await openForm(page);
@@ -528,6 +644,197 @@ for (const engine of [chromium, webkit]) {
           await expect(page.getByLabel("City", { exact: true })).toHaveValue(
             "Original city",
           );
+
+          await input.fill("300 Retry Street");
+          await expect(
+            page.getByText(unavailableMessage, { exact: false }),
+          ).toBeVisible();
+          await page
+            .getByRole("button", {
+              name: "Try suggestions again",
+              exact: true,
+            })
+            .click();
+          await expect(
+            page.getByRole("option", {
+              name: "300 Retry Street, Roswell, GA 30075",
+              exact: true,
+            }),
+          ).toBeVisible();
+          assert.equal(
+            requests.filter((query) => query === "300 Retry Street").length,
+            2,
+          );
+          await expect(input).toHaveValue("300 Retry Street");
+          await expect(
+            page.getByLabel(/Suite, unit, building, or floor/),
+          ).toHaveValue("Suite 5");
+          await expect(page.getByLabel("City", { exact: true })).toHaveValue(
+            "Original city",
+          );
+          await expect(page.getByLabel("State", { exact: true })).toHaveValue(
+            "AL",
+          );
+          await expect(
+            page.getByLabel("ZIP code", { exact: true }),
+          ).toHaveValue("99999");
+
+          await input.fill("400 Session Expired Road");
+          await expect(
+            page.getByText(
+              "Your sign-in expired. Sign in again to use address suggestions.",
+              { exact: false },
+            ),
+          ).toBeVisible();
+          await expect(
+            page.getByRole("button", {
+              name: "Try suggestions again",
+              exact: true,
+            }),
+          ).toHaveCount(0);
+          await expect(input).toHaveValue("400 Session Expired Road");
+
+          // Exercise the actual Request service integration, including its one
+          // outer Continue button, while the lookup provider is unavailable.
+          await page.goto(`http://127.0.0.1:${address.port}/wizard`);
+          await expect(
+            page.getByRole("heading", {
+              name: "Service address",
+              exact: true,
+              level: 2,
+            }),
+          ).toBeVisible();
+          await expect(input).toBeVisible();
+          await expect(input).toHaveValue("");
+          await expect(page.getByRole("radio", { checked: true })).toHaveCount(
+            0,
+          );
+          await expect(
+            page.getByRole("button", {
+              name: "Use a saved address",
+              exact: true,
+            }),
+          ).toBeVisible();
+          await expect(
+            page.getByRole("button", {
+              name: "Enter a new address",
+              exact: true,
+            }),
+          ).toHaveCount(0);
+          if (
+            width === 375 &&
+            process.env["PARTNER_ADDRESS_WIZARD_SCREENSHOT"]
+          ) {
+            await page.screenshot({
+              path: process.env["PARTNER_ADDRESS_WIZARD_SCREENSHOT"],
+              fullPage: true,
+            });
+          }
+
+          await input.fill("Typed new address");
+          await page
+            .getByLabel(/Suite, unit, building, or floor/)
+            .fill("Suite 9");
+          await expect(
+            page.getByText("Address not saved", { exact: true }),
+          ).toBeVisible();
+          await expect(
+            page.getByText(
+              "Select Continue to save this address and proceed.",
+              { exact: false },
+            ),
+          ).toBeVisible();
+          await expect(
+            page.locator('[data-partner-unsaved="true"]'),
+          ).toHaveCount(1);
+          await page
+            .getByRole("button", {
+              name: "Use a saved address",
+              exact: true,
+            })
+            .click();
+          await expect(
+            page.getByLabel("Search saved addresses", { exact: true }),
+          ).toBeFocused();
+          await page
+            .getByRole("button", {
+              name: "Enter a new address",
+              exact: true,
+            })
+            .click();
+          await expect(input).toBeFocused();
+          await expect(input).toHaveValue("Typed new address");
+          await expect(
+            page.getByLabel(/Suite, unit, building, or floor/),
+          ).toHaveValue("Suite 9");
+          await page
+            .getByRole("button", {
+              name: "Use a saved address",
+              exact: true,
+            })
+            .click();
+          await page.getByRole("radio", { name: /Existing warehouse/ }).click();
+          await expect(
+            page.locator("#partner-book-selected-address"),
+          ).toHaveAttribute("data-selected-location-id", "saved-address");
+          await page
+            .getByRole("button", { name: "Change address", exact: true })
+            .click();
+          await expect(input).toBeFocused();
+          await expect(input).toHaveValue("Typed new address");
+          await expect(
+            page.getByLabel(/Suite, unit, building, or floor/),
+          ).toHaveValue("Suite 9");
+          await input.fill("700 Offline Avenue");
+          await expect(
+            page.getByText(unavailableMessage, { exact: false }),
+          ).toBeVisible();
+          await page
+            .getByLabel(/Suite, unit, building, or floor/)
+            .fill("Suite 9");
+          await page.getByLabel("City", { exact: true }).fill("Atlanta");
+          await page.getByLabel("State", { exact: true }).fill("GA");
+          await page.getByLabel("ZIP code", { exact: true }).fill("30301");
+          await expect.poll(() => wizardDraft.locationId).toBeNull();
+          locationGate = new Promise<void>((resolve) => {
+            releaseLocation = resolve;
+          });
+          const continued = page.locator(
+            'button[data-partner-analytics="booking_step_continue"]',
+          );
+          await expect(continued).toBeEnabled();
+          await continued.click();
+          await expect.poll(() => locations.length).toBe(3);
+          await expect(continued).toBeDisabled();
+          await page
+            .locator("form")
+            .evaluate((form: HTMLFormElement) => form.requestSubmit());
+          assert.equal(
+            locations.length,
+            3,
+            "A pending address save cannot create another location",
+          );
+          releaseLocation?.();
+          await expect(
+            page.getByRole("heading", {
+              name: "Service details",
+              exact: true,
+              level: 2,
+            }),
+          ).toBeVisible();
+          assert.deepEqual(locations.at(-1)?.address, {
+            line1: "700 Offline Avenue",
+            line2: "Suite 9",
+            city: "Atlanta",
+            state: "GA",
+            postalCode: "30301",
+          });
+          assert.equal(
+            wizardDraft.locationId,
+            savedLocation(locations.at(-1)!, 3).id,
+          );
+          assert.equal(locations.length, 3);
+          assert.equal(locations.at(-1)?.siteName, "700 Offline Avenue");
           assert.deepEqual(
             pageErrors,
             [],
@@ -535,6 +842,7 @@ for (const engine of [chromium, webkit]) {
           );
         } finally {
           releaseOld?.();
+          releaseLocation?.();
           await browser.close();
           await new Promise<void>((resolve, reject) =>
             server.close((error) => (error ? reject(error) : resolve())),

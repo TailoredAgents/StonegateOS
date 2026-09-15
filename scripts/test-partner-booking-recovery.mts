@@ -252,16 +252,16 @@ for (const engine of [chromium, webkit]) {
           );
           await page
             .getByRole("button", {
-              name:
-                path === "inline"
-                  ? "Add a location without leaving"
-                  : "Add location",
+              name: path === "inline" ? "Enter a new address" : "Add location",
               exact: true,
             })
             .click();
           const form = page.locator("form");
           await form
-            .getByLabel("Location name", { exact: true })
+            .getByLabel(
+              path === "inline" ? "Location label (optional)" : "Location name",
+              { exact: true },
+            )
             .fill("First location");
           await form
             .getByLabel("Street address", { exact: true })
@@ -276,8 +276,7 @@ for (const engine of [chromium, webkit]) {
             `${path}: required fields are valid before submit`,
           );
           const save = form.getByRole("button", {
-            name:
-              path === "inline" ? "Save and use this location" : "Add location",
+            name: path === "inline" ? "Use this address" : "Add location",
             exact: true,
           });
           await directoryRequest;

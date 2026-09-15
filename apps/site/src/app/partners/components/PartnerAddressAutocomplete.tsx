@@ -27,6 +27,7 @@ type SearchState = {
   phase: "loading" | "ready" | "error";
   suggestions: AddressSuggestion[];
   message?: string;
+  retryable?: boolean;
 };
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -106,6 +107,7 @@ export function PartnerAddressAutocomplete({
   const [dismissed, setDismissed] = React.useState(false);
   const [activeIndex, setActiveIndex] = React.useState(-1);
   const [search, setSearch] = React.useState<SearchState | null>(null);
+  const [retryCount, setRetryCount] = React.useState(0);
   const query = value.trim();
   const current = search?.query === query ? search : null;
   const expanded =
@@ -162,6 +164,7 @@ export function PartnerAddressAutocomplete({
             query,
             phase: "error",
             suggestions: [],
+            retryable: result?.response.status !== 401,
             message: withPortalSupportReference(
               message,
               portalSupportReferenceFromResponse(result?.response),
@@ -179,7 +182,18 @@ export function PartnerAddressAutocomplete({
       if (deadline) clearTimeout(deadline);
       controller.abort();
     };
-  }, [query, value, focused, disabled, dismissed]);
+  }, [query, value, focused, disabled, dismissed, retryCount]);
+
+  const retry = (): void => {
+    if (disabled || current?.phase !== "error" || !current.retryable) return;
+    generation.current++;
+    setSearch({ query, phase: "loading", suggestions: [] });
+    setActiveIndex(-1);
+    setDismissed(false);
+    setFocused(true);
+    setRetryCount((count) => count + 1);
+    input.current?.focus();
+  };
 
   const choose = (suggestion: AddressSuggestion): void => {
     generation.current++;
@@ -340,6 +354,22 @@ export function PartnerAddressAutocomplete({
         ) : null}
         <span>{help}</span>
       </p>
+      {focused &&
+      !disabled &&
+      !dismissed &&
+      current?.phase === "error" &&
+      current.retryable ? (
+        <button
+          type="button"
+          className="mt-1 inline-flex min-h-11 items-center rounded-lg px-2 text-sm font-semibold text-primary-700 underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600"
+          // WebKit does not focus buttons on pointer clicks. Keep the input
+          // focused so its blur handler cannot remove Retry before the click.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={retry}
+        >
+          Try suggestions again
+        </button>
+      ) : null}
     </div>
   );
 }

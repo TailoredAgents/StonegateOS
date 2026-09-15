@@ -113,6 +113,24 @@ async function portal(page: Page, path: string) {
   return result.body;
 }
 
+async function requestStep(page: Page, name: string) {
+  await expect(
+    page.getByRole("heading", { name, exact: true, level: 2 }),
+  ).toBeVisible();
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth > innerWidth + 1,
+    ),
+    false,
+    `${name} fits the viewport`,
+  );
+}
+
+async function currentDraftId(page: Page): Promise<string> {
+  await page.waitForURL((url) => Boolean(url.searchParams.get("draftId")));
+  return new URL(page.url()).searchParams.get("draftId")!;
+}
+
 async function visit(
   page: Page,
   path: string,
@@ -346,6 +364,105 @@ for (const width of [1440, 375]) {
           JSON.stringify({ viewport: width, stage: "all_empty_tabs_passed" }),
         );
 
+        // Start where a new partner starts: the address is immediately available,
+        // without first visiting Locations or opening an add-location panel.
+        await visit(page, "book");
+        await requestStep(page, "Service address");
+        const street = page.getByLabel("Street address", { exact: true });
+        await expect(street).toBeVisible();
+        await expect(street).toHaveValue("");
+        await expect(
+          page.getByRole("button", {
+            name: "Use a saved address",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        await expect(page.getByRole("radio", { checked: true })).toHaveCount(0);
+        const addressDraftId = await currentDraftId(page);
+        assert.equal(
+          (await portal(page, `booking-drafts/${addressDraftId}`)).draft
+            .locationId,
+          null,
+        );
+        await expect(street).toBeEnabled();
+        if (process.env["PARTNER_RELEASE_SCREENSHOT_PREFIX"]) {
+          await page.screenshot({
+            path: `${process.env["PARTNER_RELEASE_SCREENSHOT_PREFIX"]}-${width}.png`,
+            fullPage: true,
+          });
+        }
+        await street.fill("2 Local Request Way");
+        await page
+          .getByLabel(/Suite, unit, building, or floor/)
+          .fill("Suite 5");
+        await page.getByLabel("City", { exact: true }).fill("Atlanta");
+        await page.getByLabel("State", { exact: true }).fill("GA");
+        await page.getByLabel("ZIP code", { exact: true }).fill("30301");
+        await expect(
+          page.getByLabel("Location label (optional)", { exact: true }),
+        ).toHaveValue("");
+        const [createdAddressResponse] = await Promise.all([
+          page.waitForResponse(
+            (response) =>
+              new URL(response.url()).pathname ===
+                "/api/partners/portal/locations" &&
+              response.request().method() === "POST",
+          ),
+          page.getByRole("button", { name: "Continue", exact: true }).click(),
+        ]);
+        assert.equal(createdAddressResponse.ok(), true);
+        const createdAddress = (await createdAddressResponse.json()).location;
+        assert.equal(createdAddress.siteName, "2 Local Request Way");
+        assert.equal(createdAddress.address.line2, "Suite 5");
+        await requestStep(page, "Service details");
+        assert.equal(
+          (await portal(page, `booking-drafts/${addressDraftId}`)).draft
+            .locationId,
+          createdAddress.id,
+          "Continuing saves the entered address on this request",
+        );
+        assert.equal((await portal(page, "locations")).locations.length, 1);
+
+        const restoredDescription =
+          "Local release draft recovery: two empty boxes.";
+        await page
+          .locator("#partner-book-description")
+          .fill(restoredDescription);
+        await expect
+          .poll(
+            async () =>
+              (await portal(page, `booking-drafts/${addressDraftId}`)).draft
+                .description,
+          )
+          .toBe(restoredDescription);
+        await page.reload();
+        await requestStep(page, "Service details");
+        assert.equal(await currentDraftId(page), addressDraftId);
+        await expect(page.locator("#partner-book-description")).toHaveValue(
+          restoredDescription,
+        );
+        await page.getByRole("button", { name: "Back", exact: true }).click();
+        await requestStep(page, "Service address");
+        await expect(
+          page.getByText(/2 Local Request Way/).first(),
+        ).toBeVisible();
+        await expect(street).toBeHidden();
+        await expect(
+          page.locator("#partner-book-selected-address"),
+        ).toHaveAttribute("data-selected-location-id", createdAddress.id);
+        assert.equal(
+          (await portal(page, `booking-drafts/${addressDraftId}`)).draft
+            .locationId,
+          createdAddress.id,
+          "Restoring the draft retains its explicitly chosen address",
+        );
+        console.log(
+          JSON.stringify({
+            viewport: width,
+            stage: "address_first_and_draft_restore_passed",
+          }),
+        );
+
         await visit(page, "properties");
         await page
           .getByRole("button", { name: "Add location", exact: true })
@@ -374,16 +491,42 @@ for (const width of [1440, 375]) {
           .click();
         await expect(form).toHaveCount(0);
         const saved = await portal(page, "locations");
-        assert.equal(saved.locations.length, 1);
+        assert.equal(saved.locations.length, 2);
         assert.doesNotMatch(JSON.stringify(saved), /synthetic-gate-code-only/);
+        const savedDirectoryLocation = saved.locations.find(
+          (location: { siteName: string }) =>
+            location.siteName === "First local service location",
+        );
+        assert.ok(savedDirectoryLocation);
 
         await visit(page, "book");
+        await requestStep(page, "Service address");
+        await expect(street).toBeVisible();
+        await expect(street).toHaveValue("");
+        await expect(page.getByRole("radio", { checked: true })).toHaveCount(0);
+        const savedAddressDraftId = await currentDraftId(page);
+        assert.equal(
+          (await portal(page, `booking-drafts/${savedAddressDraftId}`)).draft
+            .locationId,
+          null,
+          "A fresh request does not silently choose a saved address",
+        );
+        await page
+          .getByRole("button", { name: "Use a saved address", exact: true })
+          .click();
         await page
           .getByRole("radio", { name: /First local service location/ })
-          .check();
+          .click();
+        await expect(
+          page.locator("#partner-book-selected-address"),
+        ).toHaveAttribute(
+          "data-selected-location-id",
+          savedDirectoryLocation.id,
+        );
         await page
           .getByRole("button", { name: "Continue", exact: true })
           .click();
+        await requestStep(page, "Service details");
         await page
           .locator("#partner-book-service")
           .selectOption("service_request");
@@ -395,6 +538,7 @@ for (const width of [1440, 375]) {
         await page
           .getByRole("button", { name: "Continue", exact: true })
           .click();
+        await requestStep(page, "Scheduling");
         const preferred = new Date(Date.now() + 2 * 86_400_000)
           .toISOString()
           .slice(0, 10);
@@ -402,6 +546,7 @@ for (const width of [1440, 375]) {
         await page
           .getByRole("button", { name: "Continue", exact: true })
           .click();
+        await requestStep(page, "Review and submit");
         await page
           .getByRole("button", { name: "Send service request", exact: true })
           .click();
@@ -525,6 +670,61 @@ for (const width of [1440, 375]) {
             ),
           )
           .toBe(true);
+
+        // An account default remains a reusable preference, not an implicit
+        // service-address choice for every new request.
+        await visit(page, "properties");
+        await page
+          .getByRole("button", { name: "Make default", exact: true })
+          .first()
+          .click();
+        await expect
+          .poll(
+            async () =>
+              (await portal(page, "locations")).directory.defaultLocationId,
+          )
+          .toBeTruthy();
+        const defaultDirectory = await portal(page, "locations");
+        await visit(page, "book");
+        await requestStep(page, "Service address");
+        await expect(street).toBeVisible();
+        await expect(street).toHaveValue("");
+        const freshDraftId = await currentDraftId(page);
+        assert.equal(
+          (await portal(page, `booking-drafts/${freshDraftId}`)).draft
+            .locationId,
+          null,
+          "An account default is not preselected on a fresh request",
+        );
+
+        const explicitAddress = defaultDirectory.locations.find(
+          (location: { id: string }) =>
+            location.id !== defaultDirectory.directory.defaultLocationId,
+        );
+        assert.ok(
+          explicitAddress,
+          "Fixture has a non-default address to choose",
+        );
+        for (const parameter of ["locationId", "propertyId"]) {
+          await page.goto(
+            `${base}/partners/book?${parameter}=${explicitAddress.id}`,
+          );
+          await requestStep(page, "Service address");
+          await expect(street).toBeHidden();
+          await expect(
+            page.locator("#partner-book-selected-address"),
+          ).toHaveAttribute("data-selected-location-id", explicitAddress.id);
+          await expect(
+            page.getByRole("button", { name: "Change address", exact: true }),
+          ).toBeVisible();
+          const explicitDraftId = await currentDraftId(page);
+          assert.equal(
+            (await portal(page, `booking-drafts/${explicitDraftId}`)).draft
+              .locationId,
+            explicitAddress.id,
+            `An explicit ${parameter} link preserves the chosen address`,
+          );
+        }
         for (const path of [
           "overview",
           "bookings",
@@ -572,7 +772,7 @@ for (const width of [1440, 375]) {
         await portal(loginPage, "overview");
         assert.equal(
           (await portal(loginPage, "locations")).locations.length,
-          1,
+          2,
         );
         assert.deepEqual(
           pageErrors,
@@ -585,6 +785,9 @@ for (const width of [1440, 375]) {
             activation: "passed",
             allTabs: "passed",
             firstLocation: "passed",
+            addressFirst: "passed",
+            savedAddressChoice: "explicit",
+            draftRestore: "passed",
             serviceRequest: "awaiting_staff",
             companyTools: "enabled",
             passwordLogin: "passed",

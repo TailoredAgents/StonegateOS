@@ -183,14 +183,14 @@ type WizardForm = {
 };
 
 const STEPS = [
-  { label: "Where?", shortLabel: "Where", icon: MapPin },
-  { label: "What do you need?", shortLabel: "Details", icon: Truck },
+  { label: "Service address", shortLabel: "Address", icon: MapPin },
+  { label: "Service details", shortLabel: "Details", icon: Truck },
   {
-    label: "When?",
-    shortLabel: "When",
+    label: "Scheduling",
+    shortLabel: "Scheduling",
     icon: CalendarClock,
   },
-  { label: "Check & send", shortLabel: "Check", icon: ShieldCheck },
+  { label: "Review and submit", shortLabel: "Review", icon: ShieldCheck },
 ] as const;
 
 const DEFAULT_FORM: WizardForm = {
@@ -580,7 +580,7 @@ function localErrorsForStep(
 ): Record<string, string> {
   const errors: Record<string, string> = {};
   if (step === 0 && !form.locationId)
-    errors["locationId"] = "Choose a service location.";
+    errors["locationId"] = "Enter a service address or choose a saved address.";
   if (step === 1) {
     if (!form.serviceKey) errors["serviceKey"] = "Choose a service.";
     else if (service && !service.bookable) {
@@ -730,6 +730,12 @@ function PartnerBookingWizardSession({
   );
   const [availableLocations, setAvailableLocations] =
     React.useState<BookingWizardLocation[]>(locations);
+  const [addressEntryMode, setAddressEntryMode] = React.useState<
+    "new" | "saved"
+  >(canManageLocations ? "new" : "saved");
+  const [addressSaving, setAddressSaving] = React.useState(false);
+  const [addressDirty, setAddressDirty] = React.useState(false);
+  const addressFormId = React.useId();
   const [locationSearch, setLocationSearch] = React.useState("");
   const [locationSearching, setLocationSearching] = React.useState(false);
   const [locationSearchError, setLocationSearchError] = React.useState<
@@ -794,6 +800,7 @@ function PartnerBookingWizardSession({
     if (!locationSearch.trim()) {
       setLocationSearchResults(null);
       setLocationSearchError(null);
+      setLocationSearching(false);
       return;
     }
     const controller = new AbortController();
@@ -1000,11 +1007,19 @@ function PartnerBookingWizardSession({
     return cancelPendingAutosave;
   }, [cancelPendingAutosave, draftId, form, persist]);
 
-  const hasUnsavedChanges = saveStatus !== "saved" && !submittedRef.current;
+  const hasUnsavedDraftChanges =
+    saveStatus !== "saved" && !submittedRef.current;
+  const hasUnsavedAddress =
+    step === 0 &&
+    canManageLocations &&
+    addressEntryMode === "new" &&
+    !form.locationId &&
+    addressDirty;
+  const hasUnsavedChanges = hasUnsavedDraftChanges || hasUnsavedAddress;
 
   usePartnerUnsavedChanges(hasUnsavedChanges);
-  const unsavedRef = React.useRef(hasUnsavedChanges);
-  unsavedRef.current = hasUnsavedChanges;
+  const unsavedRef = React.useRef(hasUnsavedDraftChanges);
+  unsavedRef.current = hasUnsavedDraftChanges;
   React.useEffect(() => {
     // History navigation cannot reliably be canceled. Flush into this draft's
     // serialized save queue instead; no sensitive scope is stored in the browser.
@@ -1136,40 +1151,45 @@ function PartnerBookingWizardSession({
     );
   };
 
-  const updateLocation = (locationId: string): void => {
+  const focusAddressEntry = (mode: "new" | "saved"): void => {
+    window.requestAnimationFrame(() => {
+      if (mode === "new") {
+        document
+          .getElementById(addressFormId)
+          ?.querySelector<HTMLInputElement>('[role="combobox"]')
+          ?.focus();
+      } else {
+        document.getElementById("partner-location-chooser-search")?.focus();
+      }
+    });
+  };
+
+  const updateLocation = (
+    locationId: string,
+    createdLocation?: BookingWizardLocation,
+  ): WizardForm => {
     releaseHeldTimeAfterEdit();
-    const timezone =
-      availableLocations.find((location) => location.id === locationId)
-        ?.timezone ?? "America/New_York";
-    setForm((current) => ({
-      ...current,
+    const selected =
+      createdLocation ??
+      availableLocations.find((item) => item.id === locationId);
+    const nextForm: WizardForm = {
+      ...latestFormRef.current,
       locationId,
-      preferredTimezone: timezone,
-      contactName:
-        availableLocations.find((item) => item.id === locationId)?.contact
-          ?.name ||
-        requesterContact?.name ||
-        "",
-      contactPhone:
-        availableLocations.find((item) => item.id === locationId)?.contact
-          ?.phone ||
-        requesterContact?.phone ||
-        "",
-      contactEmail:
-        availableLocations.find((item) => item.id === locationId)?.contact
-          ?.email ||
-        requesterContact?.email ||
-        "",
-      accessDetails:
-        availableLocations.find((item) => item.id === locationId)
-          ?.accessDetails ?? "",
-    }));
+      preferredTimezone: selected?.timezone ?? "America/New_York",
+      contactName: selected?.contact?.name || requesterContact?.name || "",
+      contactPhone: selected?.contact?.phone || requesterContact?.phone || "",
+      contactEmail: selected?.contact?.email || requesterContact?.email || "",
+      accessDetails: selected?.accessDetails ?? "",
+    };
+    latestFormRef.current = nextForm;
+    setForm(nextForm);
     setFieldErrors((current) => {
       const next = { ...current };
       delete next["locationId"];
       delete next["preferredWindows"];
       return next;
     });
+    return nextForm;
   };
 
   const updateService = (serviceKey: string): void => {
@@ -1361,15 +1381,15 @@ function PartnerBookingWizardSession({
     return true;
   }, [flushPersist, focusErrorSummary, form, persona, setCurrentDraft]);
 
-  const goNext = async (): Promise<void> => {
+  const goNext = async (snapshot: WizardForm = form): Promise<void> => {
     if (advancingRef.current) return;
     advancingRef.current = true;
     setAdvancing(true);
     try {
       const localErrors = localErrorsForStep(
         step,
-        form,
-        services.find((service) => service.key === form.serviceKey),
+        snapshot,
+        services.find((service) => service.key === snapshot.serviceKey),
       );
       if (Object.keys(localErrors).length) {
         setFieldErrors(localErrors);
@@ -1379,9 +1399,9 @@ function PartnerBookingWizardSession({
       }
       if (step === 2 && !hold) {
         const preferredDates = [
-          form.preferredDateOne,
-          form.preferredDateTwo,
-          form.preferredDateThree,
+          snapshot.preferredDateOne,
+          snapshot.preferredDateTwo,
+          snapshot.preferredDateThree,
         ].filter(Boolean);
         const availableWindowExists =
           availability?.instantConfirmationEligible === true &&
@@ -1407,7 +1427,7 @@ function PartnerBookingWizardSession({
       if (step === 1) {
         const loaded = await loadAvailability();
         if (!loaded) return;
-      } else if (!(await persist(form))) {
+      } else if (!(await flushPersist(snapshot))) {
         return;
       }
       const next = Math.min(STEPS.length - 1, step + 1);
@@ -1571,6 +1591,11 @@ function PartnerBookingWizardSession({
   const location = availableLocations.find(
     (item) => item.id === form.locationId,
   );
+  const enteringNewAddress =
+    step === 0 &&
+    canManageLocations &&
+    addressEntryMode === "new" &&
+    !form.locationId;
   const service = services.find((item) => item.key === form.serviceKey);
   const selectedBaseOption = service?.baseOptions?.find(
     (option) => option.tierKey === form.tierKey,
@@ -1622,12 +1647,6 @@ function PartnerBookingWizardSession({
       className="space-y-5"
       data-partner-unsaved={hasUnsavedChanges ? "true" : undefined}
     >
-      {step === 0 ? (
-        <PartnerSavedRequests
-          currentDraftId={draft?.id}
-          canDiscard={canDiscardDrafts}
-        />
-      ) : null}
       <PartnerPanel className="overflow-hidden p-0 sm:p-0">
         <div className="border-b border-slate-200 bg-slate-50 px-4 py-4 sm:px-6">
           <ol
@@ -1674,7 +1693,12 @@ function PartnerBookingWizardSession({
                     <button
                       type="button"
                       onClick={() => editReviewStep(index)}
-                      disabled={advancing || submitting || availabilityLoading}
+                      disabled={
+                        advancing ||
+                        addressSaving ||
+                        submitting ||
+                        availabilityLoading
+                      }
                       aria-current={active ? "step" : undefined}
                       className="flex min-h-11 w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
                     >
@@ -1720,6 +1744,11 @@ function PartnerBookingWizardSession({
                     aria-hidden="true"
                   />
                   {saveStatus === "creating" ? "Starting request…" : "Saving…"}
+                </span>
+              ) : saveStatus === "saved" && hasUnsavedAddress ? (
+                <span className="inline-flex items-center gap-1.5 text-amber-800">
+                  <CircleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                  Address not saved
                 </span>
               ) : saveStatus === "saved" ? (
                 <span className="inline-flex items-center gap-1.5 text-emerald-700">
@@ -1797,112 +1826,216 @@ function PartnerBookingWizardSession({
 
           <div className="mt-6">
             {step === 0 ? (
-              <fieldset>
-                <legend className="text-base font-semibold text-slate-950">
-                  Where do you need service?
-                </legend>
-                <p className="mt-1 text-sm leading-6 text-slate-600">
-                  Choose a saved location to reuse its details, or add a new
-                  one. You can confirm access information in a later step.
+              <fieldset
+                id="partner-book-location"
+                tabIndex={-1}
+                className="min-w-0 focus:outline-none"
+              >
+                <legend className="sr-only">Service address details</legend>
+                <p className="text-sm leading-6 text-slate-600">
+                  {location
+                    ? "Service will be requested at the address below."
+                    : canManageLocations && addressEntryMode === "new"
+                      ? "Enter the address where service is needed. Select Continue to save this address and proceed."
+                      : "Select an address saved to your company account."}
                 </p>
-                <label
-                  className="mt-4 block text-sm font-semibold text-slate-700"
-                  htmlFor="partner-location-chooser-search"
-                >
-                  Find a saved location
-                  <input
-                    id="partner-location-chooser-search"
-                    type="search"
-                    value={locationSearch}
-                    maxLength={100}
-                    onChange={(event) => setLocationSearch(event.target.value)}
-                    className={partnerFieldClass}
-                    placeholder="Name, address, or property reference"
-                  />
-                </label>
-                {locationSearching ? (
-                  <p role="status" className="mt-2 text-sm text-slate-600">
-                    Searching your locations…
-                  </p>
+
+                {location ? (
+                  <div
+                    id="partner-book-selected-address"
+                    tabIndex={-1}
+                    data-selected-location-id={location.id}
+                    className="mt-4 rounded-xl border border-primary-200 bg-primary-50/40 p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                  >
+                    <p className="flex items-center gap-2 text-sm font-semibold text-primary-900">
+                      <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                      Selected service address
+                    </p>
+                    <p className="mt-2 break-words font-semibold text-slate-950">
+                      {location.address}
+                    </p>
+                    {location.name !== location.address ? (
+                      <p className="mt-1 text-sm text-slate-600">
+                        {location.name}
+                      </p>
+                    ) : null}
+                    {location.serviceAreaStatus &&
+                    location.serviceAreaStatus !== "eligible" ? (
+                      <p className="mt-2 text-sm text-amber-800">
+                        Stonegate will review this address before confirming
+                        service.
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={cn(partnerSecondaryButtonClass, "mt-3")}
+                      disabled={addressSaving || advancing}
+                      onClick={() => {
+                        updateLocation("");
+                        const nextMode = canManageLocations ? "new" : "saved";
+                        setAddressEntryMode(nextMode);
+                        setLocationSearch("");
+                        focusAddressEntry(nextMode);
+                      }}
+                    >
+                      Change address
+                    </button>
+                  </div>
                 ) : null}
-                {locationSearchError ? (
-                  <PartnerNotice tone="error">
-                    {locationSearchError}
-                  </PartnerNotice>
+
+                {canManageLocations ? (
+                  <div hidden={Boolean(location) || addressEntryMode !== "new"}>
+                    <PartnerInlineLocationForm
+                      embedded
+                      formId={addressFormId}
+                      canManage
+                      disabled={
+                        advancing || saveStatus === "creating" || !draft
+                      }
+                      onPendingChange={setAddressSaving}
+                      onUnsavedChange={setAddressDirty}
+                      onCreated={async (newLocation) => {
+                        setAvailableLocations((current) =>
+                          sortBookingLocations([
+                            ...current.filter(
+                              (item) => item.id !== newLocation.id,
+                            ),
+                            newLocation,
+                          ]),
+                        );
+                        const snapshot = updateLocation(
+                          newLocation.id,
+                          newLocation,
+                        );
+                        await goNext(snapshot);
+                      }}
+                    />
+                  </div>
                 ) : null}
-                {locationSearchResults?.length === 0 ? (
-                  <p role="status" className="mt-3 text-sm">
-                    No saved locations match. Try a different name or address.
-                  </p>
+
+                {!location &&
+                addressEntryMode === "new" &&
+                availableLocations.length > 0 ? (
+                  <button
+                    type="button"
+                    className={cn(partnerSecondaryButtonClass, "mt-4")}
+                    disabled={addressSaving || advancing}
+                    onClick={() => {
+                      setAddressEntryMode("saved");
+                      focusAddressEntry("saved");
+                    }}
+                  >
+                    Use a saved address
+                  </button>
                 ) : null}
-                <div className="mt-4 grid max-h-96 gap-3 overflow-y-auto p-1 md:grid-cols-2">
-                  {(
-                    locationSearchResults ??
-                    sortBookingLocations(availableLocations)
-                  ).map((item, index) => {
-                    const selected = item.id === form.locationId;
-                    return (
-                      <label
-                        key={item.id}
-                        className={cn(
-                          "relative flex min-h-24 cursor-pointer gap-3 rounded-2xl border p-4 transition focus-within:ring-2 focus-within:ring-accent-500",
-                          selected
-                            ? "border-primary-600 bg-primary-50 ring-1 ring-primary-600"
-                            : "border-slate-200 hover:border-primary-300",
-                        )}
+
+                {!location && addressEntryMode === "saved" ? (
+                  <div className="mt-4 space-y-3">
+                    {canManageLocations ? (
+                      <button
+                        type="button"
+                        className={partnerSecondaryButtonClass}
+                        disabled={addressSaving || advancing}
+                        onClick={() => {
+                          setAddressEntryMode("new");
+                          setLocationSearch("");
+                          focusAddressEntry("new");
+                        }}
                       >
-                        <input
-                          id={
-                            selected || (!form.locationId && index === 0)
-                              ? "partner-book-location"
-                              : undefined
-                          }
-                          type="radio"
-                          name="location"
-                          value={item.id}
-                          checked={selected}
-                          onChange={() => updateLocation(item.id)}
-                          className="mt-1 h-5 w-5 shrink-0 border-slate-300 text-primary-700"
-                          aria-describedby={
-                            fieldErrors["locationId"]
-                              ? "partner-book-location-error"
-                              : undefined
-                          }
-                        />
-                        <span className="min-w-0">
-                          <span className="block font-semibold text-slate-950">
-                            {item.name}
-                          </span>
-                          <span className="mt-1 block text-sm leading-5 text-slate-600">
-                            {item.address}
-                          </span>
-                          {item.serviceAreaStatus &&
-                          item.serviceAreaStatus !== "eligible" ? (
-                            <span className="mt-2 block text-xs font-medium text-amber-800">
-                              Service-area review required
+                        Enter a new address
+                      </button>
+                    ) : null}
+                    <label
+                      className="block text-sm font-semibold text-slate-700"
+                      htmlFor="partner-location-chooser-search"
+                    >
+                      Search saved addresses
+                      <input
+                        id="partner-location-chooser-search"
+                        type="search"
+                        value={locationSearch}
+                        maxLength={100}
+                        onChange={(event) =>
+                          setLocationSearch(event.target.value)
+                        }
+                        className={partnerFieldClass}
+                        placeholder="Address or location label"
+                      />
+                    </label>
+                    {locationSearching ? (
+                      <p role="status" className="text-sm text-slate-600">
+                        Searching saved addresses…
+                      </p>
+                    ) : null}
+                    {locationSearchError ? (
+                      <PartnerNotice tone="error">
+                        {locationSearchError}
+                      </PartnerNotice>
+                    ) : null}
+                    {(locationSearchResults ?? availableLocations).length ===
+                    0 ? (
+                      <p role="status" className="text-sm text-slate-600">
+                        No saved addresses match. Try another search
+                        {canManageLocations ? " or enter a new address" : ""}.
+                      </p>
+                    ) : null}
+                    <div className="grid max-h-96 gap-3 overflow-y-auto p-1 md:grid-cols-2">
+                      {(
+                        locationSearchResults ??
+                        sortBookingLocations(availableLocations)
+                      ).map((item) => (
+                        <label
+                          key={item.id}
+                          className="flex min-h-24 cursor-pointer gap-3 rounded-xl border border-slate-200 p-4 transition hover:border-primary-300 focus-within:ring-2 focus-within:ring-accent-500"
+                        >
+                          <input
+                            type="radio"
+                            name="location"
+                            value={item.id}
+                            checked={item.id === form.locationId}
+                            onChange={() => {
+                              updateLocation(item.id);
+                              setLocationSearch("");
+                              window.requestAnimationFrame(() =>
+                                document
+                                  .getElementById(
+                                    "partner-book-selected-address",
+                                  )
+                                  ?.focus(),
+                              );
+                            }}
+                            className="mt-1 h-5 w-5 shrink-0 border-slate-300 text-primary-700"
+                            aria-describedby={
+                              fieldErrors["locationId"]
+                                ? "partner-book-location-error"
+                                : undefined
+                            }
+                          />
+                          <span className="min-w-0">
+                            <span className="block break-words font-semibold text-slate-950">
+                              {item.address}
                             </span>
-                          ) : null}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-                <PartnerInlineLocationForm
-                  canManage={canManageLocations}
-                  onCreated={(newLocation) => {
-                    setAvailableLocations((current) =>
-                      [...current, newLocation].sort((left, right) =>
-                        left.name.localeCompare(right.name),
-                      ),
-                    );
-                    updateLocation(newLocation.id);
-                    setFieldErrors((current) => {
-                      const next = { ...current };
-                      delete next["locationId"];
-                      return next;
-                    });
-                  }}
-                />
+                            <span className="mt-1 block text-sm text-slate-600">
+                              {item.name}
+                            </span>
+                            {item.serviceAreaStatus &&
+                            item.serviceAreaStatus !== "eligible" ? (
+                              <span className="mt-2 block text-xs text-amber-800">
+                                Service-area review required
+                              </span>
+                            ) : null}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    {!canManageLocations ? (
+                      <p className="text-sm text-slate-600">
+                        To use a new address, ask your company administrator to
+                        add it.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
                 {fieldErrors["locationId"] ? (
                   <p
                     id="partner-book-location-error"
@@ -3801,19 +3934,25 @@ function PartnerBookingWizardSession({
             </button>
             {step < 3 ? (
               <button
-                type="button"
-                onClick={() => void goNext()}
+                type={enteringNewAddress ? "submit" : "button"}
+                form={enteringNewAddress ? addressFormId : undefined}
+                onClick={enteringNewAddress ? undefined : () => void goNext()}
                 data-partner-analytics="booking_step_continue"
                 disabled={
                   !draft ||
                   saveStatus === "creating" ||
                   advancing ||
+                  addressSaving ||
                   availabilityLoading ||
                   (step === 2 && !hold && !preferredReviewReady)
                 }
                 className={cn(partnerPrimaryButtonClass, "w-full sm:w-auto")}
               >
-                {advancing ? "Saving step…" : "Continue"}
+                {addressSaving
+                  ? "Saving address…"
+                  : advancing
+                    ? "Saving step…"
+                    : "Continue"}
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
               </button>
             ) : (
@@ -3848,6 +3987,12 @@ function PartnerBookingWizardSession({
           </div>
         </div>
       </PartnerPanel>
+      {step === 0 ? (
+        <PartnerSavedRequests
+          currentDraftId={draft?.id}
+          canDiscard={canDiscardDrafts}
+        />
+      ) : null}
     </div>
   );
 }
