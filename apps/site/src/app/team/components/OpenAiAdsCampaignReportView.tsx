@@ -1,5 +1,4 @@
 import React from "react";
-import Link from "next/link";
 import {
   formatOpenAiAdsReportCount,
   formatOpenAiAdsReportDate,
@@ -37,13 +36,12 @@ export function OpenAiAdsCampaignReportView({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link
+          <a
             href={refreshHref}
-            prefetch={false}
             className={teamButtonClass("secondary", "sm")}
           >
             Refresh report
-          </Link>
+          </a>
           <a
             href="https://ads.openai.com/"
             target="_blank"
