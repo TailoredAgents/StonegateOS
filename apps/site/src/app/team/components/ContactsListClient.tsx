@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { SubmitButton } from "@/components/SubmitButton";
+import { formatPropertyAddress } from "@/lib/property-address";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   PIPELINE_STAGES,
@@ -1181,8 +1182,7 @@ function ContactCard({
                   </option>
                   {contactState.properties.map((property) => (
                     <option key={property.id} value={property.id}>
-                      {property.addressLine1}, {property.city}, {property.state}{" "}
-                      {property.postalCode}
+                      {formatPropertyAddress(property)}
                     </option>
                   ))}
                 </select>

@@ -532,6 +532,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       doNotContact: contacts.doNotContact,
       contactUpdatedAt: contacts.updatedAt,
       propertyAddressLine1: properties.addressLine1,
+      propertyAddressLine2: properties.addressLine2,
       propertyCity: properties.city,
       propertyState: properties.state,
       propertyPostalCode: properties.postalCode,
@@ -896,6 +897,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         ? {
             id: row.propertyId,
             addressLine1: row.propertyAddressLine1 ?? "",
+            addressLine2: row.propertyAddressLine2 ?? null,
             city: row.propertyCity ?? "",
             state: row.propertyState ?? "",
             postalCode: row.propertyPostalCode ?? "",

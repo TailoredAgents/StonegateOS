@@ -158,6 +158,7 @@ export async function GET(
       doNotContact: contacts.doNotContact,
       doNotContactReason: contacts.doNotContactReason,
       propertyAddressLine1: properties.addressLine1,
+      propertyAddressLine2: properties.addressLine2,
       propertyCity: properties.city,
       propertyState: properties.state,
       propertyPostalCode: properties.postalCode,
@@ -514,6 +515,7 @@ export async function GET(
           ? {
               id: threadRow.propertyId,
               addressLine1: threadRow.propertyAddressLine1 ?? "",
+              addressLine2: threadRow.propertyAddressLine2 ?? null,
               city: threadRow.propertyCity ?? "",
               state: threadRow.propertyState ?? "",
               postalCode: threadRow.propertyPostalCode ?? "",

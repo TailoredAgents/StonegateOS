@@ -1994,6 +1994,18 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   const hasCompleteNewAddress = Boolean(
     addressLine1 && city && state && postalCode,
   );
+  // Older forms prefilled state even for saved properties; other address
+  // inputs indicate details that would otherwise be silently ignored.
+  if (
+    !shouldCreateProperty &&
+    (addressLine1 || addressLine2 || city || postalCode)
+  ) {
+    redirect(
+      errorRedirect(
+        "Choose Add a new address to use the address, unit, or building details you entered.",
+      ),
+    );
+  }
   if (shouldCreateProperty && !hasNewAddress) {
     redirect(errorRedirect("property_required"));
   }

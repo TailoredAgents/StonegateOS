@@ -29,7 +29,7 @@
     "lint": "corepack pnpm --filter api lint && corepack pnpm --filter site lint",
     "test": "corepack pnpm --filter api test -- --runInBand",
     "test:unit": "corepack pnpm --filter api test -- --runInBand",
-    "test:mobile-booking-cards": "tsx --test apps/site/test/mobile-job-drafts.test.ts apps/site/test/mobile-compact-completion.test.ts scripts/test-mobile-booking-cards.mts scripts/test-mobile-compact-completion.mts scripts/test-mobile-booking-recovery.mts scripts/test-mobile-booking-actions.mjs",
+    "test:mobile-booking-cards": "tsx --test apps/site/test/mobile-job-drafts.test.ts apps/site/test/mobile-compact-completion.test.ts scripts/test-mobile-booking-cards.mts scripts/test-mobile-compact-completion.mts scripts/test-mobile-booking-recovery.mts scripts/test-mobile-booking-actions.mjs scripts/test-mobile-booking-address.mts",
     "test:mobile-booking-page": "tsx --test scripts/test-mobile-booking-page.mts",
     "test:outbound": "corepack pnpm --filter api exec jest --config jest.config.cjs --runInBand --testPathPattern=outbound-",
     "test:outbound:browser": "tsx --test scripts/test-outbound-workspace.mts scripts/test-outbound-detail-components.mts scripts/test-outbound-import-components.mts",

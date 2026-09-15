@@ -19,7 +19,7 @@ const threadId = "33333333-3333-4333-8333-333333333333";
 const property = {
   id: "property-1",
   addressLine1: "123 Local Lane",
-  addressLine2: null,
+  addressLine2: "Building 4, Unit 210",
   city: "Atlanta",
   state: "GA",
   postalCode: "30301",
@@ -309,6 +309,9 @@ test(
               exact: true,
             }),
           ).toBeVisible();
+          await expect(
+            page.locator('select[name="appointmentId"] option'),
+          ).toContainText("123 Local Lane, Building 4, Unit 210");
           assert.equal(
             reads,
             1,
@@ -319,6 +322,43 @@ test(
           await expect(
             page.getByRole("textbox", { name: "Reply", exact: true }),
           ).toHaveValue("Keep this unsent reply");
+          await page.close();
+        },
+      );
+      await t.test(
+        "booking choices distinguish units at the same street address",
+        async () => {
+          const page = await browser.newPage();
+          await page.route("**/api/team/contacts/workspace?**", (route) =>
+            route.fulfill({
+              json: {
+                ...fixture,
+                properties: [
+                  property,
+                  {
+                    ...property,
+                    id: "property-2",
+                    addressLine2: "Building 4, Unit 211",
+                  },
+                ],
+              },
+            }),
+          );
+          await page.goto(app.url);
+          await page.getByRole("button", { name: "Book", exact: true }).click();
+          const properties = page.locator('select[name="propertyId"]');
+          await expect(
+            properties.locator('option[value="property-1"]'),
+          ).toHaveText(
+            "123 Local Lane, Building 4, Unit 210, Atlanta, GA 30301",
+          );
+          await expect(
+            properties.locator('option[value="property-2"]'),
+          ).toHaveText(
+            "123 Local Lane, Building 4, Unit 211, Atlanta, GA 30301",
+          );
+          await properties.selectOption("property-2");
+          await expect(properties).toHaveValue("property-2");
           await page.close();
         },
       );
@@ -458,9 +498,7 @@ test(
             .getByRole("button", { name: "Edit name", exact: true })
             .click();
           await page.getByLabel("First", { exact: true }).fill("Taylor");
-          await page
-            .getByRole("button", { name: "Save", exact: true })
-            .click();
+          await page.getByRole("button", { name: "Save", exact: true }).click();
           await expect(
             page.getByText("Taylor Customer", { exact: true }),
           ).toBeVisible();

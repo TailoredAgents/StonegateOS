@@ -23,6 +23,7 @@ const mockCoreRow = {
   contactFirstName: "Jordan",
   contactLastName: "Smith",
   addressLine1: "123 Oak Street",
+  addressLine2: "Building B, Unit 204" as string | null,
   city: "Atlanta",
   state: "GA",
   postalCode: "30301",
@@ -45,7 +46,17 @@ function mockSelect(fields: Record<string, unknown>) {
         identity && mockEnrichmentFailure
           ? Promise.reject(new Error("partner table unavailable"))
           : Promise.resolve(
-              identity ? mockIdentityRows : core ? [mockCoreRow] : [],
+              identity
+                ? mockIdentityRows
+                : core
+                  ? [
+                      Object.fromEntries(
+                        Object.entries(mockCoreRow).filter(
+                          ([key]) => key in fields,
+                        ),
+                      ),
+                    ]
+                  : [],
             );
       return promise.then(resolve, reject);
     },
@@ -113,6 +124,7 @@ describe("calendar card identity feed", () => {
   beforeEach(() => {
     mockEnrichmentFailure = false;
     mockIdentityReadCount = 0;
+    mockCoreRow.addressLine2 = "Building B, Unit 204";
     mockIdentityRows = [
       {
         appointmentId: mockAppointmentId,
@@ -178,5 +190,20 @@ describe("calendar card identity feed", () => {
       appointmentId: mockAppointmentId,
     });
     expect((await readFeed()).appointments).toHaveLength(1);
+  });
+
+  it("includes the booked building and unit in the calendar address", async () => {
+    const feed = await readFeed();
+    expect(feed.appointments[0]?.address).toBe(
+      "123 Oak Street, Building B, Unit 204, Atlanta, GA, 30301",
+    );
+  });
+
+  it("keeps addresses without a second line free of empty separators", async () => {
+    mockCoreRow.addressLine2 = null;
+    const feed = await readFeed();
+    expect(feed.appointments[0]?.address).toBe(
+      "123 Oak Street, Atlanta, GA, 30301",
+    );
   });
 });

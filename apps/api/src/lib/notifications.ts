@@ -11,6 +11,7 @@ import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
 import { queueSystemOutboundMessage } from "@/lib/system-outbound";
 import { quoteSentMessageDedupeKey } from "@/lib/quote-outbox-contract";
 import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
+import { formatPropertyAddress } from "@/lib/property-address";
 
 interface BaseContact {
   name: string;
@@ -20,6 +21,7 @@ interface BaseContact {
 
 interface BaseProperty {
   addressLine1: string;
+  addressLine2?: string | null;
   city: string;
   state: string;
   postalCode: string;
@@ -272,7 +274,7 @@ function createIcsAttachment(payload: EstimateNotificationPayload): {
     .filter((line): line is string => Boolean(line))
     .join("\\n");
 
-  const location = `${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}`;
+  const location = formatPropertyAddress(property);
 
   const content = [
     "BEGIN:VCALENDAR",
@@ -424,7 +426,7 @@ export async function sendEstimateConfirmation(
   const fallbackSubject = `Stonegate Junk Removal - ${when}`;
   const fallbackBody = [
     `${headline} We'll see you ${when}.`,
-    `Location: ${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}`,
+    `Location: ${formatPropertyAddress(property)}`,
     `Services: ${joinServices(payload.services)}`,
     scheduling.timeWindow ? `Preferred window: ${scheduling.timeWindow}` : null,
     payload.notes ? `Notes: ${payload.notes}` : null,
@@ -449,7 +451,9 @@ export async function sendEstimateConfirmation(
         rescheduleUrl,
         reason,
         address: {
-          line1: property.addressLine1,
+          line1: [property.addressLine1, property.addressLine2]
+            .filter(Boolean)
+            .join(", "),
           city: property.city,
           state: property.state,
           postalCode: property.postalCode,
@@ -542,7 +546,7 @@ async function sendEstimateReminderInternal(
     : `Stonegate reminder: appointment in ${windowHours}h (${when}). Reply here if you need changes.`;
   const fallbackEmailBody = [
     `Quick reminder: your Stonegate Junk Removal appointment is in ${windowHours} hours (${when}).`,
-    `Location: ${payload.property.addressLine1}, ${payload.property.city}, ${payload.property.state} ${payload.property.postalCode}`,
+    `Location: ${formatPropertyAddress(payload.property)}`,
     "",
     rescheduleUrl
       ? `Need to adjust? ${rescheduleUrl}`
@@ -561,7 +565,9 @@ async function sendEstimateReminderInternal(
         reason: "reminder",
         reminderWindowHours: windowHours,
         address: {
-          line1: payload.property.addressLine1,
+          line1: [payload.property.addressLine1, payload.property.addressLine2]
+            .filter(Boolean)
+            .join(", "),
           city: payload.property.city,
           state: payload.property.state,
           postalCode: payload.property.postalCode,

@@ -446,6 +446,98 @@ void test("mobile booking actions preserve request identity, receipts and naviga
     url = await redirected(actions.openMobileContactThreadAction, unsafeReturn);
     assert.equal(url.searchParams.get("bookingReturn"), null);
     checks++;
+
+    const savedPropertyId = "77777777-7777-4777-8777-777777777777";
+    function bookingForm() {
+      const f = new FormData();
+      for (const [name, value] of Object.entries({
+        contactId: id,
+        propertyId: "",
+        startAt: "2026-09-16T09:00",
+        appointmentType: "job",
+        sourceType: "team_member",
+        sourceTeamMemberId: member,
+        serviceType: "junk_removal",
+        priceInputMode: "exact",
+        quotedTotal: "350",
+        loadSize: "quarter_to_half",
+        addressLine1: "123 Main St",
+        addressLine2: " Building B, Unit 204 ",
+        city: "Atlanta",
+        state: "GA",
+        postalCode: "30301",
+      }))
+        f.set(name, value);
+      return f;
+    }
+    function permitBooking() {
+      globalThis.__session.teamMember = {
+        id: member,
+        permissions: ["bookings.manage"],
+      };
+    }
+    reset((path) =>
+      path.endsWith("/properties")
+        ? Response.json({ property: { id: savedPropertyId } })
+        : Response.json({ ok: true }),
+    );
+    permitBooking();
+    url = await redirected(actions.bookMobileAppointmentAction, bookingForm());
+    assert.equal(url.searchParams.get("booked"), "1", url.href);
+    assert.equal(__calls.length, 2);
+    assert.deepEqual(JSON.parse(__calls[0].init.body), {
+      addressLine1: "123 Main St",
+      addressLine2: "Building B, Unit 204",
+      city: "Atlanta",
+      state: "GA",
+      postalCode: "30301",
+    });
+    assert.equal(__calls[1].path, "/api/admin/booking/book");
+    assert.equal(JSON.parse(__calls[1].init.body).propertyId, savedPropertyId);
+    checks++;
+
+    reset();
+    permitBooking();
+    const ambiguousAddress = bookingForm();
+    ambiguousAddress.set("propertyId", savedPropertyId);
+    url = await redirected(
+      actions.bookMobileAppointmentAction,
+      ambiguousAddress,
+    );
+    assert.match(url.searchParams.get("error"), /Choose Add a new address/);
+    assert.equal(__calls.length, 0);
+    checks++;
+
+    reset(() => Response.json({ ok: true }));
+    permitBooking();
+    const savedAddress = bookingForm();
+    savedAddress.set("propertyId", savedPropertyId);
+    for (const key of [
+      "addressLine1",
+      "addressLine2",
+      "city",
+      "state",
+      "postalCode",
+    ]) {
+      savedAddress.delete(key);
+    }
+    url = await redirected(actions.bookMobileAppointmentAction, savedAddress);
+    assert.equal(url.searchParams.get("booked"), "1");
+    assert.equal(__calls.length, 1);
+    assert.equal(JSON.parse(__calls[0].init.body).propertyId, savedPropertyId);
+    checks++;
+
+    reset();
+    permitBooking();
+    const incompleteAddress = bookingForm();
+    incompleteAddress.delete("addressLine1");
+    url = await redirected(
+      actions.bookMobileAppointmentAction,
+      incompleteAddress,
+    );
+    assert.equal(url.searchParams.get("error"), "complete_address_required");
+    assert.equal(__calls.length, 0);
+    checks++;
     console.log(`${checks} mobile action runtime checks passed`);
   } finally {
     await rm(directory, { recursive: true, force: true });

@@ -4,6 +4,10 @@ import React, { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { CalendarClock, FileText, MapPin, NotebookPen } from "lucide-react";
 import {
+  formatPropertyAddress,
+  formatPropertyStreet,
+} from "@/lib/property-address";
+import {
   addPropertyAction,
   bookInboxAppointmentAction,
   createInboxQuoteAction,
@@ -89,8 +93,7 @@ function formatDateTime(value: string | null): string {
 function propertyLabel(
   property: CustomerWorkspaceProperty | null | undefined,
 ): string {
-  if (!property) return "";
-  return `${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}`;
+  return formatPropertyAddress(property);
 }
 
 function formString(formData: FormData, key: string): string {
@@ -1112,7 +1115,7 @@ function RescheduleDrawer({
             <option key={appointment.id} value={appointment.id}>
               {formatDateTime(appointment.startAt)}{" "}
               {appointment.property
-                ? `| ${appointment.property.addressLine1}`
+                ? `| ${formatPropertyStreet(appointment.property)}`
                 : ""}
             </option>
           ))}

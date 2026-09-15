@@ -228,6 +228,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       contactLastName: contacts.lastName,
       assignedSalespersonMemberId: contacts.salespersonMemberId,
       addressLine1: properties.addressLine1,
+      addressLine2: properties.addressLine2,
       city: properties.city,
       state: properties.state,
       postalCode: properties.postalCode,
@@ -431,6 +432,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           : (row.contactFirstName ?? row.contactLastName ?? null);
       const addressParts = [
         row.addressLine1,
+        row.addressLine2,
         row.city,
         row.state,
         row.postalCode,

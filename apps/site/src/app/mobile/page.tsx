@@ -19,6 +19,7 @@ import {
   type MobilePartnerAffiliation,
 } from "./lib/booking-presentation";
 import { SubmitButton } from "@/components/SubmitButton";
+import { formatPropertyAddress, formatPropertyStreet } from "@/lib/property-address";
 import Link from "next/link";
 import type { Route } from "next";
 import { redirect } from "next/navigation";
@@ -66,6 +67,7 @@ import { InboxRefresh } from "./InboxRefresh";
 import { MobileInboxMediaGallery } from "./MobileInboxMediaGallery";
 import { MobileThreadConversation } from "./MobileThreadConversation";
 import { MobileAppointmentPricingFields } from "./MobileAppointmentPricingFields";
+import { MobileBookingAddressFields } from "./MobileBookingAddressFields";
 import { MobileAppointmentCard } from "./MobileAppointmentCard";
 import { MobileAppointmentDetail } from "./MobileAppointmentDetail";
 import { MobileCompletionFinalTotalFields } from "./MobileCompletionFinalTotalFields";
@@ -181,6 +183,7 @@ type ThreadSummary = {
   property: {
     id: string;
     addressLine1: string;
+    addressLine2?: string | null;
     city: string;
     state: string;
     postalCode: string;
@@ -358,6 +361,7 @@ type QuoteSummary = {
   contact: { name: string; email: string | null };
   property: {
     addressLine1: string;
+    addressLine2?: string | null;
     city: string;
     state: string;
     postalCode: string;
@@ -2678,7 +2682,7 @@ export default async function MobileHomePage({
                         <p className="mt-1 text-sm text-slate-300">
                           {formatChannel(selectedThread.thread.channel)}
                           {selectedThread.thread.property?.addressLine1
-                            ? ` • ${selectedThread.thread.property.addressLine1}`
+                            ? ` • ${formatPropertyStreet(selectedThread.thread.property)}`
                             : ""}
                         </p>
                       </div>
@@ -2982,7 +2986,7 @@ export default async function MobileHomePage({
                                 <span>{formatChannel(thread.channel)}</span>
                                 {thread.property?.addressLine1 ? (
                                   <span className="truncate">
-                                    {thread.property.addressLine1}
+                                    {formatPropertyStreet(thread.property)}
                                   </span>
                                 ) : null}
                                 {(thread.mediaCount ?? 0) > 0 ? (
@@ -3132,7 +3136,7 @@ export default async function MobileHomePage({
                               key={property.id}
                               className="rounded-md border border-white/10 bg-slate-900 p-3 text-sm text-slate-200"
                             >
-                              <p>{property.addressLine1}</p>
+                              <p>{formatPropertyStreet(property)}</p>
                               <p className="mt-1 text-xs text-slate-400">
                                 {[
                                   property.city,
@@ -3255,117 +3259,11 @@ export default async function MobileHomePage({
                         value={selectedContact.id}
                       />
                       <input type="hidden" name="threadId" value={threadId} />
-                      {selectedContact.properties?.length ? (
-                        <label className="block">
-                          <span className="text-xs font-semibold text-slate-300">
-                            Property
-                          </span>
-                          <select
-                            name="propertyId"
-                            defaultValue={
-                              selectedContact.properties[0]?.id ?? ""
-                            }
-                            className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                          >
-                            {selectedContact.properties.map((property) => (
-                              <option key={property.id} value={property.id}>
-                                {[
-                                  property.addressLine1,
-                                  property.city,
-                                  property.state,
-                                ]
-                                  .filter(Boolean)
-                                  .join(", ")}
-                              </option>
-                            ))}
-                            <option value="">Add a new address below</option>
-                          </select>
-                          <span className="mt-1 block text-xs leading-5 text-slate-400">
-                            Pick a saved address, or choose add new to save a
-                            different one.
-                          </span>
-                        </label>
-                      ) : (
-                        <input type="hidden" name="propertyId" value="" />
-                      )}
-                      <div className="rounded-md border border-white/10 bg-slate-950 p-3">
-                        <p className="text-xs font-semibold text-slate-300">
-                          Add new address
-                        </p>
-                        <p className="mt-1 text-xs leading-5 text-slate-400">
-                          Only used when you choose add new above, or when this
-                          contact has no saved address.
-                        </p>
-                        {detectedThreadAddress ? (
-                          <p className="mt-1 text-xs leading-5 text-cyan-100">
-                            Found in the thread and prefilled for faster
-                            new-address booking.
-                          </p>
-                        ) : null}
-                        <div className="mt-2 space-y-2">
-                          <label className="block">
-                            <span className="text-xs font-semibold text-slate-400">
-                              Street
-                            </span>
-                            <input
-                              name="addressLine1"
-                              defaultValue={
-                                detectedThreadAddress?.addressLine1 ?? ""
-                              }
-                              className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                              placeholder="123 Main St"
-                            />
-                          </label>
-                          <label className="block">
-                            <span className="text-xs font-semibold text-slate-400">
-                              Unit / details
-                            </span>
-                            <input
-                              name="addressLine2"
-                              className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                              placeholder="Apt, gate, building..."
-                            />
-                          </label>
-                          <div className="grid grid-cols-[1fr_4rem_6rem] gap-2">
-                            <label className="block">
-                              <span className="text-xs font-semibold text-slate-400">
-                                City
-                              </span>
-                              <input
-                                name="city"
-                                defaultValue={detectedThreadAddress?.city ?? ""}
-                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="text-xs font-semibold text-slate-400">
-                                State
-                              </span>
-                              <input
-                                name="state"
-                                defaultValue={
-                                  detectedThreadAddress?.state ?? "GA"
-                                }
-                                maxLength={2}
-                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-base uppercase text-white outline-none focus:border-cyan-300"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="text-xs font-semibold text-slate-400">
-                                ZIP
-                              </span>
-                              <input
-                                name="postalCode"
-                                defaultValue={
-                                  detectedThreadAddress?.postalCode ?? ""
-                                }
-                                inputMode="numeric"
-                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-base text-white outline-none focus:border-cyan-300"
-                              />
-                            </label>
-                          </div>
-                        </div>
-                      </div>
+                      <MobileBookingAddressFields
+                        key={selectedContact.id}
+                        properties={selectedContact.properties ?? []}
+                        detectedAddress={detectedThreadAddress}
+                      />
                       <label className="block">
                         <span className="text-xs font-semibold text-slate-300">
                           Start
@@ -3701,92 +3599,10 @@ export default async function MobileHomePage({
                         name="returnTo"
                         value={`/mobile?screen=contacts&contactId=${encodeURIComponent(contactDetail.id)}`}
                       />
-                      {contactDetail.properties?.length ? (
-                        <label className="block">
-                          <span className="text-xs font-semibold text-slate-300">
-                            Property
-                          </span>
-                          <select
-                            name="propertyId"
-                            defaultValue={contactDetail.properties[0]?.id ?? ""}
-                            className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                          >
-                            {contactDetail.properties.map((property) => (
-                              <option key={property.id} value={property.id}>
-                                {[
-                                  property.addressLine1,
-                                  property.city,
-                                  property.state,
-                                ]
-                                  .filter(Boolean)
-                                  .join(", ")}
-                              </option>
-                            ))}
-                            <option value="">Add a new address below</option>
-                          </select>
-                        </label>
-                      ) : (
-                        <input type="hidden" name="propertyId" value="" />
-                      )}
-                      <div className="rounded-md border border-white/10 bg-slate-950 p-3">
-                        <p className="text-xs font-semibold text-slate-300">
-                          Add new address
-                        </p>
-                        <div className="mt-2 space-y-2">
-                          <label className="block">
-                            <span className="text-xs font-semibold text-slate-400">
-                              Street
-                            </span>
-                            <input
-                              name="addressLine1"
-                              className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                              placeholder="123 Main St"
-                            />
-                          </label>
-                          <label className="block">
-                            <span className="text-xs font-semibold text-slate-400">
-                              Unit / details
-                            </span>
-                            <input
-                              name="addressLine2"
-                              className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                              placeholder="Apt, gate, building..."
-                            />
-                          </label>
-                          <div className="grid grid-cols-[1fr_4rem_6rem] gap-2">
-                            <label className="block">
-                              <span className="text-xs font-semibold text-slate-400">
-                                City
-                              </span>
-                              <input
-                                name="city"
-                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="text-xs font-semibold text-slate-400">
-                                State
-                              </span>
-                              <input
-                                name="state"
-                                defaultValue="GA"
-                                maxLength={2}
-                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-base uppercase text-white outline-none focus:border-cyan-300"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="text-xs font-semibold text-slate-400">
-                                ZIP
-                              </span>
-                              <input
-                                name="postalCode"
-                                inputMode="numeric"
-                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-base text-white outline-none focus:border-cyan-300"
-                              />
-                            </label>
-                          </div>
-                        </div>
-                      </div>
+                      <MobileBookingAddressFields
+                        key={contactDetail.id}
+                        properties={contactDetail.properties ?? []}
+                      />
                       <label className="block">
                         <span className="text-xs font-semibold text-slate-300">
                           Start
@@ -3844,7 +3660,7 @@ export default async function MobileHomePage({
                           key={property.id}
                           className="rounded-md border border-white/10 bg-slate-900 p-3 text-sm text-slate-200"
                         >
-                          <p>{property.addressLine1}</p>
+                          <p>{formatPropertyStreet(property)}</p>
                           <p className="mt-1 text-xs text-slate-400">
                             {[
                               property.city,
@@ -4027,7 +3843,7 @@ export default async function MobileHomePage({
                               </p>
                               {contact.properties?.[0]?.addressLine1 ? (
                                 <p className="mt-1 truncate text-xs text-slate-400">
-                                  {contact.properties[0].addressLine1}
+                                  {formatPropertyStreet(contact.properties[0])}
                                 </p>
                               ) : null}
                             </div>
@@ -4118,7 +3934,7 @@ export default async function MobileHomePage({
                               key={`${contact.id}:${property.id}`}
                               value={`${contact.id}:${property.id}`}
                             >
-                              {contact.name} - {property.addressLine1},{" "}
+                              {contact.name} - {formatPropertyStreet(property)},{" "}
                               {property.city}
                             </option>
                           )),
@@ -4235,14 +4051,7 @@ export default async function MobileHomePage({
               <div className="space-y-3">
                 {quotes.length > 0 ? (
                   quotes.map((quote) => {
-                    const address = [
-                      quote.property.addressLine1,
-                      quote.property.city,
-                      quote.property.state,
-                      quote.property.postalCode,
-                    ]
-                      .filter(Boolean)
-                      .join(", ");
+                    const address = formatPropertyAddress(quote.property);
                     return (
                       <div
                         key={quote.id}

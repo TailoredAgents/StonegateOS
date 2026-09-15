@@ -212,6 +212,7 @@ function formatQuoteResponse(row: {
   contactEmail: string | null;
   contactPhone: string | null;
   propertyAddressLine1: string | null;
+  propertyAddressLine2: string | null;
   propertyCity: string | null;
   propertyState: string | null;
   propertyPostalCode: string | null;
@@ -276,6 +277,7 @@ function formatQuoteResponse(row: {
     },
     property: {
       addressLine1: addressLine1 ?? "",
+      addressLine2: row.propertyAddressLine2?.trim() || null,
       city: city ?? "",
       state: state ?? "",
       postalCode: postalCode ?? "",
@@ -455,6 +457,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         string | null
       >`coalesce(${contacts.phoneE164}, ${contacts.phone})`,
       propertyAddressLine1: properties.addressLine1,
+      propertyAddressLine2: properties.addressLine2,
       propertyCity: properties.city,
       propertyState: properties.state,
       propertyPostalCode: properties.postalCode,
