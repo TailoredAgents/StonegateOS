@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { PartnerRequestDetails } from "@myst-os/sdk";
 import { MobileCompletionOptions } from "./MobileCompletionOptions";
 import {
   MobileBookingReturnTracker,
@@ -300,6 +301,7 @@ type CalendarEvent = {
   paymentSummary?: AppointmentPaymentSummary;
   paymentLedgerAvailable?: boolean;
   bookingDetails?: AppointmentBookingDetails | null;
+  partnerRequest?: PartnerRequestDetails | null;
   crewMembers?: SavedCrewPayout[];
   eta?: EtaSummary;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
@@ -1436,6 +1438,7 @@ function MobileBooking({
             modern={modern}
             squarePaymentsEnabled={isMobileSquarePaymentsEnabled()}
             bookingDetails={event.bookingDetails}
+            partnerRequest={event.partnerRequest}
             appointmentId={appointmentId}
             appointmentVersion={event.version ?? null}
             employeeId={currentTeamMemberId}

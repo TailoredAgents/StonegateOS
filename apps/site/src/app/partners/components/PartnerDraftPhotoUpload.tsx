@@ -84,12 +84,14 @@ export function PartnerDraftPhotoUpload({
   draftId,
   canUpload,
   onCountChange,
+  onPendingChange,
   persona,
   compact = false,
 }: {
   draftId: string;
   canUpload: boolean;
-  onCountChange: (count: number) => void;
+  onCountChange: (count: number | null) => void;
+  onPendingChange?: (pending: boolean) => void;
   persona?: string | null;
   compact?: boolean;
 }) {
@@ -114,6 +116,12 @@ export function PartnerDraftPhotoUpload({
   const finalizeOperationKeysRef = React.useRef(new Map<string, string>());
   const [uploadAttemptStarted, setUploadAttemptStarted] = React.useState(false);
 
+  React.useEffect(() => {
+    onPendingChange?.(
+      files.length > 0 || busy || preparingFiles || deletingId !== null,
+    );
+  }, [files.length, busy, preparingFiles, deletingId, onPendingChange]);
+
   const resetUploadAttempt = React.useCallback(() => {
     uploadOperationKeyRef.current = null;
     finalizeOperationKeysRef.current.clear();
@@ -126,6 +134,7 @@ export function PartnerDraftPhotoUpload({
       media: PartnerProofMedia[];
     }>(`booking-drafts/${draftId}/media`).catch(() => null);
     if (!result?.ok) {
+      onCountChange(null);
       const status = result?.response.status ?? 503;
       setState(
         status === 403
@@ -144,6 +153,7 @@ export function PartnerDraftPhotoUpload({
       !Array.isArray(result.data.media) ||
       !result.data.media.every(isPortalProofMedia)
     ) {
+      onCountChange(null);
       setState("error");
       setLoadError(
         withPortalSupportReference(
@@ -155,7 +165,9 @@ export function PartnerDraftPhotoUpload({
     }
     mediaRef.current = result.data.media;
     setMedia(result.data.media);
-    onCountChange(result.data.media.length);
+    onCountChange(
+      result.data.media.filter((item) => item.status === "ready").length,
+    );
     setState("ready");
     setLoadError(null);
     return true;
@@ -167,11 +179,8 @@ export function PartnerDraftPhotoUpload({
 
   const chooseFiles = async (list: FileList | null): Promise<void> => {
     const selected = Array.from(list ?? []);
+    if (!selected.length) return;
     if (selected.length > 10) {
-      setFiles([]);
-      setUploadProgress([]);
-      uploadClientIdsRef.current = [];
-      resetUploadAttempt();
       setMessage({
         tone: "error",
         text: "Choose no more than 10 photos in one batch.",
@@ -181,10 +190,6 @@ export function PartnerDraftPhotoUpload({
     }
     const invalid = selected.find((file) => !validFile(file));
     if (invalid) {
-      setFiles([]);
-      setUploadProgress([]);
-      uploadClientIdsRef.current = [];
-      resetUploadAttempt();
       setMessage({
         tone: "error",
         text: `${invalid.name} is not a supported image under 10 MB.`,
@@ -194,9 +199,19 @@ export function PartnerDraftPhotoUpload({
     }
     setPreparingFiles(true);
     setMessage(null);
-    const prepared = await Promise.all(
-      selected.map((file) => preparePortalImageForUpload(file)),
-    );
+    let prepared: Awaited<ReturnType<typeof preparePortalImageForUpload>>[];
+    try {
+      prepared = await Promise.all(
+        selected.map((file) => preparePortalImageForUpload(file)),
+      );
+    } catch {
+      setPreparingFiles(false);
+      setMessage({
+        tone: "error",
+        text: "These photos could not be prepared. Try selecting them again. Your previous selection is still here.",
+      });
+      return;
+    }
     const uploadFiles = prepared.map((item) => item.file);
     setFiles(uploadFiles);
     setUploadProgress(uploadFiles.map(() => 0));
@@ -356,14 +371,30 @@ export function PartnerDraftPhotoUpload({
       return;
     }
 
+    // Keep the retry identity and selected files until the saved photos are
+    // confirmed by a read. A successful transfer alone does not prove attachment.
+    const confirmed = await refresh();
+    setBusy(false);
+    if (
+      !confirmed ||
+      !result.data.intents.every((intent) =>
+        mediaRef.current.some(
+          (item) => item.id === intent.id && item.status === "ready",
+        ),
+      )
+    ) {
+      setMessage({
+        tone: "error",
+        text: "Your photos were transferred, but we could not confirm they were attached. Try again to check the same photos safely.",
+      });
+      return;
+    }
     setFiles([]);
     setUploadProgress([]);
     uploadClientIdsRef.current = [];
     resetUploadAttempt();
     setCaption("");
     if (inputRef.current) inputRef.current.value = "";
-    await refresh();
-    setBusy(false);
     setMessage({
       tone: "success",
       text: "Photos attached to this saved request.",
@@ -395,7 +426,7 @@ export function PartnerDraftPhotoUpload({
     );
     mediaRef.current = next;
     setMedia(next);
-    onCountChange(next.length);
+    onCountChange(next.filter((item) => item.status === "ready").length);
     setMessage({ tone: "success", text: "Photo removed from this request." });
   };
 
@@ -509,7 +540,7 @@ export function PartnerDraftPhotoUpload({
       loading
     );
   }
-  if (state !== "ready" && media.length === 0) {
+  if (state !== "ready" && media.length === 0 && files.length === 0) {
     const error = (
       <PartnerNotice tone={state === "error" ? "error" : "warning"}>
         {loadError ??
@@ -567,7 +598,7 @@ export function PartnerDraftPhotoUpload({
           </button>
         </PartnerNotice>
       ) : null}
-      {canUpload && state === "ready" ? (
+      {canUpload && (state === "ready" || files.length > 0) ? (
         <div
           className={
             compact ? "mt-3 space-y-3" : "mt-4 grid gap-4 sm:grid-cols-2"
@@ -589,6 +620,9 @@ export function PartnerDraftPhotoUpload({
               </div>
               <p className="text-xs leading-5 text-slate-500">
                 JPEG, PNG, WebP, HEIC/HEIF · Up to 10 photos, 10 MB each
+                <span className="block">
+                  PDF uploads are not available yet.
+                </span>
               </p>
             </div>
           ) : (
@@ -609,6 +643,9 @@ export function PartnerDraftPhotoUpload({
                 <p className="text-xs leading-5 text-slate-500">
                   JPEG, PNG, WebP, HEIC, or HEIF. Up to 10 photos per batch and
                   10 MB each.
+                  <span className="block">
+                    PDF uploads are not available yet.
+                  </span>
                 </p>
               ) : null}
               {uploadAttemptStarted && !busy ? (
@@ -622,6 +659,7 @@ export function PartnerDraftPhotoUpload({
                 <>
                   <p className="mt-1 text-sm text-slate-700">
                     {files.length} photo{files.length === 1 ? "" : "s"} selected
+                    {busy ? " · Uploading" : " · Not attached yet"}
                   </p>
                   <PartnerSelectedPhotoPreviews
                     files={files}
@@ -673,6 +711,26 @@ export function PartnerDraftPhotoUpload({
                       ? "Retry photos"
                       : "Attach photos"}
               </button>
+              {files.length > 0 && !busy && !preparingFiles ? (
+                <button
+                  type="button"
+                  className={cn(
+                    partnerSecondaryButtonClass,
+                    "mt-3 w-full sm:ml-2 sm:w-auto",
+                  )}
+                  onClick={() => {
+                    setFiles([]);
+                    setUploadProgress([]);
+                    uploadClientIdsRef.current = [];
+                    resetUploadAttempt();
+                    setCaption("");
+                    setMessage(null);
+                    if (inputRef.current) inputRef.current.value = "";
+                  }}
+                >
+                  Clear selection
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -720,6 +778,13 @@ export function PartnerDraftPhotoUpload({
                   <p className="mt-1 text-xs text-slate-500">
                     {formatBytes(item.byteSize)}
                   </p>
+                  {item.status !== "ready" ? (
+                    <p className="mt-1 text-xs font-medium text-amber-800">
+                      {item.status === "failed"
+                        ? "Upload needs retry"
+                        : "Attachment not finished"}
+                    </p>
+                  ) : null}
                   {item.caption ? (
                     <p className="mt-2 text-sm leading-5 text-slate-600">
                       {item.caption}

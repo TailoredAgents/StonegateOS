@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import {
   parseGoogleCalendarEventListResponse,
   resolveGoogleCalendarApiEndpoint,
+  type PartnerRequestDetails,
 } from "@myst-os/sdk";
 import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -28,6 +29,7 @@ import {
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { resolveEasternDayBoundary } from "@/lib/appointment-time";
 import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
+import { loadPartnerRequestDetailsForAppointments } from "@/lib/partner-request-details-store";
 import {
   loadCalendarCardIdentityRows,
   resolveCalendarCardIdentity,
@@ -58,6 +60,7 @@ type CalendarEvent = {
   appointmentType?: string | null;
   serviceCategoryLabel?: string | null;
   partnerAffiliation?: CalendarPartnerAffiliation | null;
+  partnerRequest?: PartnerRequestDetails | null;
   rescheduleToken?: string | null;
   contactName?: string | null;
   address?: string | null;
@@ -196,6 +199,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (permissionError) return permissionError;
   const canReadPayments =
     (await requirePermission(request, "payments.read")) === null;
+  const canReadPartnerPhotos =
+    (await requirePermission(request, "partners.accounts.read")) === null;
   const canReadCrewPay =
     (await requirePermission(request, [
       "payments.collect",
@@ -269,8 +274,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       workedMinutes: number | null;
     }>
   >();
-  const [etaSummaryMap, mediaSummaryMap, paymentSummaryMap] = await Promise.all(
-    [
+  const [etaSummaryMap, mediaSummaryMap, paymentSummaryMap, partnerRequestMap] =
+    await Promise.all([
       appointmentIds.length > 0
         ? getEtaSummariesForAppointments(appointmentIds)
         : Promise.resolve(new Map<string, EtaAppointmentSummary>()),
@@ -281,8 +286,11 @@ export async function GET(request: NextRequest): Promise<Response> {
             new Map(dbRows.map((row) => [row.id, row.finalTotalCents ?? null])),
           )
         : Promise.resolve(new Map<string, AppointmentPaymentSummary>()),
-    ],
-  );
+      loadPartnerRequestDetailsForAppointments(appointmentIds, {
+        financials: canReadPayments,
+        photos: canReadPartnerPhotos,
+      }),
+    ]);
   if (appointmentIds.length) {
     const noteRows = await db
       .select({
@@ -488,6 +496,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         assignedSalespersonMemberId: row.assignedSalespersonMemberId ?? null,
         version: row.updatedAt.toISOString(),
         quotedScopeText: row.quotedScopeText ?? null,
+        partnerRequest: partnerRequestMap.get(row.id) ?? null,
         mediaSummary: mediaSummaryMap.get(row.id) ?? {
           readyCount: 0,
           pendingCount: 0,

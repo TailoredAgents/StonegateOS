@@ -39,6 +39,7 @@ Object.assign(environment, {
   DATABASE_URL:
     "postgresql://portal_test:portal_local_only@127.0.0.1:55443/portal_access_browser",
   DATABASE_SSL: "false",
+  APPOINTMENT_TIMEZONE: "America/New_York",
   DOTENV_CONFIG_PATH: "/dev/null",
   PORT: service === "api" ? "3111" : "3110",
   SITE_URL: "https://localhost:3112",
