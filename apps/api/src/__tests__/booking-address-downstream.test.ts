@@ -69,17 +69,22 @@ describe("booking addresses sent to calendar providers", () => {
     eventBodies = [];
     fetchSpy = jest
       .spyOn(globalThis, "fetch")
-      .mockImplementation(async (_url, init) => {
+      .mockImplementation((_url, init) => {
         if (init?.body instanceof URLSearchParams) {
-          return Response.json({
-            access_token: "test-access",
-            expires_in: 3600,
-          });
+          return Promise.resolve(
+            Response.json({
+              access_token: "test-access",
+              expires_in: 3600,
+            }),
+          );
         }
-        eventBodies.push(
-          JSON.parse(String(init?.body)) as Record<string, unknown>,
+        if (typeof init?.body !== "string") {
+          throw new TypeError("Calendar event request body must be JSON text.");
+        }
+        eventBodies.push(JSON.parse(init.body) as Record<string, unknown>);
+        return Promise.resolve(
+          Response.json({ id: calendarEventId, status: "confirmed" }),
         );
-        return Response.json({ id: calendarEventId, status: "confirmed" });
       });
   });
 
@@ -131,12 +136,12 @@ describe("booking addresses in confirmation and reminder emails", () => {
   it("includes building and unit in confirmation email, attached calendar, and copy input", async () => {
     await sendEstimateConfirmation(notification);
     expect(mockQueueMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expect.objectContaining<Record<string, unknown>>({
         channel: "email",
         body: expect.stringContaining(`Location: ${fullAddress}`),
-        metadata: expect.objectContaining({
+        metadata: expect.objectContaining<Record<string, unknown>>({
           emailAttachments: [
-            expect.objectContaining({
+            expect.objectContaining<Record<string, unknown>>({
               content: expect.stringContaining(
                 `LOCATION:${fullAddress.replace(/,/gu, "\\,")}`,
               ),
@@ -146,8 +151,8 @@ describe("booking addresses in confirmation and reminder emails", () => {
       }),
     );
     expect(mockGenerateCopy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        address: expect.objectContaining({
+      expect.objectContaining<Record<string, unknown>>({
+        address: expect.objectContaining<Record<string, unknown>>({
           line1: "123 Oak Street, Building B, Unit 204",
         }),
       }),
@@ -157,7 +162,7 @@ describe("booking addresses in confirmation and reminder emails", () => {
   it("includes building and unit in reminder email", async () => {
     await sendEstimateReminder24h(notification);
     expect(mockQueueMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expect.objectContaining<Record<string, unknown>>({
         channel: "email",
         body: expect.stringContaining(`Location: ${fullAddress}`),
       }),

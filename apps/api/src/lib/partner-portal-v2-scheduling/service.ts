@@ -2026,6 +2026,7 @@ type AccountContractPrice = Readonly<{
   rateCardVersion: number;
   rateItemId: string;
   tierKey: string;
+  label: string | null;
   effectiveFrom: Date;
   effectiveTo: Date | null;
   pricingState: "contracted" | "estimate" | "standard_rate";
@@ -4069,18 +4070,23 @@ async function submitUnscheduledPartnerReviewRequest(input: {
     timezone: input.location.timezone,
     now: input.now,
   });
-  const [{ profile }, accountCommercial, draftMedia] = await Promise.all([
-    loadCatalogAndProfile(input.tx, input.draft.serviceKey, input.now),
-    loadAccountCommercialEligibility({
-      tx: input.tx,
-      accountId: input.actor.accountId,
-      serviceKey: input.draft.serviceKey,
-      tierKey: input.draft.tierKey,
-      selectedAddOns: input.draft.selectedAddOns,
-      now: input.now,
-    }),
-    loadDraftMediaForTransfer(input.tx, input.actor.accountId, input.draft.id),
-  ]);
+  const [{ catalog, profile }, accountCommercial, draftMedia] =
+    await Promise.all([
+      loadCatalogAndProfile(input.tx, input.draft.serviceKey, input.now),
+      loadAccountCommercialEligibility({
+        tx: input.tx,
+        accountId: input.actor.accountId,
+        serviceKey: input.draft.serviceKey,
+        tierKey: input.draft.tierKey,
+        selectedAddOns: input.draft.selectedAddOns,
+        now: input.now,
+      }),
+      loadDraftMediaForTransfer(
+        input.tx,
+        input.actor.accountId,
+        input.draft.id,
+      ),
+    ]);
   const mediaReadiness = evaluateDraftMediaReadiness(
     draftMedia.map((item) => ({
       status: item.assetStatus,
@@ -4150,6 +4156,7 @@ async function submitUnscheduledPartnerReviewRequest(input: {
       propertyId,
       type: "job",
       startAt: null,
+      schedulingTimezone: input.location.timezone,
       durationMinutes: profile?.durationMinutes ?? 60,
       travelBufferMinutes: profile?.travelBufferMinutes ?? 30,
       status: "requested",
@@ -4189,6 +4196,7 @@ async function submitUnscheduledPartnerReviewRequest(input: {
       arrivalWindowStartAt: null,
       arrivalWindowEndAt: null,
       scopeSnapshot: {
+        serviceLabel: catalog?.label ?? null,
         scope: input.draft.scope,
         description: input.draft.description,
         crewInstructions: input.draft.crewInstructions,
@@ -4216,6 +4224,7 @@ async function submitUnscheduledPartnerReviewRequest(input: {
         rateCardVersion: contractPrice?.rateCardVersion ?? null,
         rateItemId: contractPrice?.rateItemId ?? null,
         tierKey: input.draft.tierKey,
+        tierLabel: contractPrice?.label ?? null,
         effectiveFrom: contractPrice?.effectiveFrom.toISOString() ?? null,
         effectiveTo: contractPrice?.effectiveTo?.toISOString() ?? null,
         pricingEligibility: profile?.pricingEligibility ?? null,
@@ -4762,6 +4771,7 @@ export async function submitPartnerBookingDraft(input: {
         propertyId,
         type: "job",
         startAt: appointmentSchedule.startAt,
+        schedulingTimezone: location.timezone,
         durationMinutes: hold.durationMinutes,
         travelBufferMinutes: hold.travelBufferMinutes,
         status: appointmentStatus,
@@ -4808,6 +4818,7 @@ export async function submitPartnerBookingDraft(input: {
         arrivalWindowStartAt: hold.arrivalWindowStartAt,
         arrivalWindowEndAt: hold.arrivalWindowEndAt,
         scopeSnapshot: {
+          serviceLabel: availability.setup.catalog.label,
           scope: draft.scope,
           description: draft.description,
           crewInstructions: draft.crewInstructions,
@@ -4815,6 +4826,12 @@ export async function submitPartnerBookingDraft(input: {
           onSiteContact: draft.onSiteContact,
           locationId: location.id,
           locationSnapshot: partnerJobLocationSnapshot(location),
+          preferredWindows: draft.preferredWindows,
+          scheduleAssistancePreference: draft.scheduleAssistancePreference,
+          requestedArrivalWindow: {
+            startAt: hold.arrivalWindowStartAt.toISOString(),
+            endAt: hold.arrivalWindowEndAt.toISOString(),
+          },
         },
         rateSnapshot: {
           amountMinor,
@@ -4839,6 +4856,7 @@ export async function submitPartnerBookingDraft(input: {
           rateCardVersion: contractPrice?.rateCardVersion ?? null,
           rateItemId: contractPrice?.rateItemId ?? null,
           tierKey: draft.tierKey,
+          tierLabel: contractPrice?.label ?? null,
           effectiveFrom: contractPrice?.effectiveFrom.toISOString() ?? null,
           effectiveTo: contractPrice?.effectiveTo?.toISOString() ?? null,
           pricingEligibility: availability.setup.profile.pricingEligibility,

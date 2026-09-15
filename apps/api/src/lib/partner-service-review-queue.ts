@@ -21,6 +21,8 @@ import {
 } from "@/db";
 import { readPartnerJobLocationSnapshot } from "./partner-job-location";
 import { createMediaReadUrl } from "./media-storage";
+import { loadPartnerRequestDetailsForAppointments } from "./partner-request-details-store";
+import { hasConfirmedPartnerSchedule } from "./partner-request-details";
 import {
   encodePortalV2Cursor,
   parsePortalV2Pagination,
@@ -151,6 +153,8 @@ export async function listPartnerServiceReviews(params: URLSearchParams) {
     .select({
       ...fields,
       staffAppointmentId: appointments.id,
+      appointmentStatus: appointments.status,
+      appointmentStartAt: appointments.startAt,
       arrivalStartAt: partnerBookings.arrivalWindowStartAt,
       arrivalEndAt: partnerBookings.arrivalWindowEndAt,
     })
@@ -222,8 +226,18 @@ export async function listPartnerServiceReviews(params: URLSearchParams) {
       ...(includeScheduled
         ? {
             appointmentId: row.staffAppointmentId,
-            arrivalStartAt: row.arrivalStartAt?.toISOString() ?? null,
-            arrivalEndAt: row.arrivalEndAt?.toISOString() ?? null,
+            arrivalStartAt: hasConfirmedPartnerSchedule({
+              ...row,
+              publicStatus: row.status,
+            })
+              ? (row.arrivalStartAt?.toISOString() ?? null)
+              : null,
+            arrivalEndAt: hasConfirmedPartnerSchedule({
+              ...row,
+              publicStatus: row.status,
+            })
+              ? (row.arrivalEndAt?.toISOString() ?? null)
+              : null,
           }
         : {}),
     })),
@@ -248,6 +262,7 @@ export async function listPartnerServiceReviews(params: URLSearchParams) {
 export async function getPartnerServiceReview(
   accountId: string,
   jobId: string,
+  visibility = { financials: false, photos: true },
 ) {
   if (!UUID.test(accountId) || !UUID.test(jobId)) return null;
   const [row] = await getDb()
@@ -294,37 +309,48 @@ export async function getPartnerServiceReview(
     )
     .limit(1);
   if (!row) return null;
+  const partnerRequestMap = await loadPartnerRequestDetailsForAppointments(
+    [row.appointmentId],
+    visibility,
+  );
+  const partnerRequest = partnerRequestMap.get(row.appointmentId) ?? null;
   const scope = record(row.scope),
     contact = record(scope["onSiteContact"]),
     proof = record(row.proof);
-  const media = await getDb()
-    .select({
-      id: partnerJobEvidence.id,
-      category: partnerJobEvidence.category,
-      caption: partnerJobEvidence.caption,
-      status: mediaAssets.status,
-      contentType: mediaAssets.contentType,
-      displayKey: mediaAssets.displayObjectKey,
-      thumbnailKey: mediaAssets.thumbnailObjectKey,
-    })
-    .from(partnerJobEvidence)
-    .innerJoin(
-      mediaAssets,
-      and(
-        eq(partnerJobEvidence.mediaAssetId, mediaAssets.id),
-        eq(mediaAssets.partnerAccountId, partnerJobEvidence.partnerAccountId),
-      ),
-    )
-    .where(
-      and(
-        eq(partnerJobEvidence.partnerAccountId, accountId),
-        eq(partnerJobEvidence.partnerBookingId, jobId),
-        isNull(partnerJobEvidence.deletedAt),
-        isNull(mediaAssets.deletedAt),
-      ),
-    )
-    .orderBy(asc(partnerJobEvidence.sortOrder), asc(partnerJobEvidence.id))
-    .limit(40);
+  const media = visibility.photos
+    ? await getDb()
+        .select({
+          id: partnerJobEvidence.id,
+          category: partnerJobEvidence.category,
+          caption: partnerJobEvidence.caption,
+          status: mediaAssets.status,
+          contentType: mediaAssets.contentType,
+          displayKey: mediaAssets.displayObjectKey,
+          thumbnailKey: mediaAssets.thumbnailObjectKey,
+          filename: mediaAssets.originalFilename,
+        })
+        .from(partnerJobEvidence)
+        .innerJoin(
+          mediaAssets,
+          and(
+            eq(partnerJobEvidence.mediaAssetId, mediaAssets.id),
+            eq(
+              mediaAssets.partnerAccountId,
+              partnerJobEvidence.partnerAccountId,
+            ),
+          ),
+        )
+        .where(
+          and(
+            eq(partnerJobEvidence.partnerAccountId, accountId),
+            eq(partnerJobEvidence.partnerBookingId, jobId),
+            isNull(partnerJobEvidence.deletedAt),
+            isNull(mediaAssets.deletedAt),
+          ),
+        )
+        .orderBy(asc(partnerJobEvidence.sortOrder), asc(partnerJobEvidence.id))
+        .limit(40)
+    : [];
   const photos = await Promise.all(
     media.map(async (photo) => {
       const key = photo.displayKey ?? photo.thumbnailKey;
@@ -337,7 +363,11 @@ export async function getPartnerServiceReview(
       return {
         id: photo.id,
         category: photo.category,
-        caption: text(photo.caption, 300),
+        caption: text(photo.caption, 500),
+        filename:
+          typeof photo.filename === "string"
+            ? photo.filename.slice(0, 255)
+            : null,
         status: photo.status,
         url,
       };
@@ -347,18 +377,27 @@ export async function getPartnerServiceReview(
     ok: true,
     request: {
       ...summary(row),
+      partnerRequest,
       location: readPartnerJobLocationSnapshot(scope),
       description: text(scope["description"], 8000),
-      crewInstructions: text(scope["crewInstructions"], 2000),
+      crewInstructions: text(scope["crewInstructions"], 4000),
       onSiteContact: {
-        name: text(contact["name"], 150),
+        name: text(contact["name"], 200),
         phone: text(contact["phone"], 50),
-        email: text(contact["email"], 254),
+        email: text(contact["email"], 320),
       },
       scopeFields: Object.entries(record(scope["scope"]))
         .filter(
           ([key, value]) =>
-            !/secret|token|password|gate|code/iu.test(key) &&
+            [
+              "itemCount",
+              "quantity",
+              "volumeCubicYards",
+              "restrictedItems",
+              "nonStandard",
+              "multiStop",
+              "multiStopDetails",
+            ].includes(key) &&
             ["string", "number", "boolean"].includes(typeof value),
         )
         .slice(0, 30)

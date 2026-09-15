@@ -113,7 +113,7 @@ const entry = `import React from 'react';import{createRoot}from'react-dom/client
 import{PartnerBookingWizard}from'./src/app/partners/components/PartnerBookingWizard';
 const draft=${JSON.stringify(initialDraft)},services=${JSON.stringify(services)};
 function App(){return <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6"><PartnerBookingWizard
- initialDraft={draft} locations={[{id:'facility-address',name:'Northside facility',address:'100 Facility Drive, Atlanta, GA 30301'}]}
+ initialDraft={draft} locations={[{id:'facility-address',name:'Northside facility',address:'100 Facility Drive, Atlanta, GA 30301',accessDetails:'Old location instructions removed from this draft.'}]}
  services={services} canUploadPhotos canManageLocations persona="commercial_client"
  cancellationPolicy={{minimumNoticeMinutes:0,directCancellationEnabled:false,lateCancellationDisposition:'staff_review',automaticFeeMinor:null,source:'unconfigured',revision:null}}
  supportPhoneE164="+14045550100" supportPhoneDisplay="404-555-0100"/></main>}
@@ -259,16 +259,73 @@ for (const engine of [chromium, webkit]) {
           );
           let saved: Record<string, any> = structuredClone(initialDraft);
           const mediaReads: string[] = [];
+          const photoAttempts: { key: string | undefined; body: unknown }[] =
+            [];
+          let finishValidation: (() => void) | undefined;
+          let pauseValidation = false;
+          const attachedPhoto = {
+            id: "photo-reference",
+            category: "issue",
+            caption: "Keep the entrance clear.",
+            sortOrder: 0,
+            status: "ready",
+            filename: "facility-reference.png",
+            contentType: "image/png",
+            byteSize: photo.byteLength,
+            width: 1,
+            height: 1,
+            sha256: null,
+            createdAt: initialDraft.createdAt,
+            readyAt: initialDraft.createdAt,
+            error: null,
+            downloadIntent: null,
+          };
           await page.route("**/api/partners/portal/**", async (route) => {
             const request = route.request(),
               path = new URL(request.url()).pathname;
             if (path.endsWith(`/booking-drafts/${draftId}/media`)) {
               assert.equal(request.method(), "GET");
               mediaReads.push(path);
-              return route.fulfill({ json: { ok: true, media: [] } });
+              if (photoAttempts.length === 1)
+                return route.fulfill({
+                  status: 503,
+                  json: { ok: false, error: "temporary_failure" },
+                });
+              return route.fulfill({
+                json: {
+                  ok: true,
+                  media: photoAttempts.length > 1 ? [attachedPhoto] : [],
+                },
+              });
+            }
+            if (
+              path.endsWith(`/booking-drafts/${draftId}/media/upload-intents`)
+            ) {
+              photoAttempts.push({
+                key: request.headers()["idempotency-key"],
+                body: request.postDataJSON(),
+              });
+              return route.fulfill({
+                json: {
+                  ok: true,
+                  intents: [
+                    {
+                      id: attachedPhoto.id,
+                      status: "ready",
+                      alreadyExists: true,
+                      requiresUpload: false,
+                      uploadIntent: null,
+                    },
+                  ],
+                },
+              });
             }
             if (path.endsWith(`/booking-drafts/${draftId}/validate`)) {
               assert.equal(request.method(), "POST");
+              if (pauseValidation)
+                await new Promise<void>((resolve) => {
+                  finishValidation = resolve;
+                });
               return route.fulfill({
                 json: {
                   ok: true,
@@ -366,6 +423,7 @@ for (const engine of [chromium, webkit]) {
 
           const contact = disclosure(page, "Contact and access");
           await toggle(contact, true);
+          await expect(page.locator("#partner-book-access")).toHaveValue("");
           await page
             .locator("#partner-book-access")
             .fill("Use the south loading dock.");
@@ -494,12 +552,80 @@ for (const engine of [chromium, webkit]) {
             .fill("accounts@example.test");
           await toggle(billing, false);
 
+          // Selected files are not saved attachments. Neither Continue, Back,
+          // nor the step controls may silently unmount and discard this batch.
           await page
             .getByRole("button", {
               name: "Continue to scheduling",
               exact: true,
             })
             .click();
+          await expect(page.locator("#partner-book-photos")).toBeFocused();
+          await expect(
+            page.getByText(
+              "Attach your selected photos, or clear the selection, before leaving Service details.",
+            ),
+          ).toBeVisible();
+          await page.getByRole("button", { name: "Back", exact: true }).click();
+          await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+            "data-booking-step",
+            "1",
+          );
+          await page
+            .locator('ol[aria-label="Service request progress"] button')
+            .first()
+            .click();
+          await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+            "data-booking-step",
+            "1",
+          );
+          await expect(
+            page.getByText("1 photo selected · Not attached yet"),
+          ).toBeVisible();
+          await expect(page.locator("[data-partner-unsaved]")).toHaveAttribute(
+            "data-partner-unsaved",
+            "true",
+          );
+          await toggle(photoDetails, true);
+          await expect(
+            page.locator(`#draft-photo-caption-${draftId}`),
+          ).toHaveValue("Shelving by the loading dock.");
+          await toggle(photoDetails, false);
+          await page.locator(`#draft-photo-files-${draftId}`).setInputFiles({
+            name: "unsupported.pdf",
+            mimeType: "application/pdf",
+            buffer: Buffer.from("%PDF-1.4"),
+          });
+          await expect(
+            page.getByRole("img", {
+              name: "Selected photo: facility-reference.png",
+              exact: true,
+            }),
+          ).toBeVisible();
+          await expect(
+            page.getByText(/unsupported.pdf is not a supported image/),
+          ).toBeVisible();
+          await page
+            .getByRole("button", { name: "Clear selection", exact: true })
+            .click();
+
+          pauseValidation = true;
+          await page
+            .getByRole("button", {
+              name: "Continue to scheduling",
+              exact: true,
+            })
+            .click();
+          try {
+            await expect.poll(() => Boolean(finishValidation)).toBe(true);
+            await expect(addPhotos).toBeDisabled();
+            await expect(
+              page.locator(`#draft-photo-files-${draftId}`),
+            ).toBeDisabled();
+          } finally {
+            pauseValidation = false;
+            finishValidation?.();
+          }
           await expect(errorSummary).toBeFocused();
           await expect(billing).toHaveJSProperty("open", true);
           await toggle(billing, false);
@@ -516,6 +642,11 @@ for (const engine of [chromium, webkit]) {
           await toggle(billing, false);
 
           // Required contact and job fields remain enforced in the condensed UI.
+          await page.locator(`#draft-photo-files-${draftId}`).setInputFiles({
+            name: "facility-reference.png",
+            mimeType: "image/png",
+            buffer: photo,
+          });
           await toggle(contact, true);
           await page.locator("#partner-book-contact-name").fill("");
           await page.locator("#partner-book-contact-phone").fill("");
@@ -543,6 +674,56 @@ for (const engine of [chromium, webkit]) {
               exact: true,
             }),
           ).toBeVisible();
+          // If a transfer succeeded but the saved-photo read failed, retain the
+          // selection and its request identity until retry confirms attachment.
+          await toggle(photoDetails, true);
+          await page
+            .locator(`#draft-photo-category-${draftId}`)
+            .selectOption("issue");
+          await page
+            .locator(`#draft-photo-caption-${draftId}`)
+            .fill("Keep the entrance clear.");
+          await page
+            .getByRole("button", { name: "Attach photos", exact: true })
+            .click();
+          await expect(
+            page.getByText(
+              /Your photos were transferred, but we could not confirm they were attached/,
+            ),
+          ).toBeVisible();
+          await expect(
+            page.getByRole("img", {
+              name: "Selected photo: facility-reference.png",
+              exact: true,
+            }),
+          ).toBeVisible();
+          await expect(
+            page.locator(`#draft-photo-caption-${draftId}`),
+          ).toHaveValue("Keep the entrance clear.");
+          await page
+            .getByRole("button", { name: "Retry photos", exact: true })
+            .click();
+          await expect(
+            page.getByText("Photos attached to this saved request.", {
+              exact: true,
+            }),
+          ).toBeVisible();
+          await expect(
+            page.getByRole("img", {
+              name: "Selected photo: facility-reference.png",
+              exact: true,
+            }),
+          ).toHaveCount(0);
+          await expect(
+            page.getByText("Keep the entrance clear.", { exact: true }),
+          ).toBeVisible();
+          assert.equal(photoAttempts.length, 2);
+          assert.ok(photoAttempts[0]?.key);
+          assert.deepEqual(
+            photoAttempts[1],
+            photoAttempts[0],
+            "Retry preserves the photo identity, category and client note",
+          );
           await fits(page);
           assert.deepEqual(
             errors,

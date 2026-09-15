@@ -4,6 +4,12 @@ import {
   requireCurrentTeamPrincipal,
 } from "@/lib/team-principal";
 import { callAdminApiAs } from "../lib/api";
+import {
+  parsePartnerRequestDetails,
+  parsePartnerRequestPhotos,
+  type PartnerRequestDetails,
+  type PartnerRequestPhoto,
+} from "@myst-os/sdk";
 
 export type PartnerServiceReview = {
   id: string;
@@ -26,6 +32,7 @@ export type PartnerServiceReview = {
   arrivalEndAt?: string | null;
 };
 export type PartnerServiceReviewDetail = PartnerServiceReview & {
+  partnerRequest?: PartnerRequestDetails | null;
   location: {
     name: string;
     timezone: string;
@@ -42,13 +49,7 @@ export type PartnerServiceReviewDetail = PartnerServiceReview & {
   onSiteContact: { name: string; phone: string; email: string };
   scopeFields: { label: string; value: string }[];
   proof: { before: number; after: number };
-  photos: {
-    id: string;
-    category: string;
-    caption: string;
-    status: string;
-    url: string | null;
-  }[];
+  photos: PartnerRequestPhoto[];
   appointment: {
     id: string;
     type: string | null;
@@ -141,6 +142,33 @@ export async function loadPartnerServiceReviews(
         ok: false,
         message: "The service request response could not be verified.",
       };
+    if (data.request) {
+      const photos = parsePartnerRequestPhotos(data.request.photos);
+      if (!photos)
+        return {
+          ok: false,
+          message:
+            "The request photos could not be verified. Refresh this request before reviewing them.",
+        };
+      data.request.photos = photos;
+    }
+    if (data.request?.partnerRequest != null) {
+      const partnerRequest = parsePartnerRequestDetails(
+        data.request.partnerRequest,
+      );
+      if (
+        !partnerRequest ||
+        partnerRequest.jobId !== input.id ||
+        partnerRequest.accountId !== input.accountId
+      ) {
+        return {
+          ok: false,
+          message:
+            "The submitted partner details could not be verified. Refresh this request before reviewing it.",
+        };
+      }
+      data.request.partnerRequest = partnerRequest;
+    }
     return {
       ok: true,
       items: data.requests ?? [],

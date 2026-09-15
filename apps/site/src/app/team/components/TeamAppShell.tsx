@@ -1392,12 +1392,17 @@ export function TeamAppShell(props: {
                       />
                     </div>
                     {props.user ? (
-                      <div className="hidden text-right text-xs text-[color:var(--team-text-muted)] lg:block">
-                        <div className="font-semibold text-[color:var(--team-text)]">
+                      <div className="hidden min-w-0 max-w-32 text-right text-xs text-[color:var(--team-text-muted)] lg:block xl:max-w-40 2xl:max-w-48">
+                        <div
+                          title={props.user.name}
+                          className="truncate font-semibold text-[color:var(--team-text)]"
+                        >
                           {props.user.name}
                         </div>
                         {props.user.email ? (
-                          <div className="truncate">{props.user.email}</div>
+                          <div title={props.user.email} className="truncate">
+                            {props.user.email}
+                          </div>
                         ) : null}
                       </div>
                     ) : null}

@@ -163,6 +163,9 @@ jest.mock("@/lib/eta-agent", () => ({
 jest.mock("@/lib/appointment-media", () => ({
   getAppointmentMediaSummaryMap: () => Promise.resolve(new Map()),
 }));
+jest.mock("@/lib/partner-request-details-store", () => ({
+  loadPartnerRequestDetailsForAppointments: () => Promise.resolve(new Map()),
+}));
 
 jest.mock("@/lib/payment-ledger", () => ({
   getAppointmentPaymentSummaryMap: mockGetAppointmentPaymentSummaryMap,

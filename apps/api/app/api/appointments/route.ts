@@ -29,6 +29,7 @@ import {
 import { resolveAppointmentCalendarContent } from "@/lib/calendar";
 import { requirePermission } from "@/lib/permissions";
 import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
+import { loadPartnerRequestDetailsForAppointments } from "@/lib/partner-request-details-store";
 import {
   extractQuoteFollowUpAppointmentId,
   extractQuoteFollowUpComment,
@@ -86,6 +87,10 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
   const permissionError = await requirePermission(request, "appointments.read");
   if (permissionError) return permissionError;
+  const canReadPartnerFinancials =
+    (await requirePermission(request, "payments.read")) === null;
+  const canReadPartnerPhotos =
+    (await requirePermission(request, "partners.accounts.read")) === null;
   const canReadCrewPay =
     (await requirePermission(request, [
       "payments.collect",
@@ -166,7 +171,10 @@ export async function GET(request: NextRequest): Promise<Response> {
     .leftJoin(leads, eq(appointments.leadId, leads.id))
     .leftJoin(
       partnerBookings,
-      eq(partnerBookings.appointmentId, appointments.id),
+      and(
+        eq(partnerBookings.appointmentId, appointments.id),
+        eq(partnerBookings.partnerAccountId, appointments.partnerAccountId),
+      ),
     );
 
   const conditions = [];
@@ -200,6 +208,10 @@ export async function GET(request: NextRequest): Promise<Response> {
   const appointmentIds = baseRows
     .map((row) => row.id)
     .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const partnerRequestMap = await loadPartnerRequestDetailsForAppointments(
+    appointmentIds,
+    { financials: canReadPartnerFinancials, photos: canReadPartnerPhotos },
+  );
   const crewByAppointmentId = new Map<
     string,
     Array<{
@@ -442,6 +454,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       updatedAt: row.updatedAt.toISOString(),
       leadId: row.leadId,
       partnerBookingId: row.partnerBookingId ?? null,
+      partnerRequest: partnerRequestMap.get(row.id) ?? null,
       quotedTotalCents: row.quotedTotalCents ?? null,
       quotedScopeText: row.quotedScopeText ?? null,
       finalTotalCents: row.finalTotalCents ?? null,

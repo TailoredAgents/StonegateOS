@@ -24,6 +24,10 @@ export async function GET(
   const result = await getPartnerServiceReview(
     params.get("accountId") ?? "",
     (await context.params).jobId,
+    {
+      financials: (await requirePermission(request, "payments.read")) === null,
+      photos: true,
+    },
   );
   return NextResponse.json(result ?? { ok: false, error: "not_found" }, {
     status: result ? 200 : 404,

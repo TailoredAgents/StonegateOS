@@ -1,4 +1,5 @@
 import React from "react";
+import type { PartnerRequestDetails } from "@myst-os/sdk";
 import type { AppointmentBookingDetails } from "../lib/booking-details";
 import type { SavedCrewPayout } from "../lib/crew-payout-form";
 import {
@@ -32,6 +33,7 @@ type CalendarEvent = {
   version?: string | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
   bookingDetails?: AppointmentBookingDetails | null;
+  partnerRequest?: PartnerRequestDetails | null;
   crewMembers?: SavedCrewPayout[];
   crewMemberIds?: string[];
   crewNames?: string[];

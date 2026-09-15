@@ -327,7 +327,9 @@ function formFromDraft(
     alternateContactPhone: recordString(alternateContact, "phone"),
     alternateContactEmail: recordString(alternateContact, "email"),
     crewInstructions: draft.crewInstructions ?? "",
-    accessDetails: draft.accessDetails ?? defaults.accessDetails ?? "",
+    // A saved blank is intentional; do not restore location instructions the
+    // client already removed from this request.
+    accessDetails: draft.accessDetails ?? "",
     contactName: draft.onSiteContact
       ? recordString(draft.onSiteContact, "name")
       : (defaults.contactName ?? ""),
@@ -584,6 +586,23 @@ function localErrorsForStep(
     if (!form.description.trim())
       errors["description"] = "Describe the work to be completed.";
     if (
+      form.itemCount.trim() &&
+      (!Number.isSafeInteger(Number(form.itemCount)) ||
+        Number(form.itemCount) < 0)
+    ) {
+      errors["scope.itemCount"] = "Enter a whole item count of zero or more.";
+    }
+    if (
+      form.volume.trim() &&
+      (!Number.isFinite(Number(form.volume)) || Number(form.volume) < 0)
+    ) {
+      errors["scope.volumeCubicYards"] = "Enter a volume of zero or more.";
+    }
+    if (form.requiredCompletionTime && !form.requiredCompletionDate) {
+      errors["scope.requiredCompletion.localDate"] =
+        "Add a completion date for the time you entered, or clear the time.";
+    }
+    if (
       Boolean(form.billingContactName.trim()) !==
       Boolean(form.billingContactEmail.trim())
     ) {
@@ -713,7 +732,15 @@ function PartnerBookingWizardSession({
     holdId: string | null;
   } | null>(null);
   const [advancing, setAdvancing] = React.useState(false);
-  const [draftPhotoCount, setDraftPhotoCount] = React.useState(0);
+  const [draftPhotoCount, setDraftPhotoCount] = React.useState<number | null>(
+    null,
+  );
+  const [errorFocusRequest, setErrorFocusRequest] = React.useState(0);
+  const errorSummaryRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (errorFocusRequest > 0) errorSummaryRef.current?.focus();
+  }, [errorFocusRequest]);
+  const [pendingPhotos, setPendingPhotos] = React.useState(false);
   const [showPersonaSuggestions, setShowPersonaSuggestions] =
     React.useState(false);
   const [personaFeedback, setPersonaFeedback] = React.useState<string | null>(
@@ -1006,7 +1033,8 @@ function PartnerBookingWizardSession({
     addressEntryMode === "new" &&
     !form.locationId &&
     addressDirty;
-  const hasUnsavedChanges = hasUnsavedDraftChanges || hasUnsavedAddress;
+  const hasUnsavedChanges =
+    hasUnsavedDraftChanges || hasUnsavedAddress || pendingPhotos;
 
   usePartnerUnsavedChanges(hasUnsavedChanges);
   const unsavedRef = React.useRef(hasUnsavedDraftChanges);
@@ -1064,7 +1092,8 @@ function PartnerBookingWizardSession({
         setMessage(
           "That arrival-window hold expired. Your job details are saved; choose another window.",
         );
-        setStep(2);
+        // An expired hold must not unmount selected photos on Service details.
+        if (stepRef.current !== 1) setStep(2);
       }
     };
     update();
@@ -1236,9 +1265,9 @@ function PartnerBookingWizardSession({
   const focusErrorSummary = React.useCallback(
     (errors: Record<string, string>): void => {
       if (!Object.keys(errors).length) return;
-      window.requestAnimationFrame(() =>
-        document.getElementById("partner-book-error-summary")?.focus(),
-      );
+      // Focus after React commits the error summary, including async server
+      // validation. A browser animation frame can run before that commit.
+      setErrorFocusRequest((current) => current + 1);
     },
     [],
   );
@@ -1311,6 +1340,7 @@ function PartnerBookingWizardSession({
       focusErrorSummary(errors);
       return false;
     }
+    setFieldErrors({});
 
     const from = new Date();
     const to = new Date(from.getTime() + 30 * 86_400_000);
@@ -1388,6 +1418,11 @@ function PartnerBookingWizardSession({
         focusErrorSummary(localErrors);
         return;
       }
+      setFieldErrors({});
+      if (step === 1 && pendingPhotos) {
+        showPendingPhotos();
+        return;
+      }
       if (step === 2 && !hold) {
         const preferredDates = [
           snapshot.preferredDateOne,
@@ -1441,11 +1476,24 @@ function PartnerBookingWizardSession({
       );
       return;
     }
+    if (step === 1 && target !== step && pendingPhotos) {
+      showPendingPhotos();
+      return;
+    }
     setStep(target);
     window.requestAnimationFrame(() =>
       document.getElementById("partner-book-step-heading")?.focus(),
     );
   };
+
+  function showPendingPhotos(): void {
+    setMessage(
+      "Attach your selected photos, or clear the selection, before leaving Service details.",
+    );
+    window.requestAnimationFrame(() =>
+      document.getElementById("partner-book-photos")?.focus(),
+    );
+  }
 
   const chooseWindow = async (windowId: string): Promise<void> => {
     setAvailabilityLoading(true);
@@ -1790,6 +1838,11 @@ function PartnerBookingWizardSession({
                   <CircleAlert className="h-3.5 w-3.5" aria-hidden="true" />
                   Address not saved
                 </span>
+              ) : saveStatus === "saved" && pendingPhotos ? (
+                <span className="inline-flex items-center gap-1.5 text-amber-800">
+                  <CircleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                  Photos not saved yet
+                </span>
               ) : saveStatus === "saved" ? (
                 <span className="inline-flex items-center gap-1.5 text-emerald-700">
                   <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1807,6 +1860,7 @@ function PartnerBookingWizardSession({
           {Object.keys(fieldErrors).length > 0 ? (
             <div
               id="partner-book-error-summary"
+              ref={errorSummaryRef}
               className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-950 outline-none focus-visible:ring-2 focus-visible:ring-rose-600 focus-visible:ring-offset-2"
               role="alert"
               aria-labelledby="partner-book-error-summary-heading"
@@ -2278,13 +2332,19 @@ function PartnerBookingWizardSession({
                     </aside>
                   ) : null}
                 </div>
-                <div className="min-w-0">
+                <fieldset
+                  id="partner-book-photos"
+                  tabIndex={-1}
+                  disabled={advancing || availabilityLoading || submitting}
+                  className="min-w-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+                >
                   {draft ? (
                     <PartnerDraftPhotoUpload
                       compact
                       draftId={draft.id}
                       canUpload={canUploadPhotos}
                       onCountChange={setDraftPhotoCount}
+                      onPendingChange={setPendingPhotos}
                       persona={persona}
                     />
                   ) : (
@@ -2292,7 +2352,7 @@ function PartnerBookingWizardSession({
                       Photos will be available once your request is ready.
                     </PartnerNotice>
                   )}
-                </div>
+                </fieldset>
                 <div
                   className="min-w-0 border-t border-slate-200 xl:col-span-2"
                   aria-label="Additional request details"
@@ -3682,9 +3742,65 @@ function PartnerBookingWizardSession({
                         {selectedBaseOption.label}
                       </dd>
                     ) : null}
-                    <dd className="mt-1 text-sm text-slate-600">
+                    <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-600">
                       {form.description}
                     </dd>
+                    {form.itemCount || form.volume ? (
+                      <dd className="mt-3 text-sm text-slate-700">
+                        {[
+                          form.itemCount ? `${form.itemCount} items` : null,
+                          form.volume ? `${form.volume} cubic yards` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </dd>
+                    ) : null}
+                    {form.hazardCategories.length > 0 ||
+                    form.equipmentNeeds.length > 0 ||
+                    form.requiredCompletionDate ||
+                    (form.multiStop && form.multiStopDetails) ? (
+                      <dd className="mt-3 space-y-2 border-t border-slate-200 pt-3 text-sm text-slate-700">
+                        {form.hazardCategories.length > 0 ? (
+                          <p>
+                            <strong>Materials: </strong>
+                            {PARTNER_HAZARD_OPTIONS.filter((option) =>
+                              form.hazardCategories.includes(option.key),
+                            )
+                              .map((option) => option.label)
+                              .join(", ")}
+                          </p>
+                        ) : null}
+                        {form.equipmentNeeds.length > 0 ? (
+                          <p>
+                            <strong>Equipment and access: </strong>
+                            {PARTNER_EQUIPMENT_OPTIONS.filter((option) =>
+                              form.equipmentNeeds.includes(option.key),
+                            )
+                              .map((option) => option.label)
+                              .join(", ")}
+                          </p>
+                        ) : null}
+                        {form.requiredCompletionDate ? (
+                          <p>
+                            <strong>Completion deadline requested: </strong>
+                            {formatDate(
+                              form.requiredCompletionDate,
+                              selectedTimezone,
+                            )}
+                            {form.requiredCompletionTime
+                              ? ` at ${form.requiredCompletionTime}`
+                              : ""}{" "}
+                            ({selectedTimezone})
+                          </p>
+                        ) : null}
+                        {form.multiStop && form.multiStopDetails ? (
+                          <p className="whitespace-pre-wrap break-words">
+                            <strong>Stops and sequence: </strong>
+                            {form.multiStopDetails}
+                          </p>
+                        ) : null}
+                      </dd>
+                    ) : null}
                     {selectedServiceAddOns.length ? (
                       <dd className="mt-3 border-t border-slate-200 pt-3 text-sm text-slate-700">
                         <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -3787,8 +3903,43 @@ function PartnerBookingWizardSession({
                       {form.contactName}
                     </dd>
                     <dd className="mt-1 text-sm text-slate-600">
-                      {form.contactPhone || form.contactEmail}
+                      {form.contactPhone}
                     </dd>
+                    {form.contactEmail ? (
+                      <dd className="mt-1 break-words text-sm text-slate-600">
+                        {form.contactEmail}
+                      </dd>
+                    ) : null}
+                    {form.alternateContactName ||
+                    form.alternateContactPhone ||
+                    form.alternateContactEmail ? (
+                      <dd className="mt-3 border-t border-slate-200 pt-3 text-sm text-slate-700">
+                        <span className="block font-semibold">
+                          Alternate contact
+                        </span>
+                        <span className="block">
+                          {form.alternateContactName}
+                        </span>
+                        <span className="block">
+                          {form.alternateContactPhone}
+                        </span>
+                        <span className="block break-words">
+                          {form.alternateContactEmail}
+                        </span>
+                      </dd>
+                    ) : null}
+                    {form.accessDetails ? (
+                      <dd className="mt-3 whitespace-pre-wrap break-words border-t border-slate-200 pt-3 text-sm text-slate-700">
+                        <strong className="block">Access instructions</strong>
+                        {form.accessDetails}
+                      </dd>
+                    ) : null}
+                    {form.crewInstructions ? (
+                      <dd className="mt-3 whitespace-pre-wrap break-words text-sm text-slate-700">
+                        <strong className="block">Crew instructions</strong>
+                        {form.crewInstructions}
+                      </dd>
+                    ) : null}
                   </div>
                   <div className="rounded-xl border border-slate-200 p-4">
                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -3903,9 +4054,9 @@ function PartnerBookingWizardSession({
                         .join(", ") || "No specific proof requested"}
                     </dd>
                     <dd className="mt-1 text-xs text-slate-500">
-                      {draftPhotoCount} reference photo
-                      {draftPhotoCount === 1 ? "" : "s"} attached to this
-                      request
+                      {draftPhotoCount === null
+                        ? "Photo attachments could not be checked. Return to Service details to try again."
+                        : `${draftPhotoCount} reference photo${draftPhotoCount === 1 ? "" : "s"} attached to this request`}
                     </dd>
                   </div>
                 </dl>

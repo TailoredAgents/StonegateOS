@@ -4,6 +4,9 @@ import { CopyButton } from "@/components/CopyButton";
 import { SubmitButton } from "@/components/SubmitButton";
 import { summarizeServiceLabels } from "@/lib/service-labels";
 import { formatPropertyAddress } from "@/lib/property-address";
+import type { PartnerRequestDetails } from "@myst-os/sdk";
+import { PartnerRequestDetailsPanel } from "./PartnerRequestDetailsPanel";
+import { visiblePartnerAppointmentNotes } from "../lib/partner-request-notes";
 import {
   hasTeamPermission,
   requireCurrentTeamPrincipal,
@@ -254,6 +257,7 @@ interface AppointmentDto {
   quotedTotalCents: number | null;
   finalTotalCents: number | null;
   bookingDetails: AppointmentBookingDetails | null;
+  partnerRequest?: PartnerRequestDetails | null;
   crewMembers?: SavedCrewPayout[];
   soldByMemberId: string | null;
   services: string[];
@@ -597,6 +601,7 @@ function AppointmentCard({
   canOverrideAppointmentConflicts,
 }: AppointmentCardProps): ReactElement {
   const a = item.appointment;
+  const visibleNotes = visiblePartnerAppointmentNotes(a.notes, a.partnerRequest);
   const sellerName = a.soldByMemberId
     ? (teamMemberNameById.get(a.soldByMemberId) ?? "Unknown")
     : item.isQuoteOnly
@@ -606,6 +611,10 @@ function AppointmentCard({
   const serviceSummary = item.isQuoteOnly
     ? (item.serviceLabel ?? "In-person quote")
     : (item.serviceLabel ?? summarizeServiceLabels(a.services ?? []));
+  const duplicatePartnerWork = Boolean(
+    a.partnerRequest?.description?.trim() &&
+    item.jobDetailsSummary?.trim() === a.partnerRequest.description.trim(),
+  );
   const addressText = formatPropertyAddress(a.property);
   const hasAddress = addressText.length > 0;
   const mapsHref = buildMapsHref(a.property);
@@ -627,8 +636,8 @@ function AppointmentCard({
       ? "border-slate-200 bg-slate-50/60"
       : "border-emerald-200 bg-white";
 
-  const notesLabel = a.notes.length
-    ? `${a.notes.length} ${a.notes.length === 1 ? "note" : "notes"}`
+  const notesLabel = visibleNotes.length
+    ? `${visibleNotes.length} ${visibleNotes.length === 1 ? "note" : "notes"}`
     : "Notes";
   const quoteFollowUpAssigneeName = a.quoteFollowUp?.assignedTo
     ? (teamMemberNameById.get(a.quoteFollowUp.assignedTo) ?? "Assigned rep")
@@ -674,7 +683,7 @@ function AppointmentCard({
           value: sellerName,
           muted: !a.soldByMemberId,
         },
-    !item.isQuoteOnly
+    !item.isQuoteOnly && !duplicatePartnerWork
       ? {
           label: "Details",
           value: item.jobDetailsSummary ?? "Not set",
@@ -827,6 +836,8 @@ function AppointmentCard({
         ) : null}
       </div>
 
+      {a.partnerRequest ? <PartnerRequestDetailsPanel compact details={a.partnerRequest} /> : null}
+
       {!isCompleted && (canPlaceCalls || canShowPrimaryMobileAction) ? (
         <div
           className={`mt-4 grid gap-2 sm:hidden ${
@@ -914,7 +925,7 @@ function AppointmentCard({
           }
           muted={!item.leadSourceSummary}
         />
-        {!item.isQuoteOnly ? (
+        {!item.isQuoteOnly && !duplicatePartnerWork ? (
           <SummaryTile
             label="Job details"
             value={item.jobDetailsSummary ?? "Not set"}
@@ -1381,14 +1392,14 @@ function AppointmentCard({
                   <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     Notes
                   </summary>
-                  {a.notes.length ? (
+                  {visibleNotes.length ? (
                     <div className="mt-3 space-y-2">
-                      {a.notes.map((note) => (
+                      {visibleNotes.map((note) => (
                         <div
                           key={note.id}
                           className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
                         >
-                          <div>{note.body}</div>
+                          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{note.body}</div>
                           <div className="mt-1 text-[11px] text-slate-500">
                             {new Date(note.createdAt).toLocaleString(
                               undefined,
@@ -1438,18 +1449,18 @@ function AppointmentCard({
             </details>
           ) : null}
         </div>
-      ) : a.notes.length && mode === "manage" ? (
+      ) : visibleNotes.length && mode === "manage" ? (
         <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-3">
           <summary className={summaryButtonClass("secondary")}>
             {notesLabel}
           </summary>
           <div className="mt-3 space-y-2">
-            {a.notes.map((note) => (
+            {visibleNotes.map((note) => (
               <div
                 key={note.id}
                 className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
               >
-                <div>{note.body}</div>
+                <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{note.body}</div>
                 <div className="mt-1 text-[11px] text-slate-500">
                   {new Date(note.createdAt).toLocaleString(undefined, {
                     timeZone: TEAM_TIME_ZONE,

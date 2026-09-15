@@ -1171,6 +1171,7 @@ describeWithDatabase(
                 timezone: "America/New_York",
               },
             ],
+            scheduleAssistancePreference: "callback",
             updatedAt: FIXED_NOW,
           })
           .where(eq(partnerBookingDrafts.id, draft.id));
@@ -1236,6 +1237,31 @@ describeWithDatabase(
             holdId: disabledPolicy === "global" ? held.hold.id : null,
           });
           expect(submitted.booking.publicStatus).toBe("under_review");
+          const [storedRequest] = await getDb()
+            .select()
+            .from(partnerBookings)
+            .where(eq(partnerBookings.id, submitted.booking.id));
+          expect(storedRequest?.scopeSnapshot).toMatchObject({
+            preferredWindows: [
+              {
+                localDate: FIRST_SERVICE_DATE,
+                timeOfDay: "morning",
+                timezone: "America/New_York",
+              },
+            ],
+            scheduleAssistancePreference: "callback",
+          });
+          expect(typeof storedRequest?.scopeSnapshot?.["serviceLabel"]).toBe(
+            "string",
+          );
+          expect(storedRequest?.rateSnapshot?.["tierLabel"]).toBe("Standard");
+          if (disabledPolicy === "global")
+            expect(
+              storedRequest?.scopeSnapshot?.["requestedArrivalWindow"],
+            ).toEqual({
+              startAt: held.hold.arrivalWindowStartAt,
+              endAt: held.hold.arrivalWindowEndAt,
+            });
           const recurring = await createPartnerRecurringSeries({
             actor: fixture.actor,
             principal: principalFor(fixture) as unknown as PartnerPrincipal,
@@ -1267,6 +1293,7 @@ describeWithDatabase(
             expect(appointment).toMatchObject({
               status: "requested",
               startAt: null,
+              schedulingTimezone: "America/New_York",
               promisedArrivalStartAt: null,
               promisedArrivalEndAt: null,
               schedulePolicyRevision: null,

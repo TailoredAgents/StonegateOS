@@ -9,6 +9,7 @@ import { CalendarAppointmentActions } from "./CalendarAppointmentActions";
 import { teamButtonClass } from "./team-ui";
 import { formatCalendarDayKey } from "../lib/calendar-time";
 import { teamSurfaceHref } from "../surface-registry";
+import { PartnerRequestDetailsPanel } from "./PartnerRequestDetailsPanel";
 
 function preferred(windows: PartnerServiceReview["preferredWindows"]) {
   return (
@@ -326,44 +327,106 @@ export function PartnerServiceReviews({
                 .join("; ")}
             </p>
           ) : null}
-          <div>
-            <h4 className="font-semibold">Requested work</h4>
-            <p className="mt-1 whitespace-pre-wrap text-sm leading-6">
-              {detail.description || "Description was not provided."}
-            </p>
-          </div>
-          {detail.scopeFields.length ? (
-            <dl className="grid gap-3 sm:grid-cols-2">
-              {detail.scopeFields.map((field) => (
-                <div key={field.label}>
-                  <dt className="text-sm font-semibold">{field.label}</dt>
-                  <dd className="whitespace-pre-wrap text-sm">{field.value}</dd>
+          {detail.partnerRequest ? (
+            <PartnerRequestDetailsPanel
+              details={detail.partnerRequest}
+              photos={detail.photos}
+            />
+          ) : (
+            <>
+              <div>
+                <h4 className="font-semibold">Requested work</h4>
+                <p className="mt-1 whitespace-pre-wrap text-sm leading-6">
+                  {detail.description || "Description was not provided."}
+                </p>
+              </div>
+              {detail.scopeFields.length ? (
+                <dl className="grid gap-3 sm:grid-cols-2">
+                  {detail.scopeFields.map((field) => (
+                    <div key={field.label}>
+                      <dt className="text-sm font-semibold">{field.label}</dt>
+                      <dd className="whitespace-pre-wrap text-sm">
+                        {field.value}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
+              {detail.crewInstructions ? (
+                <div>
+                  <h4 className="font-semibold">Crew instructions</h4>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-6">
+                    {detail.crewInstructions}
+                  </p>
                 </div>
-              ))}
-            </dl>
-          ) : null}
-          {detail.crewInstructions ? (
-            <div>
-              <h4 className="font-semibold">Crew instructions</h4>
-              <p className="mt-1 whitespace-pre-wrap text-sm leading-6">
-                {detail.crewInstructions}
+              ) : null}
+              <p className="text-sm">
+                <strong>On-site contact:</strong>{" "}
+                {[
+                  detail.onSiteContact.name,
+                  detail.onSiteContact.phone,
+                  detail.onSiteContact.email,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "Not provided"}
               </p>
-            </div>
-          ) : null}
-          <p className="text-sm">
-            <strong>On-site contact:</strong>{" "}
-            {[
-              detail.onSiteContact.name,
-              detail.onSiteContact.phone,
-              detail.onSiteContact.email,
-            ]
-              .filter(Boolean)
-              .join(" · ") || "Not provided"}
-          </p>
-          <p className="text-sm">
-            <strong>Requested proof:</strong> {detail.proof.before} before
-            photo(s), {detail.proof.after} after photo(s).
-          </p>
+              <p className="text-sm">
+                <strong>Requested proof:</strong> {detail.proof.before} before
+                photo(s), {detail.proof.after} after photo(s).
+              </p>
+              <div>
+                <h4 className="font-semibold">Photos supplied with this job</h4>
+                {detail.photos.length ? (
+                  <ul className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {detail.photos.map((photo) => (
+                      <li key={photo.id} className="min-w-0">
+                        {photo.url ? (
+                          <a
+                            href={photo.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block rounded-lg focus-visible:outline-2"
+                          >
+                            <img
+                              src={photo.url}
+                              alt={
+                                photo.caption ||
+                                photo.category +
+                                  " photo supplied for this request"
+                              }
+                              width={320}
+                              height={240}
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              className="aspect-[4/3] w-full rounded-lg object-cover"
+                            />
+                          </a>
+                        ) : (
+                          <p className="rounded-lg border border-slate-200 p-3 text-sm">
+                            {photo.category} —{" "}
+                            {photo.status === "ready"
+                              ? "Preview unavailable; refresh or check storage."
+                              : photo.status}
+                          </p>
+                        )}
+                        <p className="mt-1 text-xs text-slate-600">
+                          {photo.caption || photo.category}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-sm text-slate-600">
+                    No photos were attached.
+                  </p>
+                )}
+                <p className="mt-2 text-xs text-slate-500">
+                  Photo links last five minutes. Reopen this request to refresh
+                  them.
+                </p>
+              </div>
+            </>
+          )}
           {canSchedule && detail.canSchedule ? (
             <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6">
               Choose the internal planned start in 30-minute steps. The partner
@@ -371,56 +434,6 @@ export function PartnerServiceReviews({
               price and site eligibility first; CRM capacity checks still apply.
             </p>
           ) : null}
-          <div>
-            <h4 className="font-semibold">Photos supplied with this job</h4>
-            {detail.photos.length ? (
-              <ul className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                {detail.photos.map((photo) => (
-                  <li key={photo.id} className="min-w-0">
-                    {photo.url ? (
-                      <a
-                        href={photo.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="block rounded-lg focus-visible:outline-2"
-                      >
-                        <img
-                          src={photo.url}
-                          alt={
-                            photo.caption ||
-                            photo.category + " photo supplied for this request"
-                          }
-                          width={320}
-                          height={240}
-                          loading="lazy"
-                          referrerPolicy="no-referrer"
-                          className="aspect-[4/3] w-full rounded-lg object-cover"
-                        />
-                      </a>
-                    ) : (
-                      <p className="rounded-lg border border-slate-200 p-3 text-sm">
-                        {photo.category} —{" "}
-                        {photo.status === "ready"
-                          ? "Preview unavailable; refresh or check storage."
-                          : photo.status}
-                      </p>
-                    )}
-                    <p className="mt-1 text-xs text-slate-600">
-                      {photo.caption || photo.category}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-2 text-sm text-slate-600">
-                No photos were attached.
-              </p>
-            )}
-            <p className="mt-2 text-xs text-slate-500">
-              Photo links last five minutes. Reopen this request to refresh
-              them.
-            </p>
-          </div>
           {canSchedule && detail.canSchedule ? (
             <CalendarAppointmentActions
               appointmentId={detail.appointment.id}
