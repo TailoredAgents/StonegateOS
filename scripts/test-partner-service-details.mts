@@ -112,9 +112,12 @@ const photo = Buffer.from(
 const entry = `import React from 'react';import{createRoot}from'react-dom/client';
 import{PartnerBookingWizard}from'./src/app/partners/components/PartnerBookingWizard';
 const draft=${JSON.stringify(initialDraft)},services=${JSON.stringify(services)};
+const scenario=new URLSearchParams(location.search).get('scenario');
+const catalog=scenario?[{...services[0],key:'appliance_collection',label:'Appliance collection',baseOptions:[{...services[0].baseOptions[0],tierKey:'appliance_pickup'}],addOns:[]},...services,{...services[1],key:'service_request',label:'Request service',bookable:scenario!=='disabled'}]:services;
+const savedDraft=scenario?{...draft,serviceKey:scenario==='blank-saved'?null:scenario==='unavailable'?'retired_service':scenario==='switch'?'facility_cleanout':'service_request',tierKey:scenario==='switch'?'standard':null,description:'Keep the saved description and attached photo.',selectedAddOns:scenario==='switch'?[{key:'stairs',quantity:2}]:[],preferredWindows:[{localDate:new Date(Date.now()+2*86400000).toISOString().slice(0,10),timeOfDay:'afternoon',timezone:'America/New_York'}]}:draft;
 function App(){return <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6"><PartnerBookingWizard
- initialDraft={draft} locations={[{id:'facility-address',name:'Northside facility',address:'100 Facility Drive, Atlanta, GA 30301',accessDetails:'Old location instructions removed from this draft.'}]}
- services={services} canUploadPhotos canManageLocations persona="commercial_client"
+ initialDraft={scenario==='new'||scenario==='explicit'?null:savedDraft} defaultLocationId={scenario?'facility-address':''} defaultServiceKey={scenario==='explicit'||scenario==='blank-saved'?'appliance_collection':''} locations={[{id:'facility-address',name:'Northside facility',address:'100 Facility Drive, Atlanta, GA 30301',accessDetails:'Old location instructions removed from this draft.'}]}
+ services={catalog} canUploadPhotos canManageLocations persona="commercial_client"
  cancellationPolicy={{minimumNoticeMinutes:0,directCancellationEnabled:false,lateCancellationDisposition:'staff_review',automaticFeeMinor:null,source:'unconfigured',revision:null}}
  supportPhoneE164="+14045550100" supportPhoneDisplay="404-555-0100"/></main>}
 createRoot(document.getElementById('root')).render(<App/>);`;
@@ -738,4 +741,357 @@ for (const engine of [chromium, webkit]) {
       },
     );
   }
+}
+
+for (const engine of [chromium, webkit]) {
+  void test(
+    `${engine.name()}: multiple services preserve drafts and require fresh scheduling after a change`,
+    { timeout: 60_000 },
+    async () => {
+      const built = await assets();
+      const server = createServer((request, response) => {
+        const path = new URL(request.url ?? "/", "http://localhost").pathname;
+        if (path === "/client.js") {
+          response.setHeader("Content-Type", "text/javascript");
+          response.end(built.script);
+        } else if (path === "/styles.css") {
+          response.setHeader("Content-Type", "text/css");
+          response.end(built.css);
+        } else {
+          response.setHeader("Content-Type", "text/html");
+          response.end(
+            '<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles.css"></head><body><div id="root"></div><script src="/client.js"></script></body></html>',
+          );
+        }
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, "127.0.0.1", resolve),
+      );
+      const address = server.address();
+      assert.ok(address && typeof address !== "string");
+      const browser = await engine.launch();
+      try {
+        for (const scenario of [
+          "new",
+          "explicit",
+          "saved",
+          "blank-saved",
+          "unavailable",
+          "disabled",
+          "switch",
+        ]) {
+          const page = await browser.newPage({
+            viewport: { width: 375, height: 1000 },
+          });
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          let saved: Record<string, any> = {
+            ...structuredClone(initialDraft),
+            serviceKey:
+              scenario === "blank-saved"
+                ? null
+                : scenario === "unavailable"
+                  ? "retired_service"
+                  : scenario === "switch"
+                    ? "facility_cleanout"
+                    : "service_request",
+            tierKey: scenario === "switch" ? "standard" : null,
+            description: "Keep the saved description and attached photo.",
+            selectedAddOns:
+              scenario === "switch" ? [{ key: "stairs", quantity: 2 }] : [],
+            preferredWindows: [
+              {
+                localDate: new Date(Date.now() + 2 * 86400000)
+                  .toISOString()
+                  .slice(0, 10),
+                timeOfDay: "afternoon",
+                timezone: "America/New_York",
+              },
+            ],
+          };
+          let validations = 0;
+          const availabilityServices: string[] = [];
+          const attachedPhoto = {
+            id: "saved-photo",
+            category: "issue",
+            caption: "Saved reference photo.",
+            sortOrder: 0,
+            status: "ready",
+            filename: "reference.png",
+            contentType: "image/png",
+            byteSize: photo.byteLength,
+            width: 1,
+            height: 1,
+            sha256: null,
+            createdAt: initialDraft.createdAt,
+            readyAt: initialDraft.createdAt,
+            error: null,
+            downloadIntent: null,
+          };
+          await page.addInitScript(
+            (id) => sessionStorage.setItem(`partner-request-step:${id}`, "1"),
+            draftId,
+          );
+          await page.route("**/api/partners/portal/**", async (route) => {
+            const request = route.request(),
+              path = new URL(request.url()).pathname;
+            if (path.endsWith(`/booking-drafts/${draftId}/media`))
+              return route.fulfill({
+                json: { ok: true, media: [attachedPhoto] },
+              });
+            if (path.endsWith(`/booking-drafts/${draftId}/validate`)) {
+              validations++;
+              return route.fulfill({
+                json: {
+                  ok: true,
+                  draft: saved,
+                  validation: { valid: true, ready: true, fieldErrors: {} },
+                },
+              });
+            }
+            if (path.endsWith(`/booking-drafts/${draftId}/availability`)) {
+              availabilityServices.push(saved.serviceKey);
+              const amount = {
+                amountMinor:
+                  saved.serviceKey === "facility_cleanout" ? 12345 : 67890,
+                currency: "USD",
+                minorUnit: 2,
+              };
+              return route.fulfill({
+                json: {
+                  ok: true,
+                  availability: {
+                    draft: saved,
+                    timezone: "America/New_York",
+                    calendar: { state: "current" },
+                    reviewReasons: ["manual_review_required"],
+                    instantConfirmationEligible: false,
+                    pricing: {
+                      status: "estimate",
+                      currency: "USD",
+                      baseAmount: amount,
+                      addOnTotal: null,
+                      total: amount,
+                      addOns: [],
+                    },
+                    windows: [],
+                    rankedAlternatives: [],
+                  },
+                },
+              });
+            }
+            if (
+              path.endsWith(`/booking-drafts/${draftId}`) ||
+              (path.endsWith("/booking-drafts") && request.method() === "POST")
+            ) {
+              assert.ok(["PATCH", "POST"].includes(request.method()));
+              saved = {
+                ...saved,
+                ...request.postDataJSON(),
+                revision: saved.revision + 1,
+                etag: `"draft-${saved.revision + 1}"`,
+              };
+              return route.fulfill({ json: { ok: true, draft: saved } });
+            }
+            if (path.endsWith("/booking-drafts"))
+              return route.fulfill({
+                json: { ok: true, drafts: [], page: { nextCursor: null } },
+              });
+            throw new Error(
+              `Unexpected multi-service action: ${request.method()} ${path}`,
+            );
+          });
+          try {
+            await page.goto(
+              `http://127.0.0.1:${address.port}/?scenario=${scenario}`,
+            );
+            if (scenario === "new" || scenario === "explicit")
+              await page
+                .getByRole("button", { name: "Continue", exact: true })
+                .click();
+            const select = page.locator("#partner-book-service");
+            await expect(select).toBeVisible();
+            if (scenario === "new" || scenario === "blank-saved") {
+              await expect(select).toHaveValue("");
+              await page
+                .getByRole("button", {
+                  name: "Continue to scheduling",
+                  exact: true,
+                })
+                .click();
+              await expect(
+                page.locator("#partner-book-service-error"),
+              ).toHaveText("Choose a service.");
+              assert.equal(validations, 0);
+              if (scenario === "blank-saved") {
+                await expect(
+                  page.locator("#partner-book-description"),
+                ).toHaveValue("Keep the saved description and attached photo.");
+                await expect(
+                  page.getByText("Saved reference photo.", { exact: true }),
+                ).toBeVisible();
+              }
+            } else if (scenario === "explicit") {
+              await expect(select).toHaveValue("appliance_collection");
+              await expect(
+                page.locator("#partner-book-base-option"),
+              ).toHaveValue("appliance_pickup");
+            } else if (scenario === "saved") {
+              await expect(select).toHaveValue("service_request");
+              await expect.poll(() => saved.tierKey).toBe(null);
+              await expect(
+                page.locator("#partner-book-base-option"),
+              ).toHaveCount(0);
+              await expect(
+                page.locator("#partner-book-description"),
+              ).toHaveValue("Keep the saved description and attached photo.");
+              await expect(
+                page.getByText("Saved reference photo.", { exact: true }),
+              ).toBeVisible();
+            } else if (scenario === "unavailable" || scenario === "disabled") {
+              await expect(select).toHaveAttribute("aria-invalid", "true");
+              await expect(
+                page.locator("#partner-book-service-error"),
+              ).toContainText("Your other request details have been kept");
+              await page
+                .getByRole("button", {
+                  name: "Continue to scheduling",
+                  exact: true,
+                })
+                .click();
+              await expect(
+                page.locator("#partner-book-service-error"),
+              ).toContainText("Choose another service");
+              assert.equal(
+                validations,
+                0,
+                "An unavailable service must be rejected before scheduling",
+              );
+              await select.selectOption("appliance_collection");
+              await expect(select).toHaveAttribute("aria-invalid", "false");
+              await expect(
+                page.locator("#partner-book-service-error"),
+              ).toHaveCount(0);
+              await expect(
+                page.getByText("Add the highlighted details to continue.", {
+                  exact: true,
+                }),
+              ).toHaveCount(0);
+              await expect(
+                page.locator("#partner-book-description"),
+              ).toHaveValue("Keep the saved description and attached photo.");
+              await expect(
+                page.getByText("Saved reference photo.", { exact: true }),
+              ).toBeVisible();
+            } else {
+              await page
+                .getByRole("button", {
+                  name: "Continue to scheduling",
+                  exact: true,
+                })
+                .click();
+              await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+                "data-booking-step",
+                "2",
+              );
+              await page
+                .getByRole("button", { name: "Continue", exact: true })
+                .click();
+              await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+                "data-booking-step",
+                "3",
+              );
+              await expect(
+                page.getByText("$123.45", { exact: true }).first(),
+              ).toBeVisible();
+              const progress = page.getByRole("list", {
+                name: "Service request progress",
+              });
+              await progress.locator("li").nth(1).getByRole("button").click();
+              await page
+                .locator(`#draft-photo-files-${draftId}`)
+                .setInputFiles({
+                  name: "unsaved-reference.png",
+                  mimeType: "image/png",
+                  buffer: photo,
+                });
+              await select.selectOption("service_request");
+              await expect(
+                page.getByRole("img", {
+                  name: "Selected photo: unsaved-reference.png",
+                  exact: true,
+                }),
+              ).toBeVisible();
+              await expect(
+                progress.locator("li").nth(2).getByRole("button"),
+              ).toHaveCount(0);
+              await expect(
+                progress.locator("li").nth(3).getByRole("button"),
+              ).toHaveCount(0);
+              await expect(
+                page.getByText("$123.45", { exact: true }),
+              ).toHaveCount(0);
+              await expect(
+                page.locator("#partner-book-description"),
+              ).toHaveValue("Keep the saved description and attached photo.");
+              await expect(
+                page.getByText("Saved reference photo.", { exact: true }),
+              ).toBeVisible();
+              await page
+                .getByRole("button", { name: "Clear selection", exact: true })
+                .click();
+              await page
+                .getByRole("button", {
+                  name: "Continue to scheduling",
+                  exact: true,
+                })
+                .click();
+              await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+                "data-booking-step",
+                "2",
+              );
+              await expect.poll(() => saved.tierKey).toBe(null);
+              assert.deepEqual(saved.selectedAddOns, []);
+              await page
+                .getByRole("button", { name: "Continue", exact: true })
+                .click();
+              await expect(
+                page.getByText("$678.90", { exact: true }).first(),
+              ).toBeVisible();
+              await expect(
+                page.getByText("$123.45", { exact: true }),
+              ).toHaveCount(0);
+              assert.deepEqual(availabilityServices, [
+                "facility_cleanout",
+                "service_request",
+              ]);
+            }
+            await expect(
+              page.getByText("Saved", { exact: true }).first(),
+            ).toBeVisible();
+            if (scenario === "blank-saved") {
+              assert.equal(saved.serviceKey, null);
+              assert.equal(saved.tierKey, null);
+            }
+            if (scenario === "saved") {
+              assert.equal(
+                saved.tierKey,
+                null,
+                "Saving a reopened generic request must not inherit the first service's tier",
+              );
+              assert.equal(saved.serviceKey, "service_request");
+            }
+            await fits(page);
+            assert.deepEqual(errors, []);
+          } finally {
+            await page.close();
+          }
+        }
+      } finally {
+        await browser.close();
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    },
+  );
 }

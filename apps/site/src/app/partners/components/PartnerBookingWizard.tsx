@@ -299,8 +299,8 @@ function formFromDraft(
     ...DEFAULT_FORM,
     ...defaults,
     locationId: draft.locationId ?? defaults.locationId ?? "",
-    serviceKey: draft.serviceKey ?? defaults.serviceKey ?? "",
-    tierKey: draft.tierKey ?? defaults.tierKey ?? "",
+    serviceKey: draft.serviceKey ?? "",
+    tierKey: draft.tierKey ?? "",
     addOnQuantities: Object.fromEntries(
       (Array.isArray(draft.selectedAddOns) ? draft.selectedAddOns : []).map(
         (addOn) => [addOn.key, addOn.quantity],
@@ -576,9 +576,9 @@ function localErrorsForStep(
     errors["locationId"] = "Enter a service address or choose a saved address.";
   if (step === 1) {
     if (!form.serviceKey) errors["serviceKey"] = "Choose a service.";
-    else if (service && !service.bookable) {
+    else if (!service || !service.bookable) {
       errors["serviceKey"] =
-        "This service is not currently available for an online request.";
+        "This service is no longer available. Choose another service to continue.";
     }
     if ((service?.baseOptions?.length ?? 0) > 0 && !form.tierKey) {
       errors["tierKey"] = "Choose a base service option.";
@@ -679,6 +679,12 @@ function PartnerBookingWizardSession({
   const initialContact = initialLocation?.contact?.name
     ? initialLocation.contact
     : requesterContact;
+  const defaultSelectedServiceKey =
+    defaultServiceKey ||
+    (services.length === 1 && services[0]?.bookable ? services[0].key : "");
+  const defaultSelectedService = services.find(
+    (service) => service.key === defaultSelectedServiceKey,
+  );
   const [form, setForm] = React.useState<WizardForm>(() =>
     formFromDraft(initialDraft, {
       locationId: defaultLocationId,
@@ -691,20 +697,14 @@ function PartnerBookingWizardSession({
           (location) =>
             location.id === (initialDraft?.locationId || defaultLocationId),
         )?.timezone ?? "America/New_York",
-      serviceKey: defaultServiceKey || services[0]?.key || "",
+      serviceKey: defaultSelectedServiceKey,
       proofBefore: defaultProofRequirements.before > 0,
       proofBeforeCount: Math.max(1, defaultProofRequirements.before),
       proofAfter: defaultProofRequirements.after > 0,
       proofAfterCount: Math.max(1, defaultProofRequirements.after),
       tierKey:
-        services.find(
-          (service) =>
-            service.key === (defaultServiceKey || services[0]?.key || ""),
-        )?.baseOptions?.length === 1
-          ? services.find(
-              (service) =>
-                service.key === (defaultServiceKey || services[0]?.key || ""),
-            )?.baseOptions?.[0]?.tierKey
+        defaultSelectedService?.baseOptions?.length === 1
+          ? defaultSelectedService.baseOptions[0]?.tierKey
           : "",
     }),
   );
@@ -1213,7 +1213,23 @@ function PartnerBookingWizardSession({
   };
 
   const updateService = (serviceKey: string): void => {
+    if (serviceKey === form.serviceKey) return;
     releaseHeldTimeAfterEdit();
+    // A manual-review request has no hold, but its previous price and time
+    // choices still belong to the old service and must be checked again.
+    setAvailability(null);
+    setSelectedDate("");
+    setFurthestStep((current) => Math.min(current, 1));
+    const validationFields = Object.keys(fieldErrors);
+    if (
+      saveStatus !== "error" &&
+      validationFields.length > 0 &&
+      validationFields.every((field) =>
+        ["serviceKey", "tierKey", "selectedAddOns"].includes(field),
+      )
+    ) {
+      setMessage(null);
+    }
     const nextService = services.find((service) => service.key === serviceKey);
     setForm((current) => ({
       ...current,
@@ -1679,6 +1695,11 @@ function PartnerBookingWizardSession({
     addressEntryMode === "new" &&
     !form.locationId;
   const service = services.find((item) => item.key === form.serviceKey);
+  const serviceError =
+    fieldErrors["serviceKey"] ??
+    (form.serviceKey && (!service || !service.bookable)
+      ? "Your saved service is no longer available. Choose another service. Your other request details have been kept."
+      : null);
   const selectedBaseOption = service?.baseOptions?.find(
     (option) => option.tierKey === form.tierKey,
   );
@@ -2165,14 +2186,22 @@ function PartnerBookingWizardSession({
                         onChange={(event) => updateService(event.target.value)}
                         className={partnerFieldClass}
                         required
-                        aria-invalid={Boolean(fieldErrors["serviceKey"])}
+                        disabled={
+                          advancing || availabilityLoading || submitting
+                        }
+                        aria-invalid={Boolean(serviceError)}
                         aria-describedby={
-                          fieldErrors["serviceKey"]
+                          serviceError
                             ? "partner-book-service-error"
                             : undefined
                         }
                       >
                         <option value="">Choose a service</option>
+                        {form.serviceKey && !service ? (
+                          <option value={form.serviceKey} disabled>
+                            Previously selected service — unavailable
+                          </option>
+                        ) : null}
                         {services.map((item) => (
                           <option
                             key={item.key}
@@ -2184,12 +2213,12 @@ function PartnerBookingWizardSession({
                           </option>
                         ))}
                       </select>
-                      {fieldErrors["serviceKey"] ? (
+                      {serviceError ? (
                         <span
                           id="partner-book-service-error"
                           className="mt-1 block text-sm font-medium text-rose-700"
                         >
-                          {fieldErrors["serviceKey"]}
+                          {serviceError}
                         </span>
                       ) : null}
                     </label>
