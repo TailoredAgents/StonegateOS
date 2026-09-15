@@ -1,0 +1,13 @@
+.compactHeading {
+  display: none;
+}
+
+/* Once address entry is complete, keep the work area near the top of the page. */
+.page:has([data-booking-step]:not([data-booking-step="0"])) .introduction,
+.page:has([data-booking-step]:not([data-booking-step="0"])) .jobsLink {
+  display: none;
+}
+
+.page:has([data-booking-step]:not([data-booking-step="0"])) .compactHeading {
+  display: block;
+}

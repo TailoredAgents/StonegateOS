@@ -1,6 +1,9 @@
 "use client";
 
 import * as React from "react";
+import type { PartnerRequestDetails } from "@myst-os/sdk";
+import { PartnerRequestDetailsPanel } from "../team/components/PartnerRequestDetailsPanel";
+import { visiblePartnerAppointmentNotes } from "../team/lib/partner-request-notes";
 import {
   formatAppointmentJobDetails,
   type AppointmentBookingDetails,
@@ -35,6 +38,7 @@ export function MobileAppointmentDetail({
   canCollectPayments,
   canManagePayments,
   bookingDetails,
+  partnerRequest,
   modern = false,
   squarePaymentsEnabled = false,
 }: {
@@ -52,9 +56,11 @@ export function MobileAppointmentDetail({
   canCollectPayments: boolean;
   canManagePayments: boolean;
   bookingDetails?: AppointmentBookingDetails | null;
+  partnerRequest?: PartnerRequestDetails | null;
   modern?: boolean;
   squarePaymentsEnabled?: boolean;
 }) {
+  const visibleNotes = visiblePartnerAppointmentNotes(notes, partnerRequest);
   const [needsScope, setNeedsScope] = React.useState(mediaSummary.needsScope);
 
   React.useEffect(() => {
@@ -63,6 +69,13 @@ export function MobileAppointmentDetail({
 
   return (
     <>
+      {partnerRequest ? (
+        <PartnerRequestDetailsPanel
+          compact
+          details={partnerRequest}
+          appearance="dark"
+        />
+      ) : null}
       {bookingDetails?.serviceType === "moving" ? (
         <div className="rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-3">
           <p className="text-sm font-semibold text-cyan-100">Moving Job</p>
@@ -78,6 +91,7 @@ export function MobileAppointmentDetail({
         appointmentId={appointmentId}
         employeeId={employeeId}
         initialScope={quotedScopeText}
+        partnerRequestDescription={partnerRequest?.description}
         initialSummary={{ ...mediaSummary, needsScope }}
         canCapture={canCaptureMedia}
         canManage={canManageMedia}
@@ -96,18 +110,18 @@ export function MobileAppointmentDetail({
           needsScope={needsScope}
         />
       ) : null}
-      {notes?.length ? (
+      {visibleNotes.length ? (
         <details className="rounded-md border border-white/10 bg-slate-950 px-3">
           <summary className="flex min-h-11 cursor-pointer list-none items-center text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
-            Notes ({notes.length})
+            Notes ({visibleNotes.length})
           </summary>
           <div className="space-y-2 pb-3">
-            {notes.slice(0, 5).map((note) => (
+            {visibleNotes.slice(0, 5).map((note) => (
               <div
                 key={note.id}
                 className="rounded-md border border-white/10 bg-slate-900 px-3 py-2"
               >
-                <p className="whitespace-pre-wrap text-sm leading-5 text-slate-200">
+                <p className="whitespace-pre-wrap break-words text-sm leading-5 text-slate-200 [overflow-wrap:anywhere]">
                   {note.body}
                 </p>
                 <p className="mt-1 text-[11px] text-slate-500">

@@ -1,5 +1,6 @@
 export * from "./schemas";
 export * from "./team-contracts";
+export * from "./partner-request-details";
 export * from "./openai-provider";
 export * from "./meta-provider";
 export * from "./google-calendar-provider";

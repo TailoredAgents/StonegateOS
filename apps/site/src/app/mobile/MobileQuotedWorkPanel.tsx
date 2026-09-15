@@ -186,6 +186,7 @@ export function MobileQuotedWorkPanel({
   appointmentId,
   employeeId,
   initialScope,
+  partnerRequestDescription,
   initialSummary,
   canCapture,
   canManage,
@@ -195,6 +196,7 @@ export function MobileQuotedWorkPanel({
   appointmentId: string;
   employeeId: string;
   initialScope: string | null;
+  partnerRequestDescription?: string | null;
   initialSummary: AppointmentMediaSummary;
   canCapture: boolean;
   canManage: boolean;
@@ -812,7 +814,8 @@ export function MobileQuotedWorkPanel({
             </p>
           ) : null}
 
-          {!modern || managing || summary.needsScope ? (
+          {(!modern || managing || summary.needsScope) &&
+          (managing || summary.needsScope || !partnerRequestDescription?.trim() || scope.trim() !== partnerRequestDescription.trim()) ? (
             <section>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
                 {modern ? "Work details" : "Quoted to remove"}

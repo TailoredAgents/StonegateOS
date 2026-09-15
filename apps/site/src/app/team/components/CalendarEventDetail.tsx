@@ -8,6 +8,8 @@ import { teamSurfaceHref } from "../surface-registry";
 import { formatCalendarEventAmounts } from "./calendarEventAmounts";
 import { CalendarAppointmentActions } from "./CalendarAppointmentActions";
 import { getCalendarEventBadgeClass } from "./calendarEventTone";
+import { PartnerRequestDetailsPanel } from "./PartnerRequestDetailsPanel";
+import { visiblePartnerAppointmentNotes } from "../lib/partner-request-notes";
 
 type Props = {
   event: CalendarEvent;
@@ -52,7 +54,10 @@ export function CalendarEventDetail({
         query: eventDay ? { calView: "day", cal: eventDay } : undefined,
       })
     : null;
-  const notes = event.notes ?? [];
+  const notes = visiblePartnerAppointmentNotes(
+    event.notes,
+    event.partnerRequest,
+  );
   const amountSummary = isDbAppointment
     ? formatCalendarEventAmounts(event)
     : null;
@@ -158,6 +163,9 @@ export function CalendarEventDetail({
           </p>
         </div>
       ) : null}
+      {event.partnerRequest ? (
+        <PartnerRequestDetailsPanel details={event.partnerRequest} />
+      ) : null}
       {notes.length ? (
         <div className="mt-3 space-y-1 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -168,7 +176,7 @@ export function CalendarEventDetail({
               key={note.id}
               className="rounded-lg bg-white px-3 py-2 shadow-sm"
             >
-              <div className="whitespace-pre-wrap text-sm font-semibold text-slate-900">
+              <div className="whitespace-pre-wrap break-words text-sm font-semibold text-slate-900 [overflow-wrap:anywhere]">
                 {note.body}
               </div>
               <div className="mt-1 text-[11px] text-slate-500">

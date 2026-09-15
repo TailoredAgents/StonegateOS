@@ -59,6 +59,12 @@ import {
   partnerSecondaryButtonClass,
 } from "./PartnerPortalUi";
 import { PartnerDraftPhotoUpload } from "./PartnerDraftPhotoUpload";
+import { PartnerBookingDetailsRow } from "./PartnerBookingDetailsRow";
+import {
+  bookingFieldElementId,
+  bookingErrorSection,
+  focusBookingField,
+} from "../lib/booking-field-focus";
 import { PartnerSavedRequests } from "./PartnerSavedRequests";
 import { PartnerInlineLocationForm } from "./PartnerInlineLocationForm";
 import {
@@ -321,7 +327,9 @@ function formFromDraft(
     alternateContactPhone: recordString(alternateContact, "phone"),
     alternateContactEmail: recordString(alternateContact, "email"),
     crewInstructions: draft.crewInstructions ?? "",
-    accessDetails: draft.accessDetails ?? defaults.accessDetails ?? "",
+    // A saved blank is intentional; do not restore location instructions the
+    // client already removed from this request.
+    accessDetails: draft.accessDetails ?? "",
     contactName: draft.onSiteContact
       ? recordString(draft.onSiteContact, "name")
       : (defaults.contactName ?? ""),
@@ -558,21 +566,6 @@ function fieldStep(field: string): number {
   return 1;
 }
 
-function fieldElementId(field: string): string {
-  if (field.startsWith("location")) return "partner-book-location";
-  if (field.startsWith("service")) return "partner-book-service";
-  if (field.startsWith("tier")) return "partner-book-base-option";
-  if (field.startsWith("billing")) return "partner-book-billing-name";
-  if (field === "description" || field.startsWith("scope"))
-    return "partner-book-description";
-  if (field.startsWith("onSite")) return "partner-book-contact-name";
-  if (field === "contactMethod") return "partner-book-contact-phone";
-  if (field.includes("Contact")) return "partner-book-contact-name";
-  if (field.includes("access")) return "partner-book-access";
-  if (field.startsWith("preferred")) return "partner-book-preferred-date-1";
-  return "partner-book-description";
-}
-
 function localErrorsForStep(
   step: number,
   form: WizardForm,
@@ -592,6 +585,23 @@ function localErrorsForStep(
     }
     if (!form.description.trim())
       errors["description"] = "Describe the work to be completed.";
+    if (
+      form.itemCount.trim() &&
+      (!Number.isSafeInteger(Number(form.itemCount)) ||
+        Number(form.itemCount) < 0)
+    ) {
+      errors["scope.itemCount"] = "Enter a whole item count of zero or more.";
+    }
+    if (
+      form.volume.trim() &&
+      (!Number.isFinite(Number(form.volume)) || Number(form.volume) < 0)
+    ) {
+      errors["scope.volumeCubicYards"] = "Enter a volume of zero or more.";
+    }
+    if (form.requiredCompletionTime && !form.requiredCompletionDate) {
+      errors["scope.requiredCompletion.localDate"] =
+        "Add a completion date for the time you entered, or clear the time.";
+    }
     if (
       Boolean(form.billingContactName.trim()) !==
       Boolean(form.billingContactEmail.trim())
@@ -722,7 +732,15 @@ function PartnerBookingWizardSession({
     holdId: string | null;
   } | null>(null);
   const [advancing, setAdvancing] = React.useState(false);
-  const [draftPhotoCount, setDraftPhotoCount] = React.useState(0);
+  const [draftPhotoCount, setDraftPhotoCount] = React.useState<number | null>(
+    null,
+  );
+  const [errorFocusRequest, setErrorFocusRequest] = React.useState(0);
+  const errorSummaryRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (errorFocusRequest > 0) errorSummaryRef.current?.focus();
+  }, [errorFocusRequest]);
+  const [pendingPhotos, setPendingPhotos] = React.useState(false);
   const [showPersonaSuggestions, setShowPersonaSuggestions] =
     React.useState(false);
   const [personaFeedback, setPersonaFeedback] = React.useState<string | null>(
@@ -1015,7 +1033,8 @@ function PartnerBookingWizardSession({
     addressEntryMode === "new" &&
     !form.locationId &&
     addressDirty;
-  const hasUnsavedChanges = hasUnsavedDraftChanges || hasUnsavedAddress;
+  const hasUnsavedChanges =
+    hasUnsavedDraftChanges || hasUnsavedAddress || pendingPhotos;
 
   usePartnerUnsavedChanges(hasUnsavedChanges);
   const unsavedRef = React.useRef(hasUnsavedDraftChanges);
@@ -1073,7 +1092,8 @@ function PartnerBookingWizardSession({
         setMessage(
           "That arrival-window hold expired. Your job details are saved; choose another window.",
         );
-        setStep(2);
+        // An expired hold must not unmount selected photos on Service details.
+        if (stepRef.current !== 1) setStep(2);
       }
     };
     update();
@@ -1245,9 +1265,9 @@ function PartnerBookingWizardSession({
   const focusErrorSummary = React.useCallback(
     (errors: Record<string, string>): void => {
       if (!Object.keys(errors).length) return;
-      window.requestAnimationFrame(() =>
-        document.getElementById("partner-book-error-summary")?.focus(),
-      );
+      // Focus after React commits the error summary, including async server
+      // validation. A browser animation frame can run before that commit.
+      setErrorFocusRequest((current) => current + 1);
     },
     [],
   );
@@ -1320,6 +1340,7 @@ function PartnerBookingWizardSession({
       focusErrorSummary(errors);
       return false;
     }
+    setFieldErrors({});
 
     const from = new Date();
     const to = new Date(from.getTime() + 30 * 86_400_000);
@@ -1397,6 +1418,11 @@ function PartnerBookingWizardSession({
         focusErrorSummary(localErrors);
         return;
       }
+      setFieldErrors({});
+      if (step === 1 && pendingPhotos) {
+        showPendingPhotos();
+        return;
+      }
       if (step === 2 && !hold) {
         const preferredDates = [
           snapshot.preferredDateOne,
@@ -1450,11 +1476,24 @@ function PartnerBookingWizardSession({
       );
       return;
     }
+    if (step === 1 && target !== step && pendingPhotos) {
+      showPendingPhotos();
+      return;
+    }
     setStep(target);
     window.requestAnimationFrame(() =>
       document.getElementById("partner-book-step-heading")?.focus(),
     );
   };
+
+  function showPendingPhotos(): void {
+    setMessage(
+      "Attach your selected photos, or clear the selection, before leaving Service details.",
+    );
+    window.requestAnimationFrame(() =>
+      document.getElementById("partner-book-photos")?.focus(),
+    );
+  }
 
   const chooseWindow = async (windowId: string): Promise<void> => {
     setAvailabilityLoading(true);
@@ -1588,6 +1627,49 @@ function PartnerBookingWizardSession({
     router.refresh();
   };
 
+  const hasDetailsError = (
+    section: ReturnType<typeof bookingErrorSection>,
+  ): boolean =>
+    Object.keys(fieldErrors).some(
+      (field) => bookingErrorSection(field) === section,
+    );
+  const contactDetailsSummary = form.contactName.trim()
+    ? [
+        form.contactName.trim(),
+        form.contactPhone.trim() || form.contactEmail.trim(),
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "Add the person our crew should contact";
+  const scopeDetailsSummary =
+    [
+      form.restrictedItems || form.hazardCategories.length
+        ? "Special handling"
+        : "",
+      form.nonStandard ? "Heavy or oversized items" : "",
+      form.equipmentNeeds.length ? "Equipment requested" : "",
+      form.multiStop ? "Multiple stops" : "",
+      form.requiredCompletionDate ? "Completion deadline" : "",
+      form.itemCount || form.volume ? "Quantity added" : "",
+    ]
+      .filter(Boolean)
+      .join(" · ") || "Handling, equipment, deadlines, or extra stops";
+  const commercialDetailsSummary =
+    [form.poNumber, form.projectReference, form.costCenter]
+      .filter(Boolean)
+      .join(" · ") ||
+    (form.billingContactName
+      ? `Billing contact: ${form.billingContactName}`
+      : "Add a reference or billing contact if needed");
+  const proofDetailsSummary =
+    [
+      form.proofBefore ? `Before photos: ${form.proofBeforeCount}` : "",
+      form.proofAfter ? `After photos: ${form.proofAfterCount}` : "",
+      form.proofPackage ? "Completion report" : "",
+    ]
+      .filter(Boolean)
+      .join(" · ") || "Set the photos you want from the crew";
+
   const location = availableLocations.find(
     (item) => item.id === form.locationId,
   );
@@ -1646,6 +1728,7 @@ function PartnerBookingWizardSession({
     <div
       className="space-y-5"
       data-partner-unsaved={hasUnsavedChanges ? "true" : undefined}
+      data-booking-step={step}
     >
       <PartnerPanel className="overflow-hidden p-0 sm:p-0">
         <div className="border-b border-slate-200 bg-slate-50 px-4 py-4 sm:px-6">
@@ -1718,7 +1801,7 @@ function PartnerBookingWizardSession({
           </ol>
         </div>
 
-        <div className="p-5 sm:p-7">
+        <div className={cn("p-5 sm:p-7", step === 1 && "sm:px-8 sm:py-6")}>
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-700">
@@ -1731,6 +1814,11 @@ function PartnerBookingWizardSession({
               >
                 {STEPS[step]?.label}
               </h2>
+              {step === 1 ? (
+                <p className="mt-1 text-sm text-slate-500">
+                  Describe the work and add any helpful photos.
+                </p>
+              ) : null}
             </div>
             <div
               className="min-w-32 text-right text-xs text-slate-500"
@@ -1750,6 +1838,11 @@ function PartnerBookingWizardSession({
                   <CircleAlert className="h-3.5 w-3.5" aria-hidden="true" />
                   Address not saved
                 </span>
+              ) : saveStatus === "saved" && pendingPhotos ? (
+                <span className="inline-flex items-center gap-1.5 text-amber-800">
+                  <CircleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                  Photos not saved yet
+                </span>
               ) : saveStatus === "saved" ? (
                 <span className="inline-flex items-center gap-1.5 text-emerald-700">
                   <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1767,6 +1860,7 @@ function PartnerBookingWizardSession({
           {Object.keys(fieldErrors).length > 0 ? (
             <div
               id="partner-book-error-summary"
+              ref={errorSummaryRef}
               className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-950 outline-none focus-visible:ring-2 focus-visible:ring-rose-600 focus-visible:ring-offset-2"
               role="alert"
               aria-labelledby="partner-book-error-summary-heading"
@@ -1781,7 +1875,7 @@ function PartnerBookingWizardSession({
               {message ? <p className="mt-1">{message}</p> : null}
               <ul className="mt-2 list-disc space-y-1 pl-5">
                 {Object.entries(fieldErrors).map(([field, error]) => {
-                  const targetId = fieldElementId(field);
+                  const targetId = bookingFieldElementId(field);
                   return (
                     <li key={field}>
                       <a
@@ -1789,7 +1883,7 @@ function PartnerBookingWizardSession({
                         className="font-medium underline decoration-rose-400 underline-offset-2 hover:decoration-rose-700"
                         onClick={(event) => {
                           event.preventDefault();
-                          document.getElementById(targetId)?.focus();
+                          focusBookingField(field);
                         }}
                       >
                         {error}
@@ -2048,1153 +2142,1169 @@ function PartnerBookingWizardSession({
             ) : null}
 
             {step === 1 ? (
-              <div className="space-y-5">
-                {showPersonaSuggestions ? (
-                  <aside
-                    aria-labelledby="partner-persona-scope-heading"
-                    className="rounded-2xl border border-primary-100 bg-primary-50/70 p-4 sm:p-5"
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="max-w-2xl">
-                        <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-primary-700">
-                          <Sparkles className="h-4 w-4" aria-hidden="true" />
-                          {personaPresentation.label} scope guide
-                        </p>
-                        <h3
-                          id="partner-persona-scope-heading"
-                          className="mt-2 font-semibold text-slate-950"
-                        >
-                          {personaPresentation.booking.scopeHeading}
-                        </h3>
-                        <p className="mt-1 text-sm leading-6 text-slate-700">
-                          {personaPresentation.booking.scopeLead}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowPersonaSuggestions(false);
-                          setPersonaFeedback(null);
-                        }}
-                        className={cn(
-                          partnerSecondaryButtonClass,
-                          "min-h-11 px-3",
-                        )}
-                        aria-label="Dismiss persona booking suggestions"
-                      >
-                        <X className="h-4 w-4" aria-hidden="true" />
-                        Dismiss
-                      </button>
-                    </div>
-                    <ul className="mt-3 grid gap-x-6 gap-y-2 text-sm leading-5 text-slate-700 sm:grid-cols-2">
-                      {personaPresentation.booking.scopeChecklist.map(
-                        (item) => (
-                          <li key={item} className="flex gap-2">
-                            <Check
-                              className="mt-0.5 h-4 w-4 shrink-0 text-primary-700"
-                              aria-hidden="true"
-                            />
-                            <span>{item}</span>
-                          </li>
-                        ),
-                      )}
-                    </ul>
-                    <p className="mt-3 text-xs leading-5 text-slate-600">
-                      Use this checklist if it saves time. It does not change
-                      your service, account access, or saved request.
-                    </p>
-                  </aside>
-                ) : null}
-                <label className="block" htmlFor="partner-book-service">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Service
-                  </span>
-                  <select
-                    id="partner-book-service"
-                    value={form.serviceKey}
-                    onChange={(event) => updateService(event.target.value)}
-                    className={partnerFieldClass}
-                    required
-                    aria-invalid={Boolean(fieldErrors["serviceKey"])}
-                    aria-describedby={
-                      fieldErrors["serviceKey"]
-                        ? "partner-book-service-error"
-                        : undefined
-                    }
-                  >
-                    <option value="">Choose a service</option>
-                    {services.map((item) => (
-                      <option
-                        key={item.key}
-                        value={item.key}
-                        disabled={!item.bookable}
-                      >
-                        {item.label}
-                        {!item.bookable ? " — configuration required" : ""}
-                      </option>
-                    ))}
-                  </select>
-                  {fieldErrors["serviceKey"] ? (
-                    <span
-                      id="partner-book-service-error"
-                      className="mt-1 block text-sm font-medium text-rose-700"
-                    >
-                      {fieldErrors["serviceKey"]}
-                    </span>
-                  ) : null}
-                </label>
-                {service?.agreement ? (
-                  <details
-                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
-                    aria-labelledby="partner-book-agreement-heading"
-                  >
-                    <summary className="min-h-11 cursor-pointer font-semibold text-slate-800">
-                      Your service and pricing details
-                    </summary>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">
-                      Current account agreement
-                    </p>
-                    <h3
-                      id="partner-book-agreement-heading"
-                      className="mt-1 font-semibold text-slate-950"
-                    >
-                      {service.agreement.label}
-                    </h3>
-                    <p className="mt-1 text-sm leading-6 text-slate-700">
-                      {priceStateLabel(service.priceState)} ·{" "}
-                      {service.agreement.currency} · effective{" "}
-                      {formatDate(
-                        service.agreement.effectiveFrom.slice(0, 10),
-                        "UTC",
-                      )}
-                      {service.agreement.effectiveTo
-                        ? ` through ${formatDate(
-                            service.agreement.effectiveTo.slice(0, 10),
-                            "UTC",
-                          )}`
-                        : " with no recorded end date"}
-                    </p>
-                    {service.inclusions.length > 0 ? (
-                      <div className="mt-3">
-                        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                          Included
-                        </h4>
-                        <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-700">
-                          {service.inclusions.map((item) => (
-                            <li key={item}>{item}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-                    {service.exclusions.length > 0 ? (
-                      <div className="mt-3">
-                        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                          Excluded or separately quoted
-                        </h4>
-                        <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-700">
-                          {service.exclusions.map((item) => (
-                            <li key={item}>{item}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-                    {service.quoteRule ? (
-                      <p className="mt-3 text-sm leading-6 text-slate-700">
-                        <strong>Quote rule:</strong> {service.quoteRule}
-                      </p>
-                    ) : null}
-                    <p className="mt-3 text-xs leading-5 text-slate-600">
-                      If this does not match your signed agreement, continue
-                      only as a review request and contact Stonegate from Help.
-                    </p>
-                  </details>
-                ) : null}
-                {service?.baseOptions?.length ? (
-                  <label className="block" htmlFor="partner-book-base-option">
-                    <span className="text-sm font-semibold text-slate-700">
-                      Base service option
-                    </span>
-                    <select
-                      id="partner-book-base-option"
-                      value={form.tierKey}
-                      onChange={(event) =>
-                        update("tierKey", event.target.value)
-                      }
-                      className={partnerFieldClass}
-                      required
-                      aria-invalid={Boolean(fieldErrors["tierKey"])}
-                      aria-describedby={
-                        fieldErrors["tierKey"]
-                          ? "partner-book-base-option-error"
-                          : undefined
-                      }
-                    >
-                      <option value="">Choose a base option</option>
-                      {service.baseOptions.map((option) => (
-                        <option key={option.tierKey} value={option.tierKey}>
-                          {option.label}
-                          {option.price
-                            ? ` — ${formatMoney(option.price)}`
-                            : ""}
-                        </option>
-                      ))}
-                    </select>
-                    {fieldErrors["tierKey"] ? (
-                      <span
-                        id="partner-book-base-option-error"
-                        className="mt-1 block text-sm font-medium text-rose-700"
-                      >
-                        {fieldErrors["tierKey"]}
-                      </span>
-                    ) : null}
-                  </label>
-                ) : null}
-                {service?.addOns?.length ? (
-                  <details
-                    className="rounded-xl border border-slate-200 p-3"
-                    open={Boolean(fieldErrors["selectedAddOns"])}
-                  >
-                    <summary className="min-h-11 cursor-pointer font-semibold text-slate-800">
-                      Optional add-ons
-                      {Object.keys(form.addOnQuantities).length
-                        ? ` · ${Object.keys(form.addOnQuantities).length} selected`
-                        : ""}
-                    </summary>
-                    <fieldset
-                      className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
-                      aria-describedby={
-                        fieldErrors["selectedAddOns"]
-                          ? "partner-book-add-ons-error"
-                          : "partner-book-add-ons-help"
-                      }
-                    >
-                      <legend className="px-1 text-sm font-semibold text-slate-800">
-                        Optional add-ons
-                      </legend>
-                      <p
-                        id="partner-book-add-ons-help"
-                        className="mt-1 text-sm leading-6 text-slate-600"
-                      >
-                        Select the exact quantity needed. Your contracted unit
-                        price is shown when your role can view account rates.
-                      </p>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        {service.addOns.map((addOn) => {
-                          const quantity = form.addOnQuantities[addOn.key];
-                          const selected = quantity !== undefined;
-                          return (
-                            <div
-                              key={addOn.key}
-                              className={cn(
-                                "rounded-xl border bg-white p-4",
-                                selected
-                                  ? "border-primary-500 ring-1 ring-primary-200"
-                                  : "border-slate-200",
-                              )}
-                            >
-                              <label className="flex min-h-11 cursor-pointer items-start gap-3">
-                                <input
-                                  type="checkbox"
-                                  checked={selected}
-                                  onChange={(event) =>
-                                    updateAddOn(
-                                      addOn,
-                                      event.target.checked,
-                                      addOn.minimumQuantity,
-                                    )
-                                  }
-                                  className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                                />
-                                <span className="min-w-0 flex-1">
-                                  <span className="block font-semibold text-slate-950">
-                                    {addOn.label}
-                                  </span>
-                                  {addOn.detail ? (
-                                    <span className="mt-1 block text-sm leading-5 text-slate-600">
-                                      {addOn.detail}
-                                    </span>
-                                  ) : null}
-                                  <span className="mt-1 block text-xs font-semibold text-slate-700">
-                                    {addOn.unitPrice
-                                      ? `${formatMoney(addOn.unitPrice)} per ${addOn.unitLabel}`
-                                      : "Price confirmed during review"}
-                                    {addOn.requiresReview
-                                      ? " · Staff review required"
-                                      : ""}
-                                  </span>
-                                </span>
-                              </label>
-                              {selected ? (
-                                <label
-                                  className="mt-3 block"
-                                  htmlFor={`partner-book-add-on-${addOn.key}`}
-                                >
-                                  <span className="text-xs font-semibold text-slate-700">
-                                    Quantity ({addOn.unitLabel})
-                                  </span>
-                                  <input
-                                    id={`partner-book-add-on-${addOn.key}`}
-                                    type="number"
-                                    min={addOn.minimumQuantity}
-                                    max={addOn.maximumQuantity}
-                                    step="1"
-                                    inputMode="numeric"
-                                    value={quantity}
-                                    onChange={(event) =>
-                                      updateAddOn(
-                                        addOn,
-                                        true,
-                                        Number(event.target.value),
-                                      )
-                                    }
-                                    className={cn(partnerFieldClass, "mt-1")}
-                                  />
-                                </label>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-                      {fieldErrors["selectedAddOns"] ? (
-                        <p
-                          id="partner-book-add-ons-error"
-                          className="mt-3 text-sm font-medium text-rose-700"
-                        >
-                          {fieldErrors["selectedAddOns"]}
-                        </p>
-                      ) : null}
-                    </fieldset>
-                  </details>
-                ) : null}
-                <label className="block" htmlFor="partner-book-description">
-                  <span className="text-sm font-semibold text-slate-700">
-                    {personaPresentation.booking.descriptionLabel}
-                  </span>
-                  <textarea
-                    id="partner-book-description"
-                    value={form.description}
-                    onChange={(event) =>
-                      update("description", event.target.value)
-                    }
-                    rows={5}
-                    maxLength={4_000}
-                    className={partnerFieldClass}
-                    placeholder={
-                      personaPresentation.booking.descriptionPlaceholder
-                    }
-                    required
-                    aria-invalid={Boolean(fieldErrors["description"])}
-                    aria-describedby={
-                      fieldErrors["description"]
-                        ? "partner-book-description-error"
-                        : "partner-book-description-help"
-                    }
-                  />
-                  <span
-                    id="partner-book-description-help"
-                    className="mt-1 block text-xs text-slate-500"
-                  >
-                    A few clear details help us match the right crew, equipment,
-                    and arrival window without extra back-and-forth.
-                  </span>
-                  {fieldErrors["description"] ? (
-                    <span
-                      id="partner-book-description-error"
-                      className="mt-1 block text-sm font-medium text-rose-700"
-                    >
-                      {fieldErrors["description"]}
-                    </span>
-                  ) : null}
-                </label>
-                <details
-                  className="rounded-xl border border-slate-200 p-4"
-                  open={Object.keys(fieldErrors).some((key) =>
-                    key.startsWith("scope"),
-                  )}
-                >
-                  <summary className="min-h-11 cursor-pointer font-semibold text-slate-800">
-                    Special handling, heavy items, timing, or extra stops
-                  </summary>
-                  <div className="mt-4 space-y-4">
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <label htmlFor="partner-book-item-count">
-                        <span className="text-sm font-semibold text-slate-700">
-                          Approximate item count{" "}
-                          <span className="font-normal text-slate-500">
-                            (optional)
-                          </span>
-                        </span>
-                        <input
-                          id="partner-book-item-count"
-                          type="number"
-                          min="0"
-                          inputMode="numeric"
-                          value={form.itemCount}
-                          onChange={(event) =>
-                            update("itemCount", event.target.value)
-                          }
-                          className={partnerFieldClass}
-                        />
-                      </label>
-                      <label htmlFor="partner-book-volume">
-                        <span className="text-sm font-semibold text-slate-700">
-                          Estimated cubic yards{" "}
-                          <span className="font-normal text-slate-500">
-                            (optional)
-                          </span>
-                        </span>
-                        <input
-                          id="partner-book-volume"
-                          type="number"
-                          min="0"
-                          step="0.5"
-                          inputMode="decimal"
-                          value={form.volume}
-                          onChange={(event) =>
-                            update("volume", event.target.value)
-                          }
-                          className={partnerFieldClass}
-                        />
-                      </label>
-                    </div>
-                    <fieldset className="rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
-                      <legend className="px-1 text-sm font-semibold text-slate-900">
-                        Scope that needs Stonegate review
-                      </legend>
-                      <p className="mt-1 text-sm leading-6 text-slate-700">
-                        Check anything that may need special planning. This does
-                        not reject the request—it sends the saved scope to
-                        Stonegate for confirmation before a time is promised.
-                      </p>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white p-3">
-                          <input
-                            type="checkbox"
-                            checked={form.restrictedItems}
-                            onChange={(event) =>
-                              update("restrictedItems", event.target.checked)
-                            }
-                            className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                          />
-                          <span>
-                            <span className="block text-sm font-semibold text-slate-950">
-                              Potentially restricted or special-handling
-                              material
-                            </span>
-                            <span className="mt-1 block text-xs leading-5 text-slate-600">
-                              Examples include chemicals, paint, fuel,
-                              batteries, pressurized containers, or unknown
-                              material.
-                            </span>
-                          </span>
-                        </label>
-                        <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white p-3">
-                          <input
-                            type="checkbox"
-                            checked={form.nonStandard}
-                            onChange={(event) =>
-                              update("nonStandard", event.target.checked)
-                            }
-                            className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                          />
-                          <span>
-                            <span className="block text-sm font-semibold text-slate-950">
-                              Oversized, unusually heavy, or non-standard work
-                            </span>
-                            <span className="mt-1 block text-xs leading-5 text-slate-600">
-                              Select this when access, equipment, lifting,
-                              demolition, or scope is outside a typical pickup.
-                            </span>
-                          </span>
-                        </label>
-                      </div>
-                      <div className="mt-5 grid gap-5 lg:grid-cols-2">
-                        <fieldset>
-                          <legend className="text-sm font-semibold text-slate-900">
-                            Material disclosures
-                          </legend>
-                          <p className="mt-1 text-xs leading-5 text-slate-600">
-                            Select every category that may be present. Unknown
-                            material should be disclosed rather than guessed.
-                          </p>
-                          <div className="mt-2 grid gap-2">
-                            {PARTNER_HAZARD_OPTIONS.map((option) => (
-                              <label
-                                key={option.key}
-                                className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-amber-200 bg-white px-3 py-2"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={form.hazardCategories.includes(
-                                    option.key,
-                                  )}
-                                  onChange={(event) =>
-                                    update(
-                                      "hazardCategories",
-                                      event.target.checked
-                                        ? [...form.hazardCategories, option.key]
-                                        : form.hazardCategories.filter(
-                                            (key) => key !== option.key,
-                                          ),
-                                    )
-                                  }
-                                  className="h-5 w-5 rounded border-slate-300 text-primary-700"
-                                />
-                                <span className="text-sm text-slate-800">
-                                  {option.label}
-                                </span>
-                              </label>
-                            ))}
-                          </div>
-                        </fieldset>
-                        <fieldset>
-                          <legend className="text-sm font-semibold text-slate-900">
-                            Access or equipment needs
-                          </legend>
-                          <p className="mt-1 text-xs leading-5 text-slate-600">
-                            This helps Stonegate assign the correct crew,
-                            vehicle, and equipment before confirming the
-                            request.
-                          </p>
-                          <div className="mt-2 grid gap-2">
-                            {PARTNER_EQUIPMENT_OPTIONS.map((option) => (
-                              <label
-                                key={option.key}
-                                className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-amber-200 bg-white px-3 py-2"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={form.equipmentNeeds.includes(
-                                    option.key,
-                                  )}
-                                  onChange={(event) =>
-                                    update(
-                                      "equipmentNeeds",
-                                      event.target.checked
-                                        ? [...form.equipmentNeeds, option.key]
-                                        : form.equipmentNeeds.filter(
-                                            (key) => key !== option.key,
-                                          ),
-                                    )
-                                  }
-                                  className="h-5 w-5 rounded border-slate-300 text-primary-700"
-                                />
-                                <span className="text-sm text-slate-800">
-                                  {option.label}
-                                </span>
-                              </label>
-                            ))}
-                          </div>
-                        </fieldset>
-                      </div>
-                      <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                        <label htmlFor="partner-book-required-date">
-                          <span className="text-sm font-semibold text-slate-800">
-                            Must be completed by date{" "}
-                            <span className="font-normal text-slate-600">
-                              (optional)
-                            </span>
-                          </span>
-                          <input
-                            id="partner-book-required-date"
-                            type="date"
-                            value={form.requiredCompletionDate}
-                            onChange={(event) =>
-                              update(
-                                "requiredCompletionDate",
-                                event.target.value,
-                              )
-                            }
-                            className={partnerFieldClass}
-                          />
-                        </label>
-                        <label htmlFor="partner-book-required-time">
-                          <span className="text-sm font-semibold text-slate-800">
-                            Required completion time{" "}
-                            <span className="font-normal text-slate-600">
-                              (optional)
-                            </span>
-                          </span>
-                          <input
-                            id="partner-book-required-time"
-                            type="time"
-                            value={form.requiredCompletionTime}
-                            onChange={(event) =>
-                              update(
-                                "requiredCompletionTime",
-                                event.target.value,
-                              )
-                            }
-                            disabled={!form.requiredCompletionDate}
-                            className={partnerFieldClass}
-                          />
-                        </label>
-                      </div>
-                      <label className="mt-4 flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white p-3">
-                        <input
-                          type="checkbox"
-                          checked={form.multiStop}
-                          onChange={(event) =>
-                            update("multiStop", event.target.checked)
-                          }
-                          className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                        />
-                        <span>
-                          <span className="block text-sm font-semibold text-slate-950">
-                            This request has more than one pickup or service
-                            stop
-                          </span>
-                          <span className="mt-1 block text-xs leading-5 text-slate-600">
-                            Multi-stop work is reviewed before a time is
-                            promised.
-                          </span>
-                        </span>
-                      </label>
-                      {form.multiStop ? (
-                        <label
-                          className="mt-3 block"
-                          htmlFor="partner-book-multi-stop-details"
-                        >
-                          <span className="text-sm font-semibold text-slate-800">
-                            Stops and sequence
-                          </span>
-                          <textarea
-                            id="partner-book-multi-stop-details"
-                            value={form.multiStopDetails}
-                            onChange={(event) =>
-                              update("multiStopDetails", event.target.value)
-                            }
-                            rows={3}
-                            maxLength={1_000}
-                            className={partnerFieldClass}
-                            placeholder="List each stop, address or site name, and the required order."
-                          />
-                        </label>
-                      ) : null}
-                    </fieldset>
-                  </div>
-                </details>
-                <details
-                  className="rounded-xl border border-slate-200 p-4"
-                  open={Boolean(
-                    fieldErrors["billingContact"] || fieldErrors["commercial"],
-                  )}
-                >
-                  <summary className="min-h-11 cursor-pointer font-semibold text-slate-800">
-                    Work order, project, and billing details (optional)
-                  </summary>
-                  <div className="mt-4 space-y-4">
-                    <div className="grid gap-4 sm:grid-cols-3">
-                      <label htmlFor="partner-book-po">
-                        <span className="text-sm font-semibold text-slate-700">
-                          PO / work order{" "}
-                          <span className="font-normal text-slate-500">
-                            (optional)
-                          </span>
-                        </span>
-                        <input
-                          id="partner-book-po"
-                          value={form.poNumber}
-                          onChange={(event) =>
-                            update("poNumber", event.target.value)
-                          }
-                          maxLength={500}
-                          className={partnerFieldClass}
-                        />
-                      </label>
-                      <label htmlFor="partner-book-cost-center">
-                        <span className="text-sm font-semibold text-slate-700">
-                          Cost center{" "}
-                          <span className="font-normal text-slate-500">
-                            (optional)
-                          </span>
-                        </span>
-                        <input
-                          id="partner-book-cost-center"
-                          value={form.costCenter}
-                          onChange={(event) =>
-                            update("costCenter", event.target.value)
-                          }
-                          maxLength={500}
-                          className={partnerFieldClass}
-                        />
-                      </label>
-                      <label htmlFor="partner-book-project">
-                        <span className="text-sm font-semibold text-slate-700">
-                          Project / listing{" "}
-                          <span className="font-normal text-slate-500">
-                            (optional)
-                          </span>
-                        </span>
-                        <input
-                          id="partner-book-project"
-                          value={form.projectReference}
-                          onChange={(event) =>
-                            update("projectReference", event.target.value)
-                          }
-                          maxLength={500}
-                          className={partnerFieldClass}
-                        />
-                      </label>
-                    </div>
-                    <fieldset className="rounded-2xl border border-slate-200 p-4">
-                      <legend className="px-1 text-sm font-semibold text-slate-900">
-                        Billing contact{" "}
-                        <span className="font-normal text-slate-500">
-                          (optional)
-                        </span>
-                      </legend>
-                      <p className="mt-1 text-xs leading-5 text-slate-500">
-                        Add both fields when invoices or receipts for this job
-                        should go to a specific person.
-                      </p>
-                      <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                        <label htmlFor="partner-book-billing-name">
-                          <span className="text-sm font-semibold text-slate-700">
-                            Name
-                          </span>
-                          <input
-                            id="partner-book-billing-name"
-                            value={form.billingContactName}
-                            onChange={(event) =>
-                              update("billingContactName", event.target.value)
-                            }
-                            maxLength={200}
-                            autoComplete="name"
-                            className={partnerFieldClass}
-                            aria-invalid={Boolean(
-                              fieldErrors["billingContact"],
-                            )}
-                            aria-describedby={
-                              fieldErrors["billingContact"]
-                                ? "partner-book-billing-error"
-                                : undefined
-                            }
-                          />
-                        </label>
-                        <label htmlFor="partner-book-billing-email">
-                          <span className="text-sm font-semibold text-slate-700">
-                            Email
-                          </span>
-                          <input
-                            id="partner-book-billing-email"
-                            type="email"
-                            inputMode="email"
-                            autoComplete="email"
-                            value={form.billingContactEmail}
-                            onChange={(event) =>
-                              update("billingContactEmail", event.target.value)
-                            }
-                            maxLength={320}
-                            className={partnerFieldClass}
-                            aria-invalid={Boolean(
-                              fieldErrors["billingContact"],
-                            )}
-                            aria-describedby={
-                              fieldErrors["billingContact"]
-                                ? "partner-book-billing-error"
-                                : undefined
-                            }
-                          />
-                        </label>
-                      </div>
-                      {fieldErrors["billingContact"] ? (
-                        <p
-                          id="partner-book-billing-error"
-                          className="mt-3 text-sm font-medium text-rose-700"
-                        >
-                          {fieldErrors["billingContact"]}
-                        </p>
-                      ) : null}
-                    </fieldset>
-                  </div>
-                </details>
-              </div>
-            ) : null}
-
-            {step === 1 ? (
-              <details
-                open={
-                  !form.contactName ||
-                  (!form.contactPhone && !form.contactEmail) ||
-                  Boolean(
-                    fieldErrors["onSiteContact"] ||
-                      fieldErrors["contactMethod"],
-                  )
-                }
-                className="mt-5 rounded-xl border border-slate-200 p-4"
+              <div
+                className="grid gap-7 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] xl:gap-8"
+                data-service-details
               >
-                <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-slate-900">
-                  Contact and access details
-                  {form.contactName ? ` · ${form.contactName}` : ""}
-                </summary>
-                <div className="mt-4 space-y-5">
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <label
-                      className="sm:col-span-2"
-                      htmlFor="partner-book-contact-name"
-                    >
+                <div className="min-w-0 space-y-6">
+                  <div
+                    className={cn(
+                      "grid gap-5",
+                      service?.baseOptions?.length
+                        ? "sm:grid-cols-2"
+                        : "sm:max-w-md",
+                    )}
+                  >
+                    <label className="block" htmlFor="partner-book-service">
                       <span className="text-sm font-semibold text-slate-700">
-                        On-site contact name
+                        Service type
                       </span>
-                      <input
-                        id="partner-book-contact-name"
-                        autoComplete="name"
-                        value={form.contactName}
-                        onChange={(event) =>
-                          update("contactName", event.target.value)
-                        }
+                      <select
+                        id="partner-book-service"
+                        value={form.serviceKey}
+                        onChange={(event) => updateService(event.target.value)}
                         className={partnerFieldClass}
                         required
-                        aria-invalid={Boolean(fieldErrors["onSiteContact"])}
+                        aria-invalid={Boolean(fieldErrors["serviceKey"])}
                         aria-describedby={
-                          fieldErrors["onSiteContact"]
-                            ? "partner-book-contact-name-error"
+                          fieldErrors["serviceKey"]
+                            ? "partner-book-service-error"
                             : undefined
                         }
-                      />
+                      >
+                        <option value="">Choose a service</option>
+                        {services.map((item) => (
+                          <option
+                            key={item.key}
+                            value={item.key}
+                            disabled={!item.bookable}
+                          >
+                            {item.label}
+                            {!item.bookable ? " — configuration required" : ""}
+                          </option>
+                        ))}
+                      </select>
+                      {fieldErrors["serviceKey"] ? (
+                        <span
+                          id="partner-book-service-error"
+                          className="mt-1 block text-sm font-medium text-rose-700"
+                        >
+                          {fieldErrors["serviceKey"]}
+                        </span>
+                      ) : null}
                     </label>
-                    <label htmlFor="partner-book-contact-phone">
-                      <span className="text-sm font-semibold text-slate-700">
-                        Mobile phone
-                      </span>
-                      <input
-                        id="partner-book-contact-phone"
-                        type="tel"
-                        autoComplete="tel"
-                        inputMode="tel"
-                        value={form.contactPhone}
-                        onChange={(event) =>
-                          update("contactPhone", event.target.value)
-                        }
-                        className={partnerFieldClass}
-                        aria-invalid={Boolean(fieldErrors["contactMethod"])}
-                        aria-describedby={
-                          fieldErrors["contactMethod"]
-                            ? "partner-book-contact-method-error"
-                            : undefined
-                        }
-                      />
-                    </label>
-                    <label htmlFor="partner-book-contact-email">
-                      <span className="text-sm font-semibold text-slate-700">
-                        Email
-                      </span>
-                      <input
-                        id="partner-book-contact-email"
-                        type="email"
-                        autoComplete="email"
-                        inputMode="email"
-                        value={form.contactEmail}
-                        onChange={(event) =>
-                          update("contactEmail", event.target.value)
-                        }
-                        className={partnerFieldClass}
-                        aria-invalid={Boolean(fieldErrors["contactMethod"])}
-                        aria-describedby={
-                          fieldErrors["contactMethod"]
-                            ? "partner-book-contact-method-error"
-                            : undefined
-                        }
-                      />
-                    </label>
+                    {service?.baseOptions?.length ? (
+                      <label
+                        className="block"
+                        htmlFor="partner-book-base-option"
+                      >
+                        <span className="text-sm font-semibold text-slate-700">
+                          Base service option
+                        </span>
+                        <select
+                          id="partner-book-base-option"
+                          value={form.tierKey}
+                          onChange={(event) =>
+                            update("tierKey", event.target.value)
+                          }
+                          className={partnerFieldClass}
+                          required
+                          aria-invalid={Boolean(fieldErrors["tierKey"])}
+                          aria-describedby={
+                            fieldErrors["tierKey"]
+                              ? "partner-book-base-option-error"
+                              : undefined
+                          }
+                        >
+                          <option value="">Choose a base option</option>
+                          {service.baseOptions.map((option) => (
+                            <option key={option.tierKey} value={option.tierKey}>
+                              {option.label}
+                              {option.price
+                                ? ` — ${formatMoney(option.price)}`
+                                : ""}
+                            </option>
+                          ))}
+                        </select>
+                        {fieldErrors["tierKey"] ? (
+                          <span
+                            id="partner-book-base-option-error"
+                            className="mt-1 block text-sm font-medium text-rose-700"
+                          >
+                            {fieldErrors["tierKey"]}
+                          </span>
+                        ) : null}
+                      </label>
+                    ) : null}
                   </div>
-                  {fieldErrors["onSiteContact"] ? (
-                    <p
-                      id="partner-book-contact-name-error"
-                      className="text-sm font-medium text-rose-700"
-                    >
-                      {fieldErrors["onSiteContact"]}
-                    </p>
-                  ) : null}
-                  {fieldErrors["contactMethod"] ? (
-                    <p
-                      id="partner-book-contact-method-error"
-                      className="text-sm font-medium text-rose-700"
-                    >
-                      {fieldErrors["contactMethod"]}
-                    </p>
-                  ) : null}
-                  <fieldset className="rounded-2xl border border-slate-200 p-4">
-                    <legend className="px-1 text-sm font-semibold text-slate-900">
-                      Alternate on-site contact{" "}
-                      <span className="font-normal text-slate-500">
-                        (optional)
-                      </span>
-                    </legend>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">
-                      Add a backup person when the primary contact may not be
-                      available at arrival.
-                    </p>
-                    <div className="mt-3 grid gap-4 sm:grid-cols-3">
-                      <label htmlFor="partner-book-alternate-name">
-                        <span className="text-sm font-semibold text-slate-700">
-                          Name
-                        </span>
-                        <input
-                          id="partner-book-alternate-name"
-                          autoComplete="name"
-                          value={form.alternateContactName}
-                          onChange={(event) =>
-                            update("alternateContactName", event.target.value)
-                          }
-                          maxLength={200}
-                          className={partnerFieldClass}
-                        />
-                      </label>
-                      <label htmlFor="partner-book-alternate-phone">
-                        <span className="text-sm font-semibold text-slate-700">
-                          Phone
-                        </span>
-                        <input
-                          id="partner-book-alternate-phone"
-                          type="tel"
-                          autoComplete="tel"
-                          inputMode="tel"
-                          value={form.alternateContactPhone}
-                          onChange={(event) =>
-                            update("alternateContactPhone", event.target.value)
-                          }
-                          maxLength={50}
-                          className={partnerFieldClass}
-                        />
-                      </label>
-                      <label htmlFor="partner-book-alternate-email">
-                        <span className="text-sm font-semibold text-slate-700">
-                          Email
-                        </span>
-                        <input
-                          id="partner-book-alternate-email"
-                          type="email"
-                          autoComplete="email"
-                          inputMode="email"
-                          value={form.alternateContactEmail}
-                          onChange={(event) =>
-                            update("alternateContactEmail", event.target.value)
-                          }
-                          maxLength={320}
-                          className={partnerFieldClass}
-                        />
-                      </label>
-                    </div>
-                  </fieldset>
-                  <label className="block" htmlFor="partner-book-access">
+                  <label className="block" htmlFor="partner-book-description">
                     <span className="text-sm font-semibold text-slate-700">
-                      Access, parking, gate, or loading details{" "}
-                      <span className="font-normal text-slate-500">
-                        (optional)
-                      </span>
+                      Job description
                     </span>
                     <textarea
-                      id="partner-book-access"
-                      value={form.accessDetails}
+                      id="partner-book-description"
+                      value={form.description}
                       onChange={(event) =>
-                        update("accessDetails", event.target.value)
+                        update("description", event.target.value)
                       }
                       rows={4}
                       maxLength={4_000}
                       className={partnerFieldClass}
-                      placeholder="Gate code handoff, lockbox process, loading dock, elevator, parking, tenant notice, pets, or access hours."
-                    />
-                  </label>
-                  <label
-                    className="block"
-                    htmlFor="partner-book-crew-instructions"
-                  >
-                    <span className="text-sm font-semibold text-slate-700">
-                      Crew instructions{" "}
-                      <span className="font-normal text-slate-500">
-                        (optional)
-                      </span>
-                    </span>
-                    <textarea
-                      id="partner-book-crew-instructions"
-                      value={form.crewInstructions}
-                      onChange={(event) =>
-                        update("crewInstructions", event.target.value)
+                      placeholder="Example: Remove 12 empty pallets and two shelving units from the loading area."
+                      required
+                      aria-invalid={Boolean(fieldErrors["description"])}
+                      aria-describedby={
+                        fieldErrors["description"]
+                          ? "partner-book-description-error"
+                          : "partner-book-description-help"
                       }
-                      rows={3}
-                      maxLength={4_000}
-                      className={partnerFieldClass}
-                      placeholder="Anything the crew should do, avoid, verify, or document on site."
                     />
-                  </label>
-                </div>
-              </details>
-            ) : null}
-
-            {step === 1 ? (
-              <fieldset className="mt-5">
-                <legend className="text-base font-semibold text-slate-950">
-                  Photos and completion record
-                </legend>
-                <p className="mt-1 text-sm leading-6 text-slate-600">
-                  Choose the completion record once and it stays with the job.
-                  You can also attach current-condition or reference photos now.
-                </p>
-                {showPersonaSuggestions ? (
-                  <aside
-                    aria-labelledby="partner-persona-proof-heading"
-                    className="mt-4 rounded-2xl border border-primary-100 bg-primary-50/70 p-4"
-                  >
-                    <h3
-                      id="partner-persona-proof-heading"
-                      className="font-semibold text-slate-950"
+                    <span
+                      id="partner-book-description-help"
+                      className="mt-1 block text-xs text-slate-500"
                     >
-                      {personaPresentation.booking.proofHeading}
-                    </h3>
-                    <p className="mt-1 text-sm leading-6 text-slate-700">
-                      {personaPresentation.booking.proofLead}
-                    </p>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                      {personaPresentation.booking.proofPresets.map(
-                        (preset) => {
-                          const selected =
-                            form.proofBefore === preset.before > 0 &&
-                            form.proofBeforeCount ===
-                              Math.max(1, preset.before) &&
-                            form.proofAfter === preset.after > 0 &&
-                            form.proofAfterCount ===
-                              Math.max(1, preset.after) &&
-                            form.proofPackage === preset.package;
-                          return (
-                            <button
-                              key={preset.id}
-                              type="button"
-                              onClick={() => applyProofPreset(preset)}
-                              aria-pressed={selected}
-                              className={cn(
-                                "min-h-11 rounded-xl border bg-white p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
-                                selected
-                                  ? "border-primary-600 ring-1 ring-primary-200"
-                                  : "border-slate-200 hover:border-primary-300",
-                              )}
-                            >
-                              <span className="block font-semibold text-slate-950">
-                                Apply {preset.label}
-                              </span>
-                              <span className="mt-1 block text-sm leading-5 text-slate-600">
-                                {preset.description}
-                              </span>
-                            </button>
-                          );
-                        },
-                      )}
-                    </div>
-                    <p className="mt-3 text-xs leading-5 text-slate-600">
-                      Nothing is applied until you choose a preset. Use one to
-                      fill these options quickly.{" "}
-                      {"The controls below always override the suggestion."}
-                    </p>
-                    {personaFeedback ? (
-                      <p
-                        className="mt-2 text-sm font-medium text-primary-900"
-                        role="status"
-                        aria-live="polite"
+                      Include the items, approximate quantity, and work to be
+                      completed.
+                    </span>
+                    {fieldErrors["description"] ? (
+                      <span
+                        id="partner-book-description-error"
+                        className="mt-1 block text-sm font-medium text-rose-700"
                       >
-                        {personaFeedback}
-                      </p>
+                        {fieldErrors["description"]}
+                      </span>
                     ) : null}
-                  </aside>
-                ) : null}
-                <details className="mt-4 rounded-xl border border-slate-200 p-4">
-                  <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-slate-800">
-                    Before/after photo preferences
-                  </summary>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                    {[
-                      {
-                        key: "proofBefore" as const,
-                        countKey: "proofBeforeCount" as const,
-                        title: "Before photos",
-                        detail: "Document the starting condition.",
-                      },
-                      {
-                        key: "proofAfter" as const,
-                        countKey: "proofAfterCount" as const,
-                        title: "After photos",
-                        detail: "Document the completed work.",
-                      },
-                      {
-                        key: "proofPackage" as const,
-                        countKey: null,
-                        title: "Formal proof package",
-                        detail: "Request a shareable completion record.",
-                      },
-                    ].map((item) => (
-                      <div
-                        key={item.key}
-                        className={cn(
-                          "min-h-32 rounded-2xl border p-4",
-                          form[item.key]
-                            ? "border-primary-500 bg-primary-50"
-                            : "border-slate-200",
+                  </label>
+                  {showPersonaSuggestions ? (
+                    <aside
+                      aria-labelledby="partner-persona-scope-heading"
+                      className="rounded-2xl border border-primary-100 bg-primary-50/70 p-4 sm:p-5"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="max-w-2xl">
+                          <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-primary-700">
+                            <Sparkles className="h-4 w-4" aria-hidden="true" />
+                            {personaPresentation.label} scope guide
+                          </p>
+                          <h3
+                            id="partner-persona-scope-heading"
+                            className="mt-2 font-semibold text-slate-950"
+                          >
+                            {personaPresentation.booking.scopeHeading}
+                          </h3>
+                          <p className="mt-1 text-sm leading-6 text-slate-700">
+                            {personaPresentation.booking.scopeLead}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowPersonaSuggestions(false);
+                            setPersonaFeedback(null);
+                          }}
+                          className={cn(
+                            partnerSecondaryButtonClass,
+                            "min-h-11 px-3",
+                          )}
+                          aria-label="Dismiss persona booking suggestions"
+                        >
+                          <X className="h-4 w-4" aria-hidden="true" />
+                          Dismiss
+                        </button>
+                      </div>
+                      <ul className="mt-3 grid gap-x-6 gap-y-2 text-sm leading-5 text-slate-700 sm:grid-cols-2">
+                        {personaPresentation.booking.scopeChecklist.map(
+                          (item) => (
+                            <li key={item} className="flex gap-2">
+                              <Check
+                                className="mt-0.5 h-4 w-4 shrink-0 text-primary-700"
+                                aria-hidden="true"
+                              />
+                              <span>{item}</span>
+                            </li>
+                          ),
                         )}
+                      </ul>
+                      <p className="mt-3 text-xs leading-5 text-slate-600">
+                        Use this checklist if it saves time. It does not change
+                        your service, account access, or saved request.
+                      </p>
+                    </aside>
+                  ) : null}
+                </div>
+                <fieldset
+                  id="partner-book-photos"
+                  tabIndex={-1}
+                  disabled={advancing || availabilityLoading || submitting}
+                  className="min-w-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+                >
+                  {draft ? (
+                    <PartnerDraftPhotoUpload
+                      compact
+                      draftId={draft.id}
+                      canUpload={canUploadPhotos}
+                      onCountChange={setDraftPhotoCount}
+                      onPendingChange={setPendingPhotos}
+                      persona={persona}
+                    />
+                  ) : (
+                    <PartnerNotice tone="info">
+                      Photos will be available once your request is ready.
+                    </PartnerNotice>
+                  )}
+                </fieldset>
+                <div
+                  className="min-w-0 border-t border-slate-200 xl:col-span-2"
+                  aria-label="Additional request details"
+                >
+                  <PartnerBookingDetailsRow
+                    title="Contact and access"
+                    summary={contactDetailsSummary}
+                    validationErrors={fieldErrors}
+                    reveal={
+                      !form.contactName.trim() ||
+                      (!form.contactPhone.trim() &&
+                        !form.contactEmail.trim()) ||
+                      hasDetailsError("contact")
+                    }
+                  >
+                    <div className="space-y-5">
+                      <div className="grid gap-4 sm:grid-cols-3">
+                        <label htmlFor="partner-book-contact-name">
+                          <span className="text-sm font-semibold text-slate-700">
+                            On-site contact name
+                          </span>
+                          <input
+                            id="partner-book-contact-name"
+                            autoComplete="name"
+                            value={form.contactName}
+                            onChange={(event) =>
+                              update("contactName", event.target.value)
+                            }
+                            className={partnerFieldClass}
+                            required
+                            aria-invalid={Boolean(fieldErrors["onSiteContact"])}
+                            aria-describedby={
+                              fieldErrors["onSiteContact"]
+                                ? "partner-book-contact-name-error"
+                                : undefined
+                            }
+                          />
+                        </label>
+                        <label htmlFor="partner-book-contact-phone">
+                          <span className="text-sm font-semibold text-slate-700">
+                            Mobile phone
+                          </span>
+                          <input
+                            id="partner-book-contact-phone"
+                            type="tel"
+                            autoComplete="tel"
+                            inputMode="tel"
+                            value={form.contactPhone}
+                            onChange={(event) =>
+                              update("contactPhone", event.target.value)
+                            }
+                            className={partnerFieldClass}
+                            aria-invalid={Boolean(fieldErrors["contactMethod"])}
+                            aria-describedby={
+                              fieldErrors["contactMethod"]
+                                ? "partner-book-contact-method-error"
+                                : undefined
+                            }
+                          />
+                        </label>
+                        <label htmlFor="partner-book-contact-email">
+                          <span className="text-sm font-semibold text-slate-700">
+                            Email
+                          </span>
+                          <input
+                            id="partner-book-contact-email"
+                            type="email"
+                            autoComplete="email"
+                            inputMode="email"
+                            value={form.contactEmail}
+                            onChange={(event) =>
+                              update("contactEmail", event.target.value)
+                            }
+                            className={partnerFieldClass}
+                            aria-invalid={Boolean(fieldErrors["contactMethod"])}
+                            aria-describedby={
+                              fieldErrors["contactMethod"]
+                                ? "partner-book-contact-method-error"
+                                : undefined
+                            }
+                          />
+                        </label>
+                      </div>
+                      {fieldErrors["onSiteContact"] ? (
+                        <p
+                          id="partner-book-contact-name-error"
+                          className="text-sm font-medium text-rose-700"
+                        >
+                          {fieldErrors["onSiteContact"]}
+                        </p>
+                      ) : null}
+                      {fieldErrors["contactMethod"] ? (
+                        <p
+                          id="partner-book-contact-method-error"
+                          className="text-sm font-medium text-rose-700"
+                        >
+                          {fieldErrors["contactMethod"]}
+                        </p>
+                      ) : null}
+                      <fieldset className="border-t border-slate-100 pt-4">
+                        <legend className="px-1 text-sm font-semibold text-slate-900">
+                          Alternate on-site contact{" "}
+                          <span className="font-normal text-slate-500">
+                            (optional)
+                          </span>
+                        </legend>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">
+                          Add a backup person when the primary contact may not
+                          be available at arrival.
+                        </p>
+                        <div className="mt-3 grid gap-4 sm:grid-cols-3">
+                          <label htmlFor="partner-book-alternate-name">
+                            <span className="text-sm font-semibold text-slate-700">
+                              Name
+                            </span>
+                            <input
+                              id="partner-book-alternate-name"
+                              autoComplete="name"
+                              value={form.alternateContactName}
+                              onChange={(event) =>
+                                update(
+                                  "alternateContactName",
+                                  event.target.value,
+                                )
+                              }
+                              maxLength={200}
+                              className={partnerFieldClass}
+                            />
+                          </label>
+                          <label htmlFor="partner-book-alternate-phone">
+                            <span className="text-sm font-semibold text-slate-700">
+                              Phone
+                            </span>
+                            <input
+                              id="partner-book-alternate-phone"
+                              type="tel"
+                              autoComplete="tel"
+                              inputMode="tel"
+                              value={form.alternateContactPhone}
+                              onChange={(event) =>
+                                update(
+                                  "alternateContactPhone",
+                                  event.target.value,
+                                )
+                              }
+                              maxLength={50}
+                              className={partnerFieldClass}
+                            />
+                          </label>
+                          <label htmlFor="partner-book-alternate-email">
+                            <span className="text-sm font-semibold text-slate-700">
+                              Email
+                            </span>
+                            <input
+                              id="partner-book-alternate-email"
+                              type="email"
+                              autoComplete="email"
+                              inputMode="email"
+                              value={form.alternateContactEmail}
+                              onChange={(event) =>
+                                update(
+                                  "alternateContactEmail",
+                                  event.target.value,
+                                )
+                              }
+                              maxLength={320}
+                              className={partnerFieldClass}
+                            />
+                          </label>
+                        </div>
+                      </fieldset>
+                      <label className="block" htmlFor="partner-book-access">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Access, parking, gate, or loading details{" "}
+                          <span className="font-normal text-slate-500">
+                            (optional)
+                          </span>
+                        </span>
+                        <textarea
+                          id="partner-book-access"
+                          value={form.accessDetails}
+                          onChange={(event) =>
+                            update("accessDetails", event.target.value)
+                          }
+                          rows={2}
+                          maxLength={4_000}
+                          className={partnerFieldClass}
+                          placeholder="Parking, loading access, entry instructions, or access hours."
+                        />
+                      </label>
+                      <label
+                        className="block"
+                        htmlFor="partner-book-crew-instructions"
                       >
-                        <label className="flex cursor-pointer items-start gap-3">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Crew instructions{" "}
+                          <span className="font-normal text-slate-500">
+                            (optional)
+                          </span>
+                        </span>
+                        <textarea
+                          id="partner-book-crew-instructions"
+                          value={form.crewInstructions}
+                          onChange={(event) =>
+                            update("crewInstructions", event.target.value)
+                          }
+                          rows={3}
+                          maxLength={4_000}
+                          className={partnerFieldClass}
+                          placeholder="Anything the crew should do, avoid, verify, or document on site."
+                        />
+                      </label>
+                    </div>
+                  </PartnerBookingDetailsRow>
+                  <PartnerBookingDetailsRow
+                    title="Special requirements"
+                    summary={scopeDetailsSummary}
+                    validationErrors={fieldErrors}
+                    reveal={hasDetailsError("scope")}
+                    id="partner-book-scope"
+                  >
+                    <div className="space-y-4">
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <label htmlFor="partner-book-item-count">
+                          <span className="text-sm font-semibold text-slate-700">
+                            Approximate item count{" "}
+                            <span className="font-normal text-slate-500">
+                              (optional)
+                            </span>
+                          </span>
+                          <input
+                            id="partner-book-item-count"
+                            type="number"
+                            min="0"
+                            inputMode="numeric"
+                            value={form.itemCount}
+                            onChange={(event) =>
+                              update("itemCount", event.target.value)
+                            }
+                            className={partnerFieldClass}
+                          />
+                        </label>
+                        <label htmlFor="partner-book-volume">
+                          <span className="text-sm font-semibold text-slate-700">
+                            Estimated cubic yards{" "}
+                            <span className="font-normal text-slate-500">
+                              (optional)
+                            </span>
+                          </span>
+                          <input
+                            id="partner-book-volume"
+                            type="number"
+                            min="0"
+                            step="0.5"
+                            inputMode="decimal"
+                            value={form.volume}
+                            onChange={(event) =>
+                              update("volume", event.target.value)
+                            }
+                            className={partnerFieldClass}
+                          />
+                        </label>
+                      </div>
+                      <fieldset className="space-y-3 border-t border-slate-200 pt-4">
+                        <legend className="px-1 text-sm font-semibold text-slate-900">
+                          Handling and equipment
+                        </legend>
+                        <p className="mt-1 text-sm leading-6 text-slate-700">
+                          Select anything the crew needs to plan for.
+                        </p>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <label className="flex min-h-11 cursor-pointer items-start gap-3 py-2">
+                            <input
+                              type="checkbox"
+                              checked={form.restrictedItems}
+                              onChange={(event) =>
+                                update("restrictedItems", event.target.checked)
+                              }
+                              className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
+                            />
+                            <span>
+                              <span className="block text-sm font-semibold text-slate-950">
+                                Materials needing special handling
+                              </span>
+                              <span className="mt-1 block text-xs leading-5 text-slate-600">
+                                Examples include chemicals, paint, fuel,
+                                batteries, pressurized containers, or unknown
+                                material.
+                              </span>
+                            </span>
+                          </label>
+                          <label className="flex min-h-11 cursor-pointer items-start gap-3 py-2">
+                            <input
+                              type="checkbox"
+                              checked={form.nonStandard}
+                              onChange={(event) =>
+                                update("nonStandard", event.target.checked)
+                              }
+                              className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
+                            />
+                            <span>
+                              <span className="block text-sm font-semibold text-slate-950">
+                                Heavy items or unusual work
+                              </span>
+                              <span className="mt-1 block text-xs leading-5 text-slate-600">
+                                Select this when access, equipment, lifting,
+                                demolition, or scope is outside a typical
+                                pickup.
+                              </span>
+                            </span>
+                          </label>
+                        </div>
+                        <div className="mt-5 grid gap-5 lg:grid-cols-2">
+                          <fieldset>
+                            <legend className="text-sm font-semibold text-slate-900">
+                              Material disclosures
+                            </legend>
+                            <p className="mt-1 text-xs leading-5 text-slate-600">
+                              Select every category that may be present. Unknown
+                              material should be disclosed rather than guessed.
+                            </p>
+                            <div className="mt-2 grid gap-2">
+                              {PARTNER_HAZARD_OPTIONS.map((option) => (
+                                <label
+                                  key={option.key}
+                                  className="flex min-h-11 cursor-pointer items-center gap-3 py-1.5"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={form.hazardCategories.includes(
+                                      option.key,
+                                    )}
+                                    onChange={(event) =>
+                                      update(
+                                        "hazardCategories",
+                                        event.target.checked
+                                          ? [
+                                              ...form.hazardCategories,
+                                              option.key,
+                                            ]
+                                          : form.hazardCategories.filter(
+                                              (key) => key !== option.key,
+                                            ),
+                                      )
+                                    }
+                                    className="h-5 w-5 rounded border-slate-300 text-primary-700"
+                                  />
+                                  <span className="text-sm text-slate-800">
+                                    {option.label}
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          </fieldset>
+                          <fieldset>
+                            <legend className="text-sm font-semibold text-slate-900">
+                              Access or equipment needs
+                            </legend>
+                            <p className="mt-1 text-xs leading-5 text-slate-600">
+                              This helps Stonegate assign the correct crew,
+                              vehicle, and equipment before confirming the
+                              request.
+                            </p>
+                            <div className="mt-2 grid gap-2">
+                              {PARTNER_EQUIPMENT_OPTIONS.map((option) => (
+                                <label
+                                  key={option.key}
+                                  className="flex min-h-11 cursor-pointer items-center gap-3 py-1.5"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={form.equipmentNeeds.includes(
+                                      option.key,
+                                    )}
+                                    onChange={(event) =>
+                                      update(
+                                        "equipmentNeeds",
+                                        event.target.checked
+                                          ? [...form.equipmentNeeds, option.key]
+                                          : form.equipmentNeeds.filter(
+                                              (key) => key !== option.key,
+                                            ),
+                                      )
+                                    }
+                                    className="h-5 w-5 rounded border-slate-300 text-primary-700"
+                                  />
+                                  <span className="text-sm text-slate-800">
+                                    {option.label}
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          </fieldset>
+                        </div>
+                        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                          <label htmlFor="partner-book-required-date">
+                            <span className="text-sm font-semibold text-slate-800">
+                              Must be completed by date{" "}
+                              <span className="font-normal text-slate-600">
+                                (optional)
+                              </span>
+                            </span>
+                            <input
+                              id="partner-book-required-date"
+                              type="date"
+                              value={form.requiredCompletionDate}
+                              onChange={(event) =>
+                                update(
+                                  "requiredCompletionDate",
+                                  event.target.value,
+                                )
+                              }
+                              className={partnerFieldClass}
+                            />
+                          </label>
+                          <label htmlFor="partner-book-required-time">
+                            <span className="text-sm font-semibold text-slate-800">
+                              Required completion time{" "}
+                              <span className="font-normal text-slate-600">
+                                (optional)
+                              </span>
+                            </span>
+                            <input
+                              id="partner-book-required-time"
+                              type="time"
+                              value={form.requiredCompletionTime}
+                              onChange={(event) =>
+                                update(
+                                  "requiredCompletionTime",
+                                  event.target.value,
+                                )
+                              }
+                              disabled={!form.requiredCompletionDate}
+                              className={partnerFieldClass}
+                            />
+                          </label>
+                        </div>
+                        <label className="mt-4 flex min-h-11 cursor-pointer items-start gap-3 py-2">
                           <input
                             type="checkbox"
-                            checked={form[item.key]}
+                            checked={form.multiStop}
                             onChange={(event) =>
-                              update(item.key, event.target.checked)
+                              update("multiStop", event.target.checked)
                             }
                             className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
                           />
                           <span>
-                            <span className="block font-semibold text-slate-950">
-                              {item.title}
+                            <span className="block text-sm font-semibold text-slate-950">
+                              This request has more than one pickup or service
+                              stop
                             </span>
-                            <span className="mt-1 block text-sm leading-5 text-slate-600">
-                              {item.detail}
+                            <span className="mt-1 block text-xs leading-5 text-slate-600">
+                              Multi-stop work is reviewed before a time is
+                              promised.
                             </span>
                           </span>
                         </label>
-                        {item.countKey && form[item.key] ? (
-                          <label className="mt-3 block text-xs font-semibold text-slate-700">
-                            Minimum images
-                            <input
-                              type="number"
-                              min={1}
-                              max={20}
-                              step={1}
-                              inputMode="numeric"
-                              value={form[item.countKey]}
+                        {form.multiStop ? (
+                          <label
+                            className="mt-3 block"
+                            htmlFor="partner-book-multi-stop-details"
+                          >
+                            <span className="text-sm font-semibold text-slate-800">
+                              Stops and sequence
+                            </span>
+                            <textarea
+                              id="partner-book-multi-stop-details"
+                              value={form.multiStopDetails}
                               onChange={(event) =>
-                                update(
-                                  item.countKey,
-                                  Math.min(
-                                    20,
-                                    Math.max(
-                                      1,
-                                      Number(event.target.value) || 1,
-                                    ),
-                                  ),
-                                )
+                                update("multiStopDetails", event.target.value)
                               }
-                              className={cn(partnerFieldClass, "mt-1")}
+                              rows={3}
+                              maxLength={1_000}
+                              className={partnerFieldClass}
+                              placeholder="List each stop, address or site name, and the required order."
                             />
                           </label>
                         ) : null}
+                      </fieldset>
+                    </div>
+                  </PartnerBookingDetailsRow>
+                  <PartnerBookingDetailsRow
+                    title="Work order and billing"
+                    summary={commercialDetailsSummary}
+                    validationErrors={fieldErrors}
+                    reveal={hasDetailsError("commercial")}
+                  >
+                    <div className="space-y-4">
+                      <div className="grid gap-4 sm:grid-cols-3">
+                        <label htmlFor="partner-book-po">
+                          <span className="text-sm font-semibold text-slate-700">
+                            PO / work order{" "}
+                            <span className="font-normal text-slate-500">
+                              (optional)
+                            </span>
+                          </span>
+                          <input
+                            id="partner-book-po"
+                            value={form.poNumber}
+                            onChange={(event) =>
+                              update("poNumber", event.target.value)
+                            }
+                            maxLength={500}
+                            className={partnerFieldClass}
+                          />
+                        </label>
+                        <label htmlFor="partner-book-cost-center">
+                          <span className="text-sm font-semibold text-slate-700">
+                            Cost center{" "}
+                            <span className="font-normal text-slate-500">
+                              (optional)
+                            </span>
+                          </span>
+                          <input
+                            id="partner-book-cost-center"
+                            value={form.costCenter}
+                            onChange={(event) =>
+                              update("costCenter", event.target.value)
+                            }
+                            maxLength={500}
+                            className={partnerFieldClass}
+                          />
+                        </label>
+                        <label htmlFor="partner-book-project">
+                          <span className="text-sm font-semibold text-slate-700">
+                            Project / listing{" "}
+                            <span className="font-normal text-slate-500">
+                              (optional)
+                            </span>
+                          </span>
+                          <input
+                            id="partner-book-project"
+                            value={form.projectReference}
+                            onChange={(event) =>
+                              update("projectReference", event.target.value)
+                            }
+                            maxLength={500}
+                            className={partnerFieldClass}
+                          />
+                        </label>
                       </div>
-                    ))}
-                  </div>
-                </details>
-                {draft ? (
-                  <div className="mt-5">
-                    <PartnerDraftPhotoUpload
-                      draftId={draft.id}
-                      canUpload={canUploadPhotos}
-                      onCountChange={setDraftPhotoCount}
-                      persona={persona}
-                    />
-                  </div>
-                ) : (
-                  <PartnerNotice tone="info" className="mt-5">
-                    The photo uploader will appear as soon as your saved request
-                    is ready.
-                  </PartnerNotice>
-                )}
-              </fieldset>
+                      <fieldset className="border-t border-slate-100 pt-4">
+                        <legend className="px-1 text-sm font-semibold text-slate-900">
+                          Billing contact{" "}
+                          <span className="font-normal text-slate-500">
+                            (optional)
+                          </span>
+                        </legend>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">
+                          Add both fields when invoices or receipts for this job
+                          should go to a specific person.
+                        </p>
+                        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                          <label htmlFor="partner-book-billing-name">
+                            <span className="text-sm font-semibold text-slate-700">
+                              Name
+                            </span>
+                            <input
+                              id="partner-book-billing-name"
+                              value={form.billingContactName}
+                              onChange={(event) =>
+                                update("billingContactName", event.target.value)
+                              }
+                              maxLength={200}
+                              autoComplete="name"
+                              className={partnerFieldClass}
+                              aria-invalid={Boolean(
+                                fieldErrors["billingContact"],
+                              )}
+                              aria-describedby={
+                                fieldErrors["billingContact"]
+                                  ? "partner-book-billing-error"
+                                  : undefined
+                              }
+                            />
+                          </label>
+                          <label htmlFor="partner-book-billing-email">
+                            <span className="text-sm font-semibold text-slate-700">
+                              Email
+                            </span>
+                            <input
+                              id="partner-book-billing-email"
+                              type="email"
+                              inputMode="email"
+                              autoComplete="email"
+                              value={form.billingContactEmail}
+                              onChange={(event) =>
+                                update(
+                                  "billingContactEmail",
+                                  event.target.value,
+                                )
+                              }
+                              maxLength={320}
+                              className={partnerFieldClass}
+                              aria-invalid={Boolean(
+                                fieldErrors["billingContact"],
+                              )}
+                              aria-describedby={
+                                fieldErrors["billingContact"]
+                                  ? "partner-book-billing-error"
+                                  : undefined
+                              }
+                            />
+                          </label>
+                        </div>
+                        {fieldErrors["billingContact"] ? (
+                          <p
+                            id="partner-book-billing-error"
+                            className="mt-3 text-sm font-medium text-rose-700"
+                          >
+                            {fieldErrors["billingContact"]}
+                          </p>
+                        ) : null}
+                      </fieldset>
+                    </div>
+                  </PartnerBookingDetailsRow>
+                  <PartnerBookingDetailsRow
+                    title="Completion photos"
+                    summary={proofDetailsSummary}
+                    validationErrors={fieldErrors}
+                    reveal={hasDetailsError("proof")}
+                    id="partner-book-proof"
+                  >
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      {[
+                        {
+                          key: "proofBefore" as const,
+                          countKey: "proofBeforeCount" as const,
+                          title: "Before photos",
+                          detail: "Document the starting condition.",
+                        },
+                        {
+                          key: "proofAfter" as const,
+                          countKey: "proofAfterCount" as const,
+                          title: "After photos",
+                          detail: "Document the completed work.",
+                        },
+                        {
+                          key: "proofPackage" as const,
+                          countKey: null,
+                          title: "Completion report",
+                          detail: "Request a shareable completion record.",
+                        },
+                      ].map((item) => (
+                        <div
+                          key={item.key}
+                          className={cn(
+                            "min-h-32 rounded-2xl border p-4",
+                            form[item.key]
+                              ? "border-primary-500 bg-primary-50"
+                              : "border-slate-200",
+                          )}
+                        >
+                          <label className="flex cursor-pointer items-start gap-3">
+                            <input
+                              type="checkbox"
+                              checked={form[item.key]}
+                              onChange={(event) =>
+                                update(item.key, event.target.checked)
+                              }
+                              className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
+                            />
+                            <span>
+                              <span className="block font-semibold text-slate-950">
+                                {item.title}
+                              </span>
+                              <span className="mt-1 block text-sm leading-5 text-slate-600">
+                                {item.detail}
+                              </span>
+                            </span>
+                          </label>
+                          {item.countKey && form[item.key] ? (
+                            <label className="mt-3 block text-xs font-semibold text-slate-700">
+                              Number of photos
+                              <input
+                                type="number"
+                                min={1}
+                                max={20}
+                                step={1}
+                                inputMode="numeric"
+                                value={form[item.countKey]}
+                                onChange={(event) =>
+                                  update(
+                                    item.countKey,
+                                    Math.min(
+                                      20,
+                                      Math.max(
+                                        1,
+                                        Number(event.target.value) || 1,
+                                      ),
+                                    ),
+                                  )
+                                }
+                                className={cn(partnerFieldClass, "mt-1")}
+                              />
+                            </label>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                    {showPersonaSuggestions ? (
+                      <aside
+                        aria-labelledby="partner-persona-proof-heading"
+                        className="mt-4 rounded-2xl border border-primary-100 bg-primary-50/70 p-4"
+                      >
+                        <h3
+                          id="partner-persona-proof-heading"
+                          className="font-semibold text-slate-950"
+                        >
+                          {personaPresentation.booking.proofHeading}
+                        </h3>
+                        <p className="mt-1 text-sm leading-6 text-slate-700">
+                          {personaPresentation.booking.proofLead}
+                        </p>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          {personaPresentation.booking.proofPresets.map(
+                            (preset) => {
+                              const selected =
+                                form.proofBefore === preset.before > 0 &&
+                                form.proofBeforeCount ===
+                                  Math.max(1, preset.before) &&
+                                form.proofAfter === preset.after > 0 &&
+                                form.proofAfterCount ===
+                                  Math.max(1, preset.after) &&
+                                form.proofPackage === preset.package;
+                              return (
+                                <button
+                                  key={preset.id}
+                                  type="button"
+                                  onClick={() => applyProofPreset(preset)}
+                                  aria-pressed={selected}
+                                  className={cn(
+                                    "min-h-11 rounded-xl border bg-white p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
+                                    selected
+                                      ? "border-primary-600 ring-1 ring-primary-200"
+                                      : "border-slate-200 hover:border-primary-300",
+                                  )}
+                                >
+                                  <span className="block font-semibold text-slate-950">
+                                    Apply {preset.label}
+                                  </span>
+                                  <span className="mt-1 block text-sm leading-5 text-slate-600">
+                                    {preset.description}
+                                  </span>
+                                </button>
+                              );
+                            },
+                          )}
+                        </div>
+                        <p className="mt-3 text-xs leading-5 text-slate-600">
+                          Nothing is applied until you choose a preset. Use one
+                          to fill these options quickly.{" "}
+                          {"The controls below always override the suggestion."}
+                        </p>
+                        {personaFeedback ? (
+                          <p
+                            className="mt-2 text-sm font-medium text-primary-900"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            {personaFeedback}
+                          </p>
+                        ) : null}
+                      </aside>
+                    ) : null}
+                  </PartnerBookingDetailsRow>{" "}
+                  {service?.addOns?.length ? (
+                    <PartnerBookingDetailsRow
+                      title="Additional services"
+                      summary={
+                        Object.keys(form.addOnQuantities).length
+                          ? `${Object.keys(form.addOnQuantities).length} selected`
+                          : "Add to this request if needed"
+                      }
+                      validationErrors={fieldErrors}
+                      reveal={hasDetailsError("addons")}
+                      id="partner-book-add-ons"
+                    >
+                      <fieldset
+                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                        aria-describedby={
+                          fieldErrors["selectedAddOns"]
+                            ? "partner-book-add-ons-error"
+                            : "partner-book-add-ons-help"
+                        }
+                      >
+                        <legend className="px-1 text-sm font-semibold text-slate-800">
+                          Optional add-ons
+                        </legend>
+                        <p
+                          id="partner-book-add-ons-help"
+                          className="mt-1 text-sm leading-6 text-slate-600"
+                        >
+                          Select the exact quantity needed. Your contracted unit
+                          price is shown when your role can view account rates.
+                        </p>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          {service.addOns.map((addOn) => {
+                            const quantity = form.addOnQuantities[addOn.key];
+                            const selected = quantity !== undefined;
+                            return (
+                              <div
+                                key={addOn.key}
+                                className={cn(
+                                  "rounded-xl border bg-white p-4",
+                                  selected
+                                    ? "border-primary-500 ring-1 ring-primary-200"
+                                    : "border-slate-200",
+                                )}
+                              >
+                                <label className="flex min-h-11 cursor-pointer items-start gap-3">
+                                  <input
+                                    type="checkbox"
+                                    checked={selected}
+                                    onChange={(event) =>
+                                      updateAddOn(
+                                        addOn,
+                                        event.target.checked,
+                                        addOn.minimumQuantity,
+                                      )
+                                    }
+                                    className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
+                                  />
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block font-semibold text-slate-950">
+                                      {addOn.label}
+                                    </span>
+                                    {addOn.detail ? (
+                                      <span className="mt-1 block text-sm leading-5 text-slate-600">
+                                        {addOn.detail}
+                                      </span>
+                                    ) : null}
+                                    <span className="mt-1 block text-xs font-semibold text-slate-700">
+                                      {addOn.unitPrice
+                                        ? `${formatMoney(addOn.unitPrice)} per ${addOn.unitLabel}`
+                                        : "Price confirmed during review"}
+                                      {addOn.requiresReview
+                                        ? " · Staff review required"
+                                        : ""}
+                                    </span>
+                                  </span>
+                                </label>
+                                {selected ? (
+                                  <label
+                                    className="mt-3 block"
+                                    htmlFor={`partner-book-add-on-${addOn.key}`}
+                                  >
+                                    <span className="text-xs font-semibold text-slate-700">
+                                      Quantity ({addOn.unitLabel})
+                                    </span>
+                                    <input
+                                      id={`partner-book-add-on-${addOn.key}`}
+                                      type="number"
+                                      min={addOn.minimumQuantity}
+                                      max={addOn.maximumQuantity}
+                                      step="1"
+                                      inputMode="numeric"
+                                      value={quantity}
+                                      onChange={(event) =>
+                                        updateAddOn(
+                                          addOn,
+                                          true,
+                                          Number(event.target.value),
+                                        )
+                                      }
+                                      className={cn(partnerFieldClass, "mt-1")}
+                                    />
+                                  </label>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {fieldErrors["selectedAddOns"] ? (
+                          <p
+                            id="partner-book-add-ons-error"
+                            className="mt-3 text-sm font-medium text-rose-700"
+                          >
+                            {fieldErrors["selectedAddOns"]}
+                          </p>
+                        ) : null}
+                      </fieldset>
+                    </PartnerBookingDetailsRow>
+                  ) : null}
+                  {service?.agreement ? (
+                    <PartnerBookingDetailsRow
+                      title="Service and pricing"
+                      summary={service.agreement.label}
+                      validationErrors={fieldErrors}
+                      reveal={false}
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">
+                        Current account agreement
+                      </p>
+                      <h3
+                        id="partner-book-agreement-heading"
+                        className="mt-1 font-semibold text-slate-950"
+                      >
+                        {service.agreement.label}
+                      </h3>
+                      <p className="mt-1 text-sm leading-6 text-slate-700">
+                        {priceStateLabel(service.priceState)} ·{" "}
+                        {service.agreement.currency} · effective{" "}
+                        {formatDate(
+                          service.agreement.effectiveFrom.slice(0, 10),
+                          "UTC",
+                        )}
+                        {service.agreement.effectiveTo
+                          ? ` through ${formatDate(
+                              service.agreement.effectiveTo.slice(0, 10),
+                              "UTC",
+                            )}`
+                          : " with no recorded end date"}
+                      </p>
+                      {service.inclusions.length > 0 ? (
+                        <div className="mt-3">
+                          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                            Included
+                          </h4>
+                          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                            {service.inclusions.map((item) => (
+                              <li key={item}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                      {service.exclusions.length > 0 ? (
+                        <div className="mt-3">
+                          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                            Excluded or separately quoted
+                          </h4>
+                          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                            {service.exclusions.map((item) => (
+                              <li key={item}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                      {service.quoteRule ? (
+                        <p className="mt-3 text-sm leading-6 text-slate-700">
+                          <strong>Quote rule:</strong> {service.quoteRule}
+                        </p>
+                      ) : null}
+                      <p className="mt-3 text-xs leading-5 text-slate-600">
+                        If this does not match your signed agreement, continue
+                        only as a review request and contact Stonegate from
+                        Help.
+                      </p>
+                    </PartnerBookingDetailsRow>
+                  ) : null}
+                </div>
+              </div>
             ) : null}
 
             {step === 2 ? (
@@ -3632,9 +3742,65 @@ function PartnerBookingWizardSession({
                         {selectedBaseOption.label}
                       </dd>
                     ) : null}
-                    <dd className="mt-1 text-sm text-slate-600">
+                    <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-600">
                       {form.description}
                     </dd>
+                    {form.itemCount || form.volume ? (
+                      <dd className="mt-3 text-sm text-slate-700">
+                        {[
+                          form.itemCount ? `${form.itemCount} items` : null,
+                          form.volume ? `${form.volume} cubic yards` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </dd>
+                    ) : null}
+                    {form.hazardCategories.length > 0 ||
+                    form.equipmentNeeds.length > 0 ||
+                    form.requiredCompletionDate ||
+                    (form.multiStop && form.multiStopDetails) ? (
+                      <dd className="mt-3 space-y-2 border-t border-slate-200 pt-3 text-sm text-slate-700">
+                        {form.hazardCategories.length > 0 ? (
+                          <p>
+                            <strong>Materials: </strong>
+                            {PARTNER_HAZARD_OPTIONS.filter((option) =>
+                              form.hazardCategories.includes(option.key),
+                            )
+                              .map((option) => option.label)
+                              .join(", ")}
+                          </p>
+                        ) : null}
+                        {form.equipmentNeeds.length > 0 ? (
+                          <p>
+                            <strong>Equipment and access: </strong>
+                            {PARTNER_EQUIPMENT_OPTIONS.filter((option) =>
+                              form.equipmentNeeds.includes(option.key),
+                            )
+                              .map((option) => option.label)
+                              .join(", ")}
+                          </p>
+                        ) : null}
+                        {form.requiredCompletionDate ? (
+                          <p>
+                            <strong>Completion deadline requested: </strong>
+                            {formatDate(
+                              form.requiredCompletionDate,
+                              selectedTimezone,
+                            )}
+                            {form.requiredCompletionTime
+                              ? ` at ${form.requiredCompletionTime}`
+                              : ""}{" "}
+                            ({selectedTimezone})
+                          </p>
+                        ) : null}
+                        {form.multiStop && form.multiStopDetails ? (
+                          <p className="whitespace-pre-wrap break-words">
+                            <strong>Stops and sequence: </strong>
+                            {form.multiStopDetails}
+                          </p>
+                        ) : null}
+                      </dd>
+                    ) : null}
                     {selectedServiceAddOns.length ? (
                       <dd className="mt-3 border-t border-slate-200 pt-3 text-sm text-slate-700">
                         <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -3737,8 +3903,43 @@ function PartnerBookingWizardSession({
                       {form.contactName}
                     </dd>
                     <dd className="mt-1 text-sm text-slate-600">
-                      {form.contactPhone || form.contactEmail}
+                      {form.contactPhone}
                     </dd>
+                    {form.contactEmail ? (
+                      <dd className="mt-1 break-words text-sm text-slate-600">
+                        {form.contactEmail}
+                      </dd>
+                    ) : null}
+                    {form.alternateContactName ||
+                    form.alternateContactPhone ||
+                    form.alternateContactEmail ? (
+                      <dd className="mt-3 border-t border-slate-200 pt-3 text-sm text-slate-700">
+                        <span className="block font-semibold">
+                          Alternate contact
+                        </span>
+                        <span className="block">
+                          {form.alternateContactName}
+                        </span>
+                        <span className="block">
+                          {form.alternateContactPhone}
+                        </span>
+                        <span className="block break-words">
+                          {form.alternateContactEmail}
+                        </span>
+                      </dd>
+                    ) : null}
+                    {form.accessDetails ? (
+                      <dd className="mt-3 whitespace-pre-wrap break-words border-t border-slate-200 pt-3 text-sm text-slate-700">
+                        <strong className="block">Access instructions</strong>
+                        {form.accessDetails}
+                      </dd>
+                    ) : null}
+                    {form.crewInstructions ? (
+                      <dd className="mt-3 whitespace-pre-wrap break-words text-sm text-slate-700">
+                        <strong className="block">Crew instructions</strong>
+                        {form.crewInstructions}
+                      </dd>
+                    ) : null}
                   </div>
                   <div className="rounded-xl border border-slate-200 p-4">
                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -3853,9 +4054,9 @@ function PartnerBookingWizardSession({
                         .join(", ") || "No specific proof requested"}
                     </dd>
                     <dd className="mt-1 text-xs text-slate-500">
-                      {draftPhotoCount} reference photo
-                      {draftPhotoCount === 1 ? "" : "s"} attached to this
-                      request
+                      {draftPhotoCount === null
+                        ? "Photo attachments could not be checked. Return to Service details to try again."
+                        : `${draftPhotoCount} reference photo${draftPhotoCount === 1 ? "" : "s"} attached to this request`}
                     </dd>
                   </div>
                 </dl>
@@ -3952,7 +4153,9 @@ function PartnerBookingWizardSession({
                   ? "Saving address…"
                   : advancing
                     ? "Saving step…"
-                    : "Continue"}
+                    : step === 1
+                      ? "Continue to scheduling"
+                      : "Continue"}
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
               </button>
             ) : (

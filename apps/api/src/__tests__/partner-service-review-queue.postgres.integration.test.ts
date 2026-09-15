@@ -78,7 +78,7 @@ async function fixture(
       scopeSnapshot: {
         description: "Remove the sample cabinet.",
         crewInstructions: "Use loading area.",
-        accessDetails: "SECRET GATE 9876",
+        accessDetails: "Use the public loading entrance.",
         onSiteContact: { name: "Local Contact", phone: "4045550100" },
         scope: {
           quantity: 1,
@@ -289,12 +289,24 @@ suite("initial partner service review queue / real PostgreSQL", () => {
       { label: "quantity", value: "1" },
     ]);
     expect(detail!.request.proof).toEqual({ before: 2, after: 1 });
+    expect(detail!.request.partnerRequest?.accessDetails).toBe(
+      "Use the public loading entrance.",
+    );
     expect(detail!.request.canSchedule).toBe(true);
     expect(JSON.stringify(detail)).not.toMatch(
-      /SECRET|private-local-object|originalObjectKey|accessDetails|nestedProvider/u,
+      /SECRET|private-local-object|originalObjectKey|nestedProvider/u,
     );
     expect(await getPartnerServiceReview(randomUUID(), f.jobId)).toBeNull();
     expect(await getPartnerServiceReview(f.accountId, randomUUID())).toBeNull();
+    const restricted = await getPartnerServiceReview(f.accountId, f.jobId, {
+      financials: false,
+      photos: false,
+    });
+    expect(restricted!.request.photos).toEqual([]);
+    expect(restricted!.request.partnerRequest?.photos).toEqual({
+      count: 1,
+      detailPath: null,
+    });
   });
   it("binds cursor pagination to company filters and blocks scheduling before required approval", async () => {
     const f = await fixture("approval_needed");

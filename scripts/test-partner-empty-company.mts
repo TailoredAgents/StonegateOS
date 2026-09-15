@@ -536,7 +536,7 @@ for (const width of [1440, 375]) {
             "Local release test only: remove two empty boxes. No real service.",
           );
         await page
-          .getByRole("button", { name: "Continue", exact: true })
+          .getByRole("button", { name: "Continue to scheduling", exact: true })
           .click();
         await requestStep(page, "Scheduling");
         const preferred = new Date(Date.now() + 2 * 86_400_000)

@@ -7,6 +7,7 @@ const mockContactId = "22222222-2222-4222-8222-222222222222";
 let mockEnrichmentFailure = false;
 let mockIdentityReadCount = 0;
 let mockIdentityRows: CalendarCardIdentityRow[] = [];
+const mockPartnerRequestRead = jest.fn(() => Promise.resolve(new Map()));
 const mockCoreRow = {
   id: mockAppointmentId,
   contactId: mockContactId,
@@ -92,6 +93,10 @@ jest.mock("@/lib/eta-agent", () => ({
 jest.mock("@/lib/appointment-media", () => ({
   getAppointmentMediaSummaryMap: () => Promise.resolve(new Map()),
 }));
+jest.mock("@/lib/partner-request-details-store", () => ({
+  loadPartnerRequestDetailsForAppointments: (...args: unknown[]) =>
+    mockPartnerRequestRead(...args),
+}));
 jest.mock("@/lib/payment-ledger", () => ({
   getAppointmentPaymentSummaryMap: jest.fn(),
 }));
@@ -124,6 +129,7 @@ describe("calendar card identity feed", () => {
   beforeEach(() => {
     mockEnrichmentFailure = false;
     mockIdentityReadCount = 0;
+    mockPartnerRequestRead.mockClear();
     mockCoreRow.addressLine2 = "Building B, Unit 204";
     mockIdentityRows = [
       {
@@ -141,6 +147,10 @@ describe("calendar card identity feed", () => {
   it("projects partner identity once per job without exposing restricted payment data", async () => {
     const feed = await readFeed();
     expect(mockIdentityReadCount).toBe(1);
+    expect(mockPartnerRequestRead).toHaveBeenCalledWith([mockAppointmentId], {
+      financials: false,
+      photos: false,
+    });
     expect(feed.appointments).toHaveLength(1);
     expect(feed.appointments[0]).toMatchObject({
       appointmentId: mockAppointmentId,

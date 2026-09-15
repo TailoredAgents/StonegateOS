@@ -84,12 +84,16 @@ export function PartnerDraftPhotoUpload({
   draftId,
   canUpload,
   onCountChange,
+  onPendingChange,
   persona,
+  compact = false,
 }: {
   draftId: string;
   canUpload: boolean;
-  onCountChange: (count: number) => void;
+  onCountChange: (count: number | null) => void;
+  onPendingChange?: (pending: boolean) => void;
   persona?: string | null;
+  compact?: boolean;
 }) {
   const [state, setState] = React.useState<MediaState>("loading");
   const [loadError, setLoadError] = React.useState<string | null>(null);
@@ -112,6 +116,12 @@ export function PartnerDraftPhotoUpload({
   const finalizeOperationKeysRef = React.useRef(new Map<string, string>());
   const [uploadAttemptStarted, setUploadAttemptStarted] = React.useState(false);
 
+  React.useEffect(() => {
+    onPendingChange?.(
+      files.length > 0 || busy || preparingFiles || deletingId !== null,
+    );
+  }, [files.length, busy, preparingFiles, deletingId, onPendingChange]);
+
   const resetUploadAttempt = React.useCallback(() => {
     uploadOperationKeyRef.current = null;
     finalizeOperationKeysRef.current.clear();
@@ -124,6 +134,7 @@ export function PartnerDraftPhotoUpload({
       media: PartnerProofMedia[];
     }>(`booking-drafts/${draftId}/media`).catch(() => null);
     if (!result?.ok) {
+      onCountChange(null);
       const status = result?.response.status ?? 503;
       setState(
         status === 403
@@ -142,6 +153,7 @@ export function PartnerDraftPhotoUpload({
       !Array.isArray(result.data.media) ||
       !result.data.media.every(isPortalProofMedia)
     ) {
+      onCountChange(null);
       setState("error");
       setLoadError(
         withPortalSupportReference(
@@ -153,7 +165,9 @@ export function PartnerDraftPhotoUpload({
     }
     mediaRef.current = result.data.media;
     setMedia(result.data.media);
-    onCountChange(result.data.media.length);
+    onCountChange(
+      result.data.media.filter((item) => item.status === "ready").length,
+    );
     setState("ready");
     setLoadError(null);
     return true;
@@ -165,11 +179,8 @@ export function PartnerDraftPhotoUpload({
 
   const chooseFiles = async (list: FileList | null): Promise<void> => {
     const selected = Array.from(list ?? []);
+    if (!selected.length) return;
     if (selected.length > 10) {
-      setFiles([]);
-      setUploadProgress([]);
-      uploadClientIdsRef.current = [];
-      resetUploadAttempt();
       setMessage({
         tone: "error",
         text: "Choose no more than 10 photos in one batch.",
@@ -179,10 +190,6 @@ export function PartnerDraftPhotoUpload({
     }
     const invalid = selected.find((file) => !validFile(file));
     if (invalid) {
-      setFiles([]);
-      setUploadProgress([]);
-      uploadClientIdsRef.current = [];
-      resetUploadAttempt();
       setMessage({
         tone: "error",
         text: `${invalid.name} is not a supported image under 10 MB.`,
@@ -192,9 +199,19 @@ export function PartnerDraftPhotoUpload({
     }
     setPreparingFiles(true);
     setMessage(null);
-    const prepared = await Promise.all(
-      selected.map((file) => preparePortalImageForUpload(file)),
-    );
+    let prepared: Awaited<ReturnType<typeof preparePortalImageForUpload>>[];
+    try {
+      prepared = await Promise.all(
+        selected.map((file) => preparePortalImageForUpload(file)),
+      );
+    } catch {
+      setPreparingFiles(false);
+      setMessage({
+        tone: "error",
+        text: "These photos could not be prepared. Try selecting them again. Your previous selection is still here.",
+      });
+      return;
+    }
     const uploadFiles = prepared.map((item) => item.file);
     setFiles(uploadFiles);
     setUploadProgress(uploadFiles.map(() => 0));
@@ -354,14 +371,30 @@ export function PartnerDraftPhotoUpload({
       return;
     }
 
+    // Keep the retry identity and selected files until the saved photos are
+    // confirmed by a read. A successful transfer alone does not prove attachment.
+    const confirmed = await refresh();
+    setBusy(false);
+    if (
+      !confirmed ||
+      !result.data.intents.every((intent) =>
+        mediaRef.current.some(
+          (item) => item.id === intent.id && item.status === "ready",
+        ),
+      )
+    ) {
+      setMessage({
+        tone: "error",
+        text: "Your photos were transferred, but we could not confirm they were attached. Try again to check the same photos safely.",
+      });
+      return;
+    }
     setFiles([]);
     setUploadProgress([]);
     uploadClientIdsRef.current = [];
     resetUploadAttempt();
     setCaption("");
     if (inputRef.current) inputRef.current.value = "";
-    await refresh();
-    setBusy(false);
     setMessage({
       tone: "success",
       text: "Photos attached to this saved request.",
@@ -393,12 +426,97 @@ export function PartnerDraftPhotoUpload({
     );
     mediaRef.current = next;
     setMedia(next);
-    onCountChange(next.length);
+    onCountChange(next.filter((item) => item.status === "ready").length);
     setMessage({ tone: "success", text: "Photo removed from this request." });
   };
 
+  const heading = (
+    <div className={cn("flex items-start gap-3", compact && "gap-2")}>
+      {!compact ? (
+        <Camera
+          className="mt-0.5 h-5 w-5 shrink-0 text-primary-700"
+          aria-hidden="true"
+        />
+      ) : null}
+      <div>
+        <h3
+          id={`draft-photos-${draftId}`}
+          className="font-semibold text-slate-950"
+        >
+          {compact ? "Photos" : "Attach reference photos"}
+          {compact ? (
+            <span className="ml-2 text-sm font-normal text-slate-500">
+              Optional
+            </span>
+          ) : null}
+        </h3>
+        <p className="mt-1 text-sm leading-6 text-slate-600">
+          {compact
+            ? "Add photos of the items, work area, or access."
+            : "Show current conditions, items, access constraints, or an issue. Photos stay private and transfer to the job when you submit."}
+        </p>
+      </div>
+    </div>
+  );
+  const categoryField = (
+    <label htmlFor={`draft-photo-category-${draftId}`}>
+      <span className="text-sm font-semibold text-slate-700">
+        Photo category
+      </span>
+      <select
+        id={`draft-photo-category-${draftId}`}
+        value={category}
+        onChange={(event) => setCategory(event.target.value)}
+        disabled={busy || uploadAttemptStarted}
+        className={partnerFieldClass}
+      >
+        <option value="intake">Reference / intake</option>
+        <option value="before">Before condition</option>
+        <option value="issue">Issue or access concern</option>
+      </select>
+    </label>
+  );
+  const captionField = (
+    <label
+      className={compact ? undefined : "sm:col-span-2"}
+      htmlFor={`draft-photo-caption-${draftId}`}
+    >
+      <span className="text-sm font-semibold text-slate-700">
+        Batch note{" "}
+        <span className="font-normal text-slate-500">(optional)</span>
+      </span>
+      <input
+        id={`draft-photo-caption-${draftId}`}
+        value={caption}
+        onChange={(event) => setCaption(event.target.value)}
+        disabled={busy || uploadAttemptStarted}
+        maxLength={500}
+        className={partnerFieldClass}
+        placeholder="What should the crew notice in these photos?"
+      />
+    </label>
+  );
+  const fileInput = (
+    <input
+      ref={inputRef}
+      id={`draft-photo-files-${draftId}`}
+      type="file"
+      multiple
+      accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
+      onChange={(event) => void chooseFiles(event.target.files)}
+      disabled={busy || preparingFiles}
+      aria-label={compact ? "Photos" : undefined}
+      tabIndex={compact ? -1 : undefined}
+      className={
+        compact
+          ? "sr-only"
+          : `${partnerFieldClass} file:mr-3 file:rounded-lg file:border-0 file:bg-primary-50 file:px-3 file:py-2 file:font-semibold file:text-primary-800`
+      }
+    />
+  );
+
   if (state === "loading") {
-    return (
+    const loading = (
       <div
         className="flex min-h-24 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-sm text-slate-600"
         role="status"
@@ -410,9 +528,20 @@ export function PartnerDraftPhotoUpload({
         Loading attached photos…
       </div>
     );
+    return compact ? (
+      <section
+        aria-labelledby={`draft-photos-${draftId}`}
+        className="space-y-3"
+      >
+        {heading}
+        {loading}
+      </section>
+    ) : (
+      loading
+    );
   }
-  if (state !== "ready" && media.length === 0) {
-    return (
+  if (state !== "ready" && media.length === 0 && files.length === 0) {
+    const error = (
       <PartnerNotice tone={state === "error" ? "error" : "warning"}>
         {loadError ??
           (state === "forbidden"
@@ -429,31 +558,29 @@ export function PartnerDraftPhotoUpload({
         </button>
       </PartnerNotice>
     );
+    return compact ? (
+      <section
+        aria-labelledby={`draft-photos-${draftId}`}
+        className="space-y-3"
+      >
+        {heading}
+        {error}
+      </section>
+    ) : (
+      error
+    );
   }
 
   return (
     <section
       aria-labelledby={`draft-photos-${draftId}`}
-      className="rounded-2xl border border-primary-200 bg-primary-50/40 p-4 sm:p-5"
+      className={
+        compact
+          ? undefined
+          : "rounded-2xl border border-primary-200 bg-primary-50/40 p-4 sm:p-5"
+      }
     >
-      <div className="flex items-start gap-3">
-        <Camera
-          className="mt-0.5 h-5 w-5 shrink-0 text-primary-700"
-          aria-hidden="true"
-        />
-        <div>
-          <h3
-            id={`draft-photos-${draftId}`}
-            className="font-semibold text-slate-950"
-          >
-            Attach reference photos
-          </h3>
-          <p className="mt-1 text-sm leading-6 text-slate-600">
-            Show current conditions, items, access constraints, or an issue.
-            Photos stay private and transfer to the job when you submit.
-          </p>
-        </div>
-      </div>
+      {heading}
       {message ? (
         <PartnerNotice tone={message.tone} className="mt-4">
           {message.text}
@@ -471,104 +598,141 @@ export function PartnerDraftPhotoUpload({
           </button>
         </PartnerNotice>
       ) : null}
-      {canUpload && state === "ready" ? (
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <label htmlFor={`draft-photo-category-${draftId}`}>
-            <span className="text-sm font-semibold text-slate-700">
-              Photo category
-            </span>
-            <select
-              id={`draft-photo-category-${draftId}`}
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
-              disabled={busy || uploadAttemptStarted}
-              className={partnerFieldClass}
-            >
-              <option value="intake">Reference / intake</option>
-              <option value="before">Before condition</option>
-              <option value="issue">Issue or access concern</option>
-            </select>
-          </label>
-          <label htmlFor={`draft-photo-files-${draftId}`}>
-            <span className="text-sm font-semibold text-slate-700">Photos</span>
-            <input
-              ref={inputRef}
-              id={`draft-photo-files-${draftId}`}
-              type="file"
-              multiple
-              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
-              onChange={(event) => void chooseFiles(event.target.files)}
-              disabled={busy || preparingFiles}
-              className={`${partnerFieldClass} file:mr-3 file:rounded-lg file:border-0 file:bg-primary-50 file:px-3 file:py-2 file:font-semibold file:text-primary-800`}
-            />
-          </label>
-          <label
-            className="sm:col-span-2"
-            htmlFor={`draft-photo-caption-${draftId}`}
-          >
-            <span className="text-sm font-semibold text-slate-700">
-              Batch note{" "}
-              <span className="font-normal text-slate-500">(optional)</span>
-            </span>
-            <input
-              id={`draft-photo-caption-${draftId}`}
-              value={caption}
-              onChange={(event) => setCaption(event.target.value)}
-              disabled={busy || uploadAttemptStarted}
-              maxLength={500}
-              className={partnerFieldClass}
-              placeholder="What should the crew notice in these photos?"
-            />
-          </label>
-          <div className="sm:col-span-2">
-            <p className="text-xs leading-5 text-slate-500">
-              JPEG, PNG, WebP, HEIC, or HEIF. Up to 10 photos per batch and 10
-              MB each.
-            </p>
-            {uploadAttemptStarted && !busy ? (
-              <p className="mt-1 text-xs leading-5 text-slate-600">
-                Retry keeps this batch’s files, category, and note unchanged so
-                already-uploaded photos can resume safely. Choose files again to
-                start a new batch.
+      {canUpload && (state === "ready" || files.length > 0) ? (
+        <div
+          className={
+            compact ? "mt-3 space-y-3" : "mt-4 grid gap-4 sm:grid-cols-2"
+          }
+        >
+          {compact ? (
+            <div className="flex min-h-[88px] flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div>
+                <button
+                  type="button"
+                  onClick={() => inputRef.current?.click()}
+                  disabled={busy || preparingFiles}
+                  className={partnerSecondaryButtonClass}
+                >
+                  <Camera className="h-4 w-4" aria-hidden="true" />
+                  {files.length ? "Choose different photos" : "Add photos"}
+                </button>
+                {fileInput}
+              </div>
+              <p className="text-xs leading-5 text-slate-500">
+                JPEG, PNG, WebP, HEIC/HEIF · Up to 10 photos, 10 MB each
+                <span className="block">
+                  PDF uploads are not available yet.
+                </span>
               </p>
-            ) : null}
-            {files.length ? (
-              <>
-                <p className="mt-1 text-sm text-slate-700">
-                  {files.length} photo{files.length === 1 ? "" : "s"} selected
+            </div>
+          ) : (
+            <>
+              {categoryField}
+              <label htmlFor={`draft-photo-files-${draftId}`}>
+                <span className="text-sm font-semibold text-slate-700">
+                  Photos
+                </span>
+                {fileInput}
+              </label>
+              {captionField}
+            </>
+          )}
+          {!compact || files.length > 0 || preparingFiles ? (
+            <div className="sm:col-span-2">
+              {!compact ? (
+                <p className="text-xs leading-5 text-slate-500">
+                  JPEG, PNG, WebP, HEIC, or HEIF. Up to 10 photos per batch and
+                  10 MB each.
+                  <span className="block">
+                    PDF uploads are not available yet.
+                  </span>
                 </p>
-                <PartnerSelectedPhotoPreviews
-                  files={files}
-                  clientIds={uploadClientIdsRef.current}
-                  progress={uploadProgress}
-                  label="Selected booking photo previews and upload progress"
-                />
-              </>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => void upload()}
-              disabled={busy || preparingFiles || !files.length}
-              className={cn(partnerPrimaryButtonClass, "mt-3 w-full sm:w-auto")}
-              data-partner-analytics="draft_photo_upload"
-            >
-              {busy || preparingFiles ? (
-                <LoaderCircle
-                  className="h-4 w-4 animate-spin motion-reduce:animate-none"
-                  aria-hidden="true"
-                />
-              ) : (
-                <Upload className="h-4 w-4" aria-hidden="true" />
-              )}
-              {preparingFiles
-                ? "Preparing photos…"
-                : busy
-                  ? "Uploading…"
-                  : uploadAttemptStarted
-                    ? "Retry photos"
-                    : "Attach photos"}
-            </button>
-          </div>
+              ) : null}
+              {uploadAttemptStarted && !busy ? (
+                <p className="mt-1 text-xs leading-5 text-slate-600">
+                  Retry keeps this batch’s files, category, and note unchanged
+                  so already-uploaded photos can resume safely. Choose files
+                  again to start a new batch.
+                </p>
+              ) : null}
+              {files.length ? (
+                <>
+                  <p className="mt-1 text-sm text-slate-700">
+                    {files.length} photo{files.length === 1 ? "" : "s"} selected
+                    {busy ? " · Uploading" : " · Not attached yet"}
+                  </p>
+                  <PartnerSelectedPhotoPreviews
+                    files={files}
+                    clientIds={uploadClientIdsRef.current}
+                    progress={uploadProgress}
+                    label="Selected booking photo previews and upload progress"
+                  />
+                  {compact ? (
+                    <details className="mt-3 border-t border-slate-200 pt-1">
+                      <summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold text-slate-700">
+                        Photo details (optional)
+                        {category !== "intake" || caption.trim() ? (
+                          <span className="ml-2 font-normal text-slate-500">
+                            Details added
+                          </span>
+                        ) : null}
+                      </summary>
+                      <div className="grid gap-3 pb-2 sm:grid-cols-2">
+                        {categoryField}
+                        {captionField}
+                      </div>
+                    </details>
+                  ) : null}
+                </>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void upload()}
+                disabled={busy || preparingFiles || !files.length}
+                className={cn(
+                  partnerPrimaryButtonClass,
+                  "mt-3 w-full sm:w-auto",
+                )}
+                data-partner-analytics="draft_photo_upload"
+              >
+                {busy || preparingFiles ? (
+                  <LoaderCircle
+                    className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Upload className="h-4 w-4" aria-hidden="true" />
+                )}
+                {preparingFiles
+                  ? "Preparing photos…"
+                  : busy
+                    ? "Uploading…"
+                    : uploadAttemptStarted
+                      ? "Retry photos"
+                      : "Attach photos"}
+              </button>
+              {files.length > 0 && !busy && !preparingFiles ? (
+                <button
+                  type="button"
+                  className={cn(
+                    partnerSecondaryButtonClass,
+                    "mt-3 w-full sm:ml-2 sm:w-auto",
+                  )}
+                  onClick={() => {
+                    setFiles([]);
+                    setUploadProgress([]);
+                    uploadClientIdsRef.current = [];
+                    resetUploadAttempt();
+                    setCaption("");
+                    setMessage(null);
+                    if (inputRef.current) inputRef.current.value = "";
+                  }}
+                >
+                  Clear selection
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : (
         <PartnerNotice tone="info" className="mt-4">
@@ -614,6 +778,13 @@ export function PartnerDraftPhotoUpload({
                   <p className="mt-1 text-xs text-slate-500">
                     {formatBytes(item.byteSize)}
                   </p>
+                  {item.status !== "ready" ? (
+                    <p className="mt-1 text-xs font-medium text-amber-800">
+                      {item.status === "failed"
+                        ? "Upload needs retry"
+                        : "Attachment not finished"}
+                    </p>
+                  ) : null}
                   {item.caption ? (
                     <p className="mt-2 text-sm leading-5 text-slate-600">
                       {item.caption}
@@ -658,7 +829,7 @@ export function PartnerDraftPhotoUpload({
             );
           })}
         </ul>
-      ) : (
+      ) : compact ? null : (
         <p className="mt-4 text-sm leading-6 text-slate-600">
           No photos attached yet. This is optional unless your account’s service
           rules require them.
