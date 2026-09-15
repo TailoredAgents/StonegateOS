@@ -214,6 +214,7 @@ import {
   queuePartnerBillingDisputeNotification,
 } from "@/lib/partner-notification-delivery";
 import { arePartnerPortalApplicantNotificationsEnabled } from "@/lib/partner-portal-feature-flags";
+import { processOpenAiAdsConversionOutbox } from "@/lib/openai-ads-outbox";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -3709,6 +3710,8 @@ async function handleOutboxEvent(
   event: OutboxEventRecord,
 ): Promise<OutboxOutcome> {
   switch (event.type) {
+    case "ads.openai.conversion":
+      return processOpenAiAdsConversionOutbox(event.payload);
     case "partner.bulk_import.process": {
       const payload = isRecord(event.payload) ? event.payload : {};
       const accountId = payload["accountId"], importId = payload["importId"];

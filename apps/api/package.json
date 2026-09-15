@@ -37,6 +37,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@jest/globals": "29.7.0",
     "@myst-os/config": "workspace:*",
     "@types/luxon": "^3.3.4",
     "@types/node": "^20",

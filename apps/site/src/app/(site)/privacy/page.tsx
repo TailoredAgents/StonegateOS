@@ -1,3 +1,5 @@
+import { OpenAiAdsPrivacyPreference } from "@/components/OpenAiAdsPrivacyPreference";
+
 export const metadata = {
   title: "Privacy Policy | Stonegate Junk Removal",
   description: "How Stonegate Junk Removal collects, uses, and shares personal information."
@@ -62,6 +64,23 @@ export default function PrivacyPolicyPage() {
           </li>
         </ul>
         <p>We do not sell your personal information.</p>
+
+        <h2>ChatGPT advertising measurement</h2>
+        <p>
+          We use OpenAI&apos;s ChatGPT advertising measurement to understand which ads lead to visits,
+          confirmed bookings, and phone inquiries. On public website pages, this can use an ad-click
+          identifier and a browser identifier stored in first-party cookies. We may connect these
+          identifiers to your service request and report a confirmed booking or qualifying phone inquiry
+          from our server. Matching may also use one-way hashed versions of your phone number or email
+          address. A click on a phone link is measured separately from an actual inquiry.
+          We do not include your service notes, photos, or private quote links in these events.
+        </p>
+        <p>
+          ChatGPT ad measurement honors this browser&apos;s Do Not Track and Global Privacy Control
+          signals. You can also change your preference below. Website attribution is retained in this
+          browser for up to 30 days; service records follow the retention policy below.
+        </p>
+        <OpenAiAdsPrivacyPreference />
 
         <h2>Data retention</h2>
         <p>

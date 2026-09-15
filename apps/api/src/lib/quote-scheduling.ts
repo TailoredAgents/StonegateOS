@@ -1,5 +1,6 @@
 import { DateTime } from "luxon";
 import crypto from "node:crypto";
+import { enqueueOpenAiAdsBooking } from "@/lib/openai-ads-capture";
 import {
   and,
   desc,
@@ -1054,6 +1055,15 @@ export async function bookAcceptedQuote(input: {
         "The appointment could not be created.",
       );
     }
+
+    await enqueueOpenAiAdsBooking(tx, {
+      appointmentId: appointment.id,
+      status: appointment.status,
+      startAt: start,
+      contactId: current.contactId,
+      leadId: linkedLead?.id,
+      now,
+    });
 
     if (customerNote) {
       await tx.insert(appointmentNotes).values({

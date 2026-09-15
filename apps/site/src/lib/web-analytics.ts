@@ -1,3 +1,5 @@
+import { withOpenAiAdsUtm } from "./openai-ads";
+
 type WebDevice = "mobile" | "desktop" | "tablet" | "unknown";
 
 export type WebEventName =
@@ -212,16 +214,21 @@ function touchVisit(): void {
 function getOrCreateUtm(): UTM | undefined {
   if (typeof window === "undefined") return undefined;
   const current = readUtmFromLocation();
-  if (current) {
-    try {
-      sessionStorage.setItem(UTM_STORAGE_KEY, JSON.stringify(current));
-    } catch {
-      // ignore
-    }
-    return current;
-  }
   const stored = safeJsonParse<UTM>(sessionStorage.getItem(UTM_STORAGE_KEY));
-  if (stored && Object.keys(stored).length) return stored;
+  const landingClick = new URLSearchParams(window.location.search).has(
+    "oppref",
+  );
+  const attributed = withOpenAiAdsUtm(
+    current ?? (landingClick ? {} : (stored ?? {})),
+  );
+  if (Object.keys(attributed).length) {
+    try {
+      sessionStorage.setItem(UTM_STORAGE_KEY, JSON.stringify(attributed));
+    } catch {
+      /* ignore */
+    }
+    return attributed;
+  }
   return undefined;
 }
 
