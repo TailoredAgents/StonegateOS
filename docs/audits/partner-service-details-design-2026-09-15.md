@@ -21,3 +21,7 @@ Status: working local design preview, ready for user review. This design has not
 - The guarded local API omits external delivery configuration and does not dispatch the local outbox. Its general readiness endpoint reports those preexisting local omissions; database, migration and portal readiness are healthy. No production account, provider configuration or customer work was changed.
 
 The required portal workflow now includes the Service details browser checks for a future deployment. No production release or authenticated LandL write journey is claimed by this design preview.
+
+Review images are retained locally under `artifacts/partner-service-details/`: `desktop.png`, `phone.png`, and the corresponding `-contact.png` expanded views. They show synthetic companies created through the normal local UI. Phone capture keeps a 375px width and temporarily matches viewport height to document height so fixed navigation appears at the bottom of the full-page image; the 1000px testing viewport is restored afterward.
+
+An additional presentation run attempted to reuse the same synthetic company name and correctly hit account-name deduplication. Repeating the phone scenario with a distinct sample company passed. Both original desktop/phone journeys and the final presentation journeys passed; no product change was made for the fixture collision. Local test processes and containers were stopped after capture, with screenshots, logs and disposable database data retained.
