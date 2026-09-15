@@ -54,13 +54,111 @@ Dedicated tracking numbers or a call-attribution provider are needed to close
 that gap. A connected-call duration threshold measures an inquiry proxy, not a
 staff determination of lead quality; known voicemail/machine answers are excluded.
 
-The existing Twilio configuration must supply connected-call evidence: either
-an explicit human answer or a completed bridged dial leg. Parent call duration
-alone does not qualify. Signed inbound dial-action callbacks can be sent to
-`/api/webhooks/twilio/dial-action?mode=inbound`; inspect the existing TwiML flow
-before changing its action URL, since that endpoint controls what happens after
-the bridged call ends. The number's ordinary inbound status callback remains
-`/api/webhooks/twilio/call-status?mode=inbound&leg=inbound`.
+Parent call duration alone does not qualify. The ready-to-activate Studio
+configuration below supplies the completed dial leg and its duration. Studio
+considers an answering machine or voicemail to be connected, and this existing
+forwarding widget does not expose machine detection. Consequently, this setup
+cannot exclude an unrecognized voicemail connection that exceeds the threshold.
+See [Connect Call To behavior](https://www.twilio.com/docs/studio/widget-library/connect-call).
+
+## Twilio Studio activation
+
+Production configuration verified on September 15, 2026:
+
+- The business number ending in **2631** routes incoming calls to Studio Flow
+  `FWae6ddf7a2fa835025d6aad8d79ec2e8d`.
+- Published revision **72** runs `trigger` → `forward_call`. Its
+  `callCompleted` transition currently ends the Flow.
+- `forward_call` records calls and has a 30-second ringing timeout.
+- Revisions **73–75** are unpublished drafts. Build the activation candidate
+  from published revision 72 and retain the drafts separately.
+- The number's existing status callback is
+  `https://stonegate-api.onrender.com/api/webhooks/twilio/call-status?leg=inbound&mode=inbound`.
+
+The complete candidate based on published revision 72 passed Twilio Flow Validate
+(`valid: true`) on September 15, 2026. It has not been published; live callback
+verification follows activation.
+Keep the phone number configuration, `forward_call.properties`, and other Flow
+fields intact. Replace only `forward_call.transitions` with:
+
+```json
+[
+  { "event": "callCompleted", "next": "record_phone_inquiry" },
+  { "event": "hangup", "next": "record_phone_inquiry" }
+]
+```
+
+Append these two objects to the Flow's `states` array:
+
+```json
+[
+  {
+    "name": "record_phone_inquiry",
+    "type": "make-http-request",
+    "transitions": [{ "event": "success" }, { "event": "failed", "next": "record_phone_inquiry_retry" }],
+    "properties": {
+      "method": "POST",
+      "url": "https://stonegate-api.onrender.com/api/webhooks/twilio/dial-action?mode=inbound",
+      "content_type": "application/x-www-form-urlencoded",
+      "add_twilio_auth": false,
+      "parameters": [
+        { "key": "CallSid", "value": "{{trigger.call.CallSid}}" },
+        { "key": "Direction", "value": "{{trigger.call.Direction}}" },
+        { "key": "From", "value": "{{trigger.call.From}}" },
+        { "key": "To", "value": "{{trigger.call.To}}" },
+        { "key": "DialCallSid", "value": "{{widgets.forward_call.DialCallSid}}" },
+        { "key": "DialCallStatus", "value": "{{widgets.forward_call.DialCallStatus}}" },
+        { "key": "DialCallDuration", "value": "{{widgets.forward_call.DialCallDuration}}" }
+      ]
+    }
+  },
+  {
+    "name": "record_phone_inquiry_retry",
+    "type": "make-http-request",
+    "transitions": [{ "event": "success" }, { "event": "failed" }],
+    "properties": {
+      "method": "POST",
+      "url": "https://stonegate-api.onrender.com/api/webhooks/twilio/dial-action?mode=inbound",
+      "content_type": "application/x-www-form-urlencoded",
+      "add_twilio_auth": false,
+      "parameters": [
+        { "key": "CallSid", "value": "{{trigger.call.CallSid}}" },
+        { "key": "Direction", "value": "{{trigger.call.Direction}}" },
+        { "key": "From", "value": "{{trigger.call.From}}" },
+        { "key": "To", "value": "{{trigger.call.To}}" },
+        { "key": "DialCallSid", "value": "{{widgets.forward_call.DialCallSid}}" },
+        { "key": "DialCallStatus", "value": "{{widgets.forward_call.DialCallStatus}}" },
+        { "key": "DialCallDuration", "value": "{{widgets.forward_call.DialCallDuration}}" }
+      ]
+    }
+  }
+]
+```
+
+Both termination paths enter the first HTTP step. A failed request gets one
+retry; either success or a second failure ends the Flow. The API's deterministic
+`phone:<parent CallSid>` identity prevents a retry from creating another
+conversion. The trigger provides the parent call identity and caller, while the
+forwarding widget provides the connected leg's outcome and duration. These are
+documented [trigger variables](https://www.twilio.com/docs/studio/widget-library/trigger-start)
+and [widget fields and transitions](https://www.twilio.com/docs/studio/rest-api/v2/schemas).
+
+Use form encoding, as required by the existing webhook verifier. Twilio supplies
+the [request signature](https://www.twilio.com/docs/usage/webhooks/webhooks-security).
+Leave `add_twilio_auth` false: that option is for requests to Twilio APIs.
+The endpoint's XML response is an HTTP acknowledgement here; Studio does not
+execute it as new TwiML. No `AnsweredBy` or `DialBridged` value is invented.
+[HTTP widget reference](https://www.twilio.com/docs/studio/widget-library/http-request).
+
+Before publishing, validate the complete candidate with
+`POST https://studio.twilio.com/v2/Flows/Validate`, retain the published definition
+and unpublished drafts for recovery, and review the exact diff. After publishing,
+test eligible calls ended by each party, a short call, and an unanswered call.
+Verify Studio's HTTP success and a single queued conversion for the consenting
+test caller. Configuration validation checks the Flow structure; it does not
+prove runtime callback delivery. If the called party hangs up first, the caller
+may remain connected while the post-call HTTP steps finish; each HTTP step has a
+10-second timeout. Inspect failed executions if both attempts fail.
 
 ## Campaign setup
 
