@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import styles from "./request-page.module.css";
 import Link from "next/link";
 import { CalendarClock, MapPin } from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
@@ -234,40 +235,47 @@ export default async function PartnerBookPage({
   }
 
   return (
-    <div className="space-y-5 sm:space-y-6">
-      <PartnerPageHeader
-        eyebrow="Partner service request"
-        title={personaPresentation.taskLabels.schedule}
-        description={
-          context.availability.instantConfirmation
-            ? "Enter the service address, describe the work, and review available service times."
-            : "Enter the service address, describe the work, and provide preferred dates. Stonegate will review the request and confirm pricing and scheduling."
-        }
-        breadcrumbs={[
-          { label: "Overview", href: "/partners/overview" },
-          { label: "Request service", href: "/partners/book" },
-        ]}
-      >
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-600">
-          <span className="inline-flex items-center gap-1.5">
-            <ShieldCheckIcon />
-            Continue saves your service address
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <CalendarClock
-              className="h-4 w-4 text-primary-700"
-              aria-hidden="true"
-            />
-            Review before submitting
-          </span>
-          <a
-            href={`tel:${company.phoneE164}`}
-            className="inline-flex min-h-11 items-center font-semibold text-primary-800 underline-offset-4 hover:underline"
-          >
-            Contact Stonegate: {company.phoneDisplay}
-          </a>
-        </div>
-      </PartnerPageHeader>
+    <div className={`space-y-5 sm:space-y-6 ${styles["page"]}`}>
+      <div className={styles["compactHeading"]}>
+        <h1 className="text-xl font-semibold tracking-tight text-slate-950 sm:text-2xl">
+          Request service
+        </h1>
+      </div>
+      <div className={styles["introduction"]}>
+        <PartnerPageHeader
+          eyebrow="Partner service request"
+          title={personaPresentation.taskLabels.schedule}
+          description={
+            context.availability.instantConfirmation
+              ? "Enter the service address, describe the work, and review available service times."
+              : "Enter the service address, describe the work, and provide preferred dates. Stonegate will review the request and confirm pricing and scheduling."
+          }
+          breadcrumbs={[
+            { label: "Overview", href: "/partners/overview" },
+            { label: "Request service", href: "/partners/book" },
+          ]}
+        >
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-600">
+            <span className="inline-flex items-center gap-1.5">
+              <ShieldCheckIcon />
+              Continue saves your service address
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <CalendarClock
+                className="h-4 w-4 text-primary-700"
+                aria-hidden="true"
+              />
+              Review before submitting
+            </span>
+            <a
+              href={`tel:${company.phoneE164}`}
+              className="inline-flex min-h-11 items-center font-semibold text-primary-800 underline-offset-4 hover:underline"
+            >
+              Contact Stonegate: {company.phoneDisplay}
+            </a>
+          </div>
+        </PartnerPageHeader>
+      </div>
 
       {initialDraft?.additionalServiceFromJobId ? (
         <PartnerNotice tone="info">
@@ -359,7 +367,7 @@ export default async function PartnerBookPage({
         </details>
       ) : null}
 
-      <div className="text-center">
+      <div className={`text-center ${styles["jobsLink"]}`}>
         <Link href="/partners/bookings" className={partnerSecondaryButtonClass}>
           View existing jobs
         </Link>

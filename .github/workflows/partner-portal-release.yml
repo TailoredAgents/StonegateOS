@@ -51,6 +51,7 @@ jobs:
         run: |
           pnpm exec tsx --test scripts/test-partner-home-recovery.mts scripts/test-partner-booking-recovery.mts scripts/test-partner-template-proof-recovery.mts scripts/test-partner-communications-browser.mts
           pnpm exec tsx --test scripts/test-partner-address-autocomplete.mts
+          pnpm exec tsx --test scripts/test-partner-service-details.mts
           pnpm test:partner-portal:worker-runtime
       - name: Portal PostgreSQL integration tests
         run: pnpm test:partner-portal:postgres
