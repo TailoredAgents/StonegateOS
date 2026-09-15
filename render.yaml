@@ -60,6 +60,10 @@ services:
         sync: false
       - key: NEXT_PUBLIC_META_PIXEL_ID
         sync: false
+      - key: NEXT_PUBLIC_OPENAI_ADS_PIXEL_ID
+        value: VzsBYjoVDxBRKqkBtFnsmr
+      - key: NEXT_PUBLIC_OPENAI_ADS_REQUIRE_CONSENT
+        value: "false"
       - key: NEXT_PUBLIC_API_BASE_URL
         sync: false
       - key: API_BASE_URL
@@ -344,6 +348,14 @@ services:
         sync: false
       - key: FB_LEAD_FORM_IDS
         sync: false
+      - key: OPENAI_ADS_ENABLED
+        value: "false"
+      - key: OPENAI_ADS_PIXEL_ID
+        value: VzsBYjoVDxBRKqkBtFnsmr
+      - key: OPENAI_ADS_CONVERSIONS_API_KEY
+        sync: false
+      - key: OPENAI_ADS_PHONE_MIN_DURATION_SECONDS
+        value: "30"
       - key: META_DATASET_ID
         sync: false
       - key: META_CONVERSIONS_TOKEN
@@ -577,6 +589,14 @@ services:
         sync: false
       - key: FB_AD_ACCOUNT_ID
         sync: false
+      - key: OPENAI_ADS_ENABLED
+        value: "false"
+      - key: OPENAI_ADS_PIXEL_ID
+        value: VzsBYjoVDxBRKqkBtFnsmr
+      - key: OPENAI_ADS_CONVERSIONS_API_KEY
+        sync: false
+      - key: OPENAI_ADS_PHONE_MIN_DURATION_SECONDS
+        value: "30"
       - key: META_DATASET_ID
         sync: false
       - key: META_CONVERSIONS_TOKEN

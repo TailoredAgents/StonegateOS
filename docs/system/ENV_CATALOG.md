@@ -35,6 +35,7 @@ Ad tracking:
 - `NEXT_PUBLIC_GOOGLE_ADS_LEAD_SEND_TO`, `NEXT_PUBLIC_GOOGLE_ADS_CALL_SEND_TO`, `NEXT_PUBLIC_GOOGLE_ADS_CONTACT_SEND_TO`
 - `NEXT_PUBLIC_META_PIXEL_ID`
 - `NEXT_PUBLIC_GA4_ID`
+- `NEXT_PUBLIC_OPENAI_ADS_PIXEL_ID`, `NEXT_PUBLIC_OPENAI_ADS_REQUIRE_CONSENT`
 
 Public chat/agent endpoints (if enabled):
 
@@ -74,6 +75,10 @@ Providers:
   control plane: `EMAIL_FAKE_CONTROL_URL`
 - Meta: `FB_*`, `META_*`; deterministic local/CI provider boundary: `FACEBOOK_GRAPH_API_BASE_URL`, `META_FAKE_CONTROL_URL`
 - Google Ads: `GOOGLE_ADS_*`
+- ChatGPT Ads: `OPENAI_ADS_ENABLED`, `OPENAI_ADS_PIXEL_ID`,
+  `OPENAI_ADS_CONVERSIONS_API_KEY`, `OPENAI_ADS_PHONE_MIN_DURATION_SECONDS`.
+  Configure the API and outbox worker together; the conversion secret must never
+  use a `NEXT_PUBLIC_` prefix. See [ChatGPT Ads setup](../chatgpt-ads.md).
 - Google Calendar: `GOOGLE_CALENDAR_ENABLED`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`, `GOOGLE_CALENDAR_WEBHOOK_URL`; deterministic local/CI provider boundary: `GOOGLE_CALENDAR_API_BASE_URL`, `GOOGLE_CALENDAR_TOKEN_URL`, `GOOGLE_CALENDAR_FAKE_CONTROL_URL`
 - Square: `SQUARE_ENVIRONMENT`, `SQUARE_ACCESS_TOKEN`, `SQUARE_LOCATION_ID`; deterministic local/CI read boundary: `SQUARE_API_BASE_URL`, `SQUARE_FAKE_CONTROL_URL`
 - OpenAI: `OPENAI_API_KEY` (+ optional model overrides). Receipt extraction
