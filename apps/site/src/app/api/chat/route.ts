@@ -148,6 +148,7 @@ type JarvisReadToolPlan = {
 };
 
 type ChatRequest = {
+  openaiAds?: unknown;
   message?: string;
   system?: string;
   contactId?: string;
@@ -1195,10 +1196,12 @@ async function createContactAndPropertyFromState(
 async function bookSlotForState(
   state: PublicBookingState,
   startAt: string,
+  openaiAds?: unknown,
 ): Promise<{
   ok: boolean;
   appointmentId?: string;
   startAt?: string;
+  openaiAdsBookingEligible?: boolean;
   error?: string;
 }> {
   const res = await callPublicChatBookingApi("/api/admin/booking/book", {
@@ -1210,6 +1213,7 @@ async function bookSlotForState(
       durationMinutes: 60,
       travelBufferMinutes: 30,
       services: ["junk_removal_primary"],
+      openaiAds,
     }),
   }).catch(() => null);
 
@@ -1228,8 +1232,9 @@ async function bookSlotForState(
   const data = (await res.json().catch(() => ({}))) as {
     appointmentId?: string;
     startAt?: string;
+    openaiAdsBookingEligible?: boolean;
   };
-  return { ok: true, appointmentId: data.appointmentId, startAt: data.startAt };
+  return { ok: true, appointmentId: data.appointmentId, startAt: data.startAt, openaiAdsBookingEligible: data.openaiAdsBookingEligible === true };
 }
 
 function extractContactNameFromMessage(message: string): string | null {
@@ -1507,7 +1512,7 @@ export async function handleChatRequest(
           return res;
         }
 
-        const booked = await bookSlotForState(state, startAt);
+        const booked = await bookSlotForState(state, startAt, body.openaiAds);
         if (!booked.ok) {
           const res = NextResponse.json(
             {
@@ -1536,6 +1541,7 @@ export async function handleChatRequest(
           booked: {
             appointmentId: booked.appointmentId,
             startAt: booked.startAt ?? startAt,
+            openaiAdsBookingEligible: booked.openaiAdsBookingEligible === true,
           },
         });
         writePublicBookingState(res, null);

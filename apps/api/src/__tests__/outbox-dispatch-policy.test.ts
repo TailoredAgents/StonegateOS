@@ -20,6 +20,7 @@ describe("outbox dispatch kill-switch policy", () => {
   });
 
   it.each([
+    "ads.openai.conversion",
     "appointment.calendar_sync_requested",
     "estimate.requested",
     "message.send",

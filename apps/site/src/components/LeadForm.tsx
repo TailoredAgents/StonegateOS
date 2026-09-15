@@ -9,6 +9,7 @@ import {
   trackGoogleAdsConversion,
 } from "../lib/google-ads";
 import { trackWebEvent } from "../lib/web-analytics";
+import { getOpenAiAdsAttribution, trackOpenAiAdsBooking, withOpenAiAdsUtm } from "../lib/openai-ads";
 
 declare global {
   interface Window {
@@ -917,7 +918,8 @@ export function LeadForm({
                         ? demoOtherDetails.trim() || undefined
                         : undefined,
                   },
-                  utm,
+                  utm: withOpenAiAdsUtm(utm),
+                  openaiAds: getOpenAiAdsAttribution(),
                 }
               : {
                   source: "public_site",
@@ -929,7 +931,8 @@ export function LeadForm({
                     zip: zip.trim(),
                     photoUrls: photos,
                   },
-                  utm,
+                  utm: withOpenAiAdsUtm(utm),
+                  openaiAds: getOpenAiAdsAttribution(),
                 },
         ),
       });
@@ -1390,6 +1393,7 @@ export function LeadForm({
         postalCode: postalCode.trim(),
         startAt: selectedSlotStartAt,
         notes: notes || null,
+        openaiAds: getOpenAiAdsAttribution(),
       };
       if (holdId) payload["holdId"] = holdId;
 
@@ -1548,7 +1552,12 @@ export function LeadForm({
       }
       const data = (await res.json().catch(() => null)) as {
         startAt?: string | null;
+        appointmentId?: string;
+        openaiAdsBookingEligible?: boolean;
       } | null;
+      if (data?.openaiAdsBookingEligible === true && typeof data.appointmentId === "string") {
+        trackOpenAiAdsBooking(data.appointmentId);
+      }
       const bookedAt =
         typeof data?.startAt === "string" && data.startAt.length
           ? data.startAt
