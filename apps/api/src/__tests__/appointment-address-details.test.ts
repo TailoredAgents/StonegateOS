@@ -52,6 +52,9 @@ jest.mock("@/db", () => ({
 jest.mock("@/lib/eta-agent", () => ({
   getEtaSummariesForAppointments: () => Promise.resolve(new Map()),
 }));
+jest.mock("@/lib/partner-request-details-store", () => ({
+  loadPartnerRequestDetailsForAppointments: () => Promise.resolve(new Map()),
+}));
 jest.mock("@/lib/permissions", () => ({
   requirePermission: () => Promise.resolve(null),
 }));
