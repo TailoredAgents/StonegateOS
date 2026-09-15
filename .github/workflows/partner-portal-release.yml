@@ -47,7 +47,9 @@ jobs:
       - name: Apply all production migrations to the disposable database
         run: pnpm --filter api exec tsx scripts/migrate-to-target.ts latest
       - name: Portal API and website regression tests
-        run: pnpm test:partner-portal
+        run: |
+          pnpm test:partner-portal
+          pnpm --filter api exec jest --config jest.config.cjs --runInBand --runTestsByPath src/__tests__/appointment-address-details.test.ts src/__tests__/calendar-card-identity-feed.test.ts src/__tests__/calendar-payment-schema-fallback.test.ts
       - name: Browser recovery and worker rendering checks
         run: |
           pnpm exec tsx --test scripts/test-partner-home-recovery.mts scripts/test-partner-booking-recovery.mts scripts/test-partner-template-proof-recovery.mts scripts/test-partner-communications-browser.mts
