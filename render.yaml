@@ -349,7 +349,7 @@ services:
       - key: FB_LEAD_FORM_IDS
         sync: false
       - key: OPENAI_ADS_ENABLED
-        value: "false"
+        value: "true"
       - key: OPENAI_ADS_PIXEL_ID
         value: VzsBYjoVDxBRKqkBtFnsmr
       - key: OPENAI_ADS_CONVERSIONS_API_KEY
@@ -590,7 +590,7 @@ services:
       - key: FB_AD_ACCOUNT_ID
         sync: false
       - key: OPENAI_ADS_ENABLED
-        value: "false"
+        value: "true"
       - key: OPENAI_ADS_PIXEL_ID
         value: VzsBYjoVDxBRKqkBtFnsmr
       - key: OPENAI_ADS_CONVERSIONS_API_KEY

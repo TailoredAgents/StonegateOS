@@ -17,8 +17,10 @@ outcomes for delivery through the Conversions API by the outbox worker.
 
 Stonegate's Pixel ID is `VzsBYjoVDxBRKqkBtFnsmr`. The Conversions API key is
 separate from `OPENAI_API_KEY`, which powers the application's AI features.
-The Render blueprint leaves server delivery disabled until credentials are
-configured. Configure the API and worker consistently before enabling delivery.
+The API and outbox worker have matching conversion credentials and
+`OPENAI_ADS_ENABLED=true` in production. The Render blueprint preserves that
+live configuration. Generic `.env.example` defaults remain disabled until a
+new environment has its own credentials configured.
 
 ## Events and attribution
 
@@ -54,32 +56,32 @@ Dedicated tracking numbers or a call-attribution provider are needed to close
 that gap. A connected-call duration threshold measures an inquiry proxy, not a
 staff determination of lead quality; known voicemail/machine answers are excluded.
 
-Parent call duration alone does not qualify. The ready-to-activate Studio
+Parent call duration alone does not qualify. The installed Studio
 configuration below supplies the completed dial leg and its duration. Studio
 considers an answering machine or voicemail to be connected, and this existing
 forwarding widget does not expose machine detection. Consequently, this setup
 cannot exclude an unrecognized voicemail connection that exceeds the threshold.
 See [Connect Call To behavior](https://www.twilio.com/docs/studio/widget-library/connect-call).
 
-## Twilio Studio activation
+## Installed Twilio Studio configuration
 
 Production configuration verified on September 15, 2026:
 
 - The business number ending in **2631** routes incoming calls to Studio Flow
   `FWae6ddf7a2fa835025d6aad8d79ec2e8d`.
-- Published revision **72** runs `trigger` → `forward_call`. Its
-  `callCompleted` transition currently ends the Flow.
+- Published revision **76** runs `trigger` → `forward_call`, then sends both
+  `callCompleted` and `hangup` through the installed inquiry callback steps.
+- Revision 76 was built from the previous published production revision **72**.
 - `forward_call` records calls and has a 30-second ringing timeout.
-- Revisions **73–75** are unpublished drafts. Build the activation candidate
-  from published revision 72 and retain the drafts separately.
+- Historical unpublished drafts **73–75** and the revision **72** definition
+  were retained separately as recovery backups before activation.
 - The number's existing status callback is
   `https://stonegate-api.onrender.com/api/webhooks/twilio/call-status?leg=inbound&mode=inbound`.
 
-The complete candidate based on published revision 72 passed Twilio Flow Validate
-(`valid: true`) on September 15, 2026. It has not been published; live callback
-verification follows activation.
-Keep the phone number configuration, `forward_call.properties`, and other Flow
-fields intact. Replace only `forward_call.transitions` with:
+Revision 76 passed Twilio Flow Validate (`valid: true`) and was published on
+September 15, 2026. The phone number configuration, `forward_call.properties`,
+and other Flow fields were preserved. The installed `forward_call.transitions`
+are:
 
 ```json
 [
@@ -88,7 +90,7 @@ fields intact. Replace only `forward_call.transitions` with:
 ]
 ```
 
-Append these two objects to the Flow's `states` array:
+The Flow's `states` array already includes these two installed widgets:
 
 ```json
 [
@@ -143,20 +145,18 @@ forwarding widget provides the connected leg's outcome and duration. These are
 documented [trigger variables](https://www.twilio.com/docs/studio/widget-library/trigger-start)
 and [widget fields and transitions](https://www.twilio.com/docs/studio/rest-api/v2/schemas).
 
-Use form encoding, as required by the existing webhook verifier. Twilio supplies
-the [request signature](https://www.twilio.com/docs/usage/webhooks/webhooks-security).
-Leave `add_twilio_auth` false: that option is for requests to Twilio APIs.
+The widgets use form encoding, as required by the existing webhook verifier.
+Twilio supplies the [request signature](https://www.twilio.com/docs/usage/webhooks/webhooks-security).
+`add_twilio_auth` is false because that option is for requests to Twilio APIs.
 The endpoint's XML response is an HTTP acknowledgement here; Studio does not
 execute it as new TwiML. No `AnsweredBy` or `DialBridged` value is invented.
 [HTTP widget reference](https://www.twilio.com/docs/studio/widget-library/http-request).
 
-Before publishing, validate the complete candidate with
-`POST https://studio.twilio.com/v2/Flows/Validate`, retain the published definition
-and unpublished drafts for recovery, and review the exact diff. After publishing,
-test eligible calls ended by each party, a short call, and an unanswered call.
-Verify Studio's HTTP success and a single queued conversion for the consenting
-test caller. Configuration validation checks the Flow structure; it does not
-prove runtime callback delivery. If the called party hangs up first, the caller
+Live callback verification remains pending. Test eligible calls ended by each
+party, a short call, and an unanswered call. Verify Studio's HTTP success and a
+single queued conversion for the consenting test caller. Configuration
+validation establishes the Flow structure; runtime callback delivery still
+requires an eligible call. If the called party hangs up first, the caller
 may remain connected while the post-call HTTP steps finish; each HTTP step has a
 10-second timeout. Inspect failed executions if both attempts fail.
 
@@ -179,6 +179,19 @@ ads. An `oppref` establishes paid ChatGPT traffic; an organic ChatGPT referrer
 alone does not.
 
 ## Verification and operations
+
+Production verification on September 15, 2026:
+
+- The site, API, and outbox worker are live at commit
+  `04d3ed7f70e8d105861b346a2b7ff68e7108ba18`.
+- Site and API readiness checks are healthy; the API and worker conversion
+  credentials match and server delivery is enabled.
+- The browser loaded the OpenAI SDK with HTTP 200 and sent one `page_viewed`
+  event accepted with HTTP 202.
+- The checked private page did not load the OpenAI Pixel.
+
+Real attributed booking and phone-inquiry verification remains pending. Use
+these checks to complete that verification and monitor future changes:
 
 1. With the server environment configured, run
    `pnpm --filter api exec tsx --tsconfig tsconfig.json scripts/validate-openai-ads.mts`.
