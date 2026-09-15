@@ -12,6 +12,7 @@ outcomes for delivery through the Conversions API by the outbox worker.
 | Site           | `NEXT_PUBLIC_OPENAI_ADS_REQUIRE_CONSENT` | Set `true` to require an affirmative measurement preference; defaults to `false`.                         |
 | API and worker | `OPENAI_ADS_PIXEL_ID`                    | Same Pixel ID as the browser.                                                                             |
 | API and worker | `OPENAI_ADS_CONVERSIONS_API_KEY`         | Ads Manager Conversions API secret. Store in Render environment settings, never Git or browser variables. |
+| API            | `OPENAI_ADS_API_KEY`                     | Separate Advertiser API secret for campaign reporting. Store only on the API server.                     |
 | API and worker | `OPENAI_ADS_ENABLED`                     | Set `true` after configuring the conversion credentials.                                                  |
 | API and worker | `OPENAI_ADS_PHONE_MIN_DURATION_SECONDS`  | Minimum connected inbound call duration; defaults to 30 seconds.                                          |
 
@@ -162,10 +163,27 @@ may remain connected while the post-call HTTP steps finish; each HTTP step has a
 
 ## Campaign setup
 
-In Ads Manager, connect this Pixel/data source to the campaign and select the
-desired conversion events. Report bookings and phone inquiries separately so a
-caller who later books is not mistaken for two customers. Verify the campaign's
-available optimization options before selecting its primary optimization event.
+The following live account configuration was verified on September 15, 2026:
+
+- Ad account: `adacct_6aa992efa5688191a9d05019f8d857ff`, Stonegate Junk Removal,
+  USD, `America/New_York`.
+- Campaign: `cmpn_5d4728af58a4819c8e232579265ba9aa`, Stonegate Junk Removal campaign.
+- Source: `cds_6aa9a65875c881918831e5944227e7c2`, using Pixel
+  `VzsBYjoVDxBRKqkBtFnsmr`.
+- Confirmed Booking: setting `6aa9be0faddc81919c216a390ab27b80`,
+  `appointment_scheduled`.
+- Phone Inquiry: setting `6aa9be1014e081919178e37f746b9fca`, `lead_created`.
+
+Both settings are attached to the existing active campaign and use a 30-day
+click attribution window. Its existing clicks objective, budget, targeting,
+and ad creative were retained. A clicks campaign can report conversions;
+conversion-optimized bidding is a separate campaign-creation choice. OpenAI
+does not allow changing the objective of an existing campaign.
+
+The delivery panel distinguishes booking and phone events. Advertiser Insights
+provides the combined attributed conversion total; the documented API does not
+expose a booking-versus-phone breakdown for this report. This total counts
+actions, not unique customers: an inquiry followed by a booking may count twice.
 
 Add explicit campaign parameters to each ad destination. For example:
 
@@ -213,9 +231,14 @@ Controlled test/audit runtimes and external-send kill switches prevent live
 conversion delivery. Public ad scripts are excluded from authenticated CRM,
 partner, mobile, and private quote surfaces.
 
-Campaign spend, cost per conversion, and return on ad spend require the
-separate Advertiser API credentials; conversion delivery credentials alone do
-not enable that reporting integration.
+Campaign reporting uses the separate `OPENAI_ADS_API_KEY`. The reporting code
+only reads the advertiser account and Insights; it does not change campaign
+budgets, bidding, or creative. It shows spend in the account currency, delivery
+metrics, and click-attributed conversions for the selected account-local date
+period. Results may arrive late or be revised. A missing metric is unavailable,
+not zero, and delivery acceptance is separate from attribution. Return on ad
+spend is not calculated because these booking/inquiry events do not send sales
+revenue.
 
 ## References
 
@@ -223,3 +246,5 @@ not enable that reporting integration.
 - [Conversions API](https://developers.openai.com/ads/conversions-api)
 - [Supported events](https://developers.openai.com/ads/supported-events)
 - [Advertiser API](https://developers.openai.com/ads/api-overview)
+- [Campaign conversion setup](https://developers.openai.com/ads/conversion-tracking)
+- [Reporting](https://developers.openai.com/ads/reporting)

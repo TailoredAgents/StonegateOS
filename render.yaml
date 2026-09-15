@@ -352,6 +352,8 @@ services:
         value: "true"
       - key: OPENAI_ADS_PIXEL_ID
         value: VzsBYjoVDxBRKqkBtFnsmr
+      - key: OPENAI_ADS_API_KEY
+        sync: false
       - key: OPENAI_ADS_CONVERSIONS_API_KEY
         sync: false
       - key: OPENAI_ADS_PHONE_MIN_DURATION_SECONDS

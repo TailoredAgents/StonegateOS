@@ -7,6 +7,7 @@ import {
 } from "@/lib/team-principal";
 import { callAdminApiAs } from "../lib/api";
 import { OpenAiAdsStatusPanel } from "./OpenAiAdsStatusPanel";
+import { OpenAiAdsCampaignReport } from "./OpenAiAdsCampaignReport";
 import {
   TEAM_CARD_PADDED,
   TEAM_SECTION_SUBTITLE,
@@ -478,6 +479,20 @@ export async function WebAnalyticsSection(props: {
           </div>
         ) : null}
       </header>
+
+      <React.Suspense
+        fallback={
+          <div className={TEAM_CARD_PADDED}>
+            Loading ChatGPT campaign performance…
+          </div>
+        }
+      >
+        <OpenAiAdsCampaignReport
+          principal={principal}
+          rangeDays={rangeDays}
+          advertising={advertising}
+        />
+      </React.Suspense>
 
       <React.Suspense
         fallback={
