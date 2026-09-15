@@ -59,3 +59,20 @@ was changed by this release.
   browser document and recorded one Google/Meta page view for each transition.
 - Independent source review found no blocking issues. Browser interaction tests
   blocked external delivery and prevented phone, SMS, and mail app activation.
+
+## Live release
+
+- Website service: `srv-d43o7c0dl3ps73a4rb2g`.
+- Runtime commit: `bef7beb118e8a23f873a9c21c33aa83da7217a08`.
+- Render deployment: `dep-dakt1djl550s73apaqc0`, confirmed live at
+  23:16:57 UTC on September 15, 2026 (build/release finished 23:16:19 UTC).
+- Final deployment-base check confirmed the existing live `b96a50cc` release
+  and no competing deployments before publishing.
+- Live `/contractors`, `/book`, `/services`, and `/partners` returned 200.
+  Website health and readiness returned 200 with readiness true.
+- Live desktop and 375px/320px browser checks passed the same contact,
+  no-form, accessibility, overflow, and intercepted-click checks above.
+- A separate real, untagged public visit loaded exactly one OpenAI SDK script;
+  OpenAI returned 202 for `page_viewed`. A fresh staff-login visit loaded no
+  OpenAI Pixel. No real calls, messages, or synthetic lead conversions were sent.
+- Review: https://github.com/TailoredAgents/StonegateOS/pull/3.
