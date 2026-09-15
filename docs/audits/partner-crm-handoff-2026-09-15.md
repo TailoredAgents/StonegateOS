@@ -32,6 +32,7 @@ The submitted request remains the source of the client's instructions. Staff sch
 - Photo controls are disabled while a step is advancing, so new selections cannot arrive during the save/validation wait and then be discarded. An expiring old arrival hold also leaves the photo step mounted.
 - An intentionally cleared access-instruction field stays empty when the saved draft reloads.
 - Structured request details replace the old generated internal review note in calendar, My Day and mobile cards. Human notes remain available, and long note references wrap within phone layouts.
+- The complete CI journey exposed an existing desktop-header overflow with long staff names/emails. The identity block now has responsive width limits, truncation and full-text titles; the no-overflow assertion remains unchanged.
 
 ## Verification
 
@@ -49,3 +50,5 @@ The submitted request remains the source of the client's instructions. Staff sch
 Deployment identifiers will be added after completion. Tests use synthetic accounts, normal staff/partner sign-in, an isolated database and local storage. External delivery remains disabled in the local harness. The harness now explicitly sets its appointment time zone to America/New_York so staff scheduling is covered even without a saved business-hours configuration. Its browser certificate override applies only to the local self-signed HTTPS proxy.
 
 The required Partner Portal workflow includes the CRM presentation checks and the full portal-to-staff-scheduling journey. No schema migration or production account change is required.
+
+The separate general E2E workflow retains the same 129 failing suites as the pre-change revision `691e89ab`: 76 `jest` startup failures, 36 `__dirname` startup failures and 17 other existing failures. Comparing `35022870123` with `35026120367` found no new failing suite or failure signature. The required portal workflow uses the correct runners and separately exercises the affected booking-card routes; this report does not claim the broader general workflow passes.
