@@ -1,6 +1,6 @@
 # Partner Portal → CRM request handoff — September 15, 2026
 
-Status: implementation and local production-build browser journeys complete; required CI and deployment checks in progress. No production customer work is created by these checks.
+Status: deployed and verified on September 15, 2026 at 22:07 UTC. No production customer work was created by these checks.
 
 ## Required information
 
@@ -47,8 +47,36 @@ The submitted request remains the source of the client's instructions. Staff sch
 - The original empty-company desktop/phone journeys also passed after the new handoff checks. Temporary test scheduling profiles and optional service choices were returned to inactive state.
 - The live API's existing health and readiness checks returned 200 before release; configuration, portal, database, migrations and worker checks were healthy.
 
-Deployment identifiers will be added after completion. Tests use synthetic accounts, normal staff/partner sign-in, an isolated database and local storage. External delivery remains disabled in the local harness. The harness now explicitly sets its appointment time zone to America/New_York so staff scheduling is covered even without a saved business-hours configuration. Its browser certificate override applies only to the local self-signed HTTPS proxy.
+Tests use synthetic accounts, normal staff/partner sign-in, an isolated database and local storage. External delivery remains disabled in the local harness. The harness explicitly sets its appointment time zone to America/New_York so staff scheduling is covered even without a saved business-hours configuration. Its browser certificate override applies only to the local self-signed HTTPS proxy. The final corrected production-build journeys passed again after the header fix, with additional zero-overflow checks at 1024, 1280 and 1440 pixels.
 
 The required Partner Portal workflow includes the CRM presentation checks and the full portal-to-staff-scheduling journey. No schema migration or production account change is required.
 
 The separate general E2E workflow retains the same 129 failing suites as the pre-change revision `691e89ab`: 76 `jest` startup failures, 36 `__dirname` startup failures and 17 other existing failures. Comparing `35022870123` with `35026120367` found no new failing suite or failure signature. The required portal workflow uses the correct runners and separately exercises the affected booking-card routes; this report does not claim the broader general workflow passes.
+
+## Required release gate
+
+The exact release revision `bffb0c3bc495e6dcaaf08b1c26dd55952fc116ff` passed [Partner Portal production journey 35027402182](https://github.com/TailoredAgents/StonegateOS/actions/runs/35027402182). It includes the separately deployed production revision `04d3ed7f` so the current advertising integration and address fixes are preserved, together with the approved Service details design and CRM handoff changes.
+
+The final gate passed 139 API suites / 999 tests, 201 Site tests, 14 focused booking-card route tests, 24 browser recovery/presentation cases, 41 PostgreSQL suites / 223 tests, both production builds, two original empty-company browser journeys, and two complete CRM handoff journeys. Matching main revision `d62804c4` also passed its required portal gate.
+
+The API, outbox worker and Site must use the same release revision. The worker directly executes the submission code for recurring requests and bulk imports, so deploying the API alone would leave those paths on older snapshot-writing code. No additional environment or schema changes are needed.
+
+## Deployment and live checks
+
+All three services are live at `bffb0c3bc495e6dcaaf08b1c26dd55952fc116ff` from `release/partner-crm-handoff-20260915`. The feature and subsequent checks/header correction are committed and pushed on main as `ff6c39eb`, `444257eb` and `d62804c4`. The release branch also preserves the current production advertising integration; use the complete deployed revision as the source for subsequent releases.
+
+| Service | Deployment | Live at (UTC) |
+| --- | --- | --- |
+| API | `dep-dakru88ae00c73dnc9fg` | 22:02:01 |
+| Outbox worker | `dep-dakru8nqj5pc73ctauv0` | 21:58:12 |
+| Site | `dep-daks0rbl550s73alijdg` | 22:06:44 |
+
+The Site deployment started after the API was live and readiness passed. Final checks at 22:07 UTC confirmed:
+
+- API, Render Site and custom-domain health endpoints returned HTTP 200.
+- API readiness returned HTTP 200 with configuration, portal availability, database, migrations, worker heartbeat and queue checks healthy. Schema remained `0174_dynamic_crew_labor`; the final queue had zero dispatchable events.
+- Anonymous Partner booking, calendar and mobile pages redirected to their appropriate sign-in pages. Appointment and calendar APIs rejected anonymous access with HTTP 401.
+- API and Site had no error-level logs after their respective deployments through the final check.
+- All 38 sampled worker error entries matched the pre-existing OpenAI `insufficient_quota` failure, also observed before this release at 21:37 UTC. No unmatched worker error remained in that sample. This task does not change the separate call-transcription provider or its quota.
+
+Authenticated request creation and staff scheduling were verified against disposable production builds and the real test database through normal sign-in. Live checks were read-only; no LandL test work or forged customer session was created. Local rehearsal servers and the two disposable containers were stopped, with diagnostic logs, previews and test data retained.
