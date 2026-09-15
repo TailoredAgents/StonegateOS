@@ -491,26 +491,40 @@ export function MobileAppointmentCard({
                 {statusLabel}
               </span>
             </div>
-            <p className="mt-1 text-xs font-semibold leading-5 text-cyan-100">
-              {categoryLabel}
-            </p>
-            {canExpand ? (
-              <button
-                type="button"
-                aria-label={`Open job for ${customerName}`}
-                aria-haspopup="dialog"
-                aria-expanded={open}
-                aria-controls={open ? detailsId : undefined}
-                onClick={toggleOpen}
-                className="block min-h-11 w-full rounded-lg py-1 text-left text-lg font-semibold leading-6 text-white outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
-              >
-                {customerName}
-              </button>
-            ) : (
-              <p className="py-1 text-lg font-semibold leading-6 text-white">
-                {customerName}
-              </p>
-            )}
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <div className="min-w-0 flex-1 basis-32">
+                <p className="text-xs font-semibold leading-5 text-cyan-100">
+                  {categoryLabel}
+                </p>
+                {canExpand ? (
+                  <button
+                    type="button"
+                    aria-label={`Open job for ${customerName}`}
+                    aria-haspopup="dialog"
+                    aria-expanded={open}
+                    aria-controls={open ? detailsId : undefined}
+                    onClick={toggleOpen}
+                    className="block min-h-11 w-full break-words rounded-lg py-1 text-left text-lg font-semibold leading-6 text-white outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+                  >
+                    {customerName}
+                  </button>
+                ) : (
+                  <p className="break-words py-1 text-lg font-semibold leading-6 text-white">
+                    {customerName}
+                  </p>
+                )}
+              </div>
+              {normalizedAmountLabel ? (
+                <div className="ml-auto max-w-full rounded-xl bg-white/[0.05] px-3 py-2 text-right ring-1 ring-inset ring-white/10">
+                  <p className="text-[11px] font-medium leading-4 text-slate-300">
+                    Job price
+                  </p>
+                  <p className="break-words text-xl font-semibold leading-7 tracking-tight text-white tabular-nums">
+                    {normalizedAmountLabel}
+                  </p>
+                </div>
+              ) : null}
+            </div>
           </div>
 
           {address ? (
