@@ -376,7 +376,7 @@ for (const engine of [chromium, webkit]) {
           await expect(description).toBeVisible();
           await expect(page.locator("#partner-book-base-option")).toBeVisible();
           const addPhotos = page.getByRole("button", {
-            name: "Add photos",
+            name: "Choose photos",
             exact: true,
           });
           await expect(addPhotos).toBeVisible();
@@ -583,7 +583,7 @@ for (const engine of [chromium, webkit]) {
             "1",
           );
           await expect(
-            page.getByText("1 photo selected · Not attached yet"),
+            page.getByText("1 photo selected · Ready to attach"),
           ).toBeVisible();
           await expect(page.locator("[data-partner-unsaved]")).toHaveAttribute(
             "data-partner-unsaved",

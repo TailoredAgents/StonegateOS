@@ -180,3 +180,33 @@ void test("an interrupted storage request rejects promptly without reporting com
   }
   assert.deepEqual(progress, [0, 50]);
 });
+
+for (const [event, code] of [
+  ["error", "storage_upload_network_error"],
+  ["timeout", "storage_upload_timed_out"],
+] as const) {
+  void test(`a storage ${event} rejects without reporting attachment or completion`, async () => {
+    const restore = installFakeRequest();
+    const progress: number[] = [];
+    FakeXmlHttpRequest.responseStatus = 0;
+    FakeXmlHttpRequest.responseEvent = event;
+    try {
+      await assert.rejects(
+        uploadPortalFileWithProgress({
+          url: "https://storage.test/unavailable-intent",
+          method: "PUT",
+          headers: {},
+          file: { size: 10 } as File,
+          onProgress: ({ percent }) => progress.push(percent),
+        }),
+        (error) =>
+          error instanceof PortalFileUploadError && error.code === code,
+      );
+      assert.equal(FakeXmlHttpRequest.last?.timeout, 4 * 60 * 1_000);
+    } finally {
+      FakeXmlHttpRequest.responseEvent = "load";
+      restore();
+    }
+    assert.deepEqual(progress, [0, 50]);
+  });
+}

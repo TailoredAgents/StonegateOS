@@ -58,7 +58,10 @@ import {
   partnerPrimaryButtonClass,
   partnerSecondaryButtonClass,
 } from "./PartnerPortalUi";
-import { PartnerDraftPhotoUpload } from "./PartnerDraftPhotoUpload";
+import {
+  PartnerDraftPhotoUpload,
+  type DraftPhotoUploadPhase,
+} from "./PartnerDraftPhotoUpload";
 import { PartnerBookingDetailsRow } from "./PartnerBookingDetailsRow";
 import {
   bookingFieldElementId,
@@ -741,6 +744,14 @@ function PartnerBookingWizardSession({
     if (errorFocusRequest > 0) errorSummaryRef.current?.focus();
   }, [errorFocusRequest]);
   const [pendingPhotos, setPendingPhotos] = React.useState(false);
+  const [photoPhase, setPhotoPhase] =
+    React.useState<DraftPhotoUploadPhase>("idle");
+  const photosInProgress = [
+    "preparing",
+    "starting",
+    "uploading",
+    "saving",
+  ].includes(photoPhase);
   const [showPersonaSuggestions, setShowPersonaSuggestions] =
     React.useState(false);
   const [personaFeedback, setPersonaFeedback] = React.useState<string | null>(
@@ -1860,9 +1871,31 @@ function PartnerBookingWizardSession({
                   Address not saved
                 </span>
               ) : saveStatus === "saved" && pendingPhotos ? (
-                <span className="inline-flex items-center gap-1.5 text-amber-800">
-                  <CircleAlert className="h-3.5 w-3.5" aria-hidden="true" />
-                  Photos not saved yet
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5",
+                    photosInProgress ? "text-primary-700" : "text-amber-800",
+                  )}
+                >
+                  {photosInProgress ? (
+                    <LoaderCircle
+                      className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <CircleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  {photoPhase === "preparing"
+                    ? "Preparing photos…"
+                    : photoPhase === "starting"
+                      ? "Starting photo upload…"
+                      : photoPhase === "uploading"
+                        ? "Uploading photos…"
+                        : photoPhase === "saving"
+                          ? "Saving photos…"
+                          : photoPhase === "error"
+                            ? "Photos need attention"
+                            : "Photos ready to attach"}
                 </span>
               ) : saveStatus === "saved" ? (
                 <span className="inline-flex items-center gap-1.5 text-emerald-700">
@@ -2374,6 +2407,7 @@ function PartnerBookingWizardSession({
                       canUpload={canUploadPhotos}
                       onCountChange={setDraftPhotoCount}
                       onPendingChange={setPendingPhotos}
+                      onPhaseChange={setPhotoPhase}
                       persona={persona}
                     />
                   ) : (

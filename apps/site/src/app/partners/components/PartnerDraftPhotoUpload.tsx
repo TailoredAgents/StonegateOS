@@ -23,7 +23,10 @@ import {
   preparePortalImageForUpload,
   uploadPortalFileWithProgress,
 } from "../lib/upload-with-progress";
-import { PartnerSelectedPhotoPreviews } from "./PartnerSelectedPhotoPreviews";
+import {
+  PartnerSelectedPhotoPreviews,
+  type PartnerSelectedPhotoStatus,
+} from "./PartnerSelectedPhotoPreviews";
 import { isPortalProofMedia } from "../lib/portal-read-models";
 import {
   PartnerNotice,
@@ -56,6 +59,16 @@ type UploadIntent = {
 
 type MediaState = "loading" | "ready" | "forbidden" | "unavailable" | "error";
 
+export type DraftPhotoUploadPhase =
+  | "idle"
+  | "preparing"
+  | "ready"
+  | "starting"
+  | "uploading"
+  | "saving"
+  | "attached"
+  | "error";
+
 function validFile(file: File): boolean {
   return (
     file.size > 0 &&
@@ -85,6 +98,7 @@ export function PartnerDraftPhotoUpload({
   canUpload,
   onCountChange,
   onPendingChange,
+  onPhaseChange,
   persona,
   compact = false,
 }: {
@@ -92,6 +106,7 @@ export function PartnerDraftPhotoUpload({
   canUpload: boolean;
   onCountChange: (count: number | null) => void;
   onPendingChange?: (pending: boolean) => void;
+  onPhaseChange?: (phase: DraftPhotoUploadPhase) => void;
   persona?: string | null;
   compact?: boolean;
 }) {
@@ -100,6 +115,10 @@ export function PartnerDraftPhotoUpload({
   const [media, setMedia] = React.useState<PartnerProofMedia[]>([]);
   const [files, setFiles] = React.useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = React.useState<number[]>([]);
+  const [uploadStatuses, setUploadStatuses] = React.useState<
+    PartnerSelectedPhotoStatus[]
+  >([]);
+  const [phase, setPhase] = React.useState<DraftPhotoUploadPhase>("idle");
   const [category, setCategory] = React.useState("intake");
   const [caption, setCaption] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -114,6 +133,9 @@ export function PartnerDraftPhotoUpload({
   const uploadClientIdsRef = React.useRef<string[]>([]);
   const uploadOperationKeyRef = React.useRef<string | null>(null);
   const finalizeOperationKeysRef = React.useRef(new Map<string, string>());
+  const batchGenerationRef = React.useRef(0);
+  const batchIntentIdsRef = React.useRef<string[] | null>(null);
+  const busyRef = React.useRef(false);
   const [uploadAttemptStarted, setUploadAttemptStarted] = React.useState(false);
 
   React.useEffect(() => {
@@ -121,19 +143,63 @@ export function PartnerDraftPhotoUpload({
       files.length > 0 || busy || preparingFiles || deletingId !== null,
     );
   }, [files.length, busy, preparingFiles, deletingId, onPendingChange]);
+  React.useEffect(() => onPhaseChange?.(phase), [phase, onPhaseChange]);
+
+  const setUploadBusy = React.useCallback((value: boolean) => {
+    busyRef.current = value;
+    setBusy(value);
+  }, []);
 
   const resetUploadAttempt = React.useCallback(() => {
+    batchGenerationRef.current += 1;
+    batchIntentIdsRef.current = null;
     uploadOperationKeyRef.current = null;
     finalizeOperationKeysRef.current.clear();
     setUploadAttemptStarted(false);
   }, []);
 
+  const finishAttachedBatch = React.useCallback(() => {
+    setFiles([]);
+    setUploadProgress([]);
+    setUploadStatuses([]);
+    uploadClientIdsRef.current = [];
+    resetUploadAttempt();
+    setUploadBusy(false);
+    setPhase("attached");
+    setCaption("");
+    if (inputRef.current) inputRef.current.value = "";
+    setMessage({
+      tone: "success",
+      text: "Photos attached to this saved request.",
+    });
+    trackPartnerFunnelEvent({
+      stage: "upload_completed",
+      persona,
+      surface: "draft_upload",
+    });
+  }, [persona, resetUploadAttempt, setUploadBusy]);
+
   const refresh = React.useCallback(async (): Promise<boolean> => {
+    const generation = batchGenerationRef.current;
+    const expectedIds = batchIntentIdsRef.current;
+    if (expectedIds) {
+      setUploadBusy(true);
+      setPhase("saving");
+    }
     const result = await partnerPortalFetch<{
       ok: true;
       media: PartnerProofMedia[];
     }>(`booking-drafts/${draftId}/media`).catch(() => null);
+    // A late read from an earlier selection cannot complete or replace this batch.
+    if (generation !== batchGenerationRef.current) return false;
     if (!result?.ok) {
+      if (expectedIds) {
+        setUploadBusy(false);
+        setPhase("error");
+        setUploadStatuses((current) =>
+          current.map((value) => (value === "attached" ? value : "error")),
+        );
+      }
       onCountChange(null);
       const status = result?.response.status ?? 503;
       setState(
@@ -153,6 +219,13 @@ export function PartnerDraftPhotoUpload({
       !Array.isArray(result.data.media) ||
       !result.data.media.every(isPortalProofMedia)
     ) {
+      if (expectedIds) {
+        setUploadBusy(false);
+        setPhase("error");
+        setUploadStatuses((current) =>
+          current.map((value) => (value === "attached" ? value : "error")),
+        );
+      }
       onCountChange(null);
       setState("error");
       setLoadError(
@@ -170,14 +243,35 @@ export function PartnerDraftPhotoUpload({
     );
     setState("ready");
     setLoadError(null);
+    if (expectedIds) {
+      const attachedIds = new Set(
+        result.data.media
+          .filter((item) => item.status === "ready")
+          .map((item) => item.id),
+      );
+      if (expectedIds.every((id) => attachedIds.has(id))) {
+        finishAttachedBatch();
+      } else {
+        setUploadBusy(false);
+        setPhase("error");
+        setUploadStatuses(
+          expectedIds.map((id) => (attachedIds.has(id) ? "attached" : "error")),
+        );
+        setMessage({
+          tone: "error",
+          text: "Some photos are not attached yet. Retry the unfinished photos to safely check the same files.",
+        });
+      }
+    }
     return true;
-  }, [draftId, onCountChange]);
+  }, [draftId, onCountChange, finishAttachedBatch, setUploadBusy]);
 
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
 
   const chooseFiles = async (list: FileList | null): Promise<void> => {
+    if (busyRef.current || preparingFiles || deletingId) return;
     const selected = Array.from(list ?? []);
     if (!selected.length) return;
     if (selected.length > 10) {
@@ -198,6 +292,7 @@ export function PartnerDraftPhotoUpload({
       return;
     }
     setPreparingFiles(true);
+    setPhase("preparing");
     setMessage(null);
     let prepared: Awaited<ReturnType<typeof preparePortalImageForUpload>>[];
     try {
@@ -206,6 +301,7 @@ export function PartnerDraftPhotoUpload({
       );
     } catch {
       setPreparingFiles(false);
+      setPhase(files.length ? "error" : "idle");
       setMessage({
         tone: "error",
         text: "These photos could not be prepared. Try selecting them again. Your previous selection is still here.",
@@ -215,11 +311,13 @@ export function PartnerDraftPhotoUpload({
     const uploadFiles = prepared.map((item) => item.file);
     setFiles(uploadFiles);
     setUploadProgress(uploadFiles.map(() => 0));
+    setUploadStatuses(uploadFiles.map(() => "ready"));
     uploadClientIdsRef.current = selected.map(
       () => `photo_${crypto.randomUUID().replace(/-/gu, "")}`,
     );
     resetUploadAttempt();
     setPreparingFiles(false);
+    setPhase("ready");
     const compressedCount = prepared.filter((item) => item.compressed).length;
     if (compressedCount > 0) {
       setMessage({
@@ -234,6 +332,7 @@ export function PartnerDraftPhotoUpload({
   };
 
   const upload = async (): Promise<void> => {
+    if (busyRef.current || preparingFiles || deletingId) return;
     if (!files.length) {
       setMessage({
         tone: "error",
@@ -242,7 +341,12 @@ export function PartnerDraftPhotoUpload({
       inputRef.current?.focus();
       return;
     }
-    setBusy(true);
+    setUploadBusy(true);
+    setPhase("starting");
+    setUploadStatuses((current) =>
+      current.map((value) => (value === "attached" ? value : "ready")),
+    );
+    const generation = batchGenerationRef.current;
     setUploadAttemptStarted(true);
     setMessage(null);
     trackPartnerFunnelEvent({
@@ -282,7 +386,11 @@ export function PartnerDraftPhotoUpload({
         persona,
         surface: "draft_upload",
       });
-      setBusy(false);
+      setUploadBusy(false);
+      setPhase("error");
+      setUploadStatuses((current) =>
+        current.map((value) => (value === "attached" ? value : "error")),
+      );
       setMessage({
         tone: "error",
         text: result?.error.message ?? "The photo upload could not be started.",
@@ -295,11 +403,34 @@ export function PartnerDraftPhotoUpload({
     );
     let finalizedFailure: string | null = null;
     try {
-      if (result.data.intents.length !== files.length) {
+      if (
+        !Array.isArray(result.data.intents) ||
+        result.data.intents.length !== files.length ||
+        result.data.intents.some(
+          (intent) =>
+            !intent ||
+            typeof intent.id !== "string" ||
+            !intent.id ||
+            typeof intent.status !== "string" ||
+            typeof intent.requiresUpload !== "boolean" ||
+            typeof intent.alreadyExists !== "boolean",
+        ) ||
+        new Set(result.data.intents.map((intent) => intent.id)).size !==
+          files.length
+      ) {
         throw new Error("upload_intent_count_mismatch");
       }
+      batchIntentIdsRef.current = result.data.intents.map(
+        (intent) => intent.id,
+      );
       for (const [index, intent] of result.data.intents.entries()) {
         if (intent.status === "ready") {
+          setPhase("saving");
+          setUploadStatuses((current) =>
+            current.map((value, itemIndex) =>
+              itemIndex === index ? "saving" : value,
+            ),
+          );
           setUploadProgress((current) =>
             current.map((value, itemIndex) =>
               itemIndex === index ? 100 : value,
@@ -313,6 +444,12 @@ export function PartnerDraftPhotoUpload({
           if (!intent.uploadIntent) {
             throw new Error("upload_intent_incomplete");
           }
+          setPhase("uploading");
+          setUploadStatuses((current) =>
+            current.map((value, itemIndex) =>
+              itemIndex === index ? "uploading" : value,
+            ),
+          );
           await uploadPortalFileWithProgress({
             url: intent.uploadIntent.url,
             method: intent.uploadIntent.method,
@@ -327,6 +464,17 @@ export function PartnerDraftPhotoUpload({
             },
           });
         }
+        setPhase("saving");
+        setUploadProgress((current) =>
+          current.map((value, itemIndex) =>
+            itemIndex === index ? 100 : value,
+          ),
+        );
+        setUploadStatuses((current) =>
+          current.map((value, itemIndex) =>
+            itemIndex === index ? "saving" : value,
+          ),
+        );
         const finalizeOperationKey =
           finalizeOperationKeysRef.current.get(intent.id) ??
           createPortalOperationKey("draft-photo-finalize");
@@ -355,8 +503,13 @@ export function PartnerDraftPhotoUpload({
         persona,
         surface: "draft_upload",
       });
-      setBusy(false);
       await refresh();
+      if (generation !== batchGenerationRef.current) return;
+      setUploadBusy(false);
+      setPhase("error");
+      setUploadStatuses((current) =>
+        current.map((value) => (value === "attached" ? value : "error")),
+      );
       setMessage({
         tone: "error",
         text:
@@ -373,41 +526,20 @@ export function PartnerDraftPhotoUpload({
 
     // Keep the retry identity and selected files until the saved photos are
     // confirmed by a read. A successful transfer alone does not prove attachment.
-    const confirmed = await refresh();
-    setBusy(false);
-    if (
-      !confirmed ||
-      !result.data.intents.every((intent) =>
-        mediaRef.current.some(
-          (item) => item.id === intent.id && item.status === "ready",
-        ),
-      )
-    ) {
-      setMessage({
-        tone: "error",
-        text: "Your photos were transferred, but we could not confirm they were attached. Try again to check the same photos safely.",
-      });
-      return;
-    }
-    setFiles([]);
-    setUploadProgress([]);
-    uploadClientIdsRef.current = [];
-    resetUploadAttempt();
-    setCaption("");
-    if (inputRef.current) inputRef.current.value = "";
+    await refresh();
+    if (generation !== batchGenerationRef.current) return;
+    setUploadBusy(false);
+    setPhase("error");
     setMessage({
-      tone: "success",
-      text: "Photos attached to this saved request.",
-    });
-    trackPartnerFunnelEvent({
-      stage: "upload_completed",
-      persona,
-      surface: "draft_upload",
+      tone: "error",
+      text: "Your photos were transferred, but we could not confirm they were attached. Try again to check the same photos safely.",
     });
   };
 
   const remove = async (item: PartnerProofMedia): Promise<void> => {
+    if (busyRef.current || preparingFiles || deletingId) return;
     setDeletingId(item.id);
+    setPhase("saving");
     setMessage(null);
     const result = await partnerPortalFetch<{ ok: true }>(
       `booking-drafts/${draftId}/media/${item.id}`,
@@ -415,6 +547,7 @@ export function PartnerDraftPhotoUpload({
     ).catch(() => null);
     setDeletingId(null);
     if (!result?.ok) {
+      setPhase("error");
       setMessage({
         tone: "error",
         text: result?.error.message ?? "The photo was not removed.",
@@ -427,6 +560,7 @@ export function PartnerDraftPhotoUpload({
     mediaRef.current = next;
     setMedia(next);
     onCountChange(next.filter((item) => item.status === "ready").length);
+    setPhase(files.length ? "ready" : "idle");
     setMessage({ tone: "success", text: "Photo removed from this request." });
   };
 
@@ -452,7 +586,7 @@ export function PartnerDraftPhotoUpload({
         </h3>
         <p className="mt-1 text-sm leading-6 text-slate-600">
           {compact
-            ? "Add photos of the items, work area, or access."
+            ? "Choose photos, then attach them to this request."
             : "Show current conditions, items, access constraints, or an issue. Photos stay private and transfer to the job when you submit."}
         </p>
       </div>
@@ -552,6 +686,7 @@ export function PartnerDraftPhotoUpload({
         <button
           type="button"
           onClick={() => void refresh()}
+          disabled={busy || preparingFiles || deletingId !== null}
           className={cn(partnerPrimaryButtonClass, "mt-3")}
         >
           Try again
@@ -592,6 +727,7 @@ export function PartnerDraftPhotoUpload({
           <button
             type="button"
             onClick={() => void refresh()}
+            disabled={busy || preparingFiles || deletingId !== null}
             className={cn(partnerPrimaryButtonClass, "mt-3")}
           >
             Try again
@@ -614,7 +750,7 @@ export function PartnerDraftPhotoUpload({
                   className={partnerSecondaryButtonClass}
                 >
                   <Camera className="h-4 w-4" aria-hidden="true" />
-                  {files.length ? "Choose different photos" : "Add photos"}
+                  {files.length ? "Choose different photos" : "Choose photos"}
                 </button>
                 {fileInput}
               </div>
@@ -655,36 +791,6 @@ export function PartnerDraftPhotoUpload({
                   again to start a new batch.
                 </p>
               ) : null}
-              {files.length ? (
-                <>
-                  <p className="mt-1 text-sm text-slate-700">
-                    {files.length} photo{files.length === 1 ? "" : "s"} selected
-                    {busy ? " · Uploading" : " · Not attached yet"}
-                  </p>
-                  <PartnerSelectedPhotoPreviews
-                    files={files}
-                    clientIds={uploadClientIdsRef.current}
-                    progress={uploadProgress}
-                    label="Selected booking photo previews and upload progress"
-                  />
-                  {compact ? (
-                    <details className="mt-3 border-t border-slate-200 pt-1">
-                      <summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold text-slate-700">
-                        Photo details (optional)
-                        {category !== "intake" || caption.trim() ? (
-                          <span className="ml-2 font-normal text-slate-500">
-                            Details added
-                          </span>
-                        ) : null}
-                      </summary>
-                      <div className="grid gap-3 pb-2 sm:grid-cols-2">
-                        {categoryField}
-                        {captionField}
-                      </div>
-                    </details>
-                  ) : null}
-                </>
-              ) : null}
               <button
                 type="button"
                 onClick={() => void upload()}
@@ -706,7 +812,11 @@ export function PartnerDraftPhotoUpload({
                 {preparingFiles
                   ? "Preparing photos…"
                   : busy
-                    ? "Uploading…"
+                    ? phase === "saving"
+                      ? "Saving photos…"
+                      : phase === "starting"
+                        ? "Starting upload…"
+                        : "Uploading photos…"
                     : uploadAttemptStarted
                       ? "Retry photos"
                       : "Attach photos"}
@@ -719,8 +829,11 @@ export function PartnerDraftPhotoUpload({
                     "mt-3 w-full sm:ml-2 sm:w-auto",
                   )}
                   onClick={() => {
+                    if (busyRef.current || preparingFiles || deletingId) return;
                     setFiles([]);
                     setUploadProgress([]);
+                    setUploadStatuses([]);
+                    setPhase("idle");
                     uploadClientIdsRef.current = [];
                     resetUploadAttempt();
                     setCaption("");
@@ -730,6 +843,45 @@ export function PartnerDraftPhotoUpload({
                 >
                   Clear selection
                 </button>
+              ) : null}
+              {files.length ? (
+                <>
+                  <p className="mt-1 text-sm text-slate-700">
+                    {files.length} photo{files.length === 1 ? "" : "s"} selected
+                    {phase === "starting"
+                      ? " · Starting upload"
+                      : phase === "uploading"
+                        ? " · Uploading"
+                        : phase === "saving"
+                          ? " · Saving"
+                          : phase === "error"
+                            ? " · Needs retry"
+                            : " · Ready to attach"}
+                  </p>
+                  <PartnerSelectedPhotoPreviews
+                    files={files}
+                    clientIds={uploadClientIdsRef.current}
+                    progress={uploadProgress}
+                    statuses={uploadStatuses}
+                    label="Selected booking photo previews and upload progress"
+                  />
+                  {compact ? (
+                    <details className="mt-3 border-t border-slate-200 pt-1">
+                      <summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold text-slate-700">
+                        Photo details (optional)
+                        {category !== "intake" || caption.trim() ? (
+                          <span className="ml-2 font-normal text-slate-500">
+                            Details added
+                          </span>
+                        ) : null}
+                      </summary>
+                      <div className="grid gap-3 pb-2 sm:grid-cols-2">
+                        {categoryField}
+                        {captionField}
+                      </div>
+                    </details>
+                  ) : null}
+                </>
               ) : null}
             </div>
           ) : null}
@@ -778,13 +930,20 @@ export function PartnerDraftPhotoUpload({
                   <p className="mt-1 text-xs text-slate-500">
                     {formatBytes(item.byteSize)}
                   </p>
-                  {item.status !== "ready" ? (
-                    <p className="mt-1 text-xs font-medium text-amber-800">
-                      {item.status === "failed"
+                  <p
+                    className={cn(
+                      "mt-1 text-xs font-medium",
+                      item.status === "ready"
+                        ? "text-emerald-700"
+                        : "text-amber-800",
+                    )}
+                  >
+                    {item.status === "ready"
+                      ? "Attached"
+                      : item.status === "failed"
                         ? "Upload needs retry"
                         : "Attachment not finished"}
-                    </p>
-                  ) : null}
+                  </p>
                   {item.caption ? (
                     <p className="mt-2 text-sm leading-5 text-slate-600">
                       {item.caption}
@@ -806,7 +965,7 @@ export function PartnerDraftPhotoUpload({
                       <button
                         type="button"
                         onClick={() => void remove(item)}
-                        disabled={deletingId === item.id}
+                        disabled={busy || preparingFiles || deletingId !== null}
                         className={cn(
                           partnerSecondaryButtonClass,
                           "text-rose-800",
