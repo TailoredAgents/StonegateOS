@@ -221,3 +221,10 @@ Browser checks at 1440px, 768px, 375px, and 320px confirmed the approved copy,
 four cards in the correct order, two columns on desktop/tablet, and one column
 on mobile. No overflow, page errors, forms, or focused service-section
 accessibility violations were found. Desktop/mobile screenshots were reviewed.
+
+Runtime commit `79f57dcb5e93bc2b5f8a7bc2256d2865071b77b5` was deployed as
+`dep-dalaas7f3r2c73fic67g`, finished September 16 at 14:23:54 UTC and confirmed
+live at 14:24:17 UTC. Final checks on the public domain passed at all four
+viewport widths for the approved washing copy, card order, responsive columns,
+overflow, accessibility, and page errors. Health/readiness returned 200. The
+existing live subcontractor release was preserved at the final base check.
