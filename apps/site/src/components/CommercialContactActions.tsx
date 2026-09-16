@@ -6,12 +6,14 @@ type CommercialContactActionsProps = {
   placement: string;
   compact?: boolean;
   showEmail?: boolean;
+  textLabel?: string;
 };
 
 export function CommercialContactActions({
   placement,
   compact = false,
   showEmail = true,
+  textLabel = "Text Us",
 }: CommercialContactActionsProps) {
   const company = getPublicCompanyProfile();
 
@@ -43,7 +45,7 @@ export function CommercialContactActions({
             href={`sms:${company.phoneE164}`}
             data-cta={`commercial-${placement}-text`}
           >
-            Text Us
+            {textLabel}
           </a>
         </Button>
       </div>

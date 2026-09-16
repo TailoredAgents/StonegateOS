@@ -165,3 +165,31 @@ Live browser checks confirmed the updated displayed and structured hours on
 `/contractors`, `/contact`, and `/pricing`. The commercial page passed at
 1440px and 320px with no overflow or mobile footer obstruction. Checks used
 the Render origin because of the previously documented local network filter.
+
+## Contractor subcontractor positioning
+
+Reworked `/contractors` around bringing us onto a project as a subcontractor
+for demo, hauling, and cleanup. The hero introduces single-project or recurring
+crew support without adding permanent staff. Service groups cover selective
+interior demolition, construction debris, material hauling, rental/flip
+cleanouts, and brush/exterior cleanup. Contractor pricing, recurring scheduling,
+before-and-after photos, and invoicing replace the previous general audience
+grid. Same-day/next-day service remains conditional on availability.
+
+The closing section invites photos of unusual jobs so we can confirm whether
+the work is a fit. Hero and closing SMS buttons read “Text Job Photos”; phone
+calls stay first, email remains available, and existing destinations and event
+placement labels are retained. First-person copy, flowing brand edges, current
+hours, and the form-free layout are preserved. Page and social metadata now
+describe contractor support. No scheduling, campaign, or API settings changed.
+
+Scoped lint, production build (including TypeScript), and independent copy and
+contact-tracking source review passed.
+
+Production-built browser checks passed at 1440px, 375px, and 320px: correct
+contact destinations, call/text/email events with campaign context, one Pixel
+script, no primary conversions from taps, no forms, no overflow, no focused
+accessibility violations, and no page errors. Brand colors, noninteractive
+curves, sticky header, and mobile footer clearance also passed. The local
+tracking run supplied the public Pixel ID and a local API URL at build time;
+requests were intercepted and no calls, messages, or lead conversions were sent.
