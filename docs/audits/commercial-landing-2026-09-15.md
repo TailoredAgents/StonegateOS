@@ -123,3 +123,24 @@ files plus this audit, preserving that intervening release.
 Independent comparison confirmed all 13 intervening files are byte-identical
 to the live base. The production build, including TypeScript validation,
 passed again on that base.
+
+Runtime commit `e4648a0205a4871bd9b7dc513e3dece5f760c6a1` was deployed as
+`dep-dakuoju7bikc73dokre0`, finished September 16 at 01:13:30 UTC and confirmed
+live at 01:32:47 UTC. Render reports both public custom domains as verified.
+
+Post-deploy browser checks on the same production service at
+`https://stonegate-site.onrender.com/contractors` passed at 1440px, 375px, and
+320px: two noninteractive curved decorations, correct brand colors, sticky
+header, unobscured mobile footer links, no forms or overflow, no focused
+accessibility violations or page errors, and preserved contact-click events.
+Health, readiness, and the page returned 200; readiness was true. Contact
+requests were intercepted and no real calls, messages, or primary conversions
+were sent.
+
+Direct verification through `stonegatejunkremoval.com` was blocked from this
+connection: HTTPS failed before page load, and HTTP redirected to a
+`safebrowse.io` warning. Thus these final browser results validate the deployed
+production origin; public-domain access from this connection remains unverified.
+No network or security configuration was changed.
+
+Review: https://github.com/TailoredAgents/StonegateOS/pull/4.
