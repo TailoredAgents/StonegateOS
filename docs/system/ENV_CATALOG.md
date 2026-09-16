@@ -17,6 +17,15 @@ Required for normal operation:
 - `API_BASE_URL` (server actions calling API)
 - `ADMIN_API_KEY` (Team Console server actions → API)
 
+Partner Portal photos (Site build-time setting):
+
+- `PARTNER_MEDIA_STORAGE_ORIGIN` — exact HTTPS origin of the private upload and
+  preview URLs issued by the API, with no trailing slash, path, or credentials.
+  Configure it in production and rebuild the Site so photo uploads and previews
+  continue to work after navigating from Billing. This is a nonsecret browser
+  allowlist value; storage credentials remain on the API. Bucket CORS must also
+  allow the canonical portal origin and the signed upload's method and headers.
+
 Public branding (build-time, keeps marketing pages cacheable):
 
 - `NEXT_PUBLIC_COMPANY_NAME`
