@@ -156,3 +156,12 @@ pricing page. No deployed public-hours environment override was present.
 
 Booking availability policies are separate and were not changed by this
 display update. Scoped lint and independent review passed.
+
+Contentlayer generation and the production build passed. Runtime commit
+`5ee640475b487f6ca27ce19d4eaf746dba02f63a` was deployed as
+`dep-dakve85g1s2s73dmuq80`, finished September 16 at 01:59:31 UTC and confirmed
+live at 01:59:35 UTC. Production-origin health/readiness returned 200.
+Live browser checks confirmed the updated displayed and structured hours on
+`/contractors`, `/contact`, and `/pricing`. The commercial page passed at
+1440px and 320px with no overflow or mobile footer obstruction. Checks used
+the Render origin because of the previously documented local network filter.
