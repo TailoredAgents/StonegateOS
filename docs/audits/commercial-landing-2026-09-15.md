@@ -95,3 +95,10 @@ Desktop (1440px) and mobile (375px/320px) browser checks passed with no overflow
 no focused accessibility violations, and working contact-click measurement.
 Independent visual/source review, changed-code lint, and the production
 Turbopack build (including TypeScript validation) passed.
+
+Styling runtime commit `c46ae5596aa8a4aa5554d3bb775d38e96b97ca27` was deployed
+as `dep-daktptjl550s73as016g`, finished September 16 at 00:07:58 UTC and confirmed
+live at 00:08:28 UTC. Website health/readiness and `/contractors` returned 200.
+Live checks at all three viewport widths verified the navy/gold palette,
+noninteractive decorative SVGs, sticky header, unobscured mobile footer links,
+no forms/overflow/accessibility violations, and preserved contact-click events.
