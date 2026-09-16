@@ -292,6 +292,14 @@ async function enterDetails(
   }))
     await page.locator(`#partner-book-${id}`).fill(value);
   await openRow(page, "Special requirements");
+  for (const group of [
+    "Handling and access",
+    "Materials needing review",
+    "Completion deadline",
+    "Additional stops",
+    "Quantity estimate",
+  ])
+    await openRow(page, group);
   await page.locator("#partner-book-item-count").fill("7");
   await page.locator("#partner-book-volume").fill("3.5");
   for (const name of [
@@ -301,7 +309,7 @@ async function enterDetails(
     "Batteries or powered equipment",
     "Loading dock",
     "Lift gate or loading equipment",
-    "This request has more than one pickup or service stop",
+    "More than one service stop",
   ])
     await page.getByRole("checkbox", { name: new RegExp(name) }).check();
   await page.locator("#partner-book-required-date").fill(deadline);

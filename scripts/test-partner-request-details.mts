@@ -329,6 +329,9 @@ for (const engine of [chromium, webkit])
             await open(page, title);
           for (const value of [
             "Multiple-person or heavy lift",
+            "Paint or coatings",
+            "Collect the second shelf from Suite 9.",
+            "4 cubic yards",
             "Taylor Reed",
             "Suite 8",
             "OPS-41",
@@ -341,6 +344,21 @@ for (const engine of [chromium, webkit])
             await expect(
               page.getByText(value, { exact: false }).first(),
             ).toBeVisible();
+          const specialSummary = page
+            .locator("summary")
+            .filter({ hasText: /^Special requirements/ });
+          const specialBody = specialSummary.locator("..");
+          const originalSpecialText = await specialBody.innerText();
+          await specialSummary.focus();
+          await specialSummary.press("Space");
+          await expect(specialBody).toHaveJSProperty("open", false);
+          await expect(specialSummary).toContainText("Multiple stops");
+          await open(page, "Special requirements");
+          assert.equal(
+            await specialBody.innerText(),
+            originalSpecialText,
+            "The CRM preserves every requirement when its disclosure is closed and reopened",
+          );
           await fits(page);
           await page.screenshot({
             path: `${directory}/${engine.name()}-${width}-expanded.png`,

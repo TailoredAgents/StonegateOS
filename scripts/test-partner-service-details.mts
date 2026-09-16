@@ -220,6 +220,23 @@ async function screenshot(
   });
 }
 
+async function specialRequirementsScreenshot(
+  details: Locator,
+  engine: string,
+  width: number,
+  state: string,
+) {
+  const directory = process.env["PARTNER_SPECIAL_REQUIREMENTS_PREVIEW_DIR"];
+  if (!directory) return;
+  mkdirSync(directory, { recursive: true });
+  await details.screenshot({
+    path: join(
+      directory,
+      `special-requirements-${engine}-${width}-${state}.png`,
+    ),
+  });
+}
+
 for (const engine of [chromium, webkit]) {
   for (const width of [1440, 375]) {
     void test(
@@ -439,12 +456,186 @@ for (const engine of [chromium, webkit]) {
 
           const special = disclosure(page, "Special requirements");
           await toggle(special, true);
+          const specialGroups = [
+            "Handling and access",
+            "Materials needing review",
+            "Completion deadline",
+            "Additional stops",
+            "Quantity estimate",
+          ];
+          for (const name of specialGroups) {
+            const group = disclosure(page, name);
+            await expect(group).toHaveJSProperty("open", false);
+            await expect(group.locator(":scope > summary")).toBeVisible();
+          }
+          // Collapsed controls remain mounted but outside the keyboard flow.
+          await expect(page.locator("#partner-book-item-count")).toHaveCount(1);
+          await expect(
+            page.locator("#partner-book-item-count"),
+          ).not.toBeVisible();
+          const firstSpecialSummary = disclosure(
+            page,
+            specialGroups[0]!,
+          ).locator(":scope > summary");
+          await firstSpecialSummary.focus();
+          for (const name of specialGroups.slice(1)) {
+            await page.keyboard.press("Tab");
+            await expect(
+              disclosure(page, name).locator(":scope > summary"),
+            ).toBeFocused();
+          }
+          await fits(page);
+          await specialRequirementsScreenshot(
+            special,
+            engine.name(),
+            width,
+            "empty",
+          );
+
+          const handling = disclosure(page, "Handling and access");
+          await toggle(handling, true);
+          await handling
+            .getByRole("checkbox", { name: /Heavy items or unusual work/ })
+            .check();
+          await handling
+            .getByRole("checkbox", { name: "Loading dock", exact: true })
+            .check();
+          await fits(page);
+          await specialRequirementsScreenshot(
+            special,
+            engine.name(),
+            width,
+            "handling-expanded",
+          );
+          await toggle(handling, false, "Space");
+          await expect(handling.locator(":scope > summary")).toContainText(
+            "Loading dock",
+          );
+
+          const materials = disclosure(page, "Materials needing review");
+          await toggle(materials, true, "Space");
+          await materials
+            .getByRole("checkbox", {
+              name: /Materials needing special handling/,
+            })
+            .check();
+          await materials
+            .getByRole("checkbox", { name: "Paint or coatings", exact: true })
+            .check();
+          await toggle(materials, false);
+          await expect(materials.locator(":scope > summary")).toContainText(
+            "Paint or coatings",
+          );
+
+          const deadline = disclosure(page, "Completion deadline");
+          await toggle(deadline, true);
+          await page.locator("#partner-book-required-date").fill("2026-10-04");
+          await page.locator("#partner-book-required-time").fill("16:00");
+          await toggle(deadline, false);
+          await expect(deadline.locator(":scope > summary")).toContainText(
+            /Oct|10\/4|2026-10-04/,
+          );
+
+          const stops = disclosure(page, "Additional stops");
+          await toggle(stops, true);
+          await stops
+            .getByRole("checkbox", {
+              name: "More than one service stop",
+            })
+            .check();
+          await page
+            .locator("#partner-book-multi-stop-details")
+            .fill("Collect the second shelf from Suite 9.");
+          await toggle(stops, false);
+          await expect(stops.locator(":scope > summary")).toContainText(
+            "Suite 9",
+          );
+
+          const quantity = disclosure(page, "Quantity estimate");
+          await toggle(quantity, true);
           await page.locator("#partner-book-item-count").fill("4");
+          await page.locator("#partner-book-volume").fill("2.5");
+          await toggle(quantity, false);
+          await expect(quantity.locator(":scope > summary")).toContainText("4");
+          await expect(quantity.locator(":scope > summary")).toContainText(
+            "2.5",
+          );
+          const expectedScope = {
+            itemCount: 4,
+            volumeCubicYards: 2.5,
+            restrictedItems: true,
+            nonStandard: true,
+            hazardCategories: ["paint"],
+            equipmentNeeds: ["loading_dock"],
+            requiredCompletion: { localDate: "2026-10-04", localTime: "16:00" },
+            multiStop: true,
+            multiStopDetails: "Collect the second shelf from Suite 9.",
+          };
+          await expect.poll(() => saved.scope).toEqual(expectedScope);
+          await fits(page);
+          await specialRequirementsScreenshot(
+            special,
+            engine.name(),
+            width,
+            "saved-summaries",
+          );
           await toggle(special, false);
           await toggle(special, true, "Space");
+          for (const name of specialGroups)
+            await expect(disclosure(page, name)).toHaveJSProperty(
+              "open",
+              false,
+            );
+          await toggle(quantity, true);
           await expect(page.locator("#partner-book-item-count")).toHaveValue(
             "4",
           );
+          await expect(page.locator("#partner-book-volume")).toHaveValue("2.5");
+          // A validation link must reveal both the outer row and nested group.
+          await page.locator("#partner-book-item-count").fill("-1");
+          await expect(page.locator("#partner-book-item-count")).toHaveValue(
+            "-1",
+          );
+          await toggle(quantity, false);
+          await toggle(special, false);
+          await page
+            .getByRole("button", {
+              name: "Continue to scheduling",
+              exact: true,
+            })
+            .click();
+          const scopeErrorSummary = page.locator("#partner-book-error-summary");
+          await expect(scopeErrorSummary).toBeFocused();
+          await expect(scopeErrorSummary).toContainText(
+            "Enter a whole item count of zero or more.",
+          );
+          await expect(special).toHaveJSProperty("open", true);
+          await expect(quantity).toHaveJSProperty("open", true);
+          await toggle(quantity, false);
+          await toggle(special, false);
+          // Repeating unchanged validation must reopen both levels too.
+          await page
+            .getByRole("button", {
+              name: "Continue to scheduling",
+              exact: true,
+            })
+            .click();
+          await expect(scopeErrorSummary).toBeFocused();
+          await expect(special).toHaveJSProperty("open", true);
+          await expect(quantity).toHaveJSProperty("open", true);
+          await toggle(quantity, false);
+          await toggle(special, false);
+          const quantityError = scopeErrorSummary.getByRole("link", {
+            name: "Enter a whole item count of zero or more.",
+            exact: true,
+          });
+          await quantityError.focus();
+          await quantityError.press("Enter");
+          await expect(special).toHaveJSProperty("open", true);
+          await expect(quantity).toHaveJSProperty("open", true);
+          await expect(page.locator("#partner-book-item-count")).toBeFocused();
+          await page.locator("#partner-book-item-count").fill("4");
+          await toggle(quantity, false);
           await toggle(special, false);
 
           const billing = disclosure(page, "Work order and billing");
@@ -487,6 +678,11 @@ for (const engine of [chromium, webkit]) {
             .poll(() => saved.commercial.poNumber)
             .toBe("WO-2026-015");
           await expect.poll(() => saved.proofRequirements.before).toBe(2);
+          assert.deepEqual(
+            saved.scope,
+            expectedScope,
+            "Closing requirement groups preserves the complete outbound scope",
+          );
 
           // Keyboard activation opens the real file input. Preferences for crew
           // completion photos cannot erase reference files awaiting attachment.
