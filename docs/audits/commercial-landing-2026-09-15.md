@@ -193,3 +193,16 @@ accessibility violations, and no page errors. Brand colors, noninteractive
 curves, sticky header, and mobile footer clearance also passed. The local
 tracking run supplied the public Pixel ID and a local API URL at build time;
 requests were intercepted and no calls, messages, or lead conversions were sent.
+
+Runtime commit `c0d28b91d4e26b2f998adcec2e9bde9b96d5dc44` was deployed as
+`dep-dala36jm8hqs73fe6hv0`, finished September 16 at 14:07:06 UTC and confirmed
+live at 14:08:11 UTC. The deployment preserved the existing live hours release
+`5ee64047`; no competing deployment was active at the final base check.
+
+Public-domain access worked for this release. Live checks directly on
+`https://stonegatejunkremoval.com/contractors` passed at all three viewport
+widths for the updated heading, contact events, Pixel mounting, accessibility,
+overflow, and brand/sticky layout. Health/readiness returned 200. Page/social
+metadata matched the contractor positioning, with the canonical URL retained.
+All contact interactions were intercepted. Review:
+https://github.com/TailoredAgents/StonegateOS/pull/5.
