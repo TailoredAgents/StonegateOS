@@ -95,3 +95,73 @@ Desktop (1440px) and mobile (375px/320px) browser checks passed with no overflow
 no focused accessibility violations, and working contact-click measurement.
 Independent visual/source review, changed-code lint, and the production
 Turbopack build (including TypeScript validation) passed.
+
+Styling runtime commit `c46ae5596aa8a4aa5554d3bb775d38e96b97ca27` was deployed
+as `dep-daktptjl550s73as016g`, finished September 16 at 00:07:58 UTC and confirmed
+live at 00:08:28 UTC. Website health/readiness and `/contractors` returned 200.
+Live checks at all three viewport widths verified the navy/gold palette,
+noninteractive decorative SVGs, sticky header, unobscured mobile footer links,
+no forms/overflow/accessibility violations, and preserved contact-click events.
+
+## Flowing edge revision
+
+Replaced the enclosing ticket-shaped treatment with smooth, full-width navy,
+gold, and green ribbons along the upper and lower page edges. Removed the
+corner cutouts, gold perimeter, side gutters, and navy padding outside the
+content. Both ribbons occupy normal flow and remain noninteractive; the white
+page, contact hierarchy, content, and tracking are preserved.
+
+Desktop and 375px/320px mobile checks passed for the palette, sticky header,
+footer clearance, contact clicks, accessibility, and overflow. Independent
+visual/source review and scoped lint passed. No additional regression tests
+were added for this styling-only change.
+
+The deployment base is the newer live release
+`3d48d1330163dc4c370e461aa434617d4f8c27e4`, which includes the partner photo upload
+and billing CSP fixes. The revision changes only the three commercial styling
+files plus this audit, preserving that intervening release.
+Independent comparison confirmed all 13 intervening files are byte-identical
+to the live base. The production build, including TypeScript validation,
+passed again on that base.
+
+Runtime commit `e4648a0205a4871bd9b7dc513e3dece5f760c6a1` was deployed as
+`dep-dakuoju7bikc73dokre0`, finished September 16 at 01:13:30 UTC and confirmed
+live at 01:32:47 UTC. Render reports both public custom domains as verified.
+
+Post-deploy browser checks on the same production service at
+`https://stonegate-site.onrender.com/contractors` passed at 1440px, 375px, and
+320px: two noninteractive curved decorations, correct brand colors, sticky
+header, unobscured mobile footer links, no forms or overflow, no focused
+accessibility violations or page errors, and preserved contact-click events.
+Health, readiness, and the page returned 200; readiness was true. Contact
+requests were intercepted and no real calls, messages, or primary conversions
+were sent.
+
+Direct verification through `stonegatejunkremoval.com` was blocked from this
+connection: HTTPS failed before page load, and HTTP redirected to a
+`safebrowse.io` warning. Thus these final browser results validate the deployed
+production origin; public-domain access from this connection remains unverified.
+No network or security configuration was changed.
+
+Review: https://github.com/TailoredAgents/StonegateOS/pull/4.
+
+## Business hours update
+
+Updated the shared public hours to Monday–Friday 8 AM–6:30 PM Eastern,
+Saturday 8 AM–4:30 PM Eastern, and Sunday closed. This supplies the commercial
+footer, regular footer, contact page, and other existing company-profile
+consumers. Search-engine structured data uses separate weekday and Saturday
+opening windows. Removed the conflicting 7 AM–7 PM/after-hours claim from the
+pricing page. No deployed public-hours environment override was present.
+
+Booking availability policies are separate and were not changed by this
+display update. Scoped lint and independent review passed.
+
+Contentlayer generation and the production build passed. Runtime commit
+`5ee640475b487f6ca27ce19d4eaf746dba02f63a` was deployed as
+`dep-dakve85g1s2s73dmuq80`, finished September 16 at 01:59:31 UTC and confirmed
+live at 01:59:35 UTC. Production-origin health/readiness returned 200.
+Live browser checks confirmed the updated displayed and structured hours on
+`/contractors`, `/contact`, and `/pricing`. The commercial page passed at
+1440px and 320px with no overflow or mobile footer obstruction. Checks used
+the Render origin because of the previously documented local network filter.

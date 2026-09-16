@@ -1,108 +1,48 @@
 .frame {
   --frame-navy: var(--commercial-navy, #082f45);
   --frame-gold: var(--commercial-gold, #c29b47);
-  --frame-green: var(--commercial-green, #1c4439);
-  --frame-gutter: 10px;
-  --frame-corner: clamp(14px, 2vw, 24px);
-  --frame-curve-height: clamp(24px, 4vw, 44px);
+  --frame-green: var(--commercial-green, #0b6b5b);
 
-  box-sizing: border-box;
-  min-block-size: 100vh;
-  min-block-size: 100svh;
-  padding: var(--frame-gutter);
-  background: var(--frame-navy);
-}
-
-.paper {
-  position: relative;
-  isolation: isolate;
   display: flex;
   flex-direction: column;
-  box-sizing: border-box;
   min-inline-size: 0;
-  min-block-size: calc(100vh - 2 * var(--frame-gutter));
-  min-block-size: calc(100svh - 2 * var(--frame-gutter));
-  border: 1px solid var(--frame-gold);
-  padding-block-end: var(--frame-curve-height);
+  min-block-size: 100vh;
+  min-block-size: 100svh;
   background: #fff;
 }
 
 .content {
   position: relative;
-  z-index: 1;
   flex: 1;
   min-inline-size: 0;
 }
 
-/* The reserved strip below content keeps the curve clear of footer links. */
-.bottomCurve {
-  position: absolute;
-  z-index: 0;
-  inset-inline: 0;
-  inset-block-end: 0;
+/* Normal-flow ribbons cannot cover content or alter the sticky header. */
+.edge {
   display: block;
+  flex: none;
   inline-size: 100%;
-  block-size: var(--frame-curve-height);
   pointer-events: none;
   user-select: none;
 }
 
-.corner {
-  position: absolute;
-  z-index: 2;
-  display: block;
-  inline-size: var(--frame-corner);
-  block-size: var(--frame-corner);
-  overflow: visible;
-  pointer-events: none;
-  user-select: none;
-}
-
-.topLeft {
-  inset-block-start: -1px;
-  inset-inline-start: -1px;
-}
-
-.topRight {
-  inset-block-start: -1px;
-  inset-inline-end: -1px;
-  transform: rotate(90deg);
-}
-
-.bottomRight {
-  inset-block-end: -1px;
-  inset-inline-end: -1px;
+.top {
+  block-size: clamp(32px, 4vw, 56px);
   transform: rotate(180deg);
 }
 
-.bottomLeft {
-  inset-block-end: -1px;
-  inset-inline-start: -1px;
-  transform: rotate(270deg);
+.bottom {
+  block-size: clamp(72px, 9vw, 136px);
 }
 
 .navy {
   fill: var(--frame-navy);
 }
 
+.gold {
+  fill: var(--frame-gold);
+}
+
 .green {
   fill: var(--frame-green);
-}
-
-.goldLine {
-  fill: none;
-  stroke: var(--frame-gold);
-  stroke-width: 1.25px;
-}
-
-@media (min-width: 640px) {
-  .frame {
-    --frame-gutter: 16px;
-  }
-}
-
-@media (min-width: 1024px) {
-  .frame {
-    --frame-gutter: 24px;
-  }
 }

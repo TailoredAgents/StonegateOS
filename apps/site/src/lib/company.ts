@@ -18,7 +18,7 @@ const FALLBACK_COMPANY: PublicCompanyProfile = {
   email: "sales@stonegatejunkremoval.com",
   logoPath: "/images/brand/Stonegatelogo.png",
   serviceAreaSummary: "Serving North Metro Atlanta and nearby Georgia communities.",
-  hoursSummary: "Mon-Sat 7:30 AM-7:30 PM ET. Sunday: on-call.",
+  hoursSummary: "Monday–Friday 8 AM–6:30 PM ET. Saturday 8 AM–4:30 PM ET. Sunday closed.",
   hqCity: "Woodstock",
   hqState: "GA",
   hqCountry: "US"
