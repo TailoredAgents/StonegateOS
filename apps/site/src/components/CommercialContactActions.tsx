@@ -1,5 +1,6 @@
 import { Button } from "@myst-os/ui";
 import { getPublicCompanyProfile } from "@/lib/company";
+import styles from "./CommercialTheme.module.css";
 
 type CommercialContactActionsProps = {
   placement: string;
@@ -20,7 +21,7 @@ export function CommercialContactActions({
         <Button
           asChild
           size={compact ? "md" : "lg"}
-          className={compact ? "min-h-12 flex-1 px-4" : "min-h-12"}
+          className={`${styles["call"]} ${compact ? "min-h-12 flex-1 px-4" : "min-h-12"}`}
         >
           <a
             href={`tel:${company.phoneE164}`}
@@ -36,7 +37,7 @@ export function CommercialContactActions({
           asChild
           variant="secondary"
           size={compact ? "md" : "lg"}
-          className={compact ? "min-h-12 flex-1 px-4" : "min-h-12"}
+          className={`${styles["text"]} ${compact ? "min-h-12 flex-1 px-4" : "min-h-12"}`}
         >
           <a
             href={`sms:${company.phoneE164}`}
@@ -50,7 +51,7 @@ export function CommercialContactActions({
         <a
           href={`mailto:${company.email}`}
           data-cta={`commercial-${placement}-email`}
-          className="inline-flex min-h-12 max-w-full items-center rounded text-sm text-primary-800 underline decoration-primary-300 underline-offset-4 hover:text-primary-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary-500"
+          className={`${styles["email"]} inline-flex min-h-12 max-w-full items-center rounded text-sm underline underline-offset-4 hover:text-primary-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary-500`}
         >
           <span className="break-all">{company.email}</span>
         </a>

@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { CommercialContactActions } from "@/components/CommercialContactActions";
 import { getPublicCompanyProfile } from "@/lib/company";
+import styles from "./CommercialTheme.module.css";
 
 const textLinkClass =
   "inline-flex min-h-12 items-center rounded text-sm text-neutral-700 hover:text-primary-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary-500";
@@ -10,7 +11,7 @@ export function CommercialHeader() {
   const company = getPublicCompanyProfile();
 
   return (
-    <header className="sticky top-0 z-40 border-b border-neutral-200 bg-white/95">
+    <header className={`${styles["header"]} sticky top-0 z-40 border-b`}>
       <a
         href="#main-content"
         className="sr-only rounded bg-white px-4 py-3 text-primary-800 focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-50 focus:outline focus:outline-2 focus:outline-primary-500"
@@ -58,7 +59,7 @@ export function CommercialFooter() {
   const company = getPublicCompanyProfile();
 
   return (
-    <footer className="border-t border-neutral-200 bg-white">
+    <footer className={`${styles["footer"]} border-t`}>
       <div className="mx-auto max-w-6xl px-6 py-10 md:px-10">
         <div className="grid gap-8 md:grid-cols-[1fr_auto] md:items-start">
           <div className="space-y-3 text-sm text-neutral-600">
@@ -101,7 +102,7 @@ export function CommercialStickyContactBar() {
   return (
     <nav
       aria-label="Contact us about your project"
-      className="fixed inset-x-0 bottom-0 z-50 border-t border-neutral-200 bg-white px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)] shadow-[0_-6px_20px_rgba(15,23,42,0.08)] md:hidden"
+      className={`${styles["sticky"]} fixed inset-x-0 bottom-0 z-50 px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)] shadow-[0_-6px_20px_rgba(15,23,42,0.08)] md:hidden`}
     >
       <div className="mx-auto max-w-xl">
         <CommercialContactActions

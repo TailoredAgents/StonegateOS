@@ -76,3 +76,22 @@ was changed by this release.
   OpenAI returned 202 for `page_viewed`. A fresh staff-login visit loaded no
   OpenAI Pixel. No real calls, messages, or synthetic lead conversions were sent.
 - Review: https://github.com/TailoredAgents/StonegateOS/pull/3.
+
+## Business-card styling
+
+Applied the supplied business card's navy, muted gold, and deep green to this
+page only. A responsive white-paper frame has navy outer gutters, fine gold
+edges, concave corners, and a reserved navy/green curved strip below the footer.
+The hero adds the card's gold line-and-diamond detail. Service cards have gold
+outlines and green icons; calls use navy buttons and texts use a gold outline.
+
+The treatment uses scoped CSS and decorative SVG, without adding raster images
+or image requests. Gold is used for decoration; readable navy/white text and
+green keyboard focus indicators retain contrast. Decorative elements are
+noninteractive and hidden from assistive technology. Contact destinations,
+content, analytics, privacy links, and the mobile contact bar remain intact.
+
+Desktop (1440px) and mobile (375px/320px) browser checks passed with no overflow,
+no focused accessibility violations, and working contact-click measurement.
+Independent visual/source review, changed-code lint, and the production
+Turbopack build (including TypeScript validation) passed.

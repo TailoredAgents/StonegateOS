@@ -4,6 +4,7 @@ import { Card, Section } from "@myst-os/ui";
 import { CommercialContactActions } from "@/components/CommercialContactActions";
 import { getPublicCompanyProfile } from "@/lib/company";
 import { absoluteUrl } from "@/lib/metadata";
+import styles from "@/components/CommercialTheme.module.css";
 
 const title = "Junk Removal, Demolition & Land Clearing";
 const description =
@@ -93,7 +94,7 @@ export default function ContractorsPage() {
   return (
     <>
       <Section
-        className="border-b border-neutral-200 bg-gradient-to-br from-primary-50/70 via-white to-white pb-12 pt-12 md:pb-16 md:pt-20"
+        className={`${styles["hero"]} border-b pb-12 pt-12 md:pb-16 md:pt-20`}
         aria-labelledby="commercial-heading"
       >
         <header className="max-w-5xl">
@@ -106,6 +107,9 @@ export default function ContractorsPage() {
           >
             Junk Removal, Demolition &amp; Land Clearing
           </h1>
+          <div className={styles["divider"]} aria-hidden="true">
+            <span />
+          </div>
           <p className="mt-6 max-w-3xl text-lg leading-8 text-neutral-700">
             We help landlords, property managers, contractors, investors, and
             businesses clear out, take down, and prepare their properties. Tell
@@ -139,9 +143,11 @@ export default function ContractorsPage() {
             <Card
               key={service.title}
               tone="outline"
-              className="flex h-full flex-col p-6 lg:p-7"
+              className={`${styles["serviceCard"]} flex h-full flex-col p-6 lg:p-7`}
             >
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-50 text-primary-800">
+              <div
+                className={`${styles["serviceIcon"]} flex h-11 w-11 items-center justify-center`}
+              >
                 <service.icon
                   className="h-6 w-6"
                   strokeWidth={1.7}
@@ -171,7 +177,7 @@ export default function ContractorsPage() {
       </Section>
 
       <Section
-        className="border-y border-neutral-200 bg-neutral-50 py-12 md:py-16"
+        className={`${styles["clientSection"]} border-y py-12 md:py-16`}
         aria-labelledby="commercial-clients-heading"
       >
         <div className="grid gap-8 lg:grid-cols-[0.8fr_1.2fr] lg:gap-14">
@@ -192,7 +198,7 @@ export default function ContractorsPage() {
             {clients.map((client) => (
               <div
                 key={client.title}
-                className="border-t border-neutral-300 pt-5"
+                className={`${styles["clientItem"]} border-t pt-5`}
               >
                 <h3 className="text-base font-semibold text-primary-900">
                   {client.title}
