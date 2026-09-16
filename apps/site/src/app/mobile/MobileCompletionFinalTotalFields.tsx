@@ -273,6 +273,8 @@ export function MobileCompletionFinalTotalFields({
             required
             value={value}
             onChange={(event) => {
+              // Keep an initially empty total open after its first valid digit.
+              setEditing(true);
               const nextValue = event.target.value;
               const nextCents = parseDollars(nextValue);
               if (
