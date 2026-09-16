@@ -200,6 +200,10 @@ export function CrewPayoutSelector({
       ref={rootRef}
       className="min-w-0 space-y-3"
       aria-describedby={showCrewEditor ? helpId : undefined}
+      onChangeCapture={() => {
+        // Becoming valid should not close a crew selection still being edited.
+        if (compact) setEditingCrew(true);
+      }}
     >
       <legend
         className={`text-sm font-semibold ${dark ? "text-slate-100" : "text-slate-900"}`}
