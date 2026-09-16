@@ -144,3 +144,15 @@ production origin; public-domain access from this connection remains unverified.
 No network or security configuration was changed.
 
 Review: https://github.com/TailoredAgents/StonegateOS/pull/4.
+
+## Business hours update
+
+Updated the shared public hours to Monday–Friday 8 AM–6:30 PM Eastern,
+Saturday 8 AM–4:30 PM Eastern, and Sunday closed. This supplies the commercial
+footer, regular footer, contact page, and other existing company-profile
+consumers. Search-engine structured data uses separate weekday and Saturday
+opening windows. Removed the conflicting 7 AM–7 PM/after-hours claim from the
+pricing page. No deployed public-hours environment override was present.
+
+Booking availability policies are separate and were not changed by this
+display update. Scoped lint and independent review passed.
