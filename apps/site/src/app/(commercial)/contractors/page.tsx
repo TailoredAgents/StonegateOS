@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
-import { Hammer, Trees, Truck } from "lucide-react";
+import { Droplets, Hammer, Trees, Truck } from "lucide-react";
 import { Card, Section } from "@myst-os/ui";
 import { CommercialContactActions } from "@/components/CommercialContactActions";
 import { getPublicCompanyProfile } from "@/lib/company";
 import { absoluteUrl } from "@/lib/metadata";
 import styles from "@/components/CommercialTheme.module.css";
 
-const title = "Junk Removal, Demolition & Land Clearing";
+const title = "Contractor Demo, Hauling & Cleanup";
 const description =
-  "We help landlords, property managers, contractors, investors, and businesses with junk removal, demolition, and land clearing across North Metro Atlanta. Call us to discuss your project.";
+  "We provide subcontractor support for demolition, debris removal, hauling, and jobsite cleanup across North Metro Atlanta. Call us about your next job or text project photos.";
 
 export const metadata: Metadata = {
   title,
@@ -31,60 +31,71 @@ export const metadata: Metadata = {
 
 const services = [
   {
-    title: "Junk Removal",
-    icon: Truck,
-    description:
-      "We clear out unwanted items and haul away debris from rentals, job sites, and commercial properties.",
-    examples: [
-      "Rental and property cleanouts",
-      "Furniture, contents, and bulky items",
-      "Construction and renovation debris",
-    ],
-  },
-  {
-    title: "Demolition",
+    title: "Interior Demo & Removal",
     icon: Hammer,
     description:
-      "We handle light demolition, removal, and cleanup. We review what needs to come out and confirm the scope with you before we begin.",
+      "We take on selective interior demolition and haul away what comes out. We confirm the scope and site conditions with you before work begins.",
     examples: [
-      "Cabinets, flooring, and fixtures",
-      "Selective removal for remodels",
-      "Cleanup and debris haul-off",
+      "Flooring and cabinet removal",
+      "Bathroom tear-outs and fixture removal",
+      "Non-structural demo for remodels",
     ],
   },
   {
-    title: "Land Clearing",
+    title: "Debris, Hauling & Cleanouts",
+    icon: Truck,
+    description:
+      "We handle loading, haul-off, and jobsite cleanup between phases or at the end of a job. We also clear rentals and investment properties ahead of the next trade.",
+    examples: [
+      "Construction debris and jobsite cleanup",
+      "Material hauling — tell us the load and route",
+      "Rental turnovers and flip cleanouts",
+    ],
+  },
+  {
+    title: "Brush & Exterior Cleanup",
     icon: Trees,
     description:
-      "We clear brush, overgrowth, and debris to help you make better use of your property. We review the area and access with you.",
+      "We clear brush, overgrowth, and exterior debris around your project. For land clearing, we review the area, access, and extent of the work with you.",
     examples: [
-      "Brush and overgrown areas",
-      "Property and lot cleanup",
-      "Clearing needs for your next project",
+      "Brush and overgrowth removal",
+      "Exterior debris and lot cleanup",
+      "Clearing access and work areas",
+    ],
+  },
+  {
+    title: "Soft Washing & Pressure Washing",
+    icon: Droplets,
+    description:
+      "We offer soft washing and pressure washing for property turnovers, exterior upkeep, and cleanup at the end of a project. We’ll review the surfaces and scope with you before work begins.",
+    examples: [
+      "Property turnovers",
+      "Exterior surface upkeep",
+      "End-of-project cleanup",
     ],
   },
 ] as const;
 
-const clients = [
+const workingTogether = [
   {
-    title: "Landlords & property managers",
+    title: "Pricing for Contractor Work",
     description:
-      "We help you clear rental units, prepare for a turnover, and handle property cleanup.",
+      "We offer contractor pricing based on the scope, access, and frequency of the work. We agree on the price before we start.",
   },
   {
-    title: "Contractors",
+    title: "One Project or Recurring Support",
     description:
-      "We remove jobsite debris and discuss demolition or clearing needs alongside your project.",
+      "We can handle a single phase or arrange recurring visits. We coordinate with you around project milestones, site access, and other trades.",
   },
   {
-    title: "Investors",
+    title: "Photos & Invoicing",
     description:
-      "We help you clear out a newly acquired property and plan the removal work ahead.",
+      "We provide before-and-after job photos and invoicing, so you can document completed work and keep your project records together.",
   },
   {
-    title: "Businesses",
+    title: "Short-Notice Availability",
     description:
-      "We help you clear unwanted contents, clean up commercial spaces, and prepare for changes to your property.",
+      "We offer same-day or next-day service when our schedule allows. Call us with the location and scope, and we’ll confirm availability with you.",
   },
 ] as const;
 
@@ -99,24 +110,28 @@ export default function ContractorsPage() {
       >
         <header className="max-w-5xl">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary-700">
-            North Metro Atlanta · Property &amp; project services
+            North Metro Atlanta · Contractor crew support
           </p>
           <h1
             id="commercial-heading"
             className="mt-5 max-w-4xl font-display text-4xl leading-tight tracking-tight text-primary-900 sm:text-5xl lg:text-6xl"
           >
-            Junk Removal, Demolition &amp; Land Clearing
+            Your Subcontractor for Demo &amp; Cleanup
           </h1>
           <div className={styles["divider"]} aria-hidden="true">
             <span />
           </div>
           <p className="mt-6 max-w-3xl text-lg leading-8 text-neutral-700">
-            We help landlords, property managers, contractors, investors, and
-            businesses clear out, take down, and prepare their properties. Tell
-            us what you have in mind, and we’ll work through the scope with you.
+            We take on demo, hauling, and cleanup for contractors, remodelers,
+            and property teams. Bring us in for one project or recurring
+            support, so you can keep your crew focused without adding permanent
+            staff.
           </p>
           <div className="mt-8">
-            <CommercialContactActions placement="hero" />
+            <CommercialContactActions
+              placement="hero"
+              textLabel="Text Job Photos"
+            />
           </div>
           <p className="mt-5 text-sm text-neutral-600">
             We’re based in {company.hqCity} and work across North Metro Atlanta.
@@ -135,10 +150,10 @@ export default function ContractorsPage() {
             id="commercial-services-heading"
             className="font-display text-3xl tracking-tight text-primary-900 sm:text-4xl"
           >
-            Our Services
+            The Work We Can Take On
           </h2>
         </div>
-        <div className="grid gap-5 md:grid-cols-3">
+        <div className="grid gap-5 md:grid-cols-2">
           {services.map((service) => (
             <Card
               key={service.title}
@@ -177,34 +192,36 @@ export default function ContractorsPage() {
       </Section>
 
       <Section
+        id="working-together"
         className={`${styles["clientSection"]} border-y py-12 md:py-16`}
-        aria-labelledby="commercial-clients-heading"
+        aria-labelledby="commercial-working-heading"
       >
         <div className="grid gap-8 lg:grid-cols-[0.8fr_1.2fr] lg:gap-14">
           <div className="max-w-xl">
             <h2
-              id="commercial-clients-heading"
+              id="commercial-working-heading"
               className="font-display text-3xl tracking-tight text-primary-900 sm:text-4xl"
             >
-              Properties and Projects We Support
+              Built Around Your Project
             </h2>
             <p className="mt-5 text-base leading-7 text-neutral-700">
-              From a rental turnover to a contractor’s job site, we start with
-              what you need handled. We’ll discuss the property, access, and
-              work involved so we can plan the next step together.
+              We work alongside general contractors, remodelers, property
+              managers, landlords, and rental or flip investors. Tell us which
+              part of the job you need covered, and we’ll work through the scope
+              and timing with you.
             </p>
           </div>
           <div className="grid gap-x-8 gap-y-7 sm:grid-cols-2">
-            {clients.map((client) => (
+            {workingTogether.map((item) => (
               <div
-                key={client.title}
+                key={item.title}
                 className={`${styles["clientItem"]} border-t pt-5`}
               >
                 <h3 className="text-base font-semibold text-primary-900">
-                  {client.title}
+                  {item.title}
                 </h3>
                 <p className="mt-2 text-sm leading-7 text-neutral-700">
-                  {client.description}
+                  {item.description}
                 </p>
               </div>
             ))}
@@ -222,16 +239,19 @@ export default function ContractorsPage() {
             id="commercial-project-heading"
             className="font-display text-3xl tracking-tight text-primary-900 sm:text-4xl"
           >
-            Discuss Your Project
+            A Job That Doesn’t Fit the List?
           </h2>
           <p className="mt-5 text-base leading-8 text-neutral-700">
-            Call us with the property location and a quick description of the
-            work. We’ll discuss the scope, pricing, and scheduling with you
-            before any work begins. If it’s easier, text us a few photos or
-            email us the details.
+            Text us a few photos, the job location, and what you need done.
+            We’ll let you know whether it’s a fit and what we’d need to quote
+            it. If you’d rather talk it through, call us. You can also email the
+            project details.
           </p>
           <div className="mt-7">
-            <CommercialContactActions placement="closing" />
+            <CommercialContactActions
+              placement="closing"
+              textLabel="Text Job Photos"
+            />
           </div>
         </div>
       </Section>

@@ -165,3 +165,66 @@ Live browser checks confirmed the updated displayed and structured hours on
 `/contractors`, `/contact`, and `/pricing`. The commercial page passed at
 1440px and 320px with no overflow or mobile footer obstruction. Checks used
 the Render origin because of the previously documented local network filter.
+
+## Contractor subcontractor positioning
+
+Reworked `/contractors` around bringing us onto a project as a subcontractor
+for demo, hauling, and cleanup. The hero introduces single-project or recurring
+crew support without adding permanent staff. Service groups cover selective
+interior demolition, construction debris, material hauling, rental/flip
+cleanouts, and brush/exterior cleanup. Contractor pricing, recurring scheduling,
+before-and-after photos, and invoicing replace the previous general audience
+grid. Same-day/next-day service remains conditional on availability.
+
+The closing section invites photos of unusual jobs so we can confirm whether
+the work is a fit. Hero and closing SMS buttons read “Text Job Photos”; phone
+calls stay first, email remains available, and existing destinations and event
+placement labels are retained. First-person copy, flowing brand edges, current
+hours, and the form-free layout are preserved. Page and social metadata now
+describe contractor support. No scheduling, campaign, or API settings changed.
+
+Scoped lint, production build (including TypeScript), and independent copy and
+contact-tracking source review passed.
+
+Production-built browser checks passed at 1440px, 375px, and 320px: correct
+contact destinations, call/text/email events with campaign context, one Pixel
+script, no primary conversions from taps, no forms, no overflow, no focused
+accessibility violations, and no page errors. Brand colors, noninteractive
+curves, sticky header, and mobile footer clearance also passed. The local
+tracking run supplied the public Pixel ID and a local API URL at build time;
+requests were intercepted and no calls, messages, or lead conversions were sent.
+
+Runtime commit `c0d28b91d4e26b2f998adcec2e9bde9b96d5dc44` was deployed as
+`dep-dala36jm8hqs73fe6hv0`, finished September 16 at 14:07:06 UTC and confirmed
+live at 14:08:11 UTC. The deployment preserved the existing live hours release
+`5ee64047`; no competing deployment was active at the final base check.
+
+Public-domain access worked for this release. Live checks directly on
+`https://stonegatejunkremoval.com/contractors` passed at all three viewport
+widths for the updated heading, contact events, Pixel mounting, accessibility,
+overflow, and brand/sticky layout. Health/readiness returned 200. Page/social
+metadata matched the contractor positioning, with the canonical URL retained.
+All contact interactions were intercepted. Review:
+https://github.com/TailoredAgents/StonegateOS/pull/5.
+
+## Washing service addition
+
+Added the approved “Soft Washing & Pressure Washing” service card immediately
+after Brush & Exterior Cleanup. The description covers property turnovers,
+exterior upkeep, and end-of-project cleanup, with surfaces and scope reviewed
+before work begins. The four services use a two-column grid from the medium
+breakpoint upward and remain stacked on smaller screens. A decorative water
+icon follows the existing service-card style. No contact or tracking code
+changed. Independent scope review, formatting, lint, and production build passed.
+
+Browser checks at 1440px, 768px, 375px, and 320px confirmed the approved copy,
+four cards in the correct order, two columns on desktop/tablet, and one column
+on mobile. No overflow, page errors, forms, or focused service-section
+accessibility violations were found. Desktop/mobile screenshots were reviewed.
+
+Runtime commit `79f57dcb5e93bc2b5f8a7bc2256d2865071b77b5` was deployed as
+`dep-dalaas7f3r2c73fic67g`, finished September 16 at 14:23:54 UTC and confirmed
+live at 14:24:17 UTC. Final checks on the public domain passed at all four
+viewport widths for the approved washing copy, card order, responsive columns,
+overflow, accessibility, and page errors. Health/readiness returned 200. The
+existing live subcontractor release was preserved at the final base check.
