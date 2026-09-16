@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Hammer, Trees, Truck } from "lucide-react";
+import { Droplets, Hammer, Trees, Truck } from "lucide-react";
 import { Card, Section } from "@myst-os/ui";
 import { CommercialContactActions } from "@/components/CommercialContactActions";
 import { getPublicCompanyProfile } from "@/lib/company";
@@ -61,6 +61,17 @@ const services = [
       "Brush and overgrowth removal",
       "Exterior debris and lot cleanup",
       "Clearing access and work areas",
+    ],
+  },
+  {
+    title: "Soft Washing & Pressure Washing",
+    icon: Droplets,
+    description:
+      "We offer soft washing and pressure washing for property turnovers, exterior upkeep, and cleanup at the end of a project. We’ll review the surfaces and scope with you before work begins.",
+    examples: [
+      "Property turnovers",
+      "Exterior surface upkeep",
+      "End-of-project cleanup",
     ],
   },
 ] as const;
@@ -142,7 +153,7 @@ export default function ContractorsPage() {
             The Work We Can Take On
           </h2>
         </div>
-        <div className="grid gap-5 md:grid-cols-3">
+        <div className="grid gap-5 md:grid-cols-2">
           {services.map((service) => (
             <Card
               key={service.title}

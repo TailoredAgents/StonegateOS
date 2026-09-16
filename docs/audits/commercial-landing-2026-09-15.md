@@ -206,3 +206,18 @@ overflow, and brand/sticky layout. Health/readiness returned 200. Page/social
 metadata matched the contractor positioning, with the canonical URL retained.
 All contact interactions were intercepted. Review:
 https://github.com/TailoredAgents/StonegateOS/pull/5.
+
+## Washing service addition
+
+Added the approved “Soft Washing & Pressure Washing” service card immediately
+after Brush & Exterior Cleanup. The description covers property turnovers,
+exterior upkeep, and end-of-project cleanup, with surfaces and scope reviewed
+before work begins. The four services use a two-column grid from the medium
+breakpoint upward and remain stacked on smaller screens. A decorative water
+icon follows the existing service-card style. No contact or tracking code
+changed. Independent scope review, formatting, lint, and production build passed.
+
+Browser checks at 1440px, 768px, 375px, and 320px confirmed the approved copy,
+four cards in the correct order, two columns on desktop/tablet, and one column
+on mobile. No overflow, page errors, forms, or focused service-section
+accessibility violations were found. Desktop/mobile screenshots were reviewed.
