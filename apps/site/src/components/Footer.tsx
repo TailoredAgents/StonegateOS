@@ -133,7 +133,7 @@ export function Footer() {
                   href="/contractors"
                   className="inline-flex min-h-11 items-center text-neutral-700 hover:text-primary-700"
                 >
-                  Contractor services
+                  Commercial services
                 </Link>
               </li>
             </ul>

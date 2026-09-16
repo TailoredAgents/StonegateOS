@@ -9,15 +9,20 @@ declare global {
   }
 }
 
+// Public route-group layouts remount without re-running the SDK init script.
+// Write only in the client effect so this state cannot cross SSR requests.
+let lastPathname: string | undefined;
+
 export function MetaPixelPageView() {
   const pathname = usePathname();
-  const didMountRef = React.useRef(false);
 
   React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (typeof window.fbq !== "function") return;
-    if (!didMountRef.current) {
-      didMountRef.current = true;
+    if (typeof window === "undefined" || !pathname) return;
+    const previous = lastPathname;
+    lastPathname = pathname;
+    // SDK init owns the first view; repeated effects/remounts add no duplicate.
+    if (previous === undefined || previous === pathname) return;
+    if (typeof window.fbq !== "function") {
       return;
     }
     window.fbq("track", "PageView");

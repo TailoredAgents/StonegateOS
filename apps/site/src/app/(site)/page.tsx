@@ -237,7 +237,7 @@ export default function HomePage() {
       slug: "commercial-services",
       title: "Commercial Services",
       description:
-        "Storefronts, office parks, HOA amenities, and shared spaces",
+        "Junk removal, demolition, and land clearing for properties and businesses",
     },
   ];
 
@@ -411,12 +411,12 @@ export default function HomePage() {
                     <Link
                       href={
                         isCommercial
-                          ? "/contact?type=commercial"
+                          ? "/contractors"
                           : `/services/${service.slug}`
                       }
                     >
                       {isCommercial
-                        ? "Request commercial quote ->"
+                        ? "Explore commercial services ->"
                         : "Learn more ->"}
                     </Link>
                   </Button>

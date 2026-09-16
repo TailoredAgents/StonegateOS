@@ -1,0 +1,133 @@
+.theme {
+  --commercial-navy: #082f45;
+  --commercial-gold: #c29b47;
+  --commercial-green: #0b6b5b;
+  --color-primary-50: #f0f5f4;
+  --color-primary-100: #e7f0ed;
+  --color-primary-300: #b3c9c5;
+  --color-primary-400: #0b6b5b;
+  --color-primary-600: #164e63;
+  --color-primary-700: #082f45;
+  --color-primary-800: #082f45;
+  --color-primary-900: #062b40;
+  --color-accent-500: #0b6b5b;
+  --color-sand-100: #fffdf7;
+  --shadow-soft: 0 5px 14px rgb(8 47 69 / 8%);
+  --shadow-float: 0 8px 18px rgb(8 47 69 / 12%);
+  min-height: 100vh;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 6rem);
+  background: var(--commercial-navy);
+}
+
+@media (min-width: 768px) {
+  .theme {
+    padding-bottom: 0;
+  }
+}
+
+.hero.hero {
+  background: #fff;
+  border-bottom-color: rgb(194 155 71 / 35%);
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(100%, 300px);
+  margin-top: 28px;
+  color: var(--commercial-gold);
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: currentColor;
+}
+
+.divider span {
+  width: 8px;
+  height: 8px;
+  background: currentColor;
+  transform: rotate(45deg);
+}
+
+.serviceCard.serviceCard {
+  border-color: rgb(194 155 71 / 48%);
+  border-radius: 16px;
+  box-shadow: 0 3px 12px rgb(8 47 69 / 3%);
+}
+
+.serviceIcon.serviceIcon {
+  border-radius: 50%;
+  background: var(--commercial-green);
+  color: white;
+}
+
+.clientSection.clientSection {
+  background: #f5f8f6;
+  border-color: rgb(194 155 71 / 35%);
+}
+
+.clientItem.clientItem {
+  border-color: rgb(194 155 71 / 65%);
+}
+
+.call.call {
+  background: var(--commercial-navy);
+  color: white;
+  border: 1px solid var(--commercial-navy);
+}
+
+.call.call:hover {
+  background: #164e63;
+  border-color: #164e63;
+}
+
+.call.call:active {
+  background: #062b40;
+}
+
+.text.text {
+  color: var(--commercial-navy);
+  background: #fffdf7;
+  border: 1px solid var(--commercial-gold);
+}
+
+.text.text:hover {
+  background: #f8f1df;
+  border-color: #96702b;
+}
+
+.text.text:active {
+  background: #eee3c8;
+}
+
+.call.call:focus-visible,
+.text.text:focus-visible {
+  outline: 2px solid var(--commercial-green);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+
+.email.email {
+  color: var(--commercial-navy);
+  text-decoration-color: var(--commercial-gold);
+}
+
+.header.header {
+  background: rgb(255 255 255 / 97%);
+  border-bottom-color: rgb(194 155 71 / 40%);
+}
+
+.footer.footer {
+  border-color: rgb(194 155 71 / 40%);
+  background: #fff;
+}
+
+.sticky.sticky {
+  background: #fff;
+  border-top: 2px solid var(--commercial-gold);
+}
