@@ -1,60 +1,38 @@
 import type { ReactNode } from "react";
 import styles from "./CommercialBrandFrame.module.css";
 
-function CardCorner({
-  position,
-}: {
-  position: "topLeft" | "topRight" | "bottomRight" | "bottomLeft";
-}) {
+function FlowingEdge({ position }: { position: "top" | "bottom" }) {
   return (
     <svg
       aria-hidden="true"
       focusable="false"
-      viewBox="0 0 32 32"
-      className={[styles["corner"], styles[position]].join(" ")}
+      viewBox="0 0 1440 180"
+      preserveAspectRatio="none"
+      className={`${styles["edge"]} ${styles[position]}`}
     >
-      <path d="M0 0H32A32 32 0 0 1 0 32Z" className={styles["navy"]} />
       <path
-        d="M32 0A32 32 0 0 1 0 32"
-        className={styles["goldLine"]}
-        vectorEffect="non-scaling-stroke"
+        d="M0 14C400 158 780 180 1100 120V180H0Z"
+        className={styles["gold"]}
+      />
+      <path
+        d="M620 151C1000 140 1230 69 1440 8V180H620Z"
+        className={styles["green"]}
+      />
+      <path
+        d="M0 36C400 172 1020 172 1440 36V180H0Z"
+        className={styles["navy"]}
       />
     </svg>
   );
 }
 
-/** A paper-and-ink frame; decorations never clip or cover the page content. */
+/** Flowing color bands occupy their own space, clear of content and controls. */
 export function CommercialBrandFrame({ children }: { children: ReactNode }) {
   return (
     <div className={styles["frame"]}>
-      <div className={styles["paper"]}>
-        <div className={styles["content"]}>{children}</div>
-        <svg
-          aria-hidden="true"
-          focusable="false"
-          viewBox="0 0 1200 64"
-          preserveAspectRatio="none"
-          className={styles["bottomCurve"]}
-        >
-          <path
-            d="M0 20C230 18 350 58 635 60C860 62 1035 43 1200 22V64H0Z"
-            className={styles["navy"]}
-          />
-          <path
-            d="M0 20C230 18 350 58 635 60"
-            className={styles["goldLine"]}
-            vectorEffect="non-scaling-stroke"
-          />
-          <path
-            d="M648 64C825 58 970 10 1200 4V64Z"
-            className={styles["green"]}
-          />
-        </svg>
-        <CardCorner position="topLeft" />
-        <CardCorner position="topRight" />
-        <CardCorner position="bottomRight" />
-        <CardCorner position="bottomLeft" />
-      </div>
+      <FlowingEdge position="top" />
+      <div className={styles["content"]}>{children}</div>
+      <FlowingEdge position="bottom" />
     </div>
   );
 }

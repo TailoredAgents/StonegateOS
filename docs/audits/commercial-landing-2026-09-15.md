@@ -102,3 +102,24 @@ live at 00:08:28 UTC. Website health/readiness and `/contractors` returned 200.
 Live checks at all three viewport widths verified the navy/gold palette,
 noninteractive decorative SVGs, sticky header, unobscured mobile footer links,
 no forms/overflow/accessibility violations, and preserved contact-click events.
+
+## Flowing edge revision
+
+Replaced the enclosing ticket-shaped treatment with smooth, full-width navy,
+gold, and green ribbons along the upper and lower page edges. Removed the
+corner cutouts, gold perimeter, side gutters, and navy padding outside the
+content. Both ribbons occupy normal flow and remain noninteractive; the white
+page, contact hierarchy, content, and tracking are preserved.
+
+Desktop and 375px/320px mobile checks passed for the palette, sticky header,
+footer clearance, contact clicks, accessibility, and overflow. Independent
+visual/source review and scoped lint passed. No additional regression tests
+were added for this styling-only change.
+
+The deployment base is the newer live release
+`3d48d1330163dc4c370e461aa434617d4f8c27e4`, which includes the partner photo upload
+and billing CSP fixes. The revision changes only the three commercial styling
+files plus this audit, preserving that intervening release.
+Independent comparison confirmed all 13 intervening files are byte-identical
+to the live base. The production build, including TypeScript validation,
+passed again on that base.

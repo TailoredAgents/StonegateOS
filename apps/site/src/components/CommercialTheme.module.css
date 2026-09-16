@@ -16,7 +16,7 @@
   --shadow-float: 0 8px 18px rgb(8 47 69 / 12%);
   min-height: 100vh;
   padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 6rem);
-  background: var(--commercial-navy);
+  background: #fff;
 }
 
 @media (min-width: 768px) {
