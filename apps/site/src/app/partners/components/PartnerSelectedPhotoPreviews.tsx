@@ -3,6 +3,13 @@
 import * as React from "react";
 import { ImageIcon } from "lucide-react";
 
+export type PartnerSelectedPhotoStatus =
+  | "ready"
+  | "uploading"
+  | "saving"
+  | "attached"
+  | "error";
+
 function formatBytes(value: number): string {
   if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
   return `${Math.max(1, Math.ceil(value / 1024))} KB`;
@@ -12,11 +19,13 @@ export function PartnerSelectedPhotoPreviews({
   files,
   clientIds,
   progress,
+  statuses,
   label,
 }: {
   files: readonly File[];
   clientIds: readonly string[];
   progress: readonly number[];
+  statuses?: readonly PartnerSelectedPhotoStatus[];
   label: string;
 }) {
   const [previewUrls, setPreviewUrls] = React.useState<string[]>([]);
@@ -43,13 +52,28 @@ export function PartnerSelectedPhotoPreviews({
         );
         const previewUrl = previewUrls[index];
         const previewFailed = failedPreviews.has(index);
+        const status = statuses ? (statuses[index] ?? "ready") : undefined;
+        const showProgress = status === undefined || status === "uploading";
+        const statusLabel =
+          status === "ready"
+            ? "Ready to attach"
+            : status === "saving"
+              ? "Saving photo…"
+              : status === "attached"
+                ? "Attached"
+                : status === "error"
+                  ? "Needs retry"
+                  : `Uploading · ${percent}%`;
         return (
           <li
             key={`${clientIds[index] ?? file.name}-${file.lastModified}`}
             className="overflow-hidden rounded-xl border border-slate-200 bg-white"
           >
             <div className="flex aspect-[4/3] items-center justify-center bg-slate-100">
-              {previewUrl && !previewFailed && file.type !== "application/pdf" && !/\.pdf$/iu.test(file.name) ? (
+              {previewUrl &&
+              !previewFailed &&
+              file.type !== "application/pdf" &&
+              !/\.pdf$/iu.test(file.name) ? (
                 // Local object URLs intentionally bypass image optimization.
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -79,17 +103,21 @@ export function PartnerSelectedPhotoPreviews({
                 <span className="min-w-0 truncate font-semibold text-slate-800">
                   {file.name}
                 </span>
-                <span className="shrink-0">{percent}%</span>
+                <span className="shrink-0">
+                  {status === undefined ? `${percent}%` : statusLabel}
+                </span>
               </div>
               <p className="mt-1 text-xs text-slate-500">
                 {formatBytes(file.size)}
               </p>
-              <progress
-                className="mt-2 h-2 w-full accent-primary-700"
-                max={100}
-                value={percent}
-                aria-label={`${file.name} upload progress`}
-              />
+              {showProgress ? (
+                <progress
+                  className="mt-2 h-2 w-full accent-primary-700"
+                  max={100}
+                  value={percent}
+                  aria-label={`${file.name} upload progress`}
+                />
+              ) : null}
             </div>
           </li>
         );

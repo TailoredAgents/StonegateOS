@@ -1,24 +1,14 @@
 import { withContentlayer } from "next-contentlayer";
+import { createPartnerBillingCsp } from "./config/partner-billing-csp.mjs";
 
 // Square Web Payments SDK requirements:
 // https://developer.squareup.com/docs/web-payments/content-security-policy
 // Both official origins are allowed because sandbox/production selection is
 // returned by the authenticated API at runtime; the client still accepts only
 // the two exact versioned SDK URLs.
-const partnerBillingCsp = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "object-src 'none'",
-  "frame-ancestors 'none'",
-  "form-action 'self'",
-  "script-src 'self' 'unsafe-inline' https://web.squarecdn.com https://sandbox.web.squarecdn.com",
-  "style-src 'self' 'unsafe-inline' https://web.squarecdn.com https://sandbox.web.squarecdn.com",
-  "frame-src https://web.squarecdn.com https://sandbox.web.squarecdn.com",
-  "connect-src 'self' https://pci-connect.squareup.com https://pci-connect.squareupsandbox.com https://o160250.ingest.sentry.io",
-  "font-src 'self' data: https://square-fonts-production-f.squarecdn.com https://d1g145x70srn7h.cloudfront.net",
-  "img-src 'self' data: blob:",
-  "upgrade-insecure-requests",
-].join("; ");
+const partnerBillingCsp = createPartnerBillingCsp(
+  process.env["PARTNER_MEDIA_STORAGE_ORIGIN"],
+);
 
 const nextConfig = {
   typedRoutes: true,

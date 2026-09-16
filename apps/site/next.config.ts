@@ -1,22 +1,12 @@
 import type { NextConfig } from "next";
+import { createPartnerBillingCsp } from "./config/partner-billing-csp.mjs";
 
 // Keep this in sync with next.config.mjs while both deployment entrypoints
 // exist. Square's current Web Payments SDK requires its official script,
 // frame, connect, style, and font origins on the payment page.
-const partnerBillingCsp = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "object-src 'none'",
-  "frame-ancestors 'none'",
-  "form-action 'self'",
-  "script-src 'self' 'unsafe-inline' https://web.squarecdn.com https://sandbox.web.squarecdn.com",
-  "style-src 'self' 'unsafe-inline' https://web.squarecdn.com https://sandbox.web.squarecdn.com",
-  "frame-src https://web.squarecdn.com https://sandbox.web.squarecdn.com",
-  "connect-src 'self' https://pci-connect.squareup.com https://pci-connect.squareupsandbox.com https://o160250.ingest.sentry.io",
-  "font-src 'self' data: https://square-fonts-production-f.squarecdn.com https://d1g145x70srn7h.cloudfront.net",
-  "img-src 'self' data: blob:",
-  "upgrade-insecure-requests",
-].join("; ");
+const partnerBillingCsp = createPartnerBillingCsp(
+  process.env["PARTNER_MEDIA_STORAGE_ORIGIN"],
+);
 
 const nextConfig: NextConfig = {
   typescript: {

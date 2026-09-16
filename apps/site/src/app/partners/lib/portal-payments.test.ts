@@ -207,7 +207,10 @@ void test("payment UI keeps card and ACH creation idempotent and tokens ephemera
     new URL("../components/PartnerInvoicePayment.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(component, /"Idempotency-Key": prepareKeys\.current\[paymentMethod\]/u);
+  assert.match(
+    component,
+    /"Idempotency-Key": prepareKeys\.current\[paymentMethod\]/u,
+  );
   assert.match(component, /paymentMethod: "card"/u);
   assert.match(component, /paymentMethod: "ach"/u);
   assert.match(component, /"invoice_balance"/u);
@@ -225,16 +228,19 @@ void test("payment UI keeps card and ACH creation idempotent and tokens ephemera
   assert.doesNotMatch(component, /localStorage/u);
 });
 
-void test("billing route carries Square's official CSP origins", () => {
-  const config = readFileSync(
-    new URL("../../../../next.config.mjs", import.meta.url),
-    "utf8",
-  );
-  assert.match(config, /https:\/\/web\.squarecdn\.com/u);
-  assert.match(config, /https:\/\/sandbox\.web\.squarecdn\.com/u);
-  assert.match(config, /https:\/\/pci-connect\.squareup\.com/u);
-  assert.match(config, /https:\/\/pci-connect\.squareupsandbox\.com/u);
-  assert.match(config, /source: "\/partners\/billing"/u);
+void test("billing route carries Square's official CSP origins", async () => {
+  const { default: config } = await import("../../../../next.config.mjs");
+  const rules = await config.headers?.();
+  assert.ok(rules);
+  const billing = rules.find((rule) => rule.source === "/partners/billing");
+  const policy = billing?.headers.find(
+    (header) => header.key === "Content-Security-Policy",
+  )?.value;
+  assert.ok(policy);
+  assert.match(policy, /https:\/\/web\.squarecdn\.com/u);
+  assert.match(policy, /https:\/\/sandbox\.web\.squarecdn\.com/u);
+  assert.match(policy, /https:\/\/pci-connect\.squareup\.com/u);
+  assert.match(policy, /https:\/\/pci-connect\.squareupsandbox\.com/u);
 });
 
 void test("portal proxy derives payment protocol without relaying a forwarding header", () => {
