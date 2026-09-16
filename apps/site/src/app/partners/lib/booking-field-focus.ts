@@ -69,8 +69,14 @@ export function bookingFieldElementId(field: string): string {
       ? "partner-book-billing-email"
       : "partner-book-billing-name";
   }
+  if (belongsTo(path, "scope.hazardCategories"))
+    return "partner-book-materials";
+  if (belongsTo(path, "scope.equipmentNeeds")) return "partner-book-equipment";
   const exactIds: Readonly<Record<string, string>> = {
     description: "partner-book-description",
+    "scope.nonStandard": "partner-book-non-standard",
+    "scope.restrictedItems": "partner-book-restricted-items",
+    "scope.multiStop": "partner-book-multi-stop",
     "scope.itemCount": "partner-book-item-count",
     "scope.volumeCubicYards": "partner-book-volume",
     "scope.requiredCompletion": "partner-book-required-date",

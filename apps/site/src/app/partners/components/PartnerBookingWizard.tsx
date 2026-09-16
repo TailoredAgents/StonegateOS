@@ -64,6 +64,10 @@ import {
 } from "./PartnerDraftPhotoUpload";
 import { PartnerBookingDetailsRow } from "./PartnerBookingDetailsRow";
 import {
+  PartnerSpecialRequirements,
+  type PartnerSpecialRequirementsValues,
+} from "./PartnerSpecialRequirements";
+import {
   bookingFieldElementId,
   bookingErrorSection,
   focusBookingField,
@@ -149,22 +153,12 @@ export type BookingWizardCancellationPolicy = {
   revision: number | null;
 };
 
-type WizardForm = {
+type WizardForm = PartnerSpecialRequirementsValues & {
   locationId: string;
   serviceKey: string;
   tierKey: string;
   addOnQuantities: Record<string, number>;
   description: string;
-  itemCount: string;
-  volume: string;
-  restrictedItems: boolean;
-  nonStandard: boolean;
-  hazardCategories: string[];
-  equipmentNeeds: string[];
-  requiredCompletionDate: string;
-  requiredCompletionTime: string;
-  multiStop: boolean;
-  multiStopDetails: string;
   alternateContactName: string;
   alternateContactPhone: string;
   alternateContactEmail: string;
@@ -1670,17 +1664,18 @@ function PartnerBookingWizardSession({
     : "Add the person our crew should contact";
   const scopeDetailsSummary =
     [
-      form.restrictedItems || form.hazardCategories.length
-        ? "Special handling"
+      form.nonStandard || form.equipmentNeeds.length
+        ? "Handling and access"
         : "",
-      form.nonStandard ? "Heavy or oversized items" : "",
-      form.equipmentNeeds.length ? "Equipment requested" : "",
-      form.multiStop ? "Multiple stops" : "",
-      form.requiredCompletionDate ? "Completion deadline" : "",
-      form.itemCount || form.volume ? "Quantity added" : "",
+      form.restrictedItems || form.hazardCategories.length ? "Materials" : "",
+      form.requiredCompletionDate || form.requiredCompletionTime
+        ? "Deadline"
+        : "",
+      form.multiStop ? "Extra stops" : "",
+      form.itemCount || form.volume ? "Quantity" : "",
     ]
       .filter(Boolean)
-      .join(" · ") || "Handling, equipment, deadlines, or extra stops";
+      .join(" · ") || "Optional details for the crew";
   const commercialDetailsSummary =
     [form.poNumber, form.projectReference, form.costCenter]
       .filter(Boolean)
@@ -2637,265 +2632,16 @@ function PartnerBookingWizardSession({
                     reveal={hasDetailsError("scope")}
                     id="partner-book-scope"
                   >
-                    <div className="space-y-4">
-                      <div className="grid gap-4 sm:grid-cols-2">
-                        <label htmlFor="partner-book-item-count">
-                          <span className="text-sm font-semibold text-slate-700">
-                            Approximate item count{" "}
-                            <span className="font-normal text-slate-500">
-                              (optional)
-                            </span>
-                          </span>
-                          <input
-                            id="partner-book-item-count"
-                            type="number"
-                            min="0"
-                            inputMode="numeric"
-                            value={form.itemCount}
-                            onChange={(event) =>
-                              update("itemCount", event.target.value)
-                            }
-                            className={partnerFieldClass}
-                          />
-                        </label>
-                        <label htmlFor="partner-book-volume">
-                          <span className="text-sm font-semibold text-slate-700">
-                            Estimated cubic yards{" "}
-                            <span className="font-normal text-slate-500">
-                              (optional)
-                            </span>
-                          </span>
-                          <input
-                            id="partner-book-volume"
-                            type="number"
-                            min="0"
-                            step="0.5"
-                            inputMode="decimal"
-                            value={form.volume}
-                            onChange={(event) =>
-                              update("volume", event.target.value)
-                            }
-                            className={partnerFieldClass}
-                          />
-                        </label>
-                      </div>
-                      <fieldset className="space-y-3 border-t border-slate-200 pt-4">
-                        <legend className="px-1 text-sm font-semibold text-slate-900">
-                          Handling and equipment
-                        </legend>
-                        <p className="mt-1 text-sm leading-6 text-slate-700">
-                          Select anything the crew needs to plan for.
-                        </p>
-                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                          <label className="flex min-h-11 cursor-pointer items-start gap-3 py-2">
-                            <input
-                              type="checkbox"
-                              checked={form.restrictedItems}
-                              onChange={(event) =>
-                                update("restrictedItems", event.target.checked)
-                              }
-                              className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                            />
-                            <span>
-                              <span className="block text-sm font-semibold text-slate-950">
-                                Materials needing special handling
-                              </span>
-                              <span className="mt-1 block text-xs leading-5 text-slate-600">
-                                Examples include chemicals, paint, fuel,
-                                batteries, pressurized containers, or unknown
-                                material.
-                              </span>
-                            </span>
-                          </label>
-                          <label className="flex min-h-11 cursor-pointer items-start gap-3 py-2">
-                            <input
-                              type="checkbox"
-                              checked={form.nonStandard}
-                              onChange={(event) =>
-                                update("nonStandard", event.target.checked)
-                              }
-                              className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                            />
-                            <span>
-                              <span className="block text-sm font-semibold text-slate-950">
-                                Heavy items or unusual work
-                              </span>
-                              <span className="mt-1 block text-xs leading-5 text-slate-600">
-                                Select this when access, equipment, lifting,
-                                demolition, or scope is outside a typical
-                                pickup.
-                              </span>
-                            </span>
-                          </label>
-                        </div>
-                        <div className="mt-5 grid gap-5 lg:grid-cols-2">
-                          <fieldset>
-                            <legend className="text-sm font-semibold text-slate-900">
-                              Material disclosures
-                            </legend>
-                            <p className="mt-1 text-xs leading-5 text-slate-600">
-                              Select every category that may be present. Unknown
-                              material should be disclosed rather than guessed.
-                            </p>
-                            <div className="mt-2 grid gap-2">
-                              {PARTNER_HAZARD_OPTIONS.map((option) => (
-                                <label
-                                  key={option.key}
-                                  className="flex min-h-11 cursor-pointer items-center gap-3 py-1.5"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={form.hazardCategories.includes(
-                                      option.key,
-                                    )}
-                                    onChange={(event) =>
-                                      update(
-                                        "hazardCategories",
-                                        event.target.checked
-                                          ? [
-                                              ...form.hazardCategories,
-                                              option.key,
-                                            ]
-                                          : form.hazardCategories.filter(
-                                              (key) => key !== option.key,
-                                            ),
-                                      )
-                                    }
-                                    className="h-5 w-5 rounded border-slate-300 text-primary-700"
-                                  />
-                                  <span className="text-sm text-slate-800">
-                                    {option.label}
-                                  </span>
-                                </label>
-                              ))}
-                            </div>
-                          </fieldset>
-                          <fieldset>
-                            <legend className="text-sm font-semibold text-slate-900">
-                              Access or equipment needs
-                            </legend>
-                            <p className="mt-1 text-xs leading-5 text-slate-600">
-                              This helps Stonegate assign the correct crew,
-                              vehicle, and equipment before confirming the
-                              request.
-                            </p>
-                            <div className="mt-2 grid gap-2">
-                              {PARTNER_EQUIPMENT_OPTIONS.map((option) => (
-                                <label
-                                  key={option.key}
-                                  className="flex min-h-11 cursor-pointer items-center gap-3 py-1.5"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={form.equipmentNeeds.includes(
-                                      option.key,
-                                    )}
-                                    onChange={(event) =>
-                                      update(
-                                        "equipmentNeeds",
-                                        event.target.checked
-                                          ? [...form.equipmentNeeds, option.key]
-                                          : form.equipmentNeeds.filter(
-                                              (key) => key !== option.key,
-                                            ),
-                                      )
-                                    }
-                                    className="h-5 w-5 rounded border-slate-300 text-primary-700"
-                                  />
-                                  <span className="text-sm text-slate-800">
-                                    {option.label}
-                                  </span>
-                                </label>
-                              ))}
-                            </div>
-                          </fieldset>
-                        </div>
-                        <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                          <label htmlFor="partner-book-required-date">
-                            <span className="text-sm font-semibold text-slate-800">
-                              Must be completed by date{" "}
-                              <span className="font-normal text-slate-600">
-                                (optional)
-                              </span>
-                            </span>
-                            <input
-                              id="partner-book-required-date"
-                              type="date"
-                              value={form.requiredCompletionDate}
-                              onChange={(event) =>
-                                update(
-                                  "requiredCompletionDate",
-                                  event.target.value,
-                                )
-                              }
-                              className={partnerFieldClass}
-                            />
-                          </label>
-                          <label htmlFor="partner-book-required-time">
-                            <span className="text-sm font-semibold text-slate-800">
-                              Required completion time{" "}
-                              <span className="font-normal text-slate-600">
-                                (optional)
-                              </span>
-                            </span>
-                            <input
-                              id="partner-book-required-time"
-                              type="time"
-                              value={form.requiredCompletionTime}
-                              onChange={(event) =>
-                                update(
-                                  "requiredCompletionTime",
-                                  event.target.value,
-                                )
-                              }
-                              disabled={!form.requiredCompletionDate}
-                              className={partnerFieldClass}
-                            />
-                          </label>
-                        </div>
-                        <label className="mt-4 flex min-h-11 cursor-pointer items-start gap-3 py-2">
-                          <input
-                            type="checkbox"
-                            checked={form.multiStop}
-                            onChange={(event) =>
-                              update("multiStop", event.target.checked)
-                            }
-                            className="mt-0.5 h-5 w-5 rounded border-slate-300 text-primary-700"
-                          />
-                          <span>
-                            <span className="block text-sm font-semibold text-slate-950">
-                              This request has more than one pickup or service
-                              stop
-                            </span>
-                            <span className="mt-1 block text-xs leading-5 text-slate-600">
-                              Multi-stop work is reviewed before a time is
-                              promised.
-                            </span>
-                          </span>
-                        </label>
-                        {form.multiStop ? (
-                          <label
-                            className="mt-3 block"
-                            htmlFor="partner-book-multi-stop-details"
-                          >
-                            <span className="text-sm font-semibold text-slate-800">
-                              Stops and sequence
-                            </span>
-                            <textarea
-                              id="partner-book-multi-stop-details"
-                              value={form.multiStopDetails}
-                              onChange={(event) =>
-                                update("multiStopDetails", event.target.value)
-                              }
-                              rows={3}
-                              maxLength={1_000}
-                              className={partnerFieldClass}
-                              placeholder="List each stop, address or site name, and the required order."
-                            />
-                          </label>
-                        ) : null}
-                      </fieldset>
-                    </div>
+                    <PartnerSpecialRequirements
+                      value={form}
+                      onChange={(key, value) =>
+                        update<keyof PartnerSpecialRequirementsValues>(
+                          key,
+                          value,
+                        )
+                      }
+                      fieldErrors={fieldErrors}
+                    />
                   </PartnerBookingDetailsRow>
                   <PartnerBookingDetailsRow
                     title="Work order and billing"

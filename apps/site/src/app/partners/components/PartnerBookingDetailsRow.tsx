@@ -18,21 +18,22 @@ export function PartnerBookingDetailsRow({
   validationErrors?: Record<string, string>;
   id?: string;
 }) {
-  const [open, setOpen] = React.useState(reveal);
+  // Keep native disclosure state: delayed toggle events in WebKit can otherwise
+  // overwrite a validation-driven open when nested sections were just closed.
+  const detailsRef = React.useRef<HTMLDetailsElement>(null);
 
   React.useEffect(() => {
     // Missing information and validation errors may reveal a section. Editing
     // a field must never close the section and move focus away from the user.
-    if (reveal) setOpen(true);
+    if (reveal && detailsRef.current) detailsRef.current.open = true;
   }, [reveal, validationErrors]);
 
   return (
     <details
+      ref={detailsRef}
       id={id}
       tabIndex={id ? -1 : undefined}
       className="group/details border-b border-slate-200 last:border-b-0"
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 rounded-lg py-3 text-left sm:min-h-14 sm:py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 [&::-webkit-details-marker]:hidden">
         <span className="grid min-w-0 flex-1 gap-0.5 sm:grid-cols-[13rem_minmax(0,1fr)] sm:items-center sm:gap-4">
