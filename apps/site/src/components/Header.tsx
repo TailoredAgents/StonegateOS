@@ -171,13 +171,17 @@ export function Header() {
         inert={isMenuOpen ? true : undefined}
         className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3 md:px-10"
       >
-        <Link href="/" className="flex items-center gap-2 text-primary-800">
+        <Link
+          href="/"
+          prefetch={isBookingLanding ? false : null}
+          className="flex items-center gap-2 text-primary-800"
+        >
           <Image
             src={logoPath}
             alt=""
             aria-hidden="true"
-            width={80}
-            height={80}
+            width={48}
+            height={48}
             className="h-12 w-12 object-contain"
             priority
           />

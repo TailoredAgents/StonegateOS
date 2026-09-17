@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { StickyCtaBar } from "@/components/StickyCtaBar";
-import { ChatBot } from "@/components/ChatBot";
+import { SiteChatBot } from "@/components/SiteChatBot";
 import { MetaPixel } from "@/components/MetaPixel";
 import { SiteStructuredData } from "@/components/StructuredData";
 import { WebAnalyticsClient } from "@/components/WebAnalyticsClient";
@@ -21,7 +21,7 @@ export default function SiteLayout({ children }: { children: ReactNode }) {
         {children}
       </main>
       <Footer />
-      <ChatBot />
+      <SiteChatBot />
       <StickyCtaBar />
     </div>
   );

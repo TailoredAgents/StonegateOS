@@ -1,6 +1,11 @@
 "use client";
 
 import * as React from "react";
+import type {
+  AvailabilityDay,
+  AvailabilitySlot,
+  QuoteState,
+} from "./lead-form-types";
 import { Button, cn } from "@myst-os/ui";
 import { Check, MessageSquare, ShieldCheck, Star } from "lucide-react";
 import { useUTM } from "../lib/use-utm";
@@ -11,50 +16,14 @@ import {
 import { trackWebEvent } from "../lib/web-analytics";
 import { getOpenAiAdsAttribution, trackOpenAiAdsBooking, withOpenAiAdsUtm } from "../lib/openai-ads";
 
+// The contact-first result is not needed until an estimate has returned.
+const QuoteResult = React.lazy(() => import("./LeadFormQuoteResult"));
+
 declare global {
   interface Window {
     fbq?: (...args: unknown[]) => void;
   }
 }
-
-type QuoteState =
-  | { status: "idle" | "loading" }
-  | {
-      status: "ready";
-      quoteId: string | null;
-      baseLow: number;
-      baseHigh: number;
-      discountPercent: number;
-      discountAmount: number;
-      low: number;
-      high: number;
-      tier: string;
-      reason: string;
-      needsInPersonEstimate: boolean;
-      addOnTotal: number;
-      isRoughEstimate?: boolean;
-      estimateDisclaimer?: string;
-      weightRisk?: "normal" | "low" | "medium" | "high";
-      pricingFactors?: string[];
-      mediaAnalysis?: {
-        source?: string;
-        visibleVolumeRange?: string;
-        mergedVolumeRange?: string;
-        visibleMattressCount?: number;
-        visiblePaintCanCount?: number;
-        confidence?: "low" | "medium" | "high";
-        missingViews?: string[];
-      };
-    }
-  | { status: "error"; message: string };
-
-type QuoteMediaAnalysis = Extract<
-  QuoteState,
-  { status: "ready" }
->["mediaAnalysis"];
-
-type AvailabilitySlot = { startAt: string; endAt: string; reason: string };
-type AvailabilityDay = { date: string; slots: AvailabilitySlot[] };
 
 type Timeframe = "today" | "tomorrow" | "this_week" | "flexible";
 type PerceivedSize =
@@ -543,23 +512,26 @@ export function LeadForm({
     }
   }, [prefersReducedMotion, scrollToElement, step]);
 
+  const scrollToQuote = React.useCallback(() => {
+    window.setTimeout(
+      () => scrollToElement(quoteCardRef.current),
+      prefersReducedMotion() ? 0 : 100,
+    );
+  }, [prefersReducedMotion, scrollToElement]);
+
   React.useEffect(() => {
     const previousStatus = prevQuoteStatusRef.current;
     prevQuoteStatusRef.current = quoteState.status;
     if (previousStatus === null) return;
     if (
+      !contactFirst &&
       previousStatus !== "ready" &&
       quoteState.status === "ready" &&
       step === 2
     ) {
-      window.setTimeout(
-        () => {
-          scrollToElement(quoteCardRef.current);
-        },
-        prefersReducedMotion() ? 0 : 100,
-      );
+      scrollToQuote();
     }
-  }, [prefersReducedMotion, quoteState.status, scrollToElement, step]);
+  }, [contactFirst, quoteState.status, scrollToQuote, step]);
 
   const trackMetaEvent = React.useCallback(
     (
@@ -741,6 +713,7 @@ export function LeadForm({
     setPhotoUploadStatus("uploading");
     setPhotoUploadMessage(null);
     try {
+      const { prepareMediaUploads } = await import("../lib/lead-form-media");
       const preparedFiles = await prepareMediaUploads(selected);
       if (!preparedFiles.length) {
         throw new Error("No usable photos or video frames were generated.");
@@ -2533,57 +2506,68 @@ export function LeadForm({
               ) : null}
             </div>
 
-            {contactFirst ? (
-              <QuoteResult
-                quoteState={quoteState}
-                quoteCardRef={quoteCardRef}
-                discountLabel={discountLabel}
-                discountedRange={discountedRange}
-                baseRange={baseRange}                isDemo={isDemo}
-                junkWeightLabel={junkWeightLabel}
-                junkEstimateDisclaimer={junkEstimateDisclaimer}
-                quoteMediaAnalysis={quoteMediaAnalysis}
-                quoteVisibleRangeLabel={quoteVisibleRangeLabel}
-                quoteMergedRangeLabel={quoteMergedRangeLabel}
-                quoteRangeWasWidened={quoteRangeWasWidened}
-                quoteAddOnSummary={quoteAddOnSummary}
-                quoteNeedsMorePhotos={quoteNeedsMorePhotos}
-                showBookingDetails={showBookingDetails}
-                setShowBookingDetails={setShowBookingDetails}
-                textEstimateMessage={textEstimateMessage}
-                setTextEstimateMessage={setTextEstimateMessage}
-                addressLine1={addressLine1}
-                setAddressLine1={setAddressLine1}
-                city={city}
-                setCity={setCity}
-                stateField={stateField}
-                setStateField={setStateField}
-                postalCode={postalCode}
-                setPostalCode={setPostalCode}
-                addressComplete={addressComplete}
-                availabilityStatus={availabilityStatus}
-                availabilityMessage={availabilityMessage}
-                availabilityDurationMinutes={availabilityDurationMinutes}
-                availabilitySlots={availabilitySlots}
-                availabilityDays={availabilityDays}
-                availabilitySelectedDay={availabilitySelectedDay}
-                setAvailabilitySelectedDay={setAvailabilitySelectedDay}
-                selectedSlotStartAt={selectedSlotStartAt}
-                setSelectedSlotStartAt={setSelectedSlotStartAt}
-                availabilityShowMore={availabilityShowMore}
-                setAvailabilityShowMore={setAvailabilityShowMore}
-                holdStatus={holdStatus}
-                holdExpiresAt={holdExpiresAt}
-                holdMessage={holdMessage}
-                bookingStatus={bookingStatus}
-                bookingMessage={bookingMessage}
-                fetchAvailability={fetchAvailability}
-                submitBooking={submitBooking}
-                formatSlotLabel={formatSlotLabel}
-                formatSlotTimeLabel={formatSlotTimeLabel}
-                formatHoldExpiry={formatHoldExpiry}
-                formatDayLabel={formatDayLabel}
-              />
+            {contactFirst &&
+            (quoteState.status === "ready" || quoteState.status === "error") ? (
+              <React.Suspense
+                fallback={
+                  <p role="status" className="text-sm text-neutral-600">
+                    Loading your estimate...
+                  </p>
+                }
+              >
+                <QuoteResult
+                  quoteState={quoteState}
+                  quoteCardRef={quoteCardRef}
+                  onReady={scrollToQuote}
+                  discountLabel={discountLabel}
+                  discountedRange={discountedRange}
+                  baseRange={baseRange}
+                  isDemo={isDemo}
+                  junkWeightLabel={junkWeightLabel}
+                  junkEstimateDisclaimer={junkEstimateDisclaimer}
+                  quoteMediaAnalysis={quoteMediaAnalysis}
+                  quoteVisibleRangeLabel={quoteVisibleRangeLabel}
+                  quoteMergedRangeLabel={quoteMergedRangeLabel}
+                  quoteRangeWasWidened={quoteRangeWasWidened}
+                  quoteAddOnSummary={quoteAddOnSummary}
+                  quoteNeedsMorePhotos={quoteNeedsMorePhotos}
+                  showBookingDetails={showBookingDetails}
+                  setShowBookingDetails={setShowBookingDetails}
+                  textEstimateMessage={textEstimateMessage}
+                  setTextEstimateMessage={setTextEstimateMessage}
+                  addressLine1={addressLine1}
+                  setAddressLine1={setAddressLine1}
+                  city={city}
+                  setCity={setCity}
+                  stateField={stateField}
+                  setStateField={setStateField}
+                  postalCode={postalCode}
+                  setPostalCode={setPostalCode}
+                  addressComplete={addressComplete}
+                  availabilityStatus={availabilityStatus}
+                  availabilityMessage={availabilityMessage}
+                  availabilityDurationMinutes={availabilityDurationMinutes}
+                  availabilitySlots={availabilitySlots}
+                  availabilityDays={availabilityDays}
+                  availabilitySelectedDay={availabilitySelectedDay}
+                  setAvailabilitySelectedDay={setAvailabilitySelectedDay}
+                  selectedSlotStartAt={selectedSlotStartAt}
+                  setSelectedSlotStartAt={setSelectedSlotStartAt}
+                  availabilityShowMore={availabilityShowMore}
+                  setAvailabilityShowMore={setAvailabilityShowMore}
+                  holdStatus={holdStatus}
+                  holdExpiresAt={holdExpiresAt}
+                  holdMessage={holdMessage}
+                  bookingStatus={bookingStatus}
+                  bookingMessage={bookingMessage}
+                  fetchAvailability={fetchAvailability}
+                  submitBooking={submitBooking}
+                  formatSlotLabel={formatSlotLabel}
+                  formatSlotTimeLabel={formatSlotTimeLabel}
+                  formatHoldExpiry={formatHoldExpiry}
+                  formatDayLabel={formatDayLabel}
+                />
+              </React.Suspense>
             ) : null}
           </div>
         ) : (
@@ -3180,620 +3164,6 @@ export function LeadForm({
   );
 }
 
-function QuoteResult({
-  quoteState,
-  quoteCardRef,
-  discountLabel,
-  discountedRange,
-  baseRange,
-  isDemo,
-  junkWeightLabel,
-  junkEstimateDisclaimer,
-  quoteMediaAnalysis,
-  quoteVisibleRangeLabel,
-  quoteMergedRangeLabel,
-  quoteRangeWasWidened,
-  quoteAddOnSummary,
-  quoteNeedsMorePhotos,
-  showBookingDetails,
-  setShowBookingDetails,
-  textEstimateMessage,
-  setTextEstimateMessage,
-  addressLine1,
-  setAddressLine1,
-  city,
-  setCity,
-  stateField,
-  setStateField,
-  postalCode,
-  setPostalCode,
-  addressComplete,
-  availabilityStatus,
-  availabilityMessage,
-  availabilityDurationMinutes,
-  availabilitySlots,
-  availabilityDays,
-  availabilitySelectedDay,
-  setAvailabilitySelectedDay,
-  selectedSlotStartAt,
-  setSelectedSlotStartAt,
-  availabilityShowMore,
-  setAvailabilityShowMore,
-  holdStatus,
-  holdExpiresAt,
-  holdMessage,
-  bookingStatus,
-  bookingMessage,
-  fetchAvailability,
-  submitBooking,
-  formatSlotLabel,
-  formatSlotTimeLabel,
-  formatHoldExpiry,
-  formatDayLabel,
-}: {
-  quoteState: QuoteState;
-  quoteCardRef: React.RefObject<HTMLDivElement | null>;
-  discountLabel: string | null;
-  discountedRange: string | null;
-  baseRange: string | null;
-  isDemo: boolean;
-  junkWeightLabel: string | null;
-  junkEstimateDisclaimer: string | null;
-  quoteMediaAnalysis: QuoteMediaAnalysis;
-  quoteVisibleRangeLabel: string | null;
-  quoteMergedRangeLabel: string | null;
-  quoteRangeWasWidened: boolean;
-  quoteAddOnSummary: string;
-  quoteNeedsMorePhotos: boolean;
-  showBookingDetails: boolean;
-  setShowBookingDetails: React.Dispatch<React.SetStateAction<boolean>>;
-  textEstimateMessage: string | null;
-  setTextEstimateMessage: React.Dispatch<React.SetStateAction<string | null>>;
-  addressLine1: string;
-  setAddressLine1: React.Dispatch<React.SetStateAction<string>>;
-  city: string;
-  setCity: React.Dispatch<React.SetStateAction<string>>;
-  stateField: string;
-  setStateField: React.Dispatch<React.SetStateAction<string>>;
-  postalCode: string;
-  setPostalCode: React.Dispatch<React.SetStateAction<string>>;
-  addressComplete: boolean;
-  availabilityStatus: "idle" | "loading" | "ready" | "error";
-  availabilityMessage: string | null;
-  availabilityDurationMinutes: number | null;
-  availabilitySlots: AvailabilitySlot[];
-  availabilityDays: AvailabilityDay[];
-  availabilitySelectedDay: string | null;
-  setAvailabilitySelectedDay: React.Dispatch<
-    React.SetStateAction<string | null>
-  >;
-  selectedSlotStartAt: string | null;
-  setSelectedSlotStartAt: React.Dispatch<React.SetStateAction<string | null>>;
-  availabilityShowMore: boolean;
-  setAvailabilityShowMore: React.Dispatch<React.SetStateAction<boolean>>;
-  holdStatus: "idle" | "loading" | "ready" | "error";
-  holdExpiresAt: string | null;
-  holdMessage: string | null;
-  bookingStatus: "idle" | "loading" | "success" | "error";
-  bookingMessage: string | null;
-  fetchAvailability: () => Promise<void>;
-  submitBooking: () => Promise<void>;
-  formatSlotLabel: (iso: string) => string;
-  formatSlotTimeLabel: (iso: string) => string;
-  formatHoldExpiry: (iso: string) => string;
-  formatDayLabel: (dayIso: string) => string;
-}) {
-  if (quoteState.status === "error") {
-    return (
-      <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-        {quoteState.message}
-      </div>
-    );
-  }
-
-  if (quoteState.status !== "ready") return null;
-
-  return (
-    <div
-      ref={quoteCardRef}
-      className="scroll-mt-40 space-y-4 rounded-lg border border-neutral-200 bg-white p-4 shadow-soft shadow-primary-900/10"
-    >
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="text-sm font-semibold text-primary-900">
-            Here&apos;s your estimate
-          </div>
-          {discountLabel ? (
-            <span className="rounded-full bg-primary-800 px-2.5 py-1 text-[11px] font-bold uppercase text-white">
-              {discountLabel}
-            </span>
-          ) : null}
-          {!isDemo && junkWeightLabel ? (
-            <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-[11px] font-semibold text-neutral-700">
-              {junkWeightLabel}
-            </span>
-          ) : null}
-        </div>
-        <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
-          <div className="text-4xl font-semibold leading-none text-primary-900">
-            {discountedRange}
-          </div>
-          {discountLabel && baseRange ? (
-            <div className="pb-0.5 text-base font-medium text-neutral-400 line-through">
-              {baseRange}
-            </div>
-          ) : null}
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-sm text-neutral-700">
-          <span className="font-semibold text-neutral-900">
-            {quoteState.tier}
-          </span>
-          <span className="text-neutral-300">|</span>
-          <span>Estimate saved</span>
-        </div>
-      </div>
-      <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm leading-relaxed text-neutral-700">
-        {quoteState.reason}
-      </div>
-      {!isDemo && junkEstimateDisclaimer ? (
-        <div className="flex gap-2 rounded-md border border-primary-100 bg-primary-50/70 px-3 py-2 text-xs leading-relaxed text-primary-900">
-          <ShieldCheck
-            className="mt-0.5 h-4 w-4 shrink-0 text-primary-700"
-            aria-hidden="true"
-          />
-          <div>
-            <div className="font-semibold">
-              Final price confirmed before loading
-            </div>
-            <div>
-              We review the job in person first. The estimate only changes if
-              volume, weight, access, or materials differ from what was entered.
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {!isDemo && quoteMediaAnalysis ? (
-        <div className="space-y-2 rounded-md border border-primary-100 bg-white/70 px-3 py-2 text-xs text-neutral-700">
-          {quoteVisibleRangeLabel ? (
-            <div>
-              Photos show{" "}
-              <span className="font-semibold text-primary-900">
-                {quoteVisibleRangeLabel}
-              </span>
-              .
-              {quoteMergedRangeLabel ? (
-                <>
-                  {" "}
-                  This helped us price the job around{" "}
-                  <span className="font-semibold text-primary-900">
-                    {quoteMergedRangeLabel}
-                  </span>
-                  .
-                </>
-              ) : null}
-            </div>
-          ) : null}
-          {quoteRangeWasWidened ? (
-            <div>
-              If there is more outside the photos, we&apos;ll review it in
-              person before loading starts.
-            </div>
-          ) : null}
-          {quoteState.addOnTotal > 0 && quoteAddOnSummary ? (
-            <div>
-              This estimate includes{" "}
-              <span className="font-semibold text-primary-900">
-                {quoteAddOnSummary}
-              </span>
-              .
-            </div>
-          ) : (
-            <div>
-              Special disposal items, like mattresses or paint cans, are added
-              only if needed.
-            </div>
-          )}
-          {quoteNeedsMorePhotos ? (
-            <div>Want a tighter number? Add one more photo before booking.</div>
-          ) : null}
-        </div>
-      ) : !isDemo ? (
-        <div className="rounded-md bg-neutral-50 px-3 py-2 text-xs leading-relaxed text-neutral-600">
-          Disposal add-ons apply only when needed, such as mattresses at +$40
-          each and paint cans at +$10 each.
-        </div>
-      ) : null}
-      <div className="text-sm font-medium text-neutral-700">
-        {isDemo
-          ? "This is a range. We'll confirm details on-site before we start."
-          : "Your estimate is saved. Choose the next step below."}
-      </div>
-
-      {!showBookingDetails ? (
-        <div className="space-y-3 rounded-lg border border-neutral-200 bg-white p-3 text-sm">
-          <div className="text-lg font-semibold text-primary-900">
-            Want to move forward?
-          </div>
-          <div className="grid gap-3">
-            <Button
-              type="button"
-              className="justify-center"
-              onClick={() => setShowBookingDetails(true)}
-            >
-              Book online
-            </Button>
-            <Button asChild variant="secondary" className="justify-center">
-              <a
-                href="tel:+14047772631"
-                aria-label="Call to confirm and book"
-                data-cta="book-call"
-              >
-                Call to confirm
-              </a>
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              className="justify-center"
-              onClick={() =>
-                setTextEstimateMessage(
-                  "Got it. We saved this estimate under your phone number for follow-up.",
-                )
-              }
-            >
-              Text me this estimate
-            </Button>
-          </div>
-          {textEstimateMessage ? (
-            <div className="text-xs text-emerald-700">
-              {textEstimateMessage}
-            </div>
-          ) : null}
-          <div className="text-[11px] text-neutral-500">
-            If you call, we can pull up this estimate from your phone number.
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-xs font-semibold text-neutral-700">
-              {isDemo ? "Book a demo estimate" : "Book this pickup"}
-            </div>
-            <button
-              type="button"
-              className="text-[11px] font-semibold text-primary-700 underline"
-              onClick={() => setShowBookingDetails(false)}
-            >
-              Back to options
-            </button>
-          </div>
-          <div className="grid gap-2 md:grid-cols-2">
-            <input
-              name="addressLine1"
-              type="text"
-              autoComplete="address-line1"
-              placeholder="Street address"
-              value={addressLine1}
-              onChange={(e) => setAddressLine1(e.target.value)}
-              className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-            />
-            <div className="grid grid-cols-3 gap-2">
-              <input
-                name="city"
-                type="text"
-                autoComplete="address-level2"
-                placeholder="City"
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
-                className="col-span-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-              />
-              <input
-                name="state"
-                type="text"
-                autoComplete="address-level1"
-                placeholder="GA"
-                maxLength={2}
-                value={stateField}
-                onChange={(e) => setStateField(e.target.value.toUpperCase())}
-                className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 uppercase"
-              />
-            </div>
-            <input
-              name="postalCode"
-              type="text"
-              autoComplete="postal-code"
-              inputMode="numeric"
-              placeholder="ZIP"
-              value={postalCode}
-              onChange={(e) => setPostalCode(e.target.value)}
-              className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-            />
-            <div className="space-y-2 rounded-md border border-neutral-200 bg-white p-3 md:col-span-2">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-xs font-semibold text-neutral-700">
-                  Choose a time
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void fetchAvailability()}
-                  disabled={
-                    !addressComplete || availabilityStatus === "loading"
-                  }
-                  className="text-[11px] font-semibold text-primary-700 transition hover:text-primary-800 disabled:text-neutral-400"
-                >
-                  {availabilityStatus === "loading" ? "Checking..." : "Refresh"}
-                </button>
-              </div>
-              {availabilityDurationMinutes ? (
-                <div className="text-[11px] text-neutral-500">
-                  Estimated job time: {availabilityDurationMinutes} min
-                </div>
-              ) : null}
-              {!addressComplete ? (
-                <div className="text-xs text-neutral-600">
-                  Enter your address to see available times.
-                </div>
-              ) : availabilityStatus === "loading" ? (
-                <div className="text-xs text-neutral-600">
-                  Checking availability...
-                </div>
-              ) : availabilityStatus === "error" ? (
-                <div className="text-xs text-amber-700">
-                  {availabilityMessage ??
-                    "Availability check failed. Please try again."}
-                </div>
-              ) : availabilitySlots.length ||
-                availabilityDays.some((d) => d.slots.length > 0) ? (
-                <div className="space-y-3">
-                  {availabilitySlots.length ? (
-                    <div className="space-y-2">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
-                        Recommended times
-                      </div>
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        {availabilitySlots.map((slot) => {
-                          const selected = slot.startAt === selectedSlotStartAt;
-                          return (
-                            <button
-                              key={slot.startAt}
-                              type="button"
-                              onClick={() =>
-                                setSelectedSlotStartAt(slot.startAt)
-                              }
-                              aria-pressed={selected}
-                              className={cn(
-                                "rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2",
-                                selected
-                                  ? "border-primary-900 bg-primary-800 shadow-soft ring-2 ring-primary-300"
-                                  : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50",
-                              )}
-                            >
-                              <div
-                                className={cn(
-                                  "text-sm font-semibold",
-                                  selected ? "text-white" : "text-neutral-900",
-                                )}
-                              >
-                                {formatSlotLabel(slot.startAt)}
-                              </div>
-                              <div
-                                className={cn(
-                                  "text-[11px]",
-                                  selected
-                                    ? "text-primary-100"
-                                    : "text-neutral-600",
-                                )}
-                              >
-                                {slot.reason}
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {selectedSlotStartAt ? (
-                    <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-900">
-                      Selected time:{" "}
-                      <span className="font-semibold">
-                        {formatSlotLabel(selectedSlotStartAt)}
-                      </span>
-                    </div>
-                  ) : null}
-                  {holdStatus === "loading" ? (
-                    <div className="text-[11px] text-neutral-500">
-                      Holding that time for you...
-                    </div>
-                  ) : holdStatus === "ready" && holdExpiresAt ? (
-                    <div className="text-[11px] text-neutral-500">
-                      Held until {formatHoldExpiry(holdExpiresAt)}.
-                    </div>
-                  ) : holdStatus === "error" && holdMessage ? (
-                    <div className="text-[11px] text-amber-700">
-                      {holdMessage}
-                    </div>
-                  ) : null}
-
-                  {(() => {
-                    const availableDays = availabilityDays.filter(
-                      (d) => d.slots.length > 0,
-                    );
-                    if (!availableDays.length) return null;
-                    const selectedDay =
-                      typeof availabilitySelectedDay === "string" &&
-                      availabilitySelectedDay.length
-                        ? availabilitySelectedDay
-                        : (availableDays[0]?.date ?? null);
-                    const selectedDaySlots = selectedDay
-                      ? (availableDays.find((d) => d.date === selectedDay)
-                          ?.slots ?? [])
-                      : [];
-
-                    return (
-                      <div className="space-y-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          aria-expanded={availabilityShowMore}
-                          onClick={() =>
-                            setAvailabilityShowMore((prev) => !prev)
-                          }
-                          className="w-full justify-center sm:w-auto"
-                        >
-                          {availabilityShowMore
-                            ? "Hide more times"
-                            : "See more times"}
-                        </Button>
-
-                        {availabilityShowMore ? (
-                          <div className="space-y-2">
-                            <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
-                              Pick a day
-                            </label>
-                            <select
-                              value={selectedDay ?? ""}
-                              onChange={(e) => {
-                                const next = e.target.value;
-                                setAvailabilitySelectedDay(next);
-                                const daySlots =
-                                  availableDays.find((d) => d.date === next)
-                                    ?.slots ?? [];
-                                setSelectedSlotStartAt((prev) => {
-                                  if (
-                                    typeof prev === "string" &&
-                                    daySlots.some((s) => s.startAt === prev)
-                                  )
-                                    return prev;
-                                  return daySlots[0]?.startAt ?? null;
-                                });
-                              }}
-                              className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                            >
-                              {availableDays.map((day) => (
-                                <option key={day.date} value={day.date}>
-                                  {formatDayLabel(day.date)}
-                                </option>
-                              ))}
-                            </select>
-
-                            {selectedDaySlots.length ? (
-                              <div className="grid gap-2 sm:grid-cols-3">
-                                {selectedDaySlots.map((slot) => {
-                                  const selected =
-                                    slot.startAt === selectedSlotStartAt;
-                                  return (
-                                    <button
-                                      key={slot.startAt}
-                                      type="button"
-                                      onClick={() =>
-                                        setSelectedSlotStartAt(slot.startAt)
-                                      }
-                                      aria-pressed={selected}
-                                      className={cn(
-                                        "rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2",
-                                        selected
-                                          ? "border-primary-900 bg-primary-800 shadow-soft ring-2 ring-primary-300"
-                                          : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50",
-                                      )}
-                                      title={slot.reason}
-                                    >
-                                      <div
-                                        className={cn(
-                                          "text-sm font-semibold",
-                                          selected
-                                            ? "text-white"
-                                            : "text-neutral-900",
-                                        )}
-                                      >
-                                        {formatSlotTimeLabel(slot.startAt)}
-                                      </div>
-                                      <div
-                                        className={cn(
-                                          "truncate text-[11px]",
-                                          selected
-                                            ? "text-primary-100"
-                                            : "text-neutral-600",
-                                        )}
-                                      >
-                                        {slot.reason}
-                                      </div>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            ) : (
-                              <div className="text-xs text-neutral-600">
-                                No times available on this day.
-                              </div>
-                            )}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })()}
-                </div>
-              ) : (
-                <div className="text-xs text-neutral-600">
-                  {availabilityMessage ??
-                    "No times available right now. Please call to confirm & book."}
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <Button
-              type="button"
-              className="justify-center"
-              onClick={() => void submitBooking()}
-              disabled={
-                bookingStatus === "loading" ||
-                !selectedSlotStartAt ||
-                availabilityStatus === "loading"
-              }
-            >
-              {bookingStatus === "loading" ? "Booking..." : isDemo ? "Book a demo estimate" : "Book this pickup"}
-            </Button>
-            <Button asChild variant="secondary" className="justify-center">
-              <a
-                href="tel:+14047772631"
-                aria-label="Call to confirm and book"
-                data-cta="book-call"
-              >
-                Call to confirm &amp; book
-              </a>
-            </Button>
-          </div>
-          {bookingMessage ? (
-            <div
-              className={cn(
-                "text-xs",
-                bookingStatus === "error"
-                  ? "text-amber-700"
-                  : "text-emerald-700",
-              )}
-            >
-              {bookingMessage}
-            </div>
-          ) : null}
-          <div className="text-[11px] text-neutral-500">
-            By booking, you agree to our{" "}
-            <a
-              href="/service-agreement"
-              className="font-semibold text-primary-700 underline-offset-2 hover:underline"
-            >
-              Service Agreement and Cancellation Policy
-            </a>
-            . We&apos;ve saved your estimate with your contact info so we can
-            help if you have questions.
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function bucketWebAnalyticsError(err: unknown): string {
   const message =
     typeof err === "string" ? err : err instanceof Error ? err.message : "";
@@ -3851,197 +3221,4 @@ function formatEnumLabel(value: string | null | undefined): string | null {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-async function shrinkImageIfNeeded(file: File): Promise<File> {
-  const MAX_BYTES = 1_800_000;
-  if (file.size <= MAX_BYTES) return file;
-  if (typeof window === "undefined") return file;
-  if (!file.type.startsWith("image/")) return file;
-
-  const bitmap = await createImageBitmap(file).catch(() => null);
-  if (!bitmap) return file;
-
-  const maxDimension = 1600;
-  const scale = Math.min(
-    1,
-    maxDimension / Math.max(bitmap.width, bitmap.height),
-  );
-  const width = Math.max(1, Math.round(bitmap.width * scale));
-  const height = Math.max(1, Math.round(bitmap.height * scale));
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return file;
-  ctx.drawImage(bitmap, 0, 0, width, height);
-
-  const blob = await new Promise<Blob | null>((resolve) => {
-    canvas.toBlob((b) => resolve(b), "image/jpeg", 0.72);
-  });
-  if (!blob) return file;
-
-  const baseName = file.name.replace(/\.[^/.]+$/u, "") || "photo";
-  return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
-}
-
-function getVideoFrameTargetCount(
-  videoFileCount: number,
-  imageFileCount: number,
-): number {
-  const MAX_UPLOAD_IMAGES = 8;
-  const remainingSlots = Math.max(0, MAX_UPLOAD_IMAGES - imageFileCount);
-  if (videoFileCount <= 0 || remainingSlots <= 0) return 0;
-  const perVideo = Math.max(1, Math.floor(remainingSlots / videoFileCount));
-  return Math.min(4, perVideo);
-}
-
-async function prepareMediaUploads(files: File[]): Promise<File[]> {
-  const imageFiles = files.filter((file) => file.type.startsWith("image/"));
-  const videoFiles = files.filter((file) => file.type.startsWith("video/"));
-  const preparedImages = await Promise.all(
-    imageFiles.map((file) => shrinkImageIfNeeded(file)),
-  );
-  const frameTargetCount = getVideoFrameTargetCount(
-    videoFiles.length,
-    preparedImages.length,
-  );
-  if (videoFiles.length === 0 || frameTargetCount <= 0) {
-    return preparedImages.slice(0, 8);
-  }
-
-  const frameFiles = (
-    await Promise.all(
-      videoFiles.map((file) => extractVideoFrames(file, frameTargetCount)),
-    )
-  ).flat();
-  return [...preparedImages, ...frameFiles].slice(0, 8);
-}
-
-async function extractVideoFrames(
-  file: File,
-  frameCount: number,
-): Promise<File[]> {
-  if (typeof window === "undefined" || frameCount <= 0) return [];
-
-  const objectUrl = URL.createObjectURL(file);
-  const video = document.createElement("video");
-  video.preload = "metadata";
-  video.muted = true;
-  video.playsInline = true;
-  video.src = objectUrl;
-
-  try {
-    await waitForVideoEvent(video, "loadedmetadata");
-    const duration =
-      Number.isFinite(video.duration) && video.duration > 0
-        ? video.duration
-        : 0;
-    if (duration <= 0) return [];
-
-    const sourceWidth = Math.max(1, video.videoWidth || 1280);
-    const sourceHeight = Math.max(1, video.videoHeight || 720);
-    const scale = Math.min(1, 1600 / Math.max(sourceWidth, sourceHeight));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
-    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return [];
-
-    const timestamps = buildVideoFrameTimestamps(duration, frameCount);
-    const frames: File[] = [];
-    const baseName = file.name.replace(/\.[^/.]+$/u, "") || "video";
-
-    for (let index = 0; index < timestamps.length; index += 1) {
-      const timestamp = timestamps[index]!;
-      await seekVideoTo(video, timestamp);
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const blob = await canvasToBlob(canvas, "image/jpeg", 0.76);
-      if (!blob) continue;
-      frames.push(
-        new File([blob], `${baseName}-frame-${index + 1}.jpg`, {
-          type: "image/jpeg",
-        }),
-      );
-    }
-
-    return frames;
-  } finally {
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
-    URL.revokeObjectURL(objectUrl);
-  }
-}
-
-function buildVideoFrameTimestamps(
-  durationSeconds: number,
-  frameCount: number,
-): number[] {
-  if (frameCount <= 1) {
-    return [
-      Math.max(
-        0,
-        Math.min(durationSeconds * 0.5, Math.max(0, durationSeconds - 0.05)),
-      ),
-    ];
-  }
-
-  const startRatio = 0.15;
-  const endRatio = 0.85;
-  const timestamps: number[] = [];
-  for (let index = 0; index < frameCount; index += 1) {
-    const progress = frameCount === 1 ? 0.5 : index / (frameCount - 1);
-    const ratio = startRatio + (endRatio - startRatio) * progress;
-    timestamps.push(
-      Math.max(
-        0,
-        Math.min(durationSeconds * ratio, Math.max(0, durationSeconds - 0.05)),
-      ),
-    );
-  }
-  return timestamps;
-}
-
-function waitForVideoEvent(
-  video: HTMLVideoElement,
-  eventName: "loadedmetadata" | "seeked",
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const handleSuccess = () => {
-      cleanup();
-      resolve();
-    };
-    const handleError = () => {
-      cleanup();
-      reject(new Error("Unable to read the uploaded video."));
-    };
-    const cleanup = () => {
-      video.removeEventListener(eventName, handleSuccess);
-      video.removeEventListener("error", handleError);
-    };
-    video.addEventListener(eventName, handleSuccess, { once: true });
-    video.addEventListener("error", handleError, { once: true });
-  });
-}
-
-async function seekVideoTo(
-  video: HTMLVideoElement,
-  timestampSeconds: number,
-): Promise<void> {
-  if (Math.abs(video.currentTime - timestampSeconds) < 0.05) return;
-  const seekPromise = waitForVideoEvent(video, "seeked");
-  video.currentTime = timestampSeconds;
-  await seekPromise;
-}
-
-function canvasToBlob(
-  canvas: HTMLCanvasElement,
-  type: string,
-  quality: number,
-): Promise<Blob | null> {
-  return new Promise((resolve) => {
-    canvas.toBlob((blob) => resolve(blob), type, quality);
-  });
 }
