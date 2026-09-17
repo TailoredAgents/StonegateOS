@@ -136,14 +136,24 @@ async function currentDraftId(page: Page): Promise<string> {
 
 async function restoreLegacyDraft(page: Page, draftId: string): Promise<void> {
   await expect(page.getByText("Saved", { exact: true }).first()).toBeVisible();
-  const { draft } = await portal(page, `booking-drafts/${draftId}`);
-  // Simulate opening a request saved by the previous UI. Use the authenticated
-  // portal boundary and its current ETag; leaving the page prevents an old form
-  // autosave from racing the controlled legacy fixture.
+  // Stop new form writes before reading the revision. A keepalive autosave
+  // already sent during navigation may still finish, so retry only its 412
+  // revision conflict with a new authenticated read and the latest scope.
   await page.goto("about:blank");
-  const response = await page
-    .context()
-    .request.patch(`${base}/api/partners/portal/booking-drafts/${draftId}`, {
+  const endpoint = `${base}/api/partners/portal/booking-drafts/${draftId}`;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const current = await page.context().request.get(endpoint);
+    assert.equal(
+      current.status(),
+      200,
+      "The normal portal can read the current saved draft",
+    );
+    const currentBody = await current.json();
+    assert.equal(currentBody.ok, true);
+    const { draft } = currentBody;
+    assert.equal(draft.id, draftId);
+    assert.equal(typeof draft.etag, "string");
+    const response = await page.context().request.patch(endpoint, {
       headers: { "If-Match": draft.etag, Origin: base },
       data: {
         scope: {
@@ -156,12 +166,15 @@ async function restoreLegacyDraft(page: Page, draftId: string): Promise<void> {
         },
       },
     });
-  assert.equal(
-    response.status(),
-    200,
-    "The normal portal can save the legacy request fixture",
-  );
-  assert.equal((await response.json()).ok, true);
+    if (response.status() === 412 && attempt < 2) continue;
+    assert.equal(
+      response.status(),
+      200,
+      "The normal portal can save the legacy request fixture",
+    );
+    assert.equal((await response.json()).ok, true);
+    break;
+  }
   await page.goto(`${base}/partners/book?draftId=${draftId}`);
   await requestStep(page, "Service details");
   const legacy = await openRow(page, "Saved request details");
