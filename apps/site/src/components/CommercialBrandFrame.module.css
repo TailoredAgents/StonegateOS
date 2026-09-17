@@ -1,0 +1,48 @@
+.frame {
+  --frame-navy: var(--commercial-navy, #082f45);
+  --frame-gold: var(--commercial-gold, #c29b47);
+  --frame-green: var(--commercial-green, #0b6b5b);
+
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  min-block-size: 100vh;
+  min-block-size: 100svh;
+  background: #fff;
+}
+
+.content {
+  position: relative;
+  flex: 1;
+  min-inline-size: 0;
+}
+
+/* Normal-flow ribbons cannot cover content or alter the sticky header. */
+.edge {
+  display: block;
+  flex: none;
+  inline-size: 100%;
+  pointer-events: none;
+  user-select: none;
+}
+
+.top {
+  block-size: clamp(32px, 4vw, 56px);
+  transform: rotate(180deg);
+}
+
+.bottom {
+  block-size: clamp(72px, 9vw, 136px);
+}
+
+.navy {
+  fill: var(--frame-navy);
+}
+
+.gold {
+  fill: var(--frame-gold);
+}
+
+.green {
+  fill: var(--frame-green);
+}
