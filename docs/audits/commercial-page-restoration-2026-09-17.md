@@ -43,3 +43,23 @@ from the website source tree.
 - Independent review verified the restored route/layout and branded components
   are byte-identical to the selected version. Newer partner/API/reporting files
   and the current shared marketing-tag configuration remain unchanged.
+
+The restoration was published as runtime `0cb57eb1` in deployment
+`dep-dam6isou01pc73ehjkcg` and merged into main at `f49a590e`. Final public
+desktop/mobile checks and health/readiness passed; full evidence is in
+https://github.com/TailoredAgents/StonegateOS/pull/6.
+
+## Washing added to the restored version
+
+At the user's request, added Soft Washing & Pressure Washing back as the fourth
+service after Land Clearing. It uses the previously approved copy about property
+turnovers, exterior upkeep, and project cleanup, with surfaces and scope reviewed
+before work begins. The broader commercial heading, existing three service cards,
+audience copy, hours, and contact actions are retained. Services use a 2×2 grid
+on desktop/tablet and stack on mobile. No tracking or API code is changed.
+
+The production build, formatting, lint, and independent scope review passed.
+Browser checks at 1440px, 768px, 375px, and 320px confirmed the approved washing
+copy, preserved broader heading/hours, four cards in the correct order, and
+responsive columns. No overflow, forms, focused service-section accessibility
+violations, or page errors were found. The rendered service grid was reviewed.
