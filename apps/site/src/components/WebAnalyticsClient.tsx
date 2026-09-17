@@ -26,18 +26,29 @@ function hasClosest(target: EventTarget | null): target is Element {
   return target instanceof Element && typeof target.closest === "function";
 }
 
-function resolveTelClick(
+function resolveContactClick(
   target: EventTarget | null,
-): { href: string; cta: string | null } | null {
+): { key: "call" | "text" | "email"; href: string; cta: string | null } | null {
   if (!hasClosest(target)) return null;
   const anchor = target.closest("a[href]");
   if (!(anchor instanceof HTMLAnchorElement)) return null;
   const href = anchor.getAttribute("href") ?? "";
   if (!href) return null;
-  if (href.trim().toLowerCase().startsWith("tel:")) {
-    return { href: href.trim(), cta: anchor.getAttribute("data-cta") };
-  }
-  return null;
+  const normalized = href.trim().toLowerCase();
+  const key = normalized.startsWith("tel:")
+    ? "call"
+    : normalized.startsWith("sms:")
+      ? "text"
+      : normalized.startsWith("mailto:")
+        ? "email"
+        : null;
+  if (!key) return null;
+  // Keep message bodies and email subjects out of analytics.
+  return {
+    key,
+    href: href.trim().split(/[?#]/u)[0] ?? "",
+    cta: anchor.getAttribute("data-cta"),
+  };
 }
 
 function computeVitals(pathname: string): void {
@@ -135,24 +146,24 @@ export function WebAnalyticsClient(): React.ReactElement | null {
 
   React.useEffect(() => {
     const onClickCapture = (event: MouseEvent) => {
-      const tel = resolveTelClick(event.target);
-      if (!tel) return;
+      const contact = resolveContactClick(event.target);
+      if (!contact) return;
       const path = pathRef.current;
       trackWebEvent({
         event: "cta_click",
         path,
-        key: "call",
+        key: contact.key,
         meta: {
-          href: tel.href.slice(0, 40),
-          ...(tel.cta ? { cta: tel.cta } : {}),
+          href: contact.href.slice(0, 80),
+          ...(contact.cta ? { cta: contact.cta } : {}),
         },
       });
-      if (path === "/book" && GOOGLE_ADS_CALL_SEND_TO) {
+      if (contact.key === "call" && path === "/book" && GOOGLE_ADS_CALL_SEND_TO) {
         trackGoogleAdsConversion(GOOGLE_ADS_CALL_SEND_TO, {
           value: 1,
           currency: "USD",
           event_category: "phone",
-          event_label: tel.cta ?? "call",
+          event_label: contact.cta ?? "call",
           page_path: path,
         });
       }
