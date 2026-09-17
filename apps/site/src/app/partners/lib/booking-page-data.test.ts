@@ -101,6 +101,80 @@ void test("missing or broken location and catalog data never becomes an empty li
   assert.deepEqual(parseCatalogServices({ ok: true, services: [] }), []);
 });
 
+void test("catalog requirements retain bare, scope-prefixed and custom field paths", () => {
+  const requiredScopeFields = [
+    "itemCount",
+    "scope.volumeCubicYards",
+    " description ",
+    "scope.requiredCompletion.localDate",
+    "customJobDetail",
+  ];
+  const parsed = parseCatalogServices({
+    ok: true,
+    services: [
+      {
+        key: "junk-removal",
+        label: "Junk removal",
+        requiredScopeFields,
+      },
+    ],
+  });
+  assert.ok(parsed);
+  assert.deepEqual(parsed[0]?.requiredScopeFields, [
+    "itemCount",
+    "scope.volumeCubicYards",
+    "description",
+    "scope.requiredCompletion.localDate",
+    "customJobDetail",
+  ]);
+  assert.notEqual(parsed[0]?.requiredScopeFields, requiredScopeFields);
+  assert.equal(requiredScopeFields[2], " description ");
+});
+
+void test("catalog responses without requirements remain compatible and empty lists stay explicit", () => {
+  const legacy = parseCatalogServices({
+    ok: true,
+    services: [{ key: "junk-removal", label: "Junk removal" }],
+  });
+  assert.ok(legacy?.[0]);
+  assert.equal(Object.hasOwn(legacy[0], "requiredScopeFields"), false);
+  const empty = parseCatalogServices({
+    ok: true,
+    services: [
+      {
+        key: "junk-removal",
+        label: "Junk removal",
+        requiredScopeFields: [],
+      },
+    ],
+  });
+  assert.deepEqual(empty?.[0]?.requiredScopeFields, []);
+});
+
+void test("malformed catalog requirements fail the whole catalog instead of hiding required fields", () => {
+  for (const requiredScopeFields of [
+    null,
+    "itemCount",
+    { itemCount: true },
+    ["itemCount", 1],
+    ["itemCount", null],
+    ["itemCount", ["volumeCubicYards"]],
+    [""],
+    ["   "],
+  ]) {
+    assert.equal(
+      parseCatalogServices({
+        ok: true,
+        services: [
+          { key: "service_request", label: "General request" },
+          { key: "junk-removal", label: "Junk removal", requiredScopeFields },
+        ],
+      }),
+      null,
+    );
+  }
+});
+
 void test("proof requirements are checked before starting a service request", () => {
   assert.equal(parseProofDefaults({ ok: true }), null);
   assert.equal(

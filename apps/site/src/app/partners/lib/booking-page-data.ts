@@ -28,6 +28,7 @@ type CatalogItem = {
   basePrice?: unknown;
   baseOptions?: unknown;
   addOns?: unknown;
+  requiredScopeFields?: unknown;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -372,6 +373,8 @@ function parseCatalogBaseOptions(value: unknown): BookingWizardBaseOption[] {
   return result;
 }
 
+const requiredScopeFieldsSchema = z.array(z.string().trim().min(1));
+
 export function parseCatalogServices(
   payload: unknown,
 ): BookingWizardService[] | null {
@@ -395,6 +398,14 @@ export function parseCatalogServices(
     const label = item.label?.trim() ?? "";
     if (!/^[a-z][a-z0-9_-]{1,79}$/u.test(key) || !label || services.has(key))
       return null;
+    // Older catalog responses omit this metadata. A malformed provided list
+    // must not hide required inputs; mirror the API's surrounding-whitespace
+    // normalization while retaining bare and scope-prefixed/custom field paths.
+    const requiredScopeFields =
+      item.requiredScopeFields === undefined
+        ? undefined
+        : requiredScopeFieldsSchema.safeParse(item.requiredScopeFields);
+    if (requiredScopeFields && !requiredScopeFields.success) return null;
     services.set(key, {
       key,
       label,
@@ -412,6 +423,9 @@ export function parseCatalogServices(
       basePrice: parseMoney(item.basePrice),
       baseOptions: parseCatalogBaseOptions(item.baseOptions),
       addOns: parseCatalogAddOns(item.addOns),
+      ...(requiredScopeFields?.success
+        ? { requiredScopeFields: requiredScopeFields.data }
+        : {}),
     });
   }
   return [...services.values()].sort((left, right) =>

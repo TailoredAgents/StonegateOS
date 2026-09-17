@@ -403,6 +403,33 @@ for (const engine of [chromium, webkit])
             .click();
           await expect(page.getByRole("alert")).toHaveCount(0);
           assert.equal(reads, 4);
+          // Older requests still carry structured quantities and equipment
+          // removed from the new-request questions. Staff must retain them.
+          await replace(page, {
+            ...fixture,
+            scope: {
+              ...fixture.scope,
+              itemCount: 0,
+              equipmentNeeds: ["demolition", "heavy_lift", "lift_gate"],
+            },
+          });
+          await open(page, "Service details");
+          await open(page, "Special requirements");
+          const itemCount = page
+            .getByText("Item count", { exact: true })
+            .locator("..")
+            .locator("dd");
+          await expect(itemCount).toBeVisible();
+          await expect(itemCount).toHaveText("0");
+          for (const value of [
+            "4 cubic yards",
+            "Lift gate or loading equipment",
+            "Light demolition",
+          ])
+            await expect(
+              page.getByText(value, { exact: false }).first(),
+            ).toBeVisible();
+          await fits(page);
           await replace(page, {
             ...fixture,
             visibility: { financials: false, photos: false },

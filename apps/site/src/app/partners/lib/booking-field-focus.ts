@@ -16,11 +16,42 @@ function belongsTo(field: string, root: string): boolean {
   return field === root || field.startsWith(`${root}.`);
 }
 
+const EQUIPMENT_FIELDS = [
+  { id: "partner-book-heavy-items", section: "service" },
+  { id: "partner-book-disassembly", section: "service" },
+  { id: "partner-book-access-stairs", section: "contact" },
+  { id: "partner-book-access-elevator", section: "contact" },
+  { id: "partner-book-access-loading_dock", section: "contact" },
+  { id: "partner-book-saved-option-lift_gate", section: "scope" },
+  { id: "partner-book-saved-option-demolition", section: "scope" },
+] as const;
+
+/** Indices follow the complete, normalized equipment array, across all sections. */
+function indexedEquipmentField(path: string) {
+  const index = /^scope\.equipmentNeeds\.([0-6])$/u.exec(path)?.[1];
+  if (index === undefined || typeof document === "undefined") return undefined;
+  return EQUIPMENT_FIELDS.find(({ id, section }) => {
+    const element = document.getElementById(id);
+    return (
+      element?.dataset["partnerEquipmentIndex"] === index &&
+      element.dataset["partnerEquipmentSection"] === section
+    );
+  });
+}
+
 export function bookingErrorSection(field: string): BookingErrorSection {
   const path = fieldPath(field);
-  if (path.startsWith("location")) return "address";
+  if (
+    path.startsWith("location") ||
+    belongsTo(path, "scope.multiStop") ||
+    belongsTo(path, "scope.multiStopDetails")
+  )
+    return "address";
+  if (belongsTo(path, "scope.requiredCompletion")) return "scheduling";
   if (belongsTo(path, "selectedAddOns")) return "addons";
   if (belongsTo(path, "scope.alternateContact")) return "contact";
+  if (belongsTo(path, "scope.equipmentNeeds"))
+    return indexedEquipmentField(path)?.section ?? "contact";
   if (belongsTo(path, "scope")) return "scope";
   if (belongsTo(path, "commercial") || path.startsWith("billingContact"))
     return "commercial";
@@ -36,9 +67,16 @@ export function bookingErrorSection(field: string): BookingErrorSection {
   return "service";
 }
 
+export function bookingFieldStep(field: string): 0 | 1 | 2 {
+  const section = bookingErrorSection(field);
+  if (section === "address") return 0;
+  if (section === "scheduling") return 2;
+  return 1;
+}
+
 const SECTION_FALLBACK_IDS: Readonly<Record<BookingErrorSection, string>> = {
   service: "partner-book-description",
-  scope: "partner-book-scope",
+  scope: "partner-book-work-questions",
   commercial: "partner-book-billing-name",
   contact: "partner-book-contact-name",
   proof: "partner-book-proof",
@@ -71,18 +109,21 @@ export function bookingFieldElementId(field: string): string {
   }
   if (belongsTo(path, "scope.hazardCategories"))
     return "partner-book-materials";
-  if (belongsTo(path, "scope.equipmentNeeds")) return "partner-book-equipment";
+  if (belongsTo(path, "scope.equipmentNeeds"))
+    return indexedEquipmentField(path)?.id ?? "partner-book-equipment";
+  if (belongsTo(path, "scope.multiStopDetails"))
+    return "partner-book-multi-stop-details";
+  if (belongsTo(path, "scope.multiStop")) return "partner-book-multi-stop";
+  if (belongsTo(path, "scope.requiredCompletion"))
+    return belongsTo(path, "scope.requiredCompletion.localTime")
+      ? "partner-book-required-time"
+      : "partner-book-required-date";
   const exactIds: Readonly<Record<string, string>> = {
     description: "partner-book-description",
     "scope.nonStandard": "partner-book-non-standard",
     "scope.restrictedItems": "partner-book-restricted-items",
-    "scope.multiStop": "partner-book-multi-stop",
     "scope.itemCount": "partner-book-item-count",
     "scope.volumeCubicYards": "partner-book-volume",
-    "scope.requiredCompletion": "partner-book-required-date",
-    "scope.requiredCompletion.localDate": "partner-book-required-date",
-    "scope.requiredCompletion.localTime": "partner-book-required-time",
-    "scope.multiStopDetails": "partner-book-multi-stop-details",
     "commercial.poNumber": "partner-book-po",
     "commercial.costCenter": "partner-book-cost-center",
     "commercial.projectReference": "partner-book-project",
@@ -109,8 +150,18 @@ export function bookingFieldElementId(field: string): string {
 /** Call after the owning wizard step is rendered. Never closes a disclosure. */
 export function focusBookingField(field: string): boolean {
   if (typeof document === "undefined") return false;
+  const path = fieldPath(field);
+  const savedDetail = [
+    "scope.nonStandard",
+    "scope.restrictedItems",
+    "scope.itemCount",
+    "scope.volumeCubicYards",
+  ].some((root) => belongsTo(path, root));
   const target =
     document.getElementById(bookingFieldElementId(field)) ??
+    (savedDetail
+      ? document.getElementById("partner-book-saved-details")
+      : null) ??
     document.getElementById(SECTION_FALLBACK_IDS[bookingErrorSection(field)]);
   if (!target) return false;
   for (

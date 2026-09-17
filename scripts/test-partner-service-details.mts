@@ -53,6 +53,14 @@ const initialDraft = {
   createdAt: "2026-09-15T12:00:00Z",
   updatedAt: "2026-09-15T12:00:00Z",
 };
+const legacyScope = {
+  itemCount: 0,
+  volumeCubicYards: 3.5,
+  restrictedItems: true,
+  nonStandard: true,
+  hazardCategories: ["paint"],
+  equipmentNeeds: ["demolition", "lift_gate"],
+};
 const service = {
   key: "facility_cleanout",
   label: "Facility cleanout",
@@ -114,10 +122,11 @@ import{PartnerBookingWizard}from'./src/app/partners/components/PartnerBookingWiz
 const draft=${JSON.stringify(initialDraft)},services=${JSON.stringify(services)};
 const scenario=new URLSearchParams(location.search).get('scenario');
 const catalog=scenario?[{...services[0],key:'appliance_collection',label:'Appliance collection',baseOptions:[{...services[0].baseOptions[0],tierKey:'appliance_pickup'}],addOns:[]},...services,{...services[1],key:'service_request',label:'Request service',bookable:scenario!=='disabled'}]:services;
-const savedDraft=scenario?{...draft,serviceKey:scenario==='blank-saved'?null:scenario==='unavailable'?'retired_service':scenario==='switch'?'facility_cleanout':'service_request',tierKey:scenario==='switch'?'standard':null,description:'Keep the saved description and attached photo.',selectedAddOns:scenario==='switch'?[{key:'stairs',quantity:2}]:[],preferredWindows:[{localDate:new Date(Date.now()+2*86400000).toISOString().slice(0,10),timeOfDay:'afternoon',timezone:'America/New_York'}]}:draft;
+const actualCatalog=catalog.map(service=>scenario==='required'&&service.key==='facility_cleanout'?{...service,requiredScopeFields:['itemCount','volumeCubicYards']}:service);
+const savedDraft=scenario?{...draft,serviceKey:scenario==='blank-saved'?null:scenario==='unavailable'?'retired_service':(['switch','legacy','required'].includes(scenario))?'facility_cleanout':'service_request',tierKey:(['switch','legacy','required'].includes(scenario))?'standard':null,scope:scenario==='legacy'?${JSON.stringify(legacyScope)}:scenario==='legacy-flags'?{nonStandard:true,restrictedItems:true}:{},description:'Keep the saved description and attached photo.',selectedAddOns:(scenario==='switch'||scenario==='legacy')?[{key:'stairs',quantity:2}]:[],preferredWindows:[{localDate:new Date(Date.now()+2*86400000).toISOString().slice(0,10),timeOfDay:'afternoon',timezone:'America/New_York'}]}:draft;
 function App(){return <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6"><PartnerBookingWizard
  initialDraft={scenario==='new'||scenario==='explicit'?null:savedDraft} defaultLocationId={scenario?'facility-address':''} defaultServiceKey={scenario==='explicit'||scenario==='blank-saved'?'appliance_collection':''} locations={[{id:'facility-address',name:'Northside facility',address:'100 Facility Drive, Atlanta, GA 30301',accessDetails:'Old location instructions removed from this draft.'}]}
- services={catalog} canUploadPhotos canManageLocations persona="commercial_client"
+ services={actualCatalog} canUploadPhotos canManageLocations persona="commercial_client"
  cancellationPolicy={{minimumNoticeMinutes:0,directCancellationEnabled:false,lateCancellationDisposition:'staff_review',automaticFeeMinor:null,source:'unconfigured',revision:null}}
  supportPhoneE164="+14045550100" supportPhoneDisplay="404-555-0100"/></main>}
 createRoot(document.getElementById('root')).render(<App/>);`;
@@ -220,23 +229,6 @@ async function screenshot(
   });
 }
 
-async function specialRequirementsScreenshot(
-  details: Locator,
-  engine: string,
-  width: number,
-  state: string,
-) {
-  const directory = process.env["PARTNER_SPECIAL_REQUIREMENTS_PREVIEW_DIR"];
-  if (!directory) return;
-  mkdirSync(directory, { recursive: true });
-  await details.screenshot({
-    path: join(
-      directory,
-      `special-requirements-${engine}-${width}-${state}.png`,
-    ),
-  });
-}
-
 for (const engine of [chromium, webkit]) {
   for (const width of [1440, 375]) {
     void test(
@@ -283,6 +275,12 @@ for (const engine of [chromium, webkit]) {
             [];
           let finishValidation: (() => void) | undefined;
           let pauseValidation = false;
+          let remoteFieldErrors: Record<string, string> = {
+            "commercial.billingContact.email":
+              "Check the billing email address.",
+          };
+          const validationSnapshots: Record<string, any>[] = [];
+          let offerArrivalWindow = false;
           const attachedPhoto = {
             id: "photo-reference",
             category: "issue",
@@ -342,6 +340,7 @@ for (const engine of [chromium, webkit]) {
             }
             if (path.endsWith(`/booking-drafts/${draftId}/validate`)) {
               assert.equal(request.method(), "POST");
+              validationSnapshots.push(structuredClone(saved));
               if (pauseValidation)
                 await new Promise<void>((resolve) => {
                   finishValidation = resolve;
@@ -351,16 +350,53 @@ for (const engine of [chromium, webkit]) {
                   ok: true,
                   draft: saved,
                   validation: {
-                    valid: false,
-                    ready: false,
-                    fieldErrors: {
-                      "commercial.billingContact.email":
-                        "Check the billing email address.",
-                    },
+                    valid: Object.keys(remoteFieldErrors).length === 0,
+                    ready: Object.keys(remoteFieldErrors).length === 0,
+                    fieldErrors: remoteFieldErrors,
                   },
                 },
               });
             }
+            if (path.endsWith(`/booking-drafts/${draftId}/availability`))
+              return route.fulfill({
+                json: {
+                  ok: true,
+                  availability: {
+                    draft: saved,
+                    timezone: "America/New_York",
+                    calendar: { state: "current" },
+                    reviewReasons: ["manual_review_required"],
+                    instantConfirmationEligible: offerArrivalWindow,
+                    pricing: {
+                      status: "estimate",
+                      currency: "USD",
+                      baseAmount: null,
+                      addOnTotal: null,
+                      total: null,
+                      addOns: [],
+                    },
+                    windows: offerArrivalWindow
+                      ? [
+                          {
+                            id: "fresh-arrival-window",
+                            localDate: new Date(Date.now() + 2 * 86_400_000)
+                              .toISOString()
+                              .slice(0, 10),
+                            startAt: new Date(
+                              Date.now() + 2 * 86_400_000,
+                            ).toISOString(),
+                            endAt: new Date(
+                              Date.now() + 2 * 86_400_000 + 3_600_000,
+                            ).toISOString(),
+                            label: "Available arrival window",
+                            available: true,
+                          },
+                        ]
+                      : [],
+                    rankedAlternatives: [],
+                  },
+                },
+              });
             if (path.endsWith(`/booking-drafts/${draftId}`)) {
               assert.equal(request.method(), "PATCH");
               saved = {
@@ -403,7 +439,6 @@ for (const engine of [chromium, webkit]) {
           );
           const names = [
             "Contact and access",
-            "Special requirements",
             "Work order and billing",
             "Completion photos",
             "Additional services",
@@ -454,189 +489,71 @@ for (const engine of [chromium, webkit]) {
           );
           await toggle(contact, false);
 
-          const special = disclosure(page, "Special requirements");
-          await toggle(special, true);
-          const specialGroups = [
-            "Handling and access",
-            "Materials needing review",
-            "Completion deadline",
-            "Additional stops",
-            "Quantity estimate",
-          ];
-          for (const name of specialGroups) {
-            const group = disclosure(page, name);
-            await expect(group).toHaveJSProperty("open", false);
-            await expect(group.locator(":scope > summary")).toBeVisible();
-          }
-          // Collapsed controls remain mounted but outside the keyboard flow.
-          await expect(page.locator("#partner-book-item-count")).toHaveCount(1);
-          await expect(
-            page.locator("#partner-book-item-count"),
-          ).not.toBeVisible();
-          const firstSpecialSummary = disclosure(
-            page,
-            specialGroups[0]!,
-          ).locator(":scope > summary");
-          await firstSpecialSummary.focus();
-          for (const name of specialGroups.slice(1)) {
-            await page.keyboard.press("Tab");
+          // Work questions belong beside the job description; access belongs
+          // with the on-site contact. Legacy numeric fields are absent here.
+          await expect(disclosure(page, "Special requirements")).toHaveCount(0);
+          for (const id of [
+            "partner-book-item-count",
+            "partner-book-volume",
+            "partner-book-non-standard",
+            "partner-book-restricted-items",
+          ])
+            await expect(page.locator(`#${id}`)).toHaveCount(0);
+          for (const name of [
+            "Lift gate or loading equipment",
+            "Light demolition",
+          ])
             await expect(
-              disclosure(page, name).locator(":scope > summary"),
-            ).toBeFocused();
-          }
-          await fits(page);
-          await specialRequirementsScreenshot(
-            special,
-            engine.name(),
-            width,
-            "empty",
-          );
-
-          const handling = disclosure(page, "Handling and access");
-          await toggle(handling, true);
-          await handling
-            .getByRole("checkbox", { name: /Heavy items or unusual work/ })
-            .check();
-          await handling
-            .getByRole("checkbox", { name: "Loading dock", exact: true })
-            .check();
-          await fits(page);
-          await specialRequirementsScreenshot(
-            special,
-            engine.name(),
-            width,
-            "handling-expanded",
-          );
-          await toggle(handling, false, "Space");
-          await expect(handling.locator(":scope > summary")).toContainText(
-            "Loading dock",
-          );
-
-          const materials = disclosure(page, "Materials needing review");
-          await toggle(materials, true, "Space");
-          await materials
+              page.getByRole("checkbox", { name, exact: true }),
+            ).toHaveCount(0);
+          const heavy = page.getByRole("checkbox", {
+            name: "Very heavy or oversized items",
+            exact: true,
+          });
+          await heavy.focus();
+          await heavy.press("Space");
+          await expect(heavy).toBeChecked();
+          await page
             .getByRole("checkbox", {
-              name: /Materials needing special handling/,
+              name: "Items need to be taken apart",
+              exact: true,
             })
             .check();
+          await toggle(contact, true);
+          await contact
+            .getByRole("checkbox", { name: "Loading dock", exact: true })
+            .check();
+          await toggle(contact, false);
+
+          const materials = disclosure(page, "Any materials we should review?");
+          await expect(materials).toHaveJSProperty("open", false);
+          await toggle(materials, true, "Space");
           await materials
-            .getByRole("checkbox", { name: "Paint or coatings", exact: true })
+            .getByRole("checkbox", { name: /Paint/, exact: false })
             .check();
           await toggle(materials, false);
           await expect(materials.locator(":scope > summary")).toContainText(
-            "Paint or coatings",
+            /Paint/,
           );
-
-          const deadline = disclosure(page, "Completion deadline");
-          await toggle(deadline, true);
-          await page.locator("#partner-book-required-date").fill("2026-10-04");
-          await page.locator("#partner-book-required-time").fill("16:00");
-          await toggle(deadline, false);
-          await expect(deadline.locator(":scope > summary")).toContainText(
-            /Oct|10\/4|2026-10-04/,
-          );
-
-          const stops = disclosure(page, "Additional stops");
-          await toggle(stops, true);
-          await stops
-            .getByRole("checkbox", {
-              name: "More than one service stop",
-            })
-            .check();
-          await page
-            .locator("#partner-book-multi-stop-details")
-            .fill("Collect the second shelf from Suite 9.");
-          await toggle(stops, false);
-          await expect(stops.locator(":scope > summary")).toContainText(
-            "Suite 9",
-          );
-
-          const quantity = disclosure(page, "Quantity estimate");
-          await toggle(quantity, true);
-          await page.locator("#partner-book-item-count").fill("4");
-          await page.locator("#partner-book-volume").fill("2.5");
-          await toggle(quantity, false);
-          await expect(quantity.locator(":scope > summary")).toContainText("4");
-          await expect(quantity.locator(":scope > summary")).toContainText(
-            "2.5",
-          );
+          await toggle(materials, true);
+          await expect(
+            materials.getByRole("checkbox", { name: /Paint/, exact: false }),
+          ).toBeChecked();
+          await toggle(materials, false);
           const expectedScope = {
-            itemCount: 4,
-            volumeCubicYards: 2.5,
             restrictedItems: true,
             nonStandard: true,
             hazardCategories: ["paint"],
-            equipmentNeeds: ["loading_dock"],
-            requiredCompletion: { localDate: "2026-10-04", localTime: "16:00" },
-            multiStop: true,
-            multiStopDetails: "Collect the second shelf from Suite 9.",
+            equipmentNeeds: ["disassembly", "heavy_lift", "loading_dock"],
           };
           await expect.poll(() => saved.scope).toEqual(expectedScope);
           await fits(page);
-          await specialRequirementsScreenshot(
-            special,
+          await screenshot(
+            page,
             engine.name(),
             width,
-            "saved-summaries",
+            "relevant-work-questions",
           );
-          await toggle(special, false);
-          await toggle(special, true, "Space");
-          for (const name of specialGroups)
-            await expect(disclosure(page, name)).toHaveJSProperty(
-              "open",
-              false,
-            );
-          await toggle(quantity, true);
-          await expect(page.locator("#partner-book-item-count")).toHaveValue(
-            "4",
-          );
-          await expect(page.locator("#partner-book-volume")).toHaveValue("2.5");
-          // A validation link must reveal both the outer row and nested group.
-          await page.locator("#partner-book-item-count").fill("-1");
-          await expect(page.locator("#partner-book-item-count")).toHaveValue(
-            "-1",
-          );
-          await toggle(quantity, false);
-          await toggle(special, false);
-          await page
-            .getByRole("button", {
-              name: "Continue to scheduling",
-              exact: true,
-            })
-            .click();
-          const scopeErrorSummary = page.locator("#partner-book-error-summary");
-          await expect(scopeErrorSummary).toBeFocused();
-          await expect(scopeErrorSummary).toContainText(
-            "Enter a whole item count of zero or more.",
-          );
-          await expect(special).toHaveJSProperty("open", true);
-          await expect(quantity).toHaveJSProperty("open", true);
-          await toggle(quantity, false);
-          await toggle(special, false);
-          // Repeating unchanged validation must reopen both levels too.
-          await page
-            .getByRole("button", {
-              name: "Continue to scheduling",
-              exact: true,
-            })
-            .click();
-          await expect(scopeErrorSummary).toBeFocused();
-          await expect(special).toHaveJSProperty("open", true);
-          await expect(quantity).toHaveJSProperty("open", true);
-          await toggle(quantity, false);
-          await toggle(special, false);
-          const quantityError = scopeErrorSummary.getByRole("link", {
-            name: "Enter a whole item count of zero or more.",
-            exact: true,
-          });
-          await quantityError.focus();
-          await quantityError.press("Enter");
-          await expect(special).toHaveJSProperty("open", true);
-          await expect(quantity).toHaveJSProperty("open", true);
-          await expect(page.locator("#partner-book-item-count")).toBeFocused();
-          await page.locator("#partner-book-item-count").fill("4");
-          await toggle(quantity, false);
-          await toggle(special, false);
 
           const billing = disclosure(page, "Work order and billing");
           await toggle(billing, true);
@@ -681,7 +598,7 @@ for (const engine of [chromium, webkit]) {
           assert.deepEqual(
             saved.scope,
             expectedScope,
-            "Closing requirement groups preserves the complete outbound scope",
+            "Closing materials and contact preserves the complete outbound scope",
           );
 
           // Keyboard activation opens the real file input. Preferences for crew
@@ -923,6 +840,275 @@ for (const engine of [chromium, webkit]) {
             photoAttempts[0],
             "Retry preserves the photo identity, category and client note",
           );
+
+          // Questions follow the relevant step, including errors returned by
+          // the server after the user has already moved past that step.
+          if (
+            !(await contact.evaluate(
+              (element) => (element as HTMLDetailsElement).open,
+            ))
+          )
+            await toggle(contact, true);
+          await page.locator("#partner-book-contact-name").fill("Morgan Lee");
+          await page
+            .locator("#partner-book-contact-phone")
+            .fill("+14045550100");
+          await page
+            .locator("#partner-book-contact-email")
+            .fill("facilities@example.test");
+          await toggle(contact, false);
+          await description.fill(
+            "Collect four empty shelving units from the loading area.",
+          );
+          const nextDetails = page.getByRole("button", {
+            name: "Continue to scheduling",
+            exact: true,
+          });
+          for (const error of [
+            {
+              path: "scope.hazardCategories.0",
+              message: "Check these materials.",
+              group: materials,
+              target: "partner-book-materials",
+            },
+            {
+              path: "scope.equipmentNeeds.2",
+              message: "Check access requirements.",
+              group: contact,
+              target: "partner-book-access-loading_dock",
+            },
+          ]) {
+            remoteFieldErrors = { [error.path]: error.message };
+            await nextDetails.click();
+            await expect(errorSummary).toBeFocused();
+            await expect(error.group).toHaveJSProperty("open", true);
+            await toggle(error.group, false);
+            const link = errorSummary.getByRole("link", {
+              name: error.message,
+              exact: true,
+            });
+            await link.focus();
+            await link.press("Enter");
+            await expect(error.group).toHaveJSProperty("open", true);
+            await expect(page.locator(`#${error.target}`)).toBeFocused();
+            await toggle(error.group, false);
+          }
+          remoteFieldErrors = {
+            "scope.equipmentNeeds[0]": "Check disassembly requirements.",
+          };
+          await nextDetails.click();
+          await expect(errorSummary).toBeFocused();
+          await errorSummary
+            .getByRole("link", {
+              name: "Check disassembly requirements.",
+              exact: true,
+            })
+            .click();
+          await expect(page.locator("#partner-book-disassembly")).toBeFocused();
+          remoteFieldErrors = {};
+          await page.getByRole("button", { name: "Back", exact: true }).click();
+          await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+            "data-booking-step",
+            "0",
+          );
+          const stops = disclosure(page, "Add another service address");
+          await expect(stops).toHaveJSProperty("open", false);
+          await toggle(stops, true, "Space");
+          await stops
+            .getByRole("checkbox", {
+              name: "This request includes another address",
+              exact: true,
+            })
+            .check();
+          await toggle(stops, false);
+          await page
+            .getByRole("button", { name: "Continue", exact: true })
+            .click();
+          await expect(errorSummary).toBeFocused();
+          await expect(stops).toHaveJSProperty("open", true);
+          await toggle(stops, false);
+          const stopError = errorSummary.getByRole("link").first();
+          await stopError.focus();
+          await stopError.press("Enter");
+          await expect(
+            page.locator("#partner-book-multi-stop-details"),
+          ).toBeFocused();
+          const stopInstructions =
+            "Collect the second shelf from 102 Facility Drive, Suite 9.";
+          await page
+            .locator("#partner-book-multi-stop-details")
+            .fill(stopInstructions);
+          await toggle(stops, false);
+          await expect(stops.locator(":scope > summary")).toContainText(
+            "102 Facility Drive",
+          );
+          await fits(page);
+          await screenshot(page, engine.name(), width, "additional-address");
+          await page
+            .getByRole("button", { name: "Continue", exact: true })
+            .click();
+          await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+            "data-booking-step",
+            "1",
+          );
+          remoteFieldErrors = {
+            "scope.multiStopDetails": "Confirm the additional service address.",
+          };
+          await nextDetails.click();
+          await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+            "data-booking-step",
+            "0",
+          );
+          await expect(errorSummary).toBeFocused();
+          await expect(stops).toHaveJSProperty("open", true);
+          await errorSummary
+            .getByRole("link", {
+              name: "Confirm the additional service address.",
+              exact: true,
+            })
+            .click();
+          await expect(
+            page.locator("#partner-book-multi-stop-details"),
+          ).toBeFocused();
+          await expect(
+            page.locator("#partner-book-multi-stop-details"),
+          ).toHaveValue(stopInstructions);
+          remoteFieldErrors = {};
+          await page
+            .getByRole("button", { name: "Continue", exact: true })
+            .click();
+          await nextDetails.click();
+          await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+            "data-booking-step",
+            "2",
+          );
+          const deadline = disclosure(page, "Completion deadline");
+          await expect(deadline).toHaveJSProperty("open", false);
+          await toggle(deadline, true);
+          await page.locator("#partner-book-required-date").fill("2026-10-04");
+          await page.locator("#partner-book-required-time").fill("16:00");
+          await page.locator("#partner-book-required-date").fill("");
+          await toggle(deadline, false);
+          const preferredDate = new Date(Date.now() + 2 * 86_400_000)
+            .toISOString()
+            .slice(0, 10);
+          await page
+            .locator("#partner-book-preferred-date-1")
+            .fill(preferredDate);
+          await page
+            .getByRole("button", { name: "Continue", exact: true })
+            .click();
+          await expect(errorSummary).toBeFocused();
+          await expect(deadline).toHaveJSProperty("open", true);
+          await toggle(deadline, false);
+          await page
+            .getByRole("button", { name: "Continue", exact: true })
+            .click();
+          await expect(deadline).toHaveJSProperty("open", true);
+          await toggle(deadline, false);
+          const deadlineError = errorSummary.getByRole("link", {
+            name: /Add a completion date/,
+          });
+          await deadlineError.focus();
+          await deadlineError.press("Enter");
+          await expect(deadline).toHaveJSProperty("open", true);
+          await expect(
+            page.locator("#partner-book-required-date"),
+          ).toBeFocused();
+          await page.locator("#partner-book-required-date").fill("2026-10-04");
+          await fits(page);
+          await screenshot(page, engine.name(), width, "completion-deadline");
+          await toggle(deadline, false);
+          await expect(deadline.locator(":scope > summary")).toContainText(
+            /Oct|10\/4|2026-10-04/,
+          );
+          // A changed deadline must be rechecked before Review, and the form
+          // stays still while the result is pending.
+          offerArrivalWindow = true;
+          pauseValidation = true;
+          finishValidation = undefined;
+          await page
+            .getByRole("button", { name: "Continue", exact: true })
+            .click();
+          try {
+            await expect.poll(() => Boolean(finishValidation)).toBe(true);
+            await expect(
+              page.locator("#partner-book-required-date"),
+            ).toBeDisabled();
+            // Scheduling replaces its preference controls with a loading state;
+            // if a future layout keeps them mounted, they must be disabled.
+            await expect
+              .poll(async () => {
+                const preference = page.locator(
+                  "#partner-book-preferred-date-1",
+                );
+                return (
+                  (await preference.count()) === 0 ||
+                  (await preference.isDisabled())
+                );
+              })
+              .toBe(true);
+            await expect(
+              page.getByRole("button", { name: "Saving step…", exact: true }),
+            ).toBeDisabled();
+          } finally {
+            pauseValidation = false;
+            finishValidation?.();
+          }
+          await expect(errorSummary).toContainText(
+            "Choose one of the available arrival windows.",
+          );
+          await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+            "data-booking-step",
+            "2",
+          );
+          assert.deepEqual(
+            validationSnapshots.at(-1)?.scope.requiredCompletion,
+            {
+              localDate: "2026-10-04",
+              localTime: "16:00",
+            },
+          );
+          // Refresh from Service details after the fixture changes back to
+          // staff review, preserving the deadline and preferred dates.
+          offerArrivalWindow = false;
+          await page.getByRole("button", { name: "Back", exact: true }).click();
+          await nextDetails.click();
+          await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+            "data-booking-step",
+            "2",
+          );
+          await page
+            .getByRole("button", { name: "Continue", exact: true })
+            .click();
+          await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+            "data-booking-step",
+            "3",
+          );
+          assert.deepEqual(
+            saved.scope,
+            {
+              ...expectedScope,
+              multiStop: true,
+              multiStopDetails: stopInstructions,
+              requiredCompletion: {
+                localDate: "2026-10-04",
+                localTime: "16:00",
+              },
+            },
+            "Every question retains its canonical scope when moved between steps",
+          );
+          assert.deepEqual(saved.selectedAddOns, [
+            { key: "stairs", quantity: 2 },
+          ]);
+          await expect(
+            page
+              .getByText(
+                "Collect four empty shelving units from the loading area.",
+                { exact: true },
+              )
+              .first(),
+          ).toBeVisible();
           await fits(page);
           assert.deepEqual(
             errors,
@@ -975,6 +1161,10 @@ for (const engine of [chromium, webkit]) {
           "unavailable",
           "disabled",
           "switch",
+          "legacy",
+          "legacy-flags",
+          "required",
+          "scope-error",
         ]) {
           const page = await browser.newPage({
             viewport: { width: 375, height: 1000 },
@@ -988,13 +1178,23 @@ for (const engine of [chromium, webkit]) {
                 ? null
                 : scenario === "unavailable"
                   ? "retired_service"
-                  : scenario === "switch"
+                  : ["switch", "legacy", "required"].includes(scenario)
                     ? "facility_cleanout"
                     : "service_request",
-            tierKey: scenario === "switch" ? "standard" : null,
+            tierKey: ["switch", "legacy", "required"].includes(scenario)
+              ? "standard"
+              : null,
+            scope:
+              scenario === "legacy"
+                ? structuredClone(legacyScope)
+                : scenario === "legacy-flags"
+                  ? { nonStandard: true, restrictedItems: true }
+                  : {},
             description: "Keep the saved description and attached photo.",
             selectedAddOns:
-              scenario === "switch" ? [{ key: "stairs", quantity: 2 }] : [],
+              scenario === "switch" || scenario === "legacy"
+                ? [{ key: "stairs", quantity: 2 }]
+                : [],
             preferredWindows: [
               {
                 localDate: new Date(Date.now() + 2 * 86400000)
@@ -1006,6 +1206,13 @@ for (const engine of [chromium, webkit]) {
             ],
           };
           let validations = 0;
+          let validationErrors: Record<string, string> =
+            scenario === "scope-error"
+              ? {
+                  "scope.itemCount":
+                    "Enter the item count requested for this job.",
+                }
+              : {};
           const availabilityServices: string[] = [];
           const attachedPhoto = {
             id: "saved-photo",
@@ -1041,7 +1248,11 @@ for (const engine of [chromium, webkit]) {
                 json: {
                   ok: true,
                   draft: saved,
-                  validation: { valid: true, ready: true, fieldErrors: {} },
+                  validation: {
+                    valid: !Object.keys(validationErrors).length,
+                    ready: !Object.keys(validationErrors).length,
+                    fieldErrors: validationErrors,
+                  },
                 },
               });
             }
@@ -1144,6 +1355,229 @@ for (const engine of [chromium, webkit]) {
               await expect(
                 page.getByText("Saved reference photo.", { exact: true }),
               ).toBeVisible();
+            } else if (scenario === "required") {
+              const quantities = disclosure(page, "Required service details");
+              await expect(quantities).toHaveJSProperty("open", true);
+              for (const id of [
+                "partner-book-item-count",
+                "partner-book-volume",
+              ])
+                await expect(page.locator(`#${id}`)).toHaveAttribute(
+                  "required",
+                  "",
+                );
+              await page
+                .getByRole("button", {
+                  name: "Continue to scheduling",
+                  exact: true,
+                })
+                .click();
+              assert.equal(
+                validations,
+                0,
+                "Required quantities must be checked before a server request",
+              );
+              await expect(
+                page.locator("#partner-book-error-summary"),
+              ).toBeFocused();
+              await page.locator("#partner-book-item-count").fill("0");
+              await page.locator("#partner-book-volume").fill("3.5");
+              await page
+                .getByRole("button", {
+                  name: "Continue to scheduling",
+                  exact: true,
+                })
+                .click();
+              await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+                "data-booking-step",
+                "2",
+              );
+              assert.deepEqual(saved.scope, {
+                itemCount: 0,
+                volumeCubicYards: 3.5,
+              });
+              await page
+                .getByRole("button", { name: "Back", exact: true })
+                .click();
+              await select.selectOption("service_request");
+              await expect
+                .poll(() => saved.scope)
+                .toEqual({ itemCount: 0, volumeCubicYards: 3.5 });
+              await expect(
+                page.locator("#partner-book-item-count"),
+              ).not.toHaveAttribute("required", "");
+              await expect(
+                page.locator("#partner-book-volume"),
+              ).not.toHaveAttribute("required", "");
+            } else if (scenario === "scope-error") {
+              await expect(
+                page.locator("#partner-book-item-count"),
+              ).toHaveCount(0);
+              await page
+                .getByRole("button", {
+                  name: "Continue to scheduling",
+                  exact: true,
+                })
+                .click();
+              const quantities = page.locator("#partner-book-saved-details");
+              await expect(quantities).toHaveJSProperty("open", true);
+              const errorSummary = page.locator("#partner-book-error-summary");
+              await expect(errorSummary).toBeFocused();
+              await toggle(quantities, false);
+              await errorSummary
+                .getByRole("link", {
+                  name: "Enter the item count requested for this job.",
+                  exact: true,
+                })
+                .click();
+              await expect(quantities).toHaveJSProperty("open", true);
+              await expect(
+                page.locator("#partner-book-item-count"),
+              ).toBeFocused();
+              await page.locator("#partner-book-item-count").fill("0");
+              validationErrors = {};
+              await page
+                .getByRole("button", {
+                  name: "Continue to scheduling",
+                  exact: true,
+                })
+                .click();
+              await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+                "data-booking-step",
+                "2",
+              );
+              assert.deepEqual(saved.scope, { itemCount: 0 });
+            } else if (scenario === "legacy-flags") {
+              const legacy = disclosure(page, "Saved request details");
+              await toggle(legacy, true);
+              const handling = page.locator("#partner-book-non-standard");
+              const materials = page.locator("#partner-book-restricted-items");
+              await expect(handling).toBeChecked();
+              await expect(materials).toBeChecked();
+              await handling.uncheck();
+              await materials.uncheck();
+              await expect.poll(() => saved.scope).toEqual({});
+              await expect(handling).toBeVisible();
+              await expect(materials).toBeVisible();
+              await handling.check();
+              await materials.check();
+              await toggle(legacy, false);
+              await expect
+                .poll(() => saved.scope)
+                .toEqual({ nonStandard: true, restrictedItems: true });
+            } else if (scenario === "legacy") {
+              const legacy = disclosure(page, "Saved request details");
+              await expect(legacy).toHaveJSProperty("open", false);
+              await toggle(legacy, true, "Space");
+              await expect(
+                page.locator("#partner-book-item-count"),
+              ).toHaveValue("0");
+              await expect(page.locator("#partner-book-volume")).toHaveValue(
+                "3.5",
+              );
+              await expect(
+                page.locator("#partner-book-saved-option-lift_gate"),
+              ).toBeChecked();
+              await expect(
+                page.locator("#partner-book-saved-option-demolition"),
+              ).toBeChecked();
+
+              // Existing numeric fields retain their validation and exact zero.
+              await page.locator("#partner-book-item-count").fill("-1");
+              await toggle(legacy, false);
+              const next = page.getByRole("button", {
+                name: "Continue to scheduling",
+                exact: true,
+              });
+              await next.click();
+              const errorSummary = page.locator("#partner-book-error-summary");
+              await expect(errorSummary).toBeFocused();
+              await expect(legacy).toHaveJSProperty("open", true);
+              await toggle(legacy, false);
+              await next.click();
+              await expect(legacy).toHaveJSProperty("open", true);
+              await toggle(legacy, false);
+              const errorLink = errorSummary.getByRole("link", {
+                name: "Enter a whole item count of zero or more.",
+                exact: true,
+              });
+              await errorLink.focus();
+              await errorLink.press("Enter");
+              await expect(legacy).toHaveJSProperty("open", true);
+              await expect(
+                page.locator("#partner-book-item-count"),
+              ).toBeFocused();
+              await page.locator("#partner-book-item-count").fill("0");
+              await toggle(legacy, false);
+
+              const heavy = page.getByRole("checkbox", {
+                name: "Very heavy or oversized items",
+                exact: true,
+              });
+              await heavy.check();
+              await page
+                .getByRole("checkbox", {
+                  name: "Items need to be taken apart",
+                  exact: true,
+                })
+                .check();
+              await heavy.uncheck();
+              const contact = disclosure(page, "Contact and access");
+              await toggle(contact, true);
+              await contact
+                .getByRole("checkbox", { name: "Stairs", exact: true })
+                .check();
+              await contact
+                .getByRole("checkbox", { name: "Loading dock", exact: true })
+                .check();
+              await contact
+                .getByRole("checkbox", { name: "Stairs", exact: true })
+                .uncheck();
+              await toggle(contact, false);
+              const materials = disclosure(
+                page,
+                "Any materials we should review?",
+              );
+              await toggle(materials, true);
+              const paint = materials.getByRole("checkbox", {
+                name: /Paint/,
+                exact: false,
+              });
+              await expect(paint).toBeChecked();
+              await paint.uncheck();
+              await paint.check();
+              await toggle(materials, false);
+              await expect
+                .poll(() => saved.scope)
+                .toEqual({
+                  ...legacyScope,
+                  equipmentNeeds: [
+                    "demolition",
+                    "disassembly",
+                    "lift_gate",
+                    "loading_dock",
+                  ],
+                });
+              assert.deepEqual(
+                saved.selectedAddOns,
+                [{ key: "stairs", quantity: 2 }],
+                "Changing work/access requirements cannot change priced add-ons",
+              );
+              await toggle(legacy, true);
+              await expect(
+                page.locator("#partner-book-item-count"),
+              ).toHaveValue("0");
+              await expect(page.locator("#partner-book-volume")).toHaveValue(
+                "3.5",
+              );
+              await expect(
+                page.locator("#partner-book-saved-option-lift_gate"),
+              ).toBeChecked();
+              await expect(
+                page.locator("#partner-book-saved-option-demolition"),
+              ).toBeChecked();
+              await toggle(legacy, false);
+              await screenshot(page, engine.name(), 375, "restored-legacy");
             } else if (scenario === "unavailable" || scenario === "disabled") {
               await expect(select).toHaveAttribute("aria-invalid", "true");
               await expect(
@@ -1259,6 +1693,8 @@ for (const engine of [chromium, webkit]) {
               ).toHaveCount(0);
               assert.deepEqual(availabilityServices, [
                 "facility_cleanout",
+                "facility_cleanout",
+                "service_request",
                 "service_request",
               ]);
             }

@@ -134,6 +134,45 @@ async function currentDraftId(page: Page): Promise<string> {
   return new URL(page.url()).searchParams.get("draftId")!;
 }
 
+async function restoreLegacyDraft(page: Page, draftId: string): Promise<void> {
+  await expect(page.getByText("Saved", { exact: true }).first()).toBeVisible();
+  const { draft } = await portal(page, `booking-drafts/${draftId}`);
+  // Simulate opening a request saved by the previous UI. Use the authenticated
+  // portal boundary and its current ETag; leaving the page prevents an old form
+  // autosave from racing the controlled legacy fixture.
+  await page.goto("about:blank");
+  const response = await page
+    .context()
+    .request.patch(`${base}/api/partners/portal/booking-drafts/${draftId}`, {
+      headers: { "If-Match": draft.etag, Origin: base },
+      data: {
+        scope: {
+          ...draft.scope,
+          itemCount: 7,
+          volumeCubicYards: 3.5,
+          nonStandard: true,
+          restrictedItems: true,
+          equipmentNeeds: ["lift_gate"],
+        },
+      },
+    });
+  assert.equal(
+    response.status(),
+    200,
+    "The normal portal can save the legacy request fixture",
+  );
+  assert.equal((await response.json()).ok, true);
+  await page.goto(`${base}/partners/book?draftId=${draftId}`);
+  await requestStep(page, "Service details");
+  const legacy = await openRow(page, "Saved request details");
+  await expect(page.locator("#partner-book-item-count")).toHaveValue("7");
+  await expect(page.locator("#partner-book-volume")).toHaveValue("3.5");
+  await expect(
+    page.locator("#partner-book-saved-option-lift_gate"),
+  ).toBeChecked();
+  await legacy.locator(":scope > summary").click();
+}
+
 function row(page: Page, title: string) {
   return page
     .locator("details")
@@ -270,12 +309,7 @@ async function createCompany(staffPage: Page, page: Page, suffix: string) {
   return invitation.accountId as string;
 }
 
-async function enterDetails(
-  page: Page,
-  serviceKey: string,
-  addOnKey: string,
-  deadline: string,
-) {
+async function enterDetails(page: Page, serviceKey: string, addOnKey: string) {
   await page.locator("#partner-book-service").selectOption(serviceKey);
   await page.locator("#partner-book-base-option").selectOption("large");
   await page.locator("#partner-book-description").fill(expected.description);
@@ -291,32 +325,14 @@ async function enterDetails(
     "crew-instructions": expected.crewInstructions,
   }))
     await page.locator(`#partner-book-${id}`).fill(value);
-  await openRow(page, "Special requirements");
-  for (const group of [
-    "Handling and access",
-    "Materials needing review",
-    "Completion deadline",
-    "Additional stops",
-    "Quantity estimate",
-  ])
-    await openRow(page, group);
-  await page.locator("#partner-book-item-count").fill("7");
-  await page.locator("#partner-book-volume").fill("3.5");
-  for (const name of [
-    "Materials needing special handling",
-    "Heavy items or unusual work",
-    "Paint or coatings",
-    "Batteries or powered equipment",
-    "Loading dock",
-    "Lift gate or loading equipment",
-    "More than one service stop",
-  ])
-    await page.getByRole("checkbox", { name: new RegExp(name) }).check();
-  await page.locator("#partner-book-required-date").fill(deadline);
-  await page.locator("#partner-book-required-time").fill("16:30");
   await page
-    .locator("#partner-book-multi-stop-details")
-    .fill(expected.multiStopDetails);
+    .getByRole("checkbox", { name: "Loading dock", exact: true })
+    .check();
+  const materials = await openRow(page, "Any materials we should review?");
+  await materials.getByRole("checkbox", { name: "Paint", exact: true }).check();
+  await materials
+    .getByRole("checkbox", { name: "Batteries", exact: true })
+    .check();
   await openRow(page, "Work order and billing");
   for (const [id, value] of Object.entries({
     po: expected.commercial.poNumber,
@@ -618,6 +634,19 @@ for (const width of [1440, 375])
         await page.getByLabel("City", { exact: true }).fill("Atlanta");
         await page.getByLabel("State", { exact: true }).fill("GA");
         await page.getByLabel("ZIP code", { exact: true }).fill("30301");
+        const additionalAddress = await openRow(
+          page,
+          "Add another service address",
+        );
+        await additionalAddress
+          .getByRole("checkbox", {
+            name: "This request includes another address",
+            exact: true,
+          })
+          .check();
+        await page
+          .locator("#partner-book-multi-stop-details")
+          .fill(expected.multiStopDetails);
         await page
           .getByRole("button", { name: "Continue", exact: true })
           .click();
@@ -639,7 +668,8 @@ for (const width of [1440, 375])
         };
         const requestedDates = [day(2), day(3), day(4)],
           deadline = day(6);
-        await enterDetails(page, serviceKey, addOnKey, deadline);
+        await restoreLegacyDraft(page, draftId);
+        await enterDetails(page, serviceKey, addOnKey);
         await expect
           .poll(
             async () =>
@@ -712,6 +742,9 @@ for (const width of [1440, 375])
           .getByRole("button", { name: "Continue to scheduling", exact: true })
           .click();
         await requestStep(page, "Scheduling");
+        await openRow(page, "Completion deadline");
+        await page.locator("#partner-book-required-date").fill(deadline);
+        await page.locator("#partner-book-required-time").fill("16:30");
         for (let index = 0; index < 3; index++)
           await page
             .locator(`#partner-book-preferred-date-${index + 1}`)

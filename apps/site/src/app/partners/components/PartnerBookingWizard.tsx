@@ -64,10 +64,16 @@ import {
 } from "./PartnerDraftPhotoUpload";
 import { PartnerBookingDetailsRow } from "./PartnerBookingDetailsRow";
 import {
-  PartnerSpecialRequirements,
-  type PartnerSpecialRequirementsValues,
-} from "./PartnerSpecialRequirements";
+  PartnerWorkQuestions,
+  PartnerAccessQuestions,
+  PartnerMaterialsQuestion,
+  PartnerCompletionDeadline,
+  PartnerAdditionalAddresses,
+  type PartnerRequestScopeValues,
+} from "./PartnerRequestQuestions";
+import { PartnerSavedScopeDetails } from "./PartnerSavedScopeDetails";
 import {
+  bookingFieldStep,
   bookingFieldElementId,
   bookingErrorSection,
   focusBookingField,
@@ -95,6 +101,7 @@ export type BookingWizardService = {
   detail?: string;
   pricingStatus?: "contracted" | "review_required" | "hidden";
   bookable: boolean;
+  requiredScopeFields?: readonly string[];
   priceState: PartnerServicePriceState;
   agreement: {
     label: string;
@@ -153,7 +160,7 @@ export type BookingWizardCancellationPolicy = {
   revision: number | null;
 };
 
-type WizardForm = PartnerSpecialRequirementsValues & {
+type WizardForm = PartnerRequestScopeValues & {
   locationId: string;
   serviceKey: string;
   tierKey: string;
@@ -543,26 +550,6 @@ function formatCancellationNotice(minutes: number): string {
   return `${minutes} minutes`;
 }
 
-function fieldStep(field: string): number {
-  if (field.startsWith("location")) return 0;
-  if (
-    field.startsWith("service") ||
-    field.startsWith("scope") ||
-    field === "description"
-  )
-    return 1;
-  if (
-    field.startsWith("onSite") ||
-    field === "contactMethod" ||
-    field.includes("Contact") ||
-    field.includes("access")
-  )
-    return 1;
-  if (field.startsWith("proof")) return 1;
-  if (field.startsWith("preferred")) return 2;
-  return 1;
-}
-
 function localErrorsForStep(
   step: number,
   form: WizardForm,
@@ -571,7 +558,24 @@ function localErrorsForStep(
   const errors: Record<string, string> = {};
   if (step === 0 && !form.locationId)
     errors["locationId"] = "Enter a service address or choose a saved address.";
+  if (step === 0 && form.multiStop && !form.multiStopDetails.trim())
+    errors["scope.multiStopDetails"] =
+      "Add the other service addresses and the order of the stops.";
+  if (step === 2 && form.requiredCompletionTime && !form.requiredCompletionDate)
+    errors["scope.requiredCompletion.localDate"] =
+      "Add a completion date for the time you entered, or clear the time.";
   if (step === 1) {
+    const required = new Set(
+      (service?.requiredScopeFields ?? []).map((field) =>
+        field.replace(/^scope\./u, ""),
+      ),
+    );
+    if (required.has("itemCount") && !form.itemCount.trim())
+      errors["scope.itemCount"] =
+        "Enter the item count required for this service.";
+    if (required.has("volumeCubicYards") && !form.volume.trim())
+      errors["scope.volumeCubicYards"] =
+        "Enter the estimated volume required for this service.";
     if (!form.serviceKey) errors["serviceKey"] = "Choose a service.";
     else if (!service || !service.bookable) {
       errors["serviceKey"] =
@@ -594,10 +598,6 @@ function localErrorsForStep(
       (!Number.isFinite(Number(form.volume)) || Number(form.volume) < 0)
     ) {
       errors["scope.volumeCubicYards"] = "Enter a volume of zero or more.";
-    }
-    if (form.requiredCompletionTime && !form.requiredCompletionDate) {
-      errors["scope.requiredCompletion.localDate"] =
-        "Add a completion date for the time you entered, or clear the time.";
     }
     if (
       Boolean(form.billingContactName.trim()) !==
@@ -1139,7 +1139,11 @@ function PartnerBookingWizardSession({
     value: WizardForm[K],
   ): void => {
     releaseHeldTimeAfterEdit();
+    if (message === "Add the highlighted details to continue.")
+      setMessage(null);
     if (String(key).startsWith("proof")) setPersonaFeedback(null);
+    if (key === "requiredCompletionDate" || key === "requiredCompletionTime")
+      setAvailability(null);
     setForm((current) => ({ ...current, [key]: value }));
     setFieldErrors((current) => {
       const next = { ...current };
@@ -1157,9 +1161,37 @@ function PartnerBookingWizardSession({
       if (String(key).startsWith("billingContact")) {
         delete next["billingContact"];
       }
+      const scopeField: Partial<
+        Record<keyof PartnerRequestScopeValues, string>
+      > = {
+        itemCount: "itemCount",
+        volume: "volumeCubicYards",
+        nonStandard: "nonStandard",
+        restrictedItems: "restrictedItems",
+        equipmentNeeds: "equipmentNeeds",
+        hazardCategories: "hazardCategories",
+        requiredCompletionDate: "requiredCompletion",
+        requiredCompletionTime: "requiredCompletion",
+        multiStop: "multiStop",
+        multiStopDetails: "multiStopDetails",
+      };
+      const scopeRoot = scopeField[key as keyof PartnerRequestScopeValues];
+      if (scopeRoot)
+        for (const field of Object.keys(next)) {
+          const path = field.replace(/\[(\d+)\]/gu, ".$1");
+          if (
+            path === `scope.${scopeRoot}` ||
+            path.startsWith(`scope.${scopeRoot}.`)
+          )
+            delete next[field];
+        }
       return next;
     });
   };
+  const updateScope = <K extends keyof PartnerRequestScopeValues>(
+    key: K,
+    value: PartnerRequestScopeValues[K],
+  ): void => update<keyof PartnerRequestScopeValues>(key, value);
 
   const applyProofPreset = (preset: PartnerPersonaProofPreset): void => {
     releaseHeldTimeAfterEdit();
@@ -1293,9 +1325,11 @@ function PartnerBookingWizardSession({
     [],
   );
 
-  const loadAvailability = React.useCallback(async (): Promise<boolean> => {
+  const loadAvailability = React.useCallback(async (): Promise<{
+    availability: PartnerAvailability | null;
+  } | null> => {
     const current = draftRef.current;
-    if (!current) return false;
+    if (!current) return null;
     setAvailabilityLoading(true);
     setMessage(null);
     trackPartnerFunnelEvent({
@@ -1308,7 +1342,7 @@ function PartnerBookingWizardSession({
     const savedDraft = draftRef.current;
     if (!saved || !savedDraft) {
       setAvailabilityLoading(false);
-      return false;
+      return null;
     }
     const validated = await partnerPortalFetch<{
       ok: true;
@@ -1331,11 +1365,13 @@ function PartnerBookingWizardSession({
         validated?.error.message ?? "We couldn’t check this saved request.",
       );
       if (Object.keys(errors).length) {
-        const targetStep = Math.min(...Object.keys(errors).map(fieldStep));
+        const targetStep = Math.min(
+          ...Object.keys(errors).map(bookingFieldStep),
+        );
         setStep(targetStep);
         focusErrorSummary(errors);
       }
-      return false;
+      return null;
     }
     const validationResult = parseBookingValidation(validated.data);
     if (!validationResult || validationResult.draft.id !== savedDraft.id) {
@@ -1346,7 +1382,7 @@ function PartnerBookingWizardSession({
           portalSupportReferenceFromResponse(validated.response),
         ),
       );
-      return false;
+      return null;
     }
     setCurrentDraft(validationResult.draft);
     if (!validationResult.validation.valid) {
@@ -1356,10 +1392,10 @@ function PartnerBookingWizardSession({
       setMessage(
         "Add the highlighted details so we can show the right arrival windows.",
       );
-      const targetStep = Math.min(...Object.keys(errors).map(fieldStep));
+      const targetStep = Math.min(...Object.keys(errors).map(bookingFieldStep));
       setStep(Number.isFinite(targetStep) ? targetStep : 1);
       focusErrorSummary(errors);
-      return false;
+      return null;
     }
     setFieldErrors({});
 
@@ -1398,7 +1434,7 @@ function PartnerBookingWizardSession({
             : result?.error.correlationId,
         ),
       );
-      return true;
+      return { availability: null };
     }
     trackPartnerFunnelEvent({
       stage: !nextAvailability.instantConfirmationEligible
@@ -1420,7 +1456,7 @@ function PartnerBookingWizardSession({
             preferredTimezone: nextAvailability.timezone,
           },
     );
-    return true;
+    return { availability: nextAvailability };
   }, [flushPersist, focusErrorSummary, form, persona, setCurrentDraft]);
 
   const goNext = async (snapshot: WizardForm = form): Promise<void> => {
@@ -1471,9 +1507,22 @@ function PartnerBookingWizardSession({
           return;
         }
       }
-      if (step === 1) {
+      if (step === 1 || (step === 2 && !hold)) {
         const loaded = await loadAvailability();
         if (!loaded) return;
+        if (
+          step === 2 &&
+          loaded.availability?.instantConfirmationEligible &&
+          loaded.availability.windows.some((window) => window.available)
+        ) {
+          const errors = {
+            preferredWindows: "Choose one of the available arrival windows.",
+          };
+          setFieldErrors(errors);
+          setMessage(errors.preferredWindows);
+          focusErrorSummary(errors);
+          return;
+        }
       } else if (!(await flushPersist(snapshot))) {
         return;
       }
@@ -1658,24 +1707,13 @@ function PartnerBookingWizardSession({
     ? [
         form.contactName.trim(),
         form.contactPhone.trim() || form.contactEmail.trim(),
+        form.equipmentNeeds.includes("stairs") ? "Stairs" : "",
+        form.equipmentNeeds.includes("elevator") ? "Elevator" : "",
+        form.equipmentNeeds.includes("loading_dock") ? "Loading dock" : "",
       ]
         .filter(Boolean)
         .join(" · ")
     : "Add the person our crew should contact";
-  const scopeDetailsSummary =
-    [
-      form.nonStandard || form.equipmentNeeds.length
-        ? "Handling and access"
-        : "",
-      form.restrictedItems || form.hazardCategories.length ? "Materials" : "",
-      form.requiredCompletionDate || form.requiredCompletionTime
-        ? "Deadline"
-        : "",
-      form.multiStop ? "Extra stops" : "",
-      form.itemCount || form.volume ? "Quantity" : "",
-    ]
-      .filter(Boolean)
-      .join(" · ") || "Optional details for the crew";
   const commercialDetailsSummary =
     [form.poNumber, form.projectReference, form.costCenter]
       .filter(Boolean)
@@ -1932,7 +1970,10 @@ function PartnerBookingWizardSession({
                         className="font-medium underline decoration-rose-400 underline-offset-2 hover:decoration-rose-700"
                         onClick={(event) => {
                           event.preventDefault();
-                          focusBookingField(field);
+                          setStep(bookingFieldStep(field));
+                          window.requestAnimationFrame(() =>
+                            focusBookingField(field),
+                          );
                         }}
                       >
                         {error}
@@ -1967,7 +2008,13 @@ function PartnerBookingWizardSession({
             </button>
           ) : null}
 
-          <div className="mt-6">
+          <fieldset
+            className="mt-6 min-w-0"
+            disabled={
+              advancing || availabilityLoading || submitting || addressSaving
+            }
+          >
+            <legend className="sr-only">{STEPS[step]?.label}</legend>
             {step === 0 ? (
               <fieldset
                 id="partner-book-location"
@@ -2187,6 +2234,13 @@ function PartnerBookingWizardSession({
                     {fieldErrors["locationId"]}
                   </p>
                 ) : null}
+                <div className="mt-6">
+                  <PartnerAdditionalAddresses
+                    value={form}
+                    onChange={updateScope}
+                    fieldErrors={fieldErrors}
+                  />
+                </div>
               </fieldset>
             ) : null}
 
@@ -2332,6 +2386,23 @@ function PartnerBookingWizardSession({
                       </span>
                     ) : null}
                   </label>
+                  <PartnerWorkQuestions
+                    value={form}
+                    onChange={updateScope}
+                    fieldErrors={fieldErrors}
+                  />
+                  <PartnerMaterialsQuestion
+                    value={form}
+                    onChange={updateScope}
+                    fieldErrors={fieldErrors}
+                  />
+                  <PartnerSavedScopeDetails
+                    value={form}
+                    onChange={updateScope}
+                    fieldErrors={fieldErrors}
+                    initialValue={initialFormRef.current}
+                    requiredFields={service?.requiredScopeFields}
+                  />
                   {showPersonaSuggestions ? (
                     <aside
                       aria-labelledby="partner-persona-scope-heading"
@@ -2582,6 +2653,11 @@ function PartnerBookingWizardSession({
                           </label>
                         </div>
                       </fieldset>
+                      <PartnerAccessQuestions
+                        value={form}
+                        onChange={updateScope}
+                        fieldErrors={fieldErrors}
+                      />
                       <label className="block" htmlFor="partner-book-access">
                         <span className="text-sm font-semibold text-slate-700">
                           Access, parking, gate, or loading details{" "}
@@ -2624,24 +2700,6 @@ function PartnerBookingWizardSession({
                         />
                       </label>
                     </div>
-                  </PartnerBookingDetailsRow>
-                  <PartnerBookingDetailsRow
-                    title="Special requirements"
-                    summary={scopeDetailsSummary}
-                    validationErrors={fieldErrors}
-                    reveal={hasDetailsError("scope")}
-                    id="partner-book-scope"
-                  >
-                    <PartnerSpecialRequirements
-                      value={form}
-                      onChange={(key, value) =>
-                        update<keyof PartnerSpecialRequirementsValues>(
-                          key,
-                          value,
-                        )
-                      }
-                      fieldErrors={fieldErrors}
-                    />
                   </PartnerBookingDetailsRow>
                   <PartnerBookingDetailsRow
                     title="Work order and billing"
@@ -3465,6 +3523,13 @@ function PartnerBookingWizardSession({
                       ))}
                   </div>
                 ) : null}
+                <div className="mt-6">
+                  <PartnerCompletionDeadline
+                    value={form}
+                    onChange={updateScope}
+                    fieldErrors={fieldErrors}
+                  />
+                </div>
                 {hold ? (
                   <PartnerNotice tone="success" className="mt-5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3637,9 +3702,7 @@ function PartnerBookingWizardSession({
                             </li>
                           ) : null}
                           {form.nonStandard ? (
-                            <li>
-                              Oversized, unusually heavy, or non-standard work
-                            </li>
+                            <li>Handling review requested</li>
                           ) : null}
                         </ul>
                       </dd>
@@ -3930,13 +3993,15 @@ function PartnerBookingWizardSession({
                 ) : null}
               </div>
             ) : null}
-          </div>
+          </fieldset>
 
           <div className="mt-8 flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
             <button
               type="button"
               onClick={() => editReviewStep(Math.max(0, step - 1))}
-              disabled={step === 0 || submitting || advancing}
+              disabled={
+                step === 0 || submitting || advancing || availabilityLoading
+              }
               className={cn(partnerSecondaryButtonClass, "w-full sm:w-auto")}
             >
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
