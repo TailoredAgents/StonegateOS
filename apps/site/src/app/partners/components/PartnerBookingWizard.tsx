@@ -1539,21 +1539,29 @@ function PartnerBookingWizardSession({
     }
   };
 
-  const editReviewStep = (target: number): void => {
+  const editReviewStep = (target: number): boolean => {
+    if (
+      advancingRef.current ||
+      availabilityLoading ||
+      submitting ||
+      addressSaving
+    )
+      return false;
     if (submissionUncertain) {
       setMessage(
         "Retry sending to check whether this request was received before editing it. The same request will not create a duplicate job.",
       );
-      return;
+      return false;
     }
     if (step === 1 && target !== step && pendingPhotos) {
       showPendingPhotos();
-      return;
+      return false;
     }
     setStep(target);
     window.requestAnimationFrame(() =>
       document.getElementById("partner-book-step-heading")?.focus(),
     );
+    return true;
   };
 
   function showPendingPhotos(): void {
@@ -1970,7 +1978,7 @@ function PartnerBookingWizardSession({
                         className="font-medium underline decoration-rose-400 underline-offset-2 hover:decoration-rose-700"
                         onClick={(event) => {
                           event.preventDefault();
-                          setStep(bookingFieldStep(field));
+                          if (!editReviewStep(bookingFieldStep(field))) return;
                           window.requestAnimationFrame(() =>
                             focusBookingField(field),
                           );

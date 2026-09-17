@@ -275,6 +275,7 @@ for (const engine of [chromium, webkit]) {
             [];
           let finishValidation: (() => void) | undefined;
           let pauseValidation = false;
+          let nextPatchErrors: Record<string, string> | null = null;
           let remoteFieldErrors: Record<string, string> = {
             "commercial.billingContact.email":
               "Check the billing email address.",
@@ -399,6 +400,19 @@ for (const engine of [chromium, webkit]) {
               });
             if (path.endsWith(`/booking-drafts/${draftId}`)) {
               assert.equal(request.method(), "PATCH");
+              if (nextPatchErrors) {
+                const fieldErrors = nextPatchErrors;
+                nextPatchErrors = null;
+                return route.fulfill({
+                  status: 422,
+                  json: {
+                    ok: false,
+                    error: "validation_failed",
+                    message: "Review the highlighted details.",
+                    fieldErrors,
+                  },
+                });
+              }
               saved = {
                 ...saved,
                 ...request.postDataJSON(),
@@ -641,6 +655,48 @@ for (const engine of [chromium, webkit]) {
           await toggle(photoDetails, false);
           await fits(page);
           await screenshot(page, engine.name(), width, "with-photo");
+
+          // An autosave error can refer to another step while photos are only
+          // selected. Its link must use the same pending-photo guard as Back.
+          nextPatchErrors = {
+            "scope.multiStopDetails": "Describe the other service address.",
+          };
+          await description.fill(
+            "Collect four empty shelving units. Keep the selected reference photo.",
+          );
+          const photoNavigationError = page
+            .locator("#partner-book-error-summary")
+            .getByRole("link", {
+              name: "Describe the other service address.",
+              exact: true,
+            });
+          await expect(photoNavigationError).toBeVisible();
+          await photoNavigationError.click();
+          await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+            "data-booking-step",
+            "1",
+          );
+          await expect(page.locator("#partner-book-photos")).toBeFocused();
+          await expect(
+            page.getByRole("img", {
+              name: "Selected photo: facility-reference.png",
+              exact: true,
+            }),
+          ).toBeVisible();
+          assert.equal(
+            await page
+              .locator(`#draft-photo-files-${draftId}`)
+              .evaluate((input: HTMLInputElement) => input.files?.[0]?.name),
+            "facility-reference.png",
+            "A moved-field error link must not discard an unattached photo",
+          );
+          const revisionBeforeRetry = saved.revision;
+          await description.fill(
+            "Collect four empty shelving units from the loading area.",
+          );
+          await expect
+            .poll(() => saved.revision)
+            .toBeGreaterThan(revisionBeforeRetry);
 
           // A paired billing-field error expands its section. After the user
           // closes it again, the error link must reopen it before moving focus.
@@ -1431,6 +1487,14 @@ for (const engine of [chromium, webkit]) {
                 })
                 .click();
               await expect(quantities).toHaveJSProperty("open", true);
+              await expect(
+                page.locator("#partner-book-item-count"),
+              ).toBeFocused();
+              await page.locator("#partner-book-item-count").fill("0");
+              await page.locator("#partner-book-item-count").fill("");
+              await expect(
+                page.locator("#partner-book-item-count"),
+              ).toBeVisible();
               await expect(
                 page.locator("#partner-book-item-count"),
               ).toBeFocused();

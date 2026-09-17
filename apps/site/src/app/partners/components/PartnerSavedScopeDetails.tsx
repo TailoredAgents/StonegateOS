@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import { PartnerBookingDetailsRow } from "./PartnerBookingDetailsRow";
 import { partnerFieldClass } from "./PartnerPortalUi";
 import { PARTNER_EQUIPMENT_OPTIONS } from "../lib/partner-booking-add-ons";
@@ -19,6 +20,22 @@ export function PartnerSavedScopeDetails({
   initialValue: PartnerRequestScopeValues;
   requiredFields?: readonly string[];
 }) {
+  const [recoveredQuantities, setRecoveredQuantities] = React.useState<
+    string[]
+  >([]);
+  React.useEffect(() => {
+    // A quantity revealed by a server rule stays editable when the client clears
+    // its value/error, even if an older catalog omitted that rule.
+    const fields = ["itemCount", "volumeCubicYards"].filter(
+      (field) => fieldErrors[`scope.${field}`],
+    );
+    if (fields.length)
+      setRecoveredQuantities((current) =>
+        fields.every((field) => current.includes(field))
+          ? current
+          : [...new Set([...current, ...fields])],
+      );
+  }, [fieldErrors]);
   const required = new Set(
     requiredFields.map((field) => field.replace(/^scope\./u, "")),
   );
@@ -60,6 +77,7 @@ export function PartnerSavedScopeDetails({
       initialValue[key] !== "" ||
       value[key] !== "" ||
       required.has(field) ||
+      recoveredQuantities.includes(field) ||
       fieldErrors[`scope.${field}`],
   );
   const oldOptions = [
