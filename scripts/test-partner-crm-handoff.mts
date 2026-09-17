@@ -156,6 +156,7 @@ async function restoreLegacyDraft(page: Page, draftId: string): Promise<void> {
     const response = await page.context().request.patch(endpoint, {
       headers: { "If-Match": draft.etag, Origin: base },
       data: {
+        crewInstructions: "Older saved instruction: use the north entrance.",
         scope: {
           ...draft.scope,
           itemCount: 7,
@@ -327,6 +328,18 @@ async function enterDetails(page: Page, serviceKey: string, addOnKey: string) {
   await page.locator("#partner-book-base-option").selectOption("large");
   await page.locator("#partner-book-description").fill(expected.description);
   await openRow(page, "Contact and access");
+  for (const id of [
+    "partner-book-primary-contact",
+    "partner-book-backup-contact",
+    "partner-book-saved-crew-instructions",
+  ]) {
+    const details = page.locator(`#${id}`);
+    if (!(await details.evaluate((node) => (node as HTMLDetailsElement).open)))
+      await details.locator(":scope > summary").click();
+  }
+  await expect(page.locator("#partner-book-crew-instructions")).toHaveValue(
+    "Older saved instruction: use the north entrance.",
+  );
   for (const [id, value] of Object.entries({
     "contact-name": expected.onSiteContact.name,
     "contact-phone": expected.onSiteContact.phone,
@@ -694,6 +707,7 @@ for (const width of [1440, 375])
         await page.reload();
         await requestStep(page, "Service details");
         await openRow(page, "Contact and access");
+        await openRow(page, "Backup contact");
         await expect(page.locator("#partner-book-alternate-email")).toHaveValue(
           expected.alternateContact.email,
         );

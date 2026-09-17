@@ -63,6 +63,12 @@ import {
   type DraftPhotoUploadPhase,
 } from "./PartnerDraftPhotoUpload";
 import { PartnerBookingDetailsRow } from "./PartnerBookingDetailsRow";
+import { PartnerContactAccess } from "./PartnerContactAccess";
+import {
+  bookingContactErrors,
+  chooseBookingContact,
+  type BookingContactDetails,
+} from "../lib/booking-contact";
 import {
   PartnerWorkQuestions,
   PartnerAccessQuestions,
@@ -334,15 +340,10 @@ function formFromDraft(
     // A saved blank is intentional; do not restore location instructions the
     // client already removed from this request.
     accessDetails: draft.accessDetails ?? "",
-    contactName: draft.onSiteContact
-      ? recordString(draft.onSiteContact, "name")
-      : (defaults.contactName ?? ""),
-    contactPhone: draft.onSiteContact
-      ? recordString(draft.onSiteContact, "phone")
-      : (defaults.contactPhone ?? ""),
-    contactEmail: draft.onSiteContact
-      ? recordString(draft.onSiteContact, "email")
-      : (defaults.contactEmail ?? ""),
+    // A saved blank contact is authoritative, just like cleared access notes.
+    contactName: recordString(draft.onSiteContact, "name"),
+    contactPhone: recordString(draft.onSiteContact, "phone"),
+    contactEmail: recordString(draft.onSiteContact, "email"),
     proofBefore:
       typeof draft.proofRequirements["before"] === "number"
         ? draft.proofRequirements["before"] > 0
@@ -612,14 +613,7 @@ function localErrorsForStep(
       errors["billingContact"] = "Enter a valid billing contact email.";
     }
   }
-  if (step === 1) {
-    if (!form.contactName.trim())
-      errors["onSiteContact"] = "Add the on-site contact’s name.";
-    if (!form.contactPhone.trim() && !form.contactEmail.trim()) {
-      errors["contactMethod"] =
-        "Add a phone number or email for the on-site contact.";
-    }
-  }
+  if (step === 1) Object.assign(errors, bookingContactErrors(form));
   return errors;
 }
 
@@ -673,9 +667,10 @@ function PartnerBookingWizardSession({
   const initialLocation = locations.find(
     (item) => item.id === (initialDraft?.locationId || defaultLocationId),
   );
-  const initialContact = initialLocation?.contact?.name
-    ? initialLocation.contact
-    : requesterContact;
+  const initialContact = chooseBookingContact(
+    initialLocation?.contact,
+    requesterContact,
+  );
   const defaultSelectedServiceKey =
     defaultServiceKey ||
     (services.length === 1 && services[0]?.bookable ? services[0].key : "");
@@ -783,6 +778,11 @@ function PartnerBookingWizardSession({
   const saveQueueRef = React.useRef<Promise<unknown>>(Promise.resolve());
   const autosaveTimeoutRef = React.useRef<number | null>(null);
   const initialFormRef = React.useRef(form);
+  const locationDefaultsAppliedRef = React.useRef(
+    Boolean(initialDraft || defaultLocationId),
+  );
+  const contactEditedRef = React.useRef(Boolean(initialDraft));
+  const accessEditedRef = React.useRef(Boolean(initialDraft));
   const latestFormRef = React.useRef(form);
   latestFormRef.current = form;
   const createDraftOperationRef = React.useRef(
@@ -1141,6 +1141,9 @@ function PartnerBookingWizardSession({
     releaseHeldTimeAfterEdit();
     if (message === "Add the highlighted details to continue.")
       setMessage(null);
+    if (["contactName", "contactPhone", "contactEmail"].includes(key))
+      contactEditedRef.current = true;
+    if (key === "accessDetails") accessEditedRef.current = true;
     if (String(key).startsWith("proof")) setPersonaFeedback(null);
     if (key === "requiredCompletionDate" || key === "requiredCompletionTime")
       setAvailability(null);
@@ -1152,9 +1155,24 @@ function PartnerBookingWizardSession({
       if (key === "tierKey") delete next["tierKey"];
       if (key === "description") delete next["description"];
       if (["contactName", "contactPhone", "contactEmail"].includes(key)) {
-        delete next["onSiteContact"];
-        delete next["contactMethod"];
+        for (const field of Object.keys(next))
+          if (
+            field === "onSiteContact" ||
+            field.startsWith("onSiteContact.") ||
+            field === "contactMethod"
+          )
+            delete next[field];
       }
+      if (String(key).startsWith("alternateContact")) {
+        for (const field of Object.keys(next))
+          if (
+            field === "scope.alternateContact" ||
+            field.startsWith("scope.alternateContact.")
+          )
+            delete next[field];
+      }
+      if (key === "accessDetails" || key === "crewInstructions")
+        delete next[key];
       if (String(key).startsWith("preferred")) {
         delete next["preferredWindows"];
       }
@@ -1229,14 +1247,25 @@ function PartnerBookingWizardSession({
     const selected =
       createdLocation ??
       availableLocations.find((item) => item.id === locationId);
+    // Apply location defaults once for a new, untouched request. Switching
+    // addresses must not replace a contact or notes the client already chose.
+    const applyDefaults = !locationDefaultsAppliedRef.current;
+    locationDefaultsAppliedRef.current = true;
+    const contact = chooseBookingContact(selected?.contact, requesterContact);
     const nextForm: WizardForm = {
       ...latestFormRef.current,
       locationId,
       preferredTimezone: selected?.timezone ?? "America/New_York",
-      contactName: selected?.contact?.name || requesterContact?.name || "",
-      contactPhone: selected?.contact?.phone || requesterContact?.phone || "",
-      contactEmail: selected?.contact?.email || requesterContact?.email || "",
-      accessDetails: selected?.accessDetails ?? "",
+      ...(applyDefaults && !contactEditedRef.current
+        ? {
+            contactName: contact.name,
+            contactPhone: contact.phone,
+            contactEmail: contact.email,
+          }
+        : {}),
+      ...(applyDefaults && !accessEditedRef.current
+        ? { accessDetails: selected?.accessDetails ?? "" }
+        : {}),
     };
     latestFormRef.current = nextForm;
     setForm(nextForm);
@@ -1247,6 +1276,29 @@ function PartnerBookingWizardSession({
       return next;
     });
     return nextForm;
+  };
+
+  const useContact = (contact: BookingContactDetails): void => {
+    releaseHeldTimeAfterEdit();
+    if (message === "Add the highlighted details to continue.")
+      setMessage(null);
+    contactEditedRef.current = true;
+    setForm((current) => ({
+      ...current,
+      contactName: contact.name,
+      contactPhone: contact.phone,
+      contactEmail: contact.email,
+    }));
+    setFieldErrors((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(
+          ([field]) =>
+            field !== "onSiteContact" &&
+            !field.startsWith("onSiteContact.") &&
+            field !== "contactMethod",
+        ),
+      ),
+    );
   };
 
   const updateService = (serviceKey: string): void => {
@@ -2499,215 +2551,29 @@ function PartnerBookingWizardSession({
                     summary={contactDetailsSummary}
                     validationErrors={fieldErrors}
                     reveal={
-                      !form.contactName.trim() ||
-                      (!form.contactPhone.trim() &&
-                        !form.contactEmail.trim()) ||
+                      Object.keys(bookingContactErrors(form)).length > 0 ||
                       hasDetailsError("contact")
                     }
                   >
-                    <div className="space-y-5">
-                      <div className="grid gap-4 sm:grid-cols-3">
-                        <label htmlFor="partner-book-contact-name">
-                          <span className="text-sm font-semibold text-slate-700">
-                            On-site contact name
-                          </span>
-                          <input
-                            id="partner-book-contact-name"
-                            autoComplete="name"
-                            value={form.contactName}
-                            onChange={(event) =>
-                              update("contactName", event.target.value)
-                            }
-                            className={partnerFieldClass}
-                            required
-                            aria-invalid={Boolean(fieldErrors["onSiteContact"])}
-                            aria-describedby={
-                              fieldErrors["onSiteContact"]
-                                ? "partner-book-contact-name-error"
-                                : undefined
-                            }
-                          />
-                        </label>
-                        <label htmlFor="partner-book-contact-phone">
-                          <span className="text-sm font-semibold text-slate-700">
-                            Mobile phone
-                          </span>
-                          <input
-                            id="partner-book-contact-phone"
-                            type="tel"
-                            autoComplete="tel"
-                            inputMode="tel"
-                            value={form.contactPhone}
-                            onChange={(event) =>
-                              update("contactPhone", event.target.value)
-                            }
-                            className={partnerFieldClass}
-                            aria-invalid={Boolean(fieldErrors["contactMethod"])}
-                            aria-describedby={
-                              fieldErrors["contactMethod"]
-                                ? "partner-book-contact-method-error"
-                                : undefined
-                            }
-                          />
-                        </label>
-                        <label htmlFor="partner-book-contact-email">
-                          <span className="text-sm font-semibold text-slate-700">
-                            Email
-                          </span>
-                          <input
-                            id="partner-book-contact-email"
-                            type="email"
-                            autoComplete="email"
-                            inputMode="email"
-                            value={form.contactEmail}
-                            onChange={(event) =>
-                              update("contactEmail", event.target.value)
-                            }
-                            className={partnerFieldClass}
-                            aria-invalid={Boolean(fieldErrors["contactMethod"])}
-                            aria-describedby={
-                              fieldErrors["contactMethod"]
-                                ? "partner-book-contact-method-error"
-                                : undefined
-                            }
-                          />
-                        </label>
-                      </div>
-                      {fieldErrors["onSiteContact"] ? (
-                        <p
-                          id="partner-book-contact-name-error"
-                          className="text-sm font-medium text-rose-700"
-                        >
-                          {fieldErrors["onSiteContact"]}
-                        </p>
-                      ) : null}
-                      {fieldErrors["contactMethod"] ? (
-                        <p
-                          id="partner-book-contact-method-error"
-                          className="text-sm font-medium text-rose-700"
-                        >
-                          {fieldErrors["contactMethod"]}
-                        </p>
-                      ) : null}
-                      <fieldset className="border-t border-slate-100 pt-4">
-                        <legend className="px-1 text-sm font-semibold text-slate-900">
-                          Alternate on-site contact{" "}
-                          <span className="font-normal text-slate-500">
-                            (optional)
-                          </span>
-                        </legend>
-                        <p className="mt-1 text-xs leading-5 text-slate-500">
-                          Add a backup person when the primary contact may not
-                          be available at arrival.
-                        </p>
-                        <div className="mt-3 grid gap-4 sm:grid-cols-3">
-                          <label htmlFor="partner-book-alternate-name">
-                            <span className="text-sm font-semibold text-slate-700">
-                              Name
-                            </span>
-                            <input
-                              id="partner-book-alternate-name"
-                              autoComplete="name"
-                              value={form.alternateContactName}
-                              onChange={(event) =>
-                                update(
-                                  "alternateContactName",
-                                  event.target.value,
-                                )
-                              }
-                              maxLength={200}
-                              className={partnerFieldClass}
-                            />
-                          </label>
-                          <label htmlFor="partner-book-alternate-phone">
-                            <span className="text-sm font-semibold text-slate-700">
-                              Phone
-                            </span>
-                            <input
-                              id="partner-book-alternate-phone"
-                              type="tel"
-                              autoComplete="tel"
-                              inputMode="tel"
-                              value={form.alternateContactPhone}
-                              onChange={(event) =>
-                                update(
-                                  "alternateContactPhone",
-                                  event.target.value,
-                                )
-                              }
-                              maxLength={50}
-                              className={partnerFieldClass}
-                            />
-                          </label>
-                          <label htmlFor="partner-book-alternate-email">
-                            <span className="text-sm font-semibold text-slate-700">
-                              Email
-                            </span>
-                            <input
-                              id="partner-book-alternate-email"
-                              type="email"
-                              autoComplete="email"
-                              inputMode="email"
-                              value={form.alternateContactEmail}
-                              onChange={(event) =>
-                                update(
-                                  "alternateContactEmail",
-                                  event.target.value,
-                                )
-                              }
-                              maxLength={320}
-                              className={partnerFieldClass}
-                            />
-                          </label>
-                        </div>
-                      </fieldset>
-                      <PartnerAccessQuestions
-                        value={form}
-                        onChange={updateScope}
-                        fieldErrors={fieldErrors}
-                      />
-                      <label className="block" htmlFor="partner-book-access">
-                        <span className="text-sm font-semibold text-slate-700">
-                          Access, parking, gate, or loading details{" "}
-                          <span className="font-normal text-slate-500">
-                            (optional)
-                          </span>
-                        </span>
-                        <textarea
-                          id="partner-book-access"
-                          value={form.accessDetails}
-                          onChange={(event) =>
-                            update("accessDetails", event.target.value)
-                          }
-                          rows={2}
-                          maxLength={4_000}
-                          className={partnerFieldClass}
-                          placeholder="Parking, loading access, entry instructions, or access hours."
+                    <PartnerContactAccess
+                      value={form}
+                      onChange={(key, value) => update(key, value)}
+                      fieldErrors={fieldErrors}
+                      initialCrewInstructions={
+                        initialFormRef.current.crewInstructions
+                      }
+                      locationContact={location?.contact}
+                      requesterContact={requesterContact}
+                      locationAccessDetails={location?.accessDetails}
+                      onUseContact={useContact}
+                      accessChoices={
+                        <PartnerAccessQuestions
+                          value={form}
+                          onChange={updateScope}
+                          fieldErrors={fieldErrors}
                         />
-                      </label>
-                      <label
-                        className="block"
-                        htmlFor="partner-book-crew-instructions"
-                      >
-                        <span className="text-sm font-semibold text-slate-700">
-                          Crew instructions{" "}
-                          <span className="font-normal text-slate-500">
-                            (optional)
-                          </span>
-                        </span>
-                        <textarea
-                          id="partner-book-crew-instructions"
-                          value={form.crewInstructions}
-                          onChange={(event) =>
-                            update("crewInstructions", event.target.value)
-                          }
-                          rows={3}
-                          maxLength={4_000}
-                          className={partnerFieldClass}
-                          placeholder="Anything the crew should do, avoid, verify, or document on site."
-                        />
-                      </label>
-                    </div>
+                      }
+                    />
                   </PartnerBookingDetailsRow>
                   <PartnerBookingDetailsRow
                     title="Work order and billing"

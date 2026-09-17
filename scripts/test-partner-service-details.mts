@@ -123,9 +123,11 @@ const draft=${JSON.stringify(initialDraft)},services=${JSON.stringify(services)}
 const scenario=new URLSearchParams(location.search).get('scenario');
 const catalog=scenario?[{...services[0],key:'appliance_collection',label:'Appliance collection',baseOptions:[{...services[0].baseOptions[0],tierKey:'appliance_pickup'}],addOns:[]},...services,{...services[1],key:'service_request',label:'Request service',bookable:scenario!=='disabled'}]:services;
 const actualCatalog=catalog.map(service=>scenario==='required'&&service.key==='facility_cleanout'?{...service,requiredScopeFields:['itemCount','volumeCubicYards']}:service);
-const savedDraft=scenario?{...draft,serviceKey:scenario==='blank-saved'?null:scenario==='unavailable'?'retired_service':(['switch','legacy','required'].includes(scenario))?'facility_cleanout':'service_request',tierKey:(['switch','legacy','required'].includes(scenario))?'standard':null,scope:scenario==='legacy'?${JSON.stringify(legacyScope)}:scenario==='legacy-flags'?{nonStandard:true,restrictedItems:true}:{},description:'Keep the saved description and attached photo.',selectedAddOns:(scenario==='switch'||scenario==='legacy')?[{key:'stairs',quantity:2}]:[],preferredWindows:[{localDate:new Date(Date.now()+2*86400000).toISOString().slice(0,10),timeOfDay:'afternoon',timezone:'America/New_York'}]}:draft;
+let savedDraft=scenario?{...draft,serviceKey:scenario==='blank-saved'?null:scenario==='unavailable'?'retired_service':(['switch','legacy','required'].includes(scenario))?'facility_cleanout':'service_request',tierKey:(['switch','legacy','required'].includes(scenario))?'standard':null,scope:scenario==='legacy'?${JSON.stringify(legacyScope)}:scenario==='legacy-flags'?{nonStandard:true,restrictedItems:true}:{},description:'Keep the saved description and attached photo.',selectedAddOns:(scenario==='switch'||scenario==='legacy')?[{key:'stairs',quantity:2}]:[],preferredWindows:[{localDate:new Date(Date.now()+2*86400000).toISOString().slice(0,10),timeOfDay:'afternoon',timezone:'America/New_York'}]}:draft;
+if(scenario==='contact'){savedDraft={...savedDraft,onSiteContact:null,crewInstructions:'Retain the older saved crew instructions.'};const restored=sessionStorage.getItem('fixture-contact-draft');if(restored)savedDraft=JSON.parse(restored);}
+const locations=[{id:'facility-address',name:'Northside facility',address:'100 Facility Drive, Atlanta, GA 30301',accessDetails:'Old location instructions removed from this draft.',...(scenario==='contact'?{contact:{name:'Location Manager',phone:'+14045550200',email:''}}:{})},...(scenario==='contact'?[{id:'second-address',name:'Southside facility',address:'200 Facility Drive, Atlanta, GA 30301',accessDetails:'Use the second loading entrance.',contact:{name:'Second Manager',phone:'',email:'second@example.test'}}]:[])];
 function App(){return <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6"><PartnerBookingWizard
- initialDraft={scenario==='new'||scenario==='explicit'?null:savedDraft} defaultLocationId={scenario?'facility-address':''} defaultServiceKey={scenario==='explicit'||scenario==='blank-saved'?'appliance_collection':''} locations={[{id:'facility-address',name:'Northside facility',address:'100 Facility Drive, Atlanta, GA 30301',accessDetails:'Old location instructions removed from this draft.'}]}
+ initialDraft={scenario==='new'||scenario==='explicit'?null:savedDraft} defaultLocationId={scenario?'facility-address':''} defaultServiceKey={scenario==='explicit'||scenario==='blank-saved'?'appliance_collection':''} locations={locations} requesterContact={scenario==='contact'?{name:'Account Requester',phone:'',email:'requester@example.test'}:undefined}
  services={actualCatalog} canUploadPhotos canManageLocations persona="commercial_client"
  cancellationPolicy={{minimumNoticeMinutes:0,directCancellationEnabled:false,lateCancellationDisposition:'staff_review',automaticFeeMinor:null,source:'unconfigured',revision:null}}
  supportPhoneE164="+14045550100" supportPhoneDisplay="404-555-0100"/></main>}
@@ -492,6 +494,98 @@ for (const engine of [chromium, webkit]) {
 
           const contact = disclosure(page, "Contact and access");
           await toggle(contact, true);
+          const primary = page.locator("#partner-book-primary-contact");
+          const backup = page.locator("#partner-book-backup-contact");
+          const primarySummary = primary.locator(":scope > summary");
+          const doneContact = primary.getByRole("button", {
+            name: "Done",
+            exact: true,
+          });
+          for (const details of [primary, backup])
+            await expect(details).toHaveJSProperty("open", false);
+          await expect(primarySummary).toContainText("Change contact");
+          await expect(page.locator("#partner-book-contact-name")).toBeHidden();
+          await expect(
+            page.locator("#partner-book-alternate-name"),
+          ).toBeHidden();
+          await expect(
+            page.locator("#partner-book-crew-instructions"),
+          ).toHaveCount(0);
+          await screenshot(page, engine.name(), width, "contact-compact");
+
+          // Editing and finishing the primary contact works from the keyboard.
+          // Email alone is sufficient; completing an invalid editor focuses its error.
+          await toggle(primary, true);
+          await fits(page);
+          await screenshot(page, engine.name(), width, "contact-editor");
+          await page.locator("#partner-book-contact-phone").fill("");
+          await doneContact.focus();
+          await doneContact.press("Enter");
+          await expect(primary).toHaveJSProperty("open", false);
+          await expect(primarySummary).toBeFocused();
+          await expect(primarySummary).toContainText("facilities@example.test");
+          await expect
+            .poll(() => saved.onSiteContact)
+            .toEqual({
+              name: "Morgan Lee",
+              email: "facilities@example.test",
+            });
+          await toggle(primary, true);
+          await page.locator("#partner-book-contact-name").fill("");
+          await doneContact.click();
+          await expect(primary).toHaveJSProperty("open", true);
+          await expect(
+            page.locator("#partner-book-contact-name"),
+          ).toBeFocused();
+          await expect(
+            page.locator("#partner-book-contact-name"),
+          ).toHaveAttribute("aria-invalid", "true");
+          await page.locator("#partner-book-contact-name").fill("Morgan Lee");
+          await doneContact.click();
+          await expect(primary).toHaveJSProperty("open", false);
+
+          // A partial backup is not silently discarded. Validation opens both
+          // collapsed ancestors and its error link focuses the missing method.
+          await toggle(backup, true, "Space");
+          await page
+            .locator("#partner-book-alternate-name")
+            .fill("Riley Backup");
+          await toggle(backup, false);
+          await toggle(contact, false);
+          await page
+            .getByRole("button", {
+              name: "Continue to scheduling",
+              exact: true,
+            })
+            .click();
+          await expect(contact).toHaveJSProperty("open", true);
+          await expect(backup).toHaveJSProperty("open", true);
+          const backupError = page
+            .locator("#partner-book-error-summary")
+            .getByRole("link", {
+              name: "Add a phone number or email for the backup contact.",
+              exact: true,
+            });
+          await toggle(backup, false);
+          await backupError.click();
+          await expect(backup).toHaveJSProperty("open", true);
+          await expect(
+            page.locator("#partner-book-alternate-phone"),
+          ).toBeFocused();
+          await page
+            .locator("#partner-book-alternate-email")
+            .fill("backup@example.test");
+          await toggle(backup, false);
+          await expect(backup.locator(":scope > summary")).toContainText(
+            "backup@example.test",
+          );
+          await expect
+            .poll(() => saved.scope.alternateContact)
+            .toEqual({
+              name: "Riley Backup",
+              phone: "",
+              email: "backup@example.test",
+            });
           await expect(page.locator("#partner-book-access")).toHaveValue("");
           await page
             .locator("#partner-book-access")
@@ -555,6 +649,11 @@ for (const engine of [chromium, webkit]) {
           ).toBeChecked();
           await toggle(materials, false);
           const expectedScope = {
+            alternateContact: {
+              name: "Riley Backup",
+              phone: "",
+              email: "backup@example.test",
+            },
             restrictedItems: true,
             nonStandard: true,
             hazardCategories: ["paint"],
@@ -820,6 +919,7 @@ for (const engine of [chromium, webkit]) {
             buffer: photo,
           });
           await toggle(contact, true);
+          await toggle(primary, true);
           await page.locator("#partner-book-contact-name").fill("");
           await page.locator("#partner-book-contact-phone").fill("");
           await page.locator("#partner-book-contact-email").fill("");
@@ -833,6 +933,7 @@ for (const engine of [chromium, webkit]) {
             .click();
           await expect(errorSummary).toBeFocused();
           await expect(contact).toHaveJSProperty("open", true);
+          await expect(primary).toHaveJSProperty("open", true);
           await expect(description).toHaveAttribute("aria-invalid", "true");
           await expect(
             page.locator("#partner-book-contact-name"),
@@ -967,6 +1068,11 @@ for (const engine of [chromium, webkit]) {
             "data-booking-step",
             "0",
           );
+          // Back deliberately moves focus on the next animation frame. Wait for
+          // that accessible step transition before beginning keyboard expansion.
+          await expect(
+            page.locator("#partner-book-step-heading"),
+          ).toBeFocused();
           const stops = disclosure(page, "Add another service address");
           await expect(stops).toHaveJSProperty("open", false);
           await toggle(stops, true, "Space");
@@ -1221,6 +1327,7 @@ for (const engine of [chromium, webkit]) {
           "legacy-flags",
           "required",
           "scope-error",
+          "contact",
         ]) {
           const page = await browser.newPage({
             viewport: { width: 375, height: 1000 },
@@ -1229,6 +1336,12 @@ for (const engine of [chromium, webkit]) {
           page.on("pageerror", (error) => errors.push(error.message));
           let saved: Record<string, any> = {
             ...structuredClone(initialDraft),
+            ...(scenario === "contact"
+              ? {
+                  onSiteContact: null,
+                  crewInstructions: "Retain the older saved crew instructions.",
+                }
+              : {}),
             serviceKey:
               scenario === "blank-saved"
                 ? null
@@ -1411,6 +1524,177 @@ for (const engine of [chromium, webkit]) {
               await expect(
                 page.getByText("Saved reference photo.", { exact: true }),
               ).toBeVisible();
+            } else if (scenario === "contact") {
+              const contact = disclosure(page, "Contact and access");
+              const primary = page.locator("#partner-book-primary-contact");
+              const crew = page.locator(
+                "#partner-book-saved-crew-instructions",
+              );
+              await expect(contact).toHaveJSProperty("open", true);
+              await expect(primary).toHaveJSProperty("open", true);
+              for (const field of ["name", "phone", "email"])
+                await expect(
+                  page.locator(`#partner-book-contact-${field}`),
+                ).toHaveValue("");
+              await expect(page.locator("#partner-book-access")).toHaveValue(
+                "",
+              );
+              await expect(crew).toHaveJSProperty("open", false);
+              await toggle(crew, true);
+              await expect(
+                page.locator("#partner-book-crew-instructions"),
+              ).toHaveValue("Retain the older saved crew instructions.");
+
+              // Explicit choices replace one complete person, including blank
+              // methods, so a location phone cannot become the requester's phone.
+              await primary
+                .getByRole("button", {
+                  name: "Use location contact",
+                  exact: true,
+                })
+                .click();
+              await expect(
+                page.locator("#partner-book-contact-name"),
+              ).toHaveValue("Location Manager");
+              await expect(
+                page.locator("#partner-book-contact-phone"),
+              ).toHaveValue("+14045550200");
+              await expect(
+                page.locator("#partner-book-contact-email"),
+              ).toHaveValue("");
+              await primary
+                .getByRole("button", { name: "Use my details", exact: true })
+                .click();
+              await expect(
+                page.locator("#partner-book-contact-name"),
+              ).toHaveValue("Account Requester");
+              await expect(
+                page.locator("#partner-book-contact-phone"),
+              ).toHaveValue("");
+              await expect(
+                page.locator("#partner-book-contact-email"),
+              ).toHaveValue("requester@example.test");
+              await primary
+                .getByRole("button", { name: "Done", exact: true })
+                .click();
+              await expect
+                .poll(() => saved.onSiteContact)
+                .toEqual({
+                  name: "Account Requester",
+                  email: "requester@example.test",
+                });
+              await page
+                .getByRole("button", {
+                  name: "Use saved location instructions",
+                  exact: true,
+                })
+                .click();
+              await expect(page.locator("#partner-book-access")).toHaveValue(
+                "Old location instructions removed from this draft.",
+              );
+              await page
+                .locator("#partner-book-access")
+                .fill("Keep the edited arrival instructions.");
+              await toggle(crew, false);
+              await expect
+                .poll(() => saved.accessDetails)
+                .toBe("Keep the edited arrival instructions.");
+
+              const changeAddress = async (id: string) => {
+                await page
+                  .getByRole("button", { name: "Back", exact: true })
+                  .click();
+                await page
+                  .getByRole("button", { name: "Change address", exact: true })
+                  .click();
+                await page
+                  .getByRole("button", {
+                    name: "Use a saved address",
+                    exact: true,
+                  })
+                  .click();
+                await page
+                  .locator(`input[name="location"][value="${id}"]`)
+                  .click();
+                await expect(
+                  page.locator("#partner-book-selected-address"),
+                ).toContainText(
+                  id === "second-address"
+                    ? "200 Facility Drive"
+                    : "100 Facility Drive",
+                );
+                await expect.poll(() => saved.locationId).toBe(id);
+                await page
+                  .getByRole("button", { name: "Continue", exact: true })
+                  .click();
+                await expect(
+                  page.locator("[data-booking-step]"),
+                ).toHaveAttribute("data-booking-step", "1");
+                if (
+                  !(await contact.evaluate(
+                    (node) => (node as HTMLDetailsElement).open,
+                  ))
+                )
+                  await toggle(contact, true);
+              };
+              await changeAddress("second-address");
+              await expect.poll(() => saved.locationId).toBe("second-address");
+              assert.deepEqual(saved.onSiteContact, {
+                name: "Account Requester",
+                email: "requester@example.test",
+              });
+              await expect(page.locator("#partner-book-access")).toHaveValue(
+                "Keep the edited arrival instructions.",
+              );
+              await toggle(crew, true);
+              await expect(
+                page.locator("#partner-book-crew-instructions"),
+              ).toHaveValue("Retain the older saved crew instructions.");
+
+              // Intentional removal is saved as null and survives another address
+              // selection and a reopened draft, despite complete default contacts.
+              await page.locator("#partner-book-access").fill("");
+              await page.locator("#partner-book-crew-instructions").fill("");
+              await expect(
+                page.locator("#partner-book-crew-instructions"),
+              ).toBeVisible();
+              await expect(
+                page.locator("#partner-book-crew-instructions"),
+              ).toBeFocused();
+              await toggle(primary, true);
+              for (const field of ["name", "phone", "email"])
+                await page.locator(`#partner-book-contact-${field}`).fill("");
+              await expect.poll(() => saved.onSiteContact).toBe(null);
+              await expect.poll(() => saved.accessDetails).toBe(null);
+              await expect.poll(() => saved.crewInstructions).toBe(null);
+              await changeAddress("facility-address");
+              for (const field of ["name", "phone", "email"])
+                await expect(
+                  page.locator(`#partner-book-contact-${field}`),
+                ).toHaveValue("");
+              await expect(page.locator("#partner-book-access")).toHaveValue(
+                "",
+              );
+              await expect
+                .poll(() => saved.locationId)
+                .toBe("facility-address");
+              await page.evaluate(
+                (snapshot) =>
+                  sessionStorage.setItem("fixture-contact-draft", snapshot),
+                JSON.stringify(saved),
+              );
+              await page.reload();
+              await expect(primary).toHaveJSProperty("open", true);
+              for (const field of ["name", "phone", "email"])
+                await expect(
+                  page.locator(`#partner-book-contact-${field}`),
+                ).toHaveValue("");
+              await expect(page.locator("#partner-book-access")).toHaveValue(
+                "",
+              );
+              await expect(crew).toHaveCount(0);
+              assert.equal(saved.crewInstructions, null);
+              assert.deepEqual(saved.scope, {});
             } else if (scenario === "required") {
               const quantities = disclosure(page, "Required service details");
               await expect(quantities).toHaveJSProperty("open", true);
