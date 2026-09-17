@@ -64,6 +64,7 @@ import {
 } from "./PartnerDraftPhotoUpload";
 import { PartnerBookingDetailsRow } from "./PartnerBookingDetailsRow";
 import { PartnerContactAccess } from "./PartnerContactAccess";
+import { PartnerWorkOrderBilling } from "./PartnerWorkOrderBilling";
 import {
   bookingContactErrors,
   chooseBookingContact,
@@ -600,17 +601,18 @@ function localErrorsForStep(
     ) {
       errors["scope.volumeCubicYards"] = "Enter a volume of zero or more.";
     }
+    if (form.billingContactEmail.trim() && !form.billingContactName.trim())
+      errors["commercial.billingContact.name"] =
+        "Add the billing contact’s name, or leave both fields blank.";
+    if (form.billingContactName.trim() && !form.billingContactEmail.trim())
+      errors["commercial.billingContact.email"] =
+        "Add the billing contact’s email, or leave both fields blank.";
     if (
-      Boolean(form.billingContactName.trim()) !==
-      Boolean(form.billingContactEmail.trim())
-    ) {
-      errors["billingContact"] =
-        "Add both the billing contact name and email, or leave both blank.";
-    } else if (
       form.billingContactEmail.trim() &&
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(form.billingContactEmail.trim())
     ) {
-      errors["billingContact"] = "Enter a valid billing contact email.";
+      errors["commercial.billingContact.email"] =
+        "Enter a valid billing contact email.";
     }
   }
   if (step === 1) Object.assign(errors, bookingContactErrors(form));
@@ -1177,8 +1179,21 @@ function PartnerBookingWizardSession({
         delete next["preferredWindows"];
       }
       if (String(key).startsWith("billingContact")) {
-        delete next["billingContact"];
+        for (const field of Object.keys(next))
+          if (
+            field.startsWith("billingContact") ||
+            field === "commercial.billingContact" ||
+            field.startsWith("commercial.billingContact.")
+          )
+            delete next[field];
       }
+      if (["poNumber", "costCenter", "projectReference"].includes(key))
+        for (const field of Object.keys(next))
+          if (
+            field === `commercial.${key}` ||
+            field.startsWith(`commercial.${key}.`)
+          )
+            delete next[field];
       const scopeField: Partial<
         Record<keyof PartnerRequestScopeValues, string>
       > = {
@@ -1775,12 +1790,18 @@ function PartnerBookingWizardSession({
         .join(" · ")
     : "Add the person our crew should contact";
   const commercialDetailsSummary =
-    [form.poNumber, form.projectReference, form.costCenter]
+    [
+      form.poNumber.trim() ? `Work order: ${form.poNumber.trim()}` : "",
+      form.projectReference.trim()
+        ? `Project: ${form.projectReference.trim()}`
+        : "",
+      form.costCenter.trim() ? `Cost center: ${form.costCenter.trim()}` : "",
+      form.billingContactName.trim() || form.billingContactEmail.trim()
+        ? `Billing: ${form.billingContactName.trim() || form.billingContactEmail.trim()}`
+        : "",
+    ]
       .filter(Boolean)
-      .join(" · ") ||
-    (form.billingContactName
-      ? `Billing contact: ${form.billingContactName}`
-      : "Add a reference or billing contact if needed");
+      .join(" · ") || "Add a work order or billing contact if needed";
   const proofDetailsSummary =
     [
       form.proofBefore ? `Before photos: ${form.proofBeforeCount}` : "",
@@ -2581,134 +2602,11 @@ function PartnerBookingWizardSession({
                     validationErrors={fieldErrors}
                     reveal={hasDetailsError("commercial")}
                   >
-                    <div className="space-y-4">
-                      <div className="grid gap-4 sm:grid-cols-3">
-                        <label htmlFor="partner-book-po">
-                          <span className="text-sm font-semibold text-slate-700">
-                            PO / work order{" "}
-                            <span className="font-normal text-slate-500">
-                              (optional)
-                            </span>
-                          </span>
-                          <input
-                            id="partner-book-po"
-                            value={form.poNumber}
-                            onChange={(event) =>
-                              update("poNumber", event.target.value)
-                            }
-                            maxLength={500}
-                            className={partnerFieldClass}
-                          />
-                        </label>
-                        <label htmlFor="partner-book-cost-center">
-                          <span className="text-sm font-semibold text-slate-700">
-                            Cost center{" "}
-                            <span className="font-normal text-slate-500">
-                              (optional)
-                            </span>
-                          </span>
-                          <input
-                            id="partner-book-cost-center"
-                            value={form.costCenter}
-                            onChange={(event) =>
-                              update("costCenter", event.target.value)
-                            }
-                            maxLength={500}
-                            className={partnerFieldClass}
-                          />
-                        </label>
-                        <label htmlFor="partner-book-project">
-                          <span className="text-sm font-semibold text-slate-700">
-                            Project / listing{" "}
-                            <span className="font-normal text-slate-500">
-                              (optional)
-                            </span>
-                          </span>
-                          <input
-                            id="partner-book-project"
-                            value={form.projectReference}
-                            onChange={(event) =>
-                              update("projectReference", event.target.value)
-                            }
-                            maxLength={500}
-                            className={partnerFieldClass}
-                          />
-                        </label>
-                      </div>
-                      <fieldset className="border-t border-slate-100 pt-4">
-                        <legend className="px-1 text-sm font-semibold text-slate-900">
-                          Billing contact{" "}
-                          <span className="font-normal text-slate-500">
-                            (optional)
-                          </span>
-                        </legend>
-                        <p className="mt-1 text-xs leading-5 text-slate-500">
-                          Add both fields when invoices or receipts for this job
-                          should go to a specific person.
-                        </p>
-                        <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                          <label htmlFor="partner-book-billing-name">
-                            <span className="text-sm font-semibold text-slate-700">
-                              Name
-                            </span>
-                            <input
-                              id="partner-book-billing-name"
-                              value={form.billingContactName}
-                              onChange={(event) =>
-                                update("billingContactName", event.target.value)
-                              }
-                              maxLength={200}
-                              autoComplete="name"
-                              className={partnerFieldClass}
-                              aria-invalid={Boolean(
-                                fieldErrors["billingContact"],
-                              )}
-                              aria-describedby={
-                                fieldErrors["billingContact"]
-                                  ? "partner-book-billing-error"
-                                  : undefined
-                              }
-                            />
-                          </label>
-                          <label htmlFor="partner-book-billing-email">
-                            <span className="text-sm font-semibold text-slate-700">
-                              Email
-                            </span>
-                            <input
-                              id="partner-book-billing-email"
-                              type="email"
-                              inputMode="email"
-                              autoComplete="email"
-                              value={form.billingContactEmail}
-                              onChange={(event) =>
-                                update(
-                                  "billingContactEmail",
-                                  event.target.value,
-                                )
-                              }
-                              maxLength={320}
-                              className={partnerFieldClass}
-                              aria-invalid={Boolean(
-                                fieldErrors["billingContact"],
-                              )}
-                              aria-describedby={
-                                fieldErrors["billingContact"]
-                                  ? "partner-book-billing-error"
-                                  : undefined
-                              }
-                            />
-                          </label>
-                        </div>
-                        {fieldErrors["billingContact"] ? (
-                          <p
-                            id="partner-book-billing-error"
-                            className="mt-3 text-sm font-medium text-rose-700"
-                          >
-                            {fieldErrors["billingContact"]}
-                          </p>
-                        ) : null}
-                      </fieldset>
-                    </div>
+                    <PartnerWorkOrderBilling
+                      value={form}
+                      onChange={(key, value) => update(key, value)}
+                      fieldErrors={fieldErrors}
+                    />
                   </PartnerBookingDetailsRow>
                   <PartnerBookingDetailsRow
                     title="Completion photos"
@@ -3733,13 +3631,13 @@ function PartnerBookingWizardSession({
                   form.billingContactName ? (
                     <div className="rounded-xl border border-slate-200 p-4 sm:col-span-2">
                       <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Commercial references
+                        Work order and billing
                       </dt>
                       <dd className="mt-2 grid gap-3 text-sm text-slate-700 sm:grid-cols-3">
                         {form.poNumber ? (
                           <span>
                             <span className="block text-xs font-semibold text-slate-500">
-                              PO / work order
+                              Work order / PO number
                             </span>
                             <span className="mt-1 block font-semibold text-slate-950">
                               {form.poNumber}
@@ -3759,7 +3657,7 @@ function PartnerBookingWizardSession({
                         {form.projectReference ? (
                           <span>
                             <span className="block text-xs font-semibold text-slate-500">
-                              Project / listing
+                              Project or property reference
                             </span>
                             <span className="mt-1 block font-semibold text-slate-950">
                               {form.projectReference}

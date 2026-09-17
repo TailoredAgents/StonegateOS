@@ -61,6 +61,15 @@ const legacyScope = {
   hazardCategories: ["paint"],
   equipmentNeeds: ["demolition", "lift_gate"],
 };
+const savedCommercial = {
+  poNumber: "WO-SAVED-2026-015",
+  projectReference: "Northside facility project",
+  costCenter: "FAC-015",
+  billingContact: {
+    name: "Saved Accounts Team",
+    email: "saved-accounts@example.test",
+  },
+};
 const service = {
   key: "facility_cleanout",
   label: "Facility cleanout",
@@ -125,6 +134,7 @@ const catalog=scenario?[{...services[0],key:'appliance_collection',label:'Applia
 const actualCatalog=catalog.map(service=>scenario==='required'&&service.key==='facility_cleanout'?{...service,requiredScopeFields:['itemCount','volumeCubicYards']}:service);
 let savedDraft=scenario?{...draft,serviceKey:scenario==='blank-saved'?null:scenario==='unavailable'?'retired_service':(['switch','legacy','required'].includes(scenario))?'facility_cleanout':'service_request',tierKey:(['switch','legacy','required'].includes(scenario))?'standard':null,scope:scenario==='legacy'?${JSON.stringify(legacyScope)}:scenario==='legacy-flags'?{nonStandard:true,restrictedItems:true}:{},description:'Keep the saved description and attached photo.',selectedAddOns:(scenario==='switch'||scenario==='legacy')?[{key:'stairs',quantity:2}]:[],preferredWindows:[{localDate:new Date(Date.now()+2*86400000).toISOString().slice(0,10),timeOfDay:'afternoon',timezone:'America/New_York'}]}:draft;
 if(scenario==='contact'){savedDraft={...savedDraft,onSiteContact:null,crewInstructions:'Retain the older saved crew instructions.'};const restored=sessionStorage.getItem('fixture-contact-draft');if(restored)savedDraft=JSON.parse(restored);}
+if(scenario==='billing'){savedDraft={...savedDraft,commercial:${JSON.stringify(savedCommercial)}};const restored=sessionStorage.getItem('fixture-billing-draft');if(restored)savedDraft=JSON.parse(restored);}
 const locations=[{id:'facility-address',name:'Northside facility',address:'100 Facility Drive, Atlanta, GA 30301',accessDetails:'Old location instructions removed from this draft.',...(scenario==='contact'?{contact:{name:'Location Manager',phone:'+14045550200',email:''}}:{})},...(scenario==='contact'?[{id:'second-address',name:'Southside facility',address:'200 Facility Drive, Atlanta, GA 30301',accessDetails:'Use the second loading entrance.',contact:{name:'Second Manager',phone:'',email:'second@example.test'}}]:[])];
 function App(){return <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6"><PartnerBookingWizard
  initialDraft={scenario==='new'||scenario==='explicit'?null:savedDraft} defaultLocationId={scenario?'facility-address':''} defaultServiceKey={scenario==='explicit'||scenario==='blank-saved'?'appliance_collection':''} locations={locations} requesterContact={scenario==='contact'?{name:'Account Requester',phone:'',email:'requester@example.test'}:undefined}
@@ -670,15 +680,60 @@ for (const engine of [chromium, webkit]) {
 
           const billing = disclosure(page, "Work order and billing");
           await toggle(billing, true);
+          const references = page.locator(
+            "#partner-book-commercial-references",
+          );
+          const billingContact = page.locator("#partner-book-billing-contact");
+          await expect(
+            page.getByLabel("Work order / PO number", { exact: true }),
+          ).toBeVisible();
+          for (const details of [references, billingContact])
+            await expect(details).toHaveJSProperty("open", false);
+          for (const id of [
+            "project",
+            "cost-center",
+            "billing-name",
+            "billing-email",
+          ]) {
+            await expect(page.locator(`#partner-book-${id}`)).toHaveCount(1);
+            await expect(page.locator(`#partner-book-${id}`)).toBeHidden();
+          }
+          await fits(page);
+          await screenshot(page, engine.name(), width, "billing-compact");
           await page.locator("#partner-book-po").fill("WO-2026-015");
+          await toggle(references, true, "Space");
+          await page
+            .locator("#partner-book-project")
+            .fill("Northside facility project");
+          await page.locator("#partner-book-cost-center").fill("FAC-015");
+          await toggle(references, false);
+          for (const value of ["Northside facility project", "FAC-015"])
+            await expect(references.locator(":scope > summary")).toContainText(
+              value,
+            );
+          await toggle(billingContact, true);
           await page
             .locator("#partner-book-billing-name")
             .fill("Accounts team");
+          await fits(page);
+          await screenshot(page, engine.name(), width, "billing-editor");
+          await toggle(billingContact, false);
+          await expect(
+            billingContact.locator(":scope > summary"),
+          ).toContainText("Accounts team");
           await toggle(billing, false);
           await toggle(billing, true);
           await expect(page.locator("#partner-book-po")).toHaveValue(
             "WO-2026-015",
           );
+          for (const [id, value] of Object.entries({
+            project: "Northside facility project",
+            "cost-center": "FAC-015",
+            "billing-name": "Accounts team",
+          }))
+            await expect(page.locator(`#partner-book-${id}`)).toHaveValue(
+              value,
+            );
           await toggle(billing, false);
 
           const completion = disclosure(page, "Completion photos");
@@ -808,19 +863,40 @@ for (const engine of [chromium, webkit]) {
           const errorSummary = page.locator("#partner-book-error-summary");
           await expect(errorSummary).toBeFocused();
           await expect(billing).toHaveJSProperty("open", true);
+          await expect(billingContact).toHaveJSProperty("open", true);
+          await toggle(billingContact, false);
           await toggle(billing, false);
-          const billingError = errorSummary.getByRole("link", {
-            name: /Add both the billing contact name and email/,
-          });
+          const billingError = errorSummary.locator(
+            'a[href="#partner-book-billing-email"]',
+          );
+          await expect(billingError).toHaveText(
+            "Add the billing contact’s email, or leave both fields blank.",
+          );
           await billingError.focus();
           await billingError.press("Enter");
           await expect(billing).toHaveJSProperty("open", true);
+          await expect(billingContact).toHaveJSProperty("open", true);
           await expect(
-            page.locator("#partner-book-billing-name"),
+            page.locator("#partner-book-billing-email"),
           ).toBeFocused();
           await page
             .locator("#partner-book-billing-email")
             .fill("accounts@example.test");
+          await toggle(billingContact, false);
+          await expect(
+            billingContact.locator(":scope > summary"),
+          ).toContainText("accounts@example.test");
+          await expect
+            .poll(() => saved.commercial)
+            .toEqual({
+              poNumber: "WO-2026-015",
+              projectReference: "Northside facility project",
+              costCenter: "FAC-015",
+              billingContact: {
+                name: "Accounts team",
+                email: "accounts@example.test",
+              },
+            });
           await toggle(billing, false);
 
           // Selected files are not saved attachments. Neither Continue, Back,
@@ -842,10 +918,12 @@ for (const engine of [chromium, webkit]) {
             "data-booking-step",
             "1",
           );
+          await expect(page.locator("#partner-book-photos")).toBeFocused();
           await page
             .locator('ol[aria-label="Service request progress"] button')
             .first()
             .click();
+          await expect(page.locator("#partner-book-photos")).toBeFocused();
           await expect(page.locator("[data-booking-step]")).toHaveAttribute(
             "data-booking-step",
             "1",
@@ -899,6 +977,8 @@ for (const engine of [chromium, webkit]) {
           }
           await expect(errorSummary).toBeFocused();
           await expect(billing).toHaveJSProperty("open", true);
+          await expect(billingContact).toHaveJSProperty("open", true);
+          await toggle(billingContact, false);
           await toggle(billing, false);
           const nestedBillingError = errorSummary.getByRole("link", {
             name: "Check the billing email address.",
@@ -907,6 +987,7 @@ for (const engine of [chromium, webkit]) {
           await nestedBillingError.focus();
           await nestedBillingError.press("Enter");
           await expect(billing).toHaveJSProperty("open", true);
+          await expect(billingContact).toHaveJSProperty("open", true);
           await expect(
             page.locator("#partner-book-billing-email"),
           ).toBeFocused();
@@ -1022,6 +1103,12 @@ for (const engine of [chromium, webkit]) {
             exact: true,
           });
           for (const error of [
+            {
+              path: "commercial.projectReference",
+              message: "Check the project reference.",
+              group: references,
+              target: "partner-book-project",
+            },
             {
               path: "scope.hazardCategories.0",
               message: "Check these materials.",
@@ -1328,6 +1415,7 @@ for (const engine of [chromium, webkit]) {
           "required",
           "scope-error",
           "contact",
+          "billing",
         ]) {
           const page = await browser.newPage({
             viewport: { width: 375, height: 1000 },
@@ -1336,6 +1424,9 @@ for (const engine of [chromium, webkit]) {
           page.on("pageerror", (error) => errors.push(error.message));
           let saved: Record<string, any> = {
             ...structuredClone(initialDraft),
+            ...(scenario === "billing"
+              ? { commercial: structuredClone(savedCommercial) }
+              : {}),
             ...(scenario === "contact"
               ? {
                   onSiteContact: null,
@@ -1524,6 +1615,90 @@ for (const engine of [chromium, webkit]) {
               await expect(
                 page.getByText("Saved reference photo.", { exact: true }),
               ).toBeVisible();
+            } else if (scenario === "billing") {
+              const billing = disclosure(page, "Work order and billing");
+              const references = page.locator(
+                "#partner-book-commercial-references",
+              );
+              const billingContact = page.locator(
+                "#partner-book-billing-contact",
+              );
+              await toggle(billing, true);
+              for (const details of [references, billingContact])
+                await expect(details).toHaveJSProperty("open", false);
+              for (const value of [
+                savedCommercial.projectReference,
+                savedCommercial.costCenter,
+              ])
+                await expect(
+                  references.locator(":scope > summary"),
+                ).toContainText(value);
+              for (const value of Object.values(savedCommercial.billingContact))
+                await expect(
+                  billingContact.locator(":scope > summary"),
+                ).toContainText(value);
+              const fields = {
+                po: savedCommercial.poNumber,
+                project: savedCommercial.projectReference,
+                "cost-center": savedCommercial.costCenter,
+                "billing-name": savedCommercial.billingContact.name,
+                "billing-email": savedCommercial.billingContact.email,
+              };
+              for (const [id, value] of Object.entries(fields))
+                await expect(page.locator(`#partner-book-${id}`)).toHaveValue(
+                  value,
+                );
+              await toggle(references, true);
+              await page
+                .locator("#partner-book-cost-center")
+                .fill("FAC-UPDATED");
+              await toggle(references, false);
+              await toggle(billingContact, true, "Space");
+              await page
+                .locator("#partner-book-billing-email")
+                .fill("updated-accounts@example.test");
+              await toggle(billingContact, false);
+              await toggle(billing, false);
+              await expect
+                .poll(() => saved.commercial)
+                .toEqual({
+                  ...savedCommercial,
+                  costCenter: "FAC-UPDATED",
+                  billingContact: {
+                    ...savedCommercial.billingContact,
+                    email: "updated-accounts@example.test",
+                  },
+                });
+
+              // Closing is never clearing. Explicitly cleared optional values
+              // remain absent from the outbound payload and the reopened draft.
+              await toggle(billing, true);
+              await toggle(references, true);
+              await toggle(billingContact, true);
+              for (const id of Object.keys(fields))
+                await page.locator(`#partner-book-${id}`).fill("");
+              await toggle(references, false);
+              await toggle(billingContact, false);
+              await expect.poll(() => saved.commercial).toEqual({});
+              await page.evaluate(
+                (snapshot) =>
+                  sessionStorage.setItem("fixture-billing-draft", snapshot),
+                JSON.stringify(saved),
+              );
+              await page.reload();
+              await toggle(billing, true);
+              for (const details of [references, billingContact])
+                await expect(details).toHaveJSProperty("open", false);
+              for (const id of Object.keys(fields)) {
+                await expect(page.locator(`#partner-book-${id}`)).toHaveCount(
+                  1,
+                );
+                await expect(page.locator(`#partner-book-${id}`)).toHaveValue(
+                  "",
+                );
+              }
+              assert.deepEqual(saved.commercial, {});
+              await fits(page);
             } else if (scenario === "contact") {
               const contact = disclosure(page, "Contact and access");
               const primary = page.locator("#partner-book-primary-contact");

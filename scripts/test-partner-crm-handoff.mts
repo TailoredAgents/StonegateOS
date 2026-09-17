@@ -360,6 +360,8 @@ async function enterDetails(page: Page, serviceKey: string, addOnKey: string) {
     .getByRole("checkbox", { name: "Batteries", exact: true })
     .check();
   await openRow(page, "Work order and billing");
+  await openRow(page, "Project and cost center");
+  await openRow(page, "Billing contact");
   for (const [id, value] of Object.entries({
     po: expected.commercial.poNumber,
     "cost-center": expected.commercial.costCenter,
@@ -712,6 +714,15 @@ for (const width of [1440, 375])
           expected.alternateContact.email,
         );
         await openRow(page, "Work order and billing");
+        await openRow(page, "Project and cost center");
+        await openRow(page, "Billing contact");
+        for (const [id, value] of Object.entries({
+          po: expected.commercial.poNumber,
+          project: expected.commercial.projectReference,
+          "cost-center": expected.commercial.costCenter,
+          "billing-name": expected.commercial.billingContact.name,
+        }))
+          await expect(page.locator(`#partner-book-${id}`)).toHaveValue(value);
         await expect(page.locator("#partner-book-billing-email")).toHaveValue(
           expected.commercial.billingContact.email,
         );
