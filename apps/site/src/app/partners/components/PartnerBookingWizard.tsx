@@ -42,11 +42,13 @@ import {
   getPartnerPersonaPresentation,
   type PartnerPersonaProofPreset,
 } from "../lib/persona-presentation";
+import { scheduleAssistanceSummary } from "../lib/partner-scheduling-assistance";
 import {
-  PARTNER_SCHEDULE_ASSISTANCE_OPTIONS,
-  scheduleAssistanceSummary,
-  visibleRankedPartnerAlternatives,
-} from "../lib/partner-scheduling-assistance";
+  restorePreferredSchedule,
+  serializePreferredSchedule,
+  preferredScheduleErrors,
+  type PartnerPreferredScheduleValues,
+} from "../lib/booking-schedule";
 import {
   flushPartnerFunnelEvents,
   trackPartnerFunnelEvent,
@@ -65,6 +67,10 @@ import {
 import { PartnerBookingDetailsRow } from "./PartnerBookingDetailsRow";
 import { PartnerContactAccess } from "./PartnerContactAccess";
 import { PartnerWorkOrderBilling } from "./PartnerWorkOrderBilling";
+import {
+  PartnerPreferredSchedule,
+  type PartnerPreferredScheduleFormValues,
+} from "./PartnerPreferredSchedule";
 import {
   bookingContactErrors,
   chooseBookingContact,
@@ -167,37 +173,33 @@ export type BookingWizardCancellationPolicy = {
   revision: number | null;
 };
 
-type WizardForm = PartnerRequestScopeValues & {
-  locationId: string;
-  serviceKey: string;
-  tierKey: string;
-  addOnQuantities: Record<string, number>;
-  description: string;
-  alternateContactName: string;
-  alternateContactPhone: string;
-  alternateContactEmail: string;
-  crewInstructions: string;
-  accessDetails: string;
-  contactName: string;
-  contactPhone: string;
-  contactEmail: string;
-  proofBefore: boolean;
-  proofBeforeCount: number;
-  proofAfter: boolean;
-  proofAfterCount: number;
-  proofPackage: boolean;
-  poNumber: string;
-  costCenter: string;
-  projectReference: string;
-  billingContactName: string;
-  billingContactEmail: string;
-  preferredDateOne: string;
-  preferredDateTwo: string;
-  preferredDateThree: string;
-  preferredTimeOfDay: "morning" | "afternoon" | "anytime";
-  preferredTimezone: string;
-  scheduleAssistancePreference: "none" | "waitlist" | "callback";
-};
+type WizardForm = PartnerRequestScopeValues &
+  PartnerPreferredScheduleValues & {
+    locationId: string;
+    serviceKey: string;
+    tierKey: string;
+    addOnQuantities: Record<string, number>;
+    description: string;
+    alternateContactName: string;
+    alternateContactPhone: string;
+    alternateContactEmail: string;
+    crewInstructions: string;
+    accessDetails: string;
+    contactName: string;
+    contactPhone: string;
+    contactEmail: string;
+    proofBefore: boolean;
+    proofBeforeCount: number;
+    proofAfter: boolean;
+    proofAfterCount: number;
+    proofPackage: boolean;
+    poNumber: string;
+    costCenter: string;
+    projectReference: string;
+    billingContactName: string;
+    billingContactEmail: string;
+    scheduleAssistancePreference: "none" | "waitlist" | "callback";
+  };
 
 const STEPS = [
   { label: "Service address", shortLabel: "Address", icon: MapPin },
@@ -248,6 +250,8 @@ const DEFAULT_FORM: WizardForm = {
   preferredDateTwo: "",
   preferredDateThree: "",
   preferredTimeOfDay: "anytime",
+  preferredTimeOfDayTwo: "anytime",
+  preferredTimeOfDayThree: "anytime",
   preferredTimezone: "America/New_York",
   scheduleAssistancePreference: "none",
 };
@@ -283,11 +287,6 @@ function formFromDraft(
           !Array.isArray(window),
       )
     : [];
-  const preferredValue = (index: number, key: string): string => {
-    const value = preferredWindows[index]?.[key];
-    return typeof value === "string" ? value : "";
-  };
-  const preferredTimeOfDay = preferredValue(0, "timeOfDay");
   const billingContact =
     draft.commercial["billingContact"] &&
     typeof draft.commercial["billingContact"] === "object" &&
@@ -373,19 +372,10 @@ function formFromDraft(
     projectReference: recordString(draft.commercial, "projectReference"),
     billingContactName: recordString(billingContact, "name"),
     billingContactEmail: recordString(billingContact, "email"),
-    preferredDateOne: preferredValue(0, "localDate"),
-    preferredDateTwo: preferredValue(1, "localDate"),
-    preferredDateThree: preferredValue(2, "localDate"),
-    preferredTimeOfDay:
-      preferredTimeOfDay === "morning" ||
-      preferredTimeOfDay === "afternoon" ||
-      preferredTimeOfDay === "anytime"
-        ? preferredTimeOfDay
-        : "anytime",
-    preferredTimezone:
-      preferredValue(0, "timezone") ||
-      defaults.preferredTimezone ||
-      "America/New_York",
+    ...restorePreferredSchedule(
+      preferredWindows,
+      defaults.preferredTimezone || "America/New_York",
+    ),
     scheduleAssistancePreference: draft.scheduleAssistancePreference,
   };
 }
@@ -442,17 +432,7 @@ function draftMutation(form: WizardForm) {
           }
         : {}),
     },
-    preferredWindows: [
-      form.preferredDateOne,
-      form.preferredDateTwo,
-      form.preferredDateThree,
-    ]
-      .filter(Boolean)
-      .map((localDate) => ({
-        localDate,
-        timeOfDay: form.preferredTimeOfDay,
-        timezone: form.preferredTimezone,
-      })),
+    preferredWindows: serializePreferredSchedule(form),
     scheduleAssistancePreference: form.scheduleAssistancePreference,
   };
 }
@@ -638,7 +618,6 @@ function PartnerBookingWizardSession({
   defaultLocationId = "",
   defaultServiceKey = "",
   canUploadPhotos = false,
-  instantConfirmationAvailable = false,
   canManageLocations = false,
   defaultProofRequirements = { before: 1, after: 1 },
   cancellationPolicy,
@@ -716,6 +695,7 @@ function PartnerBookingWizardSession({
   const [availability, setAvailability] =
     React.useState<PartnerAvailability | null>(null);
   const [availabilityLoading, setAvailabilityLoading] = React.useState(false);
+  const [availabilityFailed, setAvailabilityFailed] = React.useState(false);
   const [hold, setHold] = React.useState<PartnerHold | null>(null);
   const [holdSeconds, setHoldSeconds] = React.useState(0);
   const [submitting, setSubmitting] = React.useState(false);
@@ -1141,7 +1121,10 @@ function PartnerBookingWizardSession({
     value: WizardForm[K],
   ): void => {
     releaseHeldTimeAfterEdit();
-    if (message === "Add the highlighted details to continue.")
+    if (
+      message === "Add the highlighted details to continue." ||
+      message === "Check the highlighted scheduling details."
+    )
       setMessage(null);
     if (["contactName", "contactPhone", "contactEmail"].includes(key))
       contactEditedRef.current = true;
@@ -1176,8 +1159,13 @@ function PartnerBookingWizardSession({
       if (key === "accessDetails" || key === "crewInstructions")
         delete next[key];
       if (String(key).startsWith("preferred")) {
-        delete next["preferredWindows"];
+        for (const field of Object.keys(next))
+          if (field.startsWith("preferred")) delete next[field];
       }
+      if (key === "scheduleAssistancePreference")
+        for (const field of Object.keys(next))
+          if (field.startsWith("scheduleAssistancePreference"))
+            delete next[field];
       if (String(key).startsWith("billingContact")) {
         for (const field of Object.keys(next))
           if (
@@ -1295,7 +1283,10 @@ function PartnerBookingWizardSession({
 
   const useContact = (contact: BookingContactDetails): void => {
     releaseHeldTimeAfterEdit();
-    if (message === "Add the highlighted details to continue.")
+    if (
+      message === "Add the highlighted details to continue." ||
+      message === "Check the highlighted scheduling details."
+    )
       setMessage(null);
     contactEditedRef.current = true;
     setForm((current) => ({
@@ -1398,6 +1389,7 @@ function PartnerBookingWizardSession({
     const current = draftRef.current;
     if (!current) return null;
     setAvailabilityLoading(true);
+    setAvailabilityFailed(false);
     setMessage(null);
     trackPartnerFunnelEvent({
       stage: "availability_requested",
@@ -1493,9 +1485,10 @@ function PartnerBookingWizardSession({
         step: 3,
       });
       setAvailability(null);
+      setAvailabilityFailed(true);
       setMessage(
         withPortalSupportReference(
-          "This request needs a schedule review. Your details are saved; choose preferred dates and Stonegate will review them without reserving a slot.",
+          "Available times could not be checked. Your details are saved. You can still send preferred dates for Stonegate to review, or try again.",
           result?.ok
             ? portalSupportReferenceFromResponse(result.response)
             : result?.error.correlationId,
@@ -1548,35 +1541,28 @@ function PartnerBookingWizardSession({
         return;
       }
       if (step === 2 && !hold) {
-        const preferredDates = [
-          snapshot.preferredDateOne,
-          snapshot.preferredDateTwo,
-          snapshot.preferredDateThree,
-        ].filter(Boolean);
         const availableWindowExists =
           availability?.instantConfirmationEligible === true &&
           availability.windows.some((window) => window.available);
-        if (
-          availableWindowExists ||
-          preferredDates.length === 0 ||
-          new Set(preferredDates).size !== preferredDates.length
-        ) {
-          const errors = {
-            preferredWindows: availableWindowExists
-              ? "Choose one of the available arrival windows."
-              : preferredDates.length === 0
-                ? "Choose at least one preferred service date."
-                : "Choose distinct preferred service dates.",
-          };
+        const errors = availableWindowExists
+          ? { preferredWindows: "Choose one of the available arrival windows." }
+          : preferredScheduleErrors(
+              snapshot,
+              preferredDateMinimum,
+              preferredDateMaximum,
+            );
+        if (Object.keys(errors).length) {
           setFieldErrors(errors);
-          setMessage(errors.preferredWindows);
+          setMessage("Check the highlighted scheduling details.");
           focusErrorSummary(errors);
           return;
         }
       }
+      let availabilityDegraded = false;
       if (step === 1 || (step === 2 && !hold)) {
         const loaded = await loadAvailability();
         if (!loaded) return;
+        availabilityDegraded = loaded.availability === null;
         if (
           step === 2 &&
           loaded.availability?.instantConfirmationEligible &&
@@ -1596,7 +1582,7 @@ function PartnerBookingWizardSession({
       const next = Math.min(STEPS.length - 1, step + 1);
       setStep(next);
       setFurthestStep((current) => Math.max(current, next));
-      setMessage(null);
+      if (!availabilityDegraded) setMessage(null);
       window.requestAnimationFrame(() =>
         document.getElementById("partner-book-step-heading")?.focus(),
       );
@@ -1842,31 +1828,31 @@ function PartnerBookingWizardSession({
     }
     return [...groups.entries()];
   }, [availability]);
-  const rankedAlternatives = React.useMemo(
-    () => visibleRankedPartnerAlternatives(availability?.rankedAlternatives),
-    [availability?.rankedAlternatives],
-  );
   const selectedTimezone =
     availability?.timezone ??
     location?.timezone ??
     form.preferredTimezone ??
     "America/New_York";
+  const timezoneLabel =
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: selectedTimezone,
+      timeZoneName: "longGeneric",
+    })
+      .formatToParts(new Date())
+      .find((part) => part.type === "timeZoneName")?.value ?? selectedTimezone;
   const visibleDate = windowsByDate.some(([date]) => date === selectedDate)
     ? selectedDate
     : (windowsByDate[0]?.[0] ?? "");
   const manualReviewMode =
     !hold && !availabilityLoading && windowsByDate.length === 0;
-  const preferredDates = [
-    form.preferredDateOne,
-    form.preferredDateTwo,
-    form.preferredDateThree,
-  ].filter(Boolean);
-  const preferredReviewReady =
-    manualReviewMode &&
-    preferredDates.length > 0 &&
-    new Set(preferredDates).size === preferredDates.length;
+  const preferredSchedule = serializePreferredSchedule(form);
   const preferredDateMinimum = preferredDateBoundary(selectedTimezone, 1);
   const preferredDateMaximum = preferredDateBoundary(selectedTimezone, 30);
+  const preferredReviewReady =
+    manualReviewMode &&
+    Object.keys(
+      preferredScheduleErrors(form, preferredDateMinimum, preferredDateMaximum),
+    ).length === 0;
   const holdMinutes = Math.floor(holdSeconds / 60);
   const holdRemainder = String(holdSeconds % 60).padStart(2, "0");
 
@@ -2947,299 +2933,78 @@ function PartnerBookingWizardSession({
             ) : null}
 
             {step === 2 ? (
-              <div>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h3 className="font-semibold text-slate-950">
-                      {instantConfirmationAvailable
-                        ? "Choose a service window"
-                        : "Choose your preferred dates"}
-                    </h3>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">
-                      {instantConfirmationAvailable
-                        ? "Pick a two-hour arrival window that works for you. The exact crew start is planned inside that window."
-                        : "Tell us which dates work for you. Stonegate will review the request and confirm your service time."}{" "}
-                      Times are shown in {selectedTimezone.replace(/_/gu, " ")}.
-                    </p>
+              <div className="space-y-5">
+                {availabilityFailed || windowsByDate.length > 0 ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    {windowsByDate.length > 0 ? (
+                      <p className="text-sm leading-6 text-slate-600">
+                        Choose an arrival window. Times shown in {timezoneLabel}
+                        .
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => void loadAvailability()}
+                      disabled={availabilityLoading}
+                      className={partnerSecondaryButtonClass}
+                    >
+                      <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                      {availabilityFailed ? "Try again" : "Refresh times"}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void loadAvailability()}
-                    disabled={availabilityLoading}
-                    className={partnerSecondaryButtonClass}
-                  >
-                    <RefreshCw
-                      className={cn(
-                        "h-4 w-4",
-                        availabilityLoading &&
-                          "animate-spin motion-reduce:animate-none",
-                      )}
-                      aria-hidden="true"
-                    />
-                    Refresh
-                  </button>
-                </div>
-                {instantConfirmationAvailable &&
-                availability?.calendar.state !== "current" ? (
-                  <PartnerNotice tone="warning" className="mt-4">
-                    The connected calendar is{" "}
-                    {availability?.calendar.state ?? "not available"}. Available
-                    windows may require staff review before confirmation.
-                  </PartnerNotice>
                 ) : null}
                 {availabilityLoading ? (
-                  <div
-                    className="mt-6 flex min-h-48 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-sm text-slate-600"
+                  <p
+                    className="flex items-center gap-2 text-sm text-slate-600"
                     role="status"
                   >
                     <LoaderCircle
-                      className="mr-2 h-5 w-5 animate-spin motion-reduce:animate-none"
+                      className="h-4 w-4 animate-spin motion-reduce:animate-none"
                       aria-hidden="true"
                     />
-                    Checking live availability…
-                  </div>
+                    Checking scheduling…
+                  </p>
                 ) : null}
-                {!availabilityLoading && windowsByDate.length === 0 ? (
-                  <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/60 p-5 sm:p-6">
-                    <div className="flex items-start gap-3">
-                      <CalendarClock
-                        className="mt-0.5 h-6 w-6 shrink-0 text-amber-700"
-                        aria-hidden="true"
+                {windowsByDate.length > 0 &&
+                availability?.calendar.state !== "current" ? (
+                  <PartnerNotice tone="warning">
+                    The connected calendar is not current. Stonegate may need to
+                    review the selected window before confirming.
+                  </PartnerNotice>
+                ) : null}
+                {windowsByDate.length === 0 ? (
+                  <PartnerPreferredSchedule
+                    value={form}
+                    onChange={(key, value) =>
+                      update<keyof PartnerPreferredScheduleFormValues>(
+                        key,
+                        value,
+                      )
+                    }
+                    fieldErrors={fieldErrors}
+                    minimumDate={preferredDateMinimum}
+                    maximumDate={preferredDateMaximum}
+                    timezoneLabel={timezoneLabel}
+                    formatDate={(date) => formatDate(date, selectedTimezone)}
+                    supportPhoneE164={supportPhoneE164}
+                    supportPhoneDisplay={supportPhoneDisplay}
+                    completionDeadline={
+                      <PartnerCompletionDeadline
+                        value={form}
+                        onChange={updateScope}
+                        fieldErrors={fieldErrors}
                       />
-                      <div>
-                        <h3 className="font-semibold text-slate-950">
-                          Tell us which dates work
-                        </h3>
-                        <p className="mt-1 text-sm leading-6 text-slate-700">
-                          This request needs a schedule review. Choose up to
-                          three preferred dates and Stonegate will follow up
-                          before any arrival window is confirmed.
-                        </p>
-                      </div>
-                    </div>
-                    <fieldset className="mt-5">
-                      <legend className="text-sm font-semibold text-slate-900">
-                        Preferred dates
-                      </legend>
-                      {rankedAlternatives.length ? (
-                        <div className="mt-3 rounded-xl border border-amber-200 bg-white p-3">
-                          <p className="text-sm font-semibold text-slate-900">
-                            Dates worth considering
-                          </p>
-                          <p className="mt-1 text-xs leading-5 text-slate-600">
-                            These dates may help us review the request, but they
-                            do not reserve a crew, truck, or arrival window.
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {rankedAlternatives.map((window) => (
-                              <button
-                                key={`review-alternative-${window.id}`}
-                                type="button"
-                                onClick={() =>
-                                  update("preferredDateOne", window.localDate)
-                                }
-                                aria-pressed={
-                                  form.preferredDateOne === window.localDate
-                                }
-                                className="min-h-11 rounded-lg border border-amber-300 bg-white px-3 py-2 text-left text-sm font-semibold text-slate-800 transition hover:border-amber-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
-                              >
-                                {formatDate(window.localDate, selectedTimezone)}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      <div className="mt-3 grid gap-4 sm:grid-cols-3">
-                        {(
-                          [
-                            ["preferredDateOne", "First choice", true],
-                            ["preferredDateTwo", "Second choice", false],
-                            ["preferredDateThree", "Third choice", false],
-                          ] as const
-                        ).map(([key, label, required], index) => (
-                          <label
-                            key={key}
-                            htmlFor={`partner-book-preferred-date-${index + 1}`}
-                          >
-                            <span className="text-sm font-semibold text-slate-700">
-                              {label}
-                              {!required ? (
-                                <span className="font-normal text-slate-500">
-                                  {" "}
-                                  (optional)
-                                </span>
-                              ) : null}
-                            </span>
-                            <input
-                              id={`partner-book-preferred-date-${index + 1}`}
-                              type="date"
-                              min={preferredDateMinimum}
-                              max={preferredDateMaximum}
-                              required={required}
-                              value={form[key]}
-                              onChange={(event) =>
-                                update(key, event.target.value)
-                              }
-                              className={partnerFieldClass}
-                              aria-invalid={Boolean(
-                                fieldErrors["preferredWindows"],
-                              )}
-                              aria-describedby={
-                                fieldErrors["preferredWindows"]
-                                  ? "partner-book-preferred-error"
-                                  : undefined
-                              }
-                            />
-                          </label>
-                        ))}
-                      </div>
+                    }
+                  />
+                ) : (
+                  <div className="space-y-5">
+                    <div className="space-y-2">
                       <label
-                        className="mt-4 block sm:max-w-sm"
-                        htmlFor="partner-book-preferred-time"
+                        className="block text-sm font-semibold text-slate-700"
+                        htmlFor="partner-book-available-date"
                       >
-                        <span className="text-sm font-semibold text-slate-700">
-                          General time preference
-                        </span>
-                        <select
-                          id="partner-book-preferred-time"
-                          value={form.preferredTimeOfDay}
-                          onChange={(event) =>
-                            update(
-                              "preferredTimeOfDay",
-                              event.target
-                                .value as WizardForm["preferredTimeOfDay"],
-                            )
-                          }
-                          className={partnerFieldClass}
-                        >
-                          <option value="anytime">Any time that day</option>
-                          <option value="morning">Morning preferred</option>
-                          <option value="afternoon">Afternoon preferred</option>
-                        </select>
+                        Service date
                       </label>
-                      {fieldErrors["preferredWindows"] ? (
-                        <p
-                          id="partner-book-preferred-error"
-                          className="mt-3 text-sm font-medium text-rose-700"
-                        >
-                          {fieldErrors["preferredWindows"]}
-                        </p>
-                      ) : null}
-                      <p className="mt-3 text-xs leading-5 text-slate-600">
-                        Preferences are shown in{" "}
-                        {selectedTimezone.replace(/_/gu, " ")} and are not a
-                        reservation.
-                      </p>
-                    </fieldset>
-                    <fieldset className="mt-5 border-t border-amber-200 pt-5">
-                      <legend className="text-sm font-semibold text-slate-900">
-                        Scheduling follow-up
-                      </legend>
-                      <p className="mt-1 text-sm leading-6 text-slate-700">
-                        Choose how you would like Stonegate to help after you
-                        send this request.
-                      </p>
-                      <div className="mt-3 grid gap-2">
-                        {PARTNER_SCHEDULE_ASSISTANCE_OPTIONS.map(
-                          ({ value, label, detail }) => (
-                            <label
-                              key={value}
-                              className="flex min-h-14 cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white px-4 py-3 text-sm transition hover:border-amber-400 focus-within:ring-2 focus-within:ring-accent-500"
-                            >
-                              <input
-                                type="radio"
-                                name="partner-book-schedule-assistance"
-                                value={value}
-                                checked={
-                                  form.scheduleAssistancePreference === value
-                                }
-                                onChange={() =>
-                                  update("scheduleAssistancePreference", value)
-                                }
-                                className="mt-1 h-4 w-4 accent-primary-700"
-                              />
-                              <span>
-                                <span className="block font-semibold text-slate-950">
-                                  {label}
-                                </span>
-                                <span className="mt-0.5 block leading-5 text-slate-600">
-                                  {detail}
-                                </span>
-                              </span>
-                            </label>
-                          ),
-                        )}
-                      </div>
-                      <p className="mt-4 text-sm leading-6 text-slate-700">
-                        Need urgent scheduling help?{" "}
-                        <a
-                          href={`tel:${supportPhoneE164}`}
-                          className="inline-flex min-h-11 items-center font-semibold text-primary-800 underline underline-offset-4"
-                        >
-                          Call {supportPhoneDisplay}
-                        </a>
-                        . Calling does not reserve capacity.
-                      </p>
-                    </fieldset>
-                  </div>
-                ) : null}
-                {!availabilityLoading && windowsByDate.length > 0 ? (
-                  <div className="mt-6 space-y-5">
-                    {rankedAlternatives.length ? (
-                      <section
-                        aria-labelledby="partner-book-recommended-windows"
-                        className="rounded-2xl border border-primary-200 bg-primary-50/60 p-4"
-                      >
-                        <h3
-                          id="partner-book-recommended-windows"
-                          className="text-sm font-semibold text-slate-950"
-                        >
-                          Recommended available windows
-                        </h3>
-                        <p className="mt-1 text-sm leading-6 text-slate-600">
-                          Based on your preferred dates, earliest availability,
-                          and remaining capacity.
-                        </p>
-                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                          {rankedAlternatives.map((window) => {
-                            const selected =
-                              hold?.arrivalWindowStartAt === window.startAt &&
-                              hold.arrivalWindowEndAt === window.endAt;
-                            return (
-                              <button
-                                key={`recommended-${window.id}`}
-                                type="button"
-                                onClick={() => void chooseWindow(window.id)}
-                                disabled={availabilityLoading}
-                                aria-pressed={selected}
-                                className={cn(
-                                  "min-h-14 rounded-xl border px-3 py-2 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
-                                  selected
-                                    ? "border-primary-700 bg-primary-700 text-white"
-                                    : "border-primary-200 bg-white text-slate-700 hover:border-primary-500",
-                                )}
-                              >
-                                <span className="block font-semibold">
-                                  {formatDate(
-                                    window.localDate,
-                                    selectedTimezone,
-                                  )}
-                                </span>
-                                <span className="mt-0.5 block">
-                                  {formatTime(window.startAt, selectedTimezone)}
-                                  –{formatTime(window.endAt, selectedTimezone)}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </section>
-                    ) : null}
-                    <label
-                      className="block text-sm font-semibold text-slate-700"
-                      htmlFor="partner-book-available-date"
-                    >
-                      Service date
                       <select
                         id="partner-book-available-date"
                         className={partnerFieldClass}
@@ -3254,7 +3019,7 @@ function PartnerBookingWizardSession({
                           </option>
                         ))}
                       </select>
-                    </label>
+                    </div>
                     {windowsByDate
                       .filter(([date]) => date === visibleDate)
                       .map(([date, windows]) => (
@@ -3293,15 +3058,13 @@ function PartnerBookingWizardSession({
                           </div>
                         </fieldset>
                       ))}
+                    <PartnerCompletionDeadline
+                      value={form}
+                      onChange={updateScope}
+                      fieldErrors={fieldErrors}
+                    />
                   </div>
-                ) : null}
-                <div className="mt-6">
-                  <PartnerCompletionDeadline
-                    value={form}
-                    onChange={updateScope}
-                    fieldErrors={fieldErrors}
-                  />
-                </div>
+                )}
                 {hold ? (
                   <PartnerNotice tone="success" className="mt-5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3592,7 +3355,7 @@ function PartnerBookingWizardSession({
                     <dd className="mt-1 font-semibold text-slate-950">
                       {hold
                         ? `${formatTime(hold.arrivalWindowStartAt, selectedTimezone)}–${formatTime(hold.arrivalWindowEndAt, selectedTimezone)}`
-                        : `${preferredDates.length} preferred date${preferredDates.length === 1 ? "" : "s"}`}
+                        : `${preferredSchedule.length} preferred date${preferredSchedule.length === 1 ? "" : "s"}`}
                     </dd>
                     <dd className="mt-1 text-sm text-slate-600">
                       {hold
@@ -3600,18 +3363,20 @@ function PartnerBookingWizardSession({
                             hold.arrivalWindowStartAt.slice(0, 10),
                             selectedTimezone,
                           )
-                        : preferredDates
-                            .map((date) => formatDate(date, selectedTimezone))
-                            .join(" · ")}
+                        : preferredSchedule.map(({ localDate, timeOfDay }) => (
+                            <span key={localDate} className="block">
+                              {formatDate(localDate, selectedTimezone)} ·{" "}
+                              {timeOfDay === "morning"
+                                ? "Morning"
+                                : timeOfDay === "afternoon"
+                                  ? "Afternoon"
+                                  : "Any time"}
+                            </span>
+                          ))}
                     </dd>
                     {!hold ? (
-                      <dd className="mt-1 text-xs font-medium text-amber-800">
-                        {form.preferredTimeOfDay === "morning"
-                          ? "Morning preferred"
-                          : form.preferredTimeOfDay === "afternoon"
-                            ? "Afternoon preferred"
-                            : "Any time on those dates"}
-                        {" — not reserved"}
+                      <dd className="mt-1 text-xs font-medium text-slate-600">
+                        Stonegate will confirm the appointment.
                       </dd>
                     ) : null}
                     {!hold &&
@@ -3791,7 +3556,7 @@ function PartnerBookingWizardSession({
                   advancing ||
                   addressSaving ||
                   availabilityLoading ||
-                  (step === 2 && !hold && !preferredReviewReady)
+                  (step === 2 && !hold && windowsByDate.length > 0)
                 }
                 className={cn(partnerPrimaryButtonClass, "w-full sm:w-auto")}
               >

@@ -783,18 +783,21 @@ for (const width of [1440, 375])
         await openRow(page, "Completion deadline");
         await page.locator("#partner-book-required-date").fill(deadline);
         await page.locator("#partner-book-required-time").fill("16:30");
+        await openRow(page, "Alternative dates");
         for (let index = 0; index < 3; index++)
           await page
             .locator(`#partner-book-preferred-date-${index + 1}`)
             .fill(requestedDates[index]!);
+        for (const id of [
+          "partner-book-preferred-time",
+          "partner-book-preferred-time-2",
+          "partner-book-preferred-time-3",
+        ])
+          await page.locator(`#${id}`).selectOption("afternoon");
+        await openRow(page, "Scheduling help");
         await page
-          .locator("#partner-book-preferred-time")
-          .selectOption("afternoon");
-        await page
-          .locator(
-            'input[name="partner-book-schedule-assistance"][value="callback"]',
-          )
-          .check();
+          .locator("#partner-book-schedule-assistance")
+          .selectOption("callback");
         await page
           .getByRole("button", { name: "Continue", exact: true })
           .click();
