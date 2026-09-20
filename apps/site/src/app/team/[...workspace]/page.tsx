@@ -52,6 +52,14 @@ export default async function CanonicalTeamWorkspacePage({
   if (!surface) notFound();
 
   const currentSearchParams = await searchParams;
+  const requestedQuery = new URLSearchParams();
+  for (const [key, value] of Object.entries(currentSearchParams ?? {})) {
+    if (key === "_canonical") continue;
+    for (const entry of Array.isArray(value) ? value : [value]) {
+      if (typeof entry === "string") requestedQuery.append(key, entry);
+    }
+  }
+  const requestedPath = `/team/${workspace.map(encodeURIComponent).join("/")}${requestedQuery.size ? `?${requestedQuery.toString()}` : ""}`;
   if (
     surface.id === "partners" &&
     `/team/${workspace.map(encodeURIComponent).join("/")}` !==
@@ -92,6 +100,7 @@ export default async function CanonicalTeamWorkspacePage({
       redirect(quoteWorkspaceHref(mode, { query: preservedQuery }));
     }
     return TeamPage({
+      requestedPath,
       searchParams: Promise.resolve({
         ...currentSearchParams,
         quoteMode: mode,
@@ -102,6 +111,7 @@ export default async function CanonicalTeamWorkspacePage({
   }
 
   return TeamPage({
+    requestedPath,
     searchParams: Promise.resolve({
       ...currentSearchParams,
       tab: surface.id,

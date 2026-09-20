@@ -79,6 +79,10 @@ export type TeamSurfaceLoaderContext = {
   };
   partners: {
     filters: {
+      requestStatus?: string;
+      requestKind?: string;
+      requestKey?: string;
+      alertGroupId?: string;
       adminView?: string;
       adminCursor?: string;
       adminQuery?: string;
@@ -175,6 +179,7 @@ export type TeamSurfaceLoaderContext = {
     canExportMessages: boolean;
     authMethod: "team_session" | "break_glass";
     setup: boolean;
+    returnTo?: string | null;
     saved: boolean;
     error: string | null;
     calendarBadge: {

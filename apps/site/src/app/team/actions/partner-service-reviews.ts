@@ -1,4 +1,5 @@
 "use server";
+import { z } from "zod";
 import {
   hasTeamPermission,
   requireCurrentTeamPrincipal,
@@ -179,6 +180,65 @@ export async function loadPartnerServiceReviews(
     return {
       ok: false,
       message: "Service requests are temporarily unavailable. Try again.",
+    };
+  }
+}
+
+export async function previewPartnerServiceArrival(input: {
+  id: string;
+  accountId: string;
+  preferredDate: string;
+  startTime: string;
+}) {
+  const principal = await requireCurrentTeamPrincipal();
+  if (
+    !UUID.test(input.id) ||
+    !UUID.test(input.accountId) ||
+    !/^\d{4}-\d{2}-\d{2}$/u.test(input.preferredDate) ||
+    !/^\d{2}:\d{2}$/u.test(input.startTime)
+  )
+    return {
+      ok: false as const,
+      message: "Choose a date and time to preview the arrival window.",
+    };
+  try {
+    const query = new URLSearchParams({
+      accountId: input.accountId,
+      preferredDate: input.preferredDate,
+      startTime: input.startTime,
+    });
+    const response = await callAdminApiAs(
+      principal,
+      `/api/admin/partner-management/v1/service-requests/${input.id}/arrival-preview?${query}`,
+      { timeoutMs: 10_000 },
+    );
+    const data: unknown = await response.json().catch(() => null);
+    const timestamp = z
+      .string()
+      .refine((value) => Number.isFinite(Date.parse(value)));
+    const parsed = z
+      .object({
+        ok: z.literal(true),
+        startAt: timestamp,
+        arrivalStartAt: timestamp,
+        arrivalEndAt: timestamp,
+        timezone: z.string(),
+      })
+      .safeParse(data);
+    if (!response.ok || !parsed.success) {
+      const error = z.object({ message: z.string() }).safeParse(data);
+      return {
+        ok: false as const,
+        message: error.success
+          ? error.data.message
+          : "The arrival window could not be verified. Choose another time or try again.",
+      };
+    }
+    return parsed.data;
+  } catch {
+    return {
+      ok: false as const,
+      message: "The arrival window could not be reached. Try again.",
     };
   }
 }

@@ -1,5 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import type { Route } from "next";
+import { safeTeamReturnPath } from "@myst-os/sdk";
 import { cookies } from "next/headers";
 import { ADMIN_SESSION_COOKIE } from "@/lib/admin-session";
 import { CREW_SESSION_COOKIE } from "@/lib/crew-session";
@@ -24,9 +26,11 @@ export default async function TeamLoginPage({
     sent?: string;
     error?: string;
     retryAfter?: string;
+    returnTo?: string;
   }>;
 }) {
   const params = (await searchParams) ?? {};
+  const returnTo = safeTeamReturnPath(params.returnTo);
   const principal = await resolveTeamPrincipalFromCookies();
   if (principal) {
     return (
@@ -36,7 +40,10 @@ export default async function TeamLoginPage({
         </h1>
         <p className="mt-2 text-sm text-slate-600">
           Go to the{" "}
-          <Link className="text-primary-700 underline" href="/team">
+          <Link
+            className="text-primary-700 underline"
+            href={(returnTo ?? "/team") as Route}
+          >
             Team Console
           </Link>
           .
@@ -131,6 +138,7 @@ export default async function TeamLoginPage({
             file).
           </p>
           <form action={requestTeamMagicLinkAction} className="mt-4 space-y-3">
+            <input type="hidden" name="returnTo" value={returnTo ?? ""} />
             <label className="block">
               <div className="text-xs font-semibold text-slate-700">
                 Email or phone
@@ -160,6 +168,7 @@ export default async function TeamLoginPage({
             If you&apos;ve set a password, sign in here.
           </p>
           <form action={teamPasswordLoginAction} className="mt-4 space-y-3">
+            <input type="hidden" name="returnTo" value={returnTo ?? ""} />
             <label className="block">
               <div className="text-xs font-semibold text-slate-700">Email</div>
               <input
@@ -201,6 +210,7 @@ export default async function TeamLoginPage({
             session. This does not make the legacy cookie a Team credential.
           </p>
           <form action={exchangeLegacyTeamSessionAction} className="mt-4">
+            <input type="hidden" name="returnTo" value={returnTo ?? ""} />
             <RecoverySubmitButton />
           </form>
         </section>

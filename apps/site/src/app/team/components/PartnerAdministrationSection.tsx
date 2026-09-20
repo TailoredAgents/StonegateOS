@@ -31,6 +31,12 @@ import {
   partnerCompanyHref,
   type PartnerCompanySection,
 } from "../partner-company-navigation";
+import { PartnerRequestInbox } from "./PartnerRequestInbox";
+import { PartnerOwnerAlertSettings } from "./PartnerOwnerAlertSettings";
+import {
+  PartnerRequestBadge,
+  PartnerRequestShortcut,
+} from "./PartnerRequestSummary";
 import { PartnerCompanyNavigation } from "./PartnerCompanyNavigation";
 import { PartnerAdministrationNavigation } from "./PartnerAdministrationNavigation";
 import { PartnerCompanyContacts } from "./PartnerCompanyContacts";
@@ -64,6 +70,8 @@ import {
 } from "./team-ui";
 
 type AdministrationView =
+  | "requests"
+  | "administration"
   | "account-merges"
   | "accounts"
   | "operations"
@@ -83,6 +91,10 @@ type AdministrationView =
   | "relationships";
 
 type PartnerAdministrationFilters = {
+  requestStatus?: string;
+  requestKind?: string;
+  requestKey?: string;
+  alertGroupId?: string;
   companyId?: string;
   companySection?: string;
   setup?: string;
@@ -169,6 +181,18 @@ const VIEW_CONFIG: ReadonlyArray<{
   permission: string;
   description: string;
 }> = [
+  {
+    id: "requests",
+    label: "Requests",
+    permission: "partners.accounts.read",
+    description: "Partner requests needing review.",
+  },
+  {
+    id: "administration",
+    label: "Administration",
+    permission: "partners.accounts.read",
+    description: "Company settings, access and owner alerts.",
+  },
   {
     id: "accounts",
     label: "Companies",
@@ -594,7 +618,10 @@ function partnerAdminHref(input: {
 }
 
 function rowPresentation(
-  view: Exclude<AdministrationView, "operations" | "relationships">,
+  view: Exclude<
+    AdministrationView,
+    "operations" | "relationships" | "requests" | "administration"
+  >,
   item: Record<string, unknown>,
 ): {
   primary: string;
@@ -1531,31 +1558,36 @@ export async function PartnerAdministrationSection({
   const companyIdCandidate = clean(filters?.companyId).toLowerCase();
   const companyId = isUuid(companyIdCandidate) ? companyIdCandidate : "";
   const companySection = normalizePartnerCompanySection(
-    filters?.companySection,
+    filters?.companySection ??
+      (filters?.adminView === "requests" ? "jobs" : undefined),
   );
   const canCreatePartner =
     hasTeamPermission(principal, "partners.accounts.manage") &&
     hasTeamPermission(principal, "partners.invitations.send") &&
     hasTeamPermission(principal, "partners.accounts.read");
   const requestedView = clean(filters?.adminView) as AdministrationView;
-  const requested: AdministrationView = !companyId
-    ? requestedView
-    : companySection === "billing"
-      ? "commercial"
-      : companySection === "people"
-        ? requestedView === "invitations" ||
-          !hasTeamPermission(principal, "partners.memberships.read")
-          ? "invitations"
-          : "memberships"
-        : companySection === "jobs"
-          ? [
-              "cancellation-requests",
-              "change-requests",
-              "location-reviews",
-            ].includes(requestedView)
-            ? requestedView
-            : "operations"
-          : "accounts";
+  const requested: AdministrationView =
+    requestedView === "requests"
+      ? "requests"
+      : !companyId
+        ? requestedView
+        : companySection === "billing"
+          ? "commercial"
+          : companySection === "people"
+            ? requestedView === "invitations" ||
+              !hasTeamPermission(principal, "partners.memberships.read")
+              ? "invitations"
+              : "memberships"
+            : companySection === "jobs"
+              ? [
+                  "requests",
+                  "cancellation-requests",
+                  "change-requests",
+                  "location-reviews",
+                ].includes(requestedView)
+                ? requestedView
+                : "operations"
+              : "accounts";
   const view =
     availableViews.find((candidate) => candidate.id === requested)?.id ??
     availableViews[0]?.id ??
@@ -1655,7 +1687,7 @@ export async function PartnerAdministrationSection({
     if (
       companyId &&
       hasTeamPermission(principal, "partners.accounts.read") &&
-      companySections.includes(companySection) &&
+      (requested === "requests" || companySections.includes(companySection)) &&
       availableViews.some((item) => item.id === requested)
     ) {
       try {
@@ -1691,7 +1723,7 @@ export async function PartnerAdministrationSection({
             try again. No other company has been opened in its place.
             <div className="mt-3">
               <Link
-                href="/team/partners"
+                href="/team/partners?p_admin=accounts"
                 className={teamButtonClass("secondary")}
               >
                 Back to companies
@@ -1720,6 +1752,33 @@ export async function PartnerAdministrationSection({
           canViewResources={hasTeamPermission(principal, "policy.read")}
         />
         <PartnersSection filters={filters} />
+      </section>
+    );
+  }
+
+  if (view === "requests" || view === "administration") {
+    return (
+      <section className="min-w-0 space-y-6">
+        <AdministrationHeader
+          activeView={view}
+          availableViews={availableViews}
+          canCreate={canCreatePartner}
+          canViewResources={hasTeamPermission(principal, "policy.read")}
+        />
+        {companyNavigation}
+        {view === "requests" ? (
+          <PartnerRequestInbox
+            key={`${companyId || "all"}:${filters?.alertGroupId || "all"}`}
+            accountId={companyId || undefined}
+            initialStatus={filters?.requestStatus}
+            initialKind={filters?.requestKind}
+            initialQuery={filters?.adminQuery}
+            initialRequestKey={filters?.requestKey}
+            alertGroupId={filters?.alertGroupId}
+          />
+        ) : (
+          <PartnerOwnerAlertSettings />
+        )}
       </section>
     );
   }
@@ -2357,12 +2416,14 @@ export async function PartnerAdministrationSection({
                     className={`${teamButtonClass("secondary")} mt-4`}
                   >
                     Open company
+                    <PartnerRequestBadge accountId={display(item["id"], "")} />
                   </a>
                 ) : null}
                 {view === "accounts" &&
                 companySection === "details" &&
                 company ? (
                   <div className="mt-4 space-y-3 text-sm">
+                    <PartnerRequestShortcut accountId={companyId} />
                     <p>
                       {display(company["website"], "No company website saved")}
                     </p>

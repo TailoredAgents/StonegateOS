@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { safeTeamReturnPath } from "@myst-os/sdk";
 import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
 import { consumeTeamAuthRateLimit } from "@/lib/team-auth-rate-limit";
 import { describeTeamAuthInfrastructureError } from "@/lib/team-auth-error-observability";
@@ -23,6 +24,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     phone?: unknown;
     identifier?: unknown;
     redirectPath?: unknown;
+    returnTo?: unknown;
   } | null;
 
   const explicitEmail = normalizeEmail(payload?.email);
@@ -163,6 +165,9 @@ export async function POST(request: NextRequest): Promise<Response> {
       );
       const url = new URL(redirectPath, siteBaseUrl);
       url.searchParams.set("token", rawToken);
+      const returnTo = safeTeamReturnPath(payload?.returnTo);
+      if (redirectPath === "/team/auth" && returnTo)
+        url.searchParams.set("returnTo", returnTo);
 
       const subject = "Your Stonegate Team Console login link";
       const body = [

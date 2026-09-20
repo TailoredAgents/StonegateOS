@@ -1,5 +1,6 @@
 import React from "react";
 import type { Route } from "next";
+import { safeTeamReturnPath, teamLoginHref } from "@myst-os/sdk";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
@@ -66,7 +67,9 @@ type SystemHealthApiResponse = {
 
 export default async function TeamPage({
   searchParams,
+  requestedPath,
 }: {
+  requestedPath?: string;
   searchParams: Promise<{
     tab?: string;
     q?: string;
@@ -114,6 +117,10 @@ export default async function TeamPage({
     p_preview?: string;
     p_preview_job?: string;
     p_admin?: string;
+    p_request_status?: string;
+    p_request_kind?: string;
+    p_request?: string;
+    p_alert?: string;
     p_setup?: string;
     p_company?: string;
     p_company_section?: string;
@@ -145,6 +152,7 @@ export default async function TeamPage({
     partnerTargetId?: string;
     action?: string;
     setup?: string;
+    returnTo?: string;
     saved?: string;
     error?: string;
     layout?: string;
@@ -185,7 +193,18 @@ export default async function TeamPage({
   const cookieStore = await cookies();
   const principal = await resolveTeamPrincipalFromCookies();
   if (!principal) {
-    redirect("/team/login");
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (key === "_canonical") continue;
+      for (const entry of Array.isArray(value) ? value : [value]) {
+        if (typeof entry === "string") query.append(key, entry);
+      }
+    }
+    redirect(
+      teamLoginHref(
+        requestedPath ?? `/team${query.size ? `?${query.toString()}` : ""}`,
+      ) as Route,
+    );
   }
   const teamMember = toTeamMemberIdentity(principal);
 
@@ -443,6 +462,18 @@ export default async function TeamPage({
   };
 
   const partnerFilters = {
+    requestStatus:
+      typeof params?.p_request_status === "string"
+        ? params.p_request_status
+        : undefined,
+    requestKind:
+      typeof params?.p_request_kind === "string"
+        ? params.p_request_kind
+        : undefined,
+    requestKey:
+      typeof params?.p_request === "string" ? params.p_request : undefined,
+    alertGroupId:
+      typeof params?.p_alert === "string" ? params.p_alert : undefined,
     setup:
       params?.p_setup === "create" || params?.p_setup === "existing"
         ? params.p_setup
@@ -736,6 +767,7 @@ export default async function TeamPage({
       canExportMessages: hasPermission("messages.export"),
       authMethod: principal.authMethod,
       setup: settingsSetup,
+      returnTo: safeTeamReturnPath(params.returnTo),
       saved: settingsSaved,
       error: settingsError,
       calendarBadge,

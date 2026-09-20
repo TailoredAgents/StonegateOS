@@ -241,8 +241,12 @@ const expected = {
   staffNote: `Staff note: keep the west entrance clear. REFERENCE-${"X".repeat(90)}`,
 };
 
-async function loginStaff(page: Page, id: string) {
-  await page.goto(`${base}/team/login`);
+async function loginStaff(page: Page, id: string, returnTo?: string) {
+  await page.goto(`${base}${returnTo ?? "/team/login"}`);
+  if (returnTo) {
+    await page.waitForURL((url) => url.pathname === "/team/login");
+    assert.equal(new URL(page.url()).searchParams.get("returnTo"), returnTo);
+  }
   const form = page
     .locator("form")
     .filter({ has: page.locator('input[name="password"]') });
@@ -258,6 +262,10 @@ async function loginStaff(page: Page, id: string) {
   await page.waitForURL((url) => !url.pathname.endsWith("/login"), {
     timeout: 30_000,
   });
+  if (returnTo) {
+    const current = new URL(page.url());
+    assert.equal(current.pathname + current.search, returnTo);
+  }
 }
 
 async function staffRead(page: Page, path: string) {
@@ -880,14 +888,50 @@ for (const width of [1440, 375])
           /local-private-handoff-door-code-915|accessSecretCiphertext/,
         );
         const companyJobs = `${base}/team/partners?p_admin=operations&p_company=${accountId}&p_company_section=jobs`;
-        await staffPage.goto(companyJobs);
-        await staffPage
-          .getByRole("button", {
-            name: new RegExp(
-              expected.serviceLabel.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"),
+        const requestQuery = new URLSearchParams({
+          p_admin: "requests",
+          p_request: `service:${jobId}`,
+          p_company: accountId,
+        });
+        // Exercise the actual anonymous deep-link redirect and ordinary staff
+        // password login. The link itself must not grant access to the request.
+        await staffContext.clearCookies();
+        await loginStaff(staffPage, staff.id, `/team/partners?${requestQuery}`);
+        const submittedDetails = staffPage.locator(
+          `[data-partner-request="${jobId}"]`,
+        );
+        await expect(submittedDetails).toBeVisible();
+        // The initial review stays compact while every saved field remains
+        // available in its native disclosure; the assertions below open all of them.
+        for (const title of [
+          "Service details",
+          "Contact and access",
+          "Special requirements",
+          "Work order and billing",
+          "Completion photos",
+          "Scheduling",
+          "Photos",
+        ]) {
+          const summary = submittedDetails
+            .locator("summary")
+            .filter({ hasText: new RegExp(`^${title}`) });
+          await expect(summary).toHaveCount(1);
+          assert.equal(
+            await summary.evaluate((element) =>
+              element.parentElement?.hasAttribute("open"),
             ),
-          })
-          .click();
+            false,
+            `${title} starts collapsed`,
+          );
+        }
+        if (process.env["PARTNER_CRM_SCREENSHOT_DIR"]) {
+          const directory = process.env["PARTNER_CRM_SCREENSHOT_DIR"]!;
+          await mkdir(directory, { recursive: true });
+          await staffPage.screenshot({
+            path: `${directory}/crm-inbox-initial-${width}.png`,
+            fullPage: true,
+          });
+        }
         await assertStaffPanel(staffPage);
         await expect(
           staffPage.getByRole("img", {
@@ -908,8 +952,30 @@ for (const width of [1440, 375])
         await staffPage
           .getByLabel("Eastern time", { exact: true })
           .fill("13:00");
+        await expect(
+          staffPage.getByRole("button", {
+            name: "Confirm service",
+            exact: true,
+          }),
+        ).toBeEnabled();
+        // Restore the normal disclosure presentation after verifying all fields.
+        const openedSummaries = submittedDetails.locator(
+          "details[open] > summary",
+        );
+        while (await openedSummaries.count()) {
+          await openedSummaries.first().click();
+        }
+        await expect(submittedDetails.locator("details[open]")).toHaveCount(0);
+        if (process.env["PARTNER_CRM_SCREENSHOT_DIR"]) {
+          const directory = process.env["PARTNER_CRM_SCREENSHOT_DIR"]!;
+          await mkdir(directory, { recursive: true });
+          await staffPage.screenshot({
+            path: `${directory}/crm-inbox-review-${width}.png`,
+            fullPage: true,
+          });
+        }
         await staffPage
-          .getByRole("button", { name: "Schedule service", exact: true })
+          .getByRole("button", { name: "Confirm service", exact: true })
           .click();
         await expect
           .poll(

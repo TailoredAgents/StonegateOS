@@ -1,3 +1,4 @@
+import { enqueueOwnerAlertEvaluation } from "@/lib/partner-owner-alerts";
 import { createHash, randomUUID } from "node:crypto";
 import { ensurePartnerJobThread } from "@/lib/partner-job-thread";
 import { partnerJobLocationSnapshot } from "@/lib/partner-job-location";
@@ -4571,6 +4572,7 @@ export async function submitPartnerBookingDraft(input: {
         result.booking,
         now,
       );
+      await enqueueOwnerAlertEvaluation(tx, { accountId: input.actor.accountId, bookingId: result.booking.id, now });
       return result;
     }
     const [hold] = await tx
@@ -5097,6 +5099,7 @@ export async function submitPartnerBookingDraft(input: {
       toSubmittedBookingDto(booking),
       now,
     );
+    await enqueueOwnerAlertEvaluation(tx, { accountId: input.actor.accountId, bookingId: booking.id, now });
     return {
       booking: toSubmittedBookingDto(booking),
       replayed: false,

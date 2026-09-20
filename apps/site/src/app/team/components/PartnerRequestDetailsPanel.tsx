@@ -115,11 +115,13 @@ export function PartnerRequestDetailsPanel({
   photos,
   appearance = "light",
   compact = false,
+  hideHeader = false,
 }: {
   details: PartnerRequestDetails;
   photos?: PartnerRequestPhoto[];
   appearance?: "light" | "dark";
   compact?: boolean;
+  hideHeader?: boolean;
 }) {
   const data = React.useMemo(
     () => parsePartnerRequestDetails(details),
@@ -336,21 +338,26 @@ export function PartnerRequestDetailsPanel({
 
   return (
     <section
-      aria-labelledby={headingId}
-      className={`mt-4 min-w-0 border-t pt-4 ${border}`}
+      aria-labelledby={hideHeader ? undefined : headingId}
+      aria-label={hideHeader ? "Submitted request details" : undefined}
+      className={
+        hideHeader ? "min-w-0" : `mt-4 min-w-0 border-t pt-4 ${border}`
+      }
       data-partner-request={data.jobId}
     >
-      <div className="mb-3">
-        <h4 id={headingId} className={`text-sm font-semibold ${text}`}>
-          Partner request
-        </h4>
-        <p
-          className={`mt-1 break-words text-xs [overflow-wrap:anywhere] ${muted}`}
-        >
-          {data.accountName} · {data.service.label}
-          {data.service.tierLabel ? ` · ${data.service.tierLabel}` : ""}
-        </p>
-      </div>
+      {!hideHeader ? (
+        <div className="mb-3">
+          <h4 id={headingId} className={`text-sm font-semibold ${text}`}>
+            Partner request
+          </h4>
+          <p
+            className={`mt-1 break-words text-xs [overflow-wrap:anywhere] ${muted}`}
+          >
+            {data.accountName} · {data.service.label}
+            {data.service.tierLabel ? ` · ${data.service.tierLabel}` : ""}
+          </p>
+        </div>
+      ) : null}
       <div className="mb-4">
         <h5 className={`text-xs font-medium ${muted}`}>Requested work</h5>
         <p

@@ -226,6 +226,8 @@ export type PrepareStaffNotificationResult =
         StaffNotificationRow,
         | "id"
         | "appointmentId"
+      | "subjectType"
+      | "subjectId"
         | "contactId"
         | "recipientTeamMemberId"
         | "kind"
@@ -239,7 +241,7 @@ export type PrepareStaffNotificationResult =
   | { kind: "in_flight"; retryAt: Date }
   | {
       kind: "terminal";
-      state: "succeeded" | "failed" | "reconciliation_required";
+      state: "succeeded" | "failed" | "reconciliation_required" | "suppressed";
     }
   | { kind: "unavailable" };
 
@@ -259,7 +261,7 @@ export async function prepareStaffNotificationDispatch(
   if (
     operation.state === "succeeded" ||
     operation.state === "failed" ||
-    operation.state === "reconciliation_required"
+    operation.state === "reconciliation_required" || operation.state === "suppressed"
   ) {
     return { kind: "terminal", state: operation.state };
   }
@@ -336,6 +338,36 @@ export async function prepareStaffNotificationDispatch(
     return { kind: "terminal", state: "failed" };
   }
 
+  if (operation.subjectType) {
+    const { ownerAlertDispatchGuard } = await import(
+      "@/lib/partner-owner-alerts"
+    );
+    const guard = await ownerAlertDispatchGuard(tx, operation, now);
+    if (!guard.allowed) {
+      await tx
+        .update(staffNotificationOperations)
+        .set({
+          state: "suppressed",
+          failureCode: guard.reason ?? "not_needed",
+          deliveryCertainty: "not_sent",
+          retryable: false,
+          failedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(staffNotificationOperations.id, operation.id));
+      await insertWorkerAudit(tx, {
+        operation,
+        outboxEventId: input.outboxEventId,
+        action: "staff_notification.dispatch.suppressed",
+        outcome: "succeeded",
+        state: "suppressed",
+        failureCode: guard.reason,
+        now,
+      });
+      return { kind: "terminal", state: "suppressed" };
+    }
+    if (guard.body) operation.body = guard.body;
+  }
   const uncertaintyAt = new Date(
     now.getTime() + STAFF_NOTIFICATION_UNCERTAINTY_WINDOW_MS,
   );
@@ -343,6 +375,7 @@ export async function prepareStaffNotificationDispatch(
     .update(staffNotificationOperations)
     .set({
       state: "dispatched",
+      body: operation.body,
       retryable: false,
       attemptCount: operation.attemptCount + 1,
       dispatchedAt: now,
@@ -387,6 +420,8 @@ async function insertWorkerAudit(
       StaffNotificationRow,
       | "id"
       | "appointmentId"
+      | "subjectType"
+      | "subjectId"
       | "contactId"
       | "recipientTeamMemberId"
       | "kind"
@@ -418,10 +453,10 @@ async function insertWorkerAudit(
       .update(input.operation.providerRequestKey)
       .digest("hex"),
     action: input.action,
-    entityType: billingDispute
+    entityType: input.operation.subjectType ?? (billingDispute
       ? "partner_billing_dispute_request"
-      : "appointment",
-    entityId: input.operation.appointmentId,
+      : "appointment"),
+    entityId: input.operation.subjectId ?? input.operation.appointmentId,
     meta: sanitizeAuditMetadata({
       operationId: input.operation.id,
       outboxEventId: input.outboxEventId,
@@ -440,7 +475,7 @@ async function insertWorkerAudit(
 export type FinalizeStaffNotificationResult =
   | {
       kind: "processed";
-      state: "succeeded" | "failed" | "reconciliation_required";
+      state: "succeeded" | "failed" | "reconciliation_required" | "suppressed";
     }
   | { kind: "retry"; retryAt: Date; error: string };
 
@@ -483,6 +518,10 @@ export async function finalizeStaffNotificationDispatch(
         updatedAt: now,
       })
       .where(eq(staffNotificationOperations.id, operation.id));
+    if (operation.subjectType === "partner_owner_group") {
+      const { ownerAlertInitialAccepted } = await import("@/lib/partner-owner-alerts");
+      await ownerAlertInitialAccepted(tx, operation, now);
+    }
     await insertWorkerAudit(tx, {
       operation,
       outboxEventId: input.outboxEventId,

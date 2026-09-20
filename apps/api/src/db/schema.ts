@@ -6486,7 +6486,8 @@ export type StaffNotificationOperationState =
   | "dispatched"
   | "succeeded"
   | "failed"
-  | "reconciliation_required";
+  | "reconciliation_required"
+  | "suppressed";
 
 /**
  * Durable, private staff notifications. These deliberately do not reuse a
@@ -6499,7 +6500,9 @@ export const staffNotificationOperations = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     // Snapshot identifier: staff-alert evidence must survive later retention
     // purges of the triggering CRM record.
-    appointmentId: uuid("appointment_id").notNull(),
+    appointmentId: uuid("appointment_id"),
+    subjectType: text("subject_type"),
+    subjectId: uuid("subject_id"),
     contactId: uuid("contact_id").references(() => contacts.id, {
       onDelete: "set null",
     }),
@@ -6546,13 +6549,16 @@ export const staffNotificationOperations = pgTable(
     providerRequestKeyIdx: uniqueIndex(
       "staff_notification_operations_provider_request_key_key",
     ).on(table.providerRequestKey),
+    subjectRecipientKey: uniqueIndex("staff_notification_subject_recipient_key").on(table.subjectType, table.subjectId, table.kind, table.recipientTeamMemberId),
+    subjectAddressKey: uniqueIndex("staff_notification_subject_address_key").on(table.subjectType, table.subjectId, table.kind, table.recipientAddress),
+    subjectCheck: check("staff_notification_subject_check", sql`(${table.appointmentId} IS NOT NULL AND ${table.subjectType} IS NULL AND ${table.subjectId} IS NULL) OR (${table.appointmentId} IS NULL AND ${table.subjectType} IN ('partner_owner_group', 'partner_owner_test') AND ${table.subjectId} IS NOT NULL)`),
     stateIdx: index("staff_notification_operations_state_idx").on(
       table.state,
       table.createdAt,
     ),
     stateCheck: check(
       "staff_notification_operations_state_check",
-      sql`${table.state} IN ('requested', 'dispatched', 'succeeded', 'failed', 'reconciliation_required')`,
+      sql`${table.state} IN ('requested', 'dispatched', 'succeeded', 'failed', 'reconciliation_required', 'suppressed')`,
     ),
     channelCheck: check(
       "staff_notification_operations_channel_check",
@@ -6560,7 +6566,7 @@ export const staffNotificationOperations = pgTable(
     ),
     kindCheck: check(
       "staff_notification_operations_kind_check",
-      sql`${table.kind} IN ('partner_booking_created', 'partner_booking_canceled', 'partner_billing_dispute_requested')`,
+      sql`${table.kind} IN ('partner_booking_created', 'partner_booking_canceled', 'partner_billing_dispute_requested', 'partner_request_initial', 'partner_request_reminder', 'partner_request_test')`,
     ),
     recipientCheck: check(
       "staff_notification_operations_recipient_check",
@@ -6572,7 +6578,7 @@ export const staffNotificationOperations = pgTable(
     ),
     lifecycleCheck: check(
       "staff_notification_operations_lifecycle_check",
-      sql`(${table.state} = 'requested' AND ${table.succeededAt} IS NULL AND ${table.failedAt} IS NULL) OR (${table.state} = 'dispatched' AND ${table.dispatchedAt} IS NOT NULL AND ${table.uncertaintyAt} IS NOT NULL AND ${table.succeededAt} IS NULL AND ${table.failedAt} IS NULL) OR (${table.state} = 'succeeded' AND ${table.succeededAt} IS NOT NULL AND ${table.failedAt} IS NULL) OR (${table.state} IN ('failed', 'reconciliation_required') AND ${table.failedAt} IS NOT NULL AND ${table.succeededAt} IS NULL)`,
+      sql`(${table.state} = 'requested' AND ${table.succeededAt} IS NULL AND ${table.failedAt} IS NULL) OR (${table.state} = 'dispatched' AND ${table.dispatchedAt} IS NOT NULL AND ${table.uncertaintyAt} IS NOT NULL AND ${table.succeededAt} IS NULL AND ${table.failedAt} IS NULL) OR (${table.state} = 'succeeded' AND ${table.succeededAt} IS NOT NULL AND ${table.failedAt} IS NULL) OR (${table.state} IN ('failed', 'reconciliation_required', 'suppressed') AND ${table.failedAt} IS NOT NULL AND ${table.succeededAt} IS NULL)`,
     ),
   }),
 );
@@ -14762,5 +14768,128 @@ export const quoteMigrationReviewItems = pgTable(
       "quote_migration_review_items_resolution_check",
       sql`${table.status} = 'open' OR (${table.resolvedAt} IS NOT NULL AND nullif(btrim(${table.resolution}), '') IS NOT NULL)`,
     ),
+  }),
+);
+
+/** Explicit owner routing; never inherits the sales assignee. Disabled on migration. */
+export const partnerOwnerAlertSettings = pgTable(
+  "partner_owner_alert_settings",
+  {
+    id: text("id").primaryKey().default("owner"),
+    enabled: boolean("enabled").notNull().default(false),
+    ownerTeamMemberId: uuid("owner_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "restrict" },
+    ),
+    phoneSnapshot: text("phone_snapshot"),
+    enabledSince: timestamp("enabled_since", { withTimezone: true }),
+    revision: integer("revision").notNull().default(1),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    singleton: check(
+      "partner_owner_alert_settings_singleton",
+      sql`${t.id} = 'owner'`,
+    ),
+    enabledCheck: check(
+      "partner_owner_alert_settings_enabled",
+      sql`NOT ${t.enabled} OR (${t.ownerTeamMemberId} IS NOT NULL AND ${t.phoneSnapshot} IS NOT NULL AND ${t.enabledSince} IS NOT NULL)`,
+    ),
+  }),
+);
+
+export const partnerOwnerAlertGroups = pgTable(
+  "partner_owner_alert_groups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    bulkImportId: uuid("bulk_import_id").references(
+      () => partnerBulkImports.id,
+      { onDelete: "restrict" },
+    ),
+    ownerTeamMemberId: uuid("owner_team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    settingsRevision: integer("settings_revision").notNull(),
+    memberCount: integer("member_count").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }),
+    initialAcceptedAt: timestamp("initial_accepted_at", { withTimezone: true }),
+    reminderDueAt: timestamp("reminder_due_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    accountOwnerKey: uniqueIndex(
+      "partner_owner_alert_groups_account_owner_key",
+    ).on(t.partnerAccountId, t.id, t.ownerTeamMemberId),
+    ownerCreated: index("partner_owner_alert_groups_owner_created").on(
+      t.ownerTeamMemberId,
+      t.createdAt,
+    ),
+    countCheck: check(
+      "partner_owner_alert_groups_count",
+      sql`${t.memberCount} > 0`,
+    ),
+  }),
+);
+
+export const partnerOwnerAlertMembers = pgTable(
+  "partner_owner_alert_members",
+  {
+    groupId: uuid("group_id").notNull(),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    partnerBookingId: uuid("partner_booking_id").notNull(),
+    ownerTeamMemberId: uuid("owner_team_member_id").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.groupId, t.partnerBookingId] }),
+    ownerJobKey: uniqueIndex("partner_owner_alert_members_job_owner_key").on(
+      t.partnerBookingId,
+      t.ownerTeamMemberId,
+    ),
+    groupFk: foreignKey({
+      name: "partner_owner_alert_members_group_fk",
+      columns: [t.partnerAccountId, t.groupId, t.ownerTeamMemberId],
+      foreignColumns: [
+        partnerOwnerAlertGroups.partnerAccountId,
+        partnerOwnerAlertGroups.id,
+        partnerOwnerAlertGroups.ownerTeamMemberId,
+      ],
+    }).onDelete("cascade"),
+    jobFk: foreignKey({
+      name: "partner_owner_alert_members_job_fk",
+      columns: [t.partnerAccountId, t.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+    }).onDelete("restrict"),
+  }),
+);
+
+export const partnerOwnerRequestOpens = pgTable(
+  "partner_owner_request_opens",
+  {
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    partnerBookingId: uuid("partner_booking_id").notNull(),
+    ownerTeamMemberId: uuid("owner_team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    openedAt: timestamp("opened_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    key: primaryKey({
+      columns: [table.partnerBookingId, table.ownerTeamMemberId],
+    }),
+    bookingFk: foreignKey({
+      name: "partner_owner_request_opens_booking_fk",
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+    }).onDelete("restrict"),
   }),
 );

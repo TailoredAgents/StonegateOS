@@ -2,6 +2,7 @@
 
 import React from "react";
 import Image from "next/image";
+import { PartnerRequestBadge } from "./PartnerRequestSummary";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Route } from "next";
 import { cn } from "@myst-os/ui";
@@ -978,6 +979,7 @@ export function TeamAppShell(props: {
                   {isCollapsed ? null : (
                     <span className="truncate">{item.label}</span>
                   )}
+                  {item.id === "partners" ? <PartnerRequestBadge /> : null}
                 </button>
               );
             })}
@@ -1047,6 +1049,9 @@ export function TeamAppShell(props: {
                           {isCollapsed ? null : (
                             <span className="truncate">{item.label}</span>
                           )}
+                          {item.id === "partners" ? (
+                            <PartnerRequestBadge />
+                          ) : null}
                         </button>
                       );
                     })}
@@ -1352,6 +1357,9 @@ export function TeamAppShell(props: {
                             {iconForTab(item.id)}
                           </span>
                           <span className="hidden sm:inline">{item.label}</span>
+                          {item.id === "partners" ? (
+                            <PartnerRequestBadge />
+                          ) : null}
                         </button>
                       );
                     })}

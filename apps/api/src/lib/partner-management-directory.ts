@@ -346,6 +346,7 @@ async function listCancellationRequests(query: PartnerManagementListQuery) {
     )
     .where(
       where([
+        query.id ? eq(partnerCancellationRequests.id, query.id) : null,
         query.accountId
           ? eq(partnerCancellationRequests.partnerAccountId, query.accountId)
           : null,
@@ -456,6 +457,7 @@ async function listBillingDisputes(query: PartnerManagementListQuery) {
     )
     .where(
       where([
+        query.id ? eq(partnerBillingDisputeRequests.id, query.id) : null,
         query.accountId
           ? eq(partnerBillingDisputeRequests.partnerAccountId, query.accountId)
           : null,
@@ -574,6 +576,7 @@ async function listLocationAddressReviews(query: PartnerManagementListQuery) {
     )
     .where(
       where([
+        query.id ? eq(partnerLocationAddressReviews.id, query.id) : null,
         query.accountId
           ? eq(partnerLocationAddressReviews.partnerAccountId, query.accountId)
           : null,
@@ -721,6 +724,7 @@ async function listJobChangeRequests(query: PartnerManagementListQuery) {
     )
     .where(
       where([
+        query.id ? eq(partnerJobChangeRequests.id, query.id) : null,
         query.accountId
           ? eq(partnerJobChangeRequests.partnerAccountId, query.accountId)
           : null,

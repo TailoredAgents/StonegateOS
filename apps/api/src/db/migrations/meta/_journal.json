@@ -1172,6 +1172,13 @@
     {
       "idx": 171, "version": "7", "when": 1795910400000,
       "tag": "0174_dynamic_crew_labor", "breakpoints": true
+    },
+    {
+      "idx": 172,
+      "version": "7",
+      "when": 1795996800000,
+      "tag": "0175_partner_owner_request_alerts",
+      "breakpoints": true
     }
   ]
 }

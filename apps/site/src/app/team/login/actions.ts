@@ -1,6 +1,11 @@
 "use server";
 
 import type { Route } from "next";
+import {
+  safeTeamReturnPath,
+  teamLoginHref,
+  teamPasswordSetupHref,
+} from "@myst-os/sdk";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import {
@@ -55,7 +60,8 @@ function firstSafeHeaderValue(
   return normalized.slice(0, maxLength);
 }
 
-export async function exchangeLegacyTeamSessionAction() {
+export async function exchangeLegacyTeamSessionAction(formData?: FormData) {
+  const returnTo = safeTeamReturnPath(formData?.get("returnTo"));
   const jar = await cookies();
   const ownerCookie = jar.get(ADMIN_SESSION_COOKIE)?.value ?? null;
   const crewCookie = jar.get(CREW_SESSION_COOKIE)?.value ?? null;
@@ -93,16 +99,17 @@ export async function exchangeLegacyTeamSessionAction() {
       userAgent,
     });
   } catch {
-    redirect("/team/login?error=recovery_failed");
+    redirect(teamLoginHref(returnTo, { error: "recovery_failed" }) as Route);
   }
 
   if (!response.ok) {
     const retryAfter = response.headers.get("retry-after")?.trim();
-    const retryQuery =
-      retryAfter && /^\d{1,5}$/u.test(retryAfter)
-        ? `&retryAfter=${encodeURIComponent(retryAfter)}`
-        : "";
-    redirect(`/team/login?error=recovery_failed${retryQuery}`);
+    redirect(
+      teamLoginHref(returnTo, {
+        error: "recovery_failed",
+        ...(retryAfter && /^\d{1,5}$/u.test(retryAfter) ? { retryAfter } : {}),
+      }) as Route,
+    );
   }
 
   const payload = (await response.json().catch(() => null)) as {
@@ -123,7 +130,7 @@ export async function exchangeLegacyTeamSessionAction() {
     !Number.isFinite(expiresAt) ||
     expiresAt <= Date.now()
   ) {
-    redirect("/team/login?error=recovery_failed");
+    redirect(teamLoginHref(returnTo, { error: "recovery_failed" }) as Route);
   }
 
   jar.set(
@@ -133,15 +140,18 @@ export async function exchangeLegacyTeamSessionAction() {
   );
   jar.delete(ADMIN_SESSION_COOKIE);
   jar.delete(CREW_SESSION_COOKIE);
-  redirect("/team");
+  redirect((returnTo ?? "/team") as Route);
 }
 
 export async function requestTeamMagicLinkAction(formData: FormData) {
+  const returnTo = safeTeamReturnPath(formData.get("returnTo"));
   const identifierRaw = formData.get("identifier");
   const identifier =
     typeof identifierRaw === "string" ? identifierRaw.trim() : "";
   if (!identifier) {
-    redirect("/team/login?error=email_or_phone_required");
+    redirect(
+      teamLoginHref(returnTo, { error: "email_or_phone_required" }) as Route,
+    );
   }
 
   const isEmail = identifier.includes("@");
@@ -149,34 +159,45 @@ export async function requestTeamMagicLinkAction(formData: FormData) {
   try {
     response = await callTeamPublicApi("/api/public/team/request-link", {
       method: "POST",
-      body: JSON.stringify(
-        isEmail ? { email: identifier } : { phone: identifier },
-      ),
+      body: JSON.stringify({
+        ...(isEmail ? { email: identifier } : { phone: identifier }),
+        ...(returnTo ? { returnTo } : {}),
+      }),
     });
   } catch {
-    redirect("/team/login?error=login_service_unavailable");
+    redirect(
+      teamLoginHref(returnTo, { error: "login_service_unavailable" }) as Route,
+    );
   }
 
   if (response.status === 429) {
     const retryAfter = response.headers.get("retry-after")?.trim() ?? "60";
     redirect(
-      `/team/login?error=too_many_login_requests&retryAfter=${encodeURIComponent(retryAfter)}`,
+      teamLoginHref(returnTo, {
+        error: "too_many_login_requests",
+        retryAfter,
+      }) as Route,
     );
   }
   if (!response.ok) {
-    redirect("/team/login?error=login_service_unavailable");
+    redirect(
+      teamLoginHref(returnTo, { error: "login_service_unavailable" }) as Route,
+    );
   }
 
-  redirect("/team/login?sent=1");
+  redirect(teamLoginHref(returnTo, { sent: "1" }) as Route);
 }
 
 export async function teamPasswordLoginAction(formData: FormData) {
+  const returnTo = safeTeamReturnPath(formData.get("returnTo"));
   const emailRaw = formData.get("email");
   const email = typeof emailRaw === "string" ? emailRaw.trim() : "";
   const passwordRaw = formData.get("password");
   const password = typeof passwordRaw === "string" ? passwordRaw : "";
   if (!email || !password) {
-    redirect("/team/login?error=missing_credentials");
+    redirect(
+      teamLoginHref(returnTo, { error: "missing_credentials" }) as Route,
+    );
   }
 
   let res: Response;
@@ -186,31 +207,38 @@ export async function teamPasswordLoginAction(formData: FormData) {
       body: JSON.stringify({ email, password }),
     });
   } catch {
-    redirect("/team/login?error=login_service_unavailable");
+    redirect(
+      teamLoginHref(returnTo, { error: "login_service_unavailable" }) as Route,
+    );
   }
 
   if (!res.ok) {
     if (res.status === 429) {
       const retryAfter = res.headers.get("retry-after")?.trim() ?? "60";
       redirect(
-        `/team/login?error=too_many_login_requests&retryAfter=${encodeURIComponent(retryAfter)}`,
+        teamLoginHref(returnTo, {
+          error: "too_many_login_requests",
+          retryAfter,
+        }) as Route,
       );
     }
     const msg = await readErrorMessage(res, "login_failed");
-    redirect(`/team/login?error=${encodeURIComponent(msg)}`);
+    redirect(teamLoginHref(returnTo, { error: msg }) as Route);
   }
 
   const payload = (await res.json().catch(() => ({}))) as {
     sessionToken?: string;
-  };
+  } | null;
   const token =
-    typeof payload.sessionToken === "string" ? payload.sessionToken : "";
+    typeof payload?.sessionToken === "string"
+      ? payload.sessionToken.trim()
+      : "";
   if (!token) {
-    redirect("/team/login?error=login_failed");
+    redirect(teamLoginHref(returnTo, { error: "login_failed" }) as Route);
   }
 
   (await cookies()).set(TEAM_SESSION_COOKIE, token, teamSessionCookieOptions());
-  redirect("/team");
+  redirect((returnTo ?? "/team") as Route);
 }
 
 export async function teamLogoutAction() {
@@ -224,20 +252,33 @@ export async function teamLogoutAction() {
 }
 
 export async function teamSetPasswordAction(formData: FormData) {
+  const returnTo = safeTeamReturnPath(formData.get("returnTo"));
   const passwordRaw = formData.get("password");
   const password = typeof passwordRaw === "string" ? passwordRaw : "";
   if (!password || password.length < 10) {
-    redirect("/team/settings?error=password_too_short" as Route);
+    redirect(
+      teamPasswordSetupHref(returnTo, { error: "password_too_short" }) as Route,
+    );
   }
 
-  const res = await callTeamApi("/api/team/password", {
-    method: "POST",
-    body: JSON.stringify({ password }),
-  });
+  let res: Response;
+  try {
+    res = await callTeamApi("/api/team/password", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
+  } catch {
+    redirect(
+      teamPasswordSetupHref(returnTo, { error: "save_failed" }) as Route,
+    );
+  }
+  if (res.status === 401) {
+    redirect(teamLoginHref(teamPasswordSetupHref(returnTo)) as Route);
+  }
   if (!res.ok) {
     const msg = await readErrorMessage(res, "save_failed");
-    redirect(`/team/settings?error=${encodeURIComponent(msg)}` as Route);
+    redirect(teamPasswordSetupHref(returnTo, { error: msg }) as Route);
   }
 
-  redirect("/team/settings?saved=1" as Route);
+  redirect((returnTo ?? "/team/settings?saved=1") as Route);
 }

@@ -118,6 +118,60 @@ describe("public team authentication routes", () => {
     consoleError.mockRestore();
   });
 
+  it("includes a safe request/group return path in the actual generated magic link", async () => {
+    const returnTo =
+      "/team/partners?p_admin=requests&p_request=service%3A11111111-1111-4111-8111-111111111111&p_alert=22222222-2222-4222-8222-222222222222";
+    mockFindActiveTeamMemberByEmail.mockResolvedValue({
+      id: "member-1",
+      name: "Staff Member",
+      email: "staff@example.com",
+      phoneE164: "+14045550100",
+    });
+    await requestLinkRoute(request({ email: "staff@example.com", returnTo }));
+    const email = mockSendEmailMessage.mock.calls[0]![2];
+    const url = new URL(
+      email
+        .split("\n")
+        .find((line) => line.startsWith("https://staff.example.com/"))!,
+    );
+    expect(url.pathname).toBe("/team/auth");
+    expect(url.searchParams.get("token")).toBe("one-time-token");
+    expect(url.searchParams.get("returnTo")).toBe(returnTo);
+    expect(mockSendSmsMessage.mock.calls[0]![1]).toContain(url.toString());
+    // The hint carries no permission or session evidence and isn't copied to audits.
+    expect(
+      JSON.stringify(mockRecordTeamAuthAuditEventSafely.mock.calls),
+    ).not.toContain(returnTo);
+  });
+
+  it.each([
+    "https://attacker.example/team",
+    "//attacker.example/team",
+    "/team/auth?token=untrusted",
+    "/team/../outside",
+  ])(
+    "does not include an unsafe magic-link return target: %s",
+    async (returnTo) => {
+      mockFindActiveTeamMemberByEmail.mockResolvedValue({
+        id: "member-1",
+        name: "Staff Member",
+        email: "staff@example.com",
+        phoneE164: null,
+      });
+      const response = await requestLinkRoute(
+        request({ email: "staff@example.com", returnTo }),
+      );
+      expect(response.status).toBe(200);
+      const email = mockSendEmailMessage.mock.calls[0]![2];
+      const url = new URL(
+        email
+          .split("\n")
+          .find((line) => line.startsWith("https://staff.example.com/"))!,
+      );
+      expect(url.searchParams.has("returnTo")).toBe(false);
+    },
+  );
+
   it("returns the same public success response for known and unknown accounts", async () => {
     mockFindActiveTeamMemberByEmail
       .mockResolvedValueOnce(null)

@@ -1,3 +1,4 @@
+import { enqueueOwnerAlertEvaluation } from "@/lib/partner-owner-alerts";
 import { randomUUID } from "node:crypto";
 import {
   and,
@@ -2085,7 +2086,61 @@ async function applyPartnerApprovalLifecycle(input: {
     }
     return;
   }
-  if (input.plan.kind === "approved_needs_reschedule") return;
+  if (input.plan.kind === "approved_needs_reschedule") {
+    if (input.target) {
+      const [unscheduled] = await input.tx
+        .update(appointments)
+        .set({
+          promisedArrivalStartAt: null,
+          promisedArrivalEndAt: null,
+          schedulePolicyRevision: null,
+        })
+        .where(
+          and(
+            eq(appointments.id, input.target.appointmentId),
+            eq(appointments.partnerAccountId, input.accountId),
+            eq(appointments.status, "requested"),
+            isNull(appointments.startAt),
+          ),
+        )
+        .returning({ id: appointments.id });
+      if (!unscheduled)
+        throw new Error("partner_approval_unscheduled_transition_race");
+      const [changed] = await input.tx
+        .update(partnerBookings)
+        .set({
+          publicStatus: "under_review",
+          confirmationMode: "review",
+          arrivalWindowStartAt: null,
+          arrivalWindowEndAt: null,
+          version: input.target.bookingVersion + 1,
+          updatedAt: input.now,
+        })
+        .where(
+          and(
+            eq(partnerBookings.id, input.target.bookingId),
+            eq(partnerBookings.partnerAccountId, input.accountId),
+            eq(partnerBookings.version, input.target.bookingVersion),
+            eq(partnerBookings.publicStatus, "approval_needed"),
+          ),
+        )
+        .returning({ id: partnerBookings.id });
+      if (!changed) throw new Error("partner_approval_review_transition_race");
+      await input.tx.insert(partnerJobEvents).values({
+        partnerAccountId: input.accountId,
+        partnerBookingId: changed.id,
+        eventType: "job.company_approved",
+        publicLabel: "Company approval complete",
+        publicDetail:
+          "Stonegate will review and confirm the service time. No arrival window is reserved.",
+        actorType: "partner",
+        actorMembershipId: input.actorMembershipId,
+        effectiveAt: input.now,
+        createdAt: input.now,
+      });
+    }
+    return;
+  }
   if (!input.target || !input.hold || !expectedDraftId) {
     throw new Error("partner_approval_confirmation_context_missing");
   }
@@ -2429,6 +2484,16 @@ export async function decidePartnerApprovalRequest(
         updatedAt: partnerApprovalRequests.updatedAt,
       });
     if (!updated) throw new Error("approval_request_revision_race");
+    if (
+      requestRow.partnerBookingId &&
+      lifecycle.plan.kind === "approved_needs_reschedule"
+    )
+      await enqueueOwnerAlertEvaluation(tx, {
+        accountId: input.accountId,
+        bookingId: requestRow.partnerBookingId,
+        afterApproval: true,
+        now,
+      });
     if (requestRow.partnerBookingId)
       await tx.insert(outboxEvents).values({
         type: "partner.approval.decided",

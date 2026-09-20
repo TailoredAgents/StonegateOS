@@ -1,4 +1,7 @@
 import type { ReactElement } from "react";
+import Link from "next/link";
+import type { Route } from "next";
+import { safeTeamReturnPath } from "@myst-os/sdk";
 import { randomUUID } from "node:crypto";
 import { teamLogoutAction, teamSetPasswordAction } from "./login/actions";
 import {
@@ -23,6 +26,7 @@ type SettingsSurfaceProps = {
   canExportMessages: boolean;
   authMethod: "team_session" | "break_glass";
   setup: boolean;
+  returnTo?: string | null;
   saved: boolean;
   error: string | null;
   calendarBadge: {
@@ -55,12 +59,14 @@ export function SettingsSurface({
   canExportMessages,
   authMethod,
   setup,
+  returnTo,
   saved,
   error,
   calendarBadge,
   personalSessions,
   personalSessionsError,
 }: SettingsSurfaceProps): ReactElement {
+  const destination = safeTeamReturnPath(returnTo);
   const revokeOtherSessionsKey =
     personalSessions && personalSessions.activeOtherCount > 0
       ? randomUUID()
@@ -161,6 +167,7 @@ export function SettingsSurface({
               action={teamSetPasswordAction}
               className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center"
             >
+              <input type="hidden" name="returnTo" value={destination ?? ""} />
               <label className="flex flex-1 flex-col gap-1 text-xs font-medium text-slate-700">
                 <span>New password</span>
                 <input
@@ -181,6 +188,14 @@ export function SettingsSurface({
                 Save
               </button>
             </form>
+            {destination ? (
+              <Link
+                href={destination as Route}
+                className="mt-3 inline-flex min-h-11 items-center text-sm font-semibold text-primary-700 underline"
+              >
+                Continue without setting a password
+              </Link>
+            ) : null}
           </div>
         ) : null}
 

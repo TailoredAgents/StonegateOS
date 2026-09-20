@@ -31,9 +31,17 @@ function windowLabel(
 export function PartnerRescheduleReviews({
   canDecide,
   accountId,
+  requestId,
+  embedded = false,
+  onReady,
+  onChanged,
 }: {
   canDecide: boolean;
   accountId?: string;
+  requestId?: string;
+  embedded?: boolean;
+  onReady?: () => void;
+  onChanged?: () => void;
 }) {
   const [items, setItems] = useState<RescheduleReview[]>([]),
     [cursor, setCursor] = useState<string | null>(null);
@@ -73,11 +81,15 @@ export function PartnerRescheduleReviews({
     setDetail(null);
     selected.current = "";
     pendingDecision.current = null;
-    void load();
+    if (requestId) void open(requestId);
+    else void load();
     return () => {
       generation.current += 1;
     };
-  }, [accountId]);
+  }, [accountId, requestId]);
+  useEffect(() => {
+    if (detail) onReady?.();
+  }, [detail]);
   async function open(id: string) {
     const requestGeneration = ++generation.current;
     selected.current = id;
@@ -159,80 +171,109 @@ export function PartnerRescheduleReviews({
     setMessage(result.message);
     if (result.ok) {
       pendingDecision.current = null;
-      setDetail(null);
-      await load();
+      onChanged?.();
+      if (requestId) await open(requestId);
+      else {
+        setDetail(null);
+        await load();
+      }
     }
   }
   return (
-    <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold text-slate-950">
-          Schedule-change reviews
-        </h2>
-        <button
-          type="button"
-          className={BUTTON}
-          disabled={busy}
-          onClick={() => void load()}
-        >
-          Refresh requests
-        </button>
-      </div>
-      <p className="text-sm leading-6 text-slate-600">
-        The original job remains scheduled until you accept a feasible
-        replacement.
-      </p>
-      {message ? (
-        <p
-          role="status"
-          className="rounded-lg border border-slate-200 p-3 text-sm"
-        >
-          {message}
-        </p>
-      ) : null}
-      {busy ? (
-        <p role="status" className="text-sm">
-          Loading…
-        </p>
-      ) : null}
-      <ul className="divide-y divide-slate-200">
-        {items.map((item) => (
-          <li key={item.id}>
+    <section
+      className={
+        embedded
+          ? "min-w-0 space-y-4"
+          : "space-y-4 rounded-xl border border-slate-200 bg-white p-5"
+      }
+    >
+      {!embedded ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-slate-950">
+              Schedule-change reviews
+            </h2>
+            <button
+              type="button"
+              className={BUTTON}
+              disabled={busy}
+              onClick={() => void load()}
+            >
+              Refresh requests
+            </button>
+          </div>
+          <p className="text-sm leading-6 text-slate-600">
+            The original job remains scheduled until you accept a feasible
+            replacement.
+          </p>
+          {message ? (
+            <p
+              role="status"
+              className="rounded-lg border border-slate-200 p-3 text-sm"
+            >
+              {message}
+            </p>
+          ) : null}
+          {busy ? (
+            <p role="status" className="text-sm">
+              Loading…
+            </p>
+          ) : null}
+          <ul className="divide-y divide-slate-200">
+            {items.map((item) => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void open(item.id)}
+                  className="min-h-11 py-3 text-left text-sm font-semibold text-primary-900"
+                >
+                  Request from{" "}
+                  {new Intl.DateTimeFormat("en-US", {
+                    dateStyle: "medium",
+                    timeZone: "America/New_York",
+                  }).format(new Date(item.createdAt))}{" "}
+                  ·{" "}
+                  {item.preferredWindows
+                    .map(
+                      (window) =>
+                        `${window.localDate} ${window.timeOfDay ?? ""}`,
+                    )
+                    .join(", ") || "Selected arrival window"}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {!busy && !items.length && !message ? (
+            <p className="text-sm text-slate-600">
+              No pending schedule-change requests.
+            </p>
+          ) : null}
+          {cursor ? (
             <button
               type="button"
               disabled={busy}
-              onClick={() => void open(item.id)}
-              className="min-h-11 py-3 text-left text-sm font-semibold text-primary-900"
+              className={BUTTON}
+              onClick={() => void load(true)}
             >
-              Request from{" "}
-              {new Intl.DateTimeFormat("en-US", {
-                dateStyle: "medium",
-                timeZone: "America/New_York",
-              }).format(new Date(item.createdAt))}{" "}
-              ·{" "}
-              {item.preferredWindows
-                .map(
-                  (window) => `${window.localDate} ${window.timeOfDay ?? ""}`,
-                )
-                .join(", ") || "Selected arrival window"}
+              Load older requests
             </button>
-          </li>
-        ))}
-      </ul>
-      {!busy && !items.length && !message ? (
-        <p className="text-sm text-slate-600">
-          No pending schedule-change requests.
-        </p>
+          ) : null}
+        </>
       ) : null}
-      {cursor ? (
-        <button
-          type="button"
-          disabled={busy}
-          className={BUTTON}
-          onClick={() => void load(true)}
-        >
-          Load older requests
-        </button>
+      {embedded && busy ? <p role="status">Loading schedule details…</p> : null}
+      {embedded && message ? (
+        <p role="status">
+          {message}{" "}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => requestId && void open(requestId)}
+            className={BUTTON}
+          >
+            Refresh request
+          </button>
+        </p>
       ) : null}
       {detail ? (
         <div

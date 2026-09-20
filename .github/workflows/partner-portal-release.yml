@@ -49,7 +49,7 @@ jobs:
       - name: Portal API and website regression tests
         run: |
           pnpm test:partner-portal
-          pnpm --filter api exec jest --config jest.config.cjs --runInBand --runTestsByPath src/__tests__/appointment-address-details.test.ts src/__tests__/calendar-card-identity-feed.test.ts src/__tests__/calendar-payment-schema-fallback.test.ts
+          pnpm --filter api exec jest --config jest.config.cjs --runInBand --runTestsByPath src/__tests__/appointment-address-details.test.ts src/__tests__/calendar-card-identity-feed.test.ts src/__tests__/calendar-payment-schema-fallback.test.ts src/__tests__/team-auth-login-routes.test.ts src/__tests__/site-team-auth-callback.test.ts src/__tests__/team-auth-site-redirect.test.ts src/__tests__/site-team-login-experience.test.ts
       - name: Browser recovery and worker rendering checks
         run: |
           pnpm exec tsx --test scripts/test-partner-home-recovery.mts scripts/test-partner-booking-recovery.mts scripts/test-partner-template-proof-recovery.mts scripts/test-partner-communications-browser.mts
@@ -58,6 +58,7 @@ jobs:
           pnpm exec tsx --test scripts/test-partner-draft-photo-upload.mts
           pnpm exec tsx --test apps/site/test/partner-billing-csp.test.mjs scripts/test-partner-billing-media-csp.mts
           pnpm exec tsx --test scripts/test-partner-request-details.mts
+          pnpm exec tsx --test scripts/test-team-auth-return.mts scripts/test-partner-request-inbox.mts
           pnpm test:partner-portal:worker-runtime
       - name: Portal PostgreSQL integration tests
         run: pnpm test:partner-portal:postgres

@@ -78,12 +78,19 @@ describe("partner portal V2 approval workspace contract", () => {
     expect(lifecycle).toContain('type: "appointment.calendar_sync_requested"');
     expect(lifecycle).not.toContain(".transaction(");
     const noPromiseGuard = lifecycle.indexOf(
-      'if (input.plan.kind === "approved_needs_reschedule") return',
+      'if (input.plan.kind === "approved_needs_reschedule") {',
     );
     expect(noPromiseGuard).toBeGreaterThan(-1);
-    expect(lifecycle.indexOf("partnerJobEvents")).toBeGreaterThan(
+    const staffReview = lifecycle.slice(
       noPromiseGuard,
+      lifecycle.indexOf("const [consumedHold]"),
     );
+    expect(staffReview).toContain('publicStatus: "under_review"');
+    expect(staffReview).toContain('confirmationMode: "review"');
+    expect(staffReview).toContain("arrivalWindowStartAt: null");
+    expect(staffReview).toMatch(/eventType:\s*"job.company_approved"/u);
+    expect(staffReview).toContain("return;");
+    expect(staffReview).not.toContain('status: "confirmed"');
     expect(lifecycle.indexOf("outboxEvents")).toBeGreaterThan(noPromiseGuard);
 
     const decision = service.slice(

@@ -58,7 +58,12 @@ async function main() {
           slug: "owner",
           permissions: [...TEAM_PERMISSION_CATALOG],
         })
-        .onConflictDoNothing();
+        // Other isolated permission tests may have intentionally narrowed this
+        // canonical role. Restore the browser scenario's explicit fixture.
+        .onConflictDoUpdate({
+          target: teamRoles.slug,
+          set: { permissions: [...TEAM_PERMISSION_CATALOG] },
+        });
       const [role] = await db
         .select()
         .from(teamRoles)
@@ -66,19 +71,17 @@ async function main() {
         .limit(1);
       if (!role)
         throw Error("Canonical owner role missing from rehearsal snapshot");
-      await db
-        .insert(teamMembers)
-        .values({
-          id,
-          roleId: role.id,
-          name: "Local access browser staff",
-          email,
-          emailNormalized: email,
-          emailIdentityStatus: "ready",
-          active: true,
-          passwordHash: hashPassword(password),
-          passwordSetAt: new Date(),
-        });
+      await db.insert(teamMembers).values({
+        id,
+        roleId: role.id,
+        name: "Local access browser staff",
+        email,
+        emailNormalized: email,
+        emailIdentityStatus: "ready",
+        active: true,
+        passwordHash: hashPassword(password),
+        passwordSetAt: new Date(),
+      });
       const session = await loginWithPassword(
         email,
         password,

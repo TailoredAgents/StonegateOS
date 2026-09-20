@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Route } from "next";
 import { TEAM_FOCUS_RING, teamButtonClass } from "./team-ui";
 
 export type PartnerAdministrationDestination = {
@@ -7,7 +8,6 @@ export type PartnerAdministrationDestination = {
   href: string;
   active: boolean;
 };
-
 export function PartnerAdministrationNavigation({
   destinations,
   canCreate = false,
@@ -15,53 +15,95 @@ export function PartnerAdministrationNavigation({
   destinations: PartnerAdministrationDestination[];
   canCreate?: boolean;
 }) {
-  const advanced = destinations.filter((item) => item.id !== "accounts");
+  const active = destinations.find((item) => item.active)?.id ?? "requests";
+  const administrative = !["requests", "accounts"].includes(active);
   return (
     <header className="min-w-0 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Partners</h1>
           <p className="mt-1 text-sm text-[color:var(--team-text-muted)]">
-            Companies we work with, their people, and their service.
+            Review requests and manage the companies you work with.
           </p>
         </div>
         {canCreate ? (
           <Link
-            className={teamButtonClass("primary")}
+            className={teamButtonClass("secondary")}
             href="/team/partners?p_admin=accounts&p_setup=create#partner-relationship-setup-heading"
           >
             Add partner
           </Link>
         ) : null}
       </div>
-      {advanced.length ? (
-        <details className="rounded-xl border border-[color:var(--team-border)] px-3">
+      <nav
+        aria-label="Partner workspace"
+        className="flex flex-wrap gap-2 border-b border-[color:var(--team-border)] pb-3"
+      >
+        {[
+          {
+            id: "requests",
+            label: "Requests",
+            href: "/team/partners?p_admin=requests",
+            active: active === "requests",
+          },
+          {
+            id: "accounts",
+            label: "Companies",
+            href: "/team/partners?p_admin=accounts",
+            active: active === "accounts",
+          },
+          {
+            id: "administration",
+            label: "Administration",
+            href: "/team/partners?p_admin=administration",
+            active: administrative,
+          },
+        ]
+          .filter(
+            (item) =>
+              destinations.some((destination) => destination.id === item.id) ||
+              (item.id === "administration" && administrative),
+          )
+          .map((item) => (
+            <Link
+              key={item.id}
+              href={item.href as Route}
+              aria-current={item.active ? "page" : undefined}
+              className={`inline-flex min-h-11 items-center rounded-lg px-4 py-2 text-sm ${TEAM_FOCUS_RING} ${item.active ? "bg-[color:var(--team-surface-muted)] font-semibold" : "text-[color:var(--team-text-muted)]"}`}
+            >
+              {item.label}
+            </Link>
+          ))}
+      </nav>
+      {administrative ? (
+        <details
+          className="rounded-xl border border-[color:var(--team-border)] px-3"
+          open={active === "administration"}
+        >
           <summary
             className={`min-h-11 cursor-pointer content-center py-2 text-sm font-medium ${TEAM_FOCUS_RING}`}
           >
-            Advanced administration
-            {advanced.some((item) => item.active)
-              ? ` · ${advanced.find((item) => item.active)?.label}`
-              : ""}
+            Administration tools
           </summary>
-          <p className="mb-2 text-sm text-[color:var(--team-text-muted)]">
-            Account-wide tools, support, and historical records. Company tasks
-            are available inside each company.
-          </p>
           <nav
-            aria-label="Advanced partner administration"
+            aria-label="Partner administration tools"
             className="flex flex-wrap gap-2 pb-3"
           >
-            {destinations.map((item) => (
-              <a
-                key={item.id}
-                href={item.href}
-                aria-current={item.active ? "page" : undefined}
-                className={`inline-flex min-h-11 items-center rounded-lg px-3 py-2 text-sm ${TEAM_FOCUS_RING} ${item.active ? "bg-[color:var(--team-surface-muted)] font-semibold" : "text-[color:var(--team-text-muted)]"}`}
-              >
-                {item.label}
-              </a>
-            ))}
+            {destinations
+              .filter(
+                (item) =>
+                  !["requests", "accounts", "administration"].includes(item.id),
+              )
+              .map((item) => (
+                <Link
+                  key={item.id}
+                  href={item.href as Route}
+                  aria-current={item.active ? "page" : undefined}
+                  className={`inline-flex min-h-11 items-center rounded-lg px-3 py-2 text-sm ${TEAM_FOCUS_RING} ${item.active ? "bg-[color:var(--team-surface-muted)] font-semibold" : "text-[color:var(--team-text-muted)]"}`}
+                >
+                  {item.label}
+                </Link>
+              ))}
           </nav>
         </details>
       ) : null}

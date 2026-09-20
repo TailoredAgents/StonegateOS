@@ -11,13 +11,15 @@ describe("Site Team authentication callback", () => {
     expect(source).toContain("function failedAuthRedirect");
     expect(source).toContain("name: TEAM_SESSION_COOKIE");
     expect(source).toContain("maxAge: 0");
-    expect(source).toContain('failedAuthRedirect("missing_token")');
-    expect(source).toContain('failedAuthRedirect("auth_failed")');
+    expect(source).toContain('failedAuthRedirect("missing_token", returnTo)');
+    expect(source).toContain('failedAuthRedirect("auth_failed", returnTo)');
     expect(source).toContain("expired_or_invalid");
   });
 
   it("reports an unavailable exchange service truthfully", () => {
-    expect(source).toContain('failedAuthRedirect("login_service_unavailable")');
+    expect(source).toContain(
+      'failedAuthRedirect("login_service_unavailable", returnTo)',
+    );
     expect(source).toContain("res.status >= 500");
   });
 

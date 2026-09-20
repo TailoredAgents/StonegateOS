@@ -39,10 +39,18 @@ export function PartnerServiceReviews({
   canSchedule,
   accountId,
   includeScheduled = false,
+  requestId,
+  embedded = false,
+  onReady,
+  onChanged,
 }: {
   canSchedule: boolean;
   accountId?: string;
   includeScheduled?: boolean;
+  requestId?: string;
+  embedded?: boolean;
+  onReady?: () => void;
+  onChanged?: () => void;
 }) {
   const [items, setItems] = useState<PartnerServiceReview[]>([]),
     [cursor, setCursor] = useState<string | null>(null);
@@ -89,13 +97,17 @@ export function PartnerServiceReviews({
     setCursor(null);
     setDetail(null);
     setReturnDetail(null);
-    void load();
+    if (requestId && accountId) void open({ id: requestId, accountId });
+    else void load();
     return () => {
       generation.current += 1;
     };
-  }, [accountId, includeScheduled]);
+  }, [accountId, includeScheduled, requestId]);
   useEffect(() => {
-    if (detail) detailRef.current?.focus();
+    if (detail) {
+      if (!embedded) detailRef.current?.focus();
+      onReady?.();
+    }
   }, [detail]);
   async function open(
     item: Pick<PartnerServiceReview, "id" | "accountId">,
@@ -122,132 +134,155 @@ export function PartnerServiceReviews({
   }
   return (
     <section
-      className="space-y-4 rounded-xl border border-slate-200 bg-white p-5"
-      aria-labelledby="partner-service-reviews-heading"
+      className={
+        embedded
+          ? "min-w-0 space-y-4"
+          : "space-y-4 rounded-xl border border-slate-200 bg-white p-5"
+      }
+      aria-labelledby={embedded ? undefined : "partner-service-reviews-heading"}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2
-          id="partner-service-reviews-heading"
-          className="text-lg font-semibold text-slate-950"
-        >
-          {includeScheduled
-            ? "Company jobs & service requests"
-            : "New service requests needing review"}
-        </h2>
-        <button
-          type="button"
-          disabled={busy}
-          className={teamButtonClass("secondary", "sm")}
-          onClick={() => void load()}
-        >
-          {includeScheduled ? "Refresh jobs" : "Refresh requests"}
-        </button>
-      </div>
-      <p className="text-sm leading-6 text-slate-600">
-        {includeScheduled
-          ? "Open a job to see the location, requested work, photos, and current status. Only jobs awaiting initial scheduling can be scheduled here; existing bookings stay unchanged."
-          : "These jobs do not have a confirmed arrival window. Review scope, pricing and requirements before using the CRM scheduler below."}
-      </p>
-      {!accountId ? (
-        <form
-          method="post"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!busy) void load(false, query);
-          }}
-          className="flex flex-wrap items-end gap-3"
-        >
-          <label className="min-w-0 flex-1 text-sm font-semibold">
-            Find company
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              type="search"
-              maxLength={100}
-              className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-base"
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={busy}
-            className={teamButtonClass("secondary", "sm")}
-          >
-            Search requests
-          </button>
-        </form>
-      ) : null}
-      {message ? (
-        <p
-          role="alert"
-          className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
-        >
-          {message}
-        </p>
-      ) : null}
-      {busy ? (
-        <p role="status" className="text-sm">
-          Loading…
-        </p>
-      ) : null}
-      <ul className="divide-y divide-slate-200">
-        {items.map((item) => (
-          <li key={item.id}>
+      {!embedded ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2
+              id="partner-service-reviews-heading"
+              className="text-lg font-semibold text-slate-950"
+            >
+              {includeScheduled
+                ? "Company jobs & service requests"
+                : "New service requests needing review"}
+            </h2>
             <button
               type="button"
               disabled={busy}
-              onClick={() => void open(item)}
-              className="min-h-11 w-full py-3 text-left"
+              className={teamButtonClass("secondary", "sm")}
+              onClick={() => void load()}
             >
-              <span className="block font-semibold text-primary-900">
-                {!accountId ? `${item.accountName} · ` : ""}
-                {item.service}
-              </span>
-              <span className="mt-1 block text-sm text-slate-600">
-                {item.siteName} ·{" "}
-                {arrival(item) ??
-                  (includeScheduled &&
-                  ![
-                    "requested",
-                    "requested_review",
-                    "under_review",
-                    "approval_needed",
-                  ].includes(item.status)
-                    ? "Arrival window not recorded"
-                    : preferred(item.preferredWindows))}
-              </span>
-              <span className="mt-1 block text-xs text-slate-500">
-                {item.status.replaceAll("_", " ")} · received{" "}
-                {new Intl.DateTimeFormat("en-US", {
-                  dateStyle: "medium",
-                  timeZone: "America/New_York",
-                }).format(new Date(item.createdAt))}
-              </span>
-              {item.originalJob ? (
-                <span className="mt-1 block text-sm font-medium text-primary-800">
-                  Additional service · original job{" "}
-                  {item.originalJob.id.slice(0, 8).toUpperCase()}
-                </span>
-              ) : null}
+              {includeScheduled ? "Refresh jobs" : "Refresh requests"}
             </button>
-          </li>
-        ))}
-      </ul>
-      {!busy && !message && !items.length ? (
-        <p className="text-sm text-slate-600">
-          {includeScheduled
-            ? "No jobs have been linked to this company yet."
-            : "No unscheduled partner requests match this view."}
-        </p>
+          </div>
+          <p className="text-sm leading-6 text-slate-600">
+            {includeScheduled
+              ? "Open a job to see the location, requested work, photos, and current status. Only jobs awaiting initial scheduling can be scheduled here; existing bookings stay unchanged."
+              : "These jobs do not have a confirmed arrival window. Review scope, pricing and requirements before using the CRM scheduler below."}
+          </p>
+          {!accountId ? (
+            <form
+              method="post"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!busy) void load(false, query);
+              }}
+              className="flex flex-wrap items-end gap-3"
+            >
+              <label className="min-w-0 flex-1 text-sm font-semibold">
+                Find company
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  type="search"
+                  maxLength={100}
+                  className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-base"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={busy}
+                className={teamButtonClass("secondary", "sm")}
+              >
+                Search requests
+              </button>
+            </form>
+          ) : null}
+          {message ? (
+            <p
+              role="alert"
+              className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+            >
+              {message}
+            </p>
+          ) : null}
+          {busy ? (
+            <p role="status" className="text-sm">
+              Loading…
+            </p>
+          ) : null}
+          <ul className="divide-y divide-slate-200">
+            {items.map((item) => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void open(item)}
+                  className="min-h-11 w-full py-3 text-left"
+                >
+                  <span className="block font-semibold text-primary-900">
+                    {!accountId ? `${item.accountName} · ` : ""}
+                    {item.service}
+                  </span>
+                  <span className="mt-1 block text-sm text-slate-600">
+                    {item.siteName} ·{" "}
+                    {arrival(item) ??
+                      (includeScheduled &&
+                      ![
+                        "requested",
+                        "requested_review",
+                        "under_review",
+                        "approval_needed",
+                      ].includes(item.status)
+                        ? "Arrival window not recorded"
+                        : preferred(item.preferredWindows))}
+                  </span>
+                  <span className="mt-1 block text-xs text-slate-500">
+                    {item.status.replaceAll("_", " ")} · received{" "}
+                    {new Intl.DateTimeFormat("en-US", {
+                      dateStyle: "medium",
+                      timeZone: "America/New_York",
+                    }).format(new Date(item.createdAt))}
+                  </span>
+                  {item.originalJob ? (
+                    <span className="mt-1 block text-sm font-medium text-primary-800">
+                      Additional service · original job{" "}
+                      {item.originalJob.id.slice(0, 8).toUpperCase()}
+                    </span>
+                  ) : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {!busy && !message && !items.length ? (
+            <p className="text-sm text-slate-600">
+              {includeScheduled
+                ? "No jobs have been linked to this company yet."
+                : "No unscheduled partner requests match this view."}
+            </p>
+          ) : null}
+          {cursor ? (
+            <button
+              type="button"
+              disabled={busy}
+              className={teamButtonClass("secondary", "sm")}
+              onClick={() => void load(true)}
+            >
+              {includeScheduled ? "Load older jobs" : "Load older requests"}
+            </button>
+          ) : null}
+        </>
       ) : null}
-      {cursor ? (
-        <button
-          type="button"
-          disabled={busy}
-          className={teamButtonClass("secondary", "sm")}
-          onClick={() => void load(true)}
-        >
-          {includeScheduled ? "Load older jobs" : "Load older requests"}
-        </button>
+      {embedded && busy ? <p role="status">Loading request details…</p> : null}
+      {embedded && message ? (
+        <p role="alert">
+          {message}{" "}
+          <button
+            type="button"
+            className={teamButtonClass("secondary", "sm")}
+            onClick={() =>
+              requestId && accountId && void open({ id: requestId, accountId })
+            }
+          >
+            Try again
+          </button>
+        </p>
       ) : null}
       {detail ? (
         <div
@@ -256,13 +291,30 @@ export function PartnerServiceReviews({
           tabIndex={-1}
           className="space-y-4 border-t border-slate-200 pt-5 focus-visible:outline-2 focus-visible:outline-offset-2"
         >
-          <h3 className="text-lg font-semibold">
-            {detail.accountName} · {detail.service}
-          </h3>
-          <p className="text-sm font-medium">
-            Status: {detail.status.replaceAll("_", " ")}
-            {arrival(detail) ? ` · ${arrival(detail)}` : ""}
-          </p>
+          {!embedded || detail.id !== requestId ? (
+            <>
+              {embedded && returnDetail ? (
+                <p className="text-xs font-semibold text-slate-600">
+                  Original job
+                </p>
+              ) : null}
+              <h3 className="text-lg font-semibold">
+                {detail.accountName} · {detail.service}
+              </h3>
+              <p className="text-sm font-medium">
+                Status: {detail.status.replaceAll("_", " ")}
+                {arrival(detail) ? ` · ${arrival(detail)}` : ""}
+              </p>
+            </>
+          ) : null}
+          {embedded &&
+          detail.id === requestId &&
+          ["confirmed", "in_progress", "completed"].includes(detail.status) &&
+          arrival(detail) ? (
+            <p className="text-sm">
+              <strong>Confirmed arrival window:</strong> {arrival(detail)}
+            </p>
+          ) : null}
           {returnDetail ? (
             <button
               type="button"
@@ -298,21 +350,23 @@ export function PartnerServiceReviews({
               </button>
             </div>
           ) : null}
-          <p className="text-sm">
-            {detail.location
-              ? [
-                  detail.location.name,
-                  detail.location.address.line1,
-                  detail.location.address.line2,
-                  detail.location.address.city,
-                  detail.location.address.state,
-                  detail.location.address.postalCode,
-                ]
-                  .filter(Boolean)
-                  .join(", ")
-              : "Site details need staff review."}
-          </p>
-          {detail.canSchedule ? (
+          {!embedded || detail.id !== requestId ? (
+            <p className="text-sm">
+              {detail.location
+                ? [
+                    detail.location.name,
+                    detail.location.address.line1,
+                    detail.location.address.line2,
+                    detail.location.address.city,
+                    detail.location.address.state,
+                    detail.location.address.postalCode,
+                  ]
+                    .filter(Boolean)
+                    .join(", ")
+                : "Site details need staff review."}
+            </p>
+          ) : null}
+          {detail.canSchedule && (!embedded || detail.id !== requestId) ? (
             <p className="text-sm">
               <strong>Preferred dates:</strong>{" "}
               {preferred(detail.preferredWindows)}. These are requests, not
@@ -331,6 +385,7 @@ export function PartnerServiceReviews({
             <PartnerRequestDetailsPanel
               details={detail.partnerRequest}
               photos={detail.photos}
+              hideHeader={embedded && detail.id === requestId}
             />
           ) : (
             <>
@@ -451,9 +506,16 @@ export function PartnerServiceReviews({
               canOverrideScheduleConflicts={false}
               teamMembers={[]}
               scheduleOnly
+              confirmPartnerService={embedded}
+              partnerRequest={{ id: detail.id, accountId: detail.accountId }}
               onScheduled={() => {
-                setDetail(null);
-                void load();
+                onChanged?.();
+                if (requestId && accountId)
+                  void open({ id: requestId, accountId });
+                else {
+                  setDetail(null);
+                  void load();
+                }
               }}
             />
           ) : (

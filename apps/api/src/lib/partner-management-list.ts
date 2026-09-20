@@ -21,6 +21,8 @@ export type PartnerManagementResource =
   | "security";
 
 export type PartnerManagementListQuery = {
+  /** Internal exact-record lookup; not accepted as a public list parameter. */
+  id?: string;
   accountId: string | null;
   cursor: PartnerManagementCursor | null;
   filterHash: string;

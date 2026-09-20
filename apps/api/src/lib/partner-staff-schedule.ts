@@ -1,4 +1,5 @@
 import { DateTime } from "luxon";
+import { resolveEasternAppointmentTime } from "@/lib/appointment-time";
 import {
   and,
   eq,
@@ -31,6 +32,7 @@ import {
   getBusinessHoursPolicy,
   getBookingRulesPolicy,
   type WeekdayKey,
+  type BusinessHoursPolicy,
 } from "@/lib/policy";
 import {
   loadNamedResourcePlan,
@@ -352,6 +354,72 @@ async function assertPartnerStaffCapacity(
       );
 }
 
+/** The preview and the scheduling transaction share one arrival-window calculation. */
+export function partnerStaffArrivalWindow(
+  startAt: Date,
+  policy: BusinessHoursPolicy,
+) {
+  const local = DateTime.fromJSDate(startAt, { zone: policy.timezone });
+  const windows =
+    policy.weekly[local.toFormat("cccc").toLowerCase() as WeekdayKey] ?? [];
+  const starts = windows.map(
+    (window) =>
+      Number(window.start.slice(0, 2)) * 60 + Number(window.start.slice(3)),
+  );
+  const minute = local.hour * 60 + local.minute;
+  // A staff-agreed out-of-hours visit anchors its own window; normal hours use
+  // the same operating-day anchor as the partner availability presentation.
+  const anchor =
+    starts.length && Math.min(...starts) <= minute
+      ? Math.min(...starts)
+      : minute;
+  if (
+    !local.isValid ||
+    local.second !== 0 ||
+    local.millisecond !== 0 ||
+    (minute - anchor) % 30 !== 0
+  )
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Choose a partner start time on a 30-minute increment.",
+      { status: 422 },
+    );
+  const [window] = groupThirtyMinutePartnerWindows(
+    [{ id: "preview", startAt: startAt, available: true }],
+    {
+      timezone: policy.timezone,
+      anchorMinuteByLocalDate: { [local.toISODate()]: anchor },
+    },
+  );
+  if (!window)
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Choose a valid partner arrival time.",
+      { status: 422 },
+    );
+  return window;
+}
+
+/** Uses the same Eastern input interpretation as the staff scheduling writer. */
+export function partnerStaffArrivalPreview(
+  day: string,
+  time: string,
+  policy: BusinessHoursPolicy,
+) {
+  const resolved = resolveEasternAppointmentTime(day, time);
+  if (!resolved.ok)
+    throw new PartnerPortalSchedulingError("invalid_fields", resolved.message, {
+      status: 422,
+    });
+  const window = partnerStaffArrivalWindow(resolved.value, policy);
+  return {
+    startAt: resolved.value.toISOString(),
+    arrivalStartAt: window.startAt.toISOString(),
+    arrivalEndAt: window.endAt.toISOString(),
+    timezone: policy.timezone,
+  };
+}
+
 /** Called only inside the CRM's already locked, capacity-checked scheduling transaction. */
 export async function synchronizePartnerStaffSchedule(
   tx: TeamMutationTransaction,
@@ -410,44 +478,7 @@ export async function synchronizePartnerStaffSchedule(
     );
   const policy = await getBusinessHoursPolicy(tx);
   await assertPartnerStaffCapacity(tx, job, input, policy.timezone);
-  const local = DateTime.fromJSDate(input.startAt, { zone: policy.timezone });
-  const windows =
-    policy.weekly[local.toFormat("cccc").toLowerCase() as WeekdayKey] ?? [];
-  const starts = windows.map(
-    (window) =>
-      Number(window.start.slice(0, 2)) * 60 + Number(window.start.slice(3)),
-  );
-  const minute = local.hour * 60 + local.minute;
-  // A staff-agreed out-of-hours visit anchors its own window; normal hours use
-  // the same operating-day anchor as the partner availability presentation.
-  const anchor =
-    starts.length && Math.min(...starts) <= minute
-      ? Math.min(...starts)
-      : minute;
-  if (
-    !local.isValid ||
-    local.second !== 0 ||
-    local.millisecond !== 0 ||
-    (minute - anchor) % 30 !== 0
-  )
-    throw new PartnerPortalSchedulingError(
-      "invalid_fields",
-      "Choose a partner start time on a 30-minute increment.",
-      { status: 422 },
-    );
-  const [window] = groupThirtyMinutePartnerWindows(
-    [{ id: job.id, startAt: input.startAt, available: true }],
-    {
-      timezone: policy.timezone,
-      anchorMinuteByLocalDate: { [local.toISODate()]: anchor },
-    },
-  );
-  if (!window)
-    throw new PartnerPortalSchedulingError(
-      "invalid_fields",
-      "Choose a valid partner arrival time.",
-      { status: 422 },
-    );
+  const window = partnerStaffArrivalWindow(input.startAt, policy);
   if (
     job.publicStatus === "confirmed" &&
     input.previousStartAt?.getTime() === input.startAt.getTime() &&

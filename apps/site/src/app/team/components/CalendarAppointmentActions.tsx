@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { previewPartnerServiceArrival } from "../actions/partner-service-reviews";
 import { useRouter } from "next/navigation";
 import {
   isTeamMutationSuccessEnvelope,
@@ -31,6 +32,8 @@ type Props = {
   canOverrideScheduleConflicts: boolean;
   teamMembers: Array<{ id: string; name: string }>;
   scheduleOnly?: boolean;
+  confirmPartnerService?: boolean;
+  partnerRequest?: { id: string; accountId: string };
   correctionOnly?: boolean;
   onScheduled?: () => void;
 };
@@ -169,6 +172,8 @@ export function CalendarAppointmentActions({
   canOverrideScheduleConflicts,
   teamMembers,
   scheduleOnly = false,
+  confirmPartnerService = false,
+  partnerRequest,
   correctionOnly = false,
   onScheduled,
 }: Props): React.ReactElement {
@@ -196,6 +201,85 @@ export function CalendarAppointmentActions({
         : "";
   const defaultDate = formatCalendarDayKey(new Date(start));
   const defaultTime = formatEasternTimeInput(start);
+
+  const [previewDate, setPreviewDate] = React.useState(defaultDate);
+  const [previewTime, setPreviewTime] = React.useState(defaultTime);
+  const [previewRetry, setPreviewRetry] = React.useState(0);
+  const [arrivalPreview, setArrivalPreview] = React.useState<{
+    input: string;
+    label: string;
+    error: string;
+  } | null>(null);
+  const previewInput = `${previewDate}:${previewTime}`;
+  const previewJobId = partnerRequest?.id;
+  const previewAccountId = partnerRequest?.accountId;
+  React.useEffect(() => {
+    if (!confirmPartnerService || !previewJobId || !previewAccountId) return;
+    let current = true;
+    const timer = setTimeout(() => {
+      if (!previewDate || !previewTime) return;
+      void previewPartnerServiceArrival({
+        id: previewJobId,
+        accountId: previewAccountId,
+        preferredDate: previewDate,
+        startTime: previewTime,
+      })
+        .then((result) => {
+          if (!current) return;
+          if (!result.ok) {
+            setArrivalPreview({
+              input: previewInput,
+              label: "",
+              error: result.message,
+            });
+            return;
+          }
+          try {
+            const format = new Intl.DateTimeFormat("en-US", {
+              dateStyle: "medium",
+              timeStyle: "short",
+              timeZone: result.timezone,
+            });
+            setArrivalPreview({
+              input: previewInput,
+              label: `${format.format(new Date(result.arrivalStartAt))} – ${format.format(new Date(result.arrivalEndAt))} (${result.timezone})`,
+              error: "",
+            });
+          } catch {
+            setArrivalPreview({
+              input: previewInput,
+              label: "",
+              error: "The arrival window could not be verified. Try again.",
+            });
+          }
+        })
+        .catch(() => {
+          if (current)
+            setArrivalPreview({
+              input: previewInput,
+              label: "",
+              error: "The arrival window could not be reached. Try again.",
+            });
+        });
+    }, 350);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [
+    confirmPartnerService,
+    previewJobId,
+    previewAccountId,
+    previewDate,
+    previewTime,
+    previewInput,
+    previewRetry,
+  ]);
+  const arrivalReady =
+    !confirmPartnerService ||
+    (arrivalPreview?.input === previewInput &&
+      !!arrivalPreview.label &&
+      !arrivalPreview.error);
 
   async function submitMutation(
     form: HTMLFormElement,
@@ -394,7 +478,9 @@ export function CalendarAppointmentActions({
         <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
             {scheduleOnly
-              ? "Schedule service in the CRM"
+              ? confirmPartnerService
+                ? "Confirm service"
+                : "Schedule service in the CRM"
               : correctionOnly
                 ? "Correct crew pay"
                 : "Update appointment"}
@@ -697,6 +783,7 @@ export function CalendarAppointmentActions({
               onSubmit={(event) => {
                 if (event.defaultPrevented) return;
                 event.preventDefault();
+                if (!arrivalReady) return;
                 void submitMutation(
                   event.currentTarget,
                   "reschedule",
@@ -715,7 +802,10 @@ export function CalendarAppointmentActions({
                   name="preferredDate"
                   required
                   defaultValue={defaultDate}
-                  onChange={() => setScheduleConflict(null)}
+                  onChange={(event) => {
+                    setScheduleConflict(null);
+                    setPreviewDate(event.target.value);
+                  }}
                   className={TEAM_INPUT_COMPACT}
                 />
               </label>
@@ -724,12 +814,41 @@ export function CalendarAppointmentActions({
                 <input
                   type="time"
                   name="startTime"
+                  step={confirmPartnerService ? 1800 : undefined}
                   required
                   defaultValue={defaultTime}
-                  onChange={() => setScheduleConflict(null)}
+                  onChange={(event) => {
+                    setScheduleConflict(null);
+                    setPreviewTime(event.target.value);
+                  }}
                   className={TEAM_INPUT_COMPACT}
                 />
               </label>
+              {confirmPartnerService ? (
+                <div
+                  role="status"
+                  className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950"
+                >
+                  <strong>Partner arrival window</strong>
+                  <p className="mt-1">
+                    {!previewDate || !previewTime
+                      ? "Choose a date and time to preview the window sent to the partner."
+                      : arrivalPreview?.input === previewInput
+                        ? arrivalPreview.error || arrivalPreview.label
+                        : "Checking arrival window…"}
+                  </p>
+                  {arrivalPreview?.input === previewInput &&
+                  arrivalPreview.error ? (
+                    <button
+                      type="button"
+                      className="mt-2 min-h-11 underline"
+                      onClick={() => setPreviewRetry((value) => value + 1)}
+                    >
+                      Retry arrival preview
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <StaffScheduleResourcePicker
                 key={appointmentId}
                 appointmentId={appointmentId}
@@ -809,16 +928,19 @@ export function CalendarAppointmentActions({
                   type="submit"
                   disabled={
                     pendingAction !== null ||
+                    !arrivalReady ||
                     Boolean(scheduleConflict && !canOverrideScheduleConflicts)
                   }
-                  className={`${teamButtonClass("secondary", "sm")} w-full`}
+                  className={`${teamButtonClass(confirmPartnerService ? "primary" : "secondary", "sm")} w-full`}
                 >
                   {pendingAction === "reschedule"
                     ? "Saving…"
                     : scheduleConflict && canOverrideScheduleConflicts
                       ? "Override and reschedule"
                       : scheduleOnly
-                        ? "Schedule service"
+                        ? confirmPartnerService
+                          ? "Confirm service"
+                          : "Schedule service"
                         : "Reschedule"}
                 </button>
               </div>

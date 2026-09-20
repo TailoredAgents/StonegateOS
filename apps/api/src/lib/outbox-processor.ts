@@ -1,3 +1,4 @@
+import { evaluateOwnerAlert, processOwnerAlertReminder, OWNER_ALERT_EVALUATE_EVENT, OWNER_ALERT_REMINDER_EVENT } from "@/lib/partner-owner-alerts";
 import {
   and,
   asc,
@@ -281,6 +282,8 @@ const CONTACT_MESSAGE_ENQUEUE_EVENT_TYPES = new Set([
   // Staff alerts have their own pre-dispatch state and uncertainty ledger.
   // They must not run inside the ordinary contact-scoped transaction.
   "staff_notification.dispatch",
+  OWNER_ALERT_EVALUATE_EVENT,
+  OWNER_ALERT_REMINDER_EVENT,
 ]);
 const HUMANISTIC_DELAY_MIN_MS = 10_000;
 const HUMANISTIC_DELAY_MAX_MS = 30_000;
@@ -344,6 +347,8 @@ function outcomeForOutboxHandlerError(
     // before the provider could be called again.
     event.type === "sales.escalation.call" ||
     event.type === "staff_notification.dispatch" ||
+    event.type === OWNER_ALERT_EVALUATE_EVENT ||
+    event.type === OWNER_ALERT_REMINDER_EVENT ||
     event.type === "partner.account_invitation.email" ||
     event.type === PARTNER_ACCESS_APPLICATION_EMAIL_EVENT ||
     event.type === "partner.auth.email" ||
@@ -3971,6 +3976,12 @@ async function handleOutboxEvent(
       });
     }
 
+    case OWNER_ALERT_EVALUATE_EVENT:
+      await evaluateOwnerAlert(event.payload);
+      return { status: "processed" };
+    case OWNER_ALERT_REMINDER_EVENT:
+      await processOwnerAlertReminder(event.payload);
+      return { status: "processed" };
     case "staff_notification.dispatch": {
       if (getTeamOperationKillSwitchForRisk("external") === "external_sends") {
         return {

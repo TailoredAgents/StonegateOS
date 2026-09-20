@@ -1,6 +1,8 @@
 import React from "react";
 import Link from "next/link";
+import { PartnerRequestShortcut } from "./PartnerRequestSummary";
 import {
+  hasTeamPermission,
   requireCurrentTeamPrincipal,
   type TeamRequestPrincipal,
 } from "@/lib/team-principal";
@@ -728,6 +730,9 @@ export async function OwnerSection({
 
   return (
     <section className="space-y-4">
+      {hasTeamPermission(principal, "partners.accounts.read") ? (
+        <PartnerRequestShortcut />
+      ) : null}
       <header className={`${TEAM_CARD_PADDED} space-y-5`}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>

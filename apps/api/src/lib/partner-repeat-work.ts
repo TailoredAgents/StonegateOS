@@ -1,3 +1,4 @@
+import { enqueueOwnerAlertEvaluation } from "@/lib/partner-owner-alerts";
 import { createHash, randomUUID } from "node:crypto";
 import { DateTime } from "luxon";
 import {
@@ -4014,6 +4015,7 @@ export async function processPartnerBulkImport(payload: {
         completedAt: pending ? null : new Date(),
       })
       .where(eq(partnerBulkImports.id, batch.id));
+    if (!pending) await enqueueOwnerAlertEvaluation(tx, { accountId: payload.accountId, bulkImportId: batch.id });
     if (pending)
       await tx.insert(outboxEvents).values({
         type: "partner.bulk_import.process",
