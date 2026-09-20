@@ -51,11 +51,12 @@ async function harness() {
         const groups=[...new Set(remaining.map(surface=>surface.group))].map(id=>({id,label:TEAM_SURFACE_GROUP_LABELS[id],items:remaining.filter(surface=>surface.group===id).map(navItem)}));
         const companyId=params.get('p_company')||'44444444-4444-4444-8444-444444444444';
         const sections=role==='owner'?['details','people','jobs','billing','settings']:['details','people'];
-        const destinations=[{id:'accounts',label:'Companies',href:'/team/partners',active:true},...(role==='owner'?[{id:'security',label:'Security',href:'/team/partners?p_admin=security',active:false},{id:'quarantine',label:'Quarantine',href:'/team/partners?p_admin=quarantine',active:false}]:[])];
+        const activeView=params.get('p_admin')||'accounts';
+        const destinations=[{id:'requests',label:'Requests',href:'/team/partners?p_admin=requests'},{id:'accounts',label:'Companies',href:'/team/partners?p_admin=accounts'},{id:'administration',label:'Administration',href:'/team/partners?p_admin=administration'},...(role==='owner'?[{id:'security',label:'Security',href:'/team/partners?p_admin=security'},{id:'quarantine',label:'Quarantine',href:'/team/partners?p_admin=quarantine'}]:[])].map(item=>({...item,active:item.id===activeView}));
         const companyContent=<><PartnerAdministrationNavigation destinations={destinations} canCreate={role==='owner'}/>{params.has('p_company')?<PartnerCompanyNavigation accountId={companyId} accountName='Example Property Management' section={params.get('p_company_section')||'details'} sections={sections}/>:null}{params.get('p_setup')==='create'?<PartnerRelationshipSetup canCreate={role==='owner'} canInvite={role==='owner'} canConfigure={role==='owner'} openCreate/>:null}</>;
         const root=createRoot(document.getElementById('root'));const render=content=>root.render(<TeamAppShell activeId='partners' title='Partner navigation check' quickItems={quickItems} utilityItems={utilityItems} groups={groups} access={{hasOwner:role==='owner',hasOffice:role==='support',hasCrew:role==='crew'}} classicHref='/team/partners?layout=classic'>{content}</TeamAppShell>);
         async function resolveServerElements(element){if(Array.isArray(element))return Promise.all(element.map(resolveServerElements));if(!React.isValidElement(element))return element;if(typeof element.type==='function'&&element.type.constructor.name==='AsyncFunction')return resolveServerElements(await element.type(element.props));if(!Object.prototype.hasOwnProperty.call(element.props,'children'))return element;return React.cloneElement(element,{},await resolveServerElements(element.props.children));}
-        if(params.has('directoryCheck')||sessionStorage.getItem('directoryCheck')){sessionStorage.setItem('directoryCheck','1');PartnerAdministrationSection({filters:{companyId:params.get('p_company')||undefined,companySection:params.get('p_company_section')||undefined,adminView:params.get('p_admin')||undefined,setup:params.get('p_setup')||undefined}}).then(resolveServerElements).then(render)}else render(params.has('companyCheck')||params.has('p_setup')||params.has('p_company')?companyContent:<p>Local navigation verification only.</p>);`,
+        if(params.has('directoryCheck')||sessionStorage.getItem('directoryCheck')){sessionStorage.setItem('directoryCheck','1');PartnerAdministrationSection({filters:{companyId:params.get('p_company')||undefined,companySection:params.get('p_company_section')||undefined,adminView:params.get('p_admin')||undefined,setup:params.get('p_setup')||undefined}}).then(resolveServerElements).then(render)}else render(params.has('companyCheck')||params.has('p_setup')||params.has('p_company')||params.has('p_admin')?companyContent:<p>Local navigation verification only.</p>);`,
       resolveDir: `${repo}/apps/site`,
       loader: "tsx",
     },
@@ -123,9 +124,11 @@ async function harness() {
               actionModules.set(
                 key,
                 names
-                  .map(
-                    (name) =>
-                      `export const ${name}=async()=>{throw Error('No external actions allowed in navigation tests')};`,
+                  .map((name) =>
+                    args.path.endsWith("actions/partner-request-inbox") &&
+                    name === "loadPartnerRequestInbox"
+                      ? `export const loadPartnerRequestInbox=async(input)=>{(window.__requestReads??=[]).push(input);return {ok:true,data:{requests:[],counts:{needsAttention:0,waitingOnClient:0,handled:0,byKind:{service:0,reschedule:0,cancellation:0,change:0,billing:0,address:0},byCompany:{}},page:{nextCursor:null},generatedAt:'2026-09-20T12:00:00.000Z',group:null}}};`
+                      : `export const ${name}=async()=>{throw Error('No external actions allowed in navigation tests')};`,
                   )
                   .join("\n"),
               );
@@ -344,34 +347,53 @@ for (const engine of [chromium, webkit]) {
           );
           const main = page.getByRole("main");
           await expect(
-            main.getByRole("heading", { name: "Partners", exact: true }),
+            main.getByRole("heading", {
+              name: "Partner companies",
+              exact: true,
+            }),
           ).toBeVisible();
           await expect(
             main.getByRole("heading", { name: "Example Property Management" }),
           ).toBeVisible();
           const advanced = main.getByRole("navigation", {
-            name: "Advanced partner administration",
+            name: "Partner administration tools",
           });
           await expect(advanced).toBeHidden();
-          await main
-            .locator("summary")
-            .filter({ hasText: "Advanced administration" })
-            .focus();
-          await page.keyboard.press("Enter");
+          const workspace = main.getByRole("navigation", {
+            name: "Partner workspace",
+          });
+          await expect(
+            workspace.getByRole("link", { name: "Companies", exact: true }),
+          ).toHaveAttribute("aria-current", "page");
+          await workspace
+            .getByRole("link", { name: "Administration", exact: true })
+            .click();
           await expect(advanced).toBeVisible();
           await expect(
+            main.getByRole("link", { name: "Add partner", exact: true }),
+          ).toHaveCount(0);
+          await expect(
             advanced.getByRole("link", { name: "Security", exact: true }),
-          ).toBeVisible();
+          ).toHaveAttribute("href", "/team/partners?p_admin=security");
+          const tools = main
+            .locator("summary")
+            .filter({ hasText: "Administration tools" });
+          await tools.focus();
           await page.keyboard.press("Enter");
           await expect(advanced).toBeHidden();
+          await page.keyboard.press("Enter");
+          await expect(advanced).toBeVisible();
+          await page.goto(
+            `${app.url}/team/partners?companyCheck=1&p_company=${accountId}`,
+          );
           const sections = main.getByRole("navigation", {
             name: "Company sections",
           });
           const expectedSections: Record<string, string> = {
-            "Details & contacts": "details",
-            "People & invitations": "people",
-            "Jobs & service requests": "jobs",
-            "Billing & service terms": "billing",
+            Overview: "details",
+            "People & access": "people",
+            Jobs: "jobs",
+            Billing: "billing",
             Settings: "settings",
           };
           for (const [name, section] of Object.entries(expectedSections)) {
@@ -389,13 +411,13 @@ for (const engine of [chromium, webkit]) {
           }
           await expect(
             sections.getByRole("link", {
-              name: "Details & contacts",
+              name: "Overview",
               exact: true,
             }),
           ).toHaveAttribute("aria-current", "page");
           await expect(
             main.getByRole("link", { name: "All companies", exact: true }),
-          ).toHaveAttribute("href", "/team/partners");
+          ).toHaveAttribute("href", "/team/partners?p_admin=accounts");
           assert.equal(
             await page.evaluate(
               () => document.documentElement.scrollWidth > innerWidth,
@@ -464,19 +486,13 @@ for (const engine of [chromium, webkit]) {
           main.getByRole("link", { name: "Add partner", exact: true }),
         ).toHaveCount(0);
         await expect(
-          main
-            .locator("summary")
-            .filter({ hasText: "Advanced administration" }),
+          main.locator("summary").filter({ hasText: "Administration tools" }),
         ).toHaveCount(0);
         const sections = main.getByRole("navigation", {
           name: "Company sections",
         });
         await expect(sections.getByRole("link")).toHaveCount(2);
-        for (const name of [
-          "Jobs & service requests",
-          "Billing & service terms",
-          "Settings",
-        ])
+        for (const name of ["Jobs", "Billing", "Settings"])
           await expect(
             sections.getByRole("link", { name, exact: true }),
           ).toHaveCount(0);
@@ -506,6 +522,20 @@ for (const engine of [chromium, webkit]) {
         });
         await page.goto(`${app.url}/team/partners?directoryCheck=1`);
         const main = page.getByRole("main");
+        await expect(
+          main.getByRole("heading", { name: "Requests", exact: true }),
+        ).toBeVisible();
+        await expect(
+          main.getByRole("link", { name: "Add partner", exact: true }),
+        ).toHaveCount(0);
+        await main
+          .getByRole("navigation", { name: "Partner workspace" })
+          .getByRole("link", { name: "Companies", exact: true })
+          .click();
+        assert.equal(
+          new URL(page.url()).searchParams.get("p_admin"),
+          "accounts",
+        );
         const directory = main.getByRole("list", {
           name: "Companies directory",
         });
@@ -519,7 +549,7 @@ for (const engine of [chromium, webkit]) {
         ).toBeVisible();
         await expect(
           main.getByRole("navigation", {
-            name: "Advanced partner administration",
+            name: "Partner administration tools",
           }),
         ).toBeHidden();
         await expect(
@@ -563,7 +593,7 @@ for (const engine of [chromium, webkit]) {
         assert.equal(new URL(page.url()).searchParams.has("p_company"), false);
 
         await page.goto(
-          `${app.url}/team/partners?directoryCheck=1&directoryCase=empty`,
+          `${app.url}/team/partners?directoryCheck=1&p_admin=accounts&directoryCase=empty`,
         );
         await expect(
           main.getByRole("heading", { name: "No matching records" }),
@@ -571,7 +601,7 @@ for (const engine of [chromium, webkit]) {
         await expect(main.getByRole("alert")).toHaveCount(0);
         for (const scenario of ["unavailable", "malformed"]) {
           await page.goto(
-            `${app.url}/team/partners?directoryCheck=1&directoryCase=${scenario}`,
+            `${app.url}/team/partners?directoryCheck=1&p_admin=accounts&directoryCase=${scenario}`,
           );
           await expect(main.getByRole("alert")).toContainText(
             "not an empty directory",
@@ -621,6 +651,31 @@ for (const engine of [chromium, webkit]) {
             );
           }
         }
+        await page.goto(
+          `${app.url}/team/partners?directoryCheck=1&p_admin=requests&p_company=${accountId}`,
+        );
+        await expect(
+          main.getByRole("heading", { name: "Requests", exact: true }),
+        ).toBeVisible();
+        await expect(
+          main.getByText("Example Property Management", { exact: true }),
+        ).toBeVisible();
+        await expect(
+          main.getByRole("navigation", { name: "Company sections" }),
+        ).toHaveCount(0);
+        await expect(
+          main.getByRole("link", { name: "Add partner", exact: true }),
+        ).toHaveCount(0);
+        await expect
+          .poll(() =>
+            page.evaluate(() =>
+              (window as any).__requestReads?.some(
+                (input: any) =>
+                  input.accountId === "44444444-4444-4444-8444-444444444444",
+              ),
+            ),
+          )
+          .toBe(true);
         assert.deepEqual(errors, []);
         await page.close();
       } finally {

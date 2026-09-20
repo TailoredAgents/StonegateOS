@@ -8,6 +8,7 @@ import {
   type PartnerRequestPhoto,
 } from "@myst-os/sdk";
 import { loadPartnerServiceReviews } from "../actions/partner-service-reviews";
+import { requestedPartnerWindow } from "../lib/partner-request-presentation";
 import {
   PARTNER_EQUIPMENT_OPTIONS,
   PARTNER_HAZARD_OPTIONS,
@@ -72,6 +73,90 @@ function photoUrl(value: string | null): string | null {
   }
 }
 
+/** Read-only client preferences sit beside the staff's separate confirmation form. */
+export function PartnerRequestScheduleSummary({
+  details,
+}: {
+  details: PartnerRequestDetails;
+}) {
+  const data = parsePartnerRequestDetails(details);
+  if (!data) return null;
+  const scheduling = data.scheduling;
+  const window = (value: { startAt: string; endAt: string }) =>
+    `${dateTime(value.startAt, scheduling.timezone)} – ${dateTime(value.endAt, scheduling.timezone)}`;
+  return (
+    <section
+      aria-label="Client scheduling preferences"
+      className="space-y-3 border-b border-slate-200 pb-5 text-sm"
+    >
+      <h4 className="font-semibold text-slate-900">
+        Client’s requested timing
+      </h4>
+      {scheduling.preferredWindows.length ? (
+        <ul className="space-y-2 text-slate-700">
+          {scheduling.preferredWindows.map((value, index) => (
+            <li key={`${value.localDate}:${value.timeOfDay}:${index}`}>
+              <span className="block">
+                {index ? `Alternative ${index}: ` : ""}
+                {requestedPartnerWindow(value)}
+              </span>
+              {value.timezone && value.timezone !== scheduling.timezone ? (
+                <span className="text-xs text-slate-500">{value.timezone}</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-slate-600">No preferred date provided.</p>
+      )}
+      {scheduling.requestedWindow ? (
+        <p className="text-slate-700">
+          <span className="block text-xs text-slate-500">
+            Requested arrival window
+          </span>
+          {window(scheduling.requestedWindow)}
+        </p>
+      ) : null}
+      {scheduling.confirmedWindow ? (
+        <p className="text-slate-700">
+          <span className="block text-xs text-slate-500">
+            Confirmed arrival window
+          </span>
+          {window(scheduling.confirmedWindow)}
+        </p>
+      ) : null}
+      {scheduling.confirmedStartAt ? (
+        <p className="text-slate-700">
+          <span className="block text-xs text-slate-500">Scheduled start</span>
+          {dateTime(scheduling.confirmedStartAt, scheduling.timezone)}
+        </p>
+      ) : null}
+      {scheduling.assistancePreference === "waitlist" ||
+      scheduling.assistancePreference === "callback" ? (
+        <p className="font-medium text-slate-700">
+          {scheduling.assistancePreference === "waitlist"
+            ? "Client asked to join the waitlist."
+            : "Client asked for a call to arrange service."}
+        </p>
+      ) : null}
+      <p className="text-xs leading-5 text-slate-500">
+        {scheduling.timezone === "America/New_York"
+          ? "Eastern time"
+          : (scheduling.timezone ?? "Time zone not provided")}
+        {data.publicStatus === "canceled"
+          ? " · Request canceled."
+          : data.publicStatus === "declined"
+            ? " · Request declined."
+            : data.publicStatus === "approval_needed"
+              ? " · Waiting for client approval."
+              : !scheduling.confirmedWindow && !scheduling.confirmedStartAt
+                ? " · Awaiting Stonegate confirmation."
+                : ""}
+      </p>
+    </section>
+  );
+}
+
 type Field = [label: string, value: React.ReactNode];
 
 function RequestGroups({
@@ -116,12 +201,14 @@ export function PartnerRequestDetailsPanel({
   appearance = "light",
   compact = false,
   hideHeader = false,
+  review = false,
 }: {
   details: PartnerRequestDetails;
   photos?: PartnerRequestPhoto[];
   appearance?: "light" | "dark";
   compact?: boolean;
   hideHeader?: boolean;
+  review?: boolean;
 }) {
   const data = React.useMemo(
     () => parsePartnerRequestDetails(details),
@@ -191,17 +278,20 @@ export function PartnerRequestDetailsPanel({
         ))}
     </dl>
   );
-  const group = (title: string, summary: string, children: React.ReactNode) => (
-    <details className={`border-t ${border}`}>
-      <summary className="min-h-12 cursor-pointer break-words py-3 text-sm [overflow-wrap:anywhere] focus-visible:outline-2 focus-visible:outline-offset-2">
-        <span className={`font-semibold ${text}`}>{title}</span>
-        {summary ? (
-          <span className={`ml-2 font-normal ${muted}`}>{summary}</span>
-        ) : null}
-      </summary>
-      <div className="pb-4">{children}</div>
-    </details>
-  );
+  const group = (title: string, summary: string, children: React.ReactNode) =>
+    review && title === "Service details" ? (
+      <div className="pb-5">{children}</div>
+    ) : (
+      <details className={`border-t ${border}`}>
+        <summary className="min-h-12 cursor-pointer break-words py-3 text-sm [overflow-wrap:anywhere] focus-visible:outline-2 focus-visible:outline-offset-2">
+          <span className={`font-semibold ${text}`}>{title}</span>
+          {summary ? (
+            <span className={`ml-2 font-normal ${muted}`}>{summary}</span>
+          ) : null}
+        </summary>
+        <div className="pb-4">{children}</div>
+      </details>
+    );
   const contactRows = (
     contact: PartnerRequestDetails["onSiteContact"],
     prefix = "",
@@ -336,6 +426,134 @@ export function PartnerRequestDetailsPanel({
     setFailedPhotos(new Set());
   }
 
+  const photoSection = (
+    <details
+      className={`border-t ${border}`}
+      open={review && count > 0 ? true : undefined}
+      onToggle={(event) => {
+        if (event.currentTarget.open && photoItems === null && !photoError)
+          void refreshPhotos();
+      }}
+    >
+      <summary
+        className={`min-h-12 cursor-pointer py-3 text-sm font-semibold ${text}`}
+      >
+        {review ? "Customer photos" : "Photos"}{" "}
+        <span className={`ml-2 font-normal ${muted}`}>{count} attached</span>
+      </summary>
+      <div className="space-y-3 pb-3">
+        {!data.visibility.photos ? (
+          <p className={`text-sm ${muted}`}>
+            Your role cannot view these partner photos.
+          </p>
+        ) : !data.photos.detailPath ? (
+          <p className={`text-sm ${muted}`}>
+            {count === 0
+              ? "No photos were attached."
+              : "Photo previews are unavailable. Reopen this booking to refresh access."}
+          </p>
+        ) : (
+          <>
+            {photoError ? (
+              <p
+                role="alert"
+                className={`text-sm ${dark ? "text-amber-200" : "text-amber-900"}`}
+              >
+                {photoError}
+              </p>
+            ) : null}
+            {photoBusy ? (
+              <p role="status" className={`text-sm ${muted}`}>
+                Loading photos…
+              </p>
+            ) : null}
+            {photoItems?.length ? (
+              <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {photoItems.map((photo) => {
+                  const url = photoUrl(photo.url);
+                  return (
+                    <li key={photo.id} className="min-w-0">
+                      {url && !failedPhotos.has(photo.id) ? (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block rounded-lg focus-visible:outline-2"
+                        >
+                          {/* Signed account media bypasses image optimization. */}
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={url}
+                            alt={
+                              photo.caption ||
+                              `${readable(photo.category)} photo supplied with this request`
+                            }
+                            width={320}
+                            height={240}
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                            className="aspect-[4/3] w-full rounded-lg object-cover"
+                            onError={() =>
+                              setFailedPhotos(
+                                (current) => new Set([...current, photo.id]),
+                              )
+                            }
+                          />
+                        </a>
+                      ) : (
+                        <p
+                          className={`rounded-lg border p-3 text-xs leading-5 ${border} ${muted}`}
+                        >
+                          {photo.status === "ready"
+                            ? "Preview unavailable. Refresh photos to try again."
+                            : `Photo ${readable(photo.status)}.`}
+                        </p>
+                      )}
+                      <p
+                        className={`mt-1 break-words text-xs font-medium ${text}`}
+                      >
+                        {readable(photo.category)}
+                      </p>
+                      {photo.filename ? (
+                        <p
+                          className={`mt-1 break-words text-xs [overflow-wrap:anywhere] ${muted}`}
+                        >
+                          {photo.filename}
+                        </p>
+                      ) : null}
+                      {photo.caption ? (
+                        <p
+                          className={`mt-1 whitespace-pre-wrap break-words text-xs leading-5 [overflow-wrap:anywhere] ${muted}`}
+                        >
+                          {photo.caption}
+                        </p>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : photoItems ? (
+              <p className={`text-sm ${muted}`}>No photos were attached.</p>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void refreshPhotos()}
+              disabled={photoBusy}
+              className={`inline-flex min-h-11 items-center rounded-lg border px-3 py-2 text-sm font-semibold ${button}`}
+            >
+              {photoError ? "Try loading photos again" : "Refresh photos"}
+            </button>
+            {photoItems?.length ? (
+              <p className={`text-xs ${muted}`}>
+                Photo links expire. Refresh photos if a preview stops opening.
+              </p>
+            ) : null}
+          </>
+        )}
+      </div>
+    </details>
+  );
+
   return (
     <section
       aria-labelledby={hideHeader ? undefined : headingId}
@@ -372,6 +590,20 @@ export function PartnerRequestDetailsPanel({
           {data.originalJob.jobId.slice(0, 8).toUpperCase()}.
         </p>
       ) : null}
+      {review && data.onSiteContact ? (
+        <p className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-700">
+          <span className="text-slate-500">On-site contact</span>
+          <span className="font-medium">{data.onSiteContact.name}</span>
+          {data.onSiteContact.phone ? (
+            <a
+              className="min-h-11 content-center text-teal-800 underline underline-offset-4"
+              href={`tel:${data.onSiteContact.phone}`}
+            >
+              {data.onSiteContact.phone}
+            </a>
+          ) : null}
+        </p>
+      ) : null}
       {data.crewInstructions || safety.length > 0 || deadline ? (
         <aside
           aria-label="Important work instructions"
@@ -394,6 +626,17 @@ export function PartnerRequestDetailsPanel({
             </p>
           ) : null}
         </aside>
+      ) : null}
+      {review ? (
+        <div className="mb-2">
+          {data.visibility.photos && count === 0 ? (
+            <p className={`border-t py-4 text-sm ${border} ${muted}`}>
+              No customer photos attached.
+            </p>
+          ) : (
+            photoSection
+          )}
+        </div>
       ) : null}
       <RequestGroups
         compact={compact}
@@ -480,7 +723,7 @@ export function PartnerRequestDetailsPanel({
               : null}
           </div>,
         )}
-        {hasSpecial
+        {hasSpecial && !review
           ? group(
               "Special requirements",
               data.scope.multiStop ? "Multiple stops" : "",
@@ -497,200 +740,78 @@ export function PartnerRequestDetailsPanel({
             )
           : null}
         {group(
-          "Completion photos",
+          review ? "Job requirements" : "Completion photos",
           `Before: ${proofCount(data.proof.before)} · After: ${proofCount(data.proof.after)}`,
-          rows([
-            ["Before service", proofCount(data.proof.before)],
-            ["After service", proofCount(data.proof.after)],
-            [
-              "Formal proof package",
-              data.proof.package ? "Requested" : "Not requested",
-            ],
-          ]),
-        )}
-        {group(
-          "Scheduling",
-          data.publicStatus === "canceled"
-            ? "Request canceled"
-            : data.publicStatus === "declined"
-              ? "Request declined"
-              : data.scheduling.confirmedWindow ||
-                  data.scheduling.confirmedStartAt
-                ? "Arrival confirmed"
-                : "Staff confirmation required",
-          <div className="space-y-3">
+          <div className="space-y-4">
+            {review && hasSpecial ? rows(special) : null}
             {rows([
-              ["Time zone", timezone ?? "Not recorded"],
+              ["Before service", proofCount(data.proof.before)],
+              ["After service", proofCount(data.proof.after)],
               [
-                "Preferred dates",
-                data.scheduling.preferredWindows.length
-                  ? data.scheduling.preferredWindows
-                      .map(
-                        (window) =>
-                          `${localDate(window.localDate)} · ${window.timeOfDay === "anytime" ? "Any time" : readable(window.timeOfDay)}${window.timezone && window.timezone !== timezone ? ` (${window.timezone})` : ""}`,
-                      )
-                      .join("\n")
-                  : "None provided",
-              ],
-              [
-                "Requested arrival window",
-                formatWindow(data.scheduling.requestedWindow),
-              ],
-              [
-                "Confirmed arrival window",
-                formatWindow(data.scheduling.confirmedWindow),
-              ],
-              [
-                "Scheduled start",
-                data.scheduling.confirmedStartAt
-                  ? dateTime(data.scheduling.confirmedStartAt, timezone)
-                  : null,
-              ],
-              [
-                "Scheduling follow-up",
-                data.scheduling.assistancePreference === "waitlist"
-                  ? "Add to waitlist"
-                  : data.scheduling.assistancePreference === "callback"
-                    ? "Call to arrange service"
-                    : "No additional follow-up requested",
+                "Formal proof package",
+                data.proof.package ? "Requested" : "Not requested",
               ],
             ])}
-            {data.scheduling.preferredWindows.length ? (
-              <p className={`text-xs ${muted}`}>
-                Preferred dates are requests. Use the confirmed arrival window
-                for the agreed schedule.
-              </p>
-            ) : null}
           </div>,
         )}
-        <details
-          className={`border-t ${border}`}
-          onToggle={(event) => {
-            if (event.currentTarget.open && photoItems === null && !photoError)
-              void refreshPhotos();
-          }}
-        >
-          <summary
-            className={`min-h-12 cursor-pointer py-3 text-sm font-semibold ${text}`}
-          >
-            Photos{" "}
-            <span className={`ml-2 font-normal ${muted}`}>
-              {count} attached
-            </span>
-          </summary>
-          <div className="space-y-3 pb-3">
-            {!data.visibility.photos ? (
-              <p className={`text-sm ${muted}`}>
-                Your role cannot view these partner photos.
-              </p>
-            ) : !data.photos.detailPath ? (
-              <p className={`text-sm ${muted}`}>
-                {count === 0
-                  ? "No photos were attached."
-                  : "Photo previews are unavailable. Reopen this booking to refresh access."}
-              </p>
-            ) : (
-              <>
-                {photoError ? (
-                  <p
-                    role="alert"
-                    className={`text-sm ${dark ? "text-amber-200" : "text-amber-900"}`}
-                  >
-                    {photoError}
-                  </p>
-                ) : null}
-                {photoBusy ? (
-                  <p role="status" className={`text-sm ${muted}`}>
-                    Loading photos…
-                  </p>
-                ) : null}
-                {photoItems?.length ? (
-                  <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {photoItems.map((photo) => {
-                      const url = photoUrl(photo.url);
-                      return (
-                        <li key={photo.id} className="min-w-0">
-                          {url && !failedPhotos.has(photo.id) ? (
-                            <a
-                              href={url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="block rounded-lg focus-visible:outline-2"
-                            >
-                              {/* Signed account media bypasses image optimization. */}
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={url}
-                                alt={
-                                  photo.caption ||
-                                  `${readable(photo.category)} photo supplied with this request`
-                                }
-                                width={320}
-                                height={240}
-                                loading="lazy"
-                                referrerPolicy="no-referrer"
-                                className="aspect-[4/3] w-full rounded-lg object-cover"
-                                onError={() =>
-                                  setFailedPhotos(
-                                    (current) =>
-                                      new Set([...current, photo.id]),
-                                  )
-                                }
-                              />
-                            </a>
-                          ) : (
-                            <p
-                              className={`rounded-lg border p-3 text-xs leading-5 ${border} ${muted}`}
-                            >
-                              {photo.status === "ready"
-                                ? "Preview unavailable. Refresh photos to try again."
-                                : `Photo ${readable(photo.status)}.`}
-                            </p>
-                          )}
-                          <p
-                            className={`mt-1 break-words text-xs font-medium ${text}`}
-                          >
-                            {readable(photo.category)}
-                          </p>
-                          {photo.filename ? (
-                            <p
-                              className={`mt-1 break-words text-xs [overflow-wrap:anywhere] ${muted}`}
-                            >
-                              {photo.filename}
-                            </p>
-                          ) : null}
-                          {photo.caption ? (
-                            <p
-                              className={`mt-1 whitespace-pre-wrap break-words text-xs leading-5 [overflow-wrap:anywhere] ${muted}`}
-                            >
-                              {photo.caption}
-                            </p>
-                          ) : null}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : photoItems ? (
-                  <p className={`text-sm ${muted}`}>No photos were attached.</p>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => void refreshPhotos()}
-                  disabled={photoBusy}
-                  className={`inline-flex min-h-11 items-center rounded-lg border px-3 py-2 text-sm font-semibold ${button}`}
-                >
-                  {photoError ? "Try loading photos again" : "Refresh photos"}
-                </button>
-                {photoItems?.length ? (
+        {!review
+          ? group(
+              "Scheduling",
+              data.publicStatus === "canceled"
+                ? "Request canceled"
+                : data.publicStatus === "declined"
+                  ? "Request declined"
+                  : data.scheduling.confirmedWindow ||
+                      data.scheduling.confirmedStartAt
+                    ? "Arrival confirmed"
+                    : "Staff confirmation required",
+              <div className="space-y-3">
+                {rows([
+                  ["Time zone", timezone ?? "Not recorded"],
+                  [
+                    "Preferred dates",
+                    data.scheduling.preferredWindows.length
+                      ? data.scheduling.preferredWindows
+                          .map(
+                            (window) =>
+                              `${localDate(window.localDate)} · ${window.timeOfDay === "anytime" ? "Any time" : readable(window.timeOfDay)}${window.timezone && window.timezone !== timezone ? ` (${window.timezone})` : ""}`,
+                          )
+                          .join("\n")
+                      : "None provided",
+                  ],
+                  [
+                    "Requested arrival window",
+                    formatWindow(data.scheduling.requestedWindow),
+                  ],
+                  [
+                    "Confirmed arrival window",
+                    formatWindow(data.scheduling.confirmedWindow),
+                  ],
+                  [
+                    "Scheduled start",
+                    data.scheduling.confirmedStartAt
+                      ? dateTime(data.scheduling.confirmedStartAt, timezone)
+                      : null,
+                  ],
+                  [
+                    "Scheduling follow-up",
+                    data.scheduling.assistancePreference === "waitlist"
+                      ? "Add to waitlist"
+                      : data.scheduling.assistancePreference === "callback"
+                        ? "Call to arrange service"
+                        : "No additional follow-up requested",
+                  ],
+                ])}
+                {data.scheduling.preferredWindows.length ? (
                   <p className={`text-xs ${muted}`}>
-                    Photo links expire. Refresh photos if a preview stops
-                    opening.
+                    Preferred dates are requests. Use the confirmed arrival
+                    window for the agreed schedule.
                   </p>
                 ) : null}
-              </>
-            )}
-          </div>
-        </details>
+              </div>,
+            )
+          : null}
+        {!review ? photoSection : null}
       </RequestGroups>
     </section>
   );

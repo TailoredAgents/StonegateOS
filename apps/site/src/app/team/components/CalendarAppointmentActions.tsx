@@ -190,6 +190,7 @@ export function CalendarAppointmentActions({
   const noteFieldId = React.useId();
   const crewConfirmationFieldId = React.useId();
   const reviewRequestFieldId = React.useId();
+  const scheduleTimezoneId = React.useId();
 
   React.useEffect(() => setCurrentVersion(version), [version]);
 
@@ -240,9 +241,17 @@ export function CalendarAppointmentActions({
               timeStyle: "short",
               timeZone: result.timezone,
             });
+            const arrivalStart = new Date(result.arrivalStartAt);
+            const arrivalEnd = new Date(result.arrivalEndAt);
+            const zone = new Intl.DateTimeFormat("en-US", {
+              timeZone: result.timezone,
+              timeZoneName: "short",
+            })
+              .formatToParts(arrivalStart)
+              .find((part) => part.type === "timeZoneName")?.value;
             setArrivalPreview({
               input: previewInput,
-              label: `${format.format(new Date(result.arrivalStartAt))} – ${format.format(new Date(result.arrivalEndAt))} (${result.timezone})`,
+              label: `${format.formatRange(arrivalStart, arrivalEnd)} ${zone ?? result.timezone}`,
               error: "",
             });
           } catch {
@@ -461,7 +470,7 @@ export function CalendarAppointmentActions({
         : "border-rose-200 bg-rose-50 text-rose-900";
 
   return (
-    <div className="mt-3 space-y-3">
+    <div className={confirmPartnerService ? "space-y-3" : "mt-3 space-y-3"}>
       {feedback ? (
         <div
           role={feedback.tone === "error" ? "alert" : "status"}
@@ -475,11 +484,23 @@ export function CalendarAppointmentActions({
       {canEditStatus ||
       correctionOnly ||
       (scheduleOnly && canUpdateAppointments) ? (
-        <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+        <div
+          className={
+            confirmPartnerService
+              ? "space-y-3"
+              : "space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3"
+          }
+        >
+          <div
+            className={
+              confirmPartnerService
+                ? "text-base font-semibold text-slate-900"
+                : "text-[11px] font-semibold uppercase tracking-wide text-slate-500"
+            }
+          >
             {scheduleOnly
               ? confirmPartnerService
-                ? "Confirm service"
+                ? "Confirm schedule"
                 : "Schedule service in the CRM"
               : correctionOnly
                 ? "Correct crew pay"
@@ -779,7 +800,7 @@ export function CalendarAppointmentActions({
             <form
               method="post"
               action="/api/team/appointments/reschedule"
-              className="grid min-w-0 grid-cols-1 gap-3 border-t border-slate-200 pt-3"
+              className={`grid min-w-0 grid-cols-1 gap-3 ${confirmPartnerService ? "" : "border-t border-slate-200 pt-3"}`}
               onSubmit={(event) => {
                 if (event.defaultPrevented) return;
                 event.preventDefault();
@@ -790,53 +811,77 @@ export function CalendarAppointmentActions({
                   scheduleOnly
                     ? "Service scheduled."
                     : "Appointment rescheduled.",
-                  "Unable to reschedule appointment",
+                  confirmPartnerService
+                    ? "Unable to confirm service"
+                    : "Unable to reschedule appointment",
                 );
               }}
             >
               <input type="hidden" name="appointmentId" value={appointmentId} />
-              <label className="flex flex-col gap-1 text-sm text-slate-700">
-                <span>New date</span>
-                <input
-                  type="date"
-                  name="preferredDate"
-                  required
-                  defaultValue={defaultDate}
-                  onChange={(event) => {
-                    setScheduleConflict(null);
-                    setPreviewDate(event.target.value);
-                  }}
-                  className={TEAM_INPUT_COMPACT}
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm text-slate-700">
-                <span>Eastern time</span>
-                <input
-                  type="time"
-                  name="startTime"
-                  step={confirmPartnerService ? 1800 : undefined}
-                  required
-                  defaultValue={defaultTime}
-                  onChange={(event) => {
-                    setScheduleConflict(null);
-                    setPreviewTime(event.target.value);
-                  }}
-                  className={TEAM_INPUT_COMPACT}
-                />
-              </label>
+              <div className="grid min-w-0 grid-cols-1 gap-3">
+                <label className="flex flex-col gap-1 text-sm text-slate-700">
+                  <span>
+                    {confirmPartnerService ? "Service date" : "New date"}
+                  </span>
+                  <input
+                    type="date"
+                    name="preferredDate"
+                    required
+                    defaultValue={defaultDate}
+                    onChange={(event) => {
+                      setScheduleConflict(null);
+                      setPreviewDate(event.target.value);
+                    }}
+                    className={TEAM_INPUT_COMPACT}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm text-slate-700">
+                  <span>
+                    {confirmPartnerService
+                      ? "Planned start time"
+                      : "Eastern time"}
+                  </span>
+                  <input
+                    type="time"
+                    name="startTime"
+                    step={confirmPartnerService ? 1800 : undefined}
+                    required
+                    defaultValue={defaultTime}
+                    aria-describedby={
+                      confirmPartnerService ? scheduleTimezoneId : undefined
+                    }
+                    onChange={(event) => {
+                      setScheduleConflict(null);
+                      setPreviewTime(event.target.value);
+                    }}
+                    className={TEAM_INPUT_COMPACT}
+                  />
+                </label>
+              </div>
+              {confirmPartnerService ? (
+                <p id={scheduleTimezoneId} className="text-xs text-slate-500">
+                  All times are Eastern.
+                </p>
+              ) : null}
               {confirmPartnerService ? (
                 <div
                   role="status"
                   className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950"
                 >
-                  <strong>Partner arrival window</strong>
+                  <strong>Arrival window to confirm</strong>
                   <p className="mt-1">
                     {!previewDate || !previewTime
-                      ? "Choose a date and time to preview the window sent to the partner."
+                      ? "Choose the service date and planned start time."
                       : arrivalPreview?.input === previewInput
                         ? arrivalPreview.error || arrivalPreview.label
                         : "Checking arrival window…"}
                   </p>
+                  {arrivalReady ? (
+                    <p className="mt-1 text-xs text-teal-800">
+                      Two-hour arrival window. The service stays unconfirmed
+                      until you select Confirm service.
+                    </p>
+                  ) : null}
                   {arrivalPreview?.input === previewInput &&
                   arrivalPreview.error ? (
                     <button
@@ -853,6 +898,11 @@ export function CalendarAppointmentActions({
                 key={appointmentId}
                 appointmentId={appointmentId}
                 disabled={pendingAction !== null}
+                compact={confirmPartnerService}
+                reveal={
+                  Boolean(scheduleConflict) ||
+                  (confirmPartnerService && feedback?.tone === "error")
+                }
               />
               {scheduleConflict ? (
                 <div
@@ -936,7 +986,9 @@ export function CalendarAppointmentActions({
                   {pendingAction === "reschedule"
                     ? "Saving…"
                     : scheduleConflict && canOverrideScheduleConflicts
-                      ? "Override and reschedule"
+                      ? confirmPartnerService
+                        ? "Override and confirm"
+                        : "Override and reschedule"
                       : scheduleOnly
                         ? confirmPartnerService
                           ? "Confirm service"

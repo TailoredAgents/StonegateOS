@@ -449,19 +449,26 @@ function assertSaved(
   assert.equal(evidence[0].status, "ready");
 }
 
-async function assertStaffPanel(page: Page) {
+async function assertStaffPanel(page: Page, review = false) {
   await expect(
     page.getByText(expected.description, { exact: true }).first(),
   ).toBeVisible();
-  for (const title of [
-    "Service details",
-    "Contact and access",
-    "Special requirements",
-    "Work order and billing",
-    "Completion photos",
-    "Scheduling",
-    "Photos",
-  ])
+  for (const title of review
+    ? [
+        "Contact and access",
+        "Work order and billing",
+        "Job requirements",
+        "Customer photos",
+      ]
+    : [
+        "Service details",
+        "Contact and access",
+        "Special requirements",
+        "Work order and billing",
+        "Completion photos",
+        "Scheduling",
+        "Photos",
+      ])
     await openRow(page, title);
   for (const value of [
     expected.accessDetails,
@@ -901,16 +908,45 @@ for (const width of [1440, 375])
           `[data-partner-request="${jobId}"]`,
         );
         await expect(submittedDetails).toBeVisible();
-        // The initial review stays compact while every saved field remains
-        // available in its native disclosure; the assertions below open all of them.
+        // Work, photos, contact and scheduling are directly available; supporting
+        // fields remain in three closed disclosures and are verified below.
+        await expect(
+          submittedDetails.getByText(expected.description, { exact: true }),
+        ).toBeVisible();
+        await expect(
+          submittedDetails.getByRole("link", {
+            name: expected.onSiteContact.phone,
+            exact: true,
+          }),
+        ).toHaveAttribute("href", `tel:${expected.onSiteContact.phone}`);
+        await expect(
+          staffPage.getByLabel("Service date", { exact: true }),
+        ).toBeVisible();
+        await expect(
+          staffPage.getByLabel("Planned start time", { exact: true }),
+        ).toBeVisible();
+        await expect(
+          staffPage.getByRole("region", {
+            name: "Client scheduling preferences",
+            exact: true,
+          }),
+        ).toContainText("Client asked for a call to arrange service.");
+        await expect(
+          staffPage.getByRole("searchbox", {
+            name: "Find company",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        await expect(
+          staffPage.getByRole("img", {
+            name: expected.photoCaption,
+            exact: true,
+          }),
+        ).toBeVisible();
         for (const title of [
-          "Service details",
           "Contact and access",
-          "Special requirements",
           "Work order and billing",
-          "Completion photos",
-          "Scheduling",
-          "Photos",
+          "Job requirements",
         ]) {
           const summary = submittedDetails
             .locator("summary")
@@ -932,7 +968,7 @@ for (const width of [1440, 375])
             fullPage: true,
           });
         }
-        await assertStaffPanel(staffPage);
+        await assertStaffPanel(staffPage, true);
         await expect(
           staffPage.getByRole("img", {
             name: expected.photoCaption,
@@ -947,10 +983,10 @@ for (const width of [1440, 375])
           )
           .toBeGreaterThan(0);
         await staffPage
-          .getByLabel("New date", { exact: true })
+          .getByLabel("Service date", { exact: true })
           .fill(requestedDates[0]!);
         await staffPage
-          .getByLabel("Eastern time", { exact: true })
+          .getByLabel("Planned start time", { exact: true })
           .fill("13:00");
         await expect(
           staffPage.getByRole("button", {
@@ -959,13 +995,25 @@ for (const width of [1440, 375])
           }),
         ).toBeEnabled();
         // Restore the normal disclosure presentation after verifying all fields.
-        const openedSummaries = submittedDetails.locator(
-          "details[open] > summary",
-        );
-        while (await openedSummaries.count()) {
-          await openedSummaries.first().click();
+        for (const title of [
+          "Contact and access",
+          "Work order and billing",
+          "Job requirements",
+        ]) {
+          const details = row(staffPage, title);
+          if (
+            await details.evaluate(
+              (element) => (element as HTMLDetailsElement).open,
+            )
+          ) {
+            await details.locator(":scope > summary").click();
+          }
+          await expect(details).toHaveJSProperty("open", false);
         }
-        await expect(submittedDetails.locator("details[open]")).toHaveCount(0);
+        await expect(row(staffPage, "Customer photos")).toHaveJSProperty(
+          "open",
+          true,
+        );
         if (process.env["PARTNER_CRM_SCREENSHOT_DIR"]) {
           const directory = process.env["PARTNER_CRM_SCREENSHOT_DIR"]!;
           await mkdir(directory, { recursive: true });

@@ -1765,11 +1765,14 @@ export async function PartnerAdministrationSection({
           canCreate={canCreatePartner}
           canViewResources={hasTeamPermission(principal, "policy.read")}
         />
-        {companyNavigation}
+        {view === "administration" ? companyNavigation : null}
         {view === "requests" ? (
           <PartnerRequestInbox
             key={`${companyId || "all"}:${filters?.alertGroupId || "all"}`}
             accountId={companyId || undefined}
+            accountName={
+              company ? display(company["name"], "Company") : undefined
+            }
             initialStatus={filters?.requestStatus}
             initialKind={filters?.requestKind}
             initialQuery={filters?.adminQuery}

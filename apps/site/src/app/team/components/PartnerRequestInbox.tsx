@@ -3,6 +3,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import {
+  ArrowLeft,
+  ArrowRight,
+  CalendarDays,
+  MapPin,
+  RefreshCw,
+  Search,
+} from "lucide-react";
+import {
   PARTNER_REQUEST_KINDS,
   PARTNER_REQUEST_STAGES,
   type PartnerRequestInboxResponse,
@@ -21,6 +29,7 @@ import { PartnerRequestDecisionPanel } from "./PartnerRequestDecisionPanel";
 import { refreshPartnerRequestCounts } from "./PartnerRequestSummary";
 import { partnerCompanyHref } from "../partner-company-navigation";
 import { TEAM_INPUT_COMPACT, teamButtonClass } from "./team-ui";
+import { requestedPartnerWindow } from "../lib/partner-request-presentation";
 const KINDS: Record<PartnerRequestKind, string> = {
   service: "Service requests",
   reschedule: "Schedule changes",
@@ -56,6 +65,7 @@ function kind(value?: string): PartnerRequestKind | "" {
 }
 export function PartnerRequestInbox({
   accountId,
+  accountName,
   initialStatus,
   initialKind,
   initialQuery,
@@ -63,6 +73,7 @@ export function PartnerRequestInbox({
   alertGroupId,
 }: {
   accountId?: string;
+  accountName?: string;
   initialStatus?: string;
   initialKind?: string;
   initialQuery?: string;
@@ -88,6 +99,7 @@ export function PartnerRequestInbox({
     hasMoreLoaded = useRef(false),
     detailHeading = useRef<HTMLHeadingElement>(null),
     listRef = useRef<HTMLDivElement>(null),
+    listPosition = useRef(0),
     opened = useRef(new Set<string>());
   const latest = useRef({
     status,
@@ -254,10 +266,15 @@ export function PartnerRequestInbox({
   }
   function selectRequest(key: string) {
     if (!mayLeave()) return;
+    if (key && !requestKey) listPosition.current = window.scrollY;
     dirty.current = false;
     setRequestKey(key);
     syncUrl({ requestKey: key });
-    if (!key) requestAnimationFrame(() => listRef.current?.focus());
+    if (!key)
+      requestAnimationFrame(() => {
+        listRef.current?.focus({ preventScroll: true });
+        window.scrollTo({ top: listPosition.current });
+      });
   }
   useEffect(() => {
     lastUrl.current = window.location.pathname + window.location.search;
@@ -380,142 +397,165 @@ export function PartnerRequestInbox({
   return (
     <section
       className="min-w-0 space-y-4"
-      aria-labelledby="partner-requests-heading"
+      aria-labelledby={requestKey ? undefined : "partner-requests-heading"}
+      aria-label={requestKey ? "Request review" : undefined}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 id="partner-requests-heading" className="text-xl font-semibold">
-            Requests
-          </h2>
-          <p className="mt-1 text-sm text-[color:var(--team-text-muted)]">
-            Review partner requests and confirm the next step.
-          </p>
-        </div>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void load()}
-          className={teamButtonClass("secondary", "sm")}
-        >
-          Refresh requests
-        </button>
-      </div>
-      {alertGroupId ? (
-        <p className="rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-950">
-          Requests from this owner alert
-          {data?.group
-            ? ` · ${data.group.memberCount} request${data.group.memberCount === 1 ? "" : "s"}`
-            : ""}
-          .{" "}
-          <Link href="/team/partners?p_admin=requests" className="underline">
-            View all requests
-          </Link>
-        </p>
-      ) : null}
-      {!alertGroupId ? (
-        <>
-          <nav aria-label="Request status" className="flex flex-wrap gap-2">
-            {PARTNER_REQUEST_STAGES.map((value) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => {
-                  if (!mayLeave()) return;
-                  dirty.current = false;
-                  setStatus(value);
-                  setRequestKey("");
-                  syncUrl({ status: value, requestKey: "" });
-                }}
-                aria-current={status === value ? "page" : undefined}
-                className={`inline-flex min-h-11 items-center gap-2 rounded-lg px-3 py-2 text-sm ${status === value ? "bg-slate-900 font-semibold text-white" : "border border-slate-200 bg-white text-slate-700"}`}
-              >
-                {STAGES[value]}
-                <span className="text-xs">
-                  {counts
-                    ? value === "needs_attention"
-                      ? counts.needsAttention
-                      : value === "waiting_on_client"
-                        ? counts.waitingOnClient
-                        : counts.handled
-                    : "…"}
-                </span>
-              </button>
-            ))}
-          </nav>
-          <form
-            className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,240px)_auto]"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!mayLeave()) return;
-              dirty.current = false;
-              setSearch(query);
-              setRequestKey("");
-              syncUrl({ search: query, requestKey: "" });
-            }}
+      <div className={requestKey ? "hidden" : "space-y-4"}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2
+              id="partner-requests-heading"
+              className="text-2xl font-semibold tracking-tight"
+            >
+              Requests
+            </h2>
+            {accountName ? (
+              <p className="mt-1 text-sm text-[color:var(--team-text-muted)]">
+                {accountName}
+              </p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void load()}
+            className={teamButtonClass("secondary", "sm")}
+            aria-label="Refresh requests"
           >
-            <label className="block min-w-0 text-sm">
-              Find company
-              <input
-                type="search"
-                value={query}
-                maxLength={100}
-                onChange={(event) => setQuery(event.target.value)}
-                className={`${TEAM_INPUT_COMPACT} mt-1 block w-full`}
-                placeholder="Company name"
-              />
-            </label>
-            <div className="min-w-0 text-sm">
-              <label className="block" htmlFor="partner-request-kind">
-                Request type
+            <RefreshCw
+              className={`h-4 w-4 ${busy ? "animate-spin" : ""}`}
+              aria-hidden="true"
+            />
+          </button>
+        </div>
+        {alertGroupId ? (
+          <p className="rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-950">
+            Requests in this group
+            {data?.group
+              ? ` · ${data.group.memberCount} request${data.group.memberCount === 1 ? "" : "s"}`
+              : ""}
+            .{" "}
+            <Link href="/team/partners?p_admin=requests" className="underline">
+              View all requests
+            </Link>
+          </p>
+        ) : null}
+        {!alertGroupId ? (
+          <>
+            <nav
+              aria-label="Request status"
+              className="grid grid-cols-3 gap-x-2 border-b border-[color:var(--team-border)] sm:flex sm:flex-wrap sm:gap-x-5"
+            >
+              {PARTNER_REQUEST_STAGES.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    if (!mayLeave()) return;
+                    dirty.current = false;
+                    setStatus(value);
+                    setRequestKey("");
+                    syncUrl({ status: value, requestKey: "" });
+                  }}
+                  aria-current={status === value ? "page" : undefined}
+                  className={`inline-flex min-h-11 flex-col items-start gap-1 border-b-2 py-3 text-left text-xs focus-visible:outline-2 focus-visible:outline-offset-2 sm:flex-row sm:items-center sm:gap-2 sm:text-sm ${status === value ? "border-[color:var(--team-link)] font-semibold text-[color:var(--team-link)]" : "border-transparent text-[color:var(--team-text-muted)] hover:text-[color:var(--team-text)]"}`}
+                >
+                  {STAGES[value]}
+                  <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+                    {counts
+                      ? value === "needs_attention"
+                        ? counts.needsAttention
+                        : value === "waiting_on_client"
+                          ? counts.waitingOnClient
+                          : counts.handled
+                      : "…"}
+                  </span>
+                </button>
+              ))}
+            </nav>
+            <form
+              className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(170px,210px)_auto]"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!mayLeave()) return;
+                dirty.current = false;
+                setSearch(query);
+                setRequestKey("");
+                syncUrl({ search: query, requestKey: "" });
+              }}
+            >
+              <label className="col-span-2 block min-w-0 text-sm sm:col-span-1">
+                <span className="sr-only">Find company</span>
+                <input
+                  type="search"
+                  value={query}
+                  maxLength={100}
+                  onChange={(event) => setQuery(event.target.value)}
+                  className={`${TEAM_INPUT_COMPACT} block w-full`}
+                  placeholder="Search company name"
+                />
               </label>
-              <select
-                id="partner-request-kind"
-                value={requestKind}
-                onChange={(event) => {
-                  if (!mayLeave()) return;
-                  const value = kind(event.target.value);
-                  dirty.current = false;
-                  setKind(value);
-                  setRequestKey("");
-                  syncUrl({ requestKind: value, requestKey: "" });
-                }}
-                className={`${TEAM_INPUT_COMPACT} mt-1 block w-full`}
+              <div className="min-w-0 text-sm">
+                <label className="sr-only" htmlFor="partner-request-kind">
+                  Request type
+                </label>
+                <select
+                  id="partner-request-kind"
+                  value={requestKind}
+                  onChange={(event) => {
+                    if (!mayLeave()) return;
+                    const value = kind(event.target.value);
+                    dirty.current = false;
+                    setKind(value);
+                    setRequestKey("");
+                    syncUrl({ requestKind: value, requestKey: "" });
+                  }}
+                  className={`${TEAM_INPUT_COMPACT} block w-full`}
+                >
+                  <option value="">All request types</option>
+                  {PARTNER_REQUEST_KINDS.map((value) => (
+                    <option key={value} value={value}>
+                      {KINDS[value]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="submit"
+                aria-label="Search requests"
+                className={teamButtonClass("secondary")}
               >
-                <option value="">All request types</option>
-                {PARTNER_REQUEST_KINDS.map((value) => (
-                  <option key={value} value={value}>
-                    {KINDS[value]}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <button type="submit" className={teamButtonClass("secondary")}>
-              Search requests
-            </button>
-          </form>
-        </>
-      ) : null}
-      {error ? (
-        <p
-          role="status"
-          className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
-        >
-          {error}
-        </p>
-      ) : null}
-      <div
-        className={`grid min-w-0 items-start gap-5 ${requestKey ? "lg:grid-cols-[minmax(250px,0.8fr)_minmax(0,1.7fr)]" : ""}`}
-      >
+                <Search className="mr-2 h-4 w-4" aria-hidden="true" /> Search
+              </button>
+            </form>
+          </>
+        ) : null}
+        {error ? (
+          <p
+            role="status"
+            className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+          >
+            {error}
+          </p>
+        ) : null}
+      </div>
+      <div className="min-w-0">
         <div
           ref={listRef}
           tabIndex={-1}
           aria-label="Request list"
-          className={`min-w-0 space-y-3 outline-none ${requestKey ? "hidden lg:block" : ""}`}
+          className={`min-w-0 space-y-3 outline-none ${requestKey ? "hidden" : ""}`}
         >
           {busy && !data ? <p role="status">Loading requests…</p> : null}
           {data && !data.requests.length ? (
-            <p className="rounded-xl border border-dashed border-slate-300 p-6 text-sm text-slate-600">
-              No requests match these filters.
+            <p className="rounded-xl border border-dashed border-[color:var(--team-border)] p-6 text-sm text-[color:var(--team-text-muted)]">
+              {search || requestKind
+                ? "No requests match these filters. Try another company or request type."
+                : status === "needs_attention"
+                  ? "You're all caught up. New requests will appear here."
+                  : status === "waiting_on_client"
+                    ? "No requests are waiting on client approval."
+                    : "No handled requests yet."}
             </p>
           ) : null}
           <ul className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -525,41 +565,52 @@ export function PartnerRequestInbox({
                   type="button"
                   onClick={() => selectRequest(item.key)}
                   aria-current={requestKey === item.key ? "true" : undefined}
-                  className={`w-full min-w-0 space-y-2 p-4 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-teal-700 ${requestKey === item.key ? "bg-teal-50" : "hover:bg-slate-50"}`}
+                  className="group grid w-full min-w-0 gap-3 p-4 text-left hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-teal-700 sm:grid-cols-[minmax(0,1fr)_200px_auto] sm:items-center sm:p-5"
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="break-words font-semibold text-slate-950">
-                      {item.accountName}
-                    </span>
-                    {item.isNew ? (
-                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-900">
-                        New
+                  <div className="min-w-0 space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="break-words font-semibold text-slate-950">
+                        {item.accountName}
                       </span>
-                    ) : null}
-                  </div>
-                  <p className="break-words text-sm text-slate-800">
-                    {item.kind === "service" ? item.service : KINDS[item.kind]}{" "}
-                    · {item.statusLabel}
-                  </p>
-                  <p className="break-words text-sm text-slate-600">
-                    {[item.siteName, item.address]
-                      .filter(Boolean)
-                      .join(" · ") || "Address needs review"}
-                  </p>
-                  {item.preferredWindows.length ? (
-                    <p className="break-words text-xs text-slate-600">
-                      Requested:{" "}
-                      {item.preferredWindows
-                        .map(
-                          (window) =>
-                            `${window.localDate} · ${window.timeOfDay === "anytime" ? "Any time" : window.timeOfDay}`,
-                        )
-                        .join("; ")}
+                      {item.isNew ? (
+                        <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-900">
+                          New
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="break-words text-sm text-slate-800">
+                      {item.kind === "service"
+                        ? item.service
+                        : KINDS[item.kind]}
                     </p>
-                  ) : null}
-                  <p className="text-xs text-slate-500">
-                    Received {date(item.receivedAt)}
-                  </p>
+                    <p className="break-words text-sm text-slate-600">
+                      {item.address || item.siteName || "Address needs review"}
+                    </p>
+                  </div>
+                  <div className="min-w-0 space-y-1.5 text-xs text-slate-500">
+                    {item.preferredWindows[0] ? (
+                      <p className="flex items-start gap-2 text-sm text-slate-700">
+                        <CalendarDays
+                          className="mt-0.5 h-4 w-4 shrink-0"
+                          aria-hidden="true"
+                        />
+                        <span>
+                          Requested{" "}
+                          {requestedPartnerWindow(item.preferredWindows[0])}
+                          {item.preferredWindows.length > 1
+                            ? ` + ${item.preferredWindows.length - 1} alternate${item.preferredWindows.length > 2 ? "s" : ""}`
+                            : ""}
+                        </span>
+                      </p>
+                    ) : null}
+                    <p>
+                      {item.statusLabel} · Received {date(item.receivedAt)}
+                    </p>
+                  </div>
+                  <ArrowRight
+                    className="hidden h-4 w-4 text-slate-400 group-hover:text-teal-700 sm:block"
+                    aria-hidden="true"
+                  />
                 </button>
               </li>
             ))}
@@ -577,7 +628,7 @@ export function PartnerRequestInbox({
         </div>
         {requestKey ? (
           <article
-            className="min-w-0 space-y-5 rounded-xl border border-slate-200 bg-white p-4 sm:p-5"
+            className="min-w-0 space-y-5"
             onInputCapture={() => {
               dirty.current = true;
             }}
@@ -585,13 +636,21 @@ export function PartnerRequestInbox({
               dirty.current = true;
             }}
           >
-            <button
-              type="button"
-              onClick={() => selectRequest("")}
-              className={teamButtonClass("secondary", "sm")}
-            >
-              Back to requests
-            </button>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => selectRequest("")}
+                className="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-[color:var(--team-text-muted)] hover:text-[color:var(--team-text)] focus-visible:outline-2 focus-visible:outline-offset-2"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                Back to requests
+              </button>
+              {selected ? (
+                <p className="text-xs text-[color:var(--team-text-muted)]">
+                  Received {date(selected.request.receivedAt)}
+                </p>
+              ) : null}
+            </div>
             {loadingDetail ? <p role="status">Loading request…</p> : null}
             {detailError ? (
               <p role="alert">
@@ -607,30 +666,28 @@ export function PartnerRequestInbox({
             ) : null}
             {selected ? (
               <>
-                <header className="space-y-3">
+                <header className="space-y-4 border-b border-[color:var(--team-border)] pb-5">
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <h3
+                    <h2
                       ref={detailHeading}
                       tabIndex={-1}
-                      className="min-w-0 break-words text-xl font-semibold outline-none"
+                      className="min-w-0 break-words text-2xl font-semibold tracking-tight text-[color:var(--team-text)] outline-none"
                     >
                       {selected.request.kind === "service"
                         ? selected.request.service
                         : KINDS[selected.request.kind]}
-                    </h3>
+                    </h2>
                     <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700">
                       {selected.request.statusLabel}
                     </span>
                   </div>
-                  <dl className="grid min-w-0 gap-3 text-sm sm:grid-cols-2">
+                  <dl className="grid min-w-0 gap-4 text-sm sm:grid-cols-2">
                     <div>
-                      <dt className="text-xs text-slate-500">
-                        Company and requester
-                      </dt>
+                      <dt className="sr-only">Company and requester</dt>
                       <dd className="mt-1 break-words">
                         <Link
                           href={partnerCompanyHref(selected.request.accountId)}
-                          className="font-medium underline"
+                          className="font-semibold text-[color:var(--team-text)] underline decoration-slate-300 underline-offset-4 hover:decoration-current"
                         >
                           {selected.request.accountName}
                         </Link>
@@ -640,32 +697,28 @@ export function PartnerRequestInbox({
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-xs text-slate-500">Received</dt>
-                      <dd className="mt-1">
-                        {date(selected.request.receivedAt)}
+                      <dt className="sr-only">Service address</dt>
+                      <dd className="flex items-start gap-2 break-words text-[color:var(--team-text-muted)]">
+                        <MapPin
+                          className="mt-0.5 h-4 w-4 shrink-0 text-slate-400"
+                          aria-hidden="true"
+                        />
+                        <span>
+                          {[selected.request.siteName, selected.request.address]
+                            .filter(Boolean)
+                            .join(" · ") || "Address needs review"}
+                        </span>
                       </dd>
                     </div>
-                    <div className="sm:col-span-2">
-                      <dt className="text-xs text-slate-500">
-                        Service address
-                      </dt>
-                      <dd className="mt-1 break-words">
-                        {[selected.request.siteName, selected.request.address]
-                          .filter(Boolean)
-                          .join(" · ") || "Address needs review"}
-                      </dd>
-                    </div>
-                    {selected.request.preferredWindows.length ? (
+                    {selected.request.kind !== "service" &&
+                    selected.request.preferredWindows.length ? (
                       <div className="sm:col-span-2">
-                        <dt className="text-xs text-slate-500">
+                        <dt className="text-xs text-[color:var(--team-text-muted)]">
                           Requested timing
                         </dt>
                         <dd className="mt-1 break-words">
                           {selected.request.preferredWindows
-                            .map(
-                              (window) =>
-                                `${window.localDate} · ${window.timeOfDay === "anytime" ? "Any time" : window.timeOfDay}`,
-                            )
+                            .map(requestedPartnerWindow)
                             .join("; ")}
                         </dd>
                       </div>

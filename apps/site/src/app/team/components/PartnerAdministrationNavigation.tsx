@@ -16,25 +16,27 @@ export function PartnerAdministrationNavigation({
   canCreate?: boolean;
 }) {
   const active = destinations.find((item) => item.active)?.id ?? "requests";
+  const requests = active === "requests";
   const administrative = !["requests", "accounts"].includes(active);
   return (
     <header className="min-w-0 space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Partners</h1>
-          <p className="mt-1 text-sm text-[color:var(--team-text-muted)]">
-            Review requests and manage the companies you work with.
-          </p>
+      {!requests ? (
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {active === "accounts"
+              ? "Partner companies"
+              : "Partner administration"}
+          </h1>
+          {canCreate && active === "accounts" ? (
+            <Link
+              className={teamButtonClass("secondary")}
+              href="/team/partners?p_admin=accounts&p_setup=create#partner-relationship-setup-heading"
+            >
+              Add partner
+            </Link>
+          ) : null}
         </div>
-        {canCreate ? (
-          <Link
-            className={teamButtonClass("secondary")}
-            href="/team/partners?p_admin=accounts&p_setup=create#partner-relationship-setup-heading"
-          >
-            Add partner
-          </Link>
-        ) : null}
-      </div>
+      ) : null}
       <nav
         aria-label="Partner workspace"
         className="flex flex-wrap gap-2 border-b border-[color:var(--team-border)] pb-3"

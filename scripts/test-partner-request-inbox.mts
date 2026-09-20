@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { chromium, webkit, expect, type Page } from "@playwright/test";
 import type {
+  PartnerRequestDetails,
   PartnerRequestInboxItem,
   PartnerRequestInboxResponse,
 } from "@myst-os/sdk";
@@ -17,6 +18,7 @@ const siteRequire = createRequire(`${repo}/apps/site/package.json`);
 const { build } = createRequire(require.resolve("tsx"))("esbuild");
 const accountId = "22222222-2222-4222-8222-222222222222";
 const groupId = "33333333-3333-4333-8333-333333333333";
+const crewId = "66666666-6666-4666-8666-666666666666";
 const kinds = [
   "service",
   "reschedule",
@@ -61,6 +63,73 @@ function row(
   };
 }
 const rows = kinds.map((kind, index) => row(kind, index + 1));
+const submittedRequest: PartnerRequestDetails = {
+  version: 1,
+  jobId: rows[0]!.id,
+  accountId,
+  accountName: "Sample Bakery",
+  service: {
+    key: "cleanout",
+    label: "Facility cleanout",
+    tierKey: null,
+    tierLabel: null,
+  },
+  publicStatus: "requested",
+  confirmationMode: "review",
+  originalJob: null,
+  visibility: { financials: true, photos: true },
+  location: {
+    id: "55555555-5555-4555-8555-555555555555",
+    name: "Bakery warehouse",
+    externalPropertyId: null,
+    timezone: "America/New_York",
+    address: {
+      line1: "100 Sample Road",
+      line2: null,
+      city: "Atlanta",
+      state: "GA",
+      postalCode: "30301",
+    },
+  },
+  description: "Collect twelve unused shelves.",
+  onSiteContact: {
+    name: "Morgan Lee",
+    phone: "+14045550100",
+    email: "morgan@example.test",
+  },
+  alternateContact: null,
+  accessDetails: "Use the east loading dock.",
+  crewInstructions: "Keep the cold-room door closed.",
+  scope: {
+    itemCount: null,
+    volumeCubicYards: null,
+    restrictedItems: false,
+    nonStandard: false,
+    hazardCategories: [],
+    equipmentNeeds: ["loading_dock"],
+    requiredCompletion: null,
+    multiStop: false,
+    multiStopDetails: null,
+    additionalFields: [],
+  },
+  addOns: [],
+  commercial: {
+    poNumber: "PO-BAKERY-123",
+    costCenter: null,
+    projectReference: null,
+    billingContact: null,
+  },
+  proof: { before: 0, after: 2, package: false },
+  scheduling: {
+    timezone: "America/New_York",
+    preferredWindows: rows[0]!.preferredWindows,
+    requestedWindow: null,
+    confirmedWindow: null,
+    confirmedStartAt: null,
+    assistancePreference: "none",
+  },
+  photos: { count: 0, detailPath: null },
+};
 const groupRows = [rows[0]!, row("service", 7), row("service", 8)].map(
   (item) => ({ ...item, alertGroupId: groupId }),
 );
@@ -71,9 +140,9 @@ const counts = {
   byKind: Object.fromEntries(kinds.map((kind) => [kind, 1])),
   byCompany: { [accountId]: 6 },
 } as PartnerRequestInboxResponse["counts"];
-const entry = `import React from 'react';import{createRoot}from'react-dom/client';import{PartnerRequestInbox}from'./src/app/team/components/PartnerRequestInbox';import{PartnerRequestBadge,PartnerRequestShortcut,refreshPartnerRequestCounts}from'./src/app/team/components/PartnerRequestSummary';
+const entry = `import React from 'react';import{createRoot}from'react-dom/client';import{PartnerRequestInbox}from'./src/app/team/components/PartnerRequestInbox';import{PartnerAdministrationNavigation}from'./src/app/team/components/PartnerAdministrationNavigation';import{PartnerRequestBadge,PartnerRequestShortcut,refreshPartnerRequestCounts}from'./src/app/team/components/PartnerRequestSummary';
 window.__refreshCounts=refreshPartnerRequestCounts;
-const params=new URLSearchParams(location.search);function App(){return <main className="mx-auto min-h-screen max-w-6xl space-y-6 bg-slate-50 p-4 text-slate-950"><header className="flex items-center gap-3"><h1 className="text-2xl font-semibold">Partners</h1><PartnerRequestBadge/><PartnerRequestBadge accountId="${accountId}"/></header><PartnerRequestShortcut/><PartnerRequestInbox initialRequestKey={params.get('p_request')||undefined} alertGroupId={params.get('p_alert')||undefined}/></main>}createRoot(document.getElementById('root')).render(<App/>);`;
+const params=new URLSearchParams(location.search);const destinations=['requests','accounts','administration'].map((id,index)=>({id,label:['Requests','Companies','Administration'][index],href:'/team/partners?p_admin='+id,active:id==='requests'}));function App(){return <><main className="team-theme-light mx-auto min-h-screen max-w-6xl space-y-6 bg-slate-50 p-4 text-slate-950"><PartnerAdministrationNavigation destinations={destinations}/><PartnerRequestInbox initialRequestKey={params.get('p_request')||undefined} alertGroupId={params.get('p_alert')||undefined}/></main><aside aria-label="Count recovery test fixtures"><PartnerRequestBadge/><PartnerRequestBadge accountId="${accountId}"/><PartnerRequestShortcut/></aside></>}createRoot(document.getElementById('root')).render(<App/>);`;
 let built: Promise<{ script: Uint8Array; css: string }> | undefined;
 function assets() {
   return (built ??= (async () => {
@@ -223,6 +292,7 @@ for (const engine of [chromium, webkit])
           previewFailure = true,
           groupPaging = true,
           allowAck = true;
+        let assistancePreference: "none" | "callback" | "waitlist" = "none";
         const calls: Array<{ name: string; input: any }> = [];
         await page.addInitScript(
           "window.__fixtureHidden=false; Object.defineProperty(document,'visibilityState',{get:function(){return window.__fixtureHidden?'hidden':'visible'}});",
@@ -332,7 +402,7 @@ for (const engine of [chromium, webkit])
                     service: "Facility cleanout",
                     siteName: "Bakery warehouse",
                     preferredWindows: rows[0]!.preferredWindows,
-                    reasons: ["staff_confirmation_required"],
+                    reasons: ["manual_review_required"],
                     originalJob: null,
                     location: {
                       name: "Bakery warehouse",
@@ -346,6 +416,13 @@ for (const engine of [chromium, webkit])
                       },
                     },
                     description: "Collect twelve unused shelves.",
+                    partnerRequest: {
+                      ...submittedRequest,
+                      scheduling: {
+                        ...submittedRequest.scheduling,
+                        assistancePreference,
+                      },
+                    },
                     crewInstructions: "Keep the cold-room door closed.",
                     onSiteContact: {
                       name: "Morgan Lee",
@@ -374,7 +451,7 @@ for (const engine of [chromium, webkit])
                 }
               : {
                   ok: true,
-                  startAt: `${input.preferredDate}T14:00:00.000Z`,
+                  startAt: `${input.preferredDate}T14:30:00.000Z`,
                   arrivalStartAt: `${input.preferredDate}T14:00:00.000Z`,
                   arrivalEndAt: `${input.preferredDate}T16:00:00.000Z`,
                   timezone: "America/New_York",
@@ -383,9 +460,27 @@ for (const engine of [chromium, webkit])
             result = {
               ok: true,
               data: {
-                applicable: false,
+                applicable: true,
+                appointmentId: "44444444-4444-4444-8444-444444444444",
+                requirements: [
+                  {
+                    kind: "crew",
+                    quantity: 1,
+                    capacityUnits: 1,
+                    requiredSkillKeys: [],
+                  },
+                ],
                 selectedResourceIds: [],
-                resources: [],
+                resources: [
+                  {
+                    id: crewId,
+                    label: "Crew Alpha",
+                    kind: "crew",
+                    capacityUnits: 1,
+                    skillKeys: [],
+                  },
+                ],
+                warning: null,
               },
             };
           else if (name === "opened") result = { ok: true, opened: true };
@@ -410,9 +505,8 @@ for (const engine of [chromium, webkit])
           await fits(page);
           const artifacts = `${repo}/artifacts/partner-crm-requests`;
           mkdirSync(artifacts, { recursive: true });
-          await page.screenshot({
+          await page.getByRole("main").screenshot({
             path: `${artifacts}/${engine.name()}-${width}-requests.png`,
-            fullPage: true,
           });
           await page
             .getByRole("button", { name: /^Waiting on client/ })
@@ -445,7 +539,7 @@ for (const engine of [chromium, webkit])
             .getByRole("button", { name: "Search requests", exact: true })
             .click();
           await expect(
-            page.getByText("No requests match these filters."),
+            page.getByText(/^No requests match these filters\./u),
           ).toBeVisible();
           await page
             .getByRole("searchbox", { name: "Find company", exact: true })
@@ -493,6 +587,7 @@ for (const engine of [chromium, webkit])
             .getByRole("button")
             .filter({ hasText: "Facility cleanout" });
           await service.focus();
+          const listScroll = await page.evaluate(() => window.scrollY);
           await service.press("Enter");
           await expect(
             page.getByRole("heading", {
@@ -500,6 +595,20 @@ for (const engine of [chromium, webkit])
               exact: true,
             }),
           ).toBeFocused();
+          await expect(list).toBeHidden();
+          await expect(list.locator("ul button")).toHaveCount(6);
+          await expect(
+            page.getByRole("searchbox", { name: "Find company", exact: true }),
+          ).toHaveCount(0);
+          await expect(
+            page.getByRole("combobox", { name: "Request type", exact: true }),
+          ).toHaveCount(0);
+          await expect(
+            page.getByRole("navigation", {
+              name: "Request status",
+              exact: true,
+            }),
+          ).toHaveCount(0);
           await expect(
             page.getByText(/Request photos could not be verified/),
           ).toBeVisible();
@@ -517,6 +626,55 @@ for (const engine of [chromium, webkit])
           await expect(
             page.getByText("Collect twelve unused shelves.", { exact: true }),
           ).toBeVisible();
+          await expect(
+            page.getByLabel("Service date", { exact: true }),
+          ).toBeVisible();
+          await expect(
+            page.getByLabel("Planned start time", { exact: true }),
+          ).toBeVisible();
+          await expect(
+            page.getByRole("link", { name: "+14045550100", exact: true }),
+          ).toHaveAttribute("href", "tel:+14045550100");
+          const submitted = page.locator(
+            `[data-partner-request="${rows[0]!.id}"]`,
+          );
+          for (const title of [
+            "Contact and access",
+            "Work order and billing",
+            "Job requirements",
+          ]) {
+            const summary = submitted
+              .locator("summary")
+              .filter({ hasText: new RegExp(`^${title}`) });
+            await expect(summary.locator("..")).toHaveJSProperty("open", false);
+          }
+          await expect(
+            submitted.locator("summary").filter({
+              hasText:
+                /^(?:Service details|Special requirements|Completion photos|Scheduling)/u,
+            }),
+          ).toHaveCount(0);
+          if (width === 375) {
+            await page
+              .getByRole("button", { name: "Set schedule", exact: true })
+              .click();
+            await expect(
+              page.getByRole("complementary", {
+                name: "Service scheduling",
+                exact: true,
+              }),
+            ).toBeFocused();
+          }
+          await expect(
+            page.getByText("Client asked for a call to arrange service.", {
+              exact: true,
+            }),
+          ).toHaveCount(0);
+          await expect(
+            page.getByText("Client asked to join the waitlist.", {
+              exact: true,
+            }),
+          ).toHaveCount(0);
           await frames(page);
           assert.equal(
             ack().length,
@@ -535,8 +693,12 @@ for (const engine of [chromium, webkit])
           await expect(
             page.getByRole("button", { name: "Confirm service", exact: true }),
           ).toBeDisabled();
-          await page.getByLabel("New date", { exact: true }).fill("2026-10-03");
-          await page.getByLabel("Eastern time", { exact: true }).fill("10:00");
+          await page
+            .getByLabel("Service date", { exact: true })
+            .fill("2026-10-03");
+          await page
+            .getByLabel("Planned start time", { exact: true })
+            .fill("10:30");
           await expect(
             page.getByText(
               "Arrival preview unavailable. Reference: preview-fixture.",
@@ -553,16 +715,83 @@ for (const engine of [chromium, webkit])
             page.getByRole("button", { name: "Confirm service", exact: true }),
           ).toBeEnabled();
           await expect(
-            page.getByText(/Oct 3, 2026.*10:00\s*AM.*Oct 3, 2026.*12:00\s*PM/u),
+            page.getByText(/Oct 3, 2026.*10:00\s*AM.*12:00\s*PM.*EDT/u),
           ).toBeVisible();
+          const resourceSummary = page
+            .locator("summary")
+            .filter({ hasText: /^Crew, truck & equipment/u });
+          await expect(resourceSummary.locator("..")).toHaveJSProperty(
+            "open",
+            false,
+          );
+          await expect(
+            page.locator('input[name="resourceSelectionMode"]'),
+          ).toHaveCount(0);
+          await resourceSummary.focus();
+          await resourceSummary.press("Enter");
+          await page
+            .getByRole("checkbox", {
+              name: "Choose crew, truck or equipment",
+              exact: true,
+            })
+            .check();
+          const crew = page.getByRole("checkbox", { name: /Crew Alpha/u });
+          await crew.check();
+          await resourceSummary.focus();
+          await resourceSummary.press("Enter");
+          await expect(resourceSummary.locator("..")).toHaveJSProperty(
+            "open",
+            false,
+          );
+          const selectedResources = await page
+            .getByRole("button", { name: "Confirm service", exact: true })
+            .evaluate((button) => {
+              const form = button.closest("form");
+              if (!form) throw Error("Confirmation must have a form");
+              const data = new FormData(form);
+              return {
+                mode: data.get("resourceSelectionMode"),
+                startTime: data.get("startTime"),
+                ids: data.getAll("selectedResourceIds"),
+              };
+            });
+          assert.deepEqual(
+            selectedResources,
+            { mode: "manual", startTime: "10:30", ids: [crewId] },
+            "Collapsing optional resource choices preserves the exact confirmation input",
+          );
           await fits(page);
-          await page.screenshot({
+          await page.getByRole("main").screenshot({
             path: `${artifacts}/${engine.name()}-${width}-review.png`,
-            fullPage: true,
           });
           page.once("dialog", (dialog) => dialog.accept());
           await page.getByRole("button", { name: "Back to requests" }).click();
           await expect(list).toBeFocused();
+          await expect(
+            page.getByRole("searchbox", { name: "Find company", exact: true }),
+          ).toHaveValue("Sample");
+          await expect(
+            page.getByRole("combobox", { name: "Request type", exact: true }),
+          ).toHaveValue("");
+          await expect
+            .poll(() => page.evaluate(() => window.scrollY))
+            .toBe(listScroll);
+          for (const preference of ["waitlist", "callback"] as const) {
+            assistancePreference = preference;
+            await service.click();
+            const requestedHelp =
+              preference === "waitlist"
+                ? "Client asked to join the waitlist."
+                : "Client asked for a call to arrange service.";
+            await expect(
+              page.getByText(requestedHelp, { exact: true }),
+            ).toBeVisible();
+            await page
+              .getByRole("button", { name: "Back to requests" })
+              .click();
+            await expect(list).toBeFocused();
+          }
+          assistancePreference = "none";
           await list
             .getByRole("button")
             .filter({ hasText: "Billing questions" })
@@ -580,9 +809,14 @@ for (const engine of [chromium, webkit])
             exact: true,
           });
           await note.fill("We are checking the signed collection report.");
-          await page
-            .getByRole("button", { name: "Refresh requests", exact: true })
-            .click();
+          const readsBeforeRefresh = calls.filter(
+            (call) => call.name === "list",
+          ).length;
+          await visibility(page, true);
+          await visibility(page, false);
+          await expect
+            .poll(() => calls.filter((call) => call.name === "list").length)
+            .toBeGreaterThan(readsBeforeRefresh);
           await expect(note).toHaveValue(
             "We are checking the signed collection report.",
           );

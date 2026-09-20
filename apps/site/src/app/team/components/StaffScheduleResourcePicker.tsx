@@ -9,15 +9,23 @@ import {
 export function StaffScheduleResourcePicker({
   appointmentId,
   disabled = false,
+  compact = false,
+  reveal = false,
 }: {
   appointmentId: string;
   disabled?: boolean;
+  compact?: boolean;
+  reveal?: boolean;
 }) {
   const [data, setData] = useState<StaffResourceOptions | null>(null);
   const [error, setError] = useState("");
   const [manual, setManual] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [generation, setGeneration] = useState(0);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (compact && (reveal || error || data?.warning)) setOpen(true);
+  }, [compact, reveal, error, data?.warning]);
   useEffect(() => {
     let current = true;
     setData(null);
@@ -41,12 +49,16 @@ export function StaffScheduleResourcePicker({
     };
   }, [appointmentId, generation]);
   if (data && !data.applicable) return null;
-  return (
+  const fields = (
     <fieldset
       disabled={disabled}
-      className="min-w-0 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3"
+      className={
+        compact
+          ? "min-w-0 space-y-2 p-3 pt-0"
+          : "min-w-0 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3"
+      }
     >
-      <legend className="px-1 text-sm font-semibold">
+      <legend className={compact ? "sr-only" : "px-1 text-sm font-semibold"}>
         Crew, truck & equipment
       </legend>
       {error ? (
@@ -55,7 +67,9 @@ export function StaffScheduleResourcePicker({
         </p>
       ) : !data ? (
         <p role="status" className="text-sm">
-          Loading current resource configuration…
+          {compact
+            ? "Loading crew and equipment…"
+            : "Loading current resource configuration…"}
         </p>
       ) : (
         <>
@@ -66,21 +80,25 @@ export function StaffScheduleResourcePicker({
                 href="/team/partners/scheduling"
                 className="inline-flex min-h-11 items-center font-semibold underline"
               >
-                Scheduling configuration
+                {compact
+                  ? "Check scheduling settings"
+                  : "Scheduling configuration"}
               </Link>
             </p>
           ) : (
             <>
               <p className="text-sm text-slate-700">
-                Required:{" "}
+                {compact ? "Needed for this job:" : "Required:"}{" "}
                 {data.requirements
                   .map(
                     (requirement) =>
-                      `${requirement.quantity} ${requirement.kind}${requirement.requiredSkillKeys.length ? ` (${requirement.requiredSkillKeys.join(", ")})` : ""}`,
+                      `${requirement.quantity} ${requirement.kind}${!compact && requirement.requiredSkillKeys.length ? ` (${requirement.requiredSkillKeys.join(", ")})` : ""}`,
                   )
                   .join("; ")}
-                . Availability and daily crew limits are checked again when
-                saved.
+                .
+                {!compact
+                  ? " Availability and daily crew limits are checked again when saved."
+                  : ""}
               </p>
               <label className="flex min-h-11 items-center gap-2 text-sm">
                 <input
@@ -89,12 +107,15 @@ export function StaffScheduleResourcePicker({
                   onChange={(event) => setManual(event.target.checked)}
                   className="h-5 w-5"
                 />
-                Choose specific resources
+                {compact
+                  ? "Choose crew, truck or equipment"
+                  : "Choose specific resources"}
               </label>
               {!manual ? (
                 <p className="text-sm text-slate-600">
-                  Automatically assign resources that meet these requirements.
-                  No reservation is made until the schedule is saved.
+                  {compact
+                    ? "Available crew and equipment will be assigned when you confirm."
+                    : "Automatically assign resources that meet these requirements. No reservation is made until the schedule is saved."}
                 </p>
               ) : (
                 <div className="grid gap-1 sm:grid-cols-2">
@@ -146,8 +167,23 @@ export function StaffScheduleResourcePicker({
         className="inline-flex min-h-11 items-center font-semibold underline"
         onClick={() => setGeneration((value) => value + 1)}
       >
-        Refresh resource options
+        {compact ? "Refresh choices" : "Refresh resource options"}
       </button>
     </fieldset>
+  );
+  return compact ? (
+    <details
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      className="min-w-0 rounded-xl border border-slate-200 bg-white"
+    >
+      <summary className="min-h-11 cursor-pointer px-3 py-3 text-sm font-medium text-slate-700">
+        Crew, truck &amp; equipment{" "}
+        <span className="font-normal text-slate-500">(optional)</span>
+      </summary>
+      {fields}
+    </details>
+  ) : (
+    fields
   );
 }

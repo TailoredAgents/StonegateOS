@@ -9,16 +9,18 @@ import { CalendarAppointmentActions } from "./CalendarAppointmentActions";
 import { teamButtonClass } from "./team-ui";
 import { formatCalendarDayKey } from "../lib/calendar-time";
 import { teamSurfaceHref } from "../surface-registry";
-import { PartnerRequestDetailsPanel } from "./PartnerRequestDetailsPanel";
+import {
+  PartnerRequestDetailsPanel,
+  PartnerRequestScheduleSummary,
+} from "./PartnerRequestDetailsPanel";
+import {
+  partnerReviewCheck,
+  requestedPartnerWindow,
+} from "../lib/partner-request-presentation";
 
 function preferred(windows: PartnerServiceReview["preferredWindows"]) {
   return (
-    windows
-      .map(
-        (window) =>
-          window.localDate + " " + window.timeOfDay.replaceAll("_", " "),
-      )
-      .join("; ") || "Staff to arrange a date"
+    windows.map(requestedPartnerWindow).join("; ") || "Staff to arrange a date"
   );
 }
 function arrival(item: PartnerServiceReview) {
@@ -62,7 +64,8 @@ export function PartnerServiceReviews({
   const [returnDetail, setReturnDetail] =
     useState<PartnerServiceReviewDetail | null>(null);
   const generation = useRef(0),
-    detailRef = useRef<HTMLDivElement>(null);
+    detailRef = useRef<HTMLDivElement>(null),
+    scheduleRef = useRef<HTMLElement>(null);
   async function load(more = false, search = appliedQuery) {
     const current = ++generation.current;
     setBusy(true);
@@ -289,7 +292,11 @@ export function PartnerServiceReviews({
           key={detail.id}
           ref={detailRef}
           tabIndex={-1}
-          className="space-y-4 border-t border-slate-200 pt-5 focus-visible:outline-2 focus-visible:outline-offset-2"
+          className={
+            embedded
+              ? "min-w-0 space-y-5 outline-none"
+              : "space-y-4 border-t border-slate-200 pt-5 focus-visible:outline-2 focus-visible:outline-offset-2"
+          }
         >
           {!embedded || detail.id !== requestId ? (
             <>
@@ -373,181 +380,255 @@ export function PartnerServiceReviews({
               reservations.
             </p>
           ) : null}
-          {detail.reasons.length ? (
-            <p className="text-sm text-amber-900">
-              <strong>Review needed:</strong>{" "}
-              {detail.reasons
-                .map((reason) => reason.replaceAll("_", " "))
-                .join("; ")}
-            </p>
+          {embedded && canSchedule && detail.canSchedule ? (
+            <button
+              type="button"
+              className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-teal-800 underline underline-offset-4 lg:hidden"
+              onClick={() => scheduleRef.current?.focus()}
+            >
+              Set schedule <span aria-hidden="true">↓</span>
+            </button>
           ) : null}
-          {detail.partnerRequest ? (
-            <PartnerRequestDetailsPanel
-              details={detail.partnerRequest}
-              photos={detail.photos}
-              hideHeader={embedded && detail.id === requestId}
-            />
-          ) : (
-            <>
-              <div>
-                <h4 className="font-semibold">Requested work</h4>
-                <p className="mt-1 whitespace-pre-wrap text-sm leading-6">
-                  {detail.description || "Description was not provided."}
-                </p>
-              </div>
-              {detail.scopeFields.length ? (
-                <dl className="grid gap-3 sm:grid-cols-2">
-                  {detail.scopeFields.map((field) => (
-                    <div key={field.label}>
-                      <dt className="text-sm font-semibold">{field.label}</dt>
-                      <dd className="whitespace-pre-wrap text-sm">
-                        {field.value}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              ) : null}
-              {detail.crewInstructions ? (
-                <div>
-                  <h4 className="font-semibold">Crew instructions</h4>
-                  <p className="mt-1 whitespace-pre-wrap text-sm leading-6">
-                    {detail.crewInstructions}
-                  </p>
+          <div
+            className={
+              embedded
+                ? "grid min-w-0 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px] xl:gap-8"
+                : "space-y-4"
+            }
+          >
+            <div
+              className={
+                embedded
+                  ? "min-w-0 rounded-xl border border-slate-200 bg-white p-4 sm:p-5"
+                  : "space-y-4"
+              }
+            >
+              {detail.reasons.filter(
+                (reason) =>
+                  ![
+                    "manual_review_required",
+                    "availability_unverified",
+                  ].includes(reason),
+              ).length ? (
+                <div className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-950">
+                  <p className="font-semibold">Check before confirming</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-4">
+                    {detail.reasons
+                      .filter(
+                        (reason) =>
+                          ![
+                            "manual_review_required",
+                            "availability_unverified",
+                          ].includes(reason),
+                      )
+                      .map((reason) => (
+                        <li key={reason}>{partnerReviewCheck(reason)}</li>
+                      ))}
+                  </ul>
                 </div>
               ) : null}
-              <p className="text-sm">
-                <strong>On-site contact:</strong>{" "}
-                {[
-                  detail.onSiteContact.name,
-                  detail.onSiteContact.phone,
-                  detail.onSiteContact.email,
-                ]
-                  .filter(Boolean)
-                  .join(" · ") || "Not provided"}
-              </p>
-              <p className="text-sm">
-                <strong>Requested proof:</strong> {detail.proof.before} before
-                photo(s), {detail.proof.after} after photo(s).
-              </p>
-              <div>
-                <h4 className="font-semibold">Photos supplied with this job</h4>
-                {detail.photos.length ? (
-                  <ul className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {detail.photos.map((photo) => (
-                      <li key={photo.id} className="min-w-0">
-                        {photo.url ? (
-                          <a
-                            href={photo.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="block rounded-lg focus-visible:outline-2"
-                          >
-                            <img
-                              src={photo.url}
-                              alt={
-                                photo.caption ||
-                                photo.category +
-                                  " photo supplied for this request"
-                              }
-                              width={320}
-                              height={240}
-                              loading="lazy"
-                              referrerPolicy="no-referrer"
-                              className="aspect-[4/3] w-full rounded-lg object-cover"
-                            />
-                          </a>
-                        ) : (
-                          <p className="rounded-lg border border-slate-200 p-3 text-sm">
-                            {photo.category} —{" "}
-                            {photo.status === "ready"
-                              ? "Preview unavailable; refresh or check storage."
-                              : photo.status}
-                          </p>
-                        )}
-                        <p className="mt-1 text-xs text-slate-600">
-                          {photo.caption || photo.category}
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="mt-2 text-sm text-slate-600">
-                    No photos were attached.
+              {detail.partnerRequest ? (
+                <PartnerRequestDetailsPanel
+                  details={detail.partnerRequest}
+                  photos={detail.photos}
+                  hideHeader={embedded && detail.id === requestId}
+                  review={embedded && detail.id === requestId}
+                />
+              ) : (
+                <>
+                  <div>
+                    <h4 className="font-semibold">Requested work</h4>
+                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6">
+                      {detail.description || "Description was not provided."}
+                    </p>
+                  </div>
+                  {detail.scopeFields.length ? (
+                    <dl className="grid gap-3 sm:grid-cols-2">
+                      {detail.scopeFields.map((field) => (
+                        <div key={field.label}>
+                          <dt className="text-sm font-semibold">
+                            {field.label}
+                          </dt>
+                          <dd className="whitespace-pre-wrap text-sm">
+                            {field.value}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ) : null}
+                  {detail.crewInstructions ? (
+                    <div>
+                      <h4 className="font-semibold">Crew instructions</h4>
+                      <p className="mt-1 whitespace-pre-wrap text-sm leading-6">
+                        {detail.crewInstructions}
+                      </p>
+                    </div>
+                  ) : null}
+                  <p className="text-sm">
+                    <strong>On-site contact:</strong>{" "}
+                    {[
+                      detail.onSiteContact.name,
+                      detail.onSiteContact.phone,
+                      detail.onSiteContact.email,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "Not provided"}
                   </p>
-                )}
-                <p className="mt-2 text-xs text-slate-500">
-                  Photo links last five minutes. Reopen this request to refresh
-                  them.
-                </p>
-              </div>
-            </>
-          )}
-          {canSchedule && detail.canSchedule ? (
-            <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6">
-              Choose the internal planned start in 30-minute steps. The partner
-              receives the corresponding two-hour arrival window. Confirm scope,
-              price and site eligibility first; CRM capacity checks still apply.
-            </p>
-          ) : null}
-          {canSchedule && detail.canSchedule ? (
-            <CalendarAppointmentActions
-              appointmentId={detail.appointment.id}
-              appointmentType={detail.appointment.type}
-              start={detail.appointment.startAt ?? ""}
-              version={detail.appointment.version}
-              quotedTotalCents={null}
-              finalTotalCents={null}
-              isQuoteOnly={false}
-              canEditStatus={false}
-              canUpdateAppointments
-              canCollectPayments={false}
-              canSendCustomerMessages={false}
-              canManageAppointmentMedia={false}
-              canOverrideScheduleConflicts={false}
-              teamMembers={[]}
-              scheduleOnly
-              confirmPartnerService={embedded}
-              partnerRequest={{ id: detail.id, accountId: detail.accountId }}
-              onScheduled={() => {
-                onChanged?.();
-                if (requestId && accountId)
-                  void open({ id: requestId, accountId });
-                else {
-                  setDetail(null);
-                  void load();
-                }
-              }}
-            />
-          ) : (
-            <div className="space-y-3">
-              <p className="text-sm text-slate-600">
-                {detail.status === "approval_needed"
-                  ? "Resolve the required company approval before scheduling."
-                  : detail.canSchedule
-                    ? "Your role can read requests but cannot schedule them."
-                    : includeScheduled
-                      ? "This job is not awaiting initial scheduling. Use the CRM job tools for any further changes."
-                      : "This request is no longer awaiting initial scheduling. Refresh to see the current queue."}
-              </p>
-              {includeScheduled &&
-              detail.appointment.startAt &&
-              formatCalendarDayKey(new Date(detail.appointment.startAt)) ? (
-                <a
-                  href={teamSurfaceHref("calendar", {
-                    query: {
-                      calView: "day",
-                      cal: formatCalendarDayKey(
-                        new Date(detail.appointment.startAt),
-                      ),
-                    },
-                  })}
-                  className={teamButtonClass("secondary")}
-                >
-                  Open this day in CRM Calendar
-                </a>
-              ) : null}
+                  <p className="text-sm">
+                    <strong>Requested proof:</strong> {detail.proof.before}{" "}
+                    before photo(s), {detail.proof.after} after photo(s).
+                  </p>
+                  <div>
+                    <h4 className="font-semibold">
+                      Photos supplied with this job
+                    </h4>
+                    {detail.photos.length ? (
+                      <ul className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                        {detail.photos.map((photo) => (
+                          <li key={photo.id} className="min-w-0">
+                            {photo.url ? (
+                              <a
+                                href={photo.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block rounded-lg focus-visible:outline-2"
+                              >
+                                <img
+                                  src={photo.url}
+                                  alt={
+                                    photo.caption ||
+                                    photo.category +
+                                      " photo supplied for this request"
+                                  }
+                                  width={320}
+                                  height={240}
+                                  loading="lazy"
+                                  referrerPolicy="no-referrer"
+                                  className="aspect-[4/3] w-full rounded-lg object-cover"
+                                />
+                              </a>
+                            ) : (
+                              <p className="rounded-lg border border-slate-200 p-3 text-sm">
+                                {photo.category} —{" "}
+                                {photo.status === "ready"
+                                  ? "Preview unavailable; refresh or check storage."
+                                  : photo.status}
+                              </p>
+                            )}
+                            <p className="mt-1 text-xs text-slate-600">
+                              {photo.caption || photo.category}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-sm text-slate-600">
+                        No photos were attached.
+                      </p>
+                    )}
+                    <p className="mt-2 text-xs text-slate-500">
+                      Photo links last five minutes. Reopen this request to
+                      refresh them.
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
-          )}
+            <aside
+              ref={scheduleRef}
+              tabIndex={-1}
+              aria-label="Service scheduling"
+              className={
+                embedded
+                  ? "min-w-0 scroll-mt-6 space-y-5 rounded-xl border border-slate-200 bg-white p-4 outline-none focus-visible:ring-2 focus-visible:ring-teal-700 sm:p-5 lg:sticky lg:top-6"
+                  : "space-y-4"
+              }
+            >
+              {embedded ? (
+                detail.partnerRequest ? (
+                  <PartnerRequestScheduleSummary
+                    details={detail.partnerRequest}
+                  />
+                ) : (
+                  <div className="space-y-2 border-b border-slate-200 pb-4 text-sm">
+                    <h4 className="font-semibold">Client’s requested timing</h4>
+                    <p>{preferred(detail.preferredWindows)}</p>
+                    <p className="text-xs text-slate-500">
+                      Awaiting Stonegate confirmation.
+                    </p>
+                  </div>
+                )
+              ) : null}
+              {canSchedule && detail.canSchedule ? (
+                <CalendarAppointmentActions
+                  appointmentId={detail.appointment.id}
+                  appointmentType={detail.appointment.type}
+                  start={detail.appointment.startAt ?? ""}
+                  version={detail.appointment.version}
+                  quotedTotalCents={null}
+                  finalTotalCents={null}
+                  isQuoteOnly={false}
+                  canEditStatus={false}
+                  canUpdateAppointments
+                  canCollectPayments={false}
+                  canSendCustomerMessages={false}
+                  canManageAppointmentMedia={false}
+                  canOverrideScheduleConflicts={false}
+                  teamMembers={[]}
+                  scheduleOnly
+                  confirmPartnerService={embedded}
+                  partnerRequest={{
+                    id: detail.id,
+                    accountId: detail.accountId,
+                  }}
+                  onScheduled={() => {
+                    onChanged?.();
+                    if (requestId && accountId)
+                      void open({ id: requestId, accountId });
+                    else {
+                      setDetail(null);
+                      void load();
+                    }
+                  }}
+                />
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-slate-600">
+                    {detail.status === "approval_needed"
+                      ? "Waiting for the client’s approval. You can confirm service after they approve."
+                      : detail.canSchedule
+                        ? "A team member with scheduling access can confirm this service."
+                        : ["confirmed", "in_progress", "completed"].includes(
+                              detail.status,
+                            )
+                          ? "This service is already scheduled. Open the calendar to review it."
+                          : detail.status === "canceled"
+                            ? "This request was canceled."
+                            : detail.status === "declined"
+                              ? "This request was declined."
+                              : "This request cannot be scheduled here in its current status. Refresh the request or review it in company Jobs."}
+                  </p>
+                  {includeScheduled &&
+                  detail.appointment.startAt &&
+                  formatCalendarDayKey(new Date(detail.appointment.startAt)) ? (
+                    <a
+                      href={teamSurfaceHref("calendar", {
+                        query: {
+                          calView: "day",
+                          cal: formatCalendarDayKey(
+                            new Date(detail.appointment.startAt),
+                          ),
+                        },
+                      })}
+                      className={teamButtonClass("secondary")}
+                    >
+                      Open in calendar
+                    </a>
+                  ) : null}
+                </div>
+              )}
+            </aside>
+          </div>
         </div>
       ) : null}
     </section>
