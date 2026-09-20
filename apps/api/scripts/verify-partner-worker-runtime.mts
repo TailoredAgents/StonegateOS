@@ -1,6 +1,34 @@
 /** Import the real worker dependency graph without processing events or contacting a provider. */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { Socket } from "node:net";
+import { fileURLToPath } from "node:url";
+
+// The worker starts at the repository root without the API's tsconfig path
+// resolver. Verify actual dispatch paths there as well as the imports below.
+const workerEnvironment: NodeJS.ProcessEnv = {
+  ...process.env,
+  NODE_ENV: "production",
+  DOTENV_CONFIG_PATH: "/dev/null",
+};
+delete workerEnvironment["TSX_TSCONFIG_PATH"];
+delete workerEnvironment["DATABASE_URL"];
+const ownerRuntime = spawnSync(
+  process.execPath,
+  ["--import", "tsx", "scripts/verify-owner-alert-worker-runtime.ts"],
+  {
+    cwd: fileURLToPath(new URL("../../../", import.meta.url)),
+    env: workerEnvironment,
+    encoding: "utf8",
+    timeout: 30_000,
+  },
+);
+assert.equal(
+  ownerRuntime.status,
+  0,
+  `Production worker dispatch verification failed: ${ownerRuntime.stderr}`,
+);
+process.stdout.write(ownerRuntime.stdout);
 
 let networkAttempts = 0;
 const originalConnect = Object.getOwnPropertyDescriptor(

@@ -149,11 +149,169 @@ function helperDefinitionsWithPermission(fileSource: string): Array<{
   });
 }
 
+/** Verify imported guards rather than exempting these routes from the inventory. */
+function partnerDelegatedGuard(routeMethod: RouteMethodSource): {
+  index: number;
+  permissions: string[];
+  verify: () => void;
+} | null {
+  const prefix = "app/api/admin/partner-management/v1/";
+  const delegates: Record<string, string> = {
+    [`GET ${prefix}request-inbox/route.ts`]: "listPartnerRequestInbox",
+    [`GET ${prefix}request-inbox/[kind]/[requestId]/route.ts`]:
+      "getPartnerRequestInboxItem",
+    [`GET ${prefix}service-requests/[jobId]/arrival-preview/route.ts`]:
+      "partnerInboxCanAct",
+    [`POST ${prefix}owner-alerts/groups/[groupId]/opened/route.ts`]:
+      "group_opened",
+    [`POST ${prefix}owner-alerts/requests/[bookingId]/opened/route.ts`]:
+      "request_opened",
+  };
+  const delegate = delegates[`${routeMethod.method} ${routeMethod.route}`];
+  if (!delegate) return null;
+  const opened = delegate.endsWith("_opened");
+  const helperSource = fs.readFileSync(
+    path.resolve(
+      API_ROOT,
+      opened
+        ? "src/lib/partner-owner-alert-routes.ts"
+        : "src/lib/partner-request-inbox.ts",
+    ),
+    "utf8",
+  );
+  const compact = (source: string) => source.replace(/\s+/gu, " ").trim();
+  const namedFunction = (name: string) => {
+    const start = helperSource.indexOf(`function ${name}(`);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const rest = helperSource.slice(start);
+    const next = /\n(?:export )?(?:async )?function /u.exec(rest);
+    return rest.slice(0, next?.index ?? rest.length);
+  };
+  const permissions = opened
+    ? mutationBoundaryPermissions(namedFunction("mutateOwnerAlerts"))
+    : [
+        "partners.accounts.read",
+        "appointments.read",
+        ...(delegate === "partnerInboxCanAct"
+          ? ["appointments.update"]
+          : [
+              "partners.cancellation_requests.read",
+              "partners.change_requests.read",
+              "partners.billing_disputes.read",
+            ]),
+      ];
+  const index = routeMethod.methodSource.indexOf(
+    `${opened ? "mutateOwnerAlerts" : delegate}(`,
+  );
+  return {
+    index,
+    permissions,
+    verify: () => {
+      const method = routeMethod.methodSource;
+      expect(index).toBeGreaterThanOrEqual(0);
+      if (opened) {
+        expect(routeMethod.fileSource).toContain(
+          'from "@/lib/partner-owner-alert-routes"',
+        );
+        const parameter = delegate === "group_opened" ? "groupId" : "bookingId";
+        // Resolving routing syntax is safe; no body parsing or I/O may occur here.
+        expect(compact(method)).toBe(
+          `export async function POST( request: NextRequest, context: { params: Promise<{ ${parameter}?: string }> }, ) { return mutateOwnerAlerts( request, "${delegate}", (await context.params).${parameter}, ); }`,
+        );
+        const helper = namedFunction("mutateOwnerAlerts");
+        const guardIndex = helper.indexOf("beginTeamMutation(");
+        expect(guardIndex).toBeGreaterThanOrEqual(0);
+        expect(
+          helper.slice(0, guardIndex).replace(/await\s*$/u, ""),
+        ).not.toMatch(/\bawait\b/u);
+        expect(guardIndex).toBeLessThan(firstSensitiveBoundary(helper)!);
+        expect(mutationBoundaryPermissions(helper)).toEqual([
+          "partners.accounts.read",
+          "appointments.read",
+        ]);
+        expect(helper).toContain('principalTypes: ["human"]');
+        const ownerGuard = helper.indexOf(
+          'if (mutation.actor.role !== "owner")',
+        );
+        expect(ownerGuard).toBeGreaterThan(guardIndex);
+        expect(ownerGuard).toBeLessThan(helper.indexOf("getDb()"));
+        expect(ownerGuard).toBeLessThan(
+          helper.indexOf("readBoundedJsonRequest("),
+        );
+        expect(helper).toContain("if (!boundary.ok) return boundary.response;");
+        return;
+      }
+      expect(routeMethod.fileSource).toContain(
+        'from "@/lib/partner-request-inbox"',
+      );
+      const before = method.slice(0, index);
+      expect(before).toContain("await resolvePermissionContext(request)");
+      expect(before).toContain("if (!context.authenticated)");
+      expect(before).toContain("status: 401");
+      // Query/id syntax may select a policy; all database/body/provider work
+      // must follow the helper's permission check.
+      expect(
+        before.replace(
+          /await resolvePermissionContext\(request\)|await params|await\s*$/gu,
+          "",
+        ),
+      ).not.toMatch(/\bawait\b/u);
+      expect(before).not.toMatch(
+        /\b(?:getDb|fetch|readBoundedJsonRequest)\s*\(|\brequest\.(?:json|text|formData|arrayBuffer)\s*\(/u,
+      );
+      expect(compact(namedFunction("partnerInboxCanRead"))).toContain(
+        "context.authenticated && READ[kind].every((permission) => context.permissions.some((grant) => permissionMatches(grant, permission)), )",
+      );
+      if (delegate === "partnerInboxCanAct") {
+        expect(compact(method)).toContain(
+          'if (!partnerInboxCanAct(context, "service")) return NextResponse.json( { ok: false, error: "forbidden" }, { status: 403, headers }, );',
+        );
+        expect(index).toBeLessThan(firstSensitiveBoundary(method)!);
+        expect(compact(namedFunction("partnerInboxCanAct"))).toContain(
+          "partnerInboxCanRead(context, kind) && context.permissions.some((grant) => permissionMatches(grant, WRITE[kind]))",
+        );
+        expect(helperSource).toContain('service: "appointments.update"');
+      } else {
+        const helper = namedFunction(delegate);
+        const permissionGuard =
+          delegate === "listPartnerRequestInbox"
+            ? "sourceSql(context)"
+            : "if (!partnerInboxCanRead(context, kind))";
+        expect(helper.indexOf(permissionGuard)).toBeGreaterThanOrEqual(0);
+        expect(helper.indexOf(permissionGuard)).toBeLessThan(
+          helper.indexOf("getDb()"),
+        );
+        expect(helper).toContain(
+          'throw new PartnerRequestInboxError(403, "forbidden")',
+        );
+        expect(compact(namedFunction("sourceSql"))).toContain(
+          'if (!branches.length) throw new PartnerRequestInboxError(403, "forbidden");',
+        );
+        expect(namedFunction("sourceSql")).not.toMatch(
+          /\b(?:getDb|fetch)\s*\(|\bawait\b/u,
+        );
+      }
+      for (const permission of permissions)
+        expect(helperSource).toContain(`"${permission}"`);
+    },
+  };
+}
+
 function findEffectiveGuard(routeMethod: RouteMethodSource): {
   index: number;
   permissions: string[];
   helperSource: string | null;
+  verifyDelegated?: () => void;
 } | null {
+  const delegated = partnerDelegatedGuard(routeMethod);
+  if (delegated) {
+    return {
+      index: delegated.index,
+      permissions: delegated.permissions,
+      helperSource: null,
+      verifyDelegated: delegated.verify,
+    };
+  }
   const directIndex = routeMethod.methodSource.indexOf("requirePermission(");
   const mutationBoundaryIndex =
     routeMethod.methodSource.indexOf("beginTeamMutation(");
@@ -214,6 +372,10 @@ function assertGuardPrecedesSensitiveWork(
   routeMethod: RouteMethodSource,
   guard: NonNullable<ReturnType<typeof findEffectiveGuard>>,
 ): void {
+  if (guard.verifyDelegated) {
+    guard.verifyDelegated();
+    return;
+  }
   const workBeforeGuard = routeMethod.methodSource
     .slice(0, guard.index)
     .replace(/\bawait\s*$/u, "");

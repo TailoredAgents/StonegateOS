@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { teamPasswordSetupHref } from "@myst-os/sdk";
 import {
   legacyTeamSurfaceHref,
   resolveDefaultTeamSurfaceId,
@@ -213,7 +214,17 @@ describe("Site Team surface registry", () => {
     const authCallback = read("auth/route.ts");
     const loginActions = read("login/actions.ts");
 
-    expect(authCallback).toContain('"/team/settings?setup=1"');
+    expect(authCallback).toContain("teamPasswordSetupHref(returnTo)");
+    expect(teamPasswordSetupHref(null)).toBe("/team/settings?setup=1");
+    const returnTo =
+      "/team/partners?p_admin=requests&p_request=service%3A123&p_alert=456";
+    const setup = new URL(teamPasswordSetupHref(returnTo), "https://site.test");
+    expect(setup.pathname).toBe("/team/settings");
+    expect(setup.searchParams.get("setup")).toBe("1");
+    expect(setup.searchParams.get("returnTo")).toBe(returnTo);
+    expect(teamPasswordSetupHref("https://outside.test/team")).toBe(
+      "/team/settings?setup=1",
+    );
     expect(authCallback).not.toContain('searchParams.set("tab", "settings")');
     expect(loginActions).toContain("/team/settings?saved=1");
     expect(read("page.tsx")).toContain(

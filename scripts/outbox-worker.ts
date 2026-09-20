@@ -1,6 +1,5 @@
 import "dotenv/config";
-import Module from "node:module";
-import path from "node:path";
+import { registerApiAliases } from "./lib/register-api-aliases";
 import {
   formatOutboxWorkerLog,
   outboxWorkerErrorDetail,
@@ -8,32 +7,6 @@ import {
   shouldLogOutboxBatch,
   startOutboxWorkerHeartbeat,
 } from "../apps/api/src/lib/outbox-worker-runtime";
-
-type ModuleResolver = (
-  request: string,
-  parent: unknown,
-  isMain: boolean,
-  options: unknown,
-) => string;
-
-function registerAliases() {
-  const moduleInternals = Module as unknown as {
-    _resolveFilename: ModuleResolver;
-  };
-  const originalResolve = moduleInternals._resolveFilename;
-  moduleInternals._resolveFilename = function (
-    request: string,
-    parent: unknown,
-    isMain: boolean,
-    options: unknown,
-  ) {
-    if (request.startsWith("@/")) {
-      const absolute = path.resolve("apps/api/src", request.slice(2));
-      return originalResolve.call(this, absolute, parent, isMain, options);
-    }
-    return originalResolve.call(this, request, parent, isMain, options);
-  };
-}
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -289,7 +262,7 @@ async function runPartnerAuthRetentionOnce() {
 }
 
 async function main() {
-  registerAliases();
+  registerApiAliases();
   const { batchSize, pollIntervalMs, heartbeatIntervalMs } =
     parseOutboxWorkerConfiguration();
   const seoIntervalMs = Number(

@@ -10,6 +10,10 @@ import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
 import type { SendResult } from "@/lib/messaging";
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
+import {
+  ownerAlertDispatchGuard,
+  ownerAlertInitialAccepted,
+} from "./partner-owner-alerts";
 
 const PARTNER_OPERATION_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,199}$/u;
 const E164_PATTERN = /^\+[1-9][0-9]{9,14}$/u;
@@ -339,9 +343,6 @@ export async function prepareStaffNotificationDispatch(
   }
 
   if (operation.subjectType) {
-    const { ownerAlertDispatchGuard } = await import(
-      "@/lib/partner-owner-alerts"
-    );
     const guard = await ownerAlertDispatchGuard(tx, operation, now);
     if (!guard.allowed) {
       await tx
@@ -519,7 +520,6 @@ export async function finalizeStaffNotificationDispatch(
       })
       .where(eq(staffNotificationOperations.id, operation.id));
     if (operation.subjectType === "partner_owner_group") {
-      const { ownerAlertInitialAccepted } = await import("@/lib/partner-owner-alerts");
       await ownerAlertInitialAccepted(tx, operation, now);
     }
     await insertWorkerAudit(tx, {
