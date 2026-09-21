@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -1304,6 +1304,34 @@ for (const width of [1440, 375])
             jobId,
           }),
         );
+      } catch (error) {
+        const directory = process.env["PARTNER_CRM_SCREENSHOT_DIR"];
+        // Retain only the controlled local CRM presentation, never login pages,
+        // cookies, invitation URLs, or document HTML containing hidden values.
+        const current = new URL(staffPage.url());
+        if (
+          directory &&
+          current.origin === base &&
+          /^\/(?:team\/(?:partners|calendar)|mobile)(?:\/|$)/u.test(
+            current.pathname,
+          )
+        ) {
+          await mkdir(directory, { recursive: true }).catch(() => {});
+          await Promise.allSettled([
+            staffPage.screenshot({
+              path: `${directory}/crm-failure-${width}.png`,
+              fullPage: true,
+              timeout: 5000,
+            }),
+            staffPage
+              .locator("body")
+              .innerText({ timeout: 5000 })
+              .then((text) =>
+                writeFile(`${directory}/crm-failure-${width}.txt`, text),
+              ),
+          ]);
+        }
+        throw error;
       } finally {
         if (configured)
           await fixture({ action: "release-profile", ...configured }, true);

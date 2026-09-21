@@ -23,10 +23,16 @@ function preferred(windows: PartnerServiceReview["preferredWindows"]) {
     windows.map(requestedPartnerWindow).join("; ") || "Staff to arrange a date"
   );
 }
-function arrival(item: PartnerServiceReview) {
-  if (!item.arrivalStartAt || !item.arrivalEndAt) return null;
-  const start = new Date(item.arrivalStartAt),
-    end = new Date(item.arrivalEndAt);
+function arrival(item: PartnerServiceReview | PartnerServiceReviewDetail) {
+  const confirmedWindow =
+    "partnerRequest" in item
+      ? item.partnerRequest?.scheduling.confirmedWindow
+      : null;
+  const startAt = confirmedWindow?.startAt ?? item.arrivalStartAt;
+  const endAt = confirmedWindow?.endAt ?? item.arrivalEndAt;
+  if (!startAt || !endAt) return null;
+  const start = new Date(startAt),
+    end = new Date(endAt);
   if (
     !Number.isFinite(start.getTime()) ||
     !Number.isFinite(end.getTime()) ||

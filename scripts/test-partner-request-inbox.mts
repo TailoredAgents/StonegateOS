@@ -431,10 +431,8 @@ for (const engine of [chromium, webkit])
                     accountName: "Sample Bakery",
                     status:
                       blockedStatus ?? (confirmed ? "confirmed" : "requested"),
-                    arrivalStartAt: confirmed
-                      ? "2026-10-05T14:00:00.000Z"
-                      : null,
-                    arrivalEndAt: confirmed ? "2026-10-05T16:00:00.000Z" : null,
+                    // The detail API keeps the arrival window in the structured
+                    // partnerRequest. Top-level arrival fields belong to lists.
                     createdAt: "2026-09-19T12:00:00.000Z",
                     service: "Facility cleanout",
                     siteName: "Bakery warehouse",
