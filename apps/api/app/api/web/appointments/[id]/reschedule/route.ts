@@ -39,6 +39,7 @@ import { PartnerPortalSchedulingError } from "@/lib/partner-portal-v2-scheduling
 import {
   acquireScheduleConflictLock,
   decideScheduleConflictOverride,
+  decideStaffScheduleConflict,
   inspectScheduleConflicts,
 } from "@/lib/appointment-schedule-conflicts";
 import {
@@ -136,22 +137,15 @@ export async function POST(
       input.conflictAcknowledgement ||
       input.conflictFingerprint,
   );
-  if (conflictOverrideRequested) {
-    if (!isAdmin) {
-      return NextResponse.json(
-        {
-          error: "schedule_conflict_override_forbidden",
-          message:
-            "Only an authorized team member can override a schedule conflict.",
-        },
-        { status: 403 },
-      );
-    }
-    const overrideDenied = await requirePermission(
-      request,
-      "appointments.override_conflicts",
+  if (conflictOverrideRequested && !isAdmin) {
+    return NextResponse.json(
+      {
+        error: "schedule_conflict_override_forbidden",
+        message:
+          "Only an authorized team member can override a schedule conflict.",
+      },
+      { status: 403 },
     );
-    if (overrideDenied) return overrideDenied;
   }
   const expectedVersion = readExpectedVersion(request, input.expectedVersion);
   if (!expectedVersion.valid) {
@@ -335,14 +329,12 @@ export async function POST(
         capacity: getAppointmentCapacity(),
         excludeAppointmentId: appointmentId,
       });
-      const scheduleOverride = decideScheduleConflictOverride(
-        scheduleDecision,
-        {
-          reason: input.conflictOverrideReason,
-          acknowledgement: input.conflictAcknowledgement,
-          fingerprint: input.conflictFingerprint,
-        },
-      );
+      const scheduleOverride =
+        isAdmin && actor.type === "human"
+          ? decideStaffScheduleConflict(scheduleDecision, {
+              actorType: actor.type,
+            })
+          : decideScheduleConflictOverride(scheduleDecision, {});
       if (!scheduleOverride.ok) {
         return {
           kind: "schedule_conflict" as const,
@@ -351,6 +343,8 @@ export async function POST(
           decision: scheduleDecision,
         };
       }
+      const scheduleWarning =
+        "warning" in scheduleOverride ? scheduleOverride.warning : null;
 
       await assertAppointmentStatusTransitionAllowed({
         appointmentId,
@@ -439,6 +433,7 @@ export async function POST(
             scheduleConflictOverridden: scheduleOverride.overridden,
             scheduleConflictOverrideReason: scheduleOverride.reason,
             scheduleConflictFingerprint: scheduleDecision.fingerprint,
+            scheduleWarning,
             conflictingIntervals: scheduleDecision.conflicts.map(
               (conflict) => ({
                 id: conflict.id,
@@ -454,6 +449,7 @@ export async function POST(
             kind: "updated" as const,
             appointment: updated,
             scheduleConflictOverridden: scheduleOverride.overridden,
+            scheduleWarning,
           }
         : { kind: "not_found" as const };
     })
@@ -648,5 +644,6 @@ export async function POST(
     version: updated.updatedAt.toISOString(),
     calendarSync,
     scheduleConflictOverridden: updatedResult.scheduleConflictOverridden,
+    scheduleWarning: updatedResult.scheduleWarning,
   });
 }

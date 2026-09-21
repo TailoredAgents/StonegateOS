@@ -223,7 +223,7 @@ describe("appointment quote-to-job conversion atomicity contract", () => {
     expect(auditBlock).not.toContain("soldByOverrideCode");
   });
 
-  it("rejects inactive attribution members and conflicting conversion-time reschedules", () => {
+  it("rejects inactive attribution members and warns on capacity during conversion-time reschedules", () => {
     const transaction = sliceBetween(
       route,
       "await database.transaction(async (tx)",
@@ -239,10 +239,14 @@ describe("appointment quote-to-job conversion atomicity contract", () => {
     expect(transaction).toContain("durationMinutes: existing.durationMinutes");
     expect(transaction).toContain("capacity: getAppointmentCapacity()");
     expect(transaction).toContain("excludeAppointmentId: appointmentId");
-    expect(transaction).toContain("if (scheduleDecision.conflict)");
     expect(transaction).toContain(
-      'conversionFailure("conflict", scheduleDecision.message',
+      "decideStaffScheduleConflict(scheduleDecision,",
     );
+    expect(transaction).toContain("if (!staffSchedule.ok)");
+    expect(transaction).toContain(
+      'conversionFailure("conflict", staffSchedule.message',
+    );
+    expect(transaction).toContain("scheduleWarning = staffSchedule.warning");
   });
 
   it("records conversion lifecycle evidence without an implicit customer send", () => {

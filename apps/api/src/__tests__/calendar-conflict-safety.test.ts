@@ -5,6 +5,7 @@ import {
   buildScheduleOccupancyInterval,
   buildScheduleInterval,
   decideScheduleConflictOverride,
+  decideStaffScheduleConflict,
   scheduleIntervalsOverlap,
   selectBlockingScheduleConflicts,
   type ScheduleConflict,
@@ -162,6 +163,87 @@ describe("Calendar half-open schedule intervals", () => {
         2,
       ),
     ).toEqual({ maximumConcurrent: 0, conflicts: [] });
+  });
+});
+
+describe("Staff schedule capacity warnings", () => {
+  it("allows a third overlapping job and reports the existing work without an override", () => {
+    const firstJob = conflictDecision().conflicts[0]!;
+    const decision: ScheduleConflictDecision = {
+      ...conflictDecision(),
+      capacity: 2,
+      overlappingCount: 2,
+      overrideAllowed: true,
+      conflicts: [
+        firstJob,
+        {
+          ...firstJob,
+          id: "appointment:second",
+          title: "Second customer - job",
+        },
+      ],
+    };
+    const result = decideStaffScheduleConflict(decision, {
+      actorType: "human",
+    });
+    const warningMessage: unknown = expect.stringContaining(
+      "This time exceeds schedule capacity",
+    );
+    expect(result).toEqual({
+      ok: true,
+      overridden: false,
+      reason: null,
+      warning: {
+        code: "schedule_capacity_exceeded",
+        message: warningMessage,
+        conflicts: decision.conflicts,
+      },
+    });
+    if (result.ok) {
+      expect(result.warning?.message).toContain("Alex Customer - job");
+      expect(result.warning?.message).toContain("Second customer - job");
+      expect(result.warning?.message).not.toContain("override");
+    }
+    expect(decideScheduleConflictOverride(decision, {})).toMatchObject({
+      ok: false,
+      code: "schedule_conflict",
+    });
+  });
+
+  it("returns no warning when the time has capacity", () => {
+    expect(
+      decideStaffScheduleConflict(
+        { ...conflictDecision(), conflict: false },
+        { actorType: "human" },
+      ),
+    ).toEqual({ ok: true, overridden: false, reason: null, warning: null });
+  });
+
+  it("still rejects configured closures and external blocks for staff", () => {
+    expect(
+      decideStaffScheduleConflict(
+        { ...conflictDecision(), overrideAllowed: false },
+        { actorType: "human" },
+      ),
+    ).toMatchObject({ ok: false, code: "schedule_conflict" });
+  });
+
+  it.each(["worker", "ai", "system", undefined])(
+    "keeps capacity blocking for %s callers even without an automated source",
+    (actorType) => {
+      expect(
+        decideStaffScheduleConflict(conflictDecision(), { actorType }),
+      ).toMatchObject({ ok: false, code: "schedule_conflict" });
+    },
+  );
+
+  it("keeps automated capacity blocking even with a human actor", () => {
+    expect(
+      decideStaffScheduleConflict(conflictDecision(), {
+        actorType: "human",
+        autonomous: true,
+      }),
+    ).toMatchObject({ ok: false, code: "schedule_conflict" });
   });
 });
 
@@ -332,8 +414,32 @@ describe("Calendar route enforcement source contracts", () => {
       expect(source.indexOf("acquireScheduleConflictLock(tx)")).toBeLessThan(
         source.indexOf("inspectScheduleConflicts(tx"),
       );
-      expect(source).toContain("appointments.override_conflicts");
+      expect(source).toContain("decideStaffScheduleConflict(scheduleDecision,");
       expect(source).toContain("requiredAcknowledgement");
+    }
+  });
+
+  it("keeps public reschedules and automated bookings on the strict conflict path", () => {
+    const booking = read("apps/api/app/api/admin/booking/book/route.ts");
+    const reschedule = read(
+      "apps/api/app/api/web/appointments/[id]/reschedule/route.ts",
+    );
+    expect(booking).toContain(
+      "const scheduleOverride = allowStaffCapacityWarning",
+    );
+    expect(booking).toContain(
+      ": decideScheduleConflictOverride(scheduleDecision",
+    );
+    expect(booking).toContain(
+      'actor.type === "human" && !requiresAutonomousBookingRules',
+    );
+    expect(reschedule).toContain('isAdmin && actor.type === "human"');
+    expect(reschedule).toContain(
+      ": decideScheduleConflictOverride(scheduleDecision, {})",
+    );
+    expect(reschedule).not.toContain('"appointments.override_conflicts"');
+    for (const source of [booking, reschedule]) {
+      expect(source).toContain("scheduleWarning,");
     }
   });
 

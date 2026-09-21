@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { callAdminApiAs } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 import { requireTeamPrincipal } from "@/app/api/team/auth";
+import { readScheduleWarning } from "@/app/team/lib/schedule-warning";
 
 export const dynamic = "force-dynamic";
 
@@ -137,16 +138,20 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 
     if (returnJson) return NextResponse.json(result);
+    const scheduleWarning = readScheduleWarning(result["scheduleWarning"]);
+    const successMessage =
+      result["calendarSync"] === "reconciliation_required"
+        ? "Appointment rescheduled in the CRM, but Google Calendar needs reconciliation."
+        : "Appointment rescheduled";
     const response = NextResponse.redirect(redirectTo, 303);
     response.cookies.set({
       name:
         result["calendarSync"] === "reconciliation_required"
           ? "myst-flash-error"
           : "myst-flash",
-      value:
-        result["calendarSync"] === "reconciliation_required"
-          ? "Appointment rescheduled in the CRM, but Google Calendar needs reconciliation."
-          : "Appointment rescheduled",
+      value: scheduleWarning
+        ? `${successMessage.replace(/\.$/u, "")}. Warning: ${scheduleWarning}`
+        : successMessage,
       path: "/",
     });
     return response;

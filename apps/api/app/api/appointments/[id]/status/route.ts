@@ -22,7 +22,9 @@ import {
 } from "@/lib/appointment-media";
 import {
   acquireScheduleConflictLock,
+  decideStaffScheduleConflict,
   inspectScheduleConflicts,
+  type ScheduleCapacityWarning,
 } from "@/lib/appointment-schedule-conflicts";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import {
@@ -1346,6 +1348,7 @@ export async function POST(
           409,
         );
       }
+      let scheduleWarning: ScheduleCapacityWarning | null = null;
       if (returnsToOccupiedSchedule && existing.startAt) {
         const capacityDecision = await inspectScheduleConflicts(tx, {
           startAt: existing.startAt,
@@ -1354,7 +1357,10 @@ export async function POST(
           capacity: getAppointmentCapacity(),
           excludeAppointmentId: existing.id,
         });
-        if (capacityDecision.conflict)
+        const staffSchedule = decideStaffScheduleConflict(capacityDecision, {
+          actorType: mutation.actor.type,
+        });
+        if (!staffSchedule.ok)
           return storeTerminalFailure(
             tx,
             mutation,
@@ -1362,10 +1368,11 @@ export async function POST(
             statusFailure(
               "conflict",
               "schedule_conflict",
-              "This appointment cannot be reopened at its old time because current staffing, holds, or calendar blocks no longer leave enough capacity. Reschedule it first.",
+              staffSchedule.message,
             ),
             409,
           );
+        scheduleWarning = staffSchedule.warning;
       }
       const becameFinalTotalKnown =
         status === "completed" &&
@@ -1645,6 +1652,7 @@ export async function POST(
           commissionPeriod,
           proofOverrideApplied,
           proofOverrideCategories,
+          scheduleWarning,
         },
         committedAt: updated.updatedAt,
       });
@@ -1715,6 +1723,7 @@ export async function POST(
           ? ("requested" as const)
           : ("not_requested" as const),
         bookingDetailsUpdated: bookingDetailsUpdate !== undefined,
+        scheduleWarning,
       };
       const success = {
         ...teamMutationSuccessResult(mutation, data, {

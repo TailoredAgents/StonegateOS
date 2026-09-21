@@ -19,6 +19,8 @@ const { build } = createRequire(require.resolve("tsx"))("esbuild");
 const accountId = "22222222-2222-4222-8222-222222222222";
 const groupId = "33333333-3333-4333-8333-333333333333";
 const crewId = "66666666-6666-4666-8666-666666666666";
+const capacityWarningMessage =
+  "This time exceeds schedule capacity. Review the overlapping jobs.";
 const kinds = [
   "service",
   "reschedule",
@@ -592,6 +594,15 @@ for (const engine of [chromium, webkit])
                   ok: true,
                   version: "2026-09-19T13:00:00.000Z",
                   calendarSync: "not_required",
+                  ...(width === 375
+                    ? {
+                        scheduleWarning: {
+                          code: "schedule_capacity_exceeded",
+                          message: capacityWarningMessage,
+                          conflicts: [],
+                        },
+                      }
+                    : {}),
                 }),
               });
             }
@@ -1158,6 +1169,17 @@ for (const engine of [chromium, webkit])
             ),
           ).toBeVisible();
           await expect(confirmService).toHaveCount(0);
+          const capacityWarning = page
+            .getByRole("status")
+            .filter({ hasText: capacityWarningMessage });
+          if (width === 375) {
+            await expect(capacityWarning).toBeVisible();
+            await expect(capacityWarning).toHaveClass(/\bbg-amber-50\b/u);
+            await frames(page);
+            await expect(capacityWarning).toBeVisible();
+          } else {
+            await expect(capacityWarning).toHaveCount(0);
+          }
           await expect(
             page.getByRole("complementary", {
               name: "Service scheduling",
@@ -1202,6 +1224,13 @@ for (const engine of [chromium, webkit])
             false,
             "Confirmed work no longer warns that its schedule is unsaved",
           );
+          await list
+            .getByRole("button")
+            .filter({ hasText: "Billing questions" })
+            .click();
+          await expect(capacityWarning).toHaveCount(0);
+          await page.getByRole("button", { name: "Back to requests" }).click();
+          await expect(list).toBeFocused();
           // A group is acknowledged only after every member has been rendered in a visible list.
           await visibility(page, true);
           await expect

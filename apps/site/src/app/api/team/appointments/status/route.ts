@@ -6,6 +6,7 @@ import { requireTeamPrincipal } from "@/app/api/team/auth";
 import { parseAppointmentBookingFormData } from "@/app/team/lib/booking-details";
 import { parseCrewPayoutFormData } from "@/app/team/lib/crew-payout-form";
 import { isTeamMutationSuccessEnvelope } from "@/app/team/lib/mutation-feedback";
+import { readScheduleWarning } from "@/app/team/lib/schedule-warning";
 import { hasTeamPermission } from "@/lib/team-principal";
 
 export const dynamic = "force-dynamic";
@@ -69,6 +70,7 @@ function isExactAppointmentStatusReceipt(
   data: {
     calendarSync: "requested" | "not_required";
     version: string;
+    scheduleWarning?: unknown;
   };
 } {
   if (!isTeamMutationSuccessEnvelope(value) || !isRecord(value)) return false;
@@ -381,16 +383,20 @@ export async function POST(request: NextRequest): Promise<Response> {
     result.data.calendarSync === "requested"
       ? " Google Calendar cleanup is queued."
       : "";
+  const scheduleWarning = readScheduleWarning(result.data.scheduleWarning);
+  const successMessage =
+    statusValue === "completed" && isQuoteOnly
+      ? `Quote marked done.${effectCopy}`
+      : statusValue === "completed"
+        ? `Job completed.${effectCopy}`
+        : statusValue === "canceled"
+          ? `Appointment canceled.${effectCopy}${calendarCopy}`
+          : `Appointment updated.${effectCopy}`;
   response.cookies.set({
     name: "myst-flash",
-    value:
-      statusValue === "completed" && isQuoteOnly
-        ? `Quote marked done.${effectCopy}`
-        : statusValue === "completed"
-          ? `Job completed.${effectCopy}`
-          : statusValue === "canceled"
-            ? `Appointment canceled.${effectCopy}${calendarCopy}`
-            : `Appointment updated.${effectCopy}`,
+    value: scheduleWarning
+      ? `${successMessage} Warning: ${scheduleWarning}`
+      : successMessage,
     path: "/",
   });
   return response;

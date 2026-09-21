@@ -118,6 +118,7 @@ export function InboxCustomerWorkspaceClient({
   const [drawer, setDrawer] = useState<Drawer>(null);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [scheduleWarning, setScheduleWarning] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const requestRef = React.useRef<AbortController | null>(null);
 
@@ -167,6 +168,7 @@ export function InboxCustomerWorkspaceClient({
     setLoading(false);
     setError(null);
     setNotice(null);
+    setScheduleWarning(null);
     setSelectedAppointmentId("");
     return () => requestRef.current?.abort();
   }, [contactId]);
@@ -186,8 +188,10 @@ export function InboxCustomerWorkspaceClient({
   function handleActionResult(result: {
     ok: boolean;
     error?: string;
+    warning?: string;
     draftText?: string;
   }): void {
+    setScheduleWarning(result.ok ? (result.warning ?? null) : null);
     if (!result.ok) {
       setNotice(result.error ?? "Unable to save. Your entries are still here.");
       return;
@@ -289,6 +293,14 @@ export function InboxCustomerWorkspaceClient({
           className="mt-2 text-xs text-[color:var(--team-text-muted)]"
         >
           {notice}
+        </p>
+      ) : null}
+      {scheduleWarning && !drawer ? (
+        <p
+          role="status"
+          className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+        >
+          Warning: {scheduleWarning}
         </p>
       ) : null}
       {drawer ? (

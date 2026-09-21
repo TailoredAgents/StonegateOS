@@ -80,6 +80,10 @@ export function PartnerServiceReviews({
     [message, setMessage] = useState("");
   const [returnDetail, setReturnDetail] =
     useState<PartnerServiceReviewDetail | null>(null);
+  const [scheduleWarning, setScheduleWarning] = useState<{
+    requestId: string;
+    message: string;
+  } | null>(null);
   const generation = useRef(0),
     focusScheduleOnLoad = useRef(false),
     detailRef = useRef<HTMLDivElement>(null),
@@ -118,6 +122,7 @@ export function PartnerServiceReviews({
     setCursor(null);
     setDetail(null);
     setReturnDetail(null);
+    setScheduleWarning(null);
     if (requestId && accountId) void open({ id: requestId, accountId });
     else void load();
     return () => {
@@ -139,6 +144,9 @@ export function PartnerServiceReviews({
     previous: PartnerServiceReviewDetail | null = null,
   ) {
     if (accountId && item.accountId !== accountId) return;
+    setScheduleWarning((previousWarning) =>
+      previousWarning?.requestId === item.id ? previousWarning : null,
+    );
     const current = ++generation.current;
     setBusy(true);
     setDetail(null);
@@ -166,6 +174,14 @@ export function PartnerServiceReviews({
       }
       aria-labelledby={embedded ? undefined : "partner-service-reviews-heading"}
     >
+      {scheduleWarning ? (
+        <p
+          role="status"
+          className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+        >
+          Service scheduled. Warning: {scheduleWarning.message}
+        </p>
+      ) : null}
       {!embedded ? (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -607,7 +623,12 @@ export function PartnerServiceReviews({
                     id: detail.id,
                     accountId: detail.accountId,
                   }}
-                  onScheduled={() => {
+                  onScheduled={(warning) => {
+                    setScheduleWarning(
+                      warning
+                        ? { requestId: detail.id, message: warning }
+                        : null,
+                    );
                     focusScheduleOnLoad.current = embedded;
                     onChanged?.();
                     if (requestId && accountId)
