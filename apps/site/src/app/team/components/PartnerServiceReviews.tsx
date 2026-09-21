@@ -40,11 +40,11 @@ function arrival(item: PartnerServiceReview) {
   });
   return `${format.formatRange(start, end)} (Eastern)`;
 }
-const SCHEDULED_HEADINGS: Record<string, string> = {
-  confirmed: "Service confirmed",
-  in_progress: "Service in progress",
-  completed: "Service completed",
-};
+const SCHEDULED_HEADINGS = new Map([
+  ["confirmed", "Service confirmed"],
+  ["in_progress", "Service in progress"],
+  ["completed", "Service completed"],
+]);
 /** Reads partner requests; the existing CRM scheduling form owns every mutation. */
 export function PartnerServiceReviews({
   canSchedule,
@@ -552,7 +552,7 @@ export function PartnerServiceReviews({
                   : "space-y-4"
               }
             >
-              {embedded && !SCHEDULED_HEADINGS[detail.status] ? (
+              {embedded && !SCHEDULED_HEADINGS.get(detail.status) ? (
                 detail.partnerRequest ? (
                   <PartnerRequestScheduleSummary
                     details={detail.partnerRequest}
@@ -614,13 +614,13 @@ export function PartnerServiceReviews({
                 />
               ) : (
                 <div className="space-y-3">
-                  {embedded && SCHEDULED_HEADINGS[detail.status] ? (
+                  {embedded && SCHEDULED_HEADINGS.get(detail.status) ? (
                     <div
                       role="status"
                       className="space-y-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-teal-950"
                     >
                       <h4 className="font-semibold">
-                        {SCHEDULED_HEADINGS[detail.status]}
+                        {SCHEDULED_HEADINGS.get(detail.status)}
                       </h4>
                       <p className="text-sm leading-6">
                         {arrival(detail)
@@ -663,7 +663,7 @@ export function PartnerServiceReviews({
                       Open in calendar
                     </a>
                   ) : null}
-                  {embedded && SCHEDULED_HEADINGS[detail.status] ? (
+                  {embedded && SCHEDULED_HEADINGS.get(detail.status) ? (
                     <details className="border-t border-slate-200 pt-3 text-sm">
                       <summary className="min-h-11 cursor-pointer py-3 font-medium text-slate-700">
                         Scheduling details

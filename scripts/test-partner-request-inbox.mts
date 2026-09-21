@@ -313,6 +313,7 @@ for (const engine of [chromium, webkit])
         let pauseNextPreview = false;
         let minimalRequest = false,
           unknownProof = false;
+        let blockedStatus: string | null = null;
         let assistancePreference: "none" | "callback" | "waitlist" = "none";
         const calls: Array<{ name: string; input: any }> = [];
         await page.addInitScript(
@@ -428,7 +429,8 @@ for (const engine of [chromium, webkit])
                     id: rows[0]!.id,
                     accountId,
                     accountName: "Sample Bakery",
-                    status: confirmed ? "confirmed" : "requested",
+                    status:
+                      blockedStatus ?? (confirmed ? "confirmed" : "requested"),
                     arrivalStartAt: confirmed
                       ? "2026-10-05T14:00:00.000Z"
                       : null,
@@ -502,7 +504,7 @@ for (const engine of [chromium, webkit])
                       status: confirmed ? "confirmed" : "requested",
                       version: "2026-09-19T12:00:00.000Z",
                     },
-                    canSchedule: !confirmed,
+                    canSchedule: !confirmed && blockedStatus === null,
                   },
                 };
           } else if (name === "preview") {
@@ -1031,6 +1033,26 @@ for (const engine of [chromium, webkit])
           assistancePreference = "none";
           minimalRequest = false;
           unknownProof = false;
+          blockedStatus = "constructor";
+          await service.click();
+          await expect(
+            page.getByText(
+              "This request cannot be scheduled here in its current status. Refresh the request or review it in company Jobs.",
+              { exact: true },
+            ),
+          ).toBeVisible();
+          await expect(
+            page.getByRole("heading", {
+              name: "Service confirmed",
+              exact: true,
+            }),
+          ).toHaveCount(0);
+          await expect(
+            page.getByRole("button", { name: "Confirm service", exact: true }),
+          ).toHaveCount(0);
+          await page.getByRole("button", { name: "Back to requests" }).click();
+          await expect(list).toBeFocused();
+          blockedStatus = null;
           await list
             .getByRole("button")
             .filter({ hasText: "Billing questions" })
