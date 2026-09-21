@@ -312,9 +312,20 @@ for (const engine of [chromium, webkit])
         }> = [];
         let releaseMutation: (() => void) | undefined;
         let releasePreview: (() => void) | undefined;
+        let releaseService: (() => void) | undefined;
         let pauseNextPreview = false;
+        let pauseNextService = false,
+          staleService = false;
+        let mutationAcknowledgement:
+          | "malformed"
+          | "wrong-appointment"
+          | "valid" = "valid";
         let minimalRequest = false,
           unknownProof = false;
+        let duplicateRequestedDates = false,
+          noRequestedDates = false,
+          schedulePermission = true;
+        let existingStartAt: string | null = null;
         let blockedStatus: string | null = null;
         let assistancePreference: "none" | "callback" | "waitlist" = "none";
         const calls: Array<{ name: string; input: any }> = [];
@@ -405,6 +416,7 @@ for (const engine of [chromium, webkit])
                     }
                   : {}),
                 canAcknowledge: allowAck,
+                canAct: schedulePermission,
               },
               record:
                 item.kind === "service"
@@ -417,6 +429,24 @@ for (const engine of [chromium, webkit])
                     },
             };
           } else if (name === "service") {
+            if (pauseNextService) {
+              pauseNextService = false;
+              await new Promise<void>((resolve) => {
+                releaseService = resolve;
+              });
+            }
+            const preferredWindows = noRequestedDates
+              ? []
+              : duplicateRequestedDates
+                ? [
+                    rows[0]!.preferredWindows[0]!,
+                    {
+                      ...rows[0]!.preferredWindows[0]!,
+                      timeOfDay: "morning",
+                    },
+                    rows[0]!.preferredWindows[1]!,
+                  ]
+                : rows[0]!.preferredWindows;
             result = serviceFailure
               ? {
                   ok: false,
@@ -431,14 +461,16 @@ for (const engine of [chromium, webkit])
                     id: rows[0]!.id,
                     accountId,
                     accountName: "Sample Bakery",
-                    status:
-                      blockedStatus ?? (confirmed ? "confirmed" : "requested"),
+                    status: staleService
+                      ? "under_review"
+                      : (blockedStatus ??
+                        (confirmed ? "confirmed" : "requested")),
                     // The detail API keeps the arrival window in the structured
                     // partnerRequest. Top-level arrival fields belong to lists.
                     createdAt: "2026-09-19T12:00:00.000Z",
                     service: "Facility cleanout",
                     siteName: "Bakery warehouse",
-                    preferredWindows: rows[0]!.preferredWindows,
+                    preferredWindows,
                     reasons: ["manual_review_required"],
                     originalJob: null,
                     location: {
@@ -476,6 +508,7 @@ for (const engine of [chromium, webkit])
                         : {}),
                       scheduling: {
                         ...submittedRequest.scheduling,
+                        preferredWindows,
                         assistancePreference,
                         confirmedWindow: confirmed
                           ? {
@@ -500,11 +533,16 @@ for (const engine of [chromium, webkit])
                     appointment: {
                       id: "44444444-4444-4444-8444-444444444444",
                       type: "service",
-                      startAt: confirmed ? "2026-10-05T14:30:00.000Z" : null,
+                      startAt: confirmed
+                        ? "2026-10-05T14:30:00.000Z"
+                        : existingStartAt,
                       status: confirmed ? "confirmed" : "requested",
                       version: "2026-09-19T12:00:00.000Z",
                     },
-                    canSchedule: !confirmed && blockedStatus === null,
+                    canSchedule:
+                      !confirmed &&
+                      blockedStatus === null &&
+                      schedulePermission,
                   },
                 };
           } else if (name === "preview") {
@@ -587,13 +625,13 @@ for (const engine of [chromium, webkit])
                 }),
               });
             } else {
-              confirmed = true;
+              confirmed = mutationAcknowledgement === "valid";
               await route.fulfill({
                 contentType: "application/json",
                 body: JSON.stringify({
                   ok: true,
                   version: "2026-09-19T13:00:00.000Z",
-                  calendarSync: "not_required",
+                  calendarSync: "reconciliation_required",
                   ...(width === 375
                     ? {
                         scheduleWarning: {
@@ -603,6 +641,17 @@ for (const engine of [chromium, webkit])
                         },
                       }
                     : {}),
+                  ...(mutationAcknowledgement === "malformed"
+                    ? {}
+                    : {
+                        appointmentId:
+                          mutationAcknowledgement === "wrong-appointment"
+                            ? "55555555-5555-4555-8555-555555555555"
+                            : fields.get("appointmentId"),
+                        status: "confirmed",
+                        preferredDate: fields.get("preferredDate"),
+                        startAt: "2026-10-05T14:30:00.000Z",
+                      }),
                 }),
               });
             }
@@ -745,11 +794,17 @@ for (const engine of [chromium, webkit])
             page.getByText("Collect twelve unused shelves.", { exact: true }),
           ).toBeVisible();
           await expect(
-            page.getByLabel("Service date", { exact: true }),
+            page.getByRole("group", { name: "Service date", exact: true }),
           ).toBeVisible();
           await expect(
-            page.getByLabel("Planned start time", { exact: true }),
+            page.getByRole("combobox", {
+              name: "Start time (Eastern)",
+              exact: true,
+            }),
           ).toBeVisible();
+          await expect(
+            page.locator('input[type="date"][name="preferredDate"]'),
+          ).toHaveCount(0);
           await expect(
             page.getByRole("link", { name: "Call Morgan Lee", exact: true }),
           ).toHaveAttribute("href", "tel:+14045550100");
@@ -817,10 +872,50 @@ for (const engine of [chromium, webkit])
           await expect(
             page.getByRole("button", { name: "Confirm service", exact: true }),
           ).toBeDisabled();
-          const serviceDate = page.getByLabel("Service date", { exact: true });
-          const plannedTime = page.getByLabel("Planned start time", {
+          const serviceDate = page.locator('input[name="preferredDate"]');
+          const manualDate = page.locator(
+            'input[type="date"][name="preferredDate"]',
+          );
+          const customDate = page.getByRole("button", {
+            name: "Choose another date",
             exact: true,
           });
+          const plannedTime = page.getByRole("combobox", {
+            name: "Start time (Eastern)",
+            exact: true,
+          });
+          await expect(plannedTime).toHaveJSProperty("tagName", "SELECT");
+          assert.ok(
+            (await plannedTime.boundingBox())!.height >= 44,
+            "The start-time selector remains a usable touch target in every browser",
+          );
+          await expect(plannedTime).toHaveValue("");
+          await expect(plannedTime.locator('option[value=""]')).toHaveCount(1);
+          await expect(
+            plannedTime.locator('option[value=""]'),
+          ).toHaveJSProperty("disabled", true);
+          const timeOptions = await plannedTime
+            .locator("option")
+            .evaluateAll((options) =>
+              options.map((option) => ({
+                value: (option as HTMLOptionElement).value,
+                text: option.textContent?.trim() ?? "",
+              })),
+            );
+          assert.deepEqual(
+            timeOptions
+              .filter((option) => option.value)
+              .map((option) => option.value),
+            Array.from(
+              { length: 48 },
+              (_, index) =>
+                `${String(Math.floor(index / 2)).padStart(2, "0")}:${index % 2 ? "30" : "00"}`,
+            ),
+            "All half-hour choices are available without selecting a default time",
+          );
+          for (const option of timeOptions.filter((option) => option.value)) {
+            assert.match(option.text, /\b(?:AM|PM)\b/u);
+          }
           const firstRequestedDate = page.getByRole("button", {
             name: "Use date: Oct 3, 2026",
             exact: true,
@@ -838,11 +933,26 @@ for (const engine of [chromium, webkit])
           );
           await expect(otherTimezone).toBeDisabled();
           await expect(otherTimezone).toHaveAccessibleDescription(
-            /Client is flexible on time.*Requested in America\/Chicago\. Enter the matching Eastern date below\./u,
+            /Client is flexible on time.*America\/Chicago.*Eastern/u,
           );
+          await expect(
+            page.getByRole("status").filter({
+              hasText:
+                "Choose a date and start time to review the appointment.",
+            }),
+          ).toBeVisible();
+          await expect(
+            page.getByText("Review appointment", { exact: true }),
+          ).toHaveCount(0);
+          await fits(page);
+          await page.getByRole("main").screenshot({
+            path: `${artifacts}/${engine.name()}-${width}-initial-review.png`,
+          });
           await firstRequestedDate.focus();
           await firstRequestedDate.press("Enter");
           await expect(serviceDate).toHaveValue("2026-10-03");
+          await expect(serviceDate).toHaveAttribute("type", "hidden");
+          await expect(manualDate).toHaveCount(0);
           await expect(firstRequestedDate).toHaveAttribute(
             "aria-pressed",
             "true",
@@ -875,9 +985,7 @@ for (const engine of [chromium, webkit])
           await shortcutBack;
           await expect(serviceDate).toHaveValue("2026-10-03");
           await expect(list).toBeHidden();
-          await page
-            .getByLabel("Planned start time", { exact: true })
-            .fill("10:30");
+          await plannedTime.selectOption("10:30");
           await expect(
             page.getByText(
               "Arrival preview unavailable. Reference: preview-fixture.",
@@ -896,6 +1004,19 @@ for (const engine of [chromium, webkit])
           await expect(
             page.getByText(/Oct 3, 2026.*10:00\s*AM.*12:00\s*PM.*EDT/u),
           ).toBeVisible();
+          const readyPreview = page.getByRole("status").filter({
+            has: page.getByText("Review appointment", { exact: true }),
+          });
+          await expect(readyPreview.locator("dt")).toHaveText([
+            "Start time",
+            "Client arrival window",
+          ]);
+          await expect(readyPreview.locator("dd").first()).toHaveText(
+            "10:30 AM Eastern",
+          );
+          await expect(readyPreview.locator("dd").last()).toHaveText(
+            /Oct 3, 2026.*10:00\s*AM.*12:00\s*PM.*EDT/u,
+          );
           const previewsBeforeShortcut = calls.filter(
             (call) => call.name === "preview",
           ).length;
@@ -936,12 +1057,78 @@ for (const engine of [chromium, webkit])
             0,
             "Date and time editing only requests an arrival preview",
           );
+          await customDate.click();
+          await expect(manualDate).toBeVisible();
+          await expect(manualDate).toBeFocused();
+          await expect(manualDate).toHaveValue("2026-10-05");
+          const previewsBeforeCustomDate = calls.filter(
+            (call) => call.name === "preview",
+          ).length;
+          pauseNextPreview = true;
+          await manualDate.fill("2026-10-07");
+          await expect(plannedTime).toHaveValue("10:30");
+          await expect(firstRequestedDate).toHaveAttribute(
+            "aria-pressed",
+            "false",
+          );
+          await expect(secondRequestedDate).toHaveAttribute(
+            "aria-pressed",
+            "false",
+          );
+          await expect(
+            page.getByRole("button", { name: "Confirm service", exact: true }),
+          ).toBeDisabled();
+          await expect
+            .poll(() => calls.filter((call) => call.name === "preview").length)
+            .toBeGreaterThan(previewsBeforeCustomDate);
+          assert.ok(releasePreview);
+          releasePreview();
+          await expect(
+            page.getByRole("button", { name: "Confirm service", exact: true }),
+          ).toBeEnabled();
+          const customPreview = calls
+            .filter((call) => call.name === "preview")
+            .at(-1)!;
+          assert.equal(customPreview.input.preferredDate, "2026-10-07");
+          assert.equal(customPreview.input.startTime, "10:30");
+          assert.equal(
+            mutations.length,
+            0,
+            "A custom date still only previews the schedule",
+          );
+          await fits(page);
+          await page.getByRole("main").screenshot({
+            path: `${artifacts}/${engine.name()}-${width}-custom-date.png`,
+          });
+          await secondRequestedDate.click();
+          await expect(manualDate).toHaveCount(0);
+          await expect(serviceDate).toHaveAttribute("type", "hidden");
+          await expect(serviceDate).toHaveValue("2026-10-05");
+          await expect(plannedTime).toHaveValue("10:30");
+          await expect(plannedTime).toBeFocused();
+          await expect(
+            page.getByRole("button", { name: "Confirm service", exact: true }),
+          ).toBeEnabled();
           const resourceSummary = page
             .locator("summary")
             .filter({ hasText: /^Crew, truck & equipment/u });
           await expect(resourceSummary.locator("..")).toHaveJSProperty(
             "open",
             false,
+          );
+          assert.equal(
+            await resourceSummary.evaluate((summary) => {
+              const preview = summary
+                .closest("form")
+                ?.querySelector('[role="status"]');
+              return Boolean(
+                preview &&
+                  summary.compareDocumentPosition(preview) &
+                    Node.DOCUMENT_POSITION_FOLLOWING,
+              );
+            }),
+            true,
+            "Optional resource choices come before the final arrival preview",
           );
           await expect(
             page.locator('input[name="resourceSelectionMode"]'),
@@ -1001,6 +1188,99 @@ for (const engine of [chromium, webkit])
           await expect
             .poll(() => page.evaluate(() => window.scrollY))
             .toBe(listScroll);
+          duplicateRequestedDates = true;
+          await service.click();
+          await expect(firstRequestedDate).toHaveCount(1);
+          await expect(firstRequestedDate).toHaveAccessibleDescription(
+            /morning/u,
+          );
+          await expect(firstRequestedDate).toHaveAccessibleDescription(
+            /afternoon/u,
+          );
+          await expect(
+            page.getByRole("button", { name: /^Use date:/u }),
+          ).toHaveCount(2);
+          await firstRequestedDate.click();
+          await expect(serviceDate).toHaveValue("2026-10-03");
+          await expect(plannedTime).toHaveValue("");
+          await expect(plannedTime).toBeFocused();
+          await expect(manualDate).toHaveCount(0);
+          assert.equal(
+            mutations.length,
+            0,
+            "Grouped date choices cannot confirm a request",
+          );
+          page.once("dialog", (dialog) => dialog.accept());
+          await page.getByRole("button", { name: "Back to requests" }).click();
+          await expect(list).toBeFocused();
+          duplicateRequestedDates = false;
+
+          noRequestedDates = true;
+          await service.click();
+          await expect(manualDate).toBeVisible();
+          await expect(plannedTime).toHaveValue("");
+          await expect(
+            page.getByRole("button", { name: /^Use date:/u }),
+          ).toHaveCount(0);
+          await manualDate.fill("2026-10-07");
+          await plannedTime.selectOption("10:30");
+          await expect(
+            page.getByRole("button", { name: "Confirm service", exact: true }),
+          ).toBeEnabled();
+          assert.equal(
+            mutations.length,
+            0,
+            "Requests without suggested dates stay preview-only until confirmation",
+          );
+          page.once("dialog", (dialog) => dialog.accept());
+          await page.getByRole("button", { name: "Back to requests" }).click();
+          await expect(list).toBeFocused();
+          noRequestedDates = false;
+
+          existingStartAt = "2026-10-03T14:15:00.000Z";
+          await service.click();
+          await expect(plannedTime).toHaveValue("10:15");
+          await expect(
+            plannedTime.locator('option[value="10:15"]'),
+          ).toContainText(/10:15\s*AM/u);
+          await expect(plannedTime.locator("option")).toHaveCount(50);
+          assert.equal(
+            mutations.length,
+            0,
+            "An existing off-grid time is never rounded or submitted automatically",
+          );
+          await page.getByRole("button", { name: "Back to requests" }).click();
+          await expect(list).toBeFocused();
+          existingStartAt = null;
+
+          schedulePermission = false;
+          const previewsBeforeReadOnly = calls.filter(
+            (call) => call.name === "preview",
+          ).length;
+          await service.click();
+          await expect(
+            page.getByRole("heading", {
+              name: "Facility cleanout",
+              exact: true,
+            }),
+          ).toBeVisible();
+          await expect(plannedTime).toHaveCount(0);
+          await expect(serviceDate).toHaveCount(0);
+          await expect(
+            page.getByRole("button", { name: "Confirm service", exact: true }),
+          ).toHaveCount(0);
+          assert.equal(
+            calls.filter((call) => call.name === "preview").length,
+            previewsBeforeReadOnly,
+          );
+          assert.equal(
+            mutations.length,
+            0,
+            "Read-only staff cannot preview or confirm a service schedule",
+          );
+          await page.getByRole("button", { name: "Back to requests" }).click();
+          await expect(list).toBeFocused();
+          schedulePermission = true;
           for (const preference of ["waitlist", "callback"] as const) {
             assistancePreference = preference;
             minimalRequest = true;
@@ -1104,7 +1384,7 @@ for (const engine of [chromium, webkit])
           // replace the form with the confirmed arrival window.
           await service.click();
           await secondRequestedDate.click();
-          await plannedTime.fill("10:30");
+          await plannedTime.selectOption("10:30");
           const confirmService = page.getByRole("button", {
             name: "Confirm service",
             exact: true,
@@ -1113,10 +1393,11 @@ for (const engine of [chromium, webkit])
           assert.equal(mutations.length, 0);
           await confirmService.click();
           await expect.poll(() => mutations.length).toBe(1);
-          await expect(serviceDate).toBeDisabled();
+          await expect(serviceDate).toHaveValue("2026-10-05");
           await expect(plannedTime).toBeDisabled();
           await expect(firstRequestedDate).toBeDisabled();
           await expect(secondRequestedDate).toBeDisabled();
+          await expect(customDate).toBeDisabled();
           assert.ok(releaseMutation);
           releaseMutation();
           await expect(
@@ -1149,43 +1430,141 @@ for (const engine of [chromium, webkit])
           await failedBack;
           await expect(plannedTime).toHaveValue("10:30");
           mutationFailure = false;
+          const confirmedHeading = page.getByRole("heading", {
+            name: "Service confirmed",
+            exact: true,
+          });
+          for (const acknowledgement of [
+            "malformed",
+            "wrong-appointment",
+          ] as const) {
+            mutationAcknowledgement = acknowledgement;
+            const readsBeforeInvalidResponse = calls.filter(
+              (call) => call.name === "service",
+            ).length;
+            await confirmService.click();
+            await expect(
+              page.getByText(
+                /The service response could not confirm the change/u,
+              ),
+            ).toBeVisible();
+            await expect(confirmedHeading).toHaveCount(0);
+            await expect(confirmService).toBeEnabled();
+            await expect(serviceDate).toHaveValue("2026-10-05");
+            await expect(plannedTime).toHaveValue("10:30");
+            assert.equal(
+              calls.filter((call) => call.name === "service").length,
+              readsBeforeInvalidResponse,
+              `${acknowledgement} responses must not start a saved-detail reload`,
+            );
+            assert.equal(mutations.at(-1)!.key, mutations[0]!.key);
+            assert.deepEqual(mutations.at(-1)!.fields, mutations[0]!.fields);
+          }
+          mutationAcknowledgement = "valid";
+          serviceFailure = true;
+          pauseNextService = true;
           await confirmService.click();
+          await expect(confirmedHeading).toHaveCount(1);
+          await expect(confirmedHeading).toBeVisible();
           await expect(
-            page.getByRole("heading", {
-              name: "Service confirmed",
-              exact: true,
-            }),
+            page.getByText("Refreshing the saved schedule…", { exact: true }),
           ).toBeVisible();
-          assert.equal(mutations.length, 2);
-          assert.equal(
-            mutations[1]!.key,
-            mutations[0]!.key,
-            "Retrying unchanged failed work reuses its original operation",
+          await expect(confirmService).toHaveCount(0);
+          await expect(serviceDate).toHaveCount(0);
+          const calendarWarning = page.getByRole("status").filter({
+            hasText:
+              "The calendar update needs attention; ask an owner to check it.",
+          });
+          const capacityWarning = page
+            .getByRole("status")
+            .filter({ hasText: capacityWarningMessage });
+          const assertCapacityWarning = async () => {
+            if (width === 375) {
+              await expect(capacityWarning).toBeVisible();
+              await expect(capacityWarning).toHaveClass(/\bbg-amber-50\b/u);
+            } else {
+              await expect(capacityWarning).toHaveCount(0);
+            }
+          };
+          await expect(calendarWarning).toBeVisible();
+          await assertCapacityWarning();
+          const schedulingPanel = page.getByRole("complementary", {
+            name: "Service scheduling",
+            exact: true,
+          });
+          await expect(schedulingPanel).toBeFocused();
+          assert.equal(mutations.length, 4);
+          for (const mutation of mutations.slice(1)) {
+            assert.equal(
+              mutation.key,
+              mutations[0]!.key,
+              "Retrying unchanged failed work reuses its original operation",
+            );
+            assert.deepEqual(mutation.fields, mutations[0]!.fields);
+          }
+          assert.ok(releaseService);
+          releaseService();
+          const refreshFailure = page.getByText(
+            "The latest details could not be refreshed. Your confirmation was saved.",
+            { exact: true },
           );
-          assert.deepEqual(mutations[1]!.fields, mutations[0]!.fields);
+          const retryDetails = page.getByRole("button", {
+            name: "Retry details",
+            exact: true,
+          });
+          await expect(refreshFailure).toBeVisible();
+          await expect(confirmedHeading).toHaveCount(1);
+          await expect(confirmService).toHaveCount(0);
+          await expect(calendarWarning).toBeVisible();
+          await assertCapacityWarning();
+          await expect(schedulingPanel).toBeFocused();
+          await fits(page);
+          await page.getByRole("main").screenshot({
+            path: `${artifacts}/${engine.name()}-${width}-saved-refresh-failed.png`,
+          });
+
+          // An older read can arrive after a verified write. It must not bring
+          // back a form for the already confirmed appointment.
+          serviceFailure = false;
+          staleService = true;
+          const readsBeforeRetry = calls.filter(
+            (call) => call.name === "service",
+          ).length;
+          await retryDetails.click();
+          await expect(refreshFailure).toBeVisible();
+          await expect(confirmedHeading).toHaveCount(1);
+          await expect(confirmService).toHaveCount(0);
+          await expect(serviceDate).toHaveCount(0);
+          await expect(calendarWarning).toBeVisible();
+          await assertCapacityWarning();
+          assert.equal(
+            calls.filter((call) => call.name === "service").length,
+            readsBeforeRetry + 1,
+          );
+          assert.equal(mutations.length, 4);
+          staleService = false;
+          await retryDetails.click();
           await expect(
             page.getByText(
               /Confirmed arrival:.*Oct 5, 2026.*10:00\s*AM.*12:00\s*PM.*Eastern/u,
             ),
           ).toBeVisible();
+          await expect(confirmedHeading).toHaveCount(1);
+          await expect(refreshFailure).toHaveCount(0);
+          await expect(retryDetails).toHaveCount(0);
+          await expect(calendarWarning).toBeVisible();
+          await assertCapacityWarning();
+          assert.equal(
+            mutations.length,
+            4,
+            "Retry details only reads the saved request; it never repeats confirmation",
+          );
           await expect(confirmService).toHaveCount(0);
-          const capacityWarning = page
-            .getByRole("status")
-            .filter({ hasText: capacityWarningMessage });
           if (width === 375) {
-            await expect(capacityWarning).toBeVisible();
-            await expect(capacityWarning).toHaveClass(/\bbg-amber-50\b/u);
             await frames(page);
             await expect(capacityWarning).toBeVisible();
-          } else {
-            await expect(capacityWarning).toHaveCount(0);
           }
-          await expect(
-            page.getByRole("complementary", {
-              name: "Service scheduling",
-              exact: true,
-            }),
-          ).toBeFocused();
+          await expect(schedulingPanel).toBeFocused();
           const calendarHref = await page
             .getByRole("link", { name: "Open in calendar", exact: true })
             .getAttribute("href");

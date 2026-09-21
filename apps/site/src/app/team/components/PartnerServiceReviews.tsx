@@ -51,6 +51,12 @@ const SCHEDULED_HEADINGS = new Map([
   ["in_progress", "Service in progress"],
   ["completed", "Service completed"],
 ]);
+type SavedScheduleReceipt = {
+  accountId: string;
+  requestId: string;
+  warning: string | null;
+  phase: "refreshing" | "refresh_failed" | "refreshed";
+};
 /** Reads partner requests; the existing CRM scheduling form owns every mutation. */
 export function PartnerServiceReviews({
   canSchedule,
@@ -80,18 +86,29 @@ export function PartnerServiceReviews({
     [message, setMessage] = useState("");
   const [returnDetail, setReturnDetail] =
     useState<PartnerServiceReviewDetail | null>(null);
-  const [scheduleWarning, setScheduleWarning] = useState<{
-    requestId: string;
-    message: string;
+  const [retryDetail, setRetryDetail] = useState<{
+    item: Pick<PartnerServiceReview, "id" | "accountId">;
+    previous: PartnerServiceReviewDetail | null;
   } | null>(null);
+  const [savedSchedule, setSavedSchedule] =
+    useState<SavedScheduleReceipt | null>(null);
+  const savedScheduleRef = useRef<SavedScheduleReceipt | null>(null);
+  const mounted = useRef(false);
+  const currentContext = useRef({ accountId, requestId, detail });
+  currentContext.current = { accountId, requestId, detail };
   const generation = useRef(0),
     focusScheduleOnLoad = useRef(false),
     detailRef = useRef<HTMLDivElement>(null),
     scheduleRef = useRef<HTMLElement>(null);
+  function rememberSavedSchedule(receipt: SavedScheduleReceipt | null) {
+    savedScheduleRef.current = receipt;
+    setSavedSchedule(receipt);
+  }
   async function load(more = false, search = appliedQuery) {
     const current = ++generation.current;
     setBusy(true);
     setMessage("");
+    setRetryDetail(null);
     const result = await loadPartnerServiceReviews({
       accountId,
       includeScheduled,
@@ -118,53 +135,122 @@ export function PartnerServiceReviews({
     setAppliedQuery(search);
   }
   useEffect(() => {
+    mounted.current = true;
     setItems([]);
     setCursor(null);
-    setDetail(null);
+    const receipt = savedScheduleRef.current;
+    if (
+      !receipt ||
+      receipt.accountId !== accountId ||
+      receipt.requestId !== requestId
+    ) {
+      rememberSavedSchedule(null);
+      setDetail(null);
+    }
     setReturnDetail(null);
-    setScheduleWarning(null);
+    setRetryDetail(null);
     if (requestId && accountId) void open({ id: requestId, accountId });
     else void load();
     return () => {
+      mounted.current = false;
       generation.current += 1;
     };
   }, [accountId, includeScheduled, requestId]);
   useEffect(() => {
     if (detail) {
-      if (!embedded) detailRef.current?.focus();
-      else if (focusScheduleOnLoad.current) {
+      if (focusScheduleOnLoad.current) {
         scheduleRef.current?.focus();
         focusScheduleOnLoad.current = false;
-      }
-      onReady?.();
+      } else if (!embedded) detailRef.current?.focus();
+      if (
+        (!requestId ||
+          (detail.id === requestId && detail.accountId === accountId)) &&
+        (!savedScheduleRef.current ||
+          savedScheduleRef.current.phase === "refreshed")
+      )
+        onReady?.();
     }
   }, [detail]);
+  useEffect(() => {
+    if (savedSchedule && savedSchedule.phase !== "refreshed") {
+      scheduleRef.current?.focus();
+    }
+  }, [savedSchedule]);
   async function open(
     item: Pick<PartnerServiceReview, "id" | "accountId">,
     previous: PartnerServiceReviewDetail | null = null,
   ) {
     if (accountId && item.accountId !== accountId) return;
-    setScheduleWarning((previousWarning) =>
-      previousWarning?.requestId === item.id ? previousWarning : null,
+    const receipt = savedScheduleRef.current;
+    const refreshingSavedSchedule =
+      receipt?.accountId === item.accountId && receipt.requestId === item.id
+        ? receipt
+        : null;
+    rememberSavedSchedule(
+      refreshingSavedSchedule
+        ? { ...refreshingSavedSchedule, phase: "refreshing" }
+        : null,
     );
     const current = ++generation.current;
     setBusy(true);
-    setDetail(null);
+    if (!refreshingSavedSchedule) setDetail(null);
     setMessage("");
+    setRetryDetail(null);
     const result = await loadPartnerServiceReviews({
       id: item.id,
       accountId: item.accountId,
     }).catch(() => null);
     if (current !== generation.current) return;
     setBusy(false);
-    if (!result?.ok) {
-      setMessage(result?.message ?? "This request could not be loaded.");
+    const nextDetail = result?.ok ? result.detail : null;
+    if (
+      !nextDetail ||
+      nextDetail.id !== item.id ||
+      nextDetail.accountId !== item.accountId
+    ) {
+      if (refreshingSavedSchedule) {
+        rememberSavedSchedule({
+          ...refreshingSavedSchedule,
+          phase: "refresh_failed",
+        });
+        return;
+      }
+      setMessage(
+        result && !result.ok
+          ? result.message
+          : "This request could not be loaded.",
+      );
+      setRetryDetail({ item, previous });
       setDetail(previous);
       return;
     }
-    setDetail(result.detail);
+    if (refreshingSavedSchedule) {
+      if (
+        nextDetail.canSchedule ||
+        (!SCHEDULED_HEADINGS.has(nextDetail.status) &&
+          !["canceled", "declined"].includes(nextDetail.status))
+      ) {
+        rememberSavedSchedule({
+          ...refreshingSavedSchedule,
+          phase: "refresh_failed",
+        });
+        return;
+      }
+      rememberSavedSchedule({
+        ...refreshingSavedSchedule,
+        phase: "refreshed",
+      });
+      focusScheduleOnLoad.current = true;
+    }
+    setDetail(nextDetail);
     setReturnDetail(previous);
   }
+  const detailReceipt =
+    detail &&
+    savedSchedule?.accountId === detail.accountId &&
+    savedSchedule.requestId === detail.id
+      ? savedSchedule
+      : null;
   return (
     <section
       className={
@@ -174,14 +260,6 @@ export function PartnerServiceReviews({
       }
       aria-labelledby={embedded ? undefined : "partner-service-reviews-heading"}
     >
-      {scheduleWarning ? (
-        <p
-          role="status"
-          className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
-        >
-          Service scheduled. Warning: {scheduleWarning.message}
-        </p>
-      ) : null}
       {!embedded ? (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -241,9 +319,21 @@ export function PartnerServiceReviews({
               className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
             >
               {message}
+              {retryDetail ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  className={`${teamButtonClass("secondary", "sm")} ml-2`}
+                  onClick={() =>
+                    void open(retryDetail.item, retryDetail.previous)
+                  }
+                >
+                  Try again
+                </button>
+              ) : null}
             </p>
           ) : null}
-          {busy ? (
+          {busy && !detailReceipt ? (
             <p role="status" className="text-sm">
               Loading…
             </p>
@@ -310,16 +400,22 @@ export function PartnerServiceReviews({
           ) : null}
         </>
       ) : null}
-      {embedded && busy ? <p role="status">Loading request details…</p> : null}
+      {embedded && busy && !detailReceipt ? (
+        <p role="status">Loading request details…</p>
+      ) : null}
       {embedded && message ? (
         <p role="alert">
           {message}{" "}
           <button
             type="button"
+            disabled={busy}
             className={teamButtonClass("secondary", "sm")}
-            onClick={() =>
-              requestId && accountId && void open({ id: requestId, accountId })
-            }
+            onClick={() => {
+              if (retryDetail)
+                void open(retryDetail.item, retryDetail.previous);
+              else if (requestId && accountId)
+                void open({ id: requestId, accountId });
+            }}
           >
             Try again
           </button>
@@ -347,8 +443,11 @@ export function PartnerServiceReviews({
                 {detail.accountName} · {detail.service}
               </h3>
               <p className="text-sm font-medium">
-                Status: {detail.status.replaceAll("_", " ")}
-                {arrival(detail) ? ` · ${arrival(detail)}` : ""}
+                {detailReceipt && detailReceipt.phase !== "refreshed"
+                  ? detailReceipt.phase === "refreshing"
+                    ? "Confirmation saved · refreshing request details"
+                    : "Confirmation saved · latest details unavailable"
+                  : `Status: ${detail.status.replaceAll("_", " ")}${!detailReceipt && arrival(detail) ? ` · ${arrival(detail)}` : ""}`}
               </p>
             </>
           ) : null}
@@ -357,8 +456,11 @@ export function PartnerServiceReviews({
               type="button"
               className={teamButtonClass("secondary", "sm")}
               onClick={() => {
-                setDetail(returnDetail);
-                setReturnDetail(null);
+                rememberSavedSchedule(null);
+                void open({
+                  id: returnDetail.id,
+                  accountId: returnDetail.accountId,
+                });
               }}
             >
               Return to additional service request
@@ -410,7 +512,7 @@ export function PartnerServiceReviews({
               reservations.
             </p>
           ) : null}
-          {embedded && canSchedule && detail.canSchedule ? (
+          {embedded && canSchedule && detail.canSchedule && !detailReceipt ? (
             <button
               type="button"
               className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-teal-800 underline underline-offset-4 lg:hidden"
@@ -422,7 +524,7 @@ export function PartnerServiceReviews({
           <div
             className={
               embedded
-                ? "grid min-w-0 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px] xl:gap-8"
+                ? "grid min-w-0 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px] xl:gap-8"
                 : "space-y-4"
             }
           >
@@ -574,7 +676,9 @@ export function PartnerServiceReviews({
                   : "space-y-4"
               }
             >
-              {embedded && !SCHEDULED_HEADINGS.get(detail.status) ? (
+              {embedded &&
+              !detailReceipt &&
+              !SCHEDULED_HEADINGS.get(detail.status) ? (
                 detail.partnerRequest ? (
                   <PartnerRequestScheduleSummary
                     details={detail.partnerRequest}
@@ -590,7 +694,7 @@ export function PartnerServiceReviews({
                   </div>
                 )
               ) : null}
-              {canSchedule && detail.canSchedule ? (
+              {canSchedule && detail.canSchedule && !detailReceipt ? (
                 <CalendarAppointmentActions
                   appointmentId={detail.appointment.id}
                   appointmentType={detail.appointment.type}
@@ -623,25 +727,58 @@ export function PartnerServiceReviews({
                     id: detail.id,
                     accountId: detail.accountId,
                   }}
-                  onScheduled={(warning) => {
-                    setScheduleWarning(
-                      warning
-                        ? { requestId: detail.id, message: warning }
-                        : null,
-                    );
-                    focusScheduleOnLoad.current = embedded;
+                  onScheduled={(warning?: string | null) => {
+                    const current = currentContext.current;
+                    if (
+                      !mounted.current ||
+                      current.accountId !== accountId ||
+                      current.requestId !== requestId ||
+                      current.detail?.accountId !== detail.accountId ||
+                      current.detail.id !== detail.id
+                    )
+                      return;
+                    rememberSavedSchedule({
+                      accountId: detail.accountId,
+                      requestId: detail.id,
+                      warning: warning?.trim() || null,
+                      phase: "refreshing",
+                    });
+                    focusScheduleOnLoad.current = true;
                     onChanged?.();
-                    if (requestId && accountId)
-                      void open({ id: requestId, accountId });
-                    else {
-                      setDetail(null);
-                      void load();
-                    }
+                    void open({ id: detail.id, accountId: detail.accountId });
                   }}
                 />
               ) : (
                 <div className="space-y-3">
-                  {embedded && SCHEDULED_HEADINGS.get(detail.status) ? (
+                  {detailReceipt && detailReceipt.phase !== "refreshed" ? (
+                    <div
+                      role="status"
+                      className="space-y-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-teal-950"
+                    >
+                      <h4 className="font-semibold">Service confirmed</h4>
+                      <p className="text-sm leading-6">
+                        {detailReceipt.phase === "refreshing"
+                          ? "Refreshing the saved schedule…"
+                          : "The latest details could not be refreshed. Your confirmation was saved."}
+                      </p>
+                      {detailReceipt.phase === "refresh_failed" ? (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className={teamButtonClass("secondary", "sm")}
+                          onClick={() =>
+                            void open({
+                              id: detailReceipt.requestId,
+                              accountId: detailReceipt.accountId,
+                            })
+                          }
+                        >
+                          Retry details
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : (embedded || detailReceipt) &&
+                    SCHEDULED_HEADINGS.get(detail.status) ? (
                     <div
                       role="status"
                       className="space-y-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-teal-950"
@@ -672,7 +809,16 @@ export function PartnerServiceReviews({
                                 : "This request cannot be scheduled here in its current status. Refresh the request or review it in company Jobs."}
                     </p>
                   )}
+                  {detailReceipt?.warning ? (
+                    <p
+                      role="status"
+                      className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+                    >
+                      {detailReceipt.warning}
+                    </p>
+                  ) : null}
                   {includeScheduled &&
+                  (!detailReceipt || detailReceipt.phase === "refreshed") &&
                   detail.appointment.startAt &&
                   formatCalendarDayKey(new Date(detail.appointment.startAt)) ? (
                     <a

@@ -926,11 +926,17 @@ for (const width of [1440, 375])
           }),
         ).toHaveAttribute("href", `mailto:${expected.onSiteContact.email}`);
         await expect(
-          staffPage.getByLabel("Service date", { exact: true }),
+          staffPage.getByRole("group", { name: "Service date", exact: true }),
         ).toBeVisible();
         await expect(
-          staffPage.getByLabel("Planned start time", { exact: true }),
+          staffPage.getByRole("combobox", {
+            name: "Start time (Eastern)",
+            exact: true,
+          }),
         ).toBeVisible();
+        await expect(
+          staffPage.locator('input[type="date"][name="preferredDate"]'),
+        ).toHaveCount(0);
         await expect(
           staffPage.getByRole("region", {
             name: "Client scheduling preferences",
@@ -997,20 +1003,25 @@ for (const width of [1440, 375])
           )
             confirmationRequests.push(request.url());
         });
-        await staffPage
-          .getByRole("group", { name: "Client’s requested dates", exact: true })
-          .getByRole("button")
-          .first()
-          .click();
-        await expect(
-          staffPage.getByLabel("Service date", { exact: true }),
-        ).toHaveValue(requestedDates[0]!);
-        await expect(
-          staffPage.getByLabel("Planned start time", { exact: true }),
-        ).toHaveValue("");
-        await expect(
-          staffPage.getByLabel("Planned start time", { exact: true }),
-        ).toBeFocused();
+        const dateChoices = staffPage.getByRole("group", {
+          name: "Service date",
+          exact: true,
+        });
+        const firstRequestedDate = dateChoices
+          .getByRole("button", { name: /^Use date:/u })
+          .first();
+        const serviceDate = staffPage.locator('input[name="preferredDate"]');
+        const plannedTime = staffPage.getByRole("combobox", {
+          name: "Start time (Eastern)",
+          exact: true,
+        });
+        await expect(plannedTime).toHaveJSProperty("tagName", "SELECT");
+        await expect(plannedTime.locator("option")).toHaveCount(49);
+        await firstRequestedDate.click();
+        await expect(serviceDate).toHaveValue(requestedDates[0]!);
+        await expect(serviceDate).toHaveAttribute("type", "hidden");
+        await expect(plannedTime).toHaveValue("");
+        await expect(plannedTime).toBeFocused();
         await expect(
           staffPage.getByRole("button", {
             name: "Confirm service",
@@ -1022,9 +1033,42 @@ for (const width of [1440, 375])
           0,
           "A requested-date shortcut does not schedule the real request",
         );
-        await staffPage
-          .getByLabel("Planned start time", { exact: true })
-          .fill("13:00");
+        await plannedTime.selectOption("13:00");
+        await expect(
+          staffPage.getByRole("button", {
+            name: "Confirm service",
+            exact: true,
+          }),
+        ).toBeEnabled();
+        const customDay = new Date(`${requestedDates[0]}T12:00:00Z`);
+        customDay.setUTCDate(customDay.getUTCDate() + 7);
+        const customDate = customDay.toISOString().slice(0, 10);
+        await dateChoices
+          .getByRole("button", { name: "Choose another date", exact: true })
+          .click();
+        const manualDate = staffPage.locator(
+          'input[type="date"][name="preferredDate"]',
+        );
+        await expect(manualDate).toBeVisible();
+        await manualDate.fill(customDate);
+        await expect(plannedTime).toHaveValue("13:00");
+        await expect(
+          staffPage.getByRole("button", {
+            name: "Confirm service",
+            exact: true,
+          }),
+        ).toBeEnabled();
+        assert.equal(
+          confirmationRequests.length,
+          0,
+          "Custom dates and arrival previews do not schedule the real appointment",
+        );
+        await firstRequestedDate.click();
+        await expect(manualDate).toHaveCount(0);
+        await expect(serviceDate).toHaveValue(requestedDates[0]!);
+        await expect(serviceDate).toHaveAttribute("type", "hidden");
+        await expect(plannedTime).toHaveValue("13:00");
+        await expect(plannedTime).toBeFocused();
         await expect(
           staffPage.getByRole("button", {
             name: "Confirm service",

@@ -657,7 +657,7 @@ export function PartnerRequestInbox({
                 {detailError}{" "}
                 <button
                   type="button"
-                  onClick={() => void loadDetail(requestKey)}
+                  onClick={() => void loadDetail(requestKey, Boolean(selected))}
                   className={teamButtonClass("secondary", "sm")}
                 >
                   Try again

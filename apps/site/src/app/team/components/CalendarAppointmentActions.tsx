@@ -9,8 +9,11 @@ import {
   readTeamMutationException,
 } from "../lib/mutation-feedback";
 import { formatCalendarDayKey, TEAM_TIME_ZONE } from "../lib/calendar-time";
-import { requestedPartnerDate } from "../lib/partner-request-presentation";
 import { readScheduleWarning } from "../lib/schedule-warning";
+import {
+  PartnerServiceScheduleFields,
+  partnerStartTimeLabel,
+} from "./PartnerServiceScheduleFields";
 import { CrewPayoutSelector } from "./CrewPayoutSelector";
 import type { SavedCrewPayout } from "../lib/crew-payout-form";
 import { StaffScheduleResourcePicker } from "./StaffScheduleResourcePicker";
@@ -115,6 +118,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function isConfirmedPartnerSchedule(
+  payload: unknown,
+  appointmentId: string,
+  formData: FormData,
+): boolean {
+  if (!isRecord(payload)) return false;
+  const startAt = payload["startAt"];
+  const version = payload["version"];
+  return (
+    payload["ok"] === true &&
+    payload["appointmentId"] === appointmentId &&
+    payload["status"] === "confirmed" &&
+    payload["preferredDate"] === formData.get("preferredDate") &&
+    typeof version === "string" &&
+    Number.isFinite(Date.parse(version)) &&
+    typeof startAt === "string" &&
+    Number.isFinite(Date.parse(startAt)) &&
+    formatCalendarDayKey(new Date(startAt)) === formData.get("preferredDate") &&
+    formatEasternTimeInput(startAt) === formData.get("startTime")
+  );
+}
+
 function isExactStatusMutationReceipt(
   payload: SuccessPayload | null,
   expected: {
@@ -201,9 +226,7 @@ export function CalendarAppointmentActions({
   const noteFieldId = React.useId();
   const crewConfirmationFieldId = React.useId();
   const reviewRequestFieldId = React.useId();
-  const scheduleTimezoneId = React.useId();
-  const requestedDatesId = React.useId();
-  const plannedTimeRef = React.useRef<HTMLInputElement>(null);
+  const plannedTimeRef = React.useRef<HTMLSelectElement>(null);
 
   React.useEffect(() => setCurrentVersion(version), [version]);
 
@@ -256,6 +279,13 @@ export function CalendarAppointmentActions({
             });
             const arrivalStart = new Date(result.arrivalStartAt);
             const arrivalEnd = new Date(result.arrivalEndAt);
+            if (
+              !Number.isFinite(arrivalStart.getTime()) ||
+              !Number.isFinite(arrivalEnd.getTime()) ||
+              arrivalEnd <= arrivalStart
+            ) {
+              throw new Error("Invalid arrival window");
+            }
             const zone = new Intl.DateTimeFormat("en-US", {
               timeZone: result.timezone,
               timeZoneName: "short",
@@ -436,7 +466,9 @@ export function CalendarAppointmentActions({
           })
         : actionName === "note"
           ? isTeamMutationSuccessEnvelope(payload)
-          : Boolean(payload && payload.ok === true);
+          : actionName === "reschedule" && confirmPartnerService
+            ? isConfirmedPartnerSchedule(payload, appointmentId, formData)
+            : Boolean(payload && payload.ok === true);
       if (!payload || !confirmed) {
         setFeedback({
           tone: "error",
@@ -464,11 +496,21 @@ export function CalendarAppointmentActions({
           : isStatusAction
             ? " Customer was not notified."
             : "";
-      const message = calendarQueued
-        ? `${successMessage} in the CRM.${effectCopy} Google Calendar cleanup is queued; keep this view available until the linked event disappears.`
-        : needsReconciliation
-          ? `${successMessage} in the CRM.${effectCopy} Google Calendar did not confirm the change. Keep the appointment open and ask an owner to reconcile the calendar.`
-          : `${successMessage}${effectCopy}`;
+      const calendarWarning =
+        actionName === "reschedule"
+          ? needsReconciliation
+            ? "The calendar update needs attention; ask an owner to check it."
+            : calendarQueued
+              ? "The calendar update is queued."
+              : null
+          : null;
+      const message = calendarWarning
+        ? `${successMessage} ${calendarWarning}`
+        : calendarQueued
+          ? `${successMessage} in the CRM.${effectCopy} Google Calendar cleanup is queued; keep this view available until the linked event disappears.`
+          : needsReconciliation
+            ? `${successMessage} in the CRM.${effectCopy} Google Calendar did not confirm the change. Keep the appointment open and ask an owner to reconcile the calendar.`
+            : `${successMessage}${effectCopy}`;
       setFeedback({
         tone:
           calendarQueued || needsReconciliation || scheduleWarning
@@ -481,7 +523,9 @@ export function CalendarAppointmentActions({
       if (actionName === "note") setNoteDraft("");
       if (actionName === "reschedule") {
         setScheduleConflict(null);
-        onScheduled?.(scheduleWarning);
+        onScheduled?.(
+          [calendarWarning, scheduleWarning].filter(Boolean).join(" ") || null,
+        );
       }
       router.refresh();
     } catch (error) {
@@ -532,7 +576,7 @@ export function CalendarAppointmentActions({
           >
             {scheduleOnly
               ? confirmPartnerService
-                ? "Confirm schedule"
+                ? "Schedule service"
                 : "Schedule service in the CRM"
               : correctionOnly
                 ? "Correct crew pay"
@@ -850,168 +894,59 @@ export function CalendarAppointmentActions({
               }}
             >
               <input type="hidden" name="appointmentId" value={appointmentId} />
-              {confirmPartnerService && partnerPreferredWindows.length ? (
-                <fieldset
-                  className="min-w-0 space-y-2"
+              {confirmPartnerService ? (
+                <PartnerServiceScheduleFields
+                  preferredWindows={partnerPreferredWindows}
+                  date={previewDate}
+                  time={previewTime}
                   disabled={pendingAction !== null}
-                >
-                  <legend className="mb-2 text-sm font-medium text-slate-700">
-                    Client’s requested dates
-                  </legend>
-                  <ul className="space-y-2">
-                    {partnerPreferredWindows.map((window, index) => {
-                      const date = new Date(`${window.localDate}T12:00:00Z`);
-                      const validDate =
-                        /^\d{4}-\d{2}-\d{2}$/u.test(window.localDate) &&
-                        Number.isFinite(date.getTime()) &&
-                        date.toISOString().slice(0, 10) === window.localDate;
-                      const otherTimezone = Boolean(
-                        window.timezone && window.timezone !== TEAM_TIME_ZONE,
-                      );
-                      const explanation = otherTimezone
-                        ? `Requested in ${window.timezone}. Enter the matching Eastern date below.`
-                        : !validDate
-                          ? "This requested date needs review. Enter a valid service date below."
-                          : "";
-                      const explanationId = `${requestedDatesId}-${index}`;
-                      const preferenceId = `${explanationId}-preference`;
-                      const dateLabel = `Use date: ${requestedPartnerDate(window.localDate)}`;
-                      const selectedDate =
-                        validDate &&
-                        !otherTimezone &&
-                        previewDate === window.localDate;
-                      return (
-                        <li
-                          key={`${window.localDate}:${window.timeOfDay}:${index}`}
-                        >
-                          <button
-                            type="button"
-                            aria-label={dateLabel}
-                            aria-pressed={selectedDate}
-                            disabled={
-                              !validDate ||
-                              otherTimezone ||
-                              pendingAction !== null
-                            }
-                            aria-describedby={`${preferenceId}${explanation ? ` ${explanationId}` : ""}`}
-                            onClick={() =>
-                              chooseRequestedDate(window.localDate)
-                            }
-                            className={`min-h-11 w-full rounded-lg border px-3 py-2 text-left text-sm font-medium text-teal-800 hover:border-teal-400 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:text-slate-500 ${selectedDate ? "border-teal-500 bg-teal-50" : "border-slate-200 bg-white"}`}
-                          >
-                            <span className="block">{dateLabel}</span>
-                            <span
-                              id={preferenceId}
-                              className="mt-0.5 block text-xs font-normal text-slate-600"
-                            >
-                              {window.timeOfDay === "anytime"
-                                ? "Client is flexible on time"
-                                : `Client prefers ${window.timeOfDay.replaceAll("_", " ").toLowerCase()}`}
-                            </span>
-                          </button>
-                          {explanation ? (
-                            <p
-                              id={explanationId}
-                              className="mt-1 text-xs leading-5 text-slate-500"
-                            >
-                              {explanation}
-                            </p>
-                          ) : null}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </fieldset>
-              ) : null}
-              <div className="grid min-w-0 grid-cols-1 gap-3">
-                <label className="flex flex-col gap-1 text-sm text-slate-700">
-                  <span>
-                    {confirmPartnerService ? "Service date" : "New date"}
-                  </span>
-                  <input
-                    type="date"
-                    name="preferredDate"
-                    required
-                    {...(confirmPartnerService
-                      ? { value: previewDate, disabled: pendingAction !== null }
-                      : { defaultValue: defaultDate })}
-                    onChange={(event) => {
-                      setScheduleConflict(null);
-                      setPreviewDate(event.target.value);
-                      if (confirmPartnerService) {
-                        setArrivalPreview(null);
-                        onScheduleEdited?.();
-                      }
-                    }}
-                    className={TEAM_INPUT_COMPACT}
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-sm text-slate-700">
-                  <span>
-                    {confirmPartnerService
-                      ? "Planned start time"
-                      : "Eastern time"}
-                  </span>
-                  <input
-                    ref={plannedTimeRef}
-                    type="time"
-                    name="startTime"
-                    step={confirmPartnerService ? 1800 : undefined}
-                    required
-                    {...(confirmPartnerService
-                      ? { value: previewTime, disabled: pendingAction !== null }
-                      : { defaultValue: defaultTime })}
-                    aria-describedby={
-                      confirmPartnerService ? scheduleTimezoneId : undefined
-                    }
-                    onChange={(event) => {
-                      setScheduleConflict(null);
-                      setPreviewTime(event.target.value);
-                      if (confirmPartnerService) {
-                        setArrivalPreview(null);
-                        onScheduleEdited?.();
-                      }
-                    }}
-                    className={TEAM_INPUT_COMPACT}
-                  />
-                </label>
-              </div>
-              {confirmPartnerService ? (
-                <p id={scheduleTimezoneId} className="text-xs text-slate-500">
-                  All times are Eastern.
-                </p>
-              ) : null}
-              {confirmPartnerService ? (
-                <div
-                  role="status"
-                  className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950"
-                >
-                  <strong>Arrival window to confirm</strong>
-                  <p className="mt-1">
-                    {!previewDate || !previewTime
-                      ? "Choose the service date and planned start time."
-                      : arrivalPreview?.input === previewInput
-                        ? arrivalPreview.error || arrivalPreview.label
-                        : "Checking arrival window…"}
-                  </p>
-                  {arrivalReady ? (
-                    <p className="mt-1 text-xs text-teal-800">
-                      Two-hour arrival window. The service stays unconfirmed
-                      until you select Confirm service.
-                    </p>
-                  ) : null}
-                  {arrivalPreview?.input === previewInput &&
-                  arrivalPreview.error ? (
-                    <button
-                      type="button"
-                      className="mt-2 min-h-11 underline"
-                      onClick={() => setPreviewRetry((value) => value + 1)}
-                    >
-                      Retry arrival preview
-                    </button>
-                  ) : null}
+                  timeRef={plannedTimeRef}
+                  onChooseDate={chooseRequestedDate}
+                  onDateChange={(date) => {
+                    setScheduleConflict(null);
+                    setPreviewDate(date);
+                    setArrivalPreview(null);
+                    onScheduleEdited?.();
+                  }}
+                  onTimeChange={(time) => {
+                    setScheduleConflict(null);
+                    setPreviewTime(time);
+                    setArrivalPreview(null);
+                    onScheduleEdited?.();
+                  }}
+                />
+              ) : (
+                <div className="grid min-w-0 grid-cols-1 gap-3">
+                  <label className="flex flex-col gap-1 text-sm text-slate-700">
+                    <span>New date</span>
+                    <input
+                      type="date"
+                      name="preferredDate"
+                      required
+                      defaultValue={defaultDate}
+                      onChange={(event) => {
+                        setScheduleConflict(null);
+                        setPreviewDate(event.target.value);
+                      }}
+                      className={TEAM_INPUT_COMPACT}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm text-slate-700">
+                    <span>Eastern time</span>
+                    <input
+                      type="time"
+                      name="startTime"
+                      required
+                      defaultValue={defaultTime}
+                      onChange={(event) => {
+                        setScheduleConflict(null);
+                        setPreviewTime(event.target.value);
+                      }}
+                      className={TEAM_INPUT_COMPACT}
+                    />
+                  </label>
                 </div>
-              ) : null}
+              )}
               <StaffScheduleResourcePicker
                 key={appointmentId}
                 appointmentId={appointmentId}
@@ -1089,6 +1024,65 @@ export function CalendarAppointmentActions({
                       another date or time.
                     </p>
                   )}
+                </div>
+              ) : null}
+              {confirmPartnerService ? (
+                <div
+                  role={
+                    arrivalPreview?.input === previewInput &&
+                    arrivalPreview.error
+                      ? "alert"
+                      : "status"
+                  }
+                  className={`rounded-lg border p-3 text-sm ${arrivalPreview?.input === previewInput && arrivalPreview.error ? "border-amber-200 bg-amber-50 text-amber-950" : arrivalReady ? "border-teal-200 bg-teal-50 text-teal-950" : "border-slate-200 bg-slate-50 text-slate-600"}`}
+                >
+                  {arrivalReady ? (
+                    <>
+                      <p className="font-semibold">Review appointment</p>
+                      <dl className="mt-2 space-y-2">
+                        <div className="flex flex-wrap justify-between gap-x-3 gap-y-1">
+                          <dt>Start time</dt>
+                          <dd className="font-semibold">
+                            {partnerStartTimeLabel(previewTime)} Eastern
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Client arrival window</dt>
+                          <dd className="mt-0.5 font-semibold">
+                            {arrivalPreview?.label}
+                          </dd>
+                        </div>
+                      </dl>
+                      <p className="mt-2 text-xs">
+                        Select Confirm service to save this appointment.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="font-medium">Client arrival window</p>
+                      <p className="mt-1">
+                        {!previewDate || !previewTime
+                          ? "Choose a date and start time to review the appointment."
+                          : arrivalPreview?.input === previewInput
+                            ? arrivalPreview.error || arrivalPreview.label
+                            : "Checking arrival window…"}
+                      </p>
+                    </>
+                  )}
+                  {arrivalPreview?.input === previewInput &&
+                  arrivalPreview.error ? (
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null}
+                      className="mt-2 min-h-11 font-semibold underline underline-offset-4"
+                      onClick={() => {
+                        setArrivalPreview(null);
+                        setPreviewRetry((value) => value + 1);
+                      }}
+                    >
+                      Retry arrival preview
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
               <div>
