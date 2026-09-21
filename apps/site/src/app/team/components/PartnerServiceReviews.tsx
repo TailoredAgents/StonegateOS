@@ -27,15 +27,24 @@ function arrival(item: PartnerServiceReview) {
   if (!item.arrivalStartAt || !item.arrivalEndAt) return null;
   const start = new Date(item.arrivalStartAt),
     end = new Date(item.arrivalEndAt);
-  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()))
+  if (
+    !Number.isFinite(start.getTime()) ||
+    !Number.isFinite(end.getTime()) ||
+    end <= start
+  )
     return null;
   const format = new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "America/New_York",
   });
-  return `${format.format(start)} – ${format.format(end)} (Eastern)`;
+  return `${format.formatRange(start, end)} (Eastern)`;
 }
+const SCHEDULED_HEADINGS: Record<string, string> = {
+  confirmed: "Service confirmed",
+  in_progress: "Service in progress",
+  completed: "Service completed",
+};
 /** Reads partner requests; the existing CRM scheduling form owns every mutation. */
 export function PartnerServiceReviews({
   canSchedule,
@@ -44,6 +53,7 @@ export function PartnerServiceReviews({
   requestId,
   embedded = false,
   onReady,
+  onEditing,
   onChanged,
 }: {
   canSchedule: boolean;
@@ -52,6 +62,7 @@ export function PartnerServiceReviews({
   requestId?: string;
   embedded?: boolean;
   onReady?: () => void;
+  onEditing?: () => void;
   onChanged?: () => void;
 }) {
   const [items, setItems] = useState<PartnerServiceReview[]>([]),
@@ -64,6 +75,7 @@ export function PartnerServiceReviews({
   const [returnDetail, setReturnDetail] =
     useState<PartnerServiceReviewDetail | null>(null);
   const generation = useRef(0),
+    focusScheduleOnLoad = useRef(false),
     detailRef = useRef<HTMLDivElement>(null),
     scheduleRef = useRef<HTMLElement>(null);
   async function load(more = false, search = appliedQuery) {
@@ -109,6 +121,10 @@ export function PartnerServiceReviews({
   useEffect(() => {
     if (detail) {
       if (!embedded) detailRef.current?.focus();
+      else if (focusScheduleOnLoad.current) {
+        scheduleRef.current?.focus();
+        focusScheduleOnLoad.current = false;
+      }
       onReady?.();
     }
   }, [detail]);
@@ -313,14 +329,6 @@ export function PartnerServiceReviews({
                 {arrival(detail) ? ` · ${arrival(detail)}` : ""}
               </p>
             </>
-          ) : null}
-          {embedded &&
-          detail.id === requestId &&
-          ["confirmed", "in_progress", "completed"].includes(detail.status) &&
-          arrival(detail) ? (
-            <p className="text-sm">
-              <strong>Confirmed arrival window:</strong> {arrival(detail)}
-            </p>
           ) : null}
           {returnDetail ? (
             <button
@@ -544,12 +552,13 @@ export function PartnerServiceReviews({
                   : "space-y-4"
               }
             >
-              {embedded ? (
+              {embedded && !SCHEDULED_HEADINGS[detail.status] ? (
                 detail.partnerRequest ? (
                   <PartnerRequestScheduleSummary
                     details={detail.partnerRequest}
+                    hidePreferredDates={canSchedule && detail.canSchedule}
                   />
-                ) : (
+                ) : canSchedule && detail.canSchedule ? null : (
                   <div className="space-y-2 border-b border-slate-200 pb-4 text-sm">
                     <h4 className="font-semibold">Client’s requested timing</h4>
                     <p>{preferred(detail.preferredWindows)}</p>
@@ -577,11 +586,23 @@ export function PartnerServiceReviews({
                   teamMembers={[]}
                   scheduleOnly
                   confirmPartnerService={embedded}
+                  partnerPreferredWindows={
+                    detail.partnerRequest
+                      ? detail.partnerRequest.scheduling.preferredWindows.map(
+                          (window) => ({
+                            ...window,
+                            timezone: window.timezone ?? undefined,
+                          }),
+                        )
+                      : detail.preferredWindows
+                  }
+                  onScheduleEdited={onEditing}
                   partnerRequest={{
                     id: detail.id,
                     accountId: detail.accountId,
                   }}
                   onScheduled={() => {
+                    focusScheduleOnLoad.current = embedded;
                     onChanged?.();
                     if (requestId && accountId)
                       void open({ id: requestId, accountId });
@@ -593,21 +614,37 @@ export function PartnerServiceReviews({
                 />
               ) : (
                 <div className="space-y-3">
-                  <p className="text-sm text-slate-600">
-                    {detail.status === "approval_needed"
-                      ? "Waiting for the client’s approval. You can confirm service after they approve."
-                      : detail.canSchedule
-                        ? "A team member with scheduling access can confirm this service."
-                        : ["confirmed", "in_progress", "completed"].includes(
-                              detail.status,
-                            )
-                          ? "This service is already scheduled. Open the calendar to review it."
-                          : detail.status === "canceled"
-                            ? "This request was canceled."
-                            : detail.status === "declined"
-                              ? "This request was declined."
-                              : "This request cannot be scheduled here in its current status. Refresh the request or review it in company Jobs."}
-                  </p>
+                  {embedded && SCHEDULED_HEADINGS[detail.status] ? (
+                    <div
+                      role="status"
+                      className="space-y-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-teal-950"
+                    >
+                      <h4 className="font-semibold">
+                        {SCHEDULED_HEADINGS[detail.status]}
+                      </h4>
+                      <p className="text-sm leading-6">
+                        {arrival(detail)
+                          ? `Confirmed arrival: ${arrival(detail)}`
+                          : "Arrival window not recorded. Review the job in the calendar."}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-600">
+                      {detail.status === "approval_needed"
+                        ? "Waiting for the client’s approval. You can confirm service after they approve."
+                        : detail.canSchedule
+                          ? "A team member with scheduling access can confirm this service."
+                          : ["confirmed", "in_progress", "completed"].includes(
+                                detail.status,
+                              )
+                            ? "This service is already scheduled. Open the calendar to review it."
+                            : detail.status === "canceled"
+                              ? "This request was canceled."
+                              : detail.status === "declined"
+                                ? "This request was declined."
+                                : "This request cannot be scheduled here in its current status. Refresh the request or review it in company Jobs."}
+                    </p>
+                  )}
                   {includeScheduled &&
                   detail.appointment.startAt &&
                   formatCalendarDayKey(new Date(detail.appointment.startAt)) ? (
@@ -618,12 +655,32 @@ export function PartnerServiceReviews({
                           cal: formatCalendarDayKey(
                             new Date(detail.appointment.startAt),
                           ),
+                          eventId: `db:${detail.appointment.id}`,
                         },
                       })}
                       className={teamButtonClass("secondary")}
                     >
                       Open in calendar
                     </a>
+                  ) : null}
+                  {embedded && SCHEDULED_HEADINGS[detail.status] ? (
+                    <details className="border-t border-slate-200 pt-3 text-sm">
+                      <summary className="min-h-11 cursor-pointer py-3 font-medium text-slate-700">
+                        Scheduling details
+                      </summary>
+                      <div className="pt-2">
+                        {detail.partnerRequest ? (
+                          <PartnerRequestScheduleSummary
+                            details={detail.partnerRequest}
+                          />
+                        ) : (
+                          <p>
+                            Client requested:{" "}
+                            {preferred(detail.preferredWindows)}
+                          </p>
+                        )}
+                      </div>
+                    </details>
                   ) : null}
                 </div>
               )}

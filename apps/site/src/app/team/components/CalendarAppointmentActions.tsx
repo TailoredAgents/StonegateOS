@@ -9,6 +9,7 @@ import {
   readTeamMutationException,
 } from "../lib/mutation-feedback";
 import { formatCalendarDayKey, TEAM_TIME_ZONE } from "../lib/calendar-time";
+import { requestedPartnerDate } from "../lib/partner-request-presentation";
 import { CrewPayoutSelector } from "./CrewPayoutSelector";
 import type { SavedCrewPayout } from "../lib/crew-payout-form";
 import { StaffScheduleResourcePicker } from "./StaffScheduleResourcePicker";
@@ -34,6 +35,12 @@ type Props = {
   scheduleOnly?: boolean;
   confirmPartnerService?: boolean;
   partnerRequest?: { id: string; accountId: string };
+  partnerPreferredWindows?: readonly {
+    localDate: string;
+    timeOfDay: string;
+    timezone?: string;
+  }[];
+  onScheduleEdited?: () => void;
   correctionOnly?: boolean;
   onScheduled?: () => void;
 };
@@ -174,6 +181,8 @@ export function CalendarAppointmentActions({
   scheduleOnly = false,
   confirmPartnerService = false,
   partnerRequest,
+  partnerPreferredWindows = [],
+  onScheduleEdited,
   correctionOnly = false,
   onScheduled,
 }: Props): React.ReactElement {
@@ -191,6 +200,8 @@ export function CalendarAppointmentActions({
   const crewConfirmationFieldId = React.useId();
   const reviewRequestFieldId = React.useId();
   const scheduleTimezoneId = React.useId();
+  const requestedDatesId = React.useId();
+  const plannedTimeRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => setCurrentVersion(version), [version]);
 
@@ -289,6 +300,16 @@ export function CalendarAppointmentActions({
     (arrivalPreview?.input === previewInput &&
       !!arrivalPreview.label &&
       !arrivalPreview.error);
+
+  function chooseRequestedDate(localDate: string): void {
+    if (pendingAction) return;
+    setPreviewDate(localDate);
+    setArrivalPreview(null);
+    setScheduleConflict(null);
+    setPreviewRetry((value) => value + 1);
+    onScheduleEdited?.();
+    plannedTimeRef.current?.focus();
+  }
 
   async function submitMutation(
     form: HTMLFormElement,
@@ -818,6 +839,79 @@ export function CalendarAppointmentActions({
               }}
             >
               <input type="hidden" name="appointmentId" value={appointmentId} />
+              {confirmPartnerService && partnerPreferredWindows.length ? (
+                <fieldset
+                  className="min-w-0 space-y-2"
+                  disabled={pendingAction !== null}
+                >
+                  <legend className="mb-2 text-sm font-medium text-slate-700">
+                    Client’s requested dates
+                  </legend>
+                  <ul className="space-y-2">
+                    {partnerPreferredWindows.map((window, index) => {
+                      const date = new Date(`${window.localDate}T12:00:00Z`);
+                      const validDate =
+                        /^\d{4}-\d{2}-\d{2}$/u.test(window.localDate) &&
+                        Number.isFinite(date.getTime()) &&
+                        date.toISOString().slice(0, 10) === window.localDate;
+                      const otherTimezone = Boolean(
+                        window.timezone && window.timezone !== TEAM_TIME_ZONE,
+                      );
+                      const explanation = otherTimezone
+                        ? `Requested in ${window.timezone}. Enter the matching Eastern date below.`
+                        : !validDate
+                          ? "This requested date needs review. Enter a valid service date below."
+                          : "";
+                      const explanationId = `${requestedDatesId}-${index}`;
+                      const preferenceId = `${explanationId}-preference`;
+                      const dateLabel = `Use date: ${requestedPartnerDate(window.localDate)}`;
+                      const selectedDate =
+                        validDate &&
+                        !otherTimezone &&
+                        previewDate === window.localDate;
+                      return (
+                        <li
+                          key={`${window.localDate}:${window.timeOfDay}:${index}`}
+                        >
+                          <button
+                            type="button"
+                            aria-label={dateLabel}
+                            aria-pressed={selectedDate}
+                            disabled={
+                              !validDate ||
+                              otherTimezone ||
+                              pendingAction !== null
+                            }
+                            aria-describedby={`${preferenceId}${explanation ? ` ${explanationId}` : ""}`}
+                            onClick={() =>
+                              chooseRequestedDate(window.localDate)
+                            }
+                            className={`min-h-11 w-full rounded-lg border px-3 py-2 text-left text-sm font-medium text-teal-800 hover:border-teal-400 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:text-slate-500 ${selectedDate ? "border-teal-500 bg-teal-50" : "border-slate-200 bg-white"}`}
+                          >
+                            <span className="block">{dateLabel}</span>
+                            <span
+                              id={preferenceId}
+                              className="mt-0.5 block text-xs font-normal text-slate-600"
+                            >
+                              {window.timeOfDay === "anytime"
+                                ? "Client is flexible on time"
+                                : `Client prefers ${window.timeOfDay.replaceAll("_", " ").toLowerCase()}`}
+                            </span>
+                          </button>
+                          {explanation ? (
+                            <p
+                              id={explanationId}
+                              className="mt-1 text-xs leading-5 text-slate-500"
+                            >
+                              {explanation}
+                            </p>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </fieldset>
+              ) : null}
               <div className="grid min-w-0 grid-cols-1 gap-3">
                 <label className="flex flex-col gap-1 text-sm text-slate-700">
                   <span>
@@ -827,10 +921,16 @@ export function CalendarAppointmentActions({
                     type="date"
                     name="preferredDate"
                     required
-                    defaultValue={defaultDate}
+                    {...(confirmPartnerService
+                      ? { value: previewDate, disabled: pendingAction !== null }
+                      : { defaultValue: defaultDate })}
                     onChange={(event) => {
                       setScheduleConflict(null);
                       setPreviewDate(event.target.value);
+                      if (confirmPartnerService) {
+                        setArrivalPreview(null);
+                        onScheduleEdited?.();
+                      }
                     }}
                     className={TEAM_INPUT_COMPACT}
                   />
@@ -842,17 +942,24 @@ export function CalendarAppointmentActions({
                       : "Eastern time"}
                   </span>
                   <input
+                    ref={plannedTimeRef}
                     type="time"
                     name="startTime"
                     step={confirmPartnerService ? 1800 : undefined}
                     required
-                    defaultValue={defaultTime}
+                    {...(confirmPartnerService
+                      ? { value: previewTime, disabled: pendingAction !== null }
+                      : { defaultValue: defaultTime })}
                     aria-describedby={
                       confirmPartnerService ? scheduleTimezoneId : undefined
                     }
                     onChange={(event) => {
                       setScheduleConflict(null);
                       setPreviewTime(event.target.value);
+                      if (confirmPartnerService) {
+                        setArrivalPreview(null);
+                        onScheduleEdited?.();
+                      }
                     }}
                     className={TEAM_INPUT_COMPACT}
                   />

@@ -50,6 +50,16 @@ function row(
         timeOfDay: "afternoon",
         timezone: "America/New_York",
       },
+      {
+        localDate: "2026-10-05",
+        timeOfDay: "morning",
+        timezone: "America/New_York",
+      },
+      {
+        localDate: "2026-10-06",
+        timeOfDay: "anytime",
+        timezone: "America/Chicago",
+      },
     ],
     receivedAt: "2026-09-19T12:00:00.000Z",
     state: "pending",
@@ -291,7 +301,18 @@ for (const engine of [chromium, webkit])
           serviceFailure = true,
           previewFailure = true,
           groupPaging = true,
-          allowAck = true;
+          allowAck = true,
+          confirmed = false,
+          mutationFailure = true;
+        const mutations: Array<{
+          fields: Record<string, FormDataEntryValue>;
+          key: string | undefined;
+        }> = [];
+        let releaseMutation: (() => void) | undefined;
+        let releasePreview: (() => void) | undefined;
+        let pauseNextPreview = false;
+        let minimalRequest = false,
+          unknownProof = false;
         let assistancePreference: "none" | "callback" | "waitlist" = "none";
         const calls: Array<{ name: string; input: any }> = [];
         await page.addInitScript(
@@ -371,7 +392,17 @@ for (const engine of [chromium, webkit])
             );
             result = {
               ok: true,
-              request: { ...item, canAcknowledge: allowAck },
+              request: {
+                ...item,
+                ...(confirmed && item.key === rows[0]!.key
+                  ? {
+                      state: "confirmed",
+                      stage: "handled",
+                      statusLabel: "Scheduled",
+                    }
+                  : {}),
+                canAcknowledge: allowAck,
+              },
               record:
                 item.kind === "service"
                   ? null
@@ -397,7 +428,11 @@ for (const engine of [chromium, webkit])
                     id: rows[0]!.id,
                     accountId,
                     accountName: "Sample Bakery",
-                    status: "requested",
+                    status: confirmed ? "confirmed" : "requested",
+                    arrivalStartAt: confirmed
+                      ? "2026-10-05T14:00:00.000Z"
+                      : null,
+                    arrivalEndAt: confirmed ? "2026-10-05T16:00:00.000Z" : null,
                     createdAt: "2026-09-19T12:00:00.000Z",
                     service: "Facility cleanout",
                     siteName: "Bakery warehouse",
@@ -418,9 +453,37 @@ for (const engine of [chromium, webkit])
                     description: "Collect twelve unused shelves.",
                     partnerRequest: {
                       ...submittedRequest,
+                      publicStatus: confirmed ? "confirmed" : "requested",
+                      ...(minimalRequest
+                        ? {
+                            onSiteContact: {
+                              ...submittedRequest.onSiteContact!,
+                              phone: null,
+                            },
+                            crewInstructions: "",
+                            scope: {
+                              ...submittedRequest.scope,
+                              equipmentNeeds: [],
+                            },
+                            proof: {
+                              before: unknownProof ? null : 0,
+                              after: unknownProof ? null : 0,
+                              package: false,
+                            },
+                          }
+                        : {}),
                       scheduling: {
                         ...submittedRequest.scheduling,
                         assistancePreference,
+                        confirmedWindow: confirmed
+                          ? {
+                              startAt: "2026-10-05T14:00:00.000Z",
+                              endAt: "2026-10-05T16:00:00.000Z",
+                            }
+                          : null,
+                        confirmedStartAt: confirmed
+                          ? "2026-10-05T14:30:00.000Z"
+                          : null,
                       },
                     },
                     crewInstructions: "Keep the cold-room door closed.",
@@ -435,14 +498,20 @@ for (const engine of [chromium, webkit])
                     appointment: {
                       id: "44444444-4444-4444-8444-444444444444",
                       type: "service",
-                      startAt: null,
-                      status: "requested",
+                      startAt: confirmed ? "2026-10-05T14:30:00.000Z" : null,
+                      status: confirmed ? "confirmed" : "requested",
                       version: "2026-09-19T12:00:00.000Z",
                     },
-                    canSchedule: true,
+                    canSchedule: !confirmed,
                   },
                 };
-          } else if (name === "preview")
+          } else if (name === "preview") {
+            if (pauseNextPreview) {
+              pauseNextPreview = false;
+              await new Promise<void>((resolve) => {
+                releasePreview = resolve;
+              });
+            }
             result = previewFailure
               ? {
                   ok: false,
@@ -456,7 +525,7 @@ for (const engine of [chromium, webkit])
                   arrivalEndAt: `${input.preferredDate}T16:00:00.000Z`,
                   timezone: "America/New_York",
                 };
-          else if (name === "resources")
+          } else if (name === "resources")
             result = {
               ok: true,
               data: {
@@ -490,6 +559,44 @@ for (const engine of [chromium, webkit])
             body: JSON.stringify(result),
           });
         });
+        await page.route(
+          "**/api/team/appointments/reschedule",
+          async (route) => {
+            const request = route.request();
+            const fields = await new Response(request.postDataBuffer(), {
+              headers: { "content-type": request.headers()["content-type"]! },
+            }).formData();
+            mutations.push({
+              fields: Object.fromEntries(fields),
+              key: request.headers()["idempotency-key"],
+            });
+            if (mutationFailure) {
+              await new Promise<void>((resolve) => {
+                releaseMutation = resolve;
+              });
+              await route.fulfill({
+                status: 503,
+                contentType: "application/json",
+                body: JSON.stringify({
+                  ok: false,
+                  error: "schedule_unavailable",
+                  message:
+                    "Scheduling unavailable. Reference: schedule-fixture.",
+                }),
+              });
+            } else {
+              confirmed = true;
+              await route.fulfill({
+                contentType: "application/json",
+                body: JSON.stringify({
+                  ok: true,
+                  version: "2026-09-19T13:00:00.000Z",
+                  calendarSync: "not_required",
+                }),
+              });
+            }
+          },
+        );
         const base = `http://127.0.0.1:${port}/team/partners?p_admin=requests`;
         const list = page.locator('[aria-label="Request list"]');
         const ack = () => calls.filter((call) => call.name === "opened");
@@ -633,8 +740,14 @@ for (const engine of [chromium, webkit])
             page.getByLabel("Planned start time", { exact: true }),
           ).toBeVisible();
           await expect(
-            page.getByRole("link", { name: "+14045550100", exact: true }),
+            page.getByRole("link", { name: "Call Morgan Lee", exact: true }),
           ).toHaveAttribute("href", "tel:+14045550100");
+          await expect(
+            page.getByRole("link", { name: "Email Morgan Lee", exact: true }),
+          ).toHaveAttribute("href", "mailto:morgan@example.test");
+          await expect(
+            page.getByText("No customer photos attached.", { exact: true }),
+          ).toHaveCount(0);
           const submitted = page.locator(
             `[data-partner-request="${rows[0]!.id}"]`,
           );
@@ -693,9 +806,64 @@ for (const engine of [chromium, webkit])
           await expect(
             page.getByRole("button", { name: "Confirm service", exact: true }),
           ).toBeDisabled();
-          await page
-            .getByLabel("Service date", { exact: true })
-            .fill("2026-10-03");
+          const serviceDate = page.getByLabel("Service date", { exact: true });
+          const plannedTime = page.getByLabel("Planned start time", {
+            exact: true,
+          });
+          const firstRequestedDate = page.getByRole("button", {
+            name: "Use date: Oct 3, 2026",
+            exact: true,
+          });
+          const secondRequestedDate = page.getByRole("button", {
+            name: "Use date: Oct 5, 2026",
+            exact: true,
+          });
+          const otherTimezone = page.getByRole("button", {
+            name: "Use date: Oct 6, 2026",
+            exact: true,
+          });
+          await expect(firstRequestedDate).toHaveAccessibleDescription(
+            "Client prefers afternoon",
+          );
+          await expect(otherTimezone).toBeDisabled();
+          await expect(otherTimezone).toHaveAccessibleDescription(
+            /Client is flexible on time.*Requested in America\/Chicago\. Enter the matching Eastern date below\./u,
+          );
+          await firstRequestedDate.focus();
+          await firstRequestedDate.press("Enter");
+          await expect(serviceDate).toHaveValue("2026-10-03");
+          await expect(firstRequestedDate).toHaveAttribute(
+            "aria-pressed",
+            "true",
+          );
+          await expect(secondRequestedDate).toHaveAttribute(
+            "aria-pressed",
+            "false",
+          );
+          await expect(otherTimezone).toHaveAttribute("aria-pressed", "false");
+          await expect(plannedTime).toHaveValue("");
+          await expect(plannedTime).toBeFocused();
+          assert.equal(
+            mutations.length,
+            0,
+            "Choosing a client date never confirms service",
+          );
+          assert.equal(
+            calls.filter((call) => call.name === "preview").length,
+            0,
+            "A date shortcut must not guess a planned time",
+          );
+          await expect(
+            page.getByRole("button", { name: "Confirm service", exact: true }),
+          ).toBeDisabled();
+          const shortcutDialog = page.waitForEvent("dialog");
+          const shortcutBack = page
+            .getByRole("button", { name: "Back to requests" })
+            .click();
+          await (await shortcutDialog).dismiss();
+          await shortcutBack;
+          await expect(serviceDate).toHaveValue("2026-10-03");
+          await expect(list).toBeHidden();
           await page
             .getByLabel("Planned start time", { exact: true })
             .fill("10:30");
@@ -717,6 +885,46 @@ for (const engine of [chromium, webkit])
           await expect(
             page.getByText(/Oct 3, 2026.*10:00\s*AM.*12:00\s*PM.*EDT/u),
           ).toBeVisible();
+          const previewsBeforeShortcut = calls.filter(
+            (call) => call.name === "preview",
+          ).length;
+          pauseNextPreview = true;
+          await secondRequestedDate.click();
+          await expect(serviceDate).toHaveValue("2026-10-05");
+          await expect(firstRequestedDate).toHaveAttribute(
+            "aria-pressed",
+            "false",
+          );
+          await expect(secondRequestedDate).toHaveAttribute(
+            "aria-pressed",
+            "true",
+          );
+          await expect(plannedTime).toHaveValue("10:30");
+          await expect(plannedTime).toBeFocused();
+          await expect
+            .poll(() => calls.filter((call) => call.name === "preview").length)
+            .toBeGreaterThan(previewsBeforeShortcut);
+          await expect(
+            page.getByRole("button", { name: "Confirm service", exact: true }),
+          ).toBeDisabled();
+          assert.ok(
+            releasePreview,
+            "The changed date must request a fresh preview before confirmation",
+          );
+          releasePreview();
+          const latestPreview = calls
+            .filter((call) => call.name === "preview")
+            .at(-1)!;
+          assert.equal(latestPreview.input.preferredDate, "2026-10-05");
+          assert.equal(latestPreview.input.startTime, "10:30");
+          await expect(
+            page.getByText(/Oct 5, 2026.*10:00\s*AM.*12:00\s*PM.*EDT/u),
+          ).toBeVisible();
+          assert.equal(
+            mutations.length,
+            0,
+            "Date and time editing only requests an arrival preview",
+          );
           const resourceSummary = page
             .locator("summary")
             .filter({ hasText: /^Crew, truck & equipment/u });
@@ -752,12 +960,18 @@ for (const engine of [chromium, webkit])
               return {
                 mode: data.get("resourceSelectionMode"),
                 startTime: data.get("startTime"),
+                preferredDate: data.get("preferredDate"),
                 ids: data.getAll("selectedResourceIds"),
               };
             });
           assert.deepEqual(
             selectedResources,
-            { mode: "manual", startTime: "10:30", ids: [crewId] },
+            {
+              mode: "manual",
+              startTime: "10:30",
+              preferredDate: "2026-10-05",
+              ids: [crewId],
+            },
             "Collapsing optional resource choices preserves the exact confirmation input",
           );
           await fits(page);
@@ -778,6 +992,8 @@ for (const engine of [chromium, webkit])
             .toBe(listScroll);
           for (const preference of ["waitlist", "callback"] as const) {
             assistancePreference = preference;
+            minimalRequest = true;
+            unknownProof = preference === "callback";
             await service.click();
             const requestedHelp =
               preference === "waitlist"
@@ -786,12 +1002,35 @@ for (const engine of [chromium, webkit])
             await expect(
               page.getByText(requestedHelp, { exact: true }),
             ).toBeVisible();
+            await expect(
+              page.getByRole("link", { name: "Call Morgan Lee", exact: true }),
+            ).toHaveCount(0);
+            await expect(
+              page.getByRole("link", { name: "Email Morgan Lee", exact: true }),
+            ).toHaveAttribute("href", "mailto:morgan@example.test");
+            const requirementSummary = page
+              .locator("summary")
+              .filter({ hasText: /^Job requirements/u });
+            if (unknownProof) {
+              await expect(requirementSummary).toBeVisible();
+              await requirementSummary.click();
+              await expect(
+                page.getByText("Not recorded", { exact: true }).first(),
+              ).toBeVisible();
+            } else {
+              await expect(requirementSummary).toHaveCount(0);
+            }
+            await expect(
+              page.getByText("No customer photos attached.", { exact: true }),
+            ).toHaveCount(0);
             await page
               .getByRole("button", { name: "Back to requests" })
               .click();
             await expect(list).toBeFocused();
           }
           assistancePreference = "none";
+          minimalRequest = false;
+          unknownProof = false;
           await list
             .getByRole("button")
             .filter({ hasText: "Billing questions" })
@@ -829,6 +1068,120 @@ for (const engine of [chromium, webkit])
           page.once("dialog", (dialog) => dialog.accept());
           await page.getByRole("button", { name: "Back to requests" }).click();
           await expect(list).toBeFocused();
+          // Confirmation uses the actual form transport. A failed response must
+          // retain edits and the same retry identity; only verified success can
+          // replace the form with the confirmed arrival window.
+          await service.click();
+          await secondRequestedDate.click();
+          await plannedTime.fill("10:30");
+          const confirmService = page.getByRole("button", {
+            name: "Confirm service",
+            exact: true,
+          });
+          await expect(confirmService).toBeEnabled();
+          assert.equal(mutations.length, 0);
+          await confirmService.click();
+          await expect.poll(() => mutations.length).toBe(1);
+          await expect(serviceDate).toBeDisabled();
+          await expect(plannedTime).toBeDisabled();
+          await expect(firstRequestedDate).toBeDisabled();
+          await expect(secondRequestedDate).toBeDisabled();
+          assert.ok(releaseMutation);
+          releaseMutation();
+          await expect(
+            page.getByText(/Scheduling unavailable.*schedule-fixture/u),
+          ).toBeVisible();
+          await expect(serviceDate).toHaveValue("2026-10-05");
+          await expect(plannedTime).toHaveValue("10:30");
+          await expect(
+            page.getByRole("heading", {
+              name: "Service confirmed",
+              exact: true,
+            }),
+          ).toHaveCount(0);
+          assert.equal(mutations.length, 1);
+          assert.equal(mutations[0]!.fields["preferredDate"], "2026-10-05");
+          assert.equal(mutations[0]!.fields["startTime"], "10:30");
+          assert.equal(
+            mutations[0]!.fields["appointmentId"],
+            "44444444-4444-4444-8444-444444444444",
+          );
+          assert.ok(
+            mutations[0]!.key,
+            "A scheduling attempt carries an idempotency key",
+          );
+          const failedLeaveDialog = page.waitForEvent("dialog");
+          const failedBack = page
+            .getByRole("button", { name: "Back to requests" })
+            .click();
+          await (await failedLeaveDialog).dismiss();
+          await failedBack;
+          await expect(plannedTime).toHaveValue("10:30");
+          mutationFailure = false;
+          await confirmService.click();
+          await expect(
+            page.getByRole("heading", {
+              name: "Service confirmed",
+              exact: true,
+            }),
+          ).toBeVisible();
+          assert.equal(mutations.length, 2);
+          assert.equal(
+            mutations[1]!.key,
+            mutations[0]!.key,
+            "Retrying unchanged failed work reuses its original operation",
+          );
+          assert.deepEqual(mutations[1]!.fields, mutations[0]!.fields);
+          await expect(
+            page.getByText(
+              /Confirmed arrival:.*Oct 5, 2026.*10:00\s*AM.*12:00\s*PM.*Eastern/u,
+            ),
+          ).toBeVisible();
+          await expect(confirmService).toHaveCount(0);
+          await expect(
+            page.getByRole("complementary", {
+              name: "Service scheduling",
+              exact: true,
+            }),
+          ).toBeFocused();
+          const calendarHref = await page
+            .getByRole("link", { name: "Open in calendar", exact: true })
+            .getAttribute("href");
+          assert.ok(calendarHref);
+          const calendarUrl = new URL(calendarHref, base);
+          assert.equal(calendarUrl.pathname, "/team/calendar");
+          assert.equal(calendarUrl.searchParams.get("cal"), "2026-10-05");
+          assert.equal(
+            calendarUrl.searchParams.get("eventId"),
+            "db:44444444-4444-4444-8444-444444444444",
+          );
+          const schedulingDetails = page
+            .locator("summary")
+            .filter({ hasText: /^Scheduling details$/u });
+          await expect(schedulingDetails.locator("..")).toHaveJSProperty(
+            "open",
+            false,
+          );
+          await fits(page);
+          await page.getByRole("main").screenshot({
+            path: `${artifacts}/${engine.name()}-${width}-confirmed.png`,
+          });
+          let staleDirtyDialog = false;
+          const unexpectedDialog = async (
+            dialog: import("@playwright/test").Dialog,
+          ) => {
+            staleDirtyDialog = true;
+            await dialog.dismiss();
+          };
+          page.on("dialog", unexpectedDialog);
+          await page.getByRole("button", { name: "Back to requests" }).click();
+          await expect(list).toBeFocused();
+          page.off("dialog", unexpectedDialog);
+          assert.equal(
+            staleDirtyDialog,
+            false,
+            "Confirmed work no longer warns that its schedule is unsaved",
+          );
           // A group is acknowledged only after every member has been rendered in a visible list.
           await visibility(page, true);
           await expect

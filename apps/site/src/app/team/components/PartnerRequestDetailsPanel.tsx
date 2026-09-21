@@ -76,12 +76,27 @@ function photoUrl(value: string | null): string | null {
 /** Read-only client preferences sit beside the staff's separate confirmation form. */
 export function PartnerRequestScheduleSummary({
   details,
+  hidePreferredDates = false,
 }: {
   details: PartnerRequestDetails;
+  hidePreferredDates?: boolean;
 }) {
   const data = parsePartnerRequestDetails(details);
   if (!data) return null;
   const scheduling = data.scheduling;
+  const hasStatusNotice = ["canceled", "declined", "approval_needed"].includes(
+    data.publicStatus,
+  );
+  if (
+    hidePreferredDates &&
+    !scheduling.requestedWindow &&
+    !scheduling.confirmedWindow &&
+    !scheduling.confirmedStartAt &&
+    scheduling.assistancePreference === "none" &&
+    scheduling.timezone === "America/New_York" &&
+    !hasStatusNotice
+  )
+    return null;
   const window = (value: { startAt: string; endAt: string }) =>
     `${dateTime(value.startAt, scheduling.timezone)} – ${dateTime(value.endAt, scheduling.timezone)}`;
   return (
@@ -89,10 +104,12 @@ export function PartnerRequestScheduleSummary({
       aria-label="Client scheduling preferences"
       className="space-y-3 border-b border-slate-200 pb-5 text-sm"
     >
-      <h4 className="font-semibold text-slate-900">
-        Client’s requested timing
-      </h4>
-      {scheduling.preferredWindows.length ? (
+      {!hidePreferredDates ? (
+        <h4 className="font-semibold text-slate-900">
+          Client’s requested timing
+        </h4>
+      ) : null}
+      {!hidePreferredDates && scheduling.preferredWindows.length ? (
         <ul className="space-y-2 text-slate-700">
           {scheduling.preferredWindows.map((value, index) => (
             <li key={`${value.localDate}:${value.timeOfDay}:${index}`}>
@@ -106,9 +123,9 @@ export function PartnerRequestScheduleSummary({
             </li>
           ))}
         </ul>
-      ) : (
+      ) : !hidePreferredDates ? (
         <p className="text-slate-600">No preferred date provided.</p>
-      )}
+      ) : null}
       {scheduling.requestedWindow ? (
         <p className="text-slate-700">
           <span className="block text-xs text-slate-500">
@@ -139,20 +156,24 @@ export function PartnerRequestScheduleSummary({
             : "Client asked for a call to arrange service."}
         </p>
       ) : null}
-      <p className="text-xs leading-5 text-slate-500">
-        {scheduling.timezone === "America/New_York"
-          ? "Eastern time"
-          : (scheduling.timezone ?? "Time zone not provided")}
-        {data.publicStatus === "canceled"
-          ? " · Request canceled."
-          : data.publicStatus === "declined"
-            ? " · Request declined."
-            : data.publicStatus === "approval_needed"
-              ? " · Waiting for client approval."
-              : !scheduling.confirmedWindow && !scheduling.confirmedStartAt
-                ? " · Awaiting Stonegate confirmation."
-                : ""}
-      </p>
+      {!hidePreferredDates ||
+      scheduling.timezone !== "America/New_York" ||
+      hasStatusNotice ? (
+        <p className="text-xs leading-5 text-slate-500">
+          {scheduling.timezone === "America/New_York"
+            ? "Eastern time"
+            : (scheduling.timezone ?? "Time zone not provided")}
+          {data.publicStatus === "canceled"
+            ? " · Request canceled."
+            : data.publicStatus === "declined"
+              ? " · Request declined."
+              : data.publicStatus === "approval_needed"
+                ? " · Waiting for client approval."
+                : !scheduling.confirmedWindow && !scheduling.confirmedStartAt
+                  ? " · Awaiting Stonegate confirmation."
+                  : ""}
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -388,6 +409,37 @@ export function PartnerRequestDetailsPanel({
   const proofCount = (count: number | null) =>
     count === null ? "Not recorded" : `${count} photo${count === 1 ? "" : "s"}`;
   const count = photoItems?.length ?? data.photos.count;
+  const verifiedEmptyPhotos =
+    data.visibility.photos &&
+    data.photos.count === 0 &&
+    count === 0 &&
+    !photoError &&
+    !photoBusy &&
+    failedPhotos.size === 0;
+  const hasContactDetails = Boolean(
+    data.location ||
+      data.onSiteContact ||
+      data.alternateContact ||
+      data.accessDetails,
+  );
+  const hasReviewRequirements =
+    hasSpecial ||
+    data.proof.before !== 0 ||
+    data.proof.after !== 0 ||
+    data.proof.package;
+  const proofSummary = review
+    ? [
+        data.proof.before !== 0
+          ? `Before: ${proofCount(data.proof.before)}`
+          : null,
+        data.proof.after !== 0
+          ? `After: ${proofCount(data.proof.after)}`
+          : null,
+        data.proof.package ? "Proof package" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : `Before: ${proofCount(data.proof.before)} · After: ${proofCount(data.proof.after)}`;
   const timezone = data.scheduling.timezone;
   const formatWindow = (window: { startAt: string; endAt: string } | null) =>
     window
@@ -596,10 +648,22 @@ export function PartnerRequestDetailsPanel({
           <span className="font-medium">{data.onSiteContact.name}</span>
           {data.onSiteContact.phone ? (
             <a
-              className="min-h-11 content-center text-teal-800 underline underline-offset-4"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center px-2 text-teal-800 underline underline-offset-4"
               href={`tel:${data.onSiteContact.phone}`}
+              aria-label={`Call ${data.onSiteContact.name || "on-site contact"}`}
+              title={data.onSiteContact.phone}
             >
-              {data.onSiteContact.phone}
+              Call
+            </a>
+          ) : null}
+          {data.onSiteContact.email ? (
+            <a
+              className="inline-flex min-h-11 min-w-11 items-center justify-center px-2 text-teal-800 underline underline-offset-4"
+              href={`mailto:${data.onSiteContact.email}`}
+              aria-label={`Email ${data.onSiteContact.name || "on-site contact"}`}
+              title={data.onSiteContact.email}
+            >
+              Email
             </a>
           ) : null}
         </p>
@@ -627,16 +691,8 @@ export function PartnerRequestDetailsPanel({
           ) : null}
         </aside>
       ) : null}
-      {review ? (
-        <div className="mb-2">
-          {data.visibility.photos && count === 0 ? (
-            <p className={`border-t py-4 text-sm ${border} ${muted}`}>
-              No customer photos attached.
-            </p>
-          ) : (
-            photoSection
-          )}
-        </div>
+      {review && !verifiedEmptyPhotos ? (
+        <div className="mb-2">{photoSection}</div>
       ) : null}
       <RequestGroups
         compact={compact}
@@ -644,7 +700,11 @@ export function PartnerRequestDetailsPanel({
         summary={[
           data.onSiteContact?.name,
           count > 0 ? `${count} photo${count === 1 ? "" : "s"}` : null,
-          data.commercial.poNumber ? `PO ${data.commercial.poNumber}` : null,
+          data.commercial.poNumber
+            ? review
+              ? data.commercial.poNumber
+              : `PO ${data.commercial.poNumber}`
+            : null,
         ]
           .filter(Boolean)
           .join(" · ")}
@@ -686,43 +746,52 @@ export function PartnerRequestDetailsPanel({
               </div>,
             )
           : null}
-        {group(
-          "Contact and access",
-          data.onSiteContact?.name ?? "Contact not recorded",
-          <div className="space-y-4">
-            {data.location
-              ? rows([
-                  ["Service location", data.location.name],
-                  [
-                    "Service address",
-                    [
-                      data.location.address.line1,
-                      data.location.address.line2,
-                      data.location.address.city,
-                      data.location.address.state,
-                      data.location.address.postalCode,
-                    ]
-                      .filter(Boolean)
-                      .join(", "),
-                  ],
-                  ["Property reference", data.location.externalPropertyId],
-                ])
-              : null}
-            {data.onSiteContact ? (
-              rows(contactRows(data.onSiteContact, "On-site "))
-            ) : (
-              <p className={`text-sm ${muted}`}>
-                An on-site contact was not provided.
-              </p>
-            )}
-            {data.alternateContact
-              ? rows(contactRows(data.alternateContact, "Alternate "))
-              : null}
-            {data.accessDetails
-              ? rows([["Access, parking and loading", data.accessDetails]])
-              : null}
-          </div>,
-        )}
+        {!review || hasContactDetails
+          ? group(
+              "Contact and access",
+              review
+                ? [
+                    data.accessDetails ? "Arrival instructions" : null,
+                    data.alternateContact ? "Backup contact" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : (data.onSiteContact?.name ?? "Contact not recorded"),
+              <div className="space-y-4">
+                {data.location
+                  ? rows([
+                      ["Service location", data.location.name],
+                      [
+                        "Service address",
+                        [
+                          data.location.address.line1,
+                          data.location.address.line2,
+                          data.location.address.city,
+                          data.location.address.state,
+                          data.location.address.postalCode,
+                        ]
+                          .filter(Boolean)
+                          .join(", "),
+                      ],
+                      ["Property reference", data.location.externalPropertyId],
+                    ])
+                  : null}
+                {data.onSiteContact ? (
+                  rows(contactRows(data.onSiteContact, "On-site "))
+                ) : (
+                  <p className={`text-sm ${muted}`}>
+                    An on-site contact was not provided.
+                  </p>
+                )}
+                {data.alternateContact
+                  ? rows(contactRows(data.alternateContact, "Alternate "))
+                  : null}
+                {data.accessDetails
+                  ? rows([["Access, parking and loading", data.accessDetails]])
+                  : null}
+              </div>,
+            )
+          : null}
         {hasSpecial && !review
           ? group(
               "Special requirements",
@@ -735,25 +804,45 @@ export function PartnerRequestDetailsPanel({
         )
           ? group(
               "Work order and billing",
-              data.commercial.poNumber ? `PO ${data.commercial.poNumber}` : "",
+              data.commercial.poNumber
+                ? review
+                  ? data.commercial.poNumber
+                  : `PO ${data.commercial.poNumber}`
+                : "",
               rows(billingFields),
             )
           : null}
-        {group(
-          review ? "Job requirements" : "Completion photos",
-          `Before: ${proofCount(data.proof.before)} · After: ${proofCount(data.proof.after)}`,
-          <div className="space-y-4">
-            {review && hasSpecial ? rows(special) : null}
-            {rows([
-              ["Before service", proofCount(data.proof.before)],
-              ["After service", proofCount(data.proof.after)],
-              [
-                "Formal proof package",
-                data.proof.package ? "Requested" : "Not requested",
-              ],
-            ])}
-          </div>,
-        )}
+        {!review || hasReviewRequirements
+          ? group(
+              review ? "Job requirements" : "Completion photos",
+              proofSummary,
+              <div className="space-y-4">
+                {review && hasSpecial ? rows(special) : null}
+                {rows([
+                  [
+                    "Before service",
+                    review && data.proof.before === 0
+                      ? null
+                      : proofCount(data.proof.before),
+                  ],
+                  [
+                    "After service",
+                    review && data.proof.after === 0
+                      ? null
+                      : proofCount(data.proof.after),
+                  ],
+                  [
+                    "Formal proof package",
+                    data.proof.package
+                      ? "Requested"
+                      : review
+                        ? null
+                        : "Not requested",
+                  ],
+                ])}
+              </div>,
+            )
+          : null}
         {!review
           ? group(
               "Scheduling",

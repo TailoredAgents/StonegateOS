@@ -734,6 +734,9 @@ export function PartnerRequestInbox({
                     includeScheduled
                     canSchedule={selected.request.canAct}
                     onReady={detailReady}
+                    onEditing={() => {
+                      dirty.current = true;
+                    }}
                     onChanged={() => void changed(true)}
                   />
                 ) : selected.request.kind === "reschedule" ? (

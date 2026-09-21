@@ -915,10 +915,16 @@ for (const width of [1440, 375])
         ).toBeVisible();
         await expect(
           submittedDetails.getByRole("link", {
-            name: expected.onSiteContact.phone,
+            name: `Call ${expected.onSiteContact.name}`,
             exact: true,
           }),
         ).toHaveAttribute("href", `tel:${expected.onSiteContact.phone}`);
+        await expect(
+          submittedDetails.getByRole("link", {
+            name: `Email ${expected.onSiteContact.name}`,
+            exact: true,
+          }),
+        ).toHaveAttribute("href", `mailto:${expected.onSiteContact.email}`);
         await expect(
           staffPage.getByLabel("Service date", { exact: true }),
         ).toBeVisible();
@@ -982,9 +988,40 @@ for (const width of [1440, 375])
               .evaluate((img) => (img as HTMLImageElement).naturalWidth),
           )
           .toBeGreaterThan(0);
+        const confirmationRequests: string[] = [];
+        staffPage.on("request", (request) => {
+          if (
+            new URL(request.url()).pathname ===
+              "/api/team/appointments/reschedule" &&
+            request.method() === "POST"
+          )
+            confirmationRequests.push(request.url());
+        });
         await staffPage
-          .getByLabel("Service date", { exact: true })
-          .fill(requestedDates[0]!);
+          .getByRole("group", { name: "Client’s requested dates", exact: true })
+          .getByRole("button")
+          .first()
+          .click();
+        await expect(
+          staffPage.getByLabel("Service date", { exact: true }),
+        ).toHaveValue(requestedDates[0]!);
+        await expect(
+          staffPage.getByLabel("Planned start time", { exact: true }),
+        ).toHaveValue("");
+        await expect(
+          staffPage.getByLabel("Planned start time", { exact: true }),
+        ).toBeFocused();
+        await expect(
+          staffPage.getByRole("button", {
+            name: "Confirm service",
+            exact: true,
+          }),
+        ).toBeDisabled();
+        assert.equal(
+          confirmationRequests.length,
+          0,
+          "A requested-date shortcut does not schedule the real request",
+        );
         await staffPage
           .getByLabel("Planned start time", { exact: true })
           .fill("13:00");
@@ -1045,6 +1082,38 @@ for (const width of [1440, 375])
           deadline,
           requestedDates,
         );
+        await expect(
+          staffPage.getByRole("heading", {
+            name: "Service confirmed",
+            exact: true,
+          }),
+        ).toBeVisible();
+        await expect(
+          staffPage.getByRole("button", {
+            name: "Confirm service",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        await expect(staffPage.getByText(/^Confirmed arrival:/u)).toBeVisible();
+        assert.equal(
+          confirmationRequests.length,
+          1,
+          "Only explicit confirmation schedules the real appointment",
+        );
+        const confirmedCalendarHref = await staffPage
+          .getByRole("link", { name: "Open in calendar", exact: true })
+          .getAttribute("href");
+        assert.ok(confirmedCalendarHref);
+        const confirmedCalendarUrl = new URL(confirmedCalendarHref, base);
+        assert.equal(confirmedCalendarUrl.pathname, "/team/calendar");
+        assert.equal(
+          confirmedCalendarUrl.searchParams.get("cal"),
+          requestedDates[0],
+        );
+        assert.equal(
+          confirmedCalendarUrl.searchParams.get("eventId"),
+          `db:${after.appointment.id}`,
+        );
         assert.ok(after.appointment.startAt);
         assert.ok(after.appointment.promisedArrivalStartAt);
         assert.equal(after.appointment.resourceAssignmentSnapshot.length, 2);
@@ -1076,6 +1145,11 @@ for (const width of [1440, 375])
           (item: any) => item.appointmentId === after.appointment.id,
         );
         assert.ok(event, "Scheduled request appears in the real calendar feed");
+        assert.equal(
+          confirmedCalendarUrl.searchParams.get("eventId"),
+          event.id,
+          "The confirmation link targets the actual calendar feed record",
+        );
         assertStaffDto(
           event.partnerRequest,
           jobId,
@@ -1162,9 +1236,11 @@ for (const width of [1440, 375])
               path: `${directory}/crm-request-${width}.png`,
             });
         }
-        await staffPage.goto(
-          `${base}/team/calendar?calView=day&cal=${requestedDates[0]}&eventId=${encodeURIComponent(event.id)}`,
-        );
+        await staffPage.goto(confirmedCalendarUrl.toString());
+        // Follow the actual confirmation link without selecting a calendar event.
+        await expect(
+          staffPage.locator(`[data-partner-request="${jobId}"]`),
+        ).toBeVisible();
         await assertStaffPanel(staffPage);
         await expect(
           staffPage.getByRole("img", {

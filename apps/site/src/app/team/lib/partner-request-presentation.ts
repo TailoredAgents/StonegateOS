@@ -1,17 +1,21 @@
 /** A requested local date must not move when the staff browser uses another timezone. */
-export function requestedPartnerWindow(window: {
-  localDate: string;
-  timeOfDay: string;
-}): string {
-  const date = new Date(`${window.localDate}T12:00:00Z`);
-  const day = Number.isFinite(date.getTime())
+export function requestedPartnerDate(localDate: string): string {
+  const date = new Date(`${localDate}T12:00:00Z`);
+  return Number.isFinite(date.getTime())
     ? new Intl.DateTimeFormat("en-US", {
         month: "short",
         day: "numeric",
         year: "numeric",
         timeZone: "UTC",
       }).format(date)
-    : window.localDate;
+    : localDate;
+}
+
+export function requestedPartnerWindow(window: {
+  localDate: string;
+  timeOfDay: string;
+}): string {
+  const day = requestedPartnerDate(window.localDate);
   const time =
     window.timeOfDay === "anytime"
       ? "Any time"
