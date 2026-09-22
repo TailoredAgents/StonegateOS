@@ -31,8 +31,8 @@ New creation uses explicit `PARTNER_MULTI_SERVICE_REQUESTS_ENABLED`; optional `P
 
 ## Verification evidence
 
-- Focused regression gate in CI: 1,136 API tests and 234 Site tests passed, including database-enabled cases. The final release commit must also pass the complete required CI workflow.
-- Complete real PostgreSQL gate: 45 suites, 277 tests passed, with exit 0. Includes all eight rate models, activation, frozen rate versions, manual parent payments/refunds, cross-account guards, repeat work, precise visit ownership, cancellations, and proof/notification lifecycle.
+- Focused regression gate in CI: 1,137 API tests and 234 Site tests passed, including database-enabled cases. The final release commit must also pass the complete required CI workflow.
+- Complete real PostgreSQL gate: 45 suites, 278 tests passed, with exit 0. Includes all eight rate models, activation, frozen rate versions, manual parent payments/refunds, cross-account guards, repeat work, precise visit ownership, cancellations, and proof/notification lifecycle.
 - Browser component gate: 16 tests passed across Chromium/WebKit, desktop/phone, and effective 200%/400% desktop zoom (eight portal cases, four CRM cases, and four existing inbox recovery cases). Zoom cases select all eight services by keyboard and check layout on both the details and review steps. Three additional SSR-to-browser hydration tests pass, including Eastern-time midnight, noon, and daylight-saving boundaries.
 - Final API and Site production builds and typechecks passed. All four complete new-request browser journeys passed with zero client exceptions, and both legacy CRM handoff journeys passed with all submitted details and photos preserved.
 - Additional legacy appointment, payment, refund, and invitation compatibility: 185 tests passed. Staff resource/capacity/mobile action browser checks: four passed. Exact seven-suite CI compatibility lane: 41 tests passed; three capacity suites: 102 passed.

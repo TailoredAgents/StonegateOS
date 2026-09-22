@@ -1,3 +1,7 @@
+import {
+  navigatePartnerBrowserPage,
+  reloadPartnerBrowserPage,
+} from "./lib/partner-browser-navigation";
 import { localPartnerRehearsalDatabaseUrl } from "./lib/partner-local-rehearsal";
 import { completeLocalPartnerRateSetup } from "./lib/partner-service-rate-browser-setup";
 import assert from "node:assert/strict";
@@ -138,7 +142,7 @@ async function visit(
   reads: string[] = [],
   failures?: string[],
 ) {
-  await page.goto(`${base}/partners/${path}`);
+  await navigatePartnerBrowserPage(page, `${base}/partners/${path}`);
   const titles: Record<string, string> = {
     overview: "Home",
     bookings: "Jobs",
@@ -158,11 +162,6 @@ async function visit(
   await expect(
     page.getByRole("heading", { name: titles[path], exact: true, level: 1 }),
   ).toBeVisible({ timeout: 20_000 });
-  if (path === "help") {
-    // Let public-policy prefetches finish before the harness forces a new
-    // document navigation, which otherwise interrupts WebKit's fetch queue.
-    await page.waitForLoadState("networkidle", { timeout: 10_000 });
-  }
   const failureNotice = page.getByText(
     /Some information could not be refreshed|Your next job could not be loaded|The upgraded job workspace|Online requests are not available for this account|We couldn’t load your locations|could not be loaded|could(?:n’t|n't| not) (?:load|refresh)|incomplete response/i,
   );
@@ -430,13 +429,17 @@ for (const [engine, browserType] of [
         const suffix = randomUUID();
         const email = `first-company-${suffix}@example.test`;
         try {
-          await staffPage.goto(`${base}/team/partners?p_admin=accounts`);
+          await navigatePartnerBrowserPage(
+            staffPage,
+            `${base}/team/partners?p_admin=accounts`,
+          );
           const addPartner = staffPage.getByRole("link", {
             name: "Add partner",
             exact: true,
           });
           await expect(addPartner).toBeVisible();
-          await staffPage.goto(
+          await navigatePartnerBrowserPage(
+            staffPage,
             new URL((await addPartner.getAttribute("href"))!, base).toString(),
           );
           await expect(
@@ -467,7 +470,7 @@ for (const [engine, browserType] of [
           await completeLocalPartnerRateSetup(staffPage);
           const invitation = await fixture({ action: "invitation", email });
           try {
-            await page.goto(invitation.url);
+            await navigatePartnerBrowserPage(page, invitation.url);
           } catch {
             throw Error("Local invitation navigation failed; token omitted.");
           }
@@ -575,7 +578,10 @@ for (const [engine, browserType] of [
             accountId: invitation.accountId,
             staffId: staff.id,
           });
-          await administratorPage.goto(`${base}/partners/settings/team`);
+          await navigatePartnerBrowserPage(
+            administratorPage,
+            `${base}/partners/settings/team`,
+          );
           const coworkerEmail = `operations-${suffix}@example.test`;
           const invitationForm = administratorPage.locator("form").filter({
             has: administratorPage.getByLabel("Work email", { exact: true }),
@@ -628,9 +634,11 @@ for (const [engine, browserType] of [
               `${new URL(page.url()).pathname}: ${error.message}\n${error.stack?.split("\n").slice(0, 4).join("\n") ?? ""}`,
             ),
           );
-          await page.goto(coworkerInvitation.url).catch(() => {
-            throw Error("Local coworker invitation failed; token omitted.");
-          });
+          await navigatePartnerBrowserPage(page, coworkerInvitation.url).catch(
+            () => {
+              throw Error("Local coworker invitation failed; token omitted.");
+            },
+          );
           await page
             .getByRole("button", {
               name: "Continue to password setup",
@@ -723,7 +731,7 @@ for (const [engine, browserType] of [
                   .description,
             )
             .toBe(restoredDescription);
-          await page.reload();
+          await reloadPartnerBrowserPage(page);
           await requestStep(page, "Service details");
           assert.equal(await currentDraftId(page), addressDraftId);
           await page
@@ -892,7 +900,7 @@ for (const [engine, browserType] of [
           assert.equal(job.schedule.arrivalWindow, null);
 
           const requestUrl = `${base}/team/partners?${new URLSearchParams({ p_admin: "requests", p_request: `service:${jobId}`, p_company: invitation.accountId })}`;
-          await staffPage.goto(requestUrl);
+          await navigatePartnerBrowserPage(staffPage, requestUrl);
           const pricing = staffPage.getByRole("region", {
             name: "Request pricing",
             exact: true,
@@ -959,7 +967,8 @@ for (const [engine, browserType] of [
             403,
             "The operations requester cannot use the administrator approval boundary",
           );
-          await administratorPage.goto(
+          await navigatePartnerBrowserPage(
+            administratorPage,
             `${base}/partners/approvals/${approval.id}`,
           );
           await expect(
@@ -984,7 +993,7 @@ for (const [engine, browserType] of [
             "Company approval alone does not reserve a visit",
           );
           for (let index = 0; index < 2; index += 1) {
-            await staffPage.goto(requestUrl);
+            await navigatePartnerBrowserPage(staffPage, requestUrl);
             const visits = staffPage.getByRole("region", {
               name: "Scheduled visits",
               exact: true,
@@ -1101,7 +1110,10 @@ for (const [engine, browserType] of [
             ).size,
             2,
           );
-          await administratorPage.goto(`${base}/partners/bookings/${jobId}`);
+          await navigatePartnerBrowserPage(
+            administratorPage,
+            `${base}/partners/bookings/${jobId}`,
+          );
           await expect(
             administratorPage.getByRole("heading", {
               name: "Visit 1",
@@ -1178,7 +1190,8 @@ for (const [engine, browserType] of [
             afterChange.pendingRescheduleRequest?.id,
             "The requested date change is linked to this job",
           );
-          await staffPage.goto(
+          await navigatePartnerBrowserPage(
+            staffPage,
             `${base}/team/partners?${new URLSearchParams({ p_admin: "requests", p_request: `reschedule:${afterChange.pendingRescheduleRequest.id}`, p_company: invitation.accountId })}`,
           );
           const changeDate = new Date(
@@ -1242,7 +1255,8 @@ for (const [engine, browserType] of [
             2,
             "Accepting a date change updates the same visit without adding another",
           );
-          await staffPage.goto(
+          await navigatePartnerBrowserPage(
+            staffPage,
             `${base}/team/partners?p_admin=commercial&p_admin_q=${encodeURIComponent(`Local first company ${suffix}`)}`,
           );
           await expect(
@@ -1259,7 +1273,8 @@ for (const [engine, browserType] of [
           await expect(
             staffPage.getByText(/The directory could not be loaded/),
           ).toHaveCount(0);
-          await staffPage.goto(
+          await navigatePartnerBrowserPage(
+            staffPage,
             `${base}/team/partners?p_admin=accounts&p_company=${invitation.accountId}&p_company_section=billing`,
           );
           await staffPage
@@ -1288,7 +1303,10 @@ for (const [engine, browserType] of [
             }),
           );
 
-          await page.goto(`${base}/partners/photos?jobId=${jobId}`);
+          await navigatePartnerBrowserPage(
+            page,
+            `${base}/partners/photos?jobId=${jobId}`,
+          );
           await expect(
             page.getByRole("heading", {
               name: "Photos & proof",
@@ -1344,7 +1362,10 @@ for (const [engine, browserType] of [
           await expect(
             page.getByText(/PDF uploads are not available yet/),
           ).toBeVisible();
-          await page.goto(`${base}/partners/bookings/${jobId}`);
+          await navigatePartnerBrowserPage(
+            page,
+            `${base}/partners/bookings/${jobId}`,
+          );
           await page
             .getByLabel("Message Stonegate", { exact: true })
             .fill("Synthetic release check: an in-portal message only.");
@@ -1380,7 +1401,8 @@ for (const [engine, browserType] of [
             }),
           );
 
-          await staffPage.goto(
+          await navigatePartnerBrowserPage(
+            staffPage,
             `${base}/team/partners?p_admin=accounts&p_company=${invitation.accountId}&p_company_section=settings`,
           );
           for (const label of [
@@ -1444,7 +1466,8 @@ for (const [engine, browserType] of [
             "Fixture has a non-default address to choose",
           );
           for (const parameter of ["locationId", "propertyId"]) {
-            await page.goto(
+            await navigatePartnerBrowserPage(
+              page,
               `${base}/partners/book?${parameter}=${explicitAddress.id}`,
             );
             await requestStep(page, "Service address");
@@ -1500,7 +1523,7 @@ for (const [engine, browserType] of [
             viewport: { width, height: 1000 },
           });
           const loginPage = await loginContext.newPage();
-          await loginPage.goto(`${base}/partners/login`);
+          await navigatePartnerBrowserPage(loginPage, `${base}/partners/login`);
           await loginPage.getByLabel("Email", { exact: true }).fill(email);
           await loginPage.locator('input[name="password"]').fill(password);
           await loginPage
