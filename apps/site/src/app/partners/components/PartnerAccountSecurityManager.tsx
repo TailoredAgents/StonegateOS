@@ -1,5 +1,6 @@
 "use client";
 
+import { formatPartnerDateTime } from "../lib/partner-date-time";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -114,11 +115,7 @@ function dateLabel(value: string | null): string {
   if (!value) return "Never";
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "Unknown";
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "America/New_York",
-  }).format(date);
+  return formatPartnerDateTime(date);
 }
 
 function sessionLabel(session: PartnerSettingsSession): string {
@@ -233,7 +230,7 @@ function AccountSwitcher({ accounts }: { accounts: PartnerSettingsAccount[] }) {
                 setMessage(null);
               }}
               disabled={busy}
-              className={partnerFieldClass}
+              className={cn(partnerFieldClass, "overflow-hidden text-ellipsis")}
             >
               {accounts.map((account) => (
                 <option value={account.id} key={account.membershipId}>
@@ -698,7 +695,7 @@ function NotificationPreferences({
             </div>
 
             <div
-              className="relative mt-5 max-w-full overflow-x-auto rounded-xl border border-slate-200 [contain:paint] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
+              className="relative mt-5 overflow-x-auto rounded-xl border border-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
               role="region"
               aria-label="Notification delivery channels"
               tabIndex={0}

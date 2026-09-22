@@ -56,6 +56,7 @@ jobs:
           pnpm exec tsx --test scripts/test-partner-address-autocomplete.mts
           pnpm exec tsx --test scripts/test-partner-service-details.mts
           pnpm exec tsx --test scripts/test-partner-multi-service-components.mts scripts/test-partner-multi-service-review-components.mts
+          pnpm exec tsx --test scripts/test-partner-date-hydration.mts
           pnpm exec tsx --test scripts/test-partner-draft-photo-upload.mts
           pnpm exec tsx --test apps/site/test/partner-billing-csp.test.mjs scripts/test-partner-billing-media-csp.mts
           pnpm exec tsx --test scripts/test-partner-request-details.mts

@@ -91,17 +91,28 @@ if (!certificateReady()) {
 const tls = { key: readFileSync(key), cert: readFileSync(cert) };
 function proxy(port: number, upstreamPort: number, application: boolean) {
   const server = createServer(tls, (incoming, outgoing) => {
+    // Browser API traffic stays HTTPS and same-origin, including under the
+    // production Billing CSP. Only this exact local namespace reaches the API.
+    const incomingPath = incoming.url ?? "/";
+    const browserApi =
+      application && /^\/__local-api(?=\/|\?|$)/u.test(incomingPath);
+    const apiPath = browserApi
+      ? incomingPath.slice("/__local-api".length)
+      : incomingPath;
+    const upstreamPath = apiPath.startsWith("?")
+      ? `/${apiPath}`
+      : apiPath || "/";
     const upstream = request(
       {
         hostname: "127.0.0.1",
-        port: upstreamPort,
-        path: incoming.url,
+        port: browserApi ? 3111 : upstreamPort,
+        path: upstreamPath,
         method: incoming.method,
         // S3 signs the original Host and path. Preserve both through its proxy.
         headers: application
           ? {
               ...incoming.headers,
-              host: "localhost:3112",
+              host: browserApi ? "localhost:3111" : "localhost:3112",
               "x-forwarded-host": "localhost:3112",
               "x-forwarded-proto": "https",
               "x-forwarded-for": "127.0.0.1",

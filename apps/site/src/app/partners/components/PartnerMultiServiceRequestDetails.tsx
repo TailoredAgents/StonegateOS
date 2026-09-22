@@ -1,3 +1,4 @@
+import { formatPartnerDateTime } from "../lib/partner-date-time";
 import Link from "next/link";
 import type { PartnerMultiServiceRequest } from "@myst-os/sdk";
 import { getPartnerServiceDefinition } from "@myst-os/pricing";
@@ -58,7 +59,7 @@ export function PartnerMultiServiceRequestDetails({
                   <p className="mt-2 text-sm font-semibold text-slate-800">
                     {arrival
                       ? `Arrival: ${formatPartnerArrivalWindow(arrival)}`
-                      : `Scheduled start: ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: visit.timezone }).format(new Date(visit.startAt))}`}
+                      : `Scheduled start: ${formatPartnerDateTime(new Date(visit.startAt), visit.timezone)}`}
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
                     {visit.timezone.replaceAll("_", " ")}

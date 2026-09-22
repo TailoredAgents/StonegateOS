@@ -1,5 +1,6 @@
 "use client";
 
+import { formatPartnerDateTime } from "../lib/partner-date-time";
 import * as React from "react";
 import Link from "next/link";
 import type { Route } from "next";
@@ -52,17 +53,9 @@ function formatCancellationDeadline(
   const deadline = new Date(value);
   if (!Number.isFinite(deadline.getTime())) return null;
   try {
-    return new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone,
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(deadline);
+    return formatPartnerDateTime(deadline, timezone);
   } catch {
-    return new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(deadline);
+    return formatPartnerDateTime(deadline);
   }
 }
 

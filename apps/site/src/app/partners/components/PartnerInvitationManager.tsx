@@ -1,5 +1,6 @@
 "use client";
 
+import { formatPartnerDateTime } from "../lib/partner-date-time";
 import * as React from "react";
 import {
   LoaderCircle,
@@ -62,11 +63,7 @@ type InvitationListPayload = {
 function dateTime(value: string): string {
   const date = new Date(value);
   return Number.isFinite(date.getTime())
-    ? new Intl.DateTimeFormat("en-US", {
-        dateStyle: "medium",
-        timeStyle: "short",
-        timeZone: "America/New_York",
-      }).format(date)
+    ? formatPartnerDateTime(date)
     : "Unavailable";
 }
 

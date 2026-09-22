@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import type * as DatabaseSchema from "@/db/schema";
 
 const appointmentWithTotalId = "11111111-1111-4111-8111-111111111111";
 const appointmentWithoutTotalId = "22222222-2222-4222-8222-222222222222";
@@ -78,68 +79,10 @@ const mockDb = {
   }),
 };
 
-jest.mock("drizzle-orm", () => ({
-  and: jest.fn((...values: unknown[]) => values),
-  desc: jest.fn((value: unknown) => value),
-  eq: jest.fn((...values: unknown[]) => values),
-  gte: jest.fn((...values: unknown[]) => values),
-  inArray: jest.fn((...values: unknown[]) => values),
-  lt: jest.fn((...values: unknown[]) => values),
-}));
-
+// Retain real table/SQL shapes as calendar bindings evolve; only execution is mocked.
 jest.mock("@/db", () => ({
-  appointmentCrewMembers: {
-    appointmentId: "appointment_crew_members.appointment_id",
-    memberId: "appointment_crew_members.member_id",
-    hourlyRateCents: "appointment_crew_members.hourly_rate_cents",
-    workedMinutes: "appointment_crew_members.worked_minutes",
-  },
-  appointmentNotes: {
-    id: "appointment_notes.id",
-    appointmentId: "appointment_notes.appointment_id",
-    body: "appointment_notes.body",
-    createdAt: "appointment_notes.created_at",
-  },
-  appointments: {
-    id: "appointments.id",
-    contactId: "appointments.contact_id",
-    propertyId: "appointments.property_id",
-    type: "appointments.type",
-    status: "appointments.status",
-    startAt: "appointments.start_at",
-    durationMinutes: "appointments.duration_minutes",
-    rescheduleToken: "appointments.reschedule_token",
-    quotedTotalCents: "appointments.quoted_total_cents",
-    finalTotalCents: "appointments.final_total_cents",
-    updatedAt: "appointments.updated_at",
-    quotedScopeText: "appointments.quoted_scope_text",
-    bookingDetails: "appointments.booking_details",
-  },
-  contacts: {
-    id: "contacts.id",
-    firstName: "contacts.first_name",
-    lastName: "contacts.last_name",
-  },
-  crmTasks: {
-    id: "crm_tasks.id",
-    contactId: "crm_tasks.contact_id",
-    notes: "crm_tasks.notes",
-    createdAt: "crm_tasks.created_at",
-    status: "crm_tasks.status",
-    dueAt: "crm_tasks.due_at",
-  },
+  ...jest.requireActual<typeof DatabaseSchema>("@/db/schema"),
   getDb: () => mockDb,
-  properties: {
-    id: "properties.id",
-    addressLine1: "properties.address_line_1",
-    city: "properties.city",
-    state: "properties.state",
-    postalCode: "properties.postal_code",
-  },
-  teamMembers: {
-    id: "team_members.id",
-    name: "team_members.name",
-  },
 }));
 
 jest.mock("@/lib/calendar", () => ({

@@ -1,5 +1,6 @@
 "use client";
 
+import { formatPartnerDateTime } from "../lib/partner-date-time";
 import * as React from "react";
 import {
   CheckCheck,
@@ -107,11 +108,7 @@ function validDate(value: string | null | undefined): Date | null {
 function formatMessageTime(value: string, timezone: string): string {
   const date = validDate(value);
   if (!date) return "Time unavailable";
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  return formatPartnerDateTime(date, timezone);
 }
 
 function normalizeDeliveryStatus(value: string | null): string | null {

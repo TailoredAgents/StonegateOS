@@ -189,6 +189,87 @@ async function visit(
         right: Math.round(element.getBoundingClientRect().right),
       }));
   });
+  if (overflow.length) {
+    console.log(
+      JSON.stringify({
+        stage: "overflow_layout",
+        path,
+        diagnostic: await page.evaluate(() => {
+          const region = document.querySelector(
+            '[aria-label="Notification delivery channels"]',
+          ) as HTMLElement | null;
+          const table = region?.querySelector("table");
+          const ancestors = [];
+          for (
+            let current: Element | null = table ?? null;
+            current;
+            current = current.parentElement
+          ) {
+            const style = getComputedStyle(current),
+              box = current.getBoundingClientRect();
+            ancestors.push({
+              tag: current.tagName,
+              className: current.getAttribute("class"),
+              overflowX: style.overflowX,
+              contain: style.contain,
+              width: style.width,
+              clientWidth: current.clientWidth,
+              scrollWidth: current.scrollWidth,
+              left: box.left,
+              right: box.right,
+            });
+          }
+          const probes: Record<string, number> = {
+            original: document.documentElement.scrollWidth,
+          };
+          if (region && table) {
+            for (const [name, element, property, value] of [
+              ["region_hidden", region, "overflow", "hidden"],
+              ["region_strict", region, "contain", "strict"],
+              ["table_min_zero", table, "min-width", "0"],
+            ] as const) {
+              const original = element.getAttribute("style");
+              element.style.setProperty(property, value);
+              probes[name] = document.documentElement.scrollWidth;
+              if (original === null) element.removeAttribute("style");
+              else element.setAttribute("style", original);
+            }
+          }
+          const removals = [];
+          const originalWidth = document.documentElement.scrollWidth;
+          for (const element of document.querySelectorAll<HTMLElement>(
+            "main section, main input, main select, main button",
+          )) {
+            const original = element.getAttribute("style");
+            element.style.setProperty("display", "none", "important");
+            const width = document.documentElement.scrollWidth;
+            if (original === null) element.removeAttribute("style");
+            else element.setAttribute("style", original);
+            if (width < originalWidth) {
+              const labels =
+                "labels" in element
+                  ? (element as HTMLInputElement).labels
+                  : null;
+              removals.push({
+                tag: element.tagName,
+                id: element.id,
+                type: element.getAttribute("type"),
+                label:
+                  element.getAttribute("aria-label") ??
+                  labels?.[0]?.textContent?.trim().slice(0, 100) ??
+                  element.querySelector("h2")?.textContent,
+                width,
+                parentClass: element.parentElement?.className,
+                grandparentClass:
+                  element.parentElement?.parentElement?.className,
+              });
+            }
+          }
+          return { viewport: innerWidth, ancestors, probes, removals };
+        }),
+      }),
+    );
+  }
   if (overflow.length && process.env["PARTNER_MULTI_SERVICE_PREVIEW_DIR"])
     await page.screenshot({
       path: `${process.env["PARTNER_MULTI_SERVICE_PREVIEW_DIR"]}/overflow-${path.replaceAll(/[^a-z]/g, "-")}-${page.viewportSize()?.width}.png`,
@@ -196,6 +277,17 @@ async function visit(
     });
   assert.deepEqual(overflow, [], `${path} fits the viewport`);
   if (path === "settings" && (page.viewportSize()?.width ?? 0) < 600) {
+    const account = page.getByRole("combobox", {
+      name: "Account",
+      exact: true,
+    });
+    await expect(account).toBeVisible();
+    await expect(account).toBeEnabled();
+    const selectedAccount = await account.inputValue();
+    await account.focus();
+    await expect(account).toBeFocused();
+    await account.press("ArrowDown");
+    await expect(account).toHaveValue(selectedAccount);
     const channels = page.getByRole("region", {
       name: "Notification delivery channels",
       exact: true,
@@ -283,7 +375,11 @@ for (const [engine, browserType] of [
             });
         });
         const pageErrors: string[] = [];
-        page.on("pageerror", (error) => pageErrors.push(error.message));
+        page.on("pageerror", (error) =>
+          pageErrors.push(
+            `${new URL(administratorPage.url()).pathname}: ${error.message}\n${error.stack?.split("\n").slice(0, 4).join("\n") ?? ""}`,
+          ),
+        );
         const suffix = randomUUID();
         const email = `first-company-${suffix}@example.test`;
         try {
@@ -465,7 +561,11 @@ for (const [engine, browserType] of [
           });
           page = await operationsContext.newPage();
           page.setDefaultTimeout(20_000);
-          page.on("pageerror", (error) => pageErrors.push(error.message));
+          page.on("pageerror", (error) =>
+            pageErrors.push(
+              `${new URL(page.url()).pathname}: ${error.message}\n${error.stack?.split("\n").slice(0, 4).join("\n") ?? ""}`,
+            ),
+          );
           await page.goto(coworkerInvitation.url).catch(() => {
             throw Error("Local coworker invitation failed; token omitted.");
           });

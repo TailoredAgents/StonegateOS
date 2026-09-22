@@ -1,5 +1,6 @@
 "use client";
 
+import { formatPartnerDate } from "../lib/partner-date-time";
 import * as React from "react";
 import {
   Ban,
@@ -69,7 +70,7 @@ function dateLabel(value: string | null): string {
   if (!value) return "Not available";
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "Not available";
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(date);
+  return formatPartnerDate(date);
 }
 
 function statusClass(status: PartnerTeamMember["status"]): string {
