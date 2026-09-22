@@ -1,6 +1,6 @@
 # Multi-service partner requests
 
-New requests require `PARTNER_MULTI_SERVICE_REQUESTS_ENABLED=true` and the existing portal write flag. `PARTNER_MULTI_SERVICE_ACCOUNT_IDS` can narrow the initial cohort. Existing saved requests remain readable if the new-request gate is paused.
+New requests require `PARTNER_MULTI_SERVICE_REQUESTS_ENABLED=true` and the existing portal write flag. `PARTNER_MULTI_SERVICE_ACCOUNT_IDS` can narrow the initial cohort. Remove the cohort variable when enabling the flow for every eligible account; existing company restrictions still apply. Render rejects an empty environment-variable value, so delete only that optional key rather than replacing the service environment. Existing saved requests remain readable if the new-request gate is paused.
 
 Apply additive migration 0176 before deploying consumers that read the new fields; deploy API and readers before enabling the new-request flag. Historical bookings retain their appointment and pricing. Model 2 parents have no appointment: service lines preserve submitted scope and rate evidence, while real scheduled visits own appointments. Migration 0177 separately adds owner alert stages.
 
