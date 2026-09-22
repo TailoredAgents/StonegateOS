@@ -36,7 +36,10 @@ export async function completeLocalPartnerRateSetup(page: Page): Promise<void> {
           `Synthetic local ${service.label} job scope; no real service or price.`,
         );
       const included = section.locator('textarea[id$="-included"]').nth(index);
-      if (service.key === "pressure-washing" && index === 0)
+      if (
+        ["pressure-washing", "soft-washing"].includes(service.key) &&
+        index === 0
+      )
         await included.fill("");
       else if (!(await included.inputValue()).trim())
         await included.fill(
@@ -79,9 +82,30 @@ export async function completeLocalPartnerRateSetup(page: Page): Promise<void> {
     /inclusions-error/,
   );
   await expect(activate).toBeDisabled();
+  const otherIncompleteService = editor
+    .locator("details")
+    .filter({ has: page.getByText("Soft washing", { exact: true }) });
+  await expect(
+    otherIncompleteService.locator('textarea[id$="-included"]').first(),
+  ).toBeHidden();
+  await expect(
+    editor
+      .locator("details[open]")
+      .filter({
+        has: page.getByText(/^(?:Pressure washing|Soft washing)$/, {
+          exact: true,
+        }),
+      }),
+  ).toHaveCount(1);
   await included.fill(
     "Requested pressure washing of the agreed surfaces is included.",
   );
+  await otherIncompleteService.locator(":scope > summary").click();
+  await expect(included).toBeHidden();
+  await otherIncompleteService
+    .locator('textarea[id$="-included"]')
+    .first()
+    .fill("Requested soft washing of the agreed surfaces is included.");
   const screenshotDirectory = process.env["PARTNER_MULTI_SERVICE_PREVIEW_DIR"];
   if (screenshotDirectory) {
     mkdirSync(screenshotDirectory, { recursive: true });
