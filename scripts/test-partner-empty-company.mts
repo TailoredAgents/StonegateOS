@@ -176,9 +176,10 @@ async function visit(
       failures.push(error instanceof Error ? error.message : `${read} failed`);
     }
   }
-  const overflow = await page.evaluate(() => {
-    if (document.documentElement.scrollWidth <= innerWidth + 1) return [];
-    return [...document.querySelectorAll("body *")]
+  const viewport = await page.evaluate(() => ({
+    width: innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    overflowingElements: [...document.querySelectorAll("body *")]
       .filter(
         (element) => element.getBoundingClientRect().right > innerWidth + 1,
       )
@@ -187,13 +188,15 @@ async function visit(
         tag: element.tagName,
         className: element.getAttribute("class"),
         right: Math.round(element.getBoundingClientRect().right),
-      }));
-  });
-  if (overflow.length) {
+      })),
+  }));
+  const overflowing = viewport.documentWidth > viewport.width + 1;
+  if (overflowing) {
     console.log(
       JSON.stringify({
         stage: "overflow_layout",
         path,
+        viewport,
         diagnostic: await page.evaluate(() => {
           const region = document.querySelector(
             '[aria-label="Notification delivery channels"]',
@@ -270,12 +273,16 @@ async function visit(
       }),
     );
   }
-  if (overflow.length && process.env["PARTNER_MULTI_SERVICE_PREVIEW_DIR"])
+  if (overflowing && process.env["PARTNER_MULTI_SERVICE_PREVIEW_DIR"])
     await page.screenshot({
       path: `${process.env["PARTNER_MULTI_SERVICE_PREVIEW_DIR"]}/overflow-${path.replaceAll(/[^a-z]/g, "-")}-${page.viewportSize()?.width}.png`,
       fullPage: true,
     });
-  assert.deepEqual(overflow, [], `${path} fits the viewport`);
+  assert.equal(
+    overflowing,
+    false,
+    `${path} fits the viewport (${viewport.documentWidth}px content in ${viewport.width}px viewport)`,
+  );
   if (path === "settings" && (page.viewportSize()?.width ?? 0) < 600) {
     const account = page.getByRole("combobox", {
       name: "Account",
@@ -577,14 +584,29 @@ for (const [engine, browserType] of [
           await invitationForm
             .getByRole("combobox", { name: "Role", exact: true })
             .selectOption("operations");
-          await invitationForm
-            .getByRole("button", { name: "Send invitation", exact: true })
-            .click();
+          const [invitationResponse] = await Promise.all([
+            administratorPage.waitForResponse(
+              (response) =>
+                response.request().method() === "POST" &&
+                new URL(response.url()).pathname ===
+                  "/api/partners/portal/invitations",
+            ),
+            invitationForm
+              .getByRole("button", { name: "Send invitation", exact: true })
+              .click(),
+          ]);
+          assert.equal(
+            invitationResponse.ok(),
+            true,
+            "The coworker invitation must commit before reading its setup link",
+          );
           await expect(
             administratorPage
               .getByRole("status")
-              .filter({ hasText: /invitation/i })
-              .first(),
+              .filter({ hasText: "Invitation request accepted." }),
+          ).toBeVisible();
+          await expect(
+            administratorPage.getByText(coworkerEmail, { exact: true }),
           ).toBeVisible();
           const coworkerInvitation = await fixture({
             action: "invitation",
@@ -1215,6 +1237,21 @@ for (const [engine, browserType] of [
             2,
             "Accepting a date change updates the same visit without adding another",
           );
+          await staffPage.goto(
+            `${base}/team/partners?p_admin=commercial&p_admin_q=${encodeURIComponent(`Local first company ${suffix}`)}`,
+          );
+          await expect(
+            staffPage.getByRole("link", {
+              name: "Open billing & service terms",
+              exact: true,
+            }),
+          ).toHaveCount(1);
+          await expect(
+            staffPage.getByText(`Local first company ${suffix}`, { exact: true }),
+          ).toBeVisible();
+          await expect(
+            staffPage.getByText(/The directory could not be loaded/),
+          ).toHaveCount(0);
           await staffPage.goto(
             `${base}/team/partners?p_admin=accounts&p_company=${invitation.accountId}&p_company_section=billing`,
           );

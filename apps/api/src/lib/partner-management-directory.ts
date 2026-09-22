@@ -3,6 +3,7 @@ import {
   desc,
   eq,
   gt,
+  getTableName,
   ilike,
   isNotNull,
   isNull,
@@ -767,123 +768,127 @@ async function listJobChangeRequests(query: PartnerManagementListQuery) {
 
 async function listCommercialReadiness(query: PartnerManagementListQuery) {
   const search = query.q ? escapedPartnerManagementSearch(query.q) : null;
-  const now = new Date();
+  const now = new Date().toISOString();
+  // Single-table SELECT projections strip PgColumn qualifiers, including inside
+  // embedded subqueries. Explicit identifiers preserve each correlated scope.
+  const qualified = (column: AnyPgColumn) =>
+    sql`${sql.identifier(getTableName(column.table))}.${sql.identifier(column.name)}`;
   const totalRateCardCount = sql<number>`(
     select count(*)::integer
     from ${partnerRateCards}
-    where ${partnerRateCards.partnerAccountId} = ${partnerAccounts.id}
+    where ${qualified(partnerRateCards.partnerAccountId)} = ${qualified(partnerAccounts.id)}
   )`.mapWith(Number);
   const currentRateCardCount = sql<number>`(
     select count(*)::integer
     from ${partnerRateCards}
-    where ${partnerRateCards.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerRateCards.active} is true
-      and ${partnerRateCards.effectiveFrom} <= ${now}
-      and (${partnerRateCards.effectiveTo} is null or ${partnerRateCards.effectiveTo} > ${now})
+    where ${qualified(partnerRateCards.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerRateCards.active)} is true
+      and ${qualified(partnerRateCards.effectiveFrom)} <= ${now}
+      and (${qualified(partnerRateCards.effectiveTo)} is null or ${qualified(partnerRateCards.effectiveTo)} > ${now})
   )`.mapWith(Number);
   const currentRateItemCount = sql<number>`(
     select count(*)::integer
     from ${partnerRateItems}
     inner join ${partnerRateCards}
-      on ${partnerRateCards.id} = ${partnerRateItems.rateCardId}
-    where ${partnerRateCards.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerRateCards.active} is true
-      and ${partnerRateCards.effectiveFrom} <= ${now}
-      and (${partnerRateCards.effectiveTo} is null or ${partnerRateCards.effectiveTo} > ${now})
+      on ${qualified(partnerRateCards.id)} = ${qualified(partnerRateItems.rateCardId)}
+    where ${qualified(partnerRateCards.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerRateCards.active)} is true
+      and ${qualified(partnerRateCards.effectiveFrom)} <= ${now}
+      and (${qualified(partnerRateCards.effectiveTo)} is null or ${qualified(partnerRateCards.effectiveTo)} > ${now})
   )`.mapWith(Number);
   const currentCurrency = sql<string | null>`(
-    select min(${partnerRateCards.currency})
+    select min(${qualified(partnerRateCards.currency)})
     from ${partnerRateCards}
-    where ${partnerRateCards.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerRateCards.active} is true
-      and ${partnerRateCards.effectiveFrom} <= ${now}
-      and (${partnerRateCards.effectiveTo} is null or ${partnerRateCards.effectiveTo} > ${now})
+    where ${qualified(partnerRateCards.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerRateCards.active)} is true
+      and ${qualified(partnerRateCards.effectiveFrom)} <= ${now}
+      and (${qualified(partnerRateCards.effectiveTo)} is null or ${qualified(partnerRateCards.effectiveTo)} > ${now})
   )`;
   const versionedRateCardCount = sql<number>`(
     select count(*)::integer
     from ${partnerRateCardVersions}
-    where ${partnerRateCardVersions.partnerAccountId} = ${partnerAccounts.id}
+    where ${qualified(partnerRateCardVersions.partnerAccountId)} = ${qualified(partnerAccounts.id)}
   )`.mapWith(Number);
   const activeVersionedRateCardCount = sql<number>`(
     select count(*)::integer
     from ${partnerRateCardVersions}
-    where ${partnerRateCardVersions.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerRateCardVersions.status} = 'active'
-      and ${partnerRateCardVersions.effectiveFrom} <= ${now}
-      and (${partnerRateCardVersions.effectiveTo} is null or ${partnerRateCardVersions.effectiveTo} > ${now})
+    where ${qualified(partnerRateCardVersions.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerRateCardVersions.status)} = 'active'
+      and ${qualified(partnerRateCardVersions.effectiveFrom)} <= ${now}
+      and (${qualified(partnerRateCardVersions.effectiveTo)} is null or ${qualified(partnerRateCardVersions.effectiveTo)} > ${now})
   )`.mapWith(Number);
   const approvalRuleCount = sql<number>`(
     select count(*)::integer
     from ${partnerApprovalRules}
-    where ${partnerApprovalRules.partnerAccountId} = ${partnerAccounts.id}
+    where ${qualified(partnerApprovalRules.partnerAccountId)} = ${qualified(partnerAccounts.id)}
   )`.mapWith(Number);
   const activeApprovalRuleCount = sql<number>`(
     select count(*)::integer
     from ${partnerApprovalRules}
-    where ${partnerApprovalRules.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerApprovalRules.active} is true
+    where ${qualified(partnerApprovalRules.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerApprovalRules.active)} is true
   )`.mapWith(Number);
   const pendingApprovalRequestCount = sql<number>`(
     select count(*)::integer
     from ${partnerApprovalRequests}
-    where ${partnerApprovalRequests.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerApprovalRequests.state} = 'pending'
+    where ${qualified(partnerApprovalRequests.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerApprovalRequests.state)} = 'pending'
   )`.mapWith(Number);
   const quoteCount = sql<number>`(
     select count(*)::integer
     from ${partnerQuotes}
-    where ${partnerQuotes.partnerAccountId} = ${partnerAccounts.id}
+    where ${qualified(partnerQuotes.partnerAccountId)} = ${qualified(partnerAccounts.id)}
   )`.mapWith(Number);
   const invoiceCount = sql<number>`(
     select count(*)::integer
     from ${partnerInvoices}
-    where ${partnerInvoices.partnerAccountId} = ${partnerAccounts.id}
+    where ${qualified(partnerInvoices.partnerAccountId)} = ${qualified(partnerAccounts.id)}
   )`.mapWith(Number);
   const openInvoiceCount = sql<number>`(
     select count(*)::integer
     from ${partnerInvoices}
-    where ${partnerInvoices.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerInvoices.status} in ('issued', 'partially_paid', 'overdue')
-      and ${partnerInvoices.balanceCents} > 0
+    where ${qualified(partnerInvoices.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerInvoices.status)} in ('issued', 'partially_paid', 'overdue')
+      and ${qualified(partnerInvoices.balanceCents)} > 0
   )`.mapWith(Number);
   const overdueInvoiceCount = sql<number>`(
     select count(*)::integer
     from ${partnerInvoices}
-    where ${partnerInvoices.partnerAccountId} = ${partnerAccounts.id}
+    where ${qualified(partnerInvoices.partnerAccountId)} = ${qualified(partnerAccounts.id)}
       and ${effectivePartnerInvoiceStatusSql()} = 'overdue'
-      and ${partnerInvoices.balanceCents} > 0
+      and ${qualified(partnerInvoices.balanceCents)} > 0
   )`.mapWith(Number);
   const hostedPaymentGapCount = sql<number>`(
     select count(*)::integer
     from ${partnerInvoices}
-    where ${partnerInvoices.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerInvoices.status} in ('issued', 'partially_paid', 'overdue')
-      and ${partnerInvoices.balanceCents} > 0
-      and (${partnerInvoices.providerInvoiceId} is not null or ${partnerInvoices.hostedPaymentUrl} is not null)
+    where ${qualified(partnerInvoices.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerInvoices.status)} in ('issued', 'partially_paid', 'overdue')
+      and ${qualified(partnerInvoices.balanceCents)} > 0
+      and (${qualified(partnerInvoices.providerInvoiceId)} is not null or ${qualified(partnerInvoices.hostedPaymentUrl)} is not null)
   )`.mapWith(Number);
   const pendingPaymentAllocationCount = sql<number>`(
     select count(*)::integer
     from ${partnerPaymentAllocations}
-    where ${partnerPaymentAllocations.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerPaymentAllocations.state} = 'pending'
+    where ${qualified(partnerPaymentAllocations.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerPaymentAllocations.state)} = 'pending'
   )`.mapWith(Number);
   const invoiceCurrencyCount = sql<number>`(
-    select count(distinct ${partnerInvoices.currency})::integer
+    select count(distinct ${qualified(partnerInvoices.currency)})::integer
     from ${partnerInvoices}
-    where ${partnerInvoices.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerInvoices.status} <> 'void'
+    where ${qualified(partnerInvoices.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerInvoices.status)} <> 'void'
   )`.mapWith(Number);
   const invoiceCurrency = sql<string | null>`(
-    select min(${partnerInvoices.currency})
+    select min(${qualified(partnerInvoices.currency)})
     from ${partnerInvoices}
-    where ${partnerInvoices.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerInvoices.status} <> 'void'
+    where ${qualified(partnerInvoices.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerInvoices.status)} <> 'void'
   )`;
   const outstandingBalanceCents = sql<string>`(
-    select coalesce(sum(${partnerInvoices.balanceCents}), 0)::text
+    select coalesce(sum(${qualified(partnerInvoices.balanceCents)}), 0)::text
     from ${partnerInvoices}
-    where ${partnerInvoices.partnerAccountId} = ${partnerAccounts.id}
-      and ${partnerInvoices.status} <> 'void'
+    where ${qualified(partnerInvoices.partnerAccountId)} = ${qualified(partnerAccounts.id)}
+      and ${qualified(partnerInvoices.status)} <> 'void'
   )`;
   const hasAnyCommercialRecord = sql<boolean>`(
     (${totalRateCardCount}) > 0
@@ -895,7 +900,7 @@ async function listCommercialReadiness(query: PartnerManagementListQuery) {
   const statusExpression = sql<
     "ready" | "attention_required" | "unconfigured"
   >`case
-    when ${partnerAccounts.portalAccessEnabled} is true
+    when ${qualified(partnerAccounts.portalAccessEnabled)} is true
       and (${currentRateCardCount}) = 1
       and (${currentRateItemCount}) > 0
       and (${hostedPaymentGapCount}) = 0

@@ -217,28 +217,33 @@ function AccountSwitcher({ accounts }: { accounts: PartnerSettingsAccount[] }) {
             <span className="text-sm font-semibold text-slate-700">
               Account
             </span>
-            <select
-              id="partner-active-account"
-              value={selected}
-              onChange={(event) => {
-                const accountId = event.target.value;
-                setSelected(accountId);
-                setMakeDefault(
-                  accounts.find((account) => account.id === accountId)
-                    ?.defaultAccount ?? false,
-                );
-                setMessage(null);
-              }}
-              disabled={busy}
-              className={cn(partnerFieldClass, "overflow-hidden text-ellipsis")}
-            >
-              {accounts.map((account) => (
-                <option value={account.id} key={account.membershipId}>
-                  {account.name} · {account.roleKey.replaceAll("_", " ")}
-                  {account.defaultAccount ? " · default" : ""}
-                </option>
-              ))}
-            </select>
+            <span className="-m-1 block overflow-hidden p-1">
+              <select
+                id="partner-active-account"
+                value={selected}
+                onChange={(event) => {
+                  const accountId = event.target.value;
+                  setSelected(accountId);
+                  setMakeDefault(
+                    accounts.find((account) => account.id === accountId)
+                      ?.defaultAccount ?? false,
+                  );
+                  setMessage(null);
+                }}
+                disabled={busy}
+                className={cn(
+                  partnerFieldClass,
+                  "min-w-0 max-w-full overflow-hidden text-ellipsis",
+                )}
+              >
+                {accounts.map((account) => (
+                  <option value={account.id} key={account.membershipId}>
+                    {account.name} · {account.roleKey.replaceAll("_", " ")}
+                    {account.defaultAccount ? " · default" : ""}
+                  </option>
+                ))}
+              </select>
+            </span>
           </label>
           <label className="flex min-h-11 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700">
             <input
