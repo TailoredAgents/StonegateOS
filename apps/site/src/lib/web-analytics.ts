@@ -1,3 +1,11 @@
+import { withOpenAiAdsUtm } from "./openai-ads";
+import {
+  COOKIE_CONSENT_EVENT,
+  isAdvertisingAllowed,
+  isAnalyticsAllowed,
+  isPublicTrackingPath,
+} from "./cookie-consent";
+
 type WebDevice = "mobile" | "desktop" | "tablet" | "unknown";
 
 export type WebEventName =
@@ -81,9 +89,47 @@ const MAX_QUEUE = 50;
 const FLUSH_BATCH = 20;
 const FLUSH_DEBOUNCE_MS = 2_000;
 
-let queue: PayloadEvent[] = [];
+type QueuedEvent = { payload: PayloadEvent; product: boolean };
+
+let queue: QueuedEvent[] = [];
 let flushInFlight = false;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let consentWindow: Window | null = null;
+let productSessionId: string | undefined;
+let productVisitId: string | undefined;
+let productVisitLast = 0;
+
+function applyConsentToQueue(): void {
+  if (!isAnalyticsAllowed()) queue = queue.filter((entry) => entry.product);
+  if (!isAdvertisingAllowed()) {
+    queue = queue.map((entry) => ({
+      ...entry,
+      payload: { ...entry.payload, utm: undefined },
+    }));
+  }
+  if (!queue.length && flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+}
+
+function listenForConsentChanges(): void {
+  if (typeof window === "undefined" || consentWindow === window) return;
+  consentWindow?.removeEventListener(COOKIE_CONSENT_EVENT, applyConsentToQueue);
+  window.addEventListener(COOKIE_CONSENT_EVENT, applyConsentToQueue);
+  consentWindow = window;
+}
+
+function getProductIdentity(): { sessionId: string; visitId: string } {
+  // Operational partner events remain available without creating public
+  // marketing/analytics identifiers in browser storage.
+  productSessionId ??= randomId("sess");
+  if (!productVisitId || nowMs() - productVisitLast >= VISIT_IDLE_MS) {
+    productVisitId = randomId("visit");
+  }
+  productVisitLast = nowMs();
+  return { sessionId: productSessionId, visitId: productVisitId };
+}
 
 function nowMs(): number {
   return Date.now();
@@ -210,23 +256,29 @@ function touchVisit(): void {
 }
 
 function getOrCreateUtm(): UTM | undefined {
-  if (typeof window === "undefined") return undefined;
+  if (typeof window === "undefined" || !isAdvertisingAllowed())
+    return undefined;
   const current = readUtmFromLocation();
-  if (current) {
-    try {
-      sessionStorage.setItem(UTM_STORAGE_KEY, JSON.stringify(current));
-    } catch {
-      // ignore
-    }
-    return current;
-  }
   const stored = safeJsonParse<UTM>(sessionStorage.getItem(UTM_STORAGE_KEY));
-  if (stored && Object.keys(stored).length) return stored;
+  const landingClick = new URLSearchParams(window.location.search).has(
+    "oppref",
+  );
+  const attributed = withOpenAiAdsUtm(
+    current ?? (landingClick ? {} : (stored ?? {})),
+  );
+  if (Object.keys(attributed).length) {
+    try {
+      sessionStorage.setItem(UTM_STORAGE_KEY, JSON.stringify(attributed));
+    } catch {
+      /* ignore */
+    }
+    return attributed;
+  }
   return undefined;
 }
 
-function enqueue(event: PayloadEvent): void {
-  queue.push(event);
+function enqueue(event: PayloadEvent, product: boolean): void {
+  queue.push({ payload: event, product });
   if (queue.length > MAX_QUEUE) {
     queue = queue.slice(queue.length - MAX_QUEUE);
   }
@@ -242,6 +294,7 @@ function buildPayload(events: PayloadEvent[]): Blob | string {
 }
 
 async function flushQueue(): Promise<void> {
+  applyConsentToQueue();
   if (flushInFlight) return;
   if (queue.length === 0) return;
   const apiBase = resolveApiBase();
@@ -249,7 +302,7 @@ async function flushQueue(): Promise<void> {
 
   flushInFlight = true;
   try {
-    const events = queue.splice(0, FLUSH_BATCH);
+    const events = queue.splice(0, FLUSH_BATCH).map((entry) => entry.payload);
     const payload = buildPayload(events);
     const url = `${apiBase}/api/public/web-events`;
 
@@ -292,11 +345,21 @@ function scheduleFlush(): void {
 
 export function trackWebEvent(input: WebAnalyticsEvent): void {
   if (typeof window === "undefined") return;
+  listenForConsentChanges();
+  const product = input.privacyMode === "product";
+  if (
+    !product &&
+    (!isAnalyticsAllowed() || !isPublicTrackingPath(window.location.pathname))
+  ) {
+    applyConsentToQueue();
+    return;
+  }
 
-  const sessionId = getOrCreateSessionId();
-  const visitId = getOrCreateVisitId();
+  const { sessionId, visitId } = product
+    ? getProductIdentity()
+    : { sessionId: getOrCreateSessionId(), visitId: getOrCreateVisitId() };
   const device = resolveDevice();
-  touchVisit();
+  if (!product) touchVisit();
 
   const path = normalizePath(input.path);
   const event: PayloadEvent = {
@@ -321,7 +384,7 @@ export function trackWebEvent(input: WebAnalyticsEvent): void {
         : undefined,
   };
 
-  enqueue(event);
+  enqueue(event, product);
 
   if (queue.length >= 10) {
     void flushQueue();
@@ -339,7 +402,12 @@ export function flushWebAnalytics(): void {
 }
 
 export function ensureVisitStarted(pathname: string): void {
-  if (typeof window === "undefined") return;
+  if (
+    typeof window === "undefined" ||
+    !isAnalyticsAllowed() ||
+    !isPublicTrackingPath(window.location.pathname)
+  )
+    return;
   const visitId = getOrCreateVisitId();
   const startedFor = sessionStorage.getItem(VISIT_STARTED_KEY);
   if (startedFor === visitId) return;

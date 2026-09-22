@@ -46,6 +46,12 @@ import {
 } from "../../web/scheduling";
 import { normalizeName, normalizePhone } from "../../web/utils";
 import {
+  captureOpenAiAdsAttribution,
+  enqueueOpenAiAdsBooking,
+  openAiAdsAttributionFromForm,
+  OpenAiAdsAttributionSchema,
+} from "@/lib/openai-ads-capture";
+import {
   acquireScheduleConflictLock,
   inspectScheduleConflicts,
 } from "@/lib/appointment-schedule-conflicts";
@@ -166,6 +172,7 @@ function deriveDurationMinutes(quote: {
 }
 
 const BookingSchema = z.object({
+  openaiAds: OpenAiAdsAttributionSchema.optional().catch({ consent: false }),
   instantQuoteId: z.string().uuid(),
   holdId: z.string().uuid().optional().nullable(),
   name: z.string().min(2),
@@ -434,6 +441,12 @@ export async function POST(request: NextRequest) {
         ],
       });
 
+      const openaiAds = captureOpenAiAdsAttribution(
+        body.openaiAds ??
+          openAiAdsAttributionFromForm(existingLead?.formPayload),
+        now,
+      );
+
       const addressLine1 = body.addressLine1.trim();
       const city = body.city.trim();
       const state = body.state.trim().toUpperCase();
@@ -469,6 +482,7 @@ export async function POST(request: NextRequest) {
 
         const nextPayload = {
           ...previousPayload,
+          openaiAds,
           booking: {
             addressLine1,
             city,
@@ -519,6 +533,7 @@ export async function POST(request: NextRequest) {
             source: "instant_quote",
             instantQuoteId: quote.id,
             formPayload: {
+              openaiAds,
               instantQuoteId: quote.id,
               perceivedSize: quote.perceivedSize,
               jobTypes: quote.jobTypes,
@@ -794,7 +809,20 @@ export async function POST(request: NextRequest) {
           .where(eq(appointmentHolds.id, holdId));
       }
 
-      return { leadId, appointmentId, startAt: startAt.toISOString() };
+      const openaiAdsBookingEligible = await enqueueOpenAiAdsBooking(tx, {
+        appointmentId,
+        status: appointmentStatus,
+        startAt,
+        contactId: contact.id,
+        attribution: openaiAds,
+        now,
+      });
+      return {
+        leadId,
+        appointmentId,
+        startAt: startAt.toISOString(),
+        openaiAdsBookingEligible,
+      };
     });
 
     return corsJson(
@@ -804,6 +832,7 @@ export async function POST(request: NextRequest) {
         appointmentId: leadResult.appointmentId,
         startAt: leadResult.startAt,
         standardJobReview,
+        openaiAdsBookingEligible: leadResult.openaiAdsBookingEligible,
       },
       requestOrigin,
     );

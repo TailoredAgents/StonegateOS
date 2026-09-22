@@ -8,6 +8,7 @@ import {
   properties,
   partnerBookings,
   appointments,
+  appointmentHolds,
   partnerServiceCatalog,
   partnerSchedulingProfiles,
   scheduleResourcePools,
@@ -186,6 +187,8 @@ async function fixture() {
   }
   return {
     accountId,
+    contactId,
+    propertyId,
     profileId,
     poolKey,
     crewId,
@@ -219,6 +222,98 @@ async function schedule(
 }
 suite("staff named-resource scheduling / PostgreSQL", () => {
   afterAll(async () => closeDbForTests());
+  it.each(["appointment", "hold"] as const)(
+    "confirms beside a snapshotless %s using its actual pool capacity and rejects a full pool atomically",
+    async (kind) => {
+      const f = await fixture();
+      await getDb().transaction(async (tx) => {
+        // Keep the migration-created aggregate crew/truck definitions, as on
+        // installations that have not configured individual named resources.
+        await tx
+          .delete(scheduleResources)
+          .where(
+            and(
+              eq(scheduleResources.capacityPoolKey, f.poolKey),
+              eq(scheduleResources.source, "staff"),
+            ),
+          );
+        await tx
+          .delete(partnerSchedulingProfileResourceRequirements)
+          .where(
+            eq(
+              partnerSchedulingProfileResourceRequirements.schedulingProfileId,
+              f.profileId,
+            ),
+          );
+        await tx.insert(partnerSchedulingProfileResourceRequirements).values(
+          (["crew", "truck"] as const).map((resourceKind) => ({
+            schedulingProfileId: f.profileId,
+            resourceKind,
+            capacityUnits: 1,
+            requiredSkillKeys: ["general_field_service"],
+            source: "compatibility_pool" as const,
+          })),
+        );
+        const occupancy = {
+          contactId: f.contactId,
+          propertyId: f.propertyId,
+          capacityPoolKey: f.poolKey,
+          capacityUnits: 2,
+          startAt: START,
+          durationMinutes: 60,
+          travelBufferMinutes: 30,
+          resourceAssignmentSnapshot: [],
+        };
+        if (kind === "appointment") {
+          await tx.insert(appointments).values({
+            ...occupancy,
+            status: "confirmed",
+            type: "job",
+            rescheduleToken: randomUUID(),
+          });
+        } else {
+          await tx.insert(appointmentHolds).values({
+            ...occupancy,
+            status: "active",
+            expiresAt: new Date(NOW.getTime() + 15 * 60_000),
+          });
+        }
+      });
+
+      const first = await f.job(),
+        second = await f.job();
+      await schedule(first);
+      const [confirmed] = await getDb()
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, first.appointmentId));
+      expect(confirmed?.status).toBe("confirmed");
+      expect(
+        confirmed?.resourceAssignmentSnapshot.map((resource) => ({
+          kind: resource.kind,
+          capacityUnits: resource.capacityUnits,
+        })),
+      ).toEqual([
+        { kind: "crew", capacityUnits: 1 },
+        { kind: "truck", capacityUnits: 1 },
+      ]);
+
+      await expect(schedule(second)).rejects.toMatchObject({ status: 409 });
+      const [unchanged] = await getDb()
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, second.appointmentId));
+      expect(unchanged?.status).toBe("requested");
+      expect(unchanged?.startAt).toBeNull();
+      expect(unchanged?.resourceAssignmentSnapshot).toEqual([]);
+      const [request] = await getDb()
+        .select()
+        .from(partnerBookings)
+        .where(eq(partnerBookings.id, second.jobId));
+      expect(request?.publicStatus).toBe("under_review");
+      expect(request?.version).toBe(1);
+    },
+  );
   it("public read filtering matches locked weighted, buffer, external-block and date-override decisions", async () => {
     const f = await fixture(),
       job = await f.job();

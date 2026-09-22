@@ -12,6 +12,7 @@ import {
 import { cn } from "@myst-os/ui";
 import { Breadcrumbs, type BreadcrumbItem } from "@/components/Breadcrumbs";
 import { PartnerAccessHelp } from "./PartnerAccessHelp";
+import { PartnerArchitecturalAccent } from "./PartnerArchitecturalAccent";
 
 export { PartnerStatusBadge } from "./PartnerStatusBadge";
 
@@ -19,7 +20,7 @@ export const partnerFieldClass =
   "mt-1.5 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500";
 
 export const partnerPrimaryButtonClass =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 motion-reduce:transition-none disabled:cursor-wait disabled:opacity-60";
+  "partner-primary-button inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 motion-reduce:transition-none disabled:cursor-wait disabled:opacity-60";
 
 export const partnerSecondaryButtonClass =
   "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-primary-300 hover:bg-primary-50 hover:text-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-60";
@@ -79,7 +80,8 @@ export function PartnerPageHeader({
   children?: ReactNode;
 }) {
   return (
-    <header className="border-b border-slate-200 pb-5">
+    <header className="partner-page-header">
+      <PartnerArchitecturalAccent className="partner-header-art" />
       {breadcrumbs?.length ? <Breadcrumbs items={breadcrumbs} /> : null}
       <div
         className={cn(
@@ -87,7 +89,7 @@ export function PartnerPageHeader({
           breadcrumbs?.length ? "mt-4" : null,
         )}
       >
-        <div className="min-w-0">
+        <div className="partner-header-copy min-w-0">
           {eyebrow ? (
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary-700">
               {eyebrow}
@@ -122,7 +124,7 @@ export function PartnerPanel({
     <Component
       id={id}
       className={cn(
-        "rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm sm:p-6",
+        "partner-panel rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm sm:p-6",
         className,
       )}
     >
@@ -189,8 +191,8 @@ export function PartnerEmptyState({
   icon?: ReactNode;
 }) {
   return (
-    <div className="flex min-h-56 flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/70 px-5 py-10 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-primary-700 shadow-sm ring-1 ring-slate-200">
+    <div className="partner-empty-state flex min-h-56 flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/70 px-5 py-10 text-center">
+      <div className="partner-empty-icon mb-2 flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-primary-700 shadow-sm ring-1 ring-slate-200">
         {icon ?? <Inbox className="h-6 w-6" aria-hidden="true" />}
       </div>
       <h2 className="mt-4 text-base font-semibold text-slate-950">{title}</h2>

@@ -567,7 +567,19 @@ void test("the canonical middleware retains admin protection and attribution", a
 
   const attributionResponse = await middleware(
     new NextRequest(
-      "https://stonegate.example/commercial?utm_source=partner&utm_campaign=fall",
+      "https://stonegate.example/contractors?utm_source=partner&utm_campaign=fall",
+      {
+        headers: {
+          cookie: `sg_cookie_consent=${encodeURIComponent(
+            JSON.stringify({
+              version: 1,
+              analytics: false,
+              advertising: true,
+              updatedAt: Date.now(),
+            }),
+          )}`,
+        },
+      },
     ),
   );
   const attributionCookie = attributionResponse.cookies.get("myst_utm");

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback } from "react";
 import { Badge, Button, cn } from "@myst-os/ui";
+import { isAnalyticsAllowed, isPublicTrackingPath } from "@/lib/cookie-consent";
 
 declare global {
   interface Window {
@@ -20,19 +21,26 @@ const GOOGLE_REVIEW_COUNT =
 
 function trackHeroEvent(type: HeroCtaType) {
   try {
-    if (typeof window === "undefined") {
+    const gaId = process.env["NEXT_PUBLIC_GA4_ID"]?.trim();
+    if (
+      typeof window === "undefined" ||
+      !isAnalyticsAllowed() ||
+      !isPublicTrackingPath(window.location.pathname) ||
+      !gaId ||
+      !/^G-[A-Z0-9]+$/u.test(gaId) ||
+      gaId === "G-E2ETEST"
+    ) {
       return;
     }
 
     const payload = {
       event_category: "hero",
       event_label: `hero_${type}_cta`,
+      send_to: gaId,
     };
 
     if (typeof window.gtag === "function") {
       window.gtag("event", "click", payload);
-    } else if (Array.isArray(window.dataLayer)) {
-      window.dataLayer.push({ event: "hero_cta_click", type, ...payload });
     }
   } catch (error) {
     console.warn("Hero CTA tracking failed", error);
@@ -93,11 +101,11 @@ export function HeroV2({
               same-day availability in Woodstock and nearby North Metro
               communities.
             </p>
-              <p className="max-w-xl text-sm text-neutral-500">
-                No travel fees in our core service area. Coverage is up to 25
-                miles for half-load and larger jobs, and up to 15 miles for
-                minimum-pickup and quarter-load jobs.
-              </p>
+            <p className="max-w-xl text-sm text-neutral-500">
+              No travel fees in our core service area. Coverage is up to 25
+              miles for half-load and larger jobs, and up to 15 miles for
+              minimum-pickup and quarter-load jobs.
+            </p>
           </div>
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">

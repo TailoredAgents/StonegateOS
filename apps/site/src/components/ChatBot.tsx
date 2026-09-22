@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Button, cn } from "@myst-os/ui";
 import { usePathname } from "next/navigation";
+import { getOpenAiAdsAttribution, trackOpenAiAdsBooking } from "@/lib/openai-ads";
 
 type BookingSuggestion = {
   startAt: string;
@@ -19,6 +20,7 @@ type AssistantPayload = {
   ok?: boolean;
   reply?: string;
   booking?: BookingPayload;
+  booked?: { appointmentId?: string; openaiAdsBookingEligible?: boolean };
 };
 
 interface Message {
@@ -141,12 +143,15 @@ export function ChatBot() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, openaiAds: getOpenAiAdsAttribution() }),
       });
       const data = (await res
         .json()
         .catch(() => null)) as AssistantPayload | null;
       if (!data) return null;
+      if (res.ok && data.ok && data.booked?.openaiAdsBookingEligible === true && typeof data.booked.appointmentId === "string") {
+        trackOpenAiAdsBooking(data.booked.appointmentId);
+      }
       return data;
     } catch {
       return null;

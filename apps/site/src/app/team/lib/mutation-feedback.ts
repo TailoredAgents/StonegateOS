@@ -68,7 +68,10 @@ function appendGuidance(message: string, guidance: string): string {
   return `${trimmed}. ${guidance}`;
 }
 
-async function readResponseDetail(response: Response): Promise<string | null> {
+async function readResponseDetail(response: Response): Promise<{
+  message: string | null;
+  error: string | null;
+}> {
   const data = (await response
     .clone()
     .json()
@@ -77,14 +80,18 @@ async function readResponseDetail(response: Response): Promise<string | null> {
     message?: unknown;
   } | null;
 
-  return normalizeMessage(data?.message) ?? normalizeMessage(data?.error);
+  return {
+    message: normalizeMessage(data?.message),
+    error: normalizeMessage(data?.error),
+  };
 }
 
 export async function readTeamMutationError(
   response: Response,
   fallback: string,
 ): Promise<string> {
-  const detail = await readResponseDetail(response);
+  const { message, error } = await readResponseDetail(response);
+  const detail = message ?? error;
 
   switch (response.status) {
     case 401:
@@ -104,9 +111,12 @@ export async function readTeamMutationError(
         "The result could not be confirmed; refresh before retrying to avoid a duplicate.",
       );
     case 409:
+      // A conflict can be a capacity or business-rule rejection, not a stale
+      // record. Preserve the server's explanation and recovery instructions.
+      if (message) return message;
       return appendGuidance(
         detail ?? fallback,
-        "This record changed since the page loaded. Refresh it and try again.",
+        "Refresh to review the latest details before trying again. No change was confirmed.",
       );
     case 422:
       return appendGuidance(

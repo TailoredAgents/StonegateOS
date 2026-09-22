@@ -1,6 +1,15 @@
 import type { Metadata, Route } from "next";
 import Link from "next/link";
-import { CalendarPlus2 } from "lucide-react";
+import {
+  CalendarDays,
+  CalendarPlus2,
+  Check,
+  Clock3,
+  FileText,
+  History,
+  MessageSquare,
+  ReceiptText,
+} from "lucide-react";
 import { callPartnerApi } from "@/app/partners/lib/api";
 import { getPartnerPortalContext } from "@/app/partners/lib/portal-context";
 import {
@@ -94,26 +103,38 @@ export default async function PartnersHomePage() {
           <section aria-labelledby="next-job-heading">
             <h2
               id="next-job-heading"
-              className="mb-3 text-xl font-semibold text-slate-950"
+              className="mb-3 flex items-center gap-3 text-lg font-semibold tracking-tight text-slate-950"
             >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-primary-100 bg-primary-50 text-primary-700">
+                <CalendarDays
+                  className="h-[18px] w-[18px]"
+                  aria-hidden="true"
+                />
+              </span>
               Your next job
             </h2>
-            <PartnerPanel>
+            <PartnerPanel className="border-l-[3px] border-l-primary-600">
               {next ? (
                 <Link
                   href={`/partners/bookings/${next.id}` as Route}
-                  className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+                  className="group block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-4"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <h3 className="font-semibold text-slate-950">
+                    <h3 className="text-lg font-semibold tracking-tight text-slate-950">
                       {next.locationName || "Stonegate service"}
                     </h3>
                     <PartnerStatusBadge status={next.status} />
                   </div>
-                  <p className="mt-2 text-sm text-slate-700">
-                    {arrival(next.startAt, next.endAt, next.timezone)}
+                  <p className="mt-3 flex items-start gap-2 text-sm leading-6 text-slate-600">
+                    <Clock3
+                      className="mt-1 h-4 w-4 shrink-0 text-primary-600"
+                      aria-hidden="true"
+                    />
+                    <span>
+                      {arrival(next.startAt, next.endAt, next.timezone)}
+                    </span>
                   </p>
-                  <span className="mt-3 inline-flex min-h-11 items-center font-semibold text-primary-800">
+                  <span className="mt-4 inline-flex min-h-11 items-center rounded-xl bg-primary-50 px-3.5 text-sm font-semibold text-primary-800 transition-colors group-hover:bg-primary-100 motion-reduce:transition-none">
                     Open job →
                   </span>
                 </Link>
@@ -129,25 +150,36 @@ export default async function PartnersHomePage() {
         ) : null}
         {saved && context.capabilities.schedule ? (
           <PartnerPanel>
-            <h2 className="text-lg font-semibold text-slate-950">
-              Continue your saved request
-            </h2>
-            <p className="mt-1 text-sm text-slate-600">
-              {saved.locationName || "Your unfinished service request"}
-            </p>
-            <Link
-              href={`/partners/book?draftId=${saved.id}` as Route}
-              className="mt-2 inline-flex min-h-11 items-center font-semibold text-primary-800"
-            >
-              Continue request →
-            </Link>
+            <div className="flex items-start gap-3 sm:gap-4">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-stone-200 bg-stone-50 text-primary-700">
+                <FileText className="h-5 w-5" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <h2 className="text-lg font-semibold tracking-tight text-slate-950">
+                  Continue your saved request
+                </h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  {saved.locationName || "Your unfinished service request"}
+                </p>
+                <Link
+                  href={`/partners/book?draftId=${saved.id}` as Route}
+                  className="mt-2 inline-flex min-h-11 items-center text-sm font-semibold text-primary-800"
+                >
+                  Continue request →
+                </Link>
+              </div>
+            </div>
           </PartnerPanel>
         ) : null}
         {overview?.outstandingBalances?.some(
           (balance) => balance.amountMinor > 0,
         ) ? (
           <PartnerPanel>
-            <h2 className="font-semibold text-slate-950">
+            <h2 className="flex items-center gap-2 font-semibold text-slate-950">
+              <ReceiptText
+                className="h-[18px] w-[18px] text-primary-700"
+                aria-hidden="true"
+              />
               Outstanding invoices
             </h2>
             <p className="mt-1 text-sm text-slate-700">
@@ -181,7 +213,12 @@ export default async function PartnersHomePage() {
             : null
         }
       >
-        <h2 className="text-xl font-semibold text-slate-950">Your updates</h2>
+        <h2 className="flex items-center gap-3 text-lg font-semibold tracking-tight text-slate-950">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-primary-100 bg-primary-50 text-primary-700">
+            <MessageSquare className="h-[18px] w-[18px]" aria-hidden="true" />
+          </span>
+          Your updates
+        </h2>
         {updates ? (
           <PartnerPanel>
             {updates.items.length ? (
@@ -191,10 +228,15 @@ export default async function PartnersHomePage() {
                 initialNextCursor={updates.nextCursor}
               />
             ) : (
-              <p className="text-sm text-slate-600">
-                You’re all caught up. New messages and service updates will
-                appear here.
-              </p>
+              <div className="flex items-center gap-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-700">
+                  <Check className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <p className="text-sm leading-6 text-slate-600">
+                  You’re all caught up. New messages and service updates will
+                  appear here.
+                </p>
+              </div>
             )}
           </PartnerPanel>
         ) : null}
@@ -216,46 +258,51 @@ export default async function PartnersHomePage() {
             <div className="mb-2 flex items-center justify-between gap-3">
               <h2
                 id="recent-jobs-heading"
-                className="text-xl font-semibold text-slate-950"
+                className="flex items-center gap-3 text-lg font-semibold tracking-tight text-slate-950"
               >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-primary-100 bg-primary-50 text-primary-700">
+                  <History className="h-[18px] w-[18px]" aria-hidden="true" />
+                </span>
                 Recent jobs
               </h2>
               <Link
                 href="/partners/bookings"
-                className="inline-flex min-h-11 items-center font-semibold text-primary-800"
+                className="inline-flex min-h-11 shrink-0 items-center text-sm font-semibold text-primary-800"
               >
                 My jobs →
               </Link>
             </div>
-            <ul className="divide-y divide-slate-200">
-              {(recent?.items ?? []).map((job) => (
-                <li key={job.id}>
-                  <Link
-                    href={`/partners/bookings/${job.id}` as Route}
-                    className="flex min-h-16 flex-wrap items-center justify-between gap-3 rounded-lg py-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
-                  >
-                    <span>
-                      <span className="block font-semibold text-slate-950">
-                        {job.location.name || "Stonegate service"}
+            <PartnerPanel>
+              <ul className="divide-y divide-stone-200/80">
+                {(recent?.items ?? []).map((job) => (
+                  <li key={job.id}>
+                    <Link
+                      href={`/partners/bookings/${job.id}` as Route}
+                      className="-mx-2 flex min-h-16 flex-wrap items-center justify-between gap-3 rounded-xl px-2 py-4 transition-colors hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 motion-reduce:transition-none sm:-mx-3 sm:px-3"
+                    >
+                      <span>
+                        <span className="block font-semibold text-slate-950">
+                          {job.location.name || "Stonegate service"}
+                        </span>
+                        <span className="mt-1 block text-sm text-slate-600">
+                          {arrival(
+                            job.schedule.arrivalWindow?.startAt,
+                            job.schedule.arrivalWindow?.endAt,
+                            job.schedule.arrivalWindow?.timezone,
+                          )}
+                        </span>
                       </span>
-                      <span className="mt-1 block text-sm text-slate-600">
-                        {arrival(
-                          job.schedule.arrivalWindow?.startAt,
-                          job.schedule.arrivalWindow?.endAt,
-                          job.schedule.arrivalWindow?.timezone,
-                        )}
-                      </span>
-                    </span>
-                    <PartnerStatusBadge status={job.status} />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-            {recent?.items.length === 0 ? (
-              <p className="py-3 text-sm text-slate-600">
-                Your service requests will appear here.
-              </p>
-            ) : null}
+                      <PartnerStatusBadge status={job.status} />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+              {recent?.items.length === 0 ? (
+                <p className="py-3 text-sm text-slate-600">
+                  Your service requests will appear here.
+                </p>
+              ) : null}
+            </PartnerPanel>
           </section>
         </PartnerHomeSection>
       ) : null}

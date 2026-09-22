@@ -15,6 +15,7 @@ export type NamedScheduleResource = Readonly<{
   capacityPoolKey: string;
   kind: ScheduleResourceKind;
   label: string;
+  source?: "staff" | "compatibility_pool";
   capacityUnits: number;
   dailyJobMultiplier: number;
   skillKeys: readonly string[];

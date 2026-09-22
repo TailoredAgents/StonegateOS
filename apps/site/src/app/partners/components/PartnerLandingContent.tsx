@@ -10,7 +10,7 @@ export function PartnerLandingContent({
 }) {
   return (
     <section
-      className="mx-auto w-full max-w-md py-2 sm:py-5"
+      className="partner-login-card mx-auto w-full max-w-lg"
       aria-labelledby="partner-landing-title"
     >
       <p className="text-sm font-semibold text-primary-900">

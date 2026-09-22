@@ -55,6 +55,7 @@ export function namedResourceBlocksForOccupancy(input: {
   endAt: Date;
   timezone: string;
   capacityPoolKey: string;
+  capacityUnits: number;
   assignments: readonly NamedScheduleResourceAssignment[];
   plan: NamedResourcePlan;
 }): NamedScheduleResourceBlock[] {
@@ -78,11 +79,18 @@ export function namedResourceBlocksForOccupancy(input: {
             (current) => current.id === assignment.resourceId,
           ),
       );
+    // Legacy writers reserve weighted pool units without naming resources.
+    // That weight is sufficient only for an aggregate compatibility resource;
+    // unknown physical or retired assignments still occupy the full resource.
+    const unassignedPoolUnits =
+      resource.source === "compatibility_pool" && kindAssignments.length === 0
+        ? input.capacityUnits
+        : resource.capacityUnits;
     if (known || unknown)
       result.push({
         id: input.id,
         resourceId: resource.id,
-        capacityUnits: unknown ? resource.capacityUnits : known!.capacityUnits,
+        capacityUnits: unknown ? unassignedPoolUnits : known!.capacityUnits,
         occupancy: { startAt: input.startAt, endAt: input.endAt },
         localDate,
       });
@@ -160,6 +168,7 @@ export async function loadNamedResourceBlocks(input: {
                 (row.durationMinutes + row.travelBufferMinutes) * 60_000,
             ),
             capacityPoolKey: row.capacityPoolKey,
+            capacityUnits: row.capacityUnits,
             assignments: row.resourceAssignmentSnapshot,
             timezone: input.timezone,
             plan: input.plan,
@@ -175,6 +184,7 @@ export async function loadNamedResourceBlocks(input: {
             (row.durationMinutes + row.travelBufferMinutes) * 60_000,
         ),
         capacityPoolKey: row.capacityPoolKey,
+        capacityUnits: row.capacityUnits,
         assignments: row.resourceAssignmentSnapshot,
         timezone: input.timezone,
         plan: input.plan,
@@ -243,6 +253,7 @@ export async function loadNamedResourcePlan(input: {
         capacityPoolKey: resource.capacityPoolKey,
         kind: resource.kind,
         label: resource.label,
+        source: resource.source,
         capacityUnits: resource.capacityUnits,
         dailyJobMultiplier:
           resource.source === "compatibility_pool" ? resource.capacityUnits : 1,

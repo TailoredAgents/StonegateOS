@@ -12,6 +12,8 @@ const appointmentId = "11111111-1111-4111-8111-111111111111",
   truckId = "33333333-3333-4333-8333-333333333333";
 const capacityWarningMessage =
   "This time exceeds schedule capacity. Review the overlapping jobs.";
+const resourceConflictMessage =
+  "The selected crew or equipment cannot cover this job, or its daily limit is reached. Choose another resource or time.";
 for (const engine of [chromium, webkit])
   test(
     `${engine.name()}: actual CRM scheduler preserves resource retries and allows capacity warnings without override permission`,
@@ -93,7 +95,7 @@ for (const engine of [chromium, webkit])
                   ? {
                       ok: false,
                       error: "slot_unavailable",
-                      message: "Selected crew is no longer available.",
+                      message: resourceConflictMessage,
                     }
                   : {
                       ok: true,
@@ -134,13 +136,28 @@ for (const engine of [chromium, webkit])
         await page
           .getByRole("button", { name: "Schedule service", exact: true })
           .click();
-        await page
-          .getByText(/^Selected crew is no longer available\./u)
-          .waitFor();
+        const resourceFeedback = page.getByText(resourceConflictMessage, {
+          exact: true,
+        });
+        await resourceFeedback.waitFor();
+        assert.equal(await resourceFeedback.innerText(), resourceConflictMessage);
+        assert.equal(
+          await page.getByText(/This record changed since the page loaded/u).count(),
+          0,
+        );
+        assert.equal(
+          await page.getByLabel("Choose specific resources").isChecked(),
+          true,
+        );
         assert.equal(await page.getByLabel(/Crew Alpha/u).isChecked(), true);
+        assert.equal(await page.getByLabel(/Truck Alpha/u).isChecked(), true);
         assert.equal(
           await page.getByLabel("New date", { exact: true }).inputValue(),
           "2035-06-04",
+        );
+        assert.equal(
+          await page.getByLabel("Eastern time", { exact: true }).inputValue(),
+          "10:00",
         );
         await page
           .getByRole("button", { name: "Schedule service", exact: true })

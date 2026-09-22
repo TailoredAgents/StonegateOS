@@ -53,7 +53,7 @@ export default async function PartnerLoginPage({
       : null;
 
   return (
-    <div className="mx-auto w-full max-w-md">
+    <div className="partner-login-card mx-auto w-full max-w-lg">
       <div>
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-slate-950">

@@ -189,6 +189,7 @@ import {
   deferRecordingProcessingLease,
   finalizeRecordingDelete,
   persistAnalyzedRecording,
+  persistRecordingTranscript,
   persistSkippedRecordingProcessing,
   prepareRecordingDelete,
   quarantineRecordingDeleteEvent,
@@ -225,6 +226,7 @@ import {
   queuePartnerBillingDisputeNotification,
 } from "@/lib/partner-notification-delivery";
 import { arePartnerPortalApplicantNotificationsEnabled } from "@/lib/partner-portal-feature-flags";
+import { processOpenAiAdsConversionOutbox } from "@/lib/openai-ads-outbox";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -3755,6 +3757,8 @@ async function handleOutboxEvent(
   event: OutboxEventRecord,
 ): Promise<OutboxOutcome> {
   switch (event.type) {
+    case "ads.openai.conversion":
+      return processOpenAiAdsConversionOutbox(event.payload);
     case "partner.bulk_import.process": {
       const payload = isRecord(event.payload) ? event.payload : {};
       const accountId = payload["accountId"],
@@ -7021,6 +7025,9 @@ async function handleOutboxEvent(
       if (lease.kind === "already_terminal") {
         return { status: "processed", skipFinalization: true };
       }
+      if (lease.kind === "quarantined") {
+        return { status: "quarantined", skipFinalization: true };
+      }
       if (lease.kind === "call_missing") {
         return {
           status: "retry",
@@ -7042,7 +7049,12 @@ async function handleOutboxEvent(
           nextAttemptAt,
         });
         return {
-          status: result === "deferred" ? "retry" : "skipped",
+          status:
+            result === "deferred"
+              ? "retry"
+              : result === "quarantined"
+                ? "quarantined"
+                : "skipped",
           error,
           nextAttemptAt,
           skipFinalization: true,
@@ -7095,20 +7107,51 @@ async function handleOutboxEvent(
           return deferLease("recording_list_inconsistent");
         }
 
-        const audio = await downloadTwilioRecordingAudio(best.sid);
-        if (!audio.ok) {
-          return deferLease(
-            `recording_download_${audio.code}`,
-            new Date(
-              Date.now() + (audio.retryable ? 60_000 : 24 * 60 * 60_000),
-            ),
-          );
-        }
+        let transcript =
+          call.recordingSid === best.sid && call.transcript?.trim()
+            ? call.transcript
+            : null;
+        if (!transcript) {
+          const audio = await downloadTwilioRecordingAudio(best.sid);
+          if (!audio.ok) {
+            return deferLease(
+              `recording_download_${audio.code}`,
+              new Date(
+                Date.now() + (audio.retryable ? 60_000 : 24 * 60 * 60_000),
+              ),
+            );
+          }
 
-        const transcript = await transcribeAudio(audio.buffer, {
-          contentType: audio.contentType,
-          filename: audio.filename,
-        });
+          transcript = await transcribeAudio(audio.buffer, {
+            contentType: audio.contentType,
+            filename: audio.filename,
+          });
+          if (transcript) {
+            const recordingCreatedAt = best.dateCreated
+              ? new Date(best.dateCreated)
+              : null;
+            const checkpoint = await persistRecordingTranscript({
+              db,
+              outboxEventId: event.id,
+              leaseToken,
+              callRecordId: call.id,
+              recording: {
+                callSid,
+                recordingSid: best.sid,
+                durationSec: best.durationSec,
+                createdAt:
+                  recordingCreatedAt &&
+                  !Number.isNaN(recordingCreatedAt.getTime())
+                    ? recordingCreatedAt
+                    : null,
+              },
+              transcript,
+            });
+            if (checkpoint !== "committed") {
+              return { status: "skipped", skipFinalization: true };
+            }
+          }
+        }
         if (!transcript) {
           const hasKey =
             typeof process.env["OPENAI_API_KEY"] === "string" &&

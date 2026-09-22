@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import "./partner-design.css";
 
 export const metadata: Metadata = {
   robots: { index: false, follow: false, nocache: true },

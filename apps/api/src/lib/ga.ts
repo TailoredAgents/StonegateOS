@@ -6,6 +6,7 @@ import {
 const GA_ENDPOINT = "https://www.google-analytics.com/mp/collect";
 
 interface ConversionPayload {
+  analyticsConsent?: boolean;
   params?: Record<string, unknown>;
 }
 
@@ -13,6 +14,8 @@ export async function sendConversion(
   eventName: string,
   payload: ConversionPayload = {},
 ): Promise<void> {
+  if (payload.analyticsConsent !== true) return;
+
   const measurementId = process.env["GA4_MEASUREMENT_ID"];
   const apiSecret = process.env["GA4_API_SECRET"];
 

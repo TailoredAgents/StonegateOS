@@ -2,18 +2,15 @@ import type { ReactNode } from "react";
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { StickyCtaBar } from "@/components/StickyCtaBar";
-import { ChatBot } from "@/components/ChatBot";
-import { MetaPixel } from "@/components/MetaPixel";
+import { SiteChatBot } from "@/components/SiteChatBot";
 import { SiteStructuredData } from "@/components/StructuredData";
 import { WebAnalyticsClient } from "@/components/WebAnalyticsClient";
 import { PublicMarketingTags } from "@/components/PublicMarketingTags";
 
 export default function SiteLayout({ children }: { children: ReactNode }) {
-  const metaPixelId = process.env["NEXT_PUBLIC_META_PIXEL_ID"] ?? null;
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-white via-neutral-100 to-white">
-      <PublicMarketingTags />
-      <MetaPixel pixelId={metaPixelId} />
+      <PublicMarketingTags includeMetaPixel />
       <WebAnalyticsClient />
       <SiteStructuredData />
       <Header />
@@ -21,10 +18,8 @@ export default function SiteLayout({ children }: { children: ReactNode }) {
         {children}
       </main>
       <Footer />
-      <ChatBot />
+      <SiteChatBot />
       <StickyCtaBar />
     </div>
   );
 }
-
-

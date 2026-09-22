@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import * as React from "react";
 import Link from "next/link";
@@ -6,6 +6,12 @@ import Image from "next/image";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Button, cn } from "@myst-os/ui";
+import {
+  COOKIE_CONSENT_EVENT,
+  isAdvertisingAllowed,
+  isAnalyticsAllowed,
+  isPublicTrackingPath,
+} from "@/lib/cookie-consent";
 
 import {
   ADDONS,
@@ -15,7 +21,7 @@ import {
   computeAddonTotal,
   getTierById,
   getTierBySliderValue,
-  normalizeTierId
+  normalizeTierId,
 } from "@/lib/pricing-estimator";
 
 declare global {
@@ -32,42 +38,60 @@ const TRACKING_QUERY_KEYS = [
   "utm_term",
   "utm_content",
   "gclid",
-  "fbclid"
+  "fbclid",
 ];
 
-function buildBookHref(tier: LoadTier, addons: Record<AddonId, number>, searchParams: URLSearchParams) {
+function buildBookHref(
+  tier: LoadTier,
+  addons: Record<AddonId, number>,
+  searchParams: URLSearchParams,
+  allowAdvertising = false,
+) {
   const query = new URLSearchParams();
-  for (const key of TRACKING_QUERY_KEYS) {
+  for (const key of allowAdvertising ? TRACKING_QUERY_KEYS : []) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
   }
 
   query.set("intent", "pricing-estimator");
   query.set(PRICING_ESTIMATOR_QUERY_KEYS.load, tier.id);
-  if (addons.mattress > 0) query.set(PRICING_ESTIMATOR_QUERY_KEYS.mattress, String(addons.mattress));
-  if (addons.paint > 0) query.set(PRICING_ESTIMATOR_QUERY_KEYS.paint, String(addons.paint));
-  if (addons.tire > 0) query.set(PRICING_ESTIMATOR_QUERY_KEYS.tire, String(addons.tire));
+  if (addons.mattress > 0)
+    query.set(PRICING_ESTIMATOR_QUERY_KEYS.mattress, String(addons.mattress));
+  if (addons.paint > 0)
+    query.set(PRICING_ESTIMATOR_QUERY_KEYS.paint, String(addons.paint));
+  if (addons.tire > 0)
+    query.set(PRICING_ESTIMATOR_QUERY_KEYS.tire, String(addons.tire));
 
   const queryString = query.toString();
   return queryString ? `/book?${queryString}` : "/book";
 }
 
-function trackPricingEstimatorEvent(action: string, payload: Record<string, unknown>) {
+function trackPricingEstimatorEvent(
+  action: string,
+  payload: Record<string, unknown>,
+) {
   try {
-    if (typeof window === "undefined") {
+    const gaId = process.env["NEXT_PUBLIC_GA4_ID"]?.trim();
+    if (
+      typeof window === "undefined" ||
+      !isAnalyticsAllowed() ||
+      !isPublicTrackingPath(window.location.pathname) ||
+      !gaId ||
+      !/^G-[A-Z0-9]+$/u.test(gaId) ||
+      gaId === "G-E2ETEST"
+    ) {
       return;
     }
 
     const eventPayload = {
       event_category: "pricing_estimator",
       event_label: action,
-      ...payload
+      ...payload,
+      send_to: gaId,
     };
 
     if (typeof window.gtag === "function") {
       window.gtag("event", action, eventPayload);
-    } else if (Array.isArray(window.dataLayer)) {
-      window.dataLayer.push({ event: "pricing_estimator", action, ...eventPayload });
     }
   } catch (error) {
     console.warn("Pricing estimator tracking failed", error);
@@ -80,7 +104,11 @@ function clampInt(value: number, min: number, max: number) {
 }
 
 function formatUsd(value: number) {
-  return value.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  return value.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  });
 }
 
 function parseCount(value: string | null): number | null {
@@ -90,14 +118,18 @@ function parseCount(value: string | null): number | null {
   return clampInt(parsed, 0, 99);
 }
 
-function buildEstimatorSearchParams(tier: LoadTier, addons: Record<AddonId, number>, base: URLSearchParams) {
+function buildEstimatorSearchParams(
+  tier: LoadTier,
+  addons: Record<AddonId, number>,
+  base: URLSearchParams,
+) {
   const next = new URLSearchParams(base.toString());
   next.set(PRICING_ESTIMATOR_QUERY_KEYS.load, tier.id);
 
   const entries = [
     [PRICING_ESTIMATOR_QUERY_KEYS.mattress, addons.mattress],
     [PRICING_ESTIMATOR_QUERY_KEYS.paint, addons.paint],
-    [PRICING_ESTIMATOR_QUERY_KEYS.tire, addons.tire]
+    [PRICING_ESTIMATOR_QUERY_KEYS.tire, addons.tire],
   ] as const;
 
   for (const [key, count] of entries) {
@@ -108,18 +140,26 @@ function buildEstimatorSearchParams(tier: LoadTier, addons: Record<AddonId, numb
   return next;
 }
 
-function buildEstimateHref(tier: LoadTier, addons: Record<AddonId, number>, searchParams: URLSearchParams) {
+function buildEstimateHref(
+  tier: LoadTier,
+  addons: Record<AddonId, number>,
+  searchParams: URLSearchParams,
+  allowAdvertising = false,
+) {
   const query = new URLSearchParams();
-  for (const key of TRACKING_QUERY_KEYS) {
+  for (const key of allowAdvertising ? TRACKING_QUERY_KEYS : []) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
   }
 
   query.set("intent", "pricing-estimator");
   query.set(PRICING_ESTIMATOR_QUERY_KEYS.load, tier.id);
-  if (addons.mattress > 0) query.set(PRICING_ESTIMATOR_QUERY_KEYS.mattress, String(addons.mattress));
-  if (addons.paint > 0) query.set(PRICING_ESTIMATOR_QUERY_KEYS.paint, String(addons.paint));
-  if (addons.tire > 0) query.set(PRICING_ESTIMATOR_QUERY_KEYS.tire, String(addons.tire));
+  if (addons.mattress > 0)
+    query.set(PRICING_ESTIMATOR_QUERY_KEYS.mattress, String(addons.mattress));
+  if (addons.paint > 0)
+    query.set(PRICING_ESTIMATOR_QUERY_KEYS.paint, String(addons.paint));
+  if (addons.tire > 0)
+    query.set(PRICING_ESTIMATOR_QUERY_KEYS.tire, String(addons.tire));
 
   const queryString = query.toString();
   return queryString ? `/estimate?${queryString}` : "/estimate";
@@ -138,7 +178,9 @@ function AddonCounters({ value, onChange }: AddonCountersProps) {
 
   return (
     <div className="space-y-3">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Add-ons</p>
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">
+        Add-ons
+      </p>
       <div className="space-y-2">
         {ADDONS.map((addon) => (
           <div
@@ -146,8 +188,12 @@ function AddonCounters({ value, onChange }: AddonCountersProps) {
             className="flex items-center justify-between gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-3 shadow-soft"
           >
             <div>
-              <p className="text-sm font-semibold text-primary-900">{addon.label}</p>
-              <p className="text-xs text-neutral-500">{formatUsd(addon.unitPrice)} each</p>
+              <p className="text-sm font-semibold text-primary-900">
+                {addon.label}
+              </p>
+              <p className="text-xs text-neutral-500">
+                {formatUsd(addon.unitPrice)} each
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -169,7 +215,9 @@ function AddonCounters({ value, onChange }: AddonCountersProps) {
                 max={99}
                 inputMode="numeric"
                 value={value[addon.id] ?? 0}
-                onChange={(event) => update(addon.id, Number.parseInt(event.target.value, 10))}
+                onChange={(event) =>
+                  update(addon.id, Number.parseInt(event.target.value, 10))
+                }
                 className="h-9 w-14 rounded-md border border-neutral-300 bg-white px-2 text-center text-sm font-semibold text-neutral-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
               />
               <button
@@ -188,7 +236,13 @@ function AddonCounters({ value, onChange }: AddonCountersProps) {
   );
 }
 
-function DumpsterSvg({ fillRatio, className }: { fillRatio: number; className?: string }) {
+function DumpsterSvg({
+  fillRatio,
+  className,
+}: {
+  fillRatio: number;
+  className?: string;
+}) {
   const safeRatio = Math.min(1, Math.max(0, fillRatio));
   const interiorTop = 86;
   const interiorBottom = 160;
@@ -229,7 +283,14 @@ function DumpsterSvg({ fillRatio, className }: { fillRatio: number; className?: 
       </defs>
 
       {/* Shadow */}
-      <ellipse cx="320" cy="250" rx="260" ry="18" fill="#0f172a" opacity="0.12" />
+      <ellipse
+        cx="320"
+        cy="250"
+        rx="260"
+        ry="18"
+        fill="#0f172a"
+        opacity="0.12"
+      />
 
       {/* Tongue / hitch */}
       <path
@@ -237,12 +298,43 @@ function DumpsterSvg({ fillRatio, className }: { fillRatio: number; className?: 
         fill="url(#pe-trailer-frame)"
         opacity="0.95"
       />
-      <rect x="602" y="206" width="20" height="10" rx="3" fill="#0b1220" opacity="0.9" />
-      <rect x="590" y="214" width="10" height="26" rx="3" fill="#111827" opacity="0.92" />
+      <rect
+        x="602"
+        y="206"
+        width="20"
+        height="10"
+        rx="3"
+        fill="#0b1220"
+        opacity="0.9"
+      />
+      <rect
+        x="590"
+        y="214"
+        width="10"
+        height="26"
+        rx="3"
+        fill="#111827"
+        opacity="0.92"
+      />
 
       {/* Frame */}
-      <rect x="85" y="176" width="448" height="18" rx="7" fill="url(#pe-trailer-frame)" />
-      <rect x="90" y="170" width="440" height="7" rx="3.5" fill="#0b1220" opacity="0.92" />
+      <rect
+        x="85"
+        y="176"
+        width="448"
+        height="18"
+        rx="7"
+        fill="url(#pe-trailer-frame)"
+      />
+      <rect
+        x="90"
+        y="170"
+        width="440"
+        height="7"
+        rx="3.5"
+        fill="#0b1220"
+        opacity="0.92"
+      />
 
       {/* Wheels + fender */}
       <g>
@@ -266,10 +358,29 @@ function DumpsterSvg({ fillRatio, className }: { fillRatio: number; className?: 
       </g>
 
       {/* Body */}
-      <polygon points="90,176 100,70 520,70 530,176" fill="url(#pe-trailer-body)" />
-      <polygon points="510,70 520,70 530,176 520,176" fill="url(#pe-trailer-body-shadow)" opacity="0.85" />
-      <polyline points="100,70 90,176" fill="none" stroke="#111827" strokeWidth="3" opacity="0.55" />
-      <polyline points="520,70 530,176" fill="none" stroke="#111827" strokeWidth="3" opacity="0.55" />
+      <polygon
+        points="90,176 100,70 520,70 530,176"
+        fill="url(#pe-trailer-body)"
+      />
+      <polygon
+        points="510,70 520,70 530,176 520,176"
+        fill="url(#pe-trailer-body-shadow)"
+        opacity="0.85"
+      />
+      <polyline
+        points="100,70 90,176"
+        fill="none"
+        stroke="#111827"
+        strokeWidth="3"
+        opacity="0.55"
+      />
+      <polyline
+        points="520,70 530,176"
+        fill="none"
+        stroke="#111827"
+        strokeWidth="3"
+        opacity="0.55"
+      />
 
       {/* Interior fill */}
       <g clipPath="url(#pe-trailer-interior)">
@@ -320,22 +431,37 @@ function DumpsterSvg({ fillRatio, className }: { fillRatio: number; className?: 
   );
 }
 
-export function PricingDumpsterEstimator({ className }: { className?: string }) {
+export function PricingDumpsterEstimator({
+  className,
+}: {
+  className?: string;
+}) {
   return (
-    <React.Suspense fallback={<PricingDumpsterEstimatorFallback className={className} />}>
+    <React.Suspense
+      fallback={<PricingDumpsterEstimatorFallback className={className} />}
+    >
       <PricingDumpsterEstimatorInner className={className} />
     </React.Suspense>
   );
 }
 
-function PricingDumpsterEstimatorFallback({ className }: { className?: string }) {
+function PricingDumpsterEstimatorFallback({
+  className,
+}: {
+  className?: string;
+}) {
   return (
     <div className={cn("space-y-5", className)}>
       <div className="space-y-1">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-500">Interactive estimator</p>
-        <h2 className="font-display text-2xl text-primary-900">Estimate your trailer volume</h2>
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-500">
+          Interactive estimator
+        </p>
+        <h2 className="font-display text-2xl text-primary-900">
+          Estimate your trailer volume
+        </h2>
         <p className="text-sm text-neutral-600">
-          Drag the slider to match your load size. Add common surcharges to see a more realistic range.
+          Drag the slider to match your load size. Add common surcharges to see
+          a more realistic range.
         </p>
       </div>
       <div className="rounded-2xl border border-neutral-200 bg-gradient-to-br from-white via-neutral-50 to-neutral-100 p-4 shadow-soft">
@@ -352,12 +478,22 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [advertisingAllowed, setAdvertisingAllowed] = React.useState(false);
 
-  const [tier, setTier] = React.useState<LoadTier>(() => getTierById("quarter"));
+  React.useEffect(() => {
+    const update = () => setAdvertisingAllowed(isAdvertisingAllowed());
+    update();
+    window.addEventListener(COOKIE_CONSENT_EVENT, update);
+    return () => window.removeEventListener(COOKIE_CONSENT_EVENT, update);
+  }, []);
+
+  const [tier, setTier] = React.useState<LoadTier>(() =>
+    getTierById("quarter"),
+  );
   const [addons, setAddons] = React.useState<Record<AddonId, number>>({
     mattress: 0,
     paint: 0,
-    tire: 0
+    tire: 0,
   });
   const hydratedRef = React.useRef(false);
   const urlSyncEnabledRef = React.useRef(false);
@@ -365,9 +501,14 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
   const addonTotal = React.useMemo(() => computeAddonTotal(addons), [addons]);
   const selectedAddonSummary = React.useMemo(() => {
     const parts: string[] = [];
-    if (addons.mattress > 0) parts.push(`${addons.mattress} mattress${addons.mattress === 1 ? "" : "es"}`);
-    if (addons.paint > 0) parts.push(`${addons.paint} paint can${addons.paint === 1 ? "" : "s"}`);
-    if (addons.tire > 0) parts.push(`${addons.tire} tire${addons.tire === 1 ? "" : "s"}`);
+    if (addons.mattress > 0)
+      parts.push(
+        `${addons.mattress} mattress${addons.mattress === 1 ? "" : "es"}`,
+      );
+    if (addons.paint > 0)
+      parts.push(`${addons.paint} paint can${addons.paint === 1 ? "" : "s"}`);
+    if (addons.tire > 0)
+      parts.push(`${addons.tire} tire${addons.tire === 1 ? "" : "s"}`);
     return parts;
   }, [addons]);
   const totalMin = tier.min + addonTotal;
@@ -389,8 +530,12 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
       params.has(PRICING_ESTIMATOR_QUERY_KEYS.mattress) ||
       params.has(PRICING_ESTIMATOR_QUERY_KEYS.paint) ||
       params.has(PRICING_ESTIMATOR_QUERY_KEYS.tire);
-    const tierId = normalizeTierId(params.get(PRICING_ESTIMATOR_QUERY_KEYS.load));
-    const mattress = parseCount(params.get(PRICING_ESTIMATOR_QUERY_KEYS.mattress));
+    const tierId = normalizeTierId(
+      params.get(PRICING_ESTIMATOR_QUERY_KEYS.load),
+    );
+    const mattress = parseCount(
+      params.get(PRICING_ESTIMATOR_QUERY_KEYS.mattress),
+    );
     const paint = parseCount(params.get(PRICING_ESTIMATOR_QUERY_KEYS.paint));
     const tire = parseCount(params.get(PRICING_ESTIMATOR_QUERY_KEYS.tire));
 
@@ -398,7 +543,7 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
     const nextAddons = {
       mattress: mattress ?? 0,
       paint: paint ?? 0,
-      tire: tire ?? 0
+      tire: tire ?? 0,
     } satisfies Record<AddonId, number>;
 
     if (hasEstimatorParams) {
@@ -408,7 +553,9 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
     setTier((prev) => (prev.id === nextTier.id ? prev : nextTier));
     setAddons((prev) => {
       const same =
-        prev.mattress === nextAddons.mattress && prev.paint === nextAddons.paint && prev.tire === nextAddons.tire;
+        prev.mattress === nextAddons.mattress &&
+        prev.paint === nextAddons.paint &&
+        prev.tire === nextAddons.tire;
       return same ? prev : nextAddons;
     });
   }, [searchParams]);
@@ -434,21 +581,60 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
   }, [addons, pathname, router, searchParams, tier]);
 
   const estimateHref = React.useMemo(
-    () => buildEstimateHref(tier, addons, new URLSearchParams(searchParams.toString())),
-    [addons, searchParams, tier]
+    () =>
+      buildEstimateHref(
+        tier,
+        addons,
+        new URLSearchParams(searchParams.toString()),
+        advertisingAllowed,
+      ),
+    [addons, searchParams, tier, advertisingAllowed],
   );
 
   const bookHref = React.useMemo(
-    () => buildBookHref(tier, addons, new URLSearchParams(searchParams.toString())),
-    [addons, searchParams, tier]
+    () =>
+      buildBookHref(
+        tier,
+        addons,
+        new URLSearchParams(searchParams.toString()),
+        advertisingAllowed,
+      ),
+    [addons, searchParams, tier, advertisingAllowed],
   );
+
+  const refreshNavigationTarget = (
+    event: React.MouseEvent<HTMLAnchorElement>,
+    destination: "book" | "estimate",
+  ) => {
+    const nextHref = (
+      destination === "book" ? buildBookHref : buildEstimateHref
+    )(
+      tier,
+      addons,
+      new URLSearchParams(searchParams.toString()),
+      isAdvertisingAllowed(),
+    );
+    if (event.currentTarget.getAttribute("href") === nextHref) return;
+    // Recheck immediately before navigation, including a choice changed in another tab.
+    event.currentTarget.setAttribute("href", nextHref);
+    if (
+      event.button === 0 &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.shiftKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      router.push(nextHref as Route);
+    }
+  };
 
   const handleTierChange = (nextTier: LoadTier) => {
     urlSyncEnabledRef.current = true;
     setTier(nextTier);
     trackPricingEstimatorEvent("tier_change", {
       tier: nextTier.id,
-      sliderValue: nextTier.sliderValue
+      sliderValue: nextTier.sliderValue,
     });
   };
 
@@ -458,17 +644,22 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
     trackPricingEstimatorEvent("addons_change", {
       mattress: next.mattress,
       paint: next.paint,
-      tire: next.tire
+      tire: next.tire,
     });
   };
 
   return (
     <div className={cn("space-y-5", className)}>
       <div className="space-y-1">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-500">Interactive estimator</p>
-        <h2 className="font-display text-2xl text-primary-900">Estimate your trailer volume</h2>
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-500">
+          Interactive estimator
+        </p>
+        <h2 className="font-display text-2xl text-primary-900">
+          Estimate your trailer volume
+        </h2>
         <p className="text-sm text-neutral-600">
-          Drag the slider to match your load size. Add common surcharges to see a more realistic range.
+          Drag the slider to match your load size. Add common surcharges to see
+          a more realistic range.
         </p>
       </div>
 
@@ -481,7 +672,9 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
 
             <div className="mt-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-semibold text-primary-900">Load size: {tier.label}</p>
+                <p className="text-sm font-semibold text-primary-900">
+                  Load size: {tier.label}
+                </p>
                 <p
                   className="rounded-full bg-primary-50 px-3 py-1 text-sm font-semibold text-primary-900 ring-1 ring-primary-100"
                   role="status"
@@ -502,7 +695,11 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
                 step={25}
                 value={tier.sliderValue}
                 onChange={(event) => {
-                  const next = clampInt(Number.parseInt(event.target.value, 10), 25, 100);
+                  const next = clampInt(
+                    Number.parseInt(event.target.value, 10),
+                    25,
+                    100,
+                  );
                   handleTierChange(getTierBySliderValue(next));
                 }}
                 className="w-full accent-accent-500"
@@ -519,7 +716,11 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
                 >
                   ¼
                 </button>
-                <button type="button" className="hover:text-primary-700" onClick={() => handleTierChange(getTierById("half"))}>
+                <button
+                  type="button"
+                  className="hover:text-primary-700"
+                  onClick={() => handleTierChange(getTierById("half"))}
+                >
                   ½
                 </button>
                 <button
@@ -529,7 +730,11 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
                 >
                   ¾
                 </button>
-                <button type="button" className="hover:text-primary-700" onClick={() => handleTierChange(getTierById("full"))}>
+                <button
+                  type="button"
+                  className="hover:text-primary-700"
+                  onClick={() => handleTierChange(getTierById("full"))}
+                >
                   Full
                 </button>
               </div>
@@ -541,14 +746,16 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
             <Button asChild size="lg" className="min-w-[220px] justify-center">
               <Link
                 href={bookHref as Route}
-                onClick={() => {
+                onAuxClick={(event) => refreshNavigationTarget(event, "book")}
+                onClick={(event) => {
+                  refreshNavigationTarget(event, "book");
                   trackPricingEstimatorEvent("quote_click", {
                     tier: tier.id,
                     mattress: addons.mattress,
                     paint: addons.paint,
                     tire: addons.tire,
                     estimateMin: totalMin,
-                    estimateMax: totalMax
+                    estimateMax: totalMax,
                   });
                 }}
               >
@@ -568,7 +775,7 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
                     tier: tier.id,
                     mattress: addons.mattress,
                     paint: addons.paint,
-                    tire: addons.tire
+                    tire: addons.tire,
                   });
                 }}
               >
@@ -586,11 +793,17 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
             </Button>
           </div>
           <p className="text-xs text-neutral-500">
-            This is an estimate range. Final pricing is confirmed on-site based on access and material type.
+            This is an estimate range. Final pricing is confirmed on-site based
+            on access and material type.
           </p>
           <p className="text-xs text-neutral-500">
             Prefer an on-site estimate?{" "}
-            <Link className="font-semibold text-primary-700 hover:text-primary-800" href={estimateHref as Route}>
+            <Link
+              className="font-semibold text-primary-700 hover:text-primary-800"
+              href={estimateHref as Route}
+              onClick={(event) => refreshNavigationTarget(event, "estimate")}
+              onAuxClick={(event) => refreshNavigationTarget(event, "estimate")}
+            >
               Schedule an estimate
             </Link>
             .
@@ -601,16 +814,21 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
           <div className="sticky top-24 z-10 rounded-2xl bg-white/90 p-5 shadow-soft ring-1 ring-neutral-200/70 backdrop-blur">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Summary</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                  Summary
+                </p>
                 <p className="mt-1 text-sm font-semibold text-primary-900">
                   {tier.label} + add-ons
                 </p>
                 <p className="mt-1 text-xs text-neutral-500">
-                  Base {formatUsd(tier.min)}–{formatUsd(tier.max)} · Add-ons {formatUsd(addonTotal)}
+                  Base {formatUsd(tier.min)}–{formatUsd(tier.max)} · Add-ons{" "}
+                  {formatUsd(addonTotal)}
                 </p>
               </div>
               <div className="text-right">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Total</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                  Total
+                </p>
                 <p className="mt-1 text-lg font-semibold text-primary-900">
                   {formatUsd(totalMin)}–{formatUsd(totalMax)}
                 </p>
@@ -620,7 +838,9 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
               {selectedAddonSummary.length ? (
                 <p>
                   Add-ons selected:{" "}
-                  <span className="font-semibold text-neutral-900">{selectedAddonSummary.join(" · ")}</span>
+                  <span className="font-semibold text-neutral-900">
+                    {selectedAddonSummary.join(" · ")}
+                  </span>
                 </p>
               ) : (
                 <p>No add-ons selected.</p>
@@ -633,7 +853,9 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
       </div>
 
       <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-soft">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Trailer reference</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">
+          Trailer reference
+        </p>
         <div className="mt-3 relative aspect-[16/9] overflow-hidden rounded-xl">
           <Image
             src="/images/gallery/trailer_16x9.jpg"
@@ -645,7 +867,8 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
           />
         </div>
         <p className="mt-3 text-xs text-neutral-500">
-          Pricing is primarily based on how full the trailer is. Access and material type can affect labor and disposal.
+          Pricing is primarily based on how full the trailer is. Access and
+          material type can affect labor and disposal.
         </p>
       </div>
     </div>
